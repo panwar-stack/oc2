@@ -46,6 +46,7 @@ import { Env } from "../../src/env"
 import { Question } from "../../src/question"
 import { Image } from "../../src/image/image"
 import { Skill } from "../../src/skill"
+import { Team } from "@/team/team"
 import { SystemPrompt } from "../../src/session/system"
 import { Todo } from "../../src/session/todo"
 import { SessionCompaction } from "../../src/session/compaction"
@@ -129,6 +130,7 @@ function makeHttp() {
     mcp,
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
+    Team.defaultLayer,
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,

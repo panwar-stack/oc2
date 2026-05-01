@@ -63,6 +63,7 @@ import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { Team } from "@/team/team"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -132,6 +133,7 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
+    const team = yield* Team.Service
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1217,6 +1219,56 @@ export const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
+    const deliverTeamMessages = Effect.fn("SessionPrompt.deliverTeamMessages")(function* (input: {
+      session: Session.Info
+      lastUser: SessionV1.User
+    }) {
+      const context = yield* team.getContext(input.session.id)
+      if (Option.isNone(context)) return false
+      const messages = yield* team.getPendingMessages(input.session.id, context.value.team.id)
+      if (messages.length === 0) return false
+
+      const members = yield* team.getMembers(context.value.team.id)
+      const senderName = (sender: string) => {
+        if (sender === context.value.team.lead_session_id) return "lead"
+        return members.find((member) => member.session_id === sender)?.name ?? sender
+      }
+      const userMsg: SessionV1.User = {
+        id: MessageID.ascending(),
+        sessionID: input.session.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: input.lastUser.agent,
+        model: input.lastUser.model,
+        tools: input.lastUser.tools,
+      }
+      yield* sessions.updateMessage(userMsg)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: userMsg.id,
+        sessionID: input.session.id,
+        type: "text",
+        synthetic: true,
+        text: [
+          "<team-messages>",
+          context.value.member
+            ? "You have pending team mailbox messages. Address them now and continue your teammate task."
+            : "You have pending team mailbox messages. As team lead, coordinate follow-up work and report to the user when the team goal is complete.",
+          "",
+          ...messages.map((message) =>
+            [`From ${senderName(message.sender)} (${message.sender}):`, message.body].join("\n"),
+          ),
+          "</team-messages>",
+        ].join("\n"),
+      } satisfies SessionV1.TextPart)
+      yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, input.session.id), {
+        concurrency: "unbounded",
+        discard: true,
+      })
+      yield* sessions.touch(input.session.id)
+      return true
+    })
+
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
@@ -1236,6 +1288,7 @@ export const layer = Layer.effect(
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          if (yield* deliverTeamMessages({ session, lastUser }).pipe(Effect.orDie)) continue
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1619,14 +1672,13 @@ export const layer = Layer.effect(
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(SessionRunState.defaultLayer),
-    Layer.provide(SessionStatus.defaultLayer),
-    Layer.provide(SessionCompaction.defaultLayer),
+    Layer.provide(Layer.mergeAll(SessionStatus.defaultLayer, SessionCompaction.defaultLayer)),
     Layer.provide(SessionProcessor.defaultLayer),
     Layer.provide(Command.defaultLayer),
     Layer.provide(Permission.defaultLayer),
     Layer.provide(MCP.defaultLayer),
     Layer.provide(LSP.defaultLayer),
-    Layer.provide(ToolRegistry.defaultLayer),
+    Layer.provide(Layer.mergeAll(ToolRegistry.defaultLayer, Team.defaultLayer)),
     Layer.provide(Truncate.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Config.defaultLayer),

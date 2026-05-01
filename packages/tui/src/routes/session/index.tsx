@@ -3,6 +3,7 @@ import {
   createContext,
   createEffect,
   createMemo,
+  createResource,
   createSignal,
   For,
   Match,
@@ -78,6 +79,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
+import { DialogTeam } from "../../component/dialog-team"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
@@ -138,6 +140,12 @@ const sessionBindingCommands = [
   "session.parent",
   "session.child.next",
   "session.child.previous",
+  "team.cycle.lead",
+  "team.member.first",
+  "team.member.next",
+  "team.member.previous",
+  "team.panel.toggle",
+  "team.task.list",
 ] as const
 
 const sessionGlobalBindingCommands = [
@@ -191,6 +199,7 @@ export function Session() {
   const kv = useKV()
   const { theme } = useTheme()
   const promptRef = usePromptRef()
+  const sdk = useSDK()
   const session = createMemo(() => sync.session.get(route.sessionID))
 
   createEffect(() => {
@@ -224,15 +233,35 @@ export function Session() {
           .map((message) => message.id),
       ),
   )
+  const teamsEnabled = createMemo(() => sync.data.config.experimental?.agent_teams === true)
+
+  const [teamInfo] = createResource(
+    () => {
+      const s = session()
+      if (!teamsEnabled() || !s || !s.parentID) return undefined
+      return s.parentID
+    },
+    (parentID) =>
+      sdk.client.team
+        .get({ sessionID: parentID })
+        .then((res) => (res.data?.status === "active" ? res.data : undefined))
+        .catch(() => undefined),
+  )
+
+  const isTeamMember = createMemo(() => teamInfo() !== undefined)
+
   const permissions = createMemo(() => {
-    if (session()?.parentID) return []
+    if (session()?.parentID && !isTeamMember()) return []
     return children().flatMap((x) => sync.data.permission[x.id] ?? [])
   })
   const questions = createMemo(() => {
-    if (session()?.parentID) return []
+    if (session()?.parentID && !isTeamMember()) return []
     return children().flatMap((x) => sync.data.question[x.id] ?? [])
   })
-  const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
+  const visible = createMemo(() => {
+    if (session()?.parentID && !isTeamMember()) return false
+    return permissions().length === 0 && questions().length === 0
+  })
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
   const pending = createMemo(() => {
@@ -273,7 +302,6 @@ export function Session() {
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
-  const sdk = useSDK()
   const editor = useEditorContext()
 
   createEffect(() => {
@@ -1077,6 +1105,73 @@ export function Session() {
         dialog.clear()
         moveChild(-1)
       }),
+    },
+    {
+      title: "Go to team lead session",
+      value: "team.cycle.lead",
+      category: "Team",
+      hidden: true,
+      enabled: !!session()?.parentID,
+      run: childSessionHandler(() => {
+        const parentID = session()?.parentID
+        if (parentID) {
+          navigate({ type: "session", sessionID: parentID })
+        }
+        dialog.clear()
+      }),
+    },
+    {
+      title: "Go to first team member",
+      value: "team.member.first",
+      category: "Team",
+      hidden: true,
+      enabled: children().some((x) => !!x.parentID && x.id !== session()?.id),
+      run: () => {
+        moveFirstChild()
+        dialog.clear()
+      },
+    },
+    {
+      title: "Next team member",
+      value: "team.member.next",
+      category: "Team",
+      hidden: true,
+      enabled: !!session()?.parentID,
+      run: childSessionHandler(() => {
+        moveChild(1)
+        dialog.clear()
+      }),
+    },
+    {
+      title: "Previous team member",
+      value: "team.member.previous",
+      category: "Team",
+      hidden: true,
+      enabled: !!session()?.parentID,
+      run: childSessionHandler(() => {
+        moveChild(-1)
+        dialog.clear()
+      }),
+    },
+    {
+      title: "Toggle team panel",
+      value: "team.panel.toggle",
+      category: "Team",
+      hidden: true,
+      enabled: sync.data.config.experimental?.agent_teams === true,
+      run: () => {
+        dialog.replace(() => <DialogTeam />)
+      },
+    },
+    {
+      title: "Toggle team task list",
+      value: "team.task.list",
+      category: "Team",
+      hidden: true,
+      enabled: sync.data.config.experimental?.agent_teams === true,
+      run: () => {
+        dialog.replace(() => <DialogTeam focusTab="tasks" />)
+      },
     },
   ])
 

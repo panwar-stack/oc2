@@ -81,6 +81,9 @@ export const {
       session_status: {
         [sessionID: string]: SessionStatus
       }
+      team_member_status: {
+        [sessionID: string]: string
+      }
       session_diff: {
         [sessionID: string]: SnapshotFileDiff[]
       }
@@ -120,6 +123,7 @@ export const {
       provider_default: {},
       session: [],
       session_status: {},
+      team_member_status: {},
       session_diff: {},
       todo: {},
       message: {},
@@ -294,6 +298,11 @@ export const {
 
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
+          break
+        }
+
+        case "team.member.updated": {
+          setStore("team_member_status", event.properties.sessionID, event.properties.status)
           break
         }
 

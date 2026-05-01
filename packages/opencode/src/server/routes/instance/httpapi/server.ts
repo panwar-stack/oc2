@@ -52,6 +52,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
+import { Team } from "@/team/team"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
 import { Vcs } from "@/project/vcs"
@@ -89,6 +90,7 @@ import { questionHandlers } from "./handlers/question"
 import { referenceHandlers } from "./handlers/reference"
 import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
+import { teamHandlers } from "./handlers/team"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@opencode-ai/server/middleware/schema-error"
@@ -154,6 +156,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     providerHandlers,
     sessionHandlers,
     syncHandlers,
+    teamHandlers,
     tuiHandlers,
     workspaceHandlers,
   ]),
@@ -253,6 +256,7 @@ export function createRoutes(
       EventV2Bridge.defaultLayer,
       EventV2.defaultLayer,
       Skill.defaultLayer,
+      Team.defaultLayer,
       Todo.defaultLayer,
       ToolRegistry.defaultLayer,
       Vcs.defaultLayer,

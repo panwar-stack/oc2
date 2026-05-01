@@ -20,6 +20,7 @@ import { QuestionApi } from "./groups/question"
 import { ReferenceApi } from "./groups/reference"
 import { SessionApi } from "./groups/session"
 import { SyncApi } from "./groups/sync"
+import { TeamApi } from "./groups/team"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
 import { Api } from "@opencode-ai/server/api"
@@ -64,6 +65,7 @@ export const InstanceHttpApi = HttpApi.make("opencode-instance")
   .addHttpApi(ReferenceApi)
   .addHttpApi(SessionApi)
   .addHttpApi(SyncApi)
+  .addHttpApi(TeamApi)
   .addHttpApi(TuiApi)
   .addHttpApi(WorkspaceApi)
   .middleware(SchemaErrorMiddleware)
