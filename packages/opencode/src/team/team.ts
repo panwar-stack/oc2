@@ -1,4 +1,4 @@
-import { Database } from "@/storage/db"
+import { Database } from "@opencode-ai/core/database/database"
 import { SessionID } from "@/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { Bus } from "@/bus"

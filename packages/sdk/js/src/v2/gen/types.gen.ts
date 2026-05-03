@@ -83,6 +83,10 @@ export type Event =
   | EventQuestionRejected
   | EventSessionStatus
   | EventSessionIdle
+  | EventTeamCreated
+  | EventTeamClosed
+  | EventTeamMemberUpdated
+  | EventTeamMessageReceived
   | EventSessionCompacted
   | EventVcsBranchUpdated
   | EventWorktreeReady
@@ -2803,6 +2807,36 @@ export type ProviderNotFoundError = {
   message: string
 }
 
+export type TeamInfo = {
+  id: string
+  name: string
+  goal: string
+  lead_session_id: string
+  status: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TeamTask = {
+  id: string
+  team_id: string
+  description: string
+  status: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TeamMessage = {
+  id: string
+  team_id: string
+  sender: string
+  recipients: Array<string>
+  body: string
+  delivery_status: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
 }
@@ -5005,6 +5039,42 @@ export type EventQuestionV2Rejected = {
   properties: {
     sessionID: string
     requestID: string
+  }
+}
+
+export type EventTeamCreated = {
+  id: string
+  type: "team.created"
+  properties: {
+    teamID: string
+  }
+}
+
+export type EventTeamClosed = {
+  id: string
+  type: "team.closed"
+  properties: {
+    teamID: string
+  }
+}
+
+export type EventTeamMemberUpdated = {
+  id: string
+  type: "team.member.updated"
+  properties: {
+    memberID: string
+    sessionID: string
+    status: string
+  }
+}
+
+export type EventTeamMessageReceived = {
+  id: string
+  type: "team.message.received"
+  properties: {
+    messageID: string
+    teamID: string
+    sender: string
   }
 }
 
@@ -9910,6 +9980,155 @@ export type V2ProviderGetResponses = {
 }
 
 export type V2ProviderGetResponse = V2ProviderGetResponses[keyof V2ProviderGetResponses]
+
+export type TeamGetData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+  }
+  url: "/team"
+}
+
+export type TeamGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TeamGetError = TeamGetErrors[keyof TeamGetErrors]
+
+export type TeamGetResponses = {
+  /**
+   * Team info
+   */
+  200: TeamInfo
+}
+
+export type TeamGetResponse = TeamGetResponses[keyof TeamGetResponses]
+
+export type TeamGetByIdData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/team/{teamID}"
+}
+
+export type TeamGetByIdErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TeamGetByIdError = TeamGetByIdErrors[keyof TeamGetByIdErrors]
+
+export type TeamGetByIdResponses = {
+  /**
+   * Team info
+   */
+  200: TeamInfo
+}
+
+export type TeamGetByIdResponse = TeamGetByIdResponses[keyof TeamGetByIdResponses]
+
+export type TeamTasksData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/team/{teamID}/tasks"
+}
+
+export type TeamTasksErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TeamTasksError = TeamTasksErrors[keyof TeamTasksErrors]
+
+export type TeamTasksResponses = {
+  /**
+   * Team tasks
+   */
+  200: Array<TeamTask>
+}
+
+export type TeamTasksResponse = TeamTasksResponses[keyof TeamTasksResponses]
+
+export type TeamMessagesData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/team/{teamID}/messages"
+}
+
+export type TeamMessagesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TeamMessagesError = TeamMessagesErrors[keyof TeamMessagesErrors]
+
+export type TeamMessagesResponses = {
+  /**
+   * Team messages
+   */
+  200: Array<TeamMessage>
+}
+
+export type TeamMessagesResponse = TeamMessagesResponses[keyof TeamMessagesResponses]
+
+export type TeamShutdownData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/team/{teamID}/shutdown"
+}
+
+export type TeamShutdownErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TeamShutdownError = TeamShutdownErrors[keyof TeamShutdownErrors]
+
+export type TeamShutdownResponses = {
+  /**
+   * Team shut down
+   */
+  200: boolean
+}
+
+export type TeamShutdownResponse = TeamShutdownResponses[keyof TeamShutdownResponses]
 
 export type V2PermissionRequestListData = {
   body?: never
