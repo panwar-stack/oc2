@@ -54,7 +54,7 @@ import { Search } from "@opencode-ai/core/filesystem/search"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
-import { provideTmpdirServer, TestInstance } from "../fixture/fixture"
+import { provideTmpdirInstance, provideTmpdirServer, TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -1290,7 +1290,7 @@ it.live(
   5_000,
 )
 
-noLLMServer.instance(
+it.instance(
   "cancel finalizes subtask tool state",
   () =>
     Effect.gen(function* () {
