@@ -38,10 +38,10 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Team } from "@/team/team"
-import { Config } from "@/config/config"
+import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 
 const node = CrossSpawnSpawner.defaultLayer
-const configLayer = (config: Config.Info = {}) =>
+const configLayer = (config: ConfigV1.Info = {}) =>
   TestConfig.layer({
     get: () => Effect.succeed(config),
     directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".opencode")])),
@@ -49,7 +49,7 @@ const configLayer = (config: Config.Info = {}) =>
 
 type RegistryLayerOptions = {
   flags?: Partial<RuntimeFlags.Info>
-  config?: Config.Info
+  config?: ConfigV1.Info
   plugin?: Layer.Layer<Plugin.Service>
 }
 
@@ -63,7 +63,7 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
       Layer.provide(Skill.defaultLayer),
       Layer.provide(Agent.defaultLayer),
       Layer.provide(Session.defaultLayer),
-      Layer.provide(Layer.mergeAll(SessionStatus.defaultLayer, BackgroundJob.defaultLayer, Team.defaultLayer)),
+      Layer.provide(Layer.mergeAll(SessionStatus.defaultLayer, BackgroundJob.defaultLayer)),
       Layer.provide(Provider.defaultLayer),
       Layer.provide(Layer.mergeAll(Git.defaultLayer, RepositoryCache.defaultLayer)),
       Layer.provide(Reference.defaultLayer),
@@ -75,9 +75,12 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
       Layer.provide(Format.defaultLayer),
       Layer.provide(Layer.mergeAll(node, Database.defaultLayer)),
       Layer.provide(Search.defaultLayer),
-      Layer.provide(Truncate.defaultLayer),
     )
-    .pipe(Layer.provide(RuntimeFlags.layer(opts.flags ?? {})))
+    .pipe(
+      Layer.provide(Truncate.defaultLayer),
+      Layer.provide(Team.defaultLayer),
+      Layer.provide(RuntimeFlags.layer(opts.flags ?? {})),
+    )
 
 // Fake Plugin.Service that returns a single plugin whose `tool` map contains
 // one definition with `args: undefined`. Used to exercise the plugin entry
@@ -104,9 +107,6 @@ const brokenPluginLayer = Layer.succeed(
 )
 
 const it = testEffect(Layer.mergeAll(registryLayer(), node, Agent.defaultLayer))
-const scout = testEffect(
-  Layer.mergeAll(registryLayer({ flags: { experimentalScout: true } }), node, Agent.defaultLayer),
-)
 const background = testEffect(
   Layer.mergeAll(registryLayer({ flags: { experimentalBackgroundSubagents: true } }), node, Agent.defaultLayer),
 )
