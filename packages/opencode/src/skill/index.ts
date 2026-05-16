@@ -34,6 +34,11 @@ const CUSTOMIZE_OPENCODE_SKILL_NAME = "customize-opencode"
 const CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION =
   "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
 const CUSTOMIZE_OPENCODE_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
+const REVIEW_MEMORY_SKILL_NAME = "review-memory"
+const REVIEW_MEMORY_SKILL_DESCRIPTION =
+  "Use when coding or reviewing changes in a repository with historical review memory, especially before final response or PR review, to query opencode memory and apply cited advisory constraints."
+const REVIEW_MEMORY_SKILL_BODY = SkillPlugin.ReviewMemoryContent
+const BUILTIN_LOCATION = "<built-in>"
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -42,6 +47,25 @@ export const Info = Schema.Struct({
   content: Schema.String,
 })
 export type Info = Schema.Schema.Type<typeof Info>
+
+const BUILTIN_SKILLS = [
+  {
+    name: CUSTOMIZE_OPENCODE_SKILL_NAME,
+    description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
+    location: BUILTIN_LOCATION,
+    content: CUSTOMIZE_OPENCODE_SKILL_BODY,
+  },
+  {
+    name: REVIEW_MEMORY_SKILL_NAME,
+    description: REVIEW_MEMORY_SKILL_DESCRIPTION,
+    location: BUILTIN_LOCATION,
+    content: REVIEW_MEMORY_SKILL_BODY,
+  },
+] satisfies Info[]
+
+export function isBuiltinLocation(location: string) {
+  return location === BUILTIN_LOCATION
+}
 
 const Issue = Schema.StructWithRest(
   Schema.Struct({
@@ -275,12 +299,7 @@ export const layer = Layer.effect(
         const s: State = { skills: {}, dirs: new Set() }
         // Register the built-in skill BEFORE disk discovery so a user-disk
         // skill with the same name can override it.
-        s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
-          name: CUSTOMIZE_OPENCODE_SKILL_NAME,
-          description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
-          location: "<built-in>",
-          content: CUSTOMIZE_OPENCODE_SKILL_BODY,
-        }
+        for (const item of BUILTIN_SKILLS) s.skills[item.name] = item
         yield* loadSkills(s, yield* InstanceState.get(discovered), events)
         return s
       }),
@@ -339,7 +358,7 @@ export function fmt(list: Info[], opts: { verbose: boolean }) {
           "  <skill>",
           `    <name>${skill.name}</name>`,
           `    <description>${skill.description}</description>`,
-          `    <location>${pathToFileURL(skill.location).href}</location>`,
+          `    <location>${isBuiltinLocation(skill.location) ? skill.location : pathToFileURL(skill.location).href}</location>`,
           "  </skill>",
         ]),
       "</available_skills>",

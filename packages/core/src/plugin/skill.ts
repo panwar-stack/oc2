@@ -7,8 +7,10 @@ import { PluginV2 } from "../plugin"
 import { AbsolutePath } from "../schema"
 import { SkillV2 } from "../skill"
 import customizeOpencodeContent from "./skill/customize-opencode.md" with { type: "text" }
+import reviewMemoryContent from "./skill/review-memory.md" with { type: "text" }
 
 export const CustomizeOpencodeContent = customizeOpencodeContent
+export const ReviewMemoryContent = reviewMemoryContent
 
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("skill"),
@@ -26,6 +28,18 @@ export const Plugin = PluginV2.define({
               "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.",
             location: AbsolutePath.make("/builtin/customize-opencode.md"),
             content: CustomizeOpencodeContent,
+          }),
+        }),
+      )
+      editor.source(
+        new SkillV2.EmbeddedSource({
+          type: "embedded",
+          skill: new SkillV2.Info({
+            name: "review-memory",
+            description:
+              "Use when coding or reviewing changes in a repository with historical review memory, especially before final response or PR review, to query opencode memory and apply cited advisory constraints.",
+            location: AbsolutePath.make("/builtin/review-memory.md"),
+            content: ReviewMemoryContent,
           }),
         }),
       )
