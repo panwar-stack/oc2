@@ -25,6 +25,7 @@ export class SessionAlreadyProjected extends Error {}
 
 type Usage = {
   cost: number
+  duration: number
   tokens: {
     input: number
     output: number
@@ -38,7 +39,11 @@ function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] |
   const value = part as Record<string, unknown>
   if (value.type !== "step-finish") return undefined
   if (!("cost" in value) || !("tokens" in value)) return undefined
-  return { cost: value.cost as Usage["cost"], tokens: value.tokens as Usage["tokens"] }
+  return {
+    cost: value.cost as Usage["cost"],
+    duration: typeof value.duration === "number" ? value.duration : 0,
+    tokens: value.tokens as Usage["tokens"],
+  }
 }
 
 function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {
@@ -70,6 +75,7 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     permission: info.permission ? [...info.permission] : undefined,
     time_created: info.time.created,
     time_updated: info.time.updated,
+    time_processing: info.time.processing ?? 0,
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
   }
@@ -97,6 +103,7 @@ function applyUsage(
     .update(SessionTable)
     .set({
       cost: sql`${SessionTable.cost} + ${value.cost * sign}`,
+      time_processing: sql`${SessionTable.time_processing} + ${value.duration * sign}`,
       tokens_input: sql`${SessionTable.tokens_input} + ${value.tokens.input * sign}`,
       tokens_output: sql`${SessionTable.tokens_output} + ${value.tokens.output * sign}`,
       tokens_reasoning: sql`${SessionTable.tokens_reasoning} + ${value.tokens.reasoning * sign}`,
