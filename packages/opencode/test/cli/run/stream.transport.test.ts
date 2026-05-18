@@ -359,6 +359,7 @@ function child(id: string): SessionChild {
     time: {
       created: 1,
       updated: 1,
+      processing: 0,
     },
   }
 }

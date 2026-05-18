@@ -213,6 +213,7 @@ export type Session = {
     updated: number
     compacting?: number
     archived?: number
+    processing: number
   }
   permission?: PermissionRuleset
   revert?: {
@@ -2283,6 +2284,7 @@ export type GlobalSession = {
     updated: number
     compacting?: number
     archived?: number
+    processing: number
   }
   permission?: PermissionRuleset
   revert?: {
@@ -3954,6 +3956,7 @@ export type SessionV2Info = {
     created: number
     updated: number
     archived?: number
+    processing: number
   }
   title: string
   location: LocationRef
