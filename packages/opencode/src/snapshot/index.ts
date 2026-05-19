@@ -74,6 +74,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Snapshot.state")(function* (ctx) {
+        // Multi-root sessions intentionally keep snapshots scoped to the primary root for now.
         const state = {
           directory: ctx.directory,
           worktree: ctx.worktree,

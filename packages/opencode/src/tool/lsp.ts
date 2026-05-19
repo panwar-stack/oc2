@@ -75,31 +75,31 @@ export const LspTool = Tool.define(
           const exists = yield* fs.existsSafe(file)
           if (!exists) throw new Error(`File not found: ${file}`)
 
-          const available = yield* lsp.hasClients(file)
+          const available = yield* lsp.hasClients(file, resolved.root)
           if (!available) throw new Error("No LSP server available for this file type.")
 
-          yield* lsp.touchFile(file, "document")
+          yield* lsp.touchFile(file, "document", resolved.root)
 
           const result: unknown[] = yield* (() => {
             switch (args.operation) {
               case "goToDefinition":
-                return lsp.definition(position)
+                return lsp.definition(position, resolved.root)
               case "findReferences":
-                return lsp.references(position)
+                return lsp.references(position, resolved.root)
               case "hover":
-                return lsp.hover(position)
+                return lsp.hover(position, resolved.root)
               case "documentSymbol":
-                return lsp.documentSymbol(uri)
+                return lsp.documentSymbol(uri, resolved.root)
               case "workspaceSymbol":
                 return lsp.workspaceSymbol(args.query ?? "")
               case "goToImplementation":
-                return lsp.implementation(position)
+                return lsp.implementation(position, resolved.root)
               case "prepareCallHierarchy":
-                return lsp.prepareCallHierarchy(position)
+                return lsp.prepareCallHierarchy(position, resolved.root)
               case "incomingCalls":
-                return lsp.incomingCalls(position)
+                return lsp.incomingCalls(position, resolved.root)
               case "outgoingCalls":
-                return lsp.outgoingCalls(position)
+                return lsp.outgoingCalls(position, resolved.root)
             }
           })()
 

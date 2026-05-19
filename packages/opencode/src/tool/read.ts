@@ -120,10 +120,10 @@ export const ReadTool = Tool.define<
       ).pipe(Effect.map((items: string[]) => items.sort((a, b) => a.localeCompare(b))))
     })
 
-    const warm = Effect.fn("ReadTool.warm")(function* (filepath: string) {
+    const warm = Effect.fn("ReadTool.warm")(function* (filepath: string, root: ToolPath.Root) {
       yield* search.open({ file: filepath }).pipe(Effect.ignore)
       // LSP warm-up is optional; do not let a background defect fail an otherwise successful read.
-      yield* lsp.touchFile(filepath).pipe(Effect.ignoreCause, Effect.forkIn(scope))
+      yield* lsp.touchFile(filepath, undefined, root).pipe(Effect.ignoreCause, Effect.forkIn(scope))
     })
 
     const readSample = Effect.fn("ReadTool.readSample")(function* (
@@ -352,7 +352,7 @@ export const ReadTool = Tool.define<
       }
       output += "\n</content>"
 
-      yield* warm(filepath)
+      yield* warm(filepath, resolved.root)
 
       if (loaded.length > 0) {
         output += `\n\n<system-reminder>\n${loaded.map((item) => item.content).join("\n\n")}\n</system-reminder>`

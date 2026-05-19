@@ -11,6 +11,7 @@ import { spawn as lspspawn } from "./launch"
 import { Effect, Layer, Context, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { containsPath } from "@/project/instance-context"
+import type { InstanceContext } from "@/project/instance-context"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -112,6 +113,7 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
 }
 
 type LocInput = { file: string; line: number; character: number }
+export type FileRoot = Pick<InstanceContext, "directory" | "worktree">
 
 interface State {
   clients: LSPClient.Info[]
@@ -123,18 +125,18 @@ interface State {
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly status: () => Effect.Effect<Status[]>
-  readonly hasClients: (file: string) => Effect.Effect<boolean>
-  readonly touchFile: (input: string, diagnostics?: "document" | "full") => Effect.Effect<void>
+  readonly hasClients: (file: string, root?: FileRoot) => Effect.Effect<boolean>
+  readonly touchFile: (input: string, diagnostics?: "document" | "full", root?: FileRoot) => Effect.Effect<void>
   readonly diagnostics: () => Effect.Effect<Record<string, LSPClient.Diagnostic[]>>
-  readonly hover: (input: LocInput) => Effect.Effect<any>
-  readonly definition: (input: LocInput) => Effect.Effect<any[]>
-  readonly references: (input: LocInput) => Effect.Effect<any[]>
-  readonly implementation: (input: LocInput) => Effect.Effect<any[]>
-  readonly documentSymbol: (uri: string) => Effect.Effect<(DocumentSymbol | Symbol)[]>
+  readonly hover: (input: LocInput, root?: FileRoot) => Effect.Effect<any>
+  readonly definition: (input: LocInput, root?: FileRoot) => Effect.Effect<any[]>
+  readonly references: (input: LocInput, root?: FileRoot) => Effect.Effect<any[]>
+  readonly implementation: (input: LocInput, root?: FileRoot) => Effect.Effect<any[]>
+  readonly documentSymbol: (uri: string, root?: FileRoot) => Effect.Effect<(DocumentSymbol | Symbol)[]>
   readonly workspaceSymbol: (query: string) => Effect.Effect<Symbol[]>
-  readonly prepareCallHierarchy: (input: LocInput) => Effect.Effect<any[]>
-  readonly incomingCalls: (input: LocInput) => Effect.Effect<any[]>
-  readonly outgoingCalls: (input: LocInput) => Effect.Effect<any[]>
+  readonly prepareCallHierarchy: (input: LocInput, root?: FileRoot) => Effect.Effect<any[]>
+  readonly incomingCalls: (input: LocInput, root?: FileRoot) => Effect.Effect<any[]>
+  readonly outgoingCalls: (input: LocInput, root?: FileRoot) => Effect.Effect<any[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/LSP") {}
@@ -209,9 +211,10 @@ export const layer = Layer.effect(
       }),
     )
 
-    const getClients = Effect.fnUntraced(function* (file: string) {
+    const getClients = Effect.fnUntraced(function* (file: string, owner?: FileRoot) {
       const ctx = yield* InstanceState.context
-      if (!containsPath(file, ctx)) return [] as LSPClient.Info[]
+      const fileCtx = owner ? { ...ctx, directory: owner.directory, worktree: owner.worktree } : ctx
+      if (!containsPath(file, fileCtx)) return [] as LSPClient.Info[]
       const s = yield* InstanceState.get(state)
       const clients = yield* Effect.promise(async () => {
         const extension = path.parse(file).ext || file
@@ -220,7 +223,7 @@ export const layer = Layer.effect(
 
         async function schedule(server: LSPServer.Info, root: string, key: string) {
           const handle = await server
-            .spawn(root, ctx, flags)
+            .spawn(root, fileCtx, flags)
             .then((value) => {
               if (!value) s.broken.add(key)
               return value
@@ -238,8 +241,8 @@ export const layer = Layer.effect(
             serverID: server.id,
             server: handle,
             root,
-            directory: ctx.directory,
-            instance: ctx,
+            directory: fileCtx.directory,
+            instance: fileCtx,
           }).catch(async (err) => {
             s.broken.add(key)
             await Process.stop(handle.process)
@@ -262,7 +265,7 @@ export const layer = Layer.effect(
         for (const server of Object.values(s.servers)) {
           if (server.extensions.length && !server.extensions.includes(extension)) continue
 
-          const root = await server.root(file, ctx)
+          const root = await server.root(file, fileCtx)
           if (!root) continue
           if (s.broken.has(root + server.id)) continue
 
@@ -304,8 +307,12 @@ export const layer = Layer.effect(
       return clients.result
     })
 
-    const run = Effect.fnUntraced(function* <T>(file: string, fn: (client: LSPClient.Info) => Promise<T>) {
-      const clients = yield* getClients(file)
+    const run = Effect.fnUntraced(function* <T>(
+      file: string,
+      fn: (client: LSPClient.Info) => Promise<T>,
+      root?: FileRoot,
+    ) {
+      const clients = yield* getClients(file, root)
       return yield* Effect.promise(() => Promise.all(clients.map((x) => fn(x))))
     })
 
@@ -333,14 +340,16 @@ export const layer = Layer.effect(
       return result
     })
 
-    const hasClients = Effect.fn("LSP.hasClients")(function* (file: string) {
+    const hasClients = Effect.fn("LSP.hasClients")(function* (file: string, owner?: FileRoot) {
       const ctx = yield* InstanceState.context
+      const fileCtx = owner ? { ...ctx, directory: owner.directory, worktree: owner.worktree } : ctx
+      if (!containsPath(file, fileCtx)) return false
       const s = yield* InstanceState.get(state)
       return yield* Effect.promise(async () => {
         const extension = path.parse(file).ext || file
         for (const server of Object.values(s.servers)) {
           if (server.extensions.length && !server.extensions.includes(extension)) continue
-          const root = await server.root(file, ctx)
+          const root = await server.root(file, fileCtx)
           if (!root) continue
           if (s.broken.has(root + server.id)) continue
           return true
@@ -349,9 +358,13 @@ export const layer = Layer.effect(
       })
     })
 
-    const touchFile = Effect.fn("LSP.touchFile")(function* (input: string, diagnostics?: "document" | "full") {
+    const touchFile = Effect.fn("LSP.touchFile")(function* (
+      input: string,
+      diagnostics?: "document" | "full",
+      root?: FileRoot,
+    ) {
       log.info("touching file", { file: input })
-      const clients = yield* getClients(input)
+      const clients = yield* getClients(input, root)
       yield* Effect.promise(() =>
         Promise.all(
           clients.map(async (client) => {
@@ -384,7 +397,7 @@ export const layer = Layer.effect(
       return results
     })
 
-    const hover = Effect.fn("LSP.hover")(function* (input: LocInput) {
+    const hover = Effect.fn("LSP.hover")(function* (input: LocInput, root?: FileRoot) {
       return yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/hover", {
@@ -392,10 +405,11 @@ export const layer = Layer.effect(
             position: { line: input.line, character: input.character },
           })
           .catch(() => null),
+        root,
       )
     })
 
-    const definition = Effect.fn("LSP.definition")(function* (input: LocInput) {
+    const definition = Effect.fn("LSP.definition")(function* (input: LocInput, root?: FileRoot) {
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/definition", {
@@ -403,11 +417,12 @@ export const layer = Layer.effect(
             position: { line: input.line, character: input.character },
           })
           .catch(() => null),
+        root,
       )
       return results.flat().filter(Boolean)
     })
 
-    const references = Effect.fn("LSP.references")(function* (input: LocInput) {
+    const references = Effect.fn("LSP.references")(function* (input: LocInput, root?: FileRoot) {
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/references", {
@@ -416,11 +431,12 @@ export const layer = Layer.effect(
             context: { includeDeclaration: true },
           })
           .catch(() => []),
+        root,
       )
       return results.flat().filter(Boolean)
     })
 
-    const implementation = Effect.fn("LSP.implementation")(function* (input: LocInput) {
+    const implementation = Effect.fn("LSP.implementation")(function* (input: LocInput, root?: FileRoot) {
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/implementation", {
@@ -428,14 +444,16 @@ export const layer = Layer.effect(
             position: { line: input.line, character: input.character },
           })
           .catch(() => null),
+        root,
       )
       return results.flat().filter(Boolean)
     })
 
-    const documentSymbol = Effect.fn("LSP.documentSymbol")(function* (uri: string) {
+    const documentSymbol = Effect.fn("LSP.documentSymbol")(function* (uri: string, root?: FileRoot) {
       const file = fileURLToPath(uri)
       const results = yield* run(file, (client) =>
         client.connection.sendRequest("textDocument/documentSymbol", { textDocument: { uri } }).catch(() => []),
+        root,
       )
       return (results.flat() as (DocumentSymbol | Symbol)[]).filter(Boolean)
     })
@@ -450,7 +468,7 @@ export const layer = Layer.effect(
       return results.flat()
     })
 
-    const prepareCallHierarchy = Effect.fn("LSP.prepareCallHierarchy")(function* (input: LocInput) {
+    const prepareCallHierarchy = Effect.fn("LSP.prepareCallHierarchy")(function* (input: LocInput, root?: FileRoot) {
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/prepareCallHierarchy", {
@@ -458,6 +476,7 @@ export const layer = Layer.effect(
             position: { line: input.line, character: input.character },
           })
           .catch(() => []),
+        root,
       )
       return results.flat().filter(Boolean)
     })
@@ -465,6 +484,7 @@ export const layer = Layer.effect(
     const callHierarchyRequest = Effect.fnUntraced(function* (
       input: LocInput,
       direction: "callHierarchy/incomingCalls" | "callHierarchy/outgoingCalls",
+      root?: FileRoot,
     ) {
       const results = yield* run(input.file, async (client) => {
         const items = await client.connection
@@ -475,16 +495,16 @@ export const layer = Layer.effect(
           .catch(() => [] as unknown[])
         if (!items?.length) return []
         return client.connection.sendRequest(direction, { item: items[0] }).catch(() => [])
-      })
+      }, root)
       return results.flat().filter(Boolean)
     })
 
-    const incomingCalls = Effect.fn("LSP.incomingCalls")(function* (input: LocInput) {
-      return yield* callHierarchyRequest(input, "callHierarchy/incomingCalls")
+    const incomingCalls = Effect.fn("LSP.incomingCalls")(function* (input: LocInput, root?: FileRoot) {
+      return yield* callHierarchyRequest(input, "callHierarchy/incomingCalls", root)
     })
 
-    const outgoingCalls = Effect.fn("LSP.outgoingCalls")(function* (input: LocInput) {
-      return yield* callHierarchyRequest(input, "callHierarchy/outgoingCalls")
+    const outgoingCalls = Effect.fn("LSP.outgoingCalls")(function* (input: LocInput, root?: FileRoot) {
+      return yield* callHierarchyRequest(input, "callHierarchy/outgoingCalls", root)
     })
 
     return Service.of({
