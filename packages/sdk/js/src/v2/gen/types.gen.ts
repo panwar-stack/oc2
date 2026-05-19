@@ -2638,6 +2638,18 @@ export type NotFoundError = {
   }
 }
 
+export type SessionRoot = {
+  id: string
+  sessionID: string
+  name?: string
+  directory: string
+  worktree: string
+  projectID: string
+  path?: string
+  created: number
+  primary: boolean
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -7819,6 +7831,150 @@ export type ReferenceListResponses = {
 }
 
 export type ReferenceListResponse = ReferenceListResponses[keyof ReferenceListResponses]
+
+export type SessionRootListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/root"
+}
+
+export type SessionRootListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionRootListError = SessionRootListErrors[keyof SessionRootListErrors]
+
+export type SessionRootListResponses = {
+  /**
+   * List of session roots
+   */
+  200: Array<SessionRoot>
+}
+
+export type SessionRootListResponse = SessionRootListResponses[keyof SessionRootListResponses]
+
+export type SessionRootAddData = {
+  body?: {
+    directory: string
+    name?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/root"
+}
+
+export type SessionRootAddErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionRootAddError = SessionRootAddErrors[keyof SessionRootAddErrors]
+
+export type SessionRootAddResponses = {
+  /**
+   * Successfully added session root
+   */
+  200: SessionRoot
+}
+
+export type SessionRootAddResponse = SessionRootAddResponses[keyof SessionRootAddResponses]
+
+export type SessionRootDeleteData = {
+  body?: never
+  path: {
+    sessionID: string
+    rootID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/root/{rootID}"
+}
+
+export type SessionRootDeleteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionRootDeleteError = SessionRootDeleteErrors[keyof SessionRootDeleteErrors]
+
+export type SessionRootDeleteResponses = {
+  /**
+   * Successfully deleted session root
+   */
+  200: boolean
+}
+
+export type SessionRootDeleteResponse = SessionRootDeleteResponses[keyof SessionRootDeleteResponses]
+
+export type SessionRootUpdateData = {
+  body?: {
+    name?: string
+    primary?: boolean
+  }
+  path: {
+    sessionID: string
+    rootID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/root/{rootID}"
+}
+
+export type SessionRootUpdateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionRootUpdateError = SessionRootUpdateErrors[keyof SessionRootUpdateErrors]
+
+export type SessionRootUpdateResponses = {
+  /**
+   * Successfully updated session root
+   */
+  200: SessionRoot
+}
+
+export type SessionRootUpdateResponse = SessionRootUpdateResponses[keyof SessionRootUpdateResponses]
 
 export type SessionListData = {
   body?: never
