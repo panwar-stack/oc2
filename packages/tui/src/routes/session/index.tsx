@@ -83,6 +83,7 @@ import { DialogTeam } from "../../component/dialog-team"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
+import { DialogRoots } from "./dialog-roots"
 
 addDefaultParsers(parsers.parsers)
 
@@ -118,6 +119,7 @@ const sessionBindingCommands = [
   "session.timeline",
   "session.fork",
   "session.compact",
+  "session.roots",
   "session.unshare",
   "session.undo",
   "session.redo",
@@ -201,6 +203,7 @@ export function Session() {
   const promptRef = usePromptRef()
   const sdk = useSDK()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const primaryRoot = createMemo(() => sync.data.session_root[route.sessionID]?.find((root) => root.primary))
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -522,6 +525,21 @@ export function Session() {
             })
           })
         dialog.clear()
+      },
+    },
+    {
+      title: "Manage roots",
+      value: "session.roots",
+      category: "Session",
+      slash: {
+        name: "roots",
+        aliases: ["cwd", "dirs"],
+      },
+      run: () => {
+        void sync.session
+          .refreshRoots(route.sessionID)
+          .catch((error) => toast.show({ message: errorMessage(error), variant: "error" }))
+          .finally(() => dialog.replace(() => <DialogRoots sessionID={route.sessionID} />))
       },
     },
     {
@@ -1238,7 +1256,7 @@ export function Session() {
   createEffect(on(() => route.sessionID, toBottom))
 
   return (
-    <PathFormatterProvider path={session()?.directory}>
+    <PathFormatterProvider path={primaryRoot()?.directory ?? session()?.directory}>
       <context.Provider
         value={{
           get width() {

@@ -19,6 +19,7 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
+  SessionRoot,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -78,6 +79,9 @@ export const {
       }
       config: Config
       session: Session[]
+      session_root: {
+        [sessionID: string]: SessionRoot[]
+      }
       session_status: {
         [sessionID: string]: SessionStatus
       }
@@ -122,6 +126,7 @@ export const {
       provider: [],
       provider_default: {},
       session: [],
+      session_root: {},
       session_status: {},
       team_member_status: {},
       session_diff: {},
@@ -263,6 +268,12 @@ export const {
               }),
             )
           }
+          setStore(
+            "session_root",
+            produce((draft) => {
+              delete draft[event.properties.info.id]
+            }),
+          )
           break
         }
         case "session.updated": {
@@ -569,6 +580,21 @@ export const {
           const list = await listSessions()
           setStore("session", reconcile(list))
         },
+        async refreshRoots(sessionID: string) {
+          const [session, roots] = await Promise.all([
+            sdk.client.session.get({ sessionID }, { throwOnError: true }),
+            sdk.client.session.root.list({ sessionID }, { throwOnError: true }),
+          ])
+          setStore(
+            produce((draft) => {
+              const match = search(draft.session, sessionID, (s) => s.id)
+              if (match.found) draft.session[match.index] = session.data!
+              if (!match.found) draft.session.splice(match.index, 0, session.data!)
+              draft.session_root[sessionID] = roots.data ?? []
+            }),
+          )
+          return roots.data ?? []
+        },
         status(sessionID: string) {
           const session = result.session.get(sessionID)
           if (!session) return "idle"
@@ -586,8 +612,9 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
+            const [session, roots, messages, todo, diff] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
+              sdk.client.session.root.list({ sessionID }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
@@ -597,6 +624,7 @@ export const {
                 const match = search(draft.session, sessionID, (s) => s.id)
                 if (match.found) draft.session[match.index] = session.data!
                 if (!match.found) draft.session.splice(match.index, 0, session.data!)
+                draft.session_root[sessionID] = roots.data ?? []
                 draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
                 const infos = (messages.data ?? []).flatMap((message) => {
