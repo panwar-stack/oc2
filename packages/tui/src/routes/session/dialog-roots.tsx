@@ -7,7 +7,7 @@ import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogPrompt } from "../../ui/dialog-prompt"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
 import { useDialog } from "../../ui/dialog"
-import { usePathFormatter } from "../../context/path-format"
+import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { useSDK } from "../../context/sdk"
 import { useSync } from "../../context/sync"
 import { useTheme } from "../../context/theme"
@@ -23,6 +23,18 @@ type RootOption =
     }
 
 export function DialogRoots(props: { sessionID: string }) {
+  const sync = useSync()
+  const session = createMemo(() => sync.session.get(props.sessionID))
+  const primaryRoot = createMemo(() => sync.data.session_root[props.sessionID]?.find((root) => root.primary))
+
+  return (
+    <PathFormatterProvider path={primaryRoot()?.directory ?? session()?.directory}>
+      <DialogRootsContent sessionID={props.sessionID} />
+    </PathFormatterProvider>
+  )
+}
+
+function DialogRootsContent(props: { sessionID: string }) {
   const dialog = useDialog()
   const sync = useSync()
   const sdk = useSDK()
