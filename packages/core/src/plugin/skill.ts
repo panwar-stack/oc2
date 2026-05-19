@@ -9,10 +9,12 @@ import { SkillV2 } from "../skill"
 import customizeOpencodeContent from "./skill/customize-opencode.md" with { type: "text" }
 import reviewMemoryContent from "./skill/review-memory.md" with { type: "text" }
 import specPlannerContent from "./skill/spec-planner.md" with { type: "text" }
+import teamReportContent from "./skill/team-report.md" with { type: "text" }
 
 export const CustomizeOpencodeContent = customizeOpencodeContent
 export const ReviewMemoryContent = reviewMemoryContent
 export const SpecPlannerContent = specPlannerContent
+export const TeamReportContent = teamReportContent
 
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("skill"),
@@ -54,6 +56,17 @@ export const Plugin = PluginV2.define({
               "Convert rough user requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs. Use when Codex needs to draft a Markdown spec, implementation plan, PR breakdown, acceptance criteria, verification plan, or repo-ready proposal similar to opencode specs such as packages/opencode/specs/agent-team-evaluation.md.",
             location: AbsolutePath.make("/builtin/spec-planner.md"),
             content: SpecPlannerContent,
+          }),
+        }),
+      )
+      editor.source(
+        new SkillV2.EmbeddedSource({
+          type: "embedded",
+          skill: new SkillV2.Info({
+            name: "team-report",
+            description: "Generate a post-run agent-team effectiveness report and optional baseline comparisons.",
+            location: AbsolutePath.make("/builtin/team-report.md"),
+            content: TeamReportContent,
           }),
         }),
       )
