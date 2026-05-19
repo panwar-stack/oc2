@@ -8,9 +8,11 @@ import { AbsolutePath } from "../schema"
 import { SkillV2 } from "../skill"
 import customizeOpencodeContent from "./skill/customize-opencode.md" with { type: "text" }
 import reviewMemoryContent from "./skill/review-memory.md" with { type: "text" }
+import specPlannerContent from "./skill/spec-planner.md" with { type: "text" }
 
 export const CustomizeOpencodeContent = customizeOpencodeContent
 export const ReviewMemoryContent = reviewMemoryContent
+export const SpecPlannerContent = specPlannerContent
 
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("skill"),
@@ -40,6 +42,18 @@ export const Plugin = PluginV2.define({
               "Use when coding or reviewing changes in a repository with historical review memory, especially before final response or PR review, to query opencode memory and apply cited advisory constraints.",
             location: AbsolutePath.make("/builtin/review-memory.md"),
             content: ReviewMemoryContent,
+          }),
+        }),
+      )
+      editor.source(
+        new SkillV2.EmbeddedSource({
+          type: "embedded",
+          skill: new SkillV2.Info({
+            name: "spec-planner",
+            description:
+              "Convert rough user requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs. Use when Codex needs to draft a Markdown spec, implementation plan, PR breakdown, acceptance criteria, verification plan, or repo-ready proposal similar to opencode specs such as packages/opencode/specs/agent-team-evaluation.md.",
+            location: AbsolutePath.make("/builtin/spec-planner.md"),
+            content: SpecPlannerContent,
           }),
         }),
       )
