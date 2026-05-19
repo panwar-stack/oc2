@@ -7,6 +7,7 @@ import { Effect, Layer } from "effect"
 import { GrepTool } from "../../src/tool/grep"
 import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
+import { Session } from "@/session/session"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Global } from "@opencode-ai/core/global"
 import { Truncate } from "@/tool/truncate"
@@ -35,6 +36,8 @@ const toolLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     CrossSpawnSpawner.defaultLayer,
     FSUtil.defaultLayer,
     Search.defaultLayer,
+    Session.defaultLayer,
+    testInstanceStoreLayer,
     Truncate.defaultLayer,
     Agent.defaultLayer,
     Git.defaultLayer,
@@ -43,7 +46,7 @@ const toolLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
 
 const it = testEffect(toolLayer())
 const references = testEffect(toolLayer({ experimentalReferences: true }))
-const rooted = testEffect(Layer.mergeAll(toolLayer(), testInstanceStoreLayer))
+const rooted = testEffect(toolLayer())
 
 const ctx = {
   sessionID: SessionID.make("ses_test"),
@@ -92,7 +95,43 @@ const git = Effect.fn("GrepToolTest.git")(function* (cwd: string, args: string[]
 })
 
 describe("tool.grep", () => {
-  rooted.live("basic search", () =>
+  it.live("searches inside a registered secondary root", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const secondary = yield* tmpdirScoped({ git: true })
+      const requests: Array<{ permission: string }> = []
+      yield* Effect.promise(() => Bun.write(path.join(secondary, "test.txt"), "needle\n"))
+
+      const info = yield* provideInstance(primary)(
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const info = yield* session.create({ title: "tool roots" })
+          yield* session.addRoot({ sessionID: info.id, directory: secondary })
+          return info
+        }),
+      )
+      const grep = yield* (yield* GrepTool).init()
+      const result = yield* provideInstance(primary)(
+        grep.execute(
+          { pattern: "needle", path: secondary, include: "*.txt" },
+          {
+            ...ctx,
+            sessionID: info.id,
+            ask: (request) =>
+              Effect.sync(() => {
+                requests.push(request)
+              }),
+          },
+        ),
+      )
+
+      expect(result.metadata.matches).toBe(1)
+      expect(result.output).toContain(path.join(secondary, "test.txt"))
+      expect(requests.find((request) => request.permission === "external_directory")).toBeUndefined()
+    }),
+  )
+
+  it.live("basic search", () =>
     Effect.gen(function* () {
       const info = yield* GrepTool
       const grep = yield* info.init()

@@ -1,12 +1,12 @@
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
-import path from "path"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./lsp.txt"
-import { InstanceState } from "@/effect/instance-state"
 import { pathToFileURL } from "url"
-import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { assertExternalDirectoryWithSession } from "./external-directory"
+import { Session } from "@/session/session"
+import { ToolPath } from "./path"
 
 const operations = [
   "goToDefinition",
@@ -39,14 +39,15 @@ export const LspTool = Tool.define(
   Effect.gen(function* () {
     const lsp = yield* LSP.Service
     const fs = yield* FSUtil.Service
+    const session = yield* Session.Service
     return {
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (args: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
-          const instance = yield* InstanceState.context
-          const file = path.isAbsolute(args.filePath) ? args.filePath : path.join(instance.directory, args.filePath)
-          yield* assertExternalDirectoryEffect(ctx, file)
+          const resolved = yield* ToolPath.resolveWithSession(session, ctx, args.filePath)
+          const file = resolved.path
+          yield* assertExternalDirectoryWithSession(session, ctx, file)
           const meta =
             args.operation === "workspaceSymbol"
               ? { operation: args.operation }
@@ -62,7 +63,7 @@ export const LspTool = Tool.define(
 
           const uri = pathToFileURL(file).href
           const position = { file, line: args.line - 1, character: args.character - 1 }
-          const relPath = path.relative(instance.worktree, file)
+          const relPath = resolved.relative
           const detail =
             args.operation === "workspaceSymbol"
               ? ""

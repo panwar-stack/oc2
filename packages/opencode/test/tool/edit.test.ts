@@ -3,7 +3,8 @@ import path from "path"
 import fs from "fs/promises"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EditTool } from "../../src/tool/edit"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { disposeAllInstances, provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Format } from "../../src/format"
@@ -11,6 +12,7 @@ import { Agent } from "../../src/agent/agent"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
+import { Session } from "@/session/session"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
@@ -33,8 +35,11 @@ afterEach(async () => {
 const layer = Layer.mergeAll(
   LSP.defaultLayer,
   FSUtil.defaultLayer,
+  CrossSpawnSpawner.defaultLayer,
   Format.defaultLayer,
   EventV2Bridge.defaultLayer,
+  Session.defaultLayer,
+  testInstanceStoreLayer,
   Truncate.defaultLayer,
   Agent.defaultLayer,
 )
@@ -94,6 +99,43 @@ const onceBus = Effect.fn("EditToolTest.onceBus")(function* (def: typeof Watcher
 })
 
 describe("tool.edit", () => {
+  it.live("edits absolute paths inside a registered secondary root", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const secondary = yield* tmpdirScoped({ git: true })
+      const filepath = path.join(secondary, "edit.txt")
+      const requests: Parameters<Tool.Context["ask"]>[0][] = []
+      yield* put(filepath, "old value")
+
+      const info = yield* provideInstance(primary)(
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const info = yield* session.create({ title: "tool roots" })
+          yield* session.addRoot({ sessionID: info.id, directory: secondary })
+          return info
+        }),
+      )
+
+      yield* provideInstance(primary)(
+        run(
+          { filePath: filepath, oldString: "old", newString: "new" },
+          {
+            ...ctx,
+            sessionID: info.id,
+            ask: (request) =>
+              Effect.sync(() => {
+                requests.push(request)
+              }),
+          },
+        ),
+      )
+
+      expect(yield* load(filepath)).toBe("new value")
+      expect(requests.find((request) => request.permission === "external_directory")).toBeUndefined()
+      expect(requests.find((request) => request.permission === "edit")?.patterns).toEqual(["edit.txt"])
+    }),
+  )
+
   describe("creating new files", () => {
     it.instance("creates new file when oldString is empty", () =>
       Effect.gen(function* () {
