@@ -1,5 +1,5 @@
 import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
-import * as DatabasePath from "../database/path"
+import { directoryColumn, pathColumn } from "../database/path"
 import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
 import type { Prompt } from "./prompt"
@@ -29,8 +29,8 @@ export const SessionTable = sqliteTable(
     workspace_id: text().$type<WorkspaceV2.ID>(),
     parent_id: text().$type<SessionSchema.ID>(),
     slug: text().notNull(),
-    directory: DatabasePath.directoryColumn().notNull(),
-    path: DatabasePath.pathColumn(),
+    directory: directoryColumn().notNull(),
+    path: pathColumn(),
     title: text().notNull(),
     version: text().notNull(),
     share_url: text(),
@@ -62,6 +62,31 @@ export const SessionTable = sqliteTable(
     index("session_project_idx").on(table.project_id),
     index("session_workspace_idx").on(table.workspace_id),
     index("session_parent_idx").on(table.parent_id),
+  ],
+)
+
+export const SessionRootTable = sqliteTable(
+  "session_root",
+  {
+    id: text().$type<string>().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    name: text(),
+    directory: directoryColumn().notNull(),
+    worktree: directoryColumn().notNull(),
+    project_id: text()
+      .$type<ProjectV2.ID>()
+      .notNull()
+      .references(() => ProjectTable.id, { onDelete: "cascade" }),
+    path: pathColumn(),
+    created: integer().notNull(),
+    primary: integer({ mode: "boolean" }).notNull().default(false),
+  },
+  (table) => [
+    uniqueIndex("session_root_session_directory_idx").on(table.session_id, table.directory),
+    index("session_root_session_idx").on(table.session_id),
   ],
 )
 

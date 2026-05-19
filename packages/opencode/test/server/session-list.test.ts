@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { Session as SessionNs } from "@/session/session"
+import { Project } from "@/project/project"
 import * as Log from "@opencode-ai/core/util/log"
 import { disposeAllInstances, provideInstance, TestInstance } from "../fixture/fixture"
 import { mkdir } from "fs/promises"
@@ -11,7 +12,6 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { eq } from "drizzle-orm"
 import { testEffect } from "../lib/effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { Storage } from "@/storage/storage"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "@/background/job"
 
@@ -21,12 +21,12 @@ const layer = (experimentalWorkspaces: boolean) =>
     Database.defaultLayer,
     SessionNs.layer.pipe(
       Layer.provide(EventV2Bridge.defaultLayer),
-      Layer.provide(Storage.defaultLayer),
       Layer.provide(Database.defaultLayer),
       Layer.provide(EventV2Bridge.defaultLayer),
       Layer.provide(SessionProjector.defaultLayer),
       Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces })),
       Layer.provide(BackgroundJob.defaultLayer),
+      Layer.provide(Project.defaultLayer),
     ),
   )
 const it = testEffect(layer(false))

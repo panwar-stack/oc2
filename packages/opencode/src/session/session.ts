@@ -26,16 +26,17 @@ import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
-import { PartTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { PartTable, SessionRootTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { Log } from "@opencode-ai/core/util/log"
+import { Project } from "../project/project"
 import { MessageV2 } from "./message-v2"
 import type { InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID, PartID, SessionRootID } from "./schema"
 
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
@@ -59,6 +60,7 @@ export function isDefaultTitle(title: string) {
 }
 
 type SessionRow = typeof SessionTable.$inferSelect
+type SessionRootRow = typeof SessionRootTable.$inferSelect
 
 export function fromRow(row: SessionRow): Info {
   const summary =
@@ -150,6 +152,20 @@ export function toRow(info: Info) {
   }
 }
 
+export function rootFromRow(row: SessionRootRow): RootInfo {
+  return {
+    id: row.id,
+    sessionID: row.session_id,
+    name: row.name ?? undefined,
+    directory: row.directory,
+    worktree: row.worktree,
+    projectID: row.project_id,
+    path: row.path ?? undefined,
+    created: row.created,
+    primary: row.primary,
+  }
+}
+
 function getForkedTitle(title: string): string {
   const match = title.match(/^(.+) \(fork #(\d+)\)$/)
   if (match) {
@@ -236,6 +252,19 @@ export const Info = Schema.Struct({
   revert: optionalOmitUndefined(Revert),
 }).annotate({ identifier: "Session" })
 export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
+
+export const RootInfo = Schema.Struct({
+  id: SessionRootID,
+  sessionID: SessionID,
+  name: optionalOmitUndefined(Schema.String),
+  directory: Schema.String,
+  worktree: Schema.String,
+  projectID: ProjectV2.ID,
+  path: optionalOmitUndefined(Schema.String),
+  created: NonNegativeInt,
+  primary: Schema.Boolean,
+}).annotate({ identifier: "SessionRoot" })
+export type RootInfo = Types.DeepMutable<Schema.Schema.Type<typeof RootInfo>>
 
 export const ProjectInfo = Schema.Struct({
   id: ProjectV2.ID,
@@ -461,6 +490,10 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("SessionBusy
   sessionID: SessionID,
 }) {}
 
+export class RootError extends Schema.TaggedErrorClass<RootError>()("SessionRootError", {
+  message: Schema.String,
+}) {}
+
 export type NotFound = NotFoundError
 
 export interface Interface {
@@ -495,6 +528,23 @@ export interface Interface {
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
+  readonly listRoots: (sessionID: SessionID) => Effect.Effect<RootInfo[], NotFound>
+  readonly addRoot: (input: {
+    sessionID: SessionID
+    directory: string
+    name?: string
+  }) => Effect.Effect<RootInfo, NotFound | RootError>
+  readonly updateRoot: (input: {
+    sessionID: SessionID
+    rootID: SessionRootID
+    name?: string
+    primary?: boolean
+  }) => Effect.Effect<RootInfo, NotFound>
+  readonly removeRoot: (input: {
+    sessionID: SessionID
+    rootID: SessionRootID
+  }) => Effect.Effect<void, NotFound | RootError>
+  readonly getPrimaryRoot: (sessionID: SessionID) => Effect.Effect<RootInfo, NotFound | RootError>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
@@ -533,7 +583,7 @@ export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" 
 export const layer: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service
+  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service | Project.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -542,6 +592,57 @@ export const layer: Layer.Layer<
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const project = yield* Project.Service
+
+    const listRootRows = (sessionID: SessionID) =>
+      db
+        .select()
+        .from(SessionRootTable)
+        .where(eq(SessionRootTable.session_id, sessionID))
+        .orderBy(SessionRootTable.created, SessionRootTable.id)
+        .all()
+        .pipe(Effect.orDie)
+
+    const getRootRow = Effect.fn("Session.getRootRow")(function* (input: {
+      sessionID: SessionID
+      rootID: SessionRootID
+    }) {
+      const row = yield* db
+        .select()
+        .from(SessionRootTable)
+        .where(and(eq(SessionRootTable.session_id, input.sessionID), eq(SessionRootTable.id, input.rootID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new NotFoundError({ message: `Session root not found: ${input.rootID}` })
+      return row
+    })
+
+    const insertRoot = (input: {
+      sessionID: SessionID
+      name?: string
+      directory: string
+      worktree: string
+      projectID: ProjectV2.ID
+      path?: string
+      created: number
+      primary: boolean
+    }) =>
+      db
+        .insert(SessionRootTable)
+        .values({
+          id: SessionRootID.ascending(),
+          session_id: input.sessionID,
+          name: input.name,
+          directory: input.directory,
+          worktree: input.worktree,
+          project_id: input.projectID,
+          path: input.path,
+          created: input.created,
+          primary: input.primary,
+        })
+        .returning()
+        .get()
+        .pipe(Effect.orDie)
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
@@ -581,6 +682,15 @@ export const layer: Layer.Layer<
       log.info("created", result)
 
       yield* events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
+      yield* insertRoot({
+        sessionID: result.id,
+        directory: result.directory,
+        worktree: ctx.worktree,
+        projectID: ctx.project.id,
+        path: result.path,
+        created: result.time.created,
+        primary: true,
+      })
 
       return result
     })
@@ -649,6 +759,174 @@ export const layer: Layer.Layer<
         .all()
         .pipe(Effect.orDie)
       return rows.map(fromRow)
+    })
+
+    const listRoots = Effect.fn("Session.listRoots")(function* (sessionID: SessionID) {
+      yield* get(sessionID)
+      return (yield* listRootRows(sessionID)).map(rootFromRow)
+    })
+
+    const getPrimaryRoot = Effect.fn("Session.getPrimaryRoot")(function* (sessionID: SessionID) {
+      yield* get(sessionID)
+      const row = yield* db
+        .select()
+        .from(SessionRootTable)
+        .where(and(eq(SessionRootTable.session_id, sessionID), eq(SessionRootTable.primary, true)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new RootError({ message: `Session has no primary root: ${sessionID}` })
+      return rootFromRow(row)
+    })
+
+    const addRoot = Effect.fn("Session.addRoot")(function* (input: {
+      sessionID: SessionID
+      directory: string
+      name?: string
+    }) {
+      yield* get(input.sessionID)
+      const directory = path.resolve(input.directory)
+      const result = yield* project.fromDirectory(directory)
+      const row = yield* db
+        .insert(SessionRootTable)
+        .values({
+          id: SessionRootID.ascending(),
+          session_id: input.sessionID,
+          name: input.name,
+          directory,
+          worktree: result.project.worktree,
+          project_id: result.project.id,
+          path: sessionPath(result.project.worktree, directory),
+          created: Date.now(),
+          primary: false,
+        })
+        .onConflictDoNothing()
+        .returning()
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new RootError({ message: `Session root already exists: ${directory}` })
+      return rootFromRow(row)
+    })
+
+    const updateRoot = Effect.fn("Session.updateRoot")(function* (input: {
+      sessionID: SessionID
+      rootID: SessionRootID
+      name?: string
+      primary?: boolean
+    }) {
+      const current = yield* getRootRow(input)
+      if (!input.primary) {
+        const row = yield* db
+          .update(SessionRootTable)
+          .set({ name: input.name ?? current.name })
+          .where(and(eq(SessionRootTable.session_id, input.sessionID), eq(SessionRootTable.id, input.rootID)))
+          .returning()
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return yield* new NotFoundError({ message: `Session root not found: ${input.rootID}` })
+        return rootFromRow(row)
+      }
+
+      const row = yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const target = yield* tx
+              .select()
+              .from(SessionRootTable)
+              .where(and(eq(SessionRootTable.session_id, input.sessionID), eq(SessionRootTable.id, input.rootID)))
+              .get()
+              .pipe(Effect.orDie)
+            if (!target) return undefined
+            yield* tx
+              .update(SessionRootTable)
+              .set({ primary: false })
+              .where(eq(SessionRootTable.session_id, input.sessionID))
+              .run()
+              .pipe(Effect.orDie)
+            const updated = yield* tx
+              .update(SessionRootTable)
+              .set({ name: input.name ?? target.name, primary: true })
+              .where(and(eq(SessionRootTable.session_id, input.sessionID), eq(SessionRootTable.id, input.rootID)))
+              .returning()
+              .get()
+              .pipe(Effect.orDie)
+            yield* tx
+              .update(SessionTable)
+              .set({
+                directory: updated.directory,
+                path: updated.path,
+                project_id: updated.project_id,
+                time_updated: Date.now(),
+              })
+              .where(eq(SessionTable.id, input.sessionID))
+              .run()
+              .pipe(Effect.orDie)
+            return updated
+          }),
+        )
+        .pipe(Effect.orDie)
+      if (!row) return yield* new NotFoundError({ message: `Session root not found: ${input.rootID}` })
+      return rootFromRow(row)
+    })
+
+    const removeRoot = Effect.fn("Session.removeRoot")(function* (input: {
+      sessionID: SessionID
+      rootID: SessionRootID
+    }) {
+      yield* get(input.sessionID)
+      const result = yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const roots = yield* tx
+              .select()
+              .from(SessionRootTable)
+              .where(eq(SessionRootTable.session_id, input.sessionID))
+              .orderBy(SessionRootTable.created, SessionRootTable.id)
+              .all()
+              .pipe(Effect.orDie)
+            const target = roots.find((root) => root.id === input.rootID)
+            if (!target) return "not_found" as const
+            if (roots.length === 1) return "last_root" as const
+
+            yield* tx
+              .delete(SessionRootTable)
+              .where(and(eq(SessionRootTable.session_id, input.sessionID), eq(SessionRootTable.id, input.rootID)))
+              .run()
+              .pipe(Effect.orDie)
+
+            if (!target.primary) return "removed" as const
+
+            const fallback = yield* tx
+              .select()
+              .from(SessionRootTable)
+              .where(eq(SessionRootTable.session_id, input.sessionID))
+              .orderBy(SessionRootTable.created, SessionRootTable.id)
+              .get()
+              .pipe(Effect.orDie)
+            if (!fallback) return "last_root" as const
+            yield* tx
+              .update(SessionRootTable)
+              .set({ primary: true })
+              .where(and(eq(SessionRootTable.session_id, input.sessionID), eq(SessionRootTable.id, fallback.id)))
+              .run()
+              .pipe(Effect.orDie)
+            yield* tx
+              .update(SessionTable)
+              .set({
+                directory: fallback.directory,
+                path: fallback.path,
+                project_id: fallback.project_id,
+                time_updated: Date.now(),
+              })
+              .where(eq(SessionTable.id, input.sessionID))
+              .run()
+              .pipe(Effect.orDie)
+            return "removed" as const
+          }),
+        )
+        .pipe(Effect.orDie)
+      if (result === "not_found")
+        return yield* new NotFoundError({ message: `Session root not found: ${input.rootID}` })
+      if (result === "last_root") return yield* new RootError({ message: "Cannot delete the last session root" })
     })
 
     const remove: Interface["remove"] = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -958,6 +1236,11 @@ export const layer: Layer.Layer<
       messages,
       children,
       remove,
+      listRoots,
+      addRoot,
+      updateRoot,
+      removeRoot,
+      getPrimaryRoot,
       updateMessage,
       removeMessage,
       removePart,
@@ -976,6 +1259,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(SessionExecution.noopLayer),
   Layer.provide(SessionV2.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
+  Layer.provide(Project.defaultLayer),
 )
 
 const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function* (
