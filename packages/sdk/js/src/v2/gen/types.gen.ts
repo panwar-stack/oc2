@@ -7831,9 +7831,9 @@ export type SessionRootListData = {
 
 export type SessionRootListErrors = {
   /**
-   * Bad request
+   * BadRequest | InvalidRequestError
    */
-  400: BadRequestError
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
    * NotFoundError
    */
@@ -7868,9 +7868,9 @@ export type SessionRootAddData = {
 
 export type SessionRootAddErrors = {
   /**
-   * Bad request
+   * BadRequest | InvalidRequestError
    */
-  400: BadRequestError
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
    * NotFoundError
    */
@@ -7903,9 +7903,9 @@ export type SessionRootDeleteData = {
 
 export type SessionRootDeleteErrors = {
   /**
-   * Bad request
+   * BadRequest | InvalidRequestError
    */
-  400: BadRequestError
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
    * NotFoundError
    */
@@ -7941,9 +7941,9 @@ export type SessionRootUpdateData = {
 
 export type SessionRootUpdateErrors = {
   /**
-   * Bad request
+   * BadRequest | InvalidRequestError
    */
-  400: BadRequestError
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
    * NotFoundError
    */

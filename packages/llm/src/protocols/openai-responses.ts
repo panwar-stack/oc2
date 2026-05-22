@@ -8,6 +8,7 @@ import {
   LLMEvent,
   Usage,
   type FinishReason,
+  type LLMError,
   type LLMRequest,
   type ProviderMetadata,
   type ReasoningPart,
@@ -151,6 +152,9 @@ const OpenAIResponsesBody = Schema.Struct({
   stream: Schema.Literal(true),
 })
 export type OpenAIResponsesBody = Schema.Schema.Type<typeof OpenAIResponsesBody>
+type OpenAIResponsesOptions = Partial<
+  Pick<OpenAIResponsesBody, "instructions" | "store" | "prompt_cache_key" | "include" | "reasoning" | "text">
+>
 
 const OpenAIResponsesWebSocketMessage = Schema.StructWithRest(
   Schema.Struct({
@@ -300,8 +304,10 @@ const hostedToolItemID = (part: ToolResultPart) => {
     : undefined
 }
 
-const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
+const lowerUserContent: (
   part: LLMRequest["messages"][number]["content"][number],
+) => Effect.Effect<OpenAIResponsesInputContent, LLMError> = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
+  part,
 ) {
   if (part.type === "text") return { type: "input_text" as const, text: part.text }
   if (part.type === "media") {
@@ -317,9 +323,11 @@ const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function*
 
 // Tool results may carry structured text/images. Keep media as provider-native
 // content instead of JSON-stringifying base64 into a prompt string.
-const lowerToolResultContentItem = Effect.fn("OpenAIResponses.lowerToolResultContentItem")(function* (
+const lowerToolResultContentItem: (
   item: ToolResultContentPart,
-) {
+) => Effect.Effect<OpenAIResponsesInputContent, LLMError> = Effect.fn(
+  "OpenAIResponses.lowerToolResultContentItem",
+)(function* (item) {
   if (item.type === "text") return { type: "input_text" as const, text: item.text }
   const media = yield* ProviderShared.validateMedia(
     "OpenAI Responses",
@@ -338,7 +346,9 @@ const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")
   return yield* Effect.forEach(content, lowerToolResultContentItem)
 })
 
-const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
+const lowerMessages: (request: LLMRequest) => Effect.Effect<OpenAIResponsesInputItem[], LLMError> = Effect.fn(
+  "OpenAIResponses.lowerMessages",
+)(function* (request) {
   const system: OpenAIResponsesInputItem[] =
     request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: OpenAIResponsesInputItem[] = [...system]
@@ -443,7 +453,9 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     : input
 })
 
-const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (request: LLMRequest) {
+const lowerOptions: (request: LLMRequest) => Effect.Effect<OpenAIResponsesOptions, LLMError> = Effect.fn(
+  "OpenAIResponses.lowerOptions",
+)(function* (request) {
   const store = OpenAIOptions.store(request)
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
   const effort = OpenAIOptions.reasoningEffort(request)
@@ -465,7 +477,9 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   }
 })
 
-const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request: LLMRequest) {
+const fromRequest: (request: LLMRequest) => Effect.Effect<OpenAIResponsesBody, LLMError> = Effect.fn(
+  "OpenAIResponses.fromRequest",
+)(function* (request) {
   const generation = request.generation
   const options = yield* lowerOptions(request)
   return {
