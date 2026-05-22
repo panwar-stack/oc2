@@ -64,7 +64,6 @@ import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Memory } from "@/memory"
 
 void Log.init({ print: false })
 
@@ -131,7 +130,6 @@ function makeHttp() {
     mcp,
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
-    Memory.layer(),
     Team.defaultLayer,
     status,
     Database.defaultLayer,

@@ -27,7 +27,6 @@ import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
 import { ConfigAgent } from "./agent"
 import { ConfigCommand } from "./command"
 import { ConfigManaged } from "./managed"
-import { ConfigMemory } from "./memory"
 import { ConfigParse } from "./parse"
 import { ConfigPaths } from "./paths"
 import { ConfigPlugin } from "./plugin"
@@ -110,13 +109,9 @@ async function resolveLoadedPlugins<T extends { plugin?: ConfigPluginV1.Spec[] }
   return config
 }
 
-const InfoSchema = ConfigV1.Info.mapFields((fields) => ({
-  ...fields,
-  memory: Schema.optional(ConfigMemory.Info),
-}))
+const InfoSchema = ConfigV1.Info
 
 type Info = ConfigV1.Info & {
-  memory?: ConfigMemory.Info
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
   // with the file and scope it came from so later runtime code can make location-sensitive decisions.
   plugin_origins?: ConfigPlugin.Origin[]

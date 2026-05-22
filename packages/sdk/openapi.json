@@ -13619,6 +13619,21 @@
             "$ref": "#/components/schemas/Event.tui.session.select"
           },
           {
+            "$ref": "#/components/schemas/EventServerConnected"
+          },
+          {
+            "$ref": "#/components/schemas/EventGlobalDisposed"
+          },
+          {
+            "$ref": "#/components/schemas/EventServerInstanceDisposed"
+          },
+          {
+            "$ref": "#/components/schemas/EventFileEdited"
+          },
+          {
+            "$ref": "#/components/schemas/EventFileWatcherUpdated"
+          },
+          {
             "$ref": "#/components/schemas/EventMcpToolsChanged"
           },
           {
@@ -21188,9 +21203,6 @@
               }
             },
             "additionalProperties": false
-          },
-          "memory": {
-            "$ref": "#/components/schemas/MemoryConfig"
           }
         },
         "additionalProperties": false
@@ -34305,53 +34317,6 @@
             }
           }
         }
-      },
-      "MemoryConfig": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "limit": {
-            "type": "integer",
-            "exclusiveMinimum": 0
-          },
-          "providers": {
-            "type": "object",
-            "properties": {
-              "github": {
-                "type": "object",
-                "properties": {
-                  "enabled": {
-                    "type": "boolean"
-                  },
-                  "repo": {
-                    "type": "string"
-                  },
-                  "max_age_days": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0
-                  },
-                  "include_authors": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "exclude_authors": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                },
-                "additionalProperties": false
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "additionalProperties": false
       },
       "SessionRoot": {
         "type": "object",

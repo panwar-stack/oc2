@@ -54,7 +54,6 @@ import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { Memory } from "@/memory"
 
 const CoreLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -113,7 +112,6 @@ const FeatureLayer = Layer.mergeAll(
   Installation.defaultLayer,
   ShareNext.defaultLayer,
   SessionShare.defaultLayer,
-  Memory.defaultLayer,
 )
 
 export const AppLayer = Layer.mergeAll(CoreLayer, SessionLayer, FeatureLayer).pipe(

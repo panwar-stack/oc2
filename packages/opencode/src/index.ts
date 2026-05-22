@@ -29,7 +29,6 @@ import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
-import { MemoryCommand } from "./cli/cmd/memory"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
@@ -133,7 +132,6 @@ const cli = yargs(args)
   .command(ImportCommand)
   .command(GithubCommand)
   .command(PrCommand)
-  .command(MemoryCommand)
   .command(SessionCommand)
   .command(PluginCommand)
   .command(DbCommand)

@@ -34,10 +34,6 @@ const CUSTOMIZE_OPENCODE_SKILL_NAME = "customize-opencode"
 const CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION =
   "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
 const CUSTOMIZE_OPENCODE_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
-const REVIEW_MEMORY_SKILL_NAME = "review-memory"
-const REVIEW_MEMORY_SKILL_DESCRIPTION =
-  "Use when coding or reviewing changes in a repository with historical review memory, especially before final response or PR review, to query opencode memory and apply cited advisory constraints."
-const REVIEW_MEMORY_SKILL_BODY = SkillPlugin.ReviewMemoryContent
 const SPEC_PLANNER_SKILL_NAME = "spec-planner"
 const SPEC_PLANNER_SKILL_DESCRIPTION =
   "Convert rough user requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs. Use when Codex needs to draft a Markdown spec, implementation plan, PR breakdown, acceptance criteria, verification plan, or repo-ready proposal similar to opencode specs such as packages/opencode/specs/agent-team-evaluation.md."
@@ -62,12 +58,6 @@ const BUILTIN_SKILLS = [
     description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
     location: BUILTIN_LOCATION,
     content: CUSTOMIZE_OPENCODE_SKILL_BODY,
-  },
-  {
-    name: REVIEW_MEMORY_SKILL_NAME,
-    description: REVIEW_MEMORY_SKILL_DESCRIPTION,
-    location: BUILTIN_LOCATION,
-    content: REVIEW_MEMORY_SKILL_BODY,
   },
   {
     name: SPEC_PLANNER_SKILL_NAME,
