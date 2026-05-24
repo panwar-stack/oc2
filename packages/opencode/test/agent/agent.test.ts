@@ -69,6 +69,10 @@ it.instance("build agent has correct default properties", () =>
     expect(build?.native).toBe(true)
     expect(evalPerm(build, "edit")).toBe("allow")
     expect(evalPerm(build, "bash")).toBe("allow")
+    expect(evalPerm(build, "memory_search_commit")).toBe("allow")
+    expect(evalPerm(build, "memory_examine_commit")).toBe("allow")
+    expect(evalPerm(build, "memory_search_summary")).toBe("allow")
+    expect(evalPerm(build, "memory_view_summary")).toBe("allow")
   }),
 )
 
@@ -91,6 +95,7 @@ it.instance("explore agent denies edit and write", () =>
     expect(evalPerm(explore, "edit")).toBe("deny")
     expect(evalPerm(explore, "write")).toBe("deny")
     expect(evalPerm(explore, "todowrite")).toBe("deny")
+    expect(evalPerm(explore, "memory_search_commit")).toBe("allow")
   }),
 )
 

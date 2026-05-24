@@ -26,6 +26,13 @@ import { TeamPlanSubmitTool } from "./team_plan_submit"
 import { TeamPlanDecideTool } from "./team_plan_decide"
 import { TeamShutdownTool } from "./team_shutdown"
 import { TeamReportTool } from "./team_report"
+import {
+  MemoryExamineCommitTool,
+  MemorySearchCommitTool,
+  MemorySearchSummaryTool,
+  MemoryViewSummaryTool,
+  toolsAvailable as memoryToolsAvailable,
+} from "./memory"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -66,6 +73,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Team } from "@/team/team"
+import { Memory } from "@/memory/memory"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -80,9 +88,11 @@ type TeamReportDef = Tool.InferDef<typeof TeamReportTool>
 type State = {
   custom: Tool.Def[]
   builtin: Tool.Def[]
+  memory: Tool.Def[]
   task: TaskDef
   read: ReadDef
   teamReport: TeamReportDef
+  worktree: string
 }
 
 export interface Interface {
@@ -123,6 +133,7 @@ export const layer: Layer.Layer<
   | RuntimeFlags.Service
   | Database.Service
   | Team.Service
+  | Memory.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -131,6 +142,7 @@ export const layer: Layer.Layer<
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    const memory = yield* Memory.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -162,6 +174,10 @@ export const layer: Layer.Layer<
     const teamPlanDecide = yield* TeamPlanDecideTool
     const teamShutdown = yield* TeamShutdownTool
     const teamReport = yield* TeamReportTool
+    const memorySearchCommit = yield* MemorySearchCommitTool
+    const memoryExamineCommit = yield* MemoryExamineCommitTool
+    const memorySearchSummary = yield* MemorySearchSummaryTool
+    const memoryViewSummary = yield* MemoryViewSummaryTool
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -284,6 +300,10 @@ export const layer: Layer.Layer<
           teamPlanDecide: Tool.init(teamPlanDecide),
           teamShutdown: Tool.init(teamShutdown),
           teamReport: Tool.init(teamReport),
+          memorySearchCommit: Tool.init(memorySearchCommit),
+          memoryExamineCommit: Tool.init(memoryExamineCommit),
+          memorySearchSummary: Tool.init(memorySearchSummary),
+          memoryViewSummary: Tool.init(memoryViewSummary),
         })
 
         return {
@@ -323,16 +343,25 @@ export const layer: Layer.Layer<
                 ]
               : []),
           ],
+          memory: [
+            tool.memorySearchCommit,
+            tool.memoryExamineCommit,
+            tool.memorySearchSummary,
+            tool.memoryViewSummary,
+          ],
           task: tool.task,
           read: tool.read,
           teamReport: tool.teamReport,
+          worktree: ctx.worktree,
         }
       }),
     )
 
     const all: Interface["all"] = Effect.fn("ToolRegistry.all")(function* () {
       const s = yield* InstanceState.get(state)
-      return [...s.builtin, ...s.custom] as Tool.Def[]
+      const cfg = yield* config.get()
+      const memoryEnabled = yield* memoryToolsAvailable(cfg, memory, s.worktree)
+      return [...s.builtin, ...(memoryEnabled ? s.memory : []), ...s.custom] as Tool.Def[]
     })
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {
@@ -429,7 +458,7 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Search.defaultLayer),
       Layer.provide(Truncate.defaultLayer),
     )
-    .pipe(Layer.provide(Database.defaultLayer), Layer.provide(RuntimeFlags.defaultLayer)),
+    .pipe(Layer.provide(Database.defaultLayer), Layer.provide(Memory.defaultLayer), Layer.provide(RuntimeFlags.defaultLayer)),
 )
 
 function isZodType(value: unknown): value is z.ZodType {

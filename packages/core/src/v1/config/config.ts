@@ -29,6 +29,41 @@ const LogLevelRef = Schema.Literals(["DEBUG", "INFO", "WARN", "ERROR"]).annotate
   description: "Log level",
 })
 
+const Memory = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean).annotate({
+    description: "Expose repository memory tools and prompt guidance when an index exists (default: false)",
+  }),
+  index_on_start: Schema.optional(Schema.Boolean).annotate({
+    description: "Index repository memory automatically when a project starts (default: false)",
+  }),
+  max_commits: Schema.optional(PositiveInt).annotate({ description: "Maximum commits to index (default: 7000)" }),
+  summary_limit: Schema.optional(NonNegativeInt).annotate({
+    description: "Maximum file summaries to maintain (default: 200)",
+  }),
+  search_commit_limit: Schema.optional(PositiveInt).annotate({
+    description: "Default limit for memory_search_commit (default: 20)",
+  }),
+  search_summary_limit: Schema.optional(PositiveInt).annotate({
+    description: "Default limit for memory_search_summary (default: 5)",
+  }),
+  include: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Repository memory include globs",
+  }),
+  exclude: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Repository memory exclude globs",
+  }),
+  github: Schema.optional(
+    Schema.Struct({
+      enabled: Schema.optional(Schema.Boolean).annotate({
+        description: "Enable GitHub metadata enrichment when available",
+      }),
+      fetch_linked_issues: Schema.optional(Schema.Boolean).annotate({
+        description: "Fetch linked GitHub issues when credentials are available",
+      }),
+    }),
+  ),
+}).annotate({ identifier: "MemoryConfig" })
+
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String).annotate({
     description: "JSON schema reference for configuration validation",
@@ -114,6 +149,9 @@ export const Info = Schema.Struct({
   lsp: Schema.optional(ConfigLSPV1.Info).annotate({
     description:
       "Enable or configure LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.",
+  }),
+  memory: Schema.optional(Memory).annotate({
+    description: "Repository memory configuration. Agent tools remain disabled unless memory.enabled is true and an index exists.",
   }),
   instructions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Additional instruction files or patterns to include",

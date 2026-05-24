@@ -58,6 +58,7 @@ import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Memory } from "@/memory/memory"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Search } from "@opencode-ai/core/filesystem/search"
 import { Format } from "../../src/format"
@@ -131,6 +132,7 @@ function makeHttp() {
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
     Team.defaultLayer,
+    Memory.defaultLayer,
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
