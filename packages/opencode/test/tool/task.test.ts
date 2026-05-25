@@ -92,15 +92,13 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
   return {
     cancel: () => Effect.void,
     resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
-    loop: (input) =>
-      Effect.sync(() =>
-        reply({ sessionID: input.sessionID, agent: "general", model: ref, parts: [] }, opts?.text ?? "done"),
-      ),
     prompt: (input) =>
       Effect.sync(() => {
         opts?.onPrompt?.(input)
         return reply(input, opts?.text ?? "done")
       }),
+    wake: (sessionID) =>
+      Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, opts?.text ?? "done")),
   }
 }
 
@@ -311,13 +309,13 @@ describe("tool.task", () => {
             cancelled.resolve(sessionID)
           }),
         resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
-        loop: (input) =>
-          Effect.sync(() => reply({ sessionID: input.sessionID, agent: "general", model: ref, parts: [] }, "looped")),
         prompt: (input) =>
           Effect.promise(() => {
             ready.resolve(input)
             return cancelled.promise
           }).pipe(Effect.as(reply(input, "cancelled"))),
+        wake: (sessionID) =>
+          Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, "looped")),
       }
 
       const fiber = yield* def
