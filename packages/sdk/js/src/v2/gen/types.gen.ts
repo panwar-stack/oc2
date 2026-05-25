@@ -2990,6 +2990,9 @@ export type TeamEvalFinding = {
     | "integration.context_loss"
     | "integration.premature_shutdown"
     | "structure.unexpected_or_missing_edge"
+    | "shallow_usage"
+    | "missing_task_list"
+    | "missing_final_report"
   node_id: string
   message: string
   time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -2998,6 +3001,18 @@ export type TeamEvalFinding = {
   metadata?: {
     [key: string]: unknown
   }
+}
+
+export type TeamUsageMetrics = {
+  work_item_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  task_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  member_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  dependency_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  plan_mode_member_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  plan_approval_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  broadcast_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  final_report_generated: boolean
+  shallow_usage: boolean
 }
 
 export type TeamEvalReport = {
@@ -3013,6 +3028,7 @@ export type TeamEvalReport = {
     propagated_failure_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     structural_deviation_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     longest_dependency_chain: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    usage: TeamUsageMetrics
   }
 }
 

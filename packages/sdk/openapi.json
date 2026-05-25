@@ -34627,7 +34627,10 @@
               "messaging.missing_progress",
               "integration.context_loss",
               "integration.premature_shutdown",
-              "structure.unexpected_or_missing_edge"
+              "structure.unexpected_or_missing_edge",
+              "shallow_usage",
+              "missing_task_list",
+              "missing_final_report"
             ]
           },
           "node_id": {
@@ -34687,6 +34690,260 @@
           "message",
           "time_created",
           "root_cause"
+        ],
+        "additionalProperties": false
+      },
+      "TeamUsageMetrics": {
+        "type": "object",
+        "properties": {
+          "work_item_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "task_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "member_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "dependency_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "plan_mode_member_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "plan_approval_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "broadcast_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "final_report_generated": {
+            "type": "boolean"
+          },
+          "shallow_usage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "work_item_count",
+          "task_count",
+          "member_count",
+          "dependency_count",
+          "plan_mode_member_count",
+          "plan_approval_count",
+          "broadcast_count",
+          "final_report_generated",
+          "shallow_usage"
         ],
         "additionalProperties": false
       },
@@ -34947,6 +35204,9 @@
                     ]
                   }
                 ]
+              },
+              "usage": {
+                "$ref": "#/components/schemas/TeamUsageMetrics"
               }
             },
             "required": [
@@ -34955,7 +35215,8 @@
               "root_cause_count",
               "propagated_failure_count",
               "structural_deviation_count",
-              "longest_dependency_chain"
+              "longest_dependency_chain",
+              "usage"
             ],
             "additionalProperties": false
           }
