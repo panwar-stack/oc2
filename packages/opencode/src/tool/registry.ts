@@ -55,6 +55,7 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Search } from "@opencode-ai/core/filesystem/search"
+import { Opengrep } from "@opencode-ai/core/filesystem/opengrep"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
@@ -89,6 +90,7 @@ type State = {
   custom: Tool.Def[]
   builtin: Tool.Def[]
   memory: Tool.Def[]
+  available: string[]
   task: TaskDef
   read: ReadDef
   teamReport: TeamReportDef
@@ -128,6 +130,7 @@ export const layer: Layer.Layer<
   | HttpClient.HttpClient
   | ChildProcessSpawner
   | Search.Service
+  | Opengrep.Service
   | Format.Service
   | Truncate.Service
   | RuntimeFlags.Service
@@ -143,6 +146,7 @@ export const layer: Layer.Layer<
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
     const memory = yield* Memory.Service
+    const opengrep = yield* Opengrep.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -269,6 +273,7 @@ export const layer: Layer.Layer<
 
         const cfg = yield* config.get()
         const teamEnabled = cfg.experimental?.agent_teams === true
+        const opengrepAvailable = yield* opengrep.available()
 
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
@@ -349,6 +354,7 @@ export const layer: Layer.Layer<
             tool.memorySearchSummary,
             tool.memoryViewSummary,
           ],
+          available: opengrepAvailable ? ["opengrep"] : [],
           task: tool.task,
           read: tool.read,
           teamReport: tool.teamReport,
@@ -365,7 +371,8 @@ export const layer: Layer.Layer<
     })
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {
-      return (yield* all()).map((tool) => tool.id)
+      const s = yield* InstanceState.get(state)
+      return [...new Set([...(yield* all()).map((tool) => tool.id), ...s.available])]
     })
 
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
@@ -456,8 +463,8 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Format.defaultLayer),
       Layer.provide(CrossSpawnSpawner.defaultLayer),
       Layer.provide(Search.defaultLayer),
-      Layer.provide(Truncate.defaultLayer),
     )
+    .pipe(Layer.provide(Opengrep.defaultLayer), Layer.provide(Truncate.defaultLayer))
     .pipe(Layer.provide(Database.defaultLayer), Layer.provide(Memory.defaultLayer), Layer.provide(RuntimeFlags.defaultLayer)),
 )
 

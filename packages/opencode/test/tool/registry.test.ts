@@ -24,9 +24,10 @@ import { Git } from "@/git"
 import { LSP } from "@/lsp/lsp"
 import { Instruction } from "@/session/instruction"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { FetchHttpClient } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Format } from "@/format"
 import { Search } from "@opencode-ai/core/filesystem/search"
+import { Opengrep } from "@opencode-ai/core/filesystem/opengrep"
 import * as Truncate from "@/tool/truncate"
 import { InstanceState } from "@/effect/instance-state"
 import { Reference } from "@/reference/reference"
@@ -40,6 +41,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Team } from "@/team/team"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { Memory } from "@/memory/memory"
+import { Global } from "@opencode-ai/core/global"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = (config: ConfigV1.Info = {}) =>
@@ -52,6 +54,7 @@ type RegistryLayerOptions = {
   flags?: Partial<RuntimeFlags.Info>
   config?: ConfigV1.Info
   plugin?: Layer.Layer<Plugin.Service>
+  opengrep?: Layer.Layer<Opengrep.Service>
 }
 
 const registryLayer = (opts: RegistryLayerOptions = {}) =>
@@ -76,6 +79,7 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
       Layer.provide(Format.defaultLayer),
       Layer.provide(Layer.mergeAll(node, Database.defaultLayer)),
       Layer.provide(Search.defaultLayer),
+      Layer.provide(opts.opengrep ?? opengrepUnavailableLayer),
     )
     .pipe(
       Layer.provide(Truncate.defaultLayer),
@@ -108,9 +112,80 @@ const brokenPluginLayer = Layer.succeed(
   }),
 )
 
+const opengrepUnavailableLayer = Layer.mock(Opengrep.Service, {
+  available: () => Effect.succeed(false),
+})
+
+const opengrepUnexpectedHttpLayer = Opengrep.layer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => Effect.die(`unexpected opengrep download: ${request.method} ${request.url}`)),
+    ),
+  ),
+)
+
+const opengrepDownloadLayer = Opengrep.layer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("downloaded opengrep"))),
+      ),
+    ),
+  ),
+)
+
+const opengrepDownloadFailLayer = Opengrep.layer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 }))),
+      ),
+    ),
+  ),
+)
+
+function withOpengrepPaths<A, E, R>(input: { bin: string; path: string }, effect: Effect.Effect<A, E, R>) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const previous = {
+        bin: Global.Path.bin,
+        PATH: process.env.PATH,
+        Path: process.env.Path,
+      }
+      ;(Global.Path as { bin: string }).bin = input.bin
+      process.env.PATH = input.path
+      return previous
+    }),
+    () => effect,
+    (previous) =>
+      Effect.sync(() => {
+        ;(Global.Path as { bin: string }).bin = previous.bin
+        if (previous.PATH === undefined) delete process.env.PATH
+        else process.env.PATH = previous.PATH
+        if (previous.Path === undefined) delete process.env.Path
+        else process.env.Path = previous.Path
+      }),
+  )
+}
+
 const it = testEffect(Layer.mergeAll(registryLayer(), node, Agent.defaultLayer))
 const withBrokenPlugin = testEffect(
   Layer.mergeAll(registryLayer({ plugin: brokenPluginLayer }), node, Agent.defaultLayer),
+)
+const withOpengrepExisting = testEffect(
+  Layer.mergeAll(registryLayer({ opengrep: opengrepUnexpectedHttpLayer }), node, Agent.defaultLayer),
+)
+const withOpengrepDownload = testEffect(
+  Layer.mergeAll(registryLayer({ opengrep: opengrepDownloadLayer }), node, Agent.defaultLayer),
+)
+const withOpengrepDownloadFail = testEffect(
+  Layer.mergeAll(registryLayer({ opengrep: opengrepDownloadFailLayer }), node, Agent.defaultLayer),
 )
 const teams = testEffect(
   Layer.mergeAll(registryLayer({ config: { experimental: { agent_teams: true } } }), node, Agent.defaultLayer),
@@ -147,6 +222,85 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
 
       expect(ids).not.toContain("task_status")
+    }),
+  )
+
+  it.instance("hides opengrep when unavailable or download fails", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).not.toContain("opengrep")
+    }),
+  )
+
+  withOpengrepDownloadFail.instance("hides opengrep when download fails", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const bin = path.join(test.directory, "bin")
+      const search = path.join(test.directory, "search")
+      yield* Effect.promise(() => fs.mkdir(search, { recursive: true }))
+
+      yield* withOpengrepPaths(
+        { bin, path: search },
+        Effect.gen(function* () {
+          const registry = yield* ToolRegistry.Service
+          const ids = yield* registry.ids()
+
+          expect(ids).not.toContain("opengrep")
+        }),
+      )
+    }),
+  )
+
+  withOpengrepExisting.instance("shows opengrep when an existing binary is found", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const bin = path.join(test.directory, "bin")
+      const search = path.join(test.directory, "search")
+      const binary = path.join(search, process.platform === "win32" ? "opengrep.exe" : "opengrep")
+      yield* Effect.promise(() => fs.mkdir(search, { recursive: true }))
+      yield* Effect.promise(() => Bun.write(binary, "existing opengrep"))
+      if (process.platform !== "win32") yield* Effect.promise(() => fs.chmod(binary, 0o755))
+
+      yield* withOpengrepPaths(
+        { bin, path: search },
+        Effect.gen(function* () {
+          const registry = yield* ToolRegistry.Service
+          const ids = yield* registry.ids()
+          const tools = yield* registry.tools({
+            providerID: ProviderV2.ID.opencode,
+            modelID: ModelV2.ID.make("test"),
+            agent: yield* (yield* Agent.Service).defaultInfo(),
+          })
+
+          expect(ids).toContain("opengrep")
+          expect(tools.map((tool) => tool.id)).not.toContain("opengrep")
+        }),
+      )
+    }),
+  )
+
+  withOpengrepDownload.instance("shows opengrep when a missing binary is downloaded successfully", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const bin = path.join(test.directory, "bin")
+      const search = path.join(test.directory, "search")
+      yield* Effect.promise(() => fs.mkdir(search, { recursive: true }))
+
+      yield* withOpengrepPaths(
+        { bin, path: search },
+        Effect.gen(function* () {
+          const registry = yield* ToolRegistry.Service
+          const ids = yield* registry.ids()
+
+          expect(ids).toContain("opengrep")
+          const downloaded = yield* Effect.promise(() =>
+            Bun.file(path.join(bin, process.platform === "win32" ? "opengrep.exe" : "opengrep")).text(),
+          )
+          expect(downloaded).toBe("downloaded opengrep")
+        }),
+      )
     }),
   )
 

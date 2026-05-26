@@ -61,6 +61,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Memory } from "@/memory/memory"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Search } from "@opencode-ai/core/filesystem/search"
+import { Opengrep } from "@opencode-ai/core/filesystem/opengrep"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
@@ -147,6 +148,8 @@ function makeHttp() {
     Layer.provide(Git.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(Search.defaultLayer),
+    Layer.provide(Memory.defaultLayer),
+    Layer.provide(Layer.mock(Opengrep.Service, { available: () => Effect.succeed(false) })),
     Layer.provide(Format.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provideMerge(todo),
