@@ -24,6 +24,7 @@ import { containsPath, type InstanceContext } from "../project/instance-context"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
+import { PositiveInt } from "@opencode-ai/core/schema"
 import { ConfigAgent } from "./agent"
 import { ConfigCommand } from "./command"
 import { ConfigManaged } from "./managed"
@@ -31,6 +32,7 @@ import { ConfigParse } from "./parse"
 import { ConfigPaths } from "./paths"
 import { ConfigPlugin } from "./plugin"
 import { ConfigVariable } from "./variable"
+import { InvalidError } from "./error"
 import { Npm } from "@opencode-ai/core/npm"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 
@@ -60,6 +62,20 @@ function normalizeLoadedConfig(data: unknown, source: string) {
   delete copy.tui
   log.warn("tui keys in opencode config are deprecated; move them to tui.json", { path: source })
   return copy
+}
+
+function validateSandbox(info: Info, source: string) {
+  if (info.sandbox?.enabled !== true) return
+  if (info.sandbox.profiles?.[info.sandbox.defaultProfile ?? "workspace"]) return
+  throw new InvalidError({
+    path: source,
+    issues: [
+      {
+        path: ["sandbox", "defaultProfile"],
+        message: `Sandbox profile '${info.sandbox.defaultProfile ?? "workspace"}' does not exist`,
+      },
+    ],
+  })
 }
 
 async function substituteWellKnownRemoteConfig(input: {
@@ -109,9 +125,58 @@ async function resolveLoadedPlugins<T extends { plugin?: ConfigPluginV1.Spec[] }
   return config
 }
 
-const InfoSchema = ConfigV1.Info
+const SandboxPathToken = Schema.String.check(
+  Schema.isPattern(/^(workspace|systemRuntime|temporaryDirectory|workspace\/.+|home\/.+)$/),
+).annotate({
+  identifier: "SandboxPathToken",
+  description: "Sandbox filesystem token: workspace, systemRuntime, temporaryDirectory, workspace/<path>, or home/<path>",
+})
+
+const SandboxProfile = Schema.Struct({
+  filesystem: Schema.optional(
+    Schema.Struct({
+      read: Schema.optional(Schema.mutable(Schema.Array(SandboxPathToken))),
+      write: Schema.optional(Schema.mutable(Schema.Array(SandboxPathToken))),
+      protected: Schema.optional(Schema.mutable(Schema.Array(SandboxPathToken))),
+    }),
+  ),
+  network: Schema.optional(
+    Schema.Union([
+      Schema.Struct({ mode: Schema.Literal("none") }),
+      Schema.Struct({ mode: Schema.Literal("allowlist"), hosts: Schema.mutable(Schema.NonEmptyArray(Schema.NonEmptyString)) }),
+      Schema.Struct({ mode: Schema.Literal("full"), requiresApproval: Schema.optional(Schema.Boolean) }),
+    ]),
+  ),
+  process: Schema.optional(
+    Schema.Struct({
+      hideHostProcesses: Schema.optional(Schema.Boolean),
+      killTreeOnExit: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  resources: Schema.optional(
+    Schema.Struct({
+      memoryMegabytes: Schema.optional(PositiveInt),
+      processLimit: Schema.optional(PositiveInt),
+      timeSeconds: Schema.optional(PositiveInt),
+    }),
+  ),
+}).annotate({ identifier: "SandboxProfile" })
+
+const Sandbox = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  defaultProfile: Schema.optional(Schema.String),
+  profiles: Schema.optional(Schema.Record(Schema.String, SandboxProfile)),
+}).annotate({
+  identifier: "SandboxConfig",
+  description: "Docker execution sandbox profiles for future sandboxed shell execution",
+})
+
+const InfoSchema = ConfigV1.Info.extend({
+  sandbox: Schema.optional(Sandbox),
+})
 
 type Info = ConfigV1.Info & {
+  sandbox?: Schema.Schema.Type<typeof Sandbox>
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
   // with the file and scope it came from so later runtime code can make location-sensitive decisions.
   plugin_origins?: ConfigPlugin.Origin[]
@@ -219,6 +284,7 @@ export const layer = Layer.effect(
       )
       const parsed = ConfigParse.jsonc(expanded, source)
       const data = ConfigParse.schema(InfoSchema, normalizeLoadedConfig(parsed, source), source)
+      validateSandbox(data, source)
       if (!("path" in options)) return data
 
       yield* Effect.promise(() => resolveLoadedPlugins(data, options.path))
