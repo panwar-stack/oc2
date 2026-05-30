@@ -103,12 +103,17 @@ export function createWebSocketFetch(options?: CreateWebSocketFetchOptions) {
         resolveFirstEvent = resolve
         rejectFirstEvent = reject
       })
+      let firstEventStarted = false
+      let firstEventError: ProviderError.ResponseStreamError | undefined
       const response = OpenAIWebSocket.streamResponsesWebSocket({
         socket: entry.socket,
         body,
         idleTimeout,
         signal: init?.signal ?? undefined,
-        onFirstEvent: (error) => resolveFirstEvent(error ?? true),
+        onFirstEvent: (error) => {
+          firstEventStarted = true
+          resolveFirstEvent(error ?? true)
+        },
         onTerminal: (event) => {
           entry.busy = false
           entry.lastUsedAt = Date.now()
@@ -124,7 +129,10 @@ export function createWebSocketFetch(options?: CreateWebSocketFetchOptions) {
           entry.lastUsedAt = Date.now()
           if (!entry.fallback) recordStreamFailure(entry)
           invalidate(entry)
+          if (firstEventStarted) return
+          firstEventError = error
           resolveFirstEvent(false)
+          return false
         },
         onAbort: (error) => {
           log.debug("websocket aborted", { key })
@@ -149,6 +157,7 @@ export function createWebSocketFetch(options?: CreateWebSocketFetchOptions) {
           headers: { "content-type": "application/json", ...first.headers },
         })
       }
+      if (!entry.fallback && firstEventError) return failedResponse(firstEventError, true)
       if (!entry.fallback) return response
       log.debug("http fallback", { key, reason: "websocket_retries_exhausted" })
       return httpFetch(input, httpInit)
@@ -219,7 +228,21 @@ function connectionLimitError(event: Record<string, unknown>) {
   return new Error(typeof event.error.message === "string" ? event.error.message : CONNECTION_LIMIT_REACHED_CODE)
 }
 
-function failedResponse(error: ProviderError.ResponseStreamError) {
+function failedResponse(error: ProviderError.ResponseStreamError, lazy = false) {
+  if (lazy) {
+    return new Response(
+      new ReadableStream({
+        pull(controller) {
+          controller.error(error)
+        },
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      },
+    )
+  }
+
   return new Response(
     new ReadableStream({
       start(controller) {
