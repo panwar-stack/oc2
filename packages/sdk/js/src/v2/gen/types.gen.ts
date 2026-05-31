@@ -94,6 +94,7 @@ export type Event =
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
+  | EventSupervisorSettingsUpdated
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -150,6 +151,106 @@ export type MoveSessionError = {
   data: {
     message: string
   }
+}
+
+export type SupervisorMode = "off" | "observe" | "advise"
+
+export type SupervisorReviewCadence = "step" | "event" | "idle"
+
+export type SupervisorSessionSettings = {
+  mode?: SupervisorMode
+  recommendation_model?: string
+  recommendation_timeout_ms?: number
+  review_cadence?: SupervisorReviewCadence
+  min_review_interval_ms?: number
+  max_recommendation_chars?: number
+  max_repeated_command_failures?: number
+  broad_diff_file_limit?: number
+  sensitive_path_globs?: Array<string>
+  validation_command_patterns?: Array<string>
+  insert_recommendations?: boolean
+  max_recommendations_per_session?: number
+  updatedAt: number
+}
+
+export type SupervisorEffectiveConfig = {
+  mode: SupervisorMode
+  recommendation_model?: string
+  recommendation_timeout_ms: number
+  review_cadence: SupervisorReviewCadence
+  min_review_interval_ms: number
+  max_recommendation_chars: number
+  max_repeated_command_failures: number
+  broad_diff_file_limit: number
+  sensitive_path_globs: Array<string>
+  validation_command_patterns: Array<string>
+  insert_recommendations: boolean
+  max_recommendations_per_session: number
+}
+
+export type SupervisorStatus = "on_track" | "uncertain" | "drifting" | "blocked" | "high_risk"
+
+export type SupervisorTrigger =
+  | "missing_reproduction"
+  | "repeated_command_failure"
+  | "missing_validation"
+  | "scope_expansion"
+  | "risky_edit"
+  | "wrong_localization"
+  | "evidence_mismatch"
+  | "validation_mismatch"
+  | "premature_success"
+  | "less_optimal_action"
+  | "trajectory_drift"
+
+export type SupervisorRisk = {
+  trigger: SupervisorTrigger
+  severity: "info" | "warning" | "high"
+  evidence: Array<string>
+  message: string
+}
+
+export type SupervisorAction = "nudge" | "ask" | "warn"
+
+export type SupervisorRecommendation = {
+  source: "model"
+  action: SupervisorAction
+  trigger: SupervisorTrigger
+  message: string
+  evidence: Array<string>
+  model?: {
+    providerID: string
+    modelID: string
+  }
+  inserted?: {
+    messageID?: string
+    partID?: string
+    insertedAt: number
+  }
+}
+
+export type SupervisorState = {
+  sessionID: string
+  mode: SupervisorMode
+  config: {
+    modeSource: "global" | "session"
+    globalMode: SupervisorMode
+    session?: SupervisorSessionSettings
+    effective: SupervisorEffectiveConfig
+  }
+  status: SupervisorStatus
+  summary?: string
+  filesTouched: Array<string>
+  commandsRun: Array<{
+    command: string
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    validation: boolean
+    repeatedFailureCount: number
+  }>
+  validationsRun: Array<string>
+  risks: Array<SupervisorRisk>
+  recommendation?: SupervisorRecommendation
+  updatedAt: number
 }
 
 export type SnapshotFileDiff = {
@@ -222,6 +323,7 @@ export type Session = {
     snapshot?: string
     diff?: string
   }
+  supervisor?: SupervisorSessionSettings
 }
 
 export type OutputFormatText = {
@@ -1616,6 +1718,7 @@ export type GlobalEvent = {
           status: "connected" | "connecting" | "disconnected" | "error"
         }
       }
+    | EventSupervisorSettingsUpdated
     | {
         id: string
         type: "server.connected"
@@ -1971,6 +2074,21 @@ export type MemoryConfig = {
   }
 }
 
+export type SupervisorConfig = {
+  mode?: SupervisorMode
+  recommendation_model?: string
+  recommendation_timeout_ms?: number
+  review_cadence?: SupervisorReviewCadence
+  min_review_interval_ms?: number
+  max_recommendation_chars?: number
+  max_repeated_command_failures?: number
+  broad_diff_file_limit?: number
+  sensitive_path_globs?: Array<string>
+  validation_command_patterns?: Array<string>
+  insert_recommendations?: boolean
+  max_recommendations_per_session?: number
+}
+
 /**
  * @deprecated Always uses stretch layout.
  */
@@ -2031,6 +2149,7 @@ export type Config = {
   enabled_providers?: Array<string>
   model?: string
   small_model?: string
+  supervisor?: SupervisorConfig
   default_agent?: string
   username?: string
   mode?: {
@@ -2340,6 +2459,7 @@ export type GlobalSession = {
     snapshot?: string
     diff?: string
   }
+  supervisor?: SupervisorSessionSettings
   project: ProjectSummary | null
 }
 
@@ -2349,6 +2469,22 @@ export type McpResource = {
   description?: string
   mimeType?: string
   client: string
+}
+
+export type SupervisorSettingsPatch = {
+  reset?: boolean
+  mode?: SupervisorMode | null
+  recommendation_model?: string | null
+  recommendation_timeout_ms?: number | null
+  review_cadence?: SupervisorReviewCadence | null
+  min_review_interval_ms?: number | null
+  max_recommendation_chars?: number | null
+  max_repeated_command_failures?: number | null
+  broad_diff_file_limit?: number | null
+  sensitive_path_globs?: Array<string> | null
+  validation_command_patterns?: Array<string> | null
+  insert_recommendations?: boolean | null
+  max_recommendations_per_session?: number | null
 }
 
 export type Symbol = {
@@ -5551,6 +5687,16 @@ export type EventWorkspaceStatus = {
   properties: {
     workspaceID: string
     status: "connected" | "connecting" | "disconnected" | "error"
+  }
+}
+
+export type EventSupervisorSettingsUpdated = {
+  id: string
+  type: "supervisor.settings.updated"
+  properties: {
+    sessionID: string
+    settings?: SupervisorSessionSettings
+    state: SupervisorState
   }
 }
 
@@ -8839,6 +8985,74 @@ export type SessionMessageResponses = {
 }
 
 export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessageResponses]
+
+export type SessionSupervisorGetData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/supervisor"
+}
+
+export type SessionSupervisorGetErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionSupervisorGetError = SessionSupervisorGetErrors[keyof SessionSupervisorGetErrors]
+
+export type SessionSupervisorGetResponses = {
+  /**
+   * Get supervisor state
+   */
+  200: SupervisorState
+}
+
+export type SessionSupervisorGetResponse = SessionSupervisorGetResponses[keyof SessionSupervisorGetResponses]
+
+export type SessionSupervisorUpdateData = {
+  body?: SupervisorSettingsPatch
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/supervisor"
+}
+
+export type SessionSupervisorUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionSupervisorUpdateError = SessionSupervisorUpdateErrors[keyof SessionSupervisorUpdateErrors]
+
+export type SessionSupervisorUpdateResponses = {
+  /**
+   * Updated supervisor state
+   */
+  200: SupervisorState
+}
+
+export type SessionSupervisorUpdateResponse = SessionSupervisorUpdateResponses[keyof SessionSupervisorUpdateResponses]
 
 export type SessionForkData = {
   body?: {

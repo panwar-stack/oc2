@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { Schema } from "effect"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session/session"
+import { Supervisor } from "../../src/supervisor/supervisor"
 
 const info = {
   id: SessionID.descending(),
@@ -32,7 +34,7 @@ describe("Session schema", () => {
   test("encodes undefined optional session fields as omitted keys", () => {
     const encoded = Schema.encodeUnknownSync(Session.Info)(info) as Record<string, unknown>
 
-    for (const key of ["workspaceID", "parentID", "summary", "share", "permission", "revert"]) {
+    for (const key of ["workspaceID", "parentID", "summary", "share", "permission", "revert", "supervisor"]) {
       expect(Object.hasOwn(encoded, key)).toBe(false)
     }
     expect(Object.hasOwn(encoded.time as Record<string, unknown>, "compacting")).toBe(false)
@@ -76,5 +78,48 @@ describe("Session schema", () => {
     for (const key of ["partID", "snapshot", "diff"]) {
       expect(Object.hasOwn(encoded.revert as Record<string, unknown>, key)).toBe(false)
     }
+  })
+
+  test("encodes supervisor session settings", () => {
+    const encoded = Schema.encodeUnknownSync(Session.Info)({
+      ...info,
+      supervisor: {
+        mode: "advise",
+        recommendation_model: "anthropic/claude-sonnet-4",
+        insert_recommendations: false,
+        updatedAt: 10,
+      },
+    }) as Record<string, unknown>
+
+    expect(encoded.supervisor).toEqual({
+      mode: "advise",
+      recommendation_model: "anthropic/claude-sonnet-4",
+      insert_recommendations: false,
+      updatedAt: 10,
+    })
+  })
+
+  test("resolves supervisor settings with session precedence and model fallback", () => {
+    expect(
+      Supervisor.resolveEffectiveConfig({
+        config: { model: "test/default", supervisor: { mode: "observe", broad_diff_file_limit: 7 } },
+        session: { mode: "advise", max_recommendation_chars: 400, updatedAt: 20 },
+      }),
+    ).toMatchObject({
+      mode: "advise",
+      recommendation_model: "test/default",
+      broad_diff_file_limit: 7,
+      max_recommendation_chars: 400,
+      insert_recommendations: true,
+    })
+  })
+
+  test("session supervisor migration adds nullable json column", () => {
+    expect(
+      readFileSync(
+        new URL("../../migration/20260531203016_session_supervisor_settings/migration.sql", import.meta.url),
+        "utf-8",
+      ).trim(),
+    ).toBe("ALTER TABLE `session` ADD `supervisor` text;")
   })
 })

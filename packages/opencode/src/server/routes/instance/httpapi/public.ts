@@ -268,6 +268,11 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   }
   if (schemas.GlobalSession?.properties?.project)
     schemas.GlobalSession.properties.project = nullable(schemas.GlobalSession.properties.project)
+  if (schemas.SupervisorSettingsPatch?.properties) {
+    for (const key of Object.keys(schemas.SupervisorSettingsPatch.properties).filter((key) => key !== "reset")) {
+      schemas.SupervisorSettingsPatch.properties[key] = nullable(schemas.SupervisorSettingsPatch.properties[key])
+    }
+  }
   const providerOptions = schemas.ProviderConfig?.properties?.options
   if (providerOptions) providerOptions.additionalProperties = {}
   const model = schemas.ProviderConfig?.properties?.models?.additionalProperties

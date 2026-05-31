@@ -6,6 +6,7 @@ type Method = "get" | "post" | "put" | "delete" | "patch"
 type OpenApiSchema = {
   readonly $ref?: string
   readonly anyOf?: ReadonlyArray<OpenApiSchema>
+  readonly oneOf?: ReadonlyArray<OpenApiSchema>
   readonly type?: string
   readonly enum?: readonly unknown[]
   readonly properties?: Record<string, OpenApiSchema>
@@ -23,7 +24,10 @@ type OpenApiOperation = {
     readonly schema?: { readonly type?: string }
   }>
   readonly responses?: Record<string, OpenApiResponse>
-  readonly requestBody?: { readonly required?: boolean }
+  readonly requestBody?: {
+    readonly required?: boolean
+    readonly content?: Record<string, { readonly schema?: OpenApiSchema }>
+  }
   readonly security?: unknown
 }
 type OpenApiPathItem = Partial<Record<Method, OpenApiOperation>>
@@ -65,6 +69,10 @@ function componentNames(response: OpenApiResponse | undefined) {
 
 function isBuiltInEndpointError(name: string) {
   return name.startsWith("EffectHttpApiError") || name.startsWith("effect_HttpApiError_")
+}
+
+function isNullable(schema: OpenApiSchema | undefined) {
+  return schema?.anyOf?.some((item) => item.type === "null") ?? schema?.oneOf?.some((item) => item.type === "null") ?? false
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
@@ -219,6 +227,38 @@ describe("PublicApi OpenAPI v2 errors", () => {
       expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["409"]) ?? "")).toBe(
         "SessionBusyError",
       )
+    }
+  })
+
+  test("documents session supervisor routes", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+
+    expect(spec.paths["/session/{sessionID}/supervisor"]?.get?.responses?.["200"]).toBeDefined()
+    expect(spec.paths["/session/{sessionID}/supervisor"]?.patch?.responses?.["200"]).toBeDefined()
+    expect(
+      spec.paths["/session/{sessionID}/supervisor"]?.patch?.requestBody?.content?.["application/json"]?.schema?.$ref,
+    ).toBe("#/components/schemas/SupervisorSettingsPatch")
+    expect(componentName(responseRef(spec.paths["/session/{sessionID}/supervisor"]?.get?.responses?.["404"]) ?? "")).toBe(
+      "NotFoundError",
+    )
+
+    const properties = spec.components?.schemas?.SupervisorSettingsPatch?.properties
+    expect(properties?.reset?.type).toBe("boolean")
+    for (const key of [
+      "mode",
+      "recommendation_model",
+      "recommendation_timeout_ms",
+      "review_cadence",
+      "min_review_interval_ms",
+      "max_recommendation_chars",
+      "max_repeated_command_failures",
+      "broad_diff_file_limit",
+      "sensitive_path_globs",
+      "validation_command_patterns",
+      "insert_recommendations",
+      "max_recommendations_per_session",
+    ]) {
+      expect(isNullable(properties?.[key]), key).toBe(true)
     }
   })
 

@@ -37,6 +37,7 @@ import { Snapshot } from "@/snapshot"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { SessionID, MessageID, PartID, SessionRootID } from "./schema"
+import { Supervisor } from "@/supervisor/supervisor"
 
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
@@ -107,6 +108,7 @@ export function fromRow(row: SessionRow): Info {
     metadata: row.metadata ?? undefined,
     revert,
     permission: row.permission ? [...row.permission] : undefined,
+    supervisor: row.supervisor ? Schema.decodeUnknownSync(Supervisor.SessionSettings)(row.supervisor) : undefined,
     time: {
       created: row.time_created,
       updated: row.time_updated,
@@ -145,6 +147,7 @@ export function toRow(info: Info) {
     time_processing: info.time.processing,
     revert: info.revert ?? null,
     permission: info.permission,
+    supervisor: info.supervisor ?? null,
     time_created: info.time.created,
     time_updated: info.time.updated,
     time_compacting: info.time.compacting,
@@ -154,7 +157,7 @@ export function toRow(info: Info) {
 
 export function rootFromRow(row: SessionRootRow): RootInfo {
   return {
-    id: row.id,
+    id: SessionRootID.make(row.id),
     sessionID: row.session_id,
     name: row.name ?? undefined,
     directory: row.directory,
@@ -250,6 +253,7 @@ export const Info = Schema.Struct({
   time: Time,
   permission: optionalOmitUndefined(PermissionV1.Ruleset),
   revert: optionalOmitUndefined(Revert),
+  supervisor: optionalOmitUndefined(Supervisor.SessionSettings),
 }).annotate({ identifier: "Session" })
 export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -317,6 +321,10 @@ export const SetRevertInput = Schema.Struct({
   revert: Schema.optional(Revert),
   summary: Schema.optional(Summary),
 })
+export const SetSupervisorSettingsInput = Schema.Struct({
+  sessionID: SessionID,
+  supervisor: Schema.optional(Supervisor.SessionSettings),
+})
 export const MessagesInput = Schema.Struct({
   sessionID: SessionID,
   limit: Schema.optional(NonNegativeInt),
@@ -379,6 +387,7 @@ const UpdatedInfo = Schema.Struct({
   time: Schema.optional(UpdatedTime),
   permission: Schema.optional(Schema.NullOr(PermissionV1.Ruleset)),
   revert: Schema.optional(Schema.NullOr(Revert)),
+  supervisor: Schema.optional(Schema.NullOr(Supervisor.SessionSettings)),
 })
 
 const UpdatedEventSchema = Schema.Struct({
@@ -519,6 +528,10 @@ export interface Interface {
     sessionID: SessionID
     revert: Info["revert"]
     summary: Info["summary"]
+  }) => Effect.Effect<void>
+  readonly setSupervisorSettings: (input: {
+    sessionID: SessionID
+    supervisor?: Supervisor.SessionSettings
   }) => Effect.Effect<void>
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
@@ -1109,6 +1122,13 @@ export const layer: Layer.Layer<
       }).pipe(Effect.orDie)
     })
 
+    const setSupervisorSettings = Effect.fn("Session.setSupervisorSettings")(function* (input: {
+      sessionID: SessionID
+      supervisor?: Supervisor.SessionSettings
+    }) {
+      yield* patch(input.sessionID, { time: { updated: Date.now() }, supervisor: input.supervisor })
+    })
+
     const clearRevert = Effect.fn("Session.clearRevert")(function* (sessionID: SessionID) {
       yield* patch(sessionID, { time: { updated: Date.now() }, revert: null }).pipe(Effect.orDie)
     })
@@ -1228,6 +1248,7 @@ export const layer: Layer.Layer<
       setMetadata,
       setPermission,
       setRevert,
+      setSupervisorSettings,
       clearRevert,
       setSummary,
       setShare,

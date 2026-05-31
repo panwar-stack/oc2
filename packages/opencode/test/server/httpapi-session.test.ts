@@ -26,6 +26,7 @@ import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionMessage } from "@opencode-ai/core/session/message"
+import { Supervisor } from "../../src/supervisor/supervisor"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import * as DateTime from "effect/DateTime"
@@ -36,6 +37,7 @@ import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped 
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { testEffect } from "../lib/effect"
+import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 
 void Log.init({ print: false })
 
@@ -110,7 +112,7 @@ function createStepFinishPart(sessionID: SessionIDType, duration: number) {
       role: "user",
       sessionID,
       agent: "build",
-      model: { providerID: ProviderID.make("test"), modelID: ModelID.make("test") },
+      model: { providerID: ProviderV2.ID.make("test"), modelID: ProviderV2.ModelID.make("test") },
       time: { created: Date.now() },
     })
     return yield* svc.updatePart({
@@ -263,6 +265,14 @@ function requestJson<T>(path: string, init?: RequestInit) {
   return request(path, init).pipe(Effect.flatMap(json<T>))
 }
 
+function subscribeGlobal(type: string, callback: (event: NonNullable<GlobalEvent["payload"]>) => void) {
+  const listener = (event: GlobalEvent) => {
+    if (event.payload?.type === type) callback(event.payload)
+  }
+  GlobalBus.on("event", listener)
+  return () => GlobalBus.off("event", listener)
+}
+
 afterEach(async () => {
   Flag.OPENCODE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
   await disposeAllInstances()
@@ -284,6 +294,117 @@ describe("session HttpApi", () => {
         })
       }
     }),
+  )
+
+  it.instance(
+    "reads and updates supervisor settings",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "supervisor" })
+        const url = pathFor(SessionPaths.supervisor, { sessionID: session.id })
+
+        expect(yield* requestJson<Supervisor.State>(url, { headers })).toMatchObject({
+          sessionID: session.id,
+          mode: "observe",
+          status: "on_track",
+          filesTouched: [],
+          commandsRun: [],
+          validationsRun: [],
+          risks: [],
+          config: {
+            modeSource: "global",
+            globalMode: "observe",
+            effective: {
+              mode: "observe",
+              recommendation_model: "test/global",
+              insert_recommendations: true,
+            },
+          },
+        })
+
+        const events: string[] = []
+        const unsubscribeSession = subscribeGlobal(Session.Event.Updated.type, (event) => events.push(event.type))
+        const unsubscribeSupervisor = subscribeGlobal(Supervisor.Event.SettingsUpdated.type, (event) =>
+          events.push(event.type),
+        )
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribeSession))
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribeSupervisor))
+
+        const updated = yield* requestJson<Supervisor.State>(url, {
+          headers,
+          method: "PATCH",
+          body: JSON.stringify({
+            mode: "advise",
+            recommendation_model: "test/session",
+            insert_recommendations: false,
+            sensitive_path_globs: ["**/secret/**"],
+          }),
+        })
+        expect(updated).toMatchObject({
+          mode: "advise",
+          config: {
+            modeSource: "session",
+            session: {
+              mode: "advise",
+              recommendation_model: "test/session",
+              insert_recommendations: false,
+              sensitive_path_globs: ["**/secret/**"],
+            },
+            effective: {
+              mode: "advise",
+              recommendation_model: "test/session",
+              insert_recommendations: false,
+            },
+          },
+        })
+        expect(typeof updated.config.session?.updatedAt).toBe("number")
+        expect((yield* Session.use.get(session.id)).supervisor).toMatchObject({
+          mode: "advise",
+          recommendation_model: "test/session",
+        })
+        expect(events).toContain(Session.Event.Updated.type)
+        expect(events).toContain(Supervisor.Event.SettingsUpdated.type)
+
+        const invalid = yield* request(url, {
+          headers,
+          method: "PATCH",
+          body: JSON.stringify({ max_recommendation_chars: 0 }),
+        })
+        expect(invalid.status).toBe(400)
+        expect((yield* Session.use.get(session.id)).supervisor?.recommendation_model).toBe("test/session")
+
+        const cleared = yield* requestJson<Supervisor.State>(url, {
+          headers,
+          method: "PATCH",
+          body: JSON.stringify({ mode: null, recommendation_model: null }),
+        })
+        expect(cleared).toMatchObject({
+          mode: "observe",
+          config: {
+            modeSource: "global",
+            session: { insert_recommendations: false, sensitive_path_globs: ["**/secret/**"] },
+            effective: { mode: "observe", recommendation_model: "test/global" },
+          },
+        })
+
+        const reset = yield* requestJson<Supervisor.State>(url, {
+          headers,
+          method: "PATCH",
+          body: JSON.stringify({ reset: true }),
+        })
+        expect(reset.config.session).toBeUndefined()
+        expect((yield* Session.use.get(session.id)).supervisor).toBeUndefined()
+      }),
+    {
+      git: true,
+      config: {
+        formatter: false,
+        lsp: false,
+        supervisor: { mode: "observe", recommendation_model: "test/global" },
+      },
+    },
   )
 
   it.instance(

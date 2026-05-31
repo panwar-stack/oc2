@@ -8,6 +8,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { Supervisor } from "@/supervisor/supervisor"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID, SessionRootID } from "@/session/schema"
 import { Snapshot } from "@/snapshot"
@@ -82,6 +83,7 @@ export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
+export const SupervisorSettingsPayload = Supervisor.SettingsPatch
 
 export const SessionPaths = {
   list: root,
@@ -97,6 +99,7 @@ export const SessionPaths = {
   create: root,
   remove: `${root}/:sessionID`,
   update: `${root}/:sessionID`,
+  supervisor: `${root}/:sessionID/supervisor`,
   fork: `${root}/:sessionID/fork`,
   abort: `${root}/:sessionID/abort`,
   share: `${root}/:sessionID/share`,
@@ -295,6 +298,31 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.update",
             summary: "Update session",
             description: "Update properties of an existing session, such as title or other metadata.",
+          }),
+        ),
+        HttpApiEndpoint.get("getSupervisor", SessionPaths.supervisor, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Supervisor.State, "Get supervisor state"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.supervisor.get",
+            summary: "Get session supervisor state",
+            description: "Get the effective supervisor config and current derived supervisor state for a session.",
+          }),
+        ),
+        HttpApiEndpoint.patch("updateSupervisor", SessionPaths.supervisor, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SupervisorSettingsPayload,
+          success: described(Supervisor.State, "Updated supervisor state"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.supervisor.update",
+            summary: "Update session supervisor settings",
+            description: "Update durable per-session supervisor setting overrides.",
           }),
         ),
         HttpApiEndpoint.post("fork", SessionPaths.fork, {
