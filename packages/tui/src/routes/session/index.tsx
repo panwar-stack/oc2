@@ -84,6 +84,7 @@ import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { DialogRoots } from "./dialog-roots"
+import { DialogSupervisor } from "./dialog-supervisor"
 import { collectExportSessionFromClient } from "../../util/session-export"
 
 addDefaultParsers(parsers.parsers)
@@ -252,6 +253,37 @@ export function SessionRootsCommand() {
 
   useBindings(() => ({
     commands: rootsCommands(),
+  }))
+
+  return null
+}
+
+export function SessionSupervisorCommand() {
+  const route = useRoute()
+  const dialog = useDialog()
+  const toast = useToast()
+  const sessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
+  const commands = createMemo(() => [
+    {
+      namespace: "palette",
+      name: "session.supervisor",
+      title: "Configure supervisor",
+      category: "Session",
+      slashName: "supervisor",
+      hidden: sessionID() === undefined,
+      run: () => {
+        const id = sessionID()
+        if (!id) {
+          toast.show({ message: "Open a session to configure supervisor", variant: "error" })
+          return
+        }
+        dialog.replace(() => <DialogSupervisor sessionID={id} />)
+      },
+    },
+  ])
+
+  useBindings(() => ({
+    commands: commands(),
   }))
 
   return null
