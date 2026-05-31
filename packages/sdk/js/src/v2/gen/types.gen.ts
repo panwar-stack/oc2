@@ -96,6 +96,8 @@ export type Event =
   | EventWorkspaceStatus
   | EventSupervisorSettingsUpdated
   | EventSupervisorStateUpdated
+  | EventSupervisorRecommendationCreated
+  | EventSupervisorReportCompleted
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -252,6 +254,24 @@ export type SupervisorState = {
   risks: Array<SupervisorRisk>
   recommendation?: SupervisorRecommendation
   updatedAt: number
+}
+
+export type SupervisorReport = {
+  sessionID: string
+  status: SupervisorStatus
+  summary?: string
+  filesTouched: Array<string>
+  commandsRun: Array<{
+    command: string
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    validation: boolean
+    repeatedFailureCount: number
+  }>
+  validationsRun: Array<string>
+  risks: Array<SupervisorRisk>
+  recommendations: Array<SupervisorRecommendation>
+  evidence: Array<string>
+  generatedAt: number
 }
 
 export type SnapshotFileDiff = {
@@ -1721,6 +1741,8 @@ export type GlobalEvent = {
       }
     | EventSupervisorSettingsUpdated
     | EventSupervisorStateUpdated
+    | EventSupervisorRecommendationCreated
+    | EventSupervisorReportCompleted
     | {
         id: string
         type: "server.connected"
@@ -5711,6 +5733,25 @@ export type EventSupervisorStateUpdated = {
   }
 }
 
+export type EventSupervisorRecommendationCreated = {
+  id: string
+  type: "supervisor.recommendation.created"
+  properties: {
+    sessionID: string
+    recommendation: SupervisorRecommendation
+    state: SupervisorState
+  }
+}
+
+export type EventSupervisorReportCompleted = {
+  id: string
+  type: "supervisor.report.completed"
+  properties: {
+    sessionID: string
+    report: SupervisorReport
+  }
+}
+
 export type EventServerConnected = {
   id: string
   type: "server.connected"
@@ -9064,6 +9105,40 @@ export type SessionSupervisorUpdateResponses = {
 }
 
 export type SessionSupervisorUpdateResponse = SessionSupervisorUpdateResponses[keyof SessionSupervisorUpdateResponses]
+
+export type SessionSupervisorReportData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/supervisor/report"
+}
+
+export type SessionSupervisorReportErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionSupervisorReportError = SessionSupervisorReportErrors[keyof SessionSupervisorReportErrors]
+
+export type SessionSupervisorReportResponses = {
+  /**
+   * Get supervisor report
+   */
+  200: SupervisorReport
+}
+
+export type SessionSupervisorReportResponse = SessionSupervisorReportResponses[keyof SessionSupervisorReportResponses]
 
 export type SessionForkData = {
   body?: {

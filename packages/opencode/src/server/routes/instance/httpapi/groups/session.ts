@@ -100,6 +100,7 @@ export const SessionPaths = {
   remove: `${root}/:sessionID`,
   update: `${root}/:sessionID`,
   supervisor: `${root}/:sessionID/supervisor`,
+  supervisorReport: `${root}/:sessionID/supervisor/report`,
   fork: `${root}/:sessionID/fork`,
   abort: `${root}/:sessionID/abort`,
   share: `${root}/:sessionID/share`,
@@ -323,6 +324,18 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.supervisor.update",
             summary: "Update session supervisor settings",
             description: "Update durable per-session supervisor setting overrides.",
+          }),
+        ),
+        HttpApiEndpoint.get("getSupervisorReport", SessionPaths.supervisorReport, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Supervisor.Report, "Get supervisor report"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.supervisor.report",
+            summary: "Get session supervisor report",
+            description: "Generate and return a supervisor report from observable session state.",
           }),
         ),
         HttpApiEndpoint.post("fork", SessionPaths.fork, {

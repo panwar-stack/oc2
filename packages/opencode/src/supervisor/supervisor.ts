@@ -7,7 +7,9 @@ import { NonNegativeInt, optionalOmitUndefined, PositiveInt } from "@opencode-ai
 import { Schema, Types } from "effect"
 
 export const Mode = ConfigSupervisor.Mode
+export type Mode = ConfigSupervisor.Mode
 export const ReviewCadence = ConfigSupervisor.ReviewCadence
+export type ReviewCadence = ConfigSupervisor.ReviewCadence
 
 const SettingsFields = {
   mode: optionalOmitUndefined(Mode),
@@ -87,6 +89,7 @@ export const Risk = Schema.Struct({
   evidence: Schema.Array(Schema.String),
   message: Schema.String,
 }).annotate({ identifier: "SupervisorRisk" })
+export type Risk = Types.DeepMutable<Schema.Schema.Type<typeof Risk>>
 
 export const Recommendation = Schema.Struct({
   source: Schema.Literal("model"),
@@ -108,6 +111,58 @@ export const Recommendation = Schema.Struct({
     }),
   ),
 }).annotate({ identifier: "SupervisorRecommendation" })
+export type Recommendation = Types.DeepMutable<Schema.Schema.Type<typeof Recommendation>>
+
+export const RecommendationInput = Schema.Struct({
+  sessionID: SessionID,
+  status: Status,
+  summary: optionalOmitUndefined(Schema.String),
+  supervisorModel: optionalOmitUndefined(
+    Schema.Struct({
+      providerID: Schema.String,
+      modelID: Schema.String,
+    }),
+  ),
+  allowedTriggers: Schema.Array(Trigger),
+  triggeredRisks: Schema.Array(Risk),
+  filesTouched: Schema.Array(Schema.String),
+  commandsRun: StateCommandArray(),
+  validationsRun: Schema.Array(Schema.String),
+  risks: Schema.Array(Risk),
+  recentEvents: Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      target: optionalOmitUndefined(Schema.String),
+      outcome: optionalOmitUndefined(Schema.Literals(["success", "failure", "unknown"])),
+    }),
+  ),
+  reviewReason: Schema.Literals(["cadence", "deterministic_trigger", "session_idle"]),
+  maxRecommendationChars: PositiveInt,
+}).annotate({ identifier: "SupervisorRecommendationInput" })
+export type RecommendationInput = Types.DeepMutable<Schema.Schema.Type<typeof RecommendationInput>>
+
+export const RecommendationOutput = Schema.Struct({
+  recommend: Schema.Boolean,
+  action: Action,
+  trigger: Trigger,
+  message: Schema.String,
+  evidence: Schema.Array(Schema.String),
+}).annotate({ identifier: "SupervisorRecommendationOutput" })
+export type RecommendationOutput = Types.DeepMutable<Schema.Schema.Type<typeof RecommendationOutput>>
+
+export const Report = Schema.Struct({
+  sessionID: SessionID,
+  status: Status,
+  summary: optionalOmitUndefined(Schema.String),
+  filesTouched: Schema.Array(Schema.String),
+  commandsRun: StateCommandArray(),
+  validationsRun: Schema.Array(Schema.String),
+  risks: Schema.Array(Risk),
+  recommendations: Schema.Array(Recommendation),
+  evidence: Schema.Array(Schema.String),
+  generatedAt: NonNegativeInt,
+}).annotate({ identifier: "SupervisorReport" })
+export type Report = Types.DeepMutable<Schema.Schema.Type<typeof Report>>
 
 export const State = Schema.Struct({
   sessionID: SessionID,
@@ -152,6 +207,32 @@ export const Event = {
       state: State,
     }),
   ),
+  RecommendationCreated: BusEvent.define(
+    "supervisor.recommendation.created",
+    Schema.Struct({
+      sessionID: SessionID,
+      recommendation: Recommendation,
+      state: State,
+    }),
+  ),
+  ReportCompleted: BusEvent.define(
+    "supervisor.report.completed",
+    Schema.Struct({
+      sessionID: SessionID,
+      report: Report,
+    }),
+  ),
+}
+
+function StateCommandArray() {
+  return Schema.Array(
+    Schema.Struct({
+      command: Schema.String,
+      exitCode: optionalOmitUndefined(Schema.Number),
+      validation: Schema.Boolean,
+      repeatedFailureCount: NonNegativeInt,
+    }),
+  )
 }
 
 export const defaults = {

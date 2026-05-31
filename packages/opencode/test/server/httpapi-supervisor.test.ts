@@ -87,6 +87,28 @@ function addShellCommand(sessionID: SessionID, command: string) {
   })
 }
 
+function addPatch(sessionID: SessionID, files: string[]) {
+  return Effect.gen(function* () {
+    const session = yield* Session.Service
+    const message = yield* session.updateMessage({
+      id: MessageID.ascending(),
+      role: "user",
+      sessionID,
+      agent: "build",
+      model: { providerID: "test", modelID: "test" },
+      time: { created: Date.now() },
+    } as MessageV2.User)
+    yield* session.updatePart({
+      id: PartID.ascending(),
+      sessionID,
+      messageID: message.id,
+      type: "patch",
+      hash: PartID.ascending(),
+      files,
+    })
+  })
+}
+
 afterEach(async () => {
   Flag.OPENCODE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
   await disposeAllInstances()
@@ -130,5 +152,26 @@ describe("supervisor HttpApi", () => {
       expect(state.config.session?.validation_command_patterns).toEqual(["custom check"])
       expect((yield* Session.use.get(session.id)).supervisor?.mode).toBe("advise")
     }),
+  )
+
+  it.instance(
+    "GET report returns observable supervisor report",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* Session.use.create({ title: "report" })
+        yield* addPatch(session.id, ["src/app.ts"])
+
+        const report = yield* requestJson<Supervisor.Report>(
+          pathFor(SessionPaths.supervisorReport, { sessionID: session.id }),
+          { headers: { "x-opencode-directory": test.directory } },
+        )
+
+        expect(report.sessionID).toBe(session.id)
+        expect(report.filesTouched).toEqual(["src/app.ts"])
+        expect(report.risks.map((risk) => risk.trigger)).toContain("missing_validation")
+        expect(JSON.stringify(report)).not.toContain("raw output")
+      }),
+    { config: { formatter: false, lsp: false, supervisor: { mode: "observe" } } },
   )
 })

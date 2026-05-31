@@ -240,6 +240,8 @@ import type {
   SessionSummarizeResponses,
   SessionSupervisorGetErrors,
   SessionSupervisorGetResponses,
+  SessionSupervisorReportErrors,
+  SessionSupervisorReportResponses,
   SessionSupervisorUpdateErrors,
   SessionSupervisorUpdateResponses,
   SessionTodoErrors,
@@ -3886,6 +3888,42 @@ export class Supervisor extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Get session supervisor report
+   *
+   * Generate and return a supervisor report from observable session state.
+   */
+  public report<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionSupervisorReportResponses,
+      SessionSupervisorReportErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/supervisor/report",
+      ...options,
+      ...params,
     })
   }
 }
