@@ -14,6 +14,8 @@ Read the highest-value sources first:
 - existing instruction files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`)
 - repo-local OpenCode config such as `opencode.json`
 
+Run `opencode memory index` to create or refresh repository memory for future sessions.
+
 If architecture is still unclear after reading config and docs, inspect a small number of representative code files to find the real entrypoints, package boundaries, and execution flow. Prefer reading the files that explain how the system is wired together over random leaf files.
 
 Prefer executable sources of truth over prose. If docs conflict with config or scripts, trust the executable source and only keep what you can verify.
@@ -31,6 +33,15 @@ Look for the highest-signal facts for an agent working in this repo:
 - important constraints from existing instruction files worth preserving
 
 Good `AGENTS.md` content is usually hard-earned context that took reading multiple files to infer.
+
+## Required Principles
+
+Add these principles exactly in spirit, adjusting only formatting to match the target file:
+
+1. Think before coding - Don't assume. Don't hide confusion. Surface tradeoffs.
+2. Simplicity first - Minimum code that solves the problem. Nothing speculative.
+3. Surgical changes - Touch only what you must. Clean up only your own mess.
+4. Goal-driven execution - Define success criteria. Loop until verified.
 
 ## Questions
 
@@ -53,11 +64,13 @@ Include only high-signal, repo-specific guidance such as:
 - references to existing instruction sources that matter
 
 Exclude:
-- generic software advice
+- generic software advice beyond the required principles above
 - long tutorials or exhaustive file trees
 - obvious language conventions
 - speculative claims or anything you could not verify
 - content better stored in another file referenced via `opencode.json` `instructions`
+
+Keep the init output intact; append or merge the required principles instead of replacing existing guidance.
 
 When in doubt, omit.
 
