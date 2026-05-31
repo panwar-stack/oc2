@@ -3,7 +3,6 @@ import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
-import { Config } from "@/config/config"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
@@ -14,7 +13,7 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
-import { Supervisor } from "@/supervisor/supervisor"
+import { SupervisorState } from "@/supervisor"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
@@ -53,7 +52,6 @@ const tryParseJson = (text: string) =>
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
-    const configSvc = yield* Config.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
     const revertSvc = yield* SessionRevert.Service
@@ -65,6 +63,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
+    const supervisorState = yield* SupervisorState.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -240,20 +239,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const getSupervisor = Effect.fn("SessionHttpApi.getSupervisor")(function* (ctx: {
       params: { sessionID: SessionID }
     }) {
-      const info = yield* requireSession(ctx.params.sessionID)
-      return Supervisor.state({ sessionID: ctx.params.sessionID, config: yield* configSvc.get(), session: info.supervisor })
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionError.mapStorageNotFound(supervisorState.get(ctx.params.sessionID))
     })
 
     const updateSupervisor = Effect.fn("SessionHttpApi.updateSupervisor")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof SupervisorSettingsPayload.Type
     }) {
-      const info = yield* requireSession(ctx.params.sessionID)
-      const settings = Supervisor.applySettingsPatch({ current: info.supervisor, patch: ctx.payload, updatedAt: Date.now() })
-      yield* session.setSupervisorSettings({ sessionID: ctx.params.sessionID, supervisor: settings })
-      const state = Supervisor.state({ sessionID: ctx.params.sessionID, config: yield* configSvc.get(), session: settings })
-      yield* bus.publish(Supervisor.Event.SettingsUpdated, { sessionID: ctx.params.sessionID, settings, state })
-      return state
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionError.mapStorageNotFound(
+        supervisorState.updateSettings({ sessionID: ctx.params.sessionID, patch: ctx.payload }),
+      )
     })
 
     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {

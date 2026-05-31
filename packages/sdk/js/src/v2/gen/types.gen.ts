@@ -95,6 +95,7 @@ export type Event =
   | EventWorkspaceFailed
   | EventWorkspaceStatus
   | EventSupervisorSettingsUpdated
+  | EventSupervisorStateUpdated
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -1719,6 +1720,7 @@ export type GlobalEvent = {
         }
       }
     | EventSupervisorSettingsUpdated
+    | EventSupervisorStateUpdated
     | {
         id: string
         type: "server.connected"
@@ -5696,6 +5698,15 @@ export type EventSupervisorSettingsUpdated = {
   properties: {
     sessionID: string
     settings?: SupervisorSessionSettings
+    state: SupervisorState
+  }
+}
+
+export type EventSupervisorStateUpdated = {
+  id: string
+  type: "supervisor.state.updated"
+  properties: {
+    sessionID: string
     state: SupervisorState
   }
 }

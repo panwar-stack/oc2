@@ -145,6 +145,13 @@ export const Event = {
       state: State,
     }),
   ),
+  StateUpdated: BusEvent.define(
+    "supervisor.state.updated",
+    Schema.Struct({
+      sessionID: SessionID,
+      state: State,
+    }),
+  ),
 }
 
 export const defaults = {
