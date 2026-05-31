@@ -1053,7 +1053,10 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
   const busy = () => state.busy
 
   const textPart = createMemo(
-    () => props.parts?.find((p) => p.type === "text" && !(p as TextPart).synthetic) as TextPart | undefined,
+    () =>
+      props.parts?.find((p) => p.type === "text" && (!(p as TextPart).synthetic || (p as TextPart).metadata?.supervisor)) as
+        | TextPart
+        | undefined,
   )
 
   const text = createMemo(() => textPart()?.text || "")

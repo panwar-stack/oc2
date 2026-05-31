@@ -121,7 +121,7 @@ export function formatAssistantHeader(
 }
 
 export function formatPart(part: Part, options: TranscriptOptions): string {
-  if (part.type === "text" && !part.synthetic) {
+  if (part.type === "text" && (!part.synthetic || part.metadata?.supervisor !== undefined)) {
     return `${part.text}\n\n`
   }
 

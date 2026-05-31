@@ -17,6 +17,10 @@ type Turn = {
   variant: string | undefined
 }
 
+function visibleTextPart(part: Extract<SessionMessages[number]["parts"][number], { type: "text" }>) {
+  return !part.synthetic || part.metadata?.supervisor !== undefined
+}
+
 export type RunSession = {
   first: boolean
   turns: Turn[]
@@ -64,7 +68,7 @@ export function messagePrompt(msg: SessionMessages[number]): RunPrompt {
   const parts: RunPrompt["parts"] = []
   let text = msg.parts
     .filter((part): part is Extract<SessionMessages[number]["parts"][number], { type: "text" }> => {
-      return part.type === "text" && !part.synthetic
+      return part.type === "text" && visibleTextPart(part)
     })
     .map((part) => part.text)
     .join("")

@@ -55,6 +55,10 @@ type Derived = {
   summary?: string
   updatedAt: number
 }
+type SnapshotDerived = {
+  derived: Derived
+  recommendations: Supervisor.Recommendation[]
+}
 type State = {
   derived: Map<SessionID, Derived>
   recommendations: Map<SessionID, Supervisor.Recommendation[]>
@@ -164,14 +168,25 @@ export const layer: Layer.Layer<
           data.lastReviewAt.delete(sessionID)
           return base
         }
-        if (base.mode !== "advise" || !base.config.effective.insert_recommendations) data.pendingInsertions.delete(sessionID)
+        if (base.mode !== "advise") data.pendingInsertions.delete(sessionID)
 
         const fromSnapshots = yield* deriveFromSnapshots(info, base.config.effective, data.roots).pipe(
-          Effect.orElseSucceed((): Derived => emptyDerived()),
+          Effect.orElseSucceed((): SnapshotDerived => ({ derived: emptyDerived(), recommendations: [] })),
         )
         const current = data.derived.get(sessionID)
-        const derived = mergeDerived(fromSnapshots, current)
+        const derived = mergeDerived(fromSnapshots.derived, current)
         data.derived.set(sessionID, derived)
+        if (fromSnapshots.recommendations.length > 0) {
+          data.recommendations.set(sessionID, fromSnapshots.recommendations)
+          data.recommendationKeys.set(
+            sessionID,
+            new Set(
+              fromSnapshots.recommendations.map((recommendation) =>
+                recommendationKey(overlay(base, derived, recommendation), recommendation),
+              ),
+            ),
+          )
+        }
         const next = overlay(base, derived, latestRecommendation(data, sessionID), { report: options.report })
         if (options.publish) yield* bus.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
         return next
@@ -197,7 +212,7 @@ export const layer: Layer.Layer<
           data.lastReviewAt.delete(normalized.sessionID)
           return
         }
-        if (base.mode !== "advise" || !base.config.effective.insert_recommendations) {
+        if (base.mode !== "advise") {
           data.pendingInsertions.delete(normalized.sessionID)
         }
         if (normalized.type === "refresh") {
@@ -244,7 +259,6 @@ export const layer: Layer.Layer<
         const latestInfo = yield* session.get(sessionID).pipe(Effect.orDie)
         const latestBase = Supervisor.state({ sessionID, config: yield* config.get(), session: latestInfo.supervisor })
         if (latestBase.mode !== "advise") return
-        if (!latestBase.config.effective.insert_recommendations) return
         if (observeConfig(data, sessionID, latestBase.config.effective) !== configGeneration) return
         if ((data.recommendations.get(sessionID)?.length ?? 0) >= latestBase.config.effective.max_recommendations_per_session) return
         if (hasRecommendationKey(data, sessionID, recommendationKey(current, recommendation))) return
@@ -281,7 +295,6 @@ export const layer: Layer.Layer<
         const latestBase = Supervisor.state({ sessionID, config: yield* config.get(), session: latestInfo.supervisor })
         observeConfig(data, sessionID, latestBase.config.effective)
         if (latestBase.mode !== "advise") return
-        if (!latestBase.config.effective.insert_recommendations) return
         if ((data.recommendations.get(sessionID)?.length ?? 0) >= latestBase.config.effective.max_recommendations_per_session) return
         if ((yield* sessionStatus.get(sessionID)).type !== "idle") {
           data.pendingInsertions.set(sessionID, recommendation)
@@ -289,33 +302,35 @@ export const layer: Layer.Layer<
         }
 
         const insertedAt = Date.now()
-        const messageID = MessageID.ascending()
-        const partID = PartID.ascending()
-        const inserted = { messageID, partID, insertedAt }
-        const insertedRecommendation = { ...recommendation, inserted }
         const key = recommendationKey(overlay(latestBase, derived, latestRecommendation(data, sessionID)), recommendation)
         if (hasRecommendationKey(data, sessionID, key)) return
+        const inserted = latestBase.config.effective.insert_recommendations
+          ? { messageID: MessageID.ascending(), partID: PartID.ascending(), insertedAt }
+          : undefined
+        const insertedRecommendation = inserted ? { ...recommendation, inserted } : recommendation
         data.recommendations.set(sessionID, [...(data.recommendations.get(sessionID) ?? []), insertedRecommendation])
         data.recommendationKeys.set(sessionID, new Set([...(data.recommendationKeys.get(sessionID) ?? []), key]))
 
-        yield* session.updateMessage({
-          id: messageID,
-          role: "user",
-          sessionID,
-          agent: "supervisor",
-          model: { providerID: "supervisor", modelID: "supervisor" },
-          time: { created: insertedAt },
-        } as MessageV2.User)
-        yield* session.updatePart({
-          id: partID,
-          sessionID,
-          messageID,
-          type: "text",
-          text: recommendationText(insertedRecommendation, latestBase.config.effective.max_recommendation_chars),
-          synthetic: true,
-          metadata: { supervisor: insertedRecommendation },
-          time: { start: insertedAt, end: insertedAt },
-        })
+        if (inserted) {
+          yield* session.updateMessage({
+            id: inserted.messageID,
+            role: "user",
+            sessionID,
+            agent: "supervisor",
+            model: { providerID: "supervisor", modelID: "supervisor" },
+            time: { created: insertedAt },
+          } as MessageV2.User)
+          yield* session.updatePart({
+            id: inserted.partID,
+            sessionID,
+            messageID: inserted.messageID,
+            type: "text",
+            text: recommendationText(insertedRecommendation, latestBase.config.effective.max_recommendation_chars),
+            synthetic: true,
+            metadata: { supervisor: insertedRecommendation },
+            time: { start: insertedAt, end: insertedAt },
+          })
+        }
 
         const next = overlay(latestBase, derived, insertedRecommendation)
         yield* bus.publish(Supervisor.Event.RecommendationCreated, { sessionID, recommendation: insertedRecommendation, state: next })
@@ -340,7 +355,12 @@ export const layer: Layer.Layer<
             filesTouched: boundedUnique(diffs.flatMap((diff) => (diff.file ? [diff.file] : [])), MAX_FILES),
           }),
         )
-        return { ...derived, summary: activitySummary(derived) }
+        return {
+          derived: { ...derived, summary: activitySummary(derived) },
+          recommendations: messages.flatMap((message) =>
+            message.parts.flatMap((part) => persistedSupervisorRecommendation(message.info, part)),
+          ),
+        }
       })
     }
 
@@ -753,8 +773,50 @@ function recommendationKey(state: Supervisor.State, recommendation: Supervisor.R
   })
 }
 
+function persistedSupervisorRecommendation(info: { id: MessageID }, part: MessageV2.Part) {
+  if (part.type !== "text") return []
+  if (!part.synthetic) return []
+  const decoded = Schema.decodeUnknownOption(Supervisor.Recommendation)(part.metadata?.supervisor)
+  if (Option.isNone(decoded)) return []
+  const insertedAt = decoded.value.inserted?.insertedAt ?? part.time?.start
+  if (typeof insertedAt !== "number") return []
+  return [
+    {
+      ...decoded.value,
+      evidence: [...decoded.value.evidence],
+      inserted: {
+        messageID: info.id,
+        partID: part.id,
+        insertedAt,
+      },
+    },
+  ]
+}
+
 function recommendationText(recommendation: Supervisor.Recommendation, max: number) {
-  const text = `Supervisor recommendation (${recommendation.trigger}): ${recommendation.message}`
+  const header = `Supervisor recommendation (${recommendation.trigger}): `
+  const evidence = recommendation.evidence.slice(0, 3).map((item) => `- ${item}`)
+  const evidenceBlock = evidence.length > 0 ? `\n\nEvidence:\n${evidence.join("\n")}` : ""
+  const text = `${header}${recommendation.message}${evidenceBlock}`
+  if (text.length <= max) return text
+  if (max <= 3) return text.slice(0, max)
+  if (!evidenceBlock) return truncateRecommendation(`${header}${recommendation.message}`, max)
+
+  const messageMax = max - header.length - evidenceBlock.length
+  if (messageMax > 3) return `${header}${truncateRecommendation(recommendation.message, messageMax)}${evidenceBlock}`
+
+  const prefix = header.length + evidence[0].length + "\n\nEvidence:\n".length <= max ? `${header.trimEnd()}\n\nEvidence:` : "Supervisor recommendation\nEvidence:"
+  return evidence.reduce((result, line) => {
+    if (result.length >= max) return result
+    const next = `${result}\n${line}`
+    if (next.length <= max) return next
+    const remaining = max - result.length - 1
+    if (remaining <= 0) return result
+    return `${result}\n${truncateRecommendation(line, remaining)}`
+  }, truncateRecommendation(prefix, max))
+}
+
+function truncateRecommendation(text: string, max: number) {
   if (text.length <= max) return text
   if (max <= 3) return text.slice(0, max)
   return text.slice(0, max - 3).trimEnd() + "..."

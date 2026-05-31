@@ -204,6 +204,18 @@ function supervisorTextPartCount(sessionID: MessageV2.User["sessionID"]) {
   )
 }
 
+function supervisorTextParts(sessionID: MessageV2.User["sessionID"]) {
+  return Session.Service.use((session) =>
+    session.messages({ sessionID }).pipe(
+      Effect.map((messages) =>
+        messages.flatMap((message) =>
+          message.parts.filter((part) => part.type === "text" && part.synthetic && part.metadata?.supervisor !== undefined),
+        ),
+      ),
+    ),
+  )
+}
+
 function expectNoRecommendation(events: Queue.Queue<Recommendation>) {
   return Effect.gen(function* () {
     expect(Option.isNone(yield* Queue.take(events).pipe(Effect.timeoutOption("200 millis")))).toBe(true)
@@ -242,11 +254,23 @@ describe("supervisor recommendation insertion", () => {
       expect(part?.type).toBe("text")
       expect(part?.type === "text" ? part.synthetic : false).toBe(true)
       expect(part?.type === "text" ? part.text.length : 0).toBeLessThanOrEqual(60)
+      expect(part?.type === "text" ? part.text : "").toContain("Evidence:")
+      expect(part?.type === "text" ? part.text : "").toContain("- command:bun test")
       expect(part?.type === "text" ? part.metadata?.supervisor : undefined).toMatchObject({ inserted })
+
+      const modelMessages = yield* MessageV2.toModelMessagesEffect(messages, model)
+      const modelText = modelMessages.flatMap((message) =>
+        message.role === "user"
+          ? typeof message.content === "string"
+            ? [message.content]
+            : message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+          : [],
+      )
+      expect(modelText.some((text) => text.includes("Evidence:") && text.includes("- command:bun test"))).toBe(true)
     }),
   )
 
-  it.instance("drops queued recommendation when insertion is disabled before idle", () =>
+  it.instance("accepts queued recommendation without insertion when insertion is disabled before idle", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
       const status = yield* SessionStatus.Service
@@ -266,8 +290,40 @@ describe("supervisor recommendation insertion", () => {
       yield* configureSupervisor({ sessionID: info.id, insert: false })
       yield* status.set(info.id, { type: "idle" })
 
-      yield* expectNoRecommendation(events)
+      const recommendation = yield* awaitWithTimeout(Queue.take(events), "recommendation was not accepted")
+      expect(recommendation.inserted).toBeUndefined()
+      expect((yield* supervisor.get(info.id)).recommendation?.inserted).toBeUndefined()
       expect(yield* supervisorTextPartCount(info.id)).toBe(0)
+    }),
+  )
+
+  it.instance("rebuilds inserted recommendation linkage from persisted supervisor metadata", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const status = yield* SessionStatus.Service
+      const supervisor = yield* SupervisorState.Service
+      const info = yield* session.create({})
+      const message = yield* addMessage(info.id)
+      const events = yield* subscribeRecommendations(info.id)
+      generationEvents = yield* Queue.unbounded<void>()
+
+      yield* supervisor.init()
+      yield* configureSupervisor({ sessionID: info.id, max: 1 })
+      yield* status.set(info.id, { type: "busy" })
+      yield* updateFailedCommand({ sessionID: info.id, messageID: message.id })
+      yield* awaitWithTimeout(Queue.take(generationEvents), "recommendation was not generated while busy")
+      yield* status.set(info.id, { type: "idle" })
+
+      const recommendation = yield* awaitWithTimeout(Queue.take(events), "recommendation was not inserted")
+      const part = (yield* supervisorTextParts(info.id))[0]
+      expect(part?.id === recommendation.inserted?.partID).toBe(true)
+
+      yield* configureSupervisor({ sessionID: info.id, mode: "off" })
+      yield* configureSupervisor({ sessionID: info.id, max: 1 })
+
+      const rebuilt = yield* supervisor.get(info.id)
+      expect(rebuilt.recommendation?.inserted?.messageID).toBe(recommendation.inserted?.messageID)
+      expect(rebuilt.recommendation?.inserted?.partID).toBe(recommendation.inserted?.partID)
     }),
   )
 
