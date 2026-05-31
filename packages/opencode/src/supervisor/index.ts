@@ -2,9 +2,10 @@ import { Bus } from "@/bus"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { Provider } from "@/provider/provider"
-import { SessionID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
+import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Snapshot } from "@/snapshot"
 import { Supervisor } from "@/supervisor/supervisor"
@@ -57,6 +58,8 @@ type Derived = {
 type State = {
   derived: Map<SessionID, Derived>
   recommendations: Map<SessionID, Supervisor.Recommendation[]>
+  pendingInsertions: Map<SessionID, Supervisor.Recommendation>
+  recommendationKeys: Map<SessionID, Set<string>>
   lastReviewAt: Map<SessionID, number>
   configKeys: Map<SessionID, string>
   configGenerations: Map<SessionID, number>
@@ -88,13 +91,14 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Su
 export const layer: Layer.Layer<
   Service,
   never,
-  Bus.Service | Config.Service | Session.Service | SessionSummary.Service
+  Bus.Service | Config.Service | Session.Service | SessionStatus.Service | SessionSummary.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const config = yield* Config.Service
     const session = yield* Session.Service
+    const sessionStatus = yield* SessionStatus.Service
     const summary = yield* SessionSummary.Service
     const scope = yield* Scope.Scope
     const state = yield* InstanceState.make<State>(
@@ -102,6 +106,8 @@ export const layer: Layer.Layer<
         Effect.succeed({
           derived: new Map(),
           recommendations: new Map(),
+          pendingInsertions: new Map(),
+          recommendationKeys: new Map(),
           lastReviewAt: new Map(),
           configKeys: new Map(),
           configGenerations: new Map(),
@@ -133,7 +139,7 @@ export const layer: Layer.Layer<
         updatedAt: Date.now(),
       })
       yield* session.setSupervisorSettings({ sessionID: input.sessionID, supervisor: settings })
-        const next = yield* rebuild(input.sessionID, { publish: false })
+      const next = yield* rebuild(input.sessionID, { publish: false })
       yield* bus.publish(Supervisor.Event.SettingsUpdated, { sessionID: input.sessionID, settings, state: next })
       return next
     })
@@ -153,9 +159,12 @@ export const layer: Layer.Layer<
         if (base.mode === "off") {
           data.derived.delete(sessionID)
           data.recommendations.delete(sessionID)
+          data.pendingInsertions.delete(sessionID)
+          data.recommendationKeys.delete(sessionID)
           data.lastReviewAt.delete(sessionID)
           return base
         }
+        if (base.mode !== "advise" || !base.config.effective.insert_recommendations) data.pendingInsertions.delete(sessionID)
 
         const fromSnapshots = yield* deriveFromSnapshots(info, base.config.effective, data.roots).pipe(
           Effect.orElseSucceed((): Derived => emptyDerived()),
@@ -183,8 +192,13 @@ export const layer: Layer.Layer<
         if (base.mode === "off") {
           data.derived.delete(normalized.sessionID)
           data.recommendations.delete(normalized.sessionID)
+          data.pendingInsertions.delete(normalized.sessionID)
+          data.recommendationKeys.delete(normalized.sessionID)
           data.lastReviewAt.delete(normalized.sessionID)
           return
+        }
+        if (base.mode !== "advise" || !base.config.effective.insert_recommendations) {
+          data.pendingInsertions.delete(normalized.sessionID)
         }
         if (normalized.type === "refresh") {
           yield* rebuild(normalized.sessionID, { publish: true })
@@ -201,6 +215,7 @@ export const layer: Layer.Layer<
           sessionID: normalized.sessionID,
           state: next,
         })
+        if (normalized.boundary === "idle") yield* flushPendingInsertion(normalized.sessionID, derived)
         if (normalized.boundary && shouldReview(base.config.effective.review_cadence, normalized.boundary)) {
           yield* maybeReview(normalized.sessionID, base, derived).pipe(Effect.forkIn(scope, { startImmediately: true }))
         }
@@ -229,12 +244,81 @@ export const layer: Layer.Layer<
         const latestInfo = yield* session.get(sessionID).pipe(Effect.orDie)
         const latestBase = Supervisor.state({ sessionID, config: yield* config.get(), session: latestInfo.supervisor })
         if (latestBase.mode !== "advise") return
+        if (!latestBase.config.effective.insert_recommendations) return
         if (observeConfig(data, sessionID, latestBase.config.effective) !== configGeneration) return
         if ((data.recommendations.get(sessionID)?.length ?? 0) >= latestBase.config.effective.max_recommendations_per_session) return
+        if (hasRecommendationKey(data, sessionID, recommendationKey(current, recommendation))) return
 
-        data.recommendations.set(sessionID, [...(data.recommendations.get(sessionID) ?? []), recommendation])
-        const next = overlay(latestBase, derived, recommendation)
-        yield* bus.publish(Supervisor.Event.RecommendationCreated, { sessionID, recommendation, state: next })
+        yield* enqueueInsertion(sessionID, recommendation, derived)
+      })
+    }
+
+    function enqueueInsertion(sessionID: SessionID, recommendation: Supervisor.Recommendation, derived: Derived) {
+      return Effect.gen(function* () {
+        const data = yield* InstanceState.get(state)
+        if ((yield* sessionStatus.get(sessionID)).type === "idle") {
+          yield* insertRecommendation(sessionID, recommendation, derived)
+          return
+        }
+        data.pendingInsertions.set(sessionID, recommendation)
+      })
+    }
+
+    function flushPendingInsertion(sessionID: SessionID, derived: Derived) {
+      return Effect.gen(function* () {
+        const data = yield* InstanceState.get(state)
+        const recommendation = data.pendingInsertions.get(sessionID)
+        if (!recommendation) return
+        data.pendingInsertions.delete(sessionID)
+        yield* insertRecommendation(sessionID, recommendation, derived)
+      })
+    }
+
+    function insertRecommendation(sessionID: SessionID, recommendation: Supervisor.Recommendation, derived: Derived) {
+      return Effect.gen(function* () {
+        const data = yield* InstanceState.get(state)
+        const latestInfo = yield* session.get(sessionID).pipe(Effect.orDie)
+        const latestBase = Supervisor.state({ sessionID, config: yield* config.get(), session: latestInfo.supervisor })
+        observeConfig(data, sessionID, latestBase.config.effective)
+        if (latestBase.mode !== "advise") return
+        if (!latestBase.config.effective.insert_recommendations) return
+        if ((data.recommendations.get(sessionID)?.length ?? 0) >= latestBase.config.effective.max_recommendations_per_session) return
+        if ((yield* sessionStatus.get(sessionID)).type !== "idle") {
+          data.pendingInsertions.set(sessionID, recommendation)
+          return
+        }
+
+        const insertedAt = Date.now()
+        const messageID = MessageID.ascending()
+        const partID = PartID.ascending()
+        const inserted = { messageID, partID, insertedAt }
+        const insertedRecommendation = { ...recommendation, inserted }
+        const key = recommendationKey(overlay(latestBase, derived, latestRecommendation(data, sessionID)), recommendation)
+        if (hasRecommendationKey(data, sessionID, key)) return
+        data.recommendations.set(sessionID, [...(data.recommendations.get(sessionID) ?? []), insertedRecommendation])
+        data.recommendationKeys.set(sessionID, new Set([...(data.recommendationKeys.get(sessionID) ?? []), key]))
+
+        yield* session.updateMessage({
+          id: messageID,
+          role: "user",
+          sessionID,
+          agent: "supervisor",
+          model: { providerID: "supervisor", modelID: "supervisor" },
+          time: { created: insertedAt },
+        } as MessageV2.User)
+        yield* session.updatePart({
+          id: partID,
+          sessionID,
+          messageID,
+          type: "text",
+          text: recommendationText(insertedRecommendation, latestBase.config.effective.max_recommendation_chars),
+          synthetic: true,
+          metadata: { supervisor: insertedRecommendation },
+          time: { start: insertedAt, end: insertedAt },
+        })
+
+        const next = overlay(latestBase, derived, insertedRecommendation)
+        yield* bus.publish(Supervisor.Event.RecommendationCreated, { sessionID, recommendation: insertedRecommendation, state: next })
         yield* bus.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
       })
     }
@@ -269,6 +353,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Bus.layer),
     Layer.provide(Config.defaultLayer),
     Layer.provide(Session.defaultLayer),
+    Layer.provide(SessionStatus.defaultLayer),
     Layer.provide(SessionSummary.defaultLayer),
   ),
 )
@@ -651,6 +736,28 @@ function statusWithRisks(status: Supervisor.State["status"], risks: Supervisor.R
 
 function latestRecommendation(state: State, sessionID: SessionID) {
   return state.recommendations.get(sessionID)?.at(-1)
+}
+
+function hasRecommendationKey(state: State, sessionID: SessionID, key: string) {
+  return state.recommendationKeys.get(sessionID)?.has(key) ?? false
+}
+
+function recommendationKey(state: Supervisor.State, recommendation: Supervisor.Recommendation) {
+  return JSON.stringify({
+    trigger: recommendation.trigger,
+    evidence: recommendation.evidence,
+    filesTouched: state.filesTouched,
+    commandsRun: state.commandsRun,
+    validationsRun: state.validationsRun,
+    risks: state.risks.map((risk) => ({ trigger: risk.trigger, evidence: risk.evidence })),
+  })
+}
+
+function recommendationText(recommendation: Supervisor.Recommendation, max: number) {
+  const text = `Supervisor recommendation (${recommendation.trigger}): ${recommendation.message}`
+  if (text.length <= max) return text
+  if (max <= 3) return text.slice(0, max)
+  return text.slice(0, max - 3).trimEnd() + "..."
 }
 
 function observeConfig(state: State, sessionID: SessionID, config: Supervisor.EffectiveConfig) {

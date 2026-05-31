@@ -17,6 +17,7 @@ const it = testEffect(
   SupervisorState.layer.pipe(
     Layer.provideMerge(Config.defaultLayer),
     Layer.provideMerge(Session.defaultLayer),
+    Layer.provideMerge(SessionStatus.layer),
     Layer.provideMerge(SessionSummary.defaultLayer),
     Layer.provideMerge(Bus.layer),
   ),
