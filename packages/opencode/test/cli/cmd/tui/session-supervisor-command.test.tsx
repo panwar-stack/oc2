@@ -4,7 +4,7 @@ import { TextareaRenderable } from "@opentui/core"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { testRender, useRenderer } from "@opentui/solid"
 import { Global } from "@opencode-ai/core/global"
-import type { SupervisorSettingsPatch, SupervisorState } from "@opencode-ai/sdk/v2"
+import type { SupervisorActivity, SupervisorMode, SupervisorSettingsPatch, SupervisorState } from "@opencode-ai/sdk/v2"
 import { onCleanup, onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
 import { createTuiResolvedConfig } from "../../../fixture/tui-runtime"
@@ -14,7 +14,7 @@ import { createExit, ExitProvider } from "../../../../src/cli/cmd/tui/context/ex
 import { KVProvider } from "../../../../src/cli/cmd/tui/context/kv"
 import { LocalProvider } from "../../../../src/cli/cmd/tui/context/local"
 import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
-import { RouteProvider, useRoute } from "../../../../src/cli/cmd/tui/context/route"
+import { RouteProvider } from "../../../../src/cli/cmd/tui/context/route"
 import { SDKProvider } from "../../../../src/cli/cmd/tui/context/sdk"
 import { SyncProvider } from "../../../../src/cli/cmd/tui/context/sync"
 import { ThemeProvider } from "../../../../src/cli/cmd/tui/context/theme"
@@ -26,7 +26,6 @@ import { PromptStashProvider } from "../../../../src/cli/cmd/tui/component/promp
 import {
   OpencodeKeymapProvider,
   registerOpencodeKeymap,
-  useBindings,
   useCommandSlashes,
   useOpencodeKeymap,
 } from "../../../../src/cli/cmd/tui/keymap"
@@ -37,12 +36,15 @@ import { createEventSource, directory, json, wait } from "./sync-fixture"
 
 const sessionID = "ses_supervisor_command"
 
-test("registers /supervisor on session and home routes", async () => {
+test("registers supervisor slash commands on session and home routes", async () => {
   const session = await mount({ route: { type: "session", sessionID } })
   try {
     await wait(() => session.slashes().some((entry) => entry.display === "/supervisor"))
     expect(session.slashes().find((entry) => entry.display === "/supervisor")?.description).toBe(
       "Configure supervisor",
+    )
+    expect(session.slashes().find((entry) => entry.display === "/supervisor activity")?.description).toBe(
+      "Show supervisor activity",
     )
   } finally {
     await session.cleanup()
@@ -54,6 +56,9 @@ test("registers /supervisor on session and home routes", async () => {
     expect(home.slashes().find((entry) => entry.display === "/supervisor")?.description).toBe(
       "Configure supervisor",
     )
+    expect(home.slashes().find((entry) => entry.display === "/supervisor activity")?.description).toBe(
+      "Show supervisor activity",
+    )
     home.keymap.dispatchCommand("session.supervisor")
     await wait(() => home.toast.currentToast?.variant === "error")
     expect(home.toast.currentToast?.message).toBe("Open a session to configure supervisor")
@@ -63,14 +68,15 @@ test("registers /supervisor on session and home routes", async () => {
 })
 
 test("typed internal slash dispatches locally before session commands", async () => {
-  const supervisor = await mount({ route: { type: "session", sessionID }, withPrompt: true, withActivitySlash: true })
+  const supervisor = await mount({ route: { type: "session", sessionID }, withPrompt: true })
   try {
     await wait(() => supervisor.slashes().some((entry) => entry.display === "/supervisor activity"))
     const before = supervisor.requests.length
+    const previousActivityGets = supervisor.activityGets
     supervisor.prompt.set({ input: "/supervisor activity", parts: [] })
     supervisor.prompt.submit()
     await wait(() => supervisor.prompt.current.input === "")
-    await wait(() => supervisor.activityRuns > 0)
+    await wait(() => supervisor.activityGets > previousActivityGets)
     expect(sessionSubmitRequests(supervisor.requests.slice(before))).toEqual([])
   } finally {
     await supervisor.cleanup()
@@ -78,7 +84,7 @@ test("typed internal slash dispatches locally before session commands", async ()
 })
 
 test("typed internal slash without a session shows local toast", async () => {
-  const supervisor = await mount({ route: { type: "home" }, withPrompt: true, withActivitySlash: true })
+  const supervisor = await mount({ route: { type: "home" }, withPrompt: true })
   try {
     await wait(() => supervisor.slashes().some((entry) => entry.display === "/supervisor activity"))
     const before = supervisor.requests.length
@@ -88,6 +94,55 @@ test("typed internal slash without a session shows local toast", async () => {
     expect(supervisor.toast.currentToast?.message).toBe("Open a session to view supervisor activity")
     await wait(() => supervisor.prompt.current.input === "")
     expect(sessionSubmitRequests(supervisor.requests.slice(before))).toEqual([])
+  } finally {
+    await supervisor.cleanup()
+  }
+})
+
+test("opens supervisor activity timeline", async () => {
+  const supervisor = await mount({ route: { type: "session", sessionID } })
+  try {
+    await openActivity(supervisor)
+    await supervisor.app.renderOnce()
+    const frame = supervisor.app.captureCharFrame()
+    expect(frame).toContain("Supervisor Activity")
+    expect(frame).toContain("risk: Repeated command failure")
+    expect(frame).toContain("high | warn | repeated_command_failure")
+    expect(frame).toContain("evidence: test failed twice")
+  } finally {
+    await supervisor.cleanup()
+  }
+})
+
+test("shows empty supervisor activity state", async () => {
+  const supervisor = await mount({ route: { type: "session", sessionID }, activity: [] })
+  try {
+    await openActivity(supervisor)
+    await supervisor.app.renderOnce()
+    expect(supervisor.app.captureCharFrame()).toContain("No supervisor activity yet.")
+  } finally {
+    await supervisor.cleanup()
+  }
+})
+
+test("shows off-mode supervisor activity empty state", async () => {
+  const supervisor = await mount({ route: { type: "session", sessionID }, activity: [], supervisorMode: "off" })
+  try {
+    await openActivity(supervisor)
+    await supervisor.app.renderOnce()
+    expect(supervisor.app.captureCharFrame()).toContain("Supervisor is off. No new activity is being recorded.")
+  } finally {
+    await supervisor.cleanup()
+  }
+})
+
+test("shows error toast on supervisor activity fetch failure", async () => {
+  const supervisor = await mount({ route: { type: "session", sessionID }, failActivity: true })
+  try {
+    await wait(() => supervisor.slashes().some((entry) => entry.display === "/supervisor activity"))
+    supervisor.slashes().find((entry) => entry.display === "/supervisor activity")?.onSelect()
+    await wait(() => supervisor.toast.currentToast?.variant === "error")
+    expect(supervisor.toast.currentToast?.message).toContain("activity failed")
   } finally {
     await supervisor.cleanup()
   }
@@ -196,6 +251,14 @@ async function open(harness: Awaited<ReturnType<typeof mount>>) {
   await Bun.sleep(100)
 }
 
+async function openActivity(harness: Awaited<ReturnType<typeof mount>>) {
+  await wait(() => harness.slashes().some((entry) => entry.display === "/supervisor activity"))
+  const previousActivityGets = harness.activityGets
+  harness.slashes().find((entry) => entry.display === "/supervisor activity")?.onSelect()
+  await wait(() => harness.activityGets > previousActivityGets)
+  await Bun.sleep(100)
+}
+
 async function patchFrom(action: (supervisor: Awaited<ReturnType<typeof mount>>) => void) {
   const supervisor = await mount({ route: { type: "session", sessionID } })
   try {
@@ -211,7 +274,9 @@ async function patchFrom(action: (supervisor: Awaited<ReturnType<typeof mount>>)
 async function mount(input: {
   route: { type: "session"; sessionID: string } | { type: "home" }
   failUpdates?: boolean
-  withActivitySlash?: boolean
+  failActivity?: boolean
+  activity?: SupervisorActivity[]
+  supervisorMode?: SupervisorMode
   withPrompt?: boolean
 }) {
   const previous = Global.Path.state
@@ -221,8 +286,8 @@ async function mount(input: {
   const events = createEventSource()
   const patches: SupervisorSettingsPatch[] = []
   const requests: { method: string; pathname: string }[] = []
-  let activityRuns = 0
   let gets = 0
+  let activityGets = 0
   let slashes!: ReturnType<typeof useCommandSlashes>
   let keymap!: ReturnType<typeof useOpencodeKeymap>
   let prompt: PromptRef | undefined
@@ -238,16 +303,21 @@ async function mount(input: {
     requests.push({ method, pathname: url.pathname })
     if (url.pathname === `/session/${sessionID}/supervisor` && method === "GET") {
       gets++
-      return json(state())
+      return json(state(input.supervisorMode ?? "advise"))
+    }
+    if (url.pathname === `/session/${sessionID}/supervisor/activity` && method === "GET") {
+      activityGets++
+      if (input.failActivity) return json({ message: "activity failed" }, { status: 500 })
+      return json(input.activity ?? [activity()])
     }
     if (url.pathname === `/session/${sessionID}/supervisor` && method === "PATCH") {
       if (input.failUpdates) return json({ message: "update failed" }, { status: 400 })
       if (!(request instanceof Request)) throw new Error("expected request body")
       patches.push((await request.json()) as SupervisorSettingsPatch)
-      return json(state())
+      return json(state(input.supervisorMode ?? "advise"))
     }
-    if (url.pathname === "/session") return json([session()])
-    if (url.pathname === `/session/${sessionID}`) return json(session())
+    if (url.pathname === "/session") return json([session(input.supervisorMode ?? "advise")])
+    if (url.pathname === `/session/${sessionID}`) return json(session(input.supervisorMode ?? "advise"))
     if (url.pathname === `/session/${sessionID}/message`) return json([])
     if (url.pathname === `/session/${sessionID}/todo`) return json([])
     if (url.pathname === `/session/${sessionID}/diff`) return json([])
@@ -305,30 +375,6 @@ async function mount(input: {
     return <box />
   }
 
-  function TestActivitySlashCommand() {
-    const route = useRoute()
-    const toast = useToast()
-
-    useBindings(() => ({
-      commands: [
-        {
-          namespace: "palette",
-          name: "test.supervisor.activity",
-          title: "Show supervisor activity",
-          category: "Session",
-          slashName: "supervisor activity",
-          run: () => {
-            activityRuns++
-            if (route.data.type === "session") return
-            toast.show({ message: "Open a session to view supervisor activity", variant: "error" })
-          },
-        },
-      ],
-    }))
-
-    return null
-  }
-
   function MaybePrompt() {
     if (!input.withPrompt) return null
     return <Prompt sessionID={input.route.type === "session" ? input.route.sessionID : undefined} ref={(ref) => (prompt = ref)} />
@@ -360,7 +406,6 @@ async function mount(input: {
                                     <FrecencyProvider>
                                       <EditorContextProvider>
                                         <SessionSupervisorCommand />
-                                        {input.withActivitySlash ? <TestActivitySlashCommand /> : null}
                                         <MaybePrompt />
                                         <Probe />
                                       </EditorContextProvider>
@@ -383,7 +428,10 @@ async function mount(input: {
     )
   }
 
-  const app = await testRender(() => <Harness />)
+  const app = await testRender(
+    () => <Harness />,
+    { width: 120, height: 40 },
+  )
   await mounted
 
   return {
@@ -391,14 +439,14 @@ async function mount(input: {
     get gets() {
       return gets
     },
+    get activityGets() {
+      return activityGets
+    },
     keymap,
     patches,
     requests,
     slashes,
     toast,
-    get activityRuns() {
-      return activityRuns
-    },
     get prompt() {
       if (!prompt) throw new Error("expected prompt")
       return prompt
@@ -419,7 +467,7 @@ function sessionSubmitRequests(requests: { method: string; pathname: string }[])
   )
 }
 
-function session() {
+function session(mode: SupervisorMode) {
   return {
     id: sessionID,
     title: "Supervisor",
@@ -429,7 +477,7 @@ function session() {
     project_id: "proj_test",
     cost: 0,
     supervisor: {
-      mode: "advise" as const,
+      mode,
       recommendation_model: "test/supervisor",
       recommendation_variant: "fast",
       insert_recommendations: true,
@@ -438,16 +486,16 @@ function session() {
   }
 }
 
-function state(): SupervisorState {
+function state(mode: SupervisorMode): SupervisorState {
   return {
     sessionID,
-    mode: "advise",
+    mode,
     config: {
       modeSource: "session",
       globalMode: "off",
-      session: session().supervisor,
+      session: session(mode).supervisor,
       effective: {
-        mode: "advise",
+        mode,
         recommendation_model: "test/supervisor",
         recommendation_variant: "fast",
         recommendation_timeout_ms: 15000,
@@ -468,5 +516,26 @@ function state(): SupervisorState {
     validationsRun: [],
     risks: [],
     updatedAt: 1,
+  }
+}
+
+function activity(): SupervisorActivity {
+  return {
+    id: "activity_1",
+    sessionID,
+    time: 2,
+    type: "risk",
+    severity: "high",
+    title: "Repeated command failure",
+    message: "The same validation command failed repeatedly.",
+    evidence: ["test failed twice"],
+    metadata: {
+      command: "bun test",
+      exitCode: 1,
+      validation: true,
+      repeatedFailureCount: 2,
+      trigger: "repeated_command_failure",
+      action: "warn",
+    },
   }
 }

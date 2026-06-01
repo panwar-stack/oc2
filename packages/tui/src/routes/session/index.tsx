@@ -85,6 +85,7 @@ import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap 
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { DialogRoots } from "./dialog-roots"
 import { DialogSupervisor } from "./dialog-supervisor"
+import { DialogSupervisorActivity } from "./dialog-supervisor-activity"
 import { collectExportSessionFromClient } from "../../util/session-export"
 
 addDefaultParsers(parsers.parsers)
@@ -277,6 +278,21 @@ export function SessionSupervisorCommand() {
           return
         }
         dialog.replace(() => <DialogSupervisor sessionID={id} />)
+      },
+    },
+    {
+      namespace: "palette",
+      name: "session.supervisor.activity",
+      title: "Show supervisor activity",
+      category: "Session",
+      slashName: "supervisor activity",
+      run: () => {
+        const id = sessionID()
+        if (!id) {
+          toast.show({ message: "Open a session to view supervisor activity", variant: "error" })
+          return
+        }
+        dialog.replace(() => <DialogSupervisorActivity sessionID={id} />)
       },
     },
   ])

@@ -273,6 +273,7 @@ TUI `/supervisor` behavior:
 - The first-pass dialog must support setting `off`, `observe`, and `advise`, toggling `insert_recommendations`, editing `recommendation_model`, cadence, timeout, numeric limits, and resetting all session overrides.
 - Do not store supervisor settings in `packages/opencode/src/cli/cmd/tui/context/local.tsx`; call the supervisor settings API and rely on `session.updated` or `supervisor.state.updated` to refresh UI state.
 - If the user opens `/supervisor` outside a session, show a compact error toast instead of creating a session or changing global config.
+- Register `/supervisor activity` as a separate session-scoped palette slash command that opens a read-only supervisor activity timeline. Keep `/supervisor` focused on settings and show an error toast if activity is requested outside a session.
 
 ## Event Inputs
 
