@@ -141,6 +141,33 @@ describe("supervisor deterministic rules", () => {
     }),
   )
 
+  it.instance("detects missing validation when diff is observed after idle", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const status = yield* SessionStatus.Service
+      const supervisor = yield* SupervisorState.Service
+      const bus = yield* Bus.Service
+      const info = yield* session.create({})
+      yield* supervisor.init()
+      yield* supervisor.updateSettings({ sessionID: info.id, patch: { mode: "observe" } })
+
+      yield* status.set(info.id, { type: "busy" })
+      yield* status.set(info.id, { type: "idle" })
+      yield* bus.publish(Session.Event.Diff, {
+        sessionID: info.id,
+        diff: [{ file: "src/app.ts", patch: "", additions: 1, deletions: 0, status: "modified" }],
+      })
+
+      const state = yield* pollWithTimeout(
+        supervisor
+          .get(info.id)
+          .pipe(Effect.map((state) => (state.risks.some((risk) => risk.trigger === "missing_validation") ? state : undefined))),
+        "missing validation risk was not observed when diff arrived after idle",
+      )
+      expect(state.risks.map((risk) => risk.trigger)).toContain("missing_validation")
+    }),
+  )
+
   it.instance("detects scope expansion above the configured file limit", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

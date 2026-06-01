@@ -261,10 +261,11 @@ export const layer: Layer.Layer<
           sessionID: normalized.sessionID,
           state: next,
         })
-        const hadPendingInsertion = normalized.boundary === "idle" && data.pendingInsertions.has(normalized.sessionID)
-        if (normalized.boundary === "idle") yield* flushPendingInsertion(normalized.sessionID)
+        const boundary = normalized.boundary === "event" && eventDerived.filesTouched.length > 0 && idleAfterEdit(derived) ? "idle" : normalized.boundary
+        const hadPendingInsertion = boundary === "idle" && data.pendingInsertions.has(normalized.sessionID)
+        if (boundary === "idle") yield* flushPendingInsertion(normalized.sessionID)
         if (hadPendingInsertion) return
-        if (normalized.boundary && shouldReview(base.config.effective.review_cadence, normalized.boundary)) {
+        if (boundary && shouldReview(base.config.effective.review_cadence, boundary)) {
           yield* maybeReview(normalized.sessionID, base, derived).pipe(Effect.forkIn(scope, { startImmediately: true }))
         }
       }).pipe(Effect.catch(() => Effect.void))
@@ -275,6 +276,7 @@ export const layer: Layer.Layer<
         if (base.mode !== "advise") return
         const data = yield* InstanceState.get(state)
         const current = overlay(base, derived, latestRecommendation(data, sessionID))
+        if (current.risks.length === 0 && observedEvidence(current).length === 0) return
         if ((data.recommendations.get(sessionID)?.length ?? 0) >= base.config.effective.max_recommendations_per_session) return
         if (Date.now() - (data.lastReviewAt.get(sessionID) ?? 0) < base.config.effective.min_review_interval_ms) return
         data.lastReviewAt.set(sessionID, Date.now())
@@ -1042,7 +1044,12 @@ function eventsSinceLatestPatch(derived: Derived) {
 }
 
 function idleAfterEdit(derived: Derived) {
-  return derived.recentEvents[0]?.type === "idle" && derived.recentEvents.some((event) => event.type === "patch")
+  const patchIndex = derived.recentEvents.findIndex((event) => event.type === "patch")
+  if (patchIndex === -1) return false
+  const idleIndex = derived.recentEvents.findIndex((event) => event.type === "idle")
+  if (idleIndex === -1) return false
+  if (idleIndex < patchIndex) return true
+  return patchIndex === 0 && idleIndex === 1
 }
 
 function hasSuccessfulValidationAfterLatestPatch(derived: Derived) {
@@ -1129,6 +1136,7 @@ function normalizeEvent(event: EventPayload): NormalizedEvent | undefined {
         recentEvents: diff.flatMap((item) =>
           isRecord(item) && typeof item.file === "string" ? [{ type: "patch", target: item.file, outcome: "unknown" as const }] : [],
         ),
+        updatedAt: Date.now(),
       },
     }
   }

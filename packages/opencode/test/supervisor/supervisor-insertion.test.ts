@@ -13,7 +13,7 @@ import { Supervisor } from "@/supervisor/supervisor"
 import { Effect, Layer, Queue, Schema } from "effect"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import * as Log from "@opencode-ai/core/util/log"
-import { awaitWithTimeout, testEffect } from "../lib/effect"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import * as Option from "effect/Option"
 
 void Log.init({ print: false })
@@ -58,7 +58,7 @@ const language: LanguageModelV3 = {
       const prompt = options.prompt.flatMap((message) =>
         message.role === "user" ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])) : [],
       ).at(-1)
-      const repeatedFailure = prompt?.includes("repeated_command_failure") ?? false
+      const repeatedFailure = prompt?.includes('"trigger":"repeated_command_failure"') ?? false
       return {
         content: [
           {
@@ -277,6 +277,33 @@ describe("supervisor recommendation insertion", () => {
           : [],
       )
       expect(modelText.some((text) => text.includes("Evidence:") && text.includes("- command:bun test"))).toBe(true)
+    }),
+  )
+
+  it.instance("inserts missing validation recommendation when diff is observed after idle", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const status = yield* SessionStatus.Service
+      const supervisor = yield* SupervisorState.Service
+      const bus = yield* Bus.Service
+      const info = yield* session.create({})
+
+      yield* supervisor.init()
+      yield* configureSupervisor({ sessionID: info.id, max: 1 })
+      yield* status.set(info.id, { type: "busy" })
+      yield* status.set(info.id, { type: "idle" })
+      yield* bus.publish(Session.Event.Diff, {
+        sessionID: info.id,
+        diff: [{ file: "src/app.ts", patch: "", additions: 1, deletions: 0, status: "modified" }],
+      })
+
+      const parts = yield* pollWithTimeout(
+        supervisorTextParts(info.id).pipe(Effect.map((parts) => (parts.length === 1 ? parts : undefined))),
+        "recommendation was not inserted after late diff",
+      )
+      const recommendation = parts[0]?.type === "text" ? parts[0].metadata?.supervisor : undefined
+      expect(recommendation).toMatchObject({ trigger: "missing_validation" })
+      expect(recommendation?.inserted?.messageID).toBeString()
     }),
   )
 
