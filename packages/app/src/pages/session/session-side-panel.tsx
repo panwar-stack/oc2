@@ -8,7 +8,7 @@ import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Mark } from "@opencode-ai/ui/logo"
 import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
-import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
+import type { SnapshotFileDiff, SupervisorState, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 
@@ -29,6 +29,46 @@ import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
+
+const supervisorStatusLabel = (status: SupervisorState["status"]) => status.replaceAll("_", " ")
+
+function SupervisorInfo(props: { state: SupervisorState }) {
+  return (
+    <div class="my-3 rounded-lg border border-border-weaker-base bg-background-base px-3 py-2 text-12-regular text-text-weak">
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <div class="text-text font-medium">Supervisor</div>
+        <div class="capitalize">{supervisorStatusLabel(props.state.status)}</div>
+      </div>
+      <div class="space-y-2">
+        <div>
+          Mode: <span class="text-text capitalize">{props.state.mode}</span>
+          <span> from {props.state.config.modeSource}</span>
+        </div>
+        <Show when={props.state.filesTouched.length > 0}>
+          <div>
+            Files: {props.state.filesTouched.slice(0, 3).join(", ")}
+            <Show when={props.state.filesTouched.length > 3}> +{props.state.filesTouched.length - 3}</Show>
+          </div>
+        </Show>
+        <Show when={props.state.validationsRun.length > 0}>
+          <div>
+            Validations: {props.state.validationsRun.slice(0, 2).join(", ")}
+            <Show when={props.state.validationsRun.length > 2}> +{props.state.validationsRun.length - 2}</Show>
+          </div>
+        </Show>
+        <div>
+          Risks: <span class="text-text">{props.state.risks.length}</span>
+          <For each={props.state.risks.slice(0, 2)}>
+            {(risk) => <div class="mt-1 truncate">{risk.message}</div>}
+          </For>
+        </div>
+        <Show when={props.state.recommendation}>
+          {(recommendation) => <div class="truncate">Latest: {recommendation().message}</div>}
+        </Show>
+      </div>
+    </div>
+  )
+}
 
 function renderDiff(value: SnapshotFileDiff | VcsFileDiff): value is RenderDiff {
   return typeof value.file === "string"
@@ -73,6 +113,7 @@ export function SessionSidePanel(props: {
   const treeWidth = createMemo(() => (fileOpen() ? `${layout.fileTree.width()}px` : "0px"))
 
   const diffs = createMemo(() => props.diffs().filter(renderDiff))
+  const supervisor = createMemo(() => (params.id ? sync.data.supervisor[params.id] : undefined))
   const diffFiles = createMemo(() => diffs().map((d) => d.file))
   const kinds = createMemo(() => {
     const merge = (a: "add" | "del" | "mix" | undefined, b: "add" | "del" | "mix") => {
@@ -400,6 +441,7 @@ export function SessionSidePanel(props: {
                       </Tabs.Trigger>
                     </Tabs.List>
                     <Tabs.Content value="changes" class="bg-background-stronger px-3 py-0">
+                      <Show when={supervisor()}>{(state) => <SupervisorInfo state={state()} />}</Show>
                       <Switch>
                         <Match when={props.hasReview() || !props.diffsReady()}>
                           <Show

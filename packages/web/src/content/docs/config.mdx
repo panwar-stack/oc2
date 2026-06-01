@@ -475,6 +475,82 @@ You can also configure [local models](/docs/models#local). [Learn more](/docs/mo
 
 ---
 
+### Supervisor
+
+The supervisor is an opt-in session reviewer. It observes bounded session state, derives risks, and can ask an independently configured model to suggest visible steering recommendations.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "supervisor": {
+    "mode": "advise",
+    "recommendation_model": "anthropic/claude-sonnet-4-5",
+    "review_cadence": "step",
+    "insert_recommendations": true
+  }
+}
+```
+
+Global `supervisor` config provides defaults. A session-level override set through `/supervisor` or `PATCH /session/:sessionID/supervisor` wins for that session, so one session can enable `observe` or `advise` even when global config keeps the supervisor `off`. Unset session fields inherit from global config and then built-in defaults.
+
+Mode behavior:
+
+- `off` - Ignore observation/review events for the effective session, emit no active recommendations, and drop queued work. The service can still notice later session setting changes.
+- `observe` - Derive supervisor state and risks, and emit `supervisor.state.updated`, but do not create or insert recommendations.
+- `advise` - Derive state, run supervisor-model review at meaningful boundaries, emit accepted recommendation events, and insert recommendations into the visible transcript when `insert_recommendations` is `true`.
+
+Available options:
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `mode` | `"off"` | Effective behavior for sessions without an override: `"off"`, `"observe"`, or `"advise"`. |
+| `recommendation_model` | `model`, then `small_model`, then none | Supervisor model in `provider/model` format. Set this explicitly when the primary coding model is weaker or lower-quantized than the desired reviewer. |
+| `recommendation_timeout_ms` | `15000` | Timeout for supervisor recommendation model calls. |
+| `review_cadence` | `"step"` | Review cadence: `"step"`, `"event"`, or `"idle"`. The supervisor reviews meaningful state changes, not every streamed token. |
+| `min_review_interval_ms` | `10000` | Minimum interval between model reviews for a session. |
+| `max_recommendation_chars` | `800` | Maximum accepted recommendation message length. |
+| `max_repeated_command_failures` | `3` | Number of repeated failures for the same normalized command before a risk can be raised. |
+| `broad_diff_file_limit` | `5` | Touched-file threshold for broad-diff/scope-expansion risks. |
+| `sensitive_path_globs` | See below | Paths that raise risky-edit signals, such as auth, permission, migration, billing, deploy, and lockfile paths. |
+| `validation_command_patterns` | See below | Command prefixes treated as validation commands. |
+| `insert_recommendations` | `true` | Insert accepted recommendations into the visible conversation in `advise` mode. |
+| `max_recommendations_per_session` | `8` | Maximum visible recommendation insertions per session. |
+
+Default `sensitive_path_globs`:
+
+```json
+[
+  "**/auth/**",
+  "**/authorization/**",
+  "**/permission/**",
+  "**/permissions/**",
+  "**/migration/**",
+  "**/migrations/**",
+  "**/*delete*",
+  "**/*deletion*",
+  "**/*encrypt*",
+  "**/*decrypt*",
+  "**/billing/**",
+  "**/deployment/**",
+  "**/deploy/**",
+  "**/package-lock.json",
+  "**/pnpm-lock.yaml",
+  "**/yarn.lock",
+  "**/bun.lock",
+  "**/bun.lockb"
+]
+```
+
+Default `validation_command_patterns`:
+
+```json
+["bun test", "bun typecheck", "npm test", "pnpm test", "yarn test", "go test", "cargo test", "pytest", "vitest", "jest", "tsc", "eslint"]
+```
+
+[Learn more about the supervisor here](/docs/supervisor).
+
+---
+
 ### Policies
 
 Use the `experimental.policies` option to allow or deny OpenCode actions on configured resources. Currently, policies can control which providers OpenCode may use.

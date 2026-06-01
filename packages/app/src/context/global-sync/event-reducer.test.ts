@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part, PermissionRequest, Project, QuestionRequest, Session } from "@opencode-ai/sdk/v2/client"
+import type {
+  Message,
+  Part,
+  PermissionRequest,
+  Project,
+  QuestionRequest,
+  Session,
+  SupervisorState,
+} from "@opencode-ai/sdk/v2/client"
 import { createStore } from "solid-js/store"
 import type { State } from "./types"
 import { applyDirectoryEvent, applyGlobalEvent, cleanupDroppedSessionCaches } from "./event-reducer"
@@ -57,6 +65,35 @@ const questionRequest = (id: string, sessionID: string, title = id) =>
     ],
   }) as QuestionRequest
 
+const supervisorState = (sessionID: string) =>
+  ({
+    sessionID,
+    mode: "observe",
+    config: {
+      modeSource: "global",
+      globalMode: "observe",
+      effective: {
+        mode: "observe",
+        recommendation_timeout_ms: 15000,
+        review_cadence: "step",
+        min_review_interval_ms: 10000,
+        max_recommendation_chars: 800,
+        max_repeated_command_failures: 3,
+        broad_diff_file_limit: 5,
+        sensitive_path_globs: [],
+        validation_command_patterns: ["bun test"],
+        insert_recommendations: true,
+        max_recommendations_per_session: 8,
+      },
+    },
+    status: "uncertain",
+    filesTouched: ["src/app.ts"],
+    commandsRun: [],
+    validationsRun: ["bun test"],
+    risks: [],
+    updatedAt: 1,
+  }) as SupervisorState
+
 const baseState = (input: Partial<State> = {}) =>
   ({
     status: "complete",
@@ -72,6 +109,7 @@ const baseState = (input: Partial<State> = {}) =>
     sessionTotal: 0,
     session_status: {},
     session_diff: {},
+    supervisor: {},
     todo: {},
     permission: {},
     question: {},
@@ -196,6 +234,7 @@ describe("applyDirectoryEvent", () => {
         message: { ses_1: [message] },
         part: { [message.id]: [textPart("prt_1", "ses_1", message.id)] },
         session_diff: { ses_1: [] },
+        supervisor: { ses_1: supervisorState("ses_1") },
         todo: { ses_1: [] },
         permission: { ses_1: [] },
         question: { ses_1: [] },
@@ -217,6 +256,7 @@ describe("applyDirectoryEvent", () => {
     expect(store.message.ses_1).toBeUndefined()
     expect(store.part[message.id]).toBeUndefined()
     expect(store.session_diff.ses_1).toBeUndefined()
+    expect(store.supervisor.ses_1).toBeUndefined()
     expect(store.todo.ses_1).toBeUndefined()
     expect(store.permission.ses_1).toBeUndefined()
     expect(store.question.ses_1).toBeUndefined()
@@ -242,6 +282,7 @@ describe("applyDirectoryEvent", () => {
           message: { [item.info.id]: [message] },
           part: { [message.id]: [textPart("prt_1", item.info.id, message.id)] },
           session_diff: { [item.info.id]: [] },
+          supervisor: { [item.info.id]: supervisorState(item.info.id) },
           todo: { [item.info.id]: [] },
           permission: { [item.info.id]: [] },
           question: { [item.info.id]: [] },
@@ -263,6 +304,7 @@ describe("applyDirectoryEvent", () => {
       expect(store.message[item.info.id]).toBeUndefined()
       expect(store.part[message.id]).toBeUndefined()
       expect(store.session_diff[item.info.id]).toBeUndefined()
+      expect(store.supervisor[item.info.id]).toBeUndefined()
       expect(store.todo[item.info.id]).toBeUndefined()
       expect(store.permission[item.info.id]).toBeUndefined()
       expect(store.question[item.info.id]).toBeUndefined()
@@ -282,6 +324,7 @@ describe("applyDirectoryEvent", () => {
         message: { [dropped.id]: [message] },
         part: { [message.id]: [textPart("prt_1", dropped.id, message.id)] },
         session_diff: { [dropped.id]: [] },
+        supervisor: { [dropped.id]: supervisorState(dropped.id) },
         todo: { [dropped.id]: [] },
         permission: { [dropped.id]: [] },
         question: { [dropped.id]: [] },
@@ -306,6 +349,7 @@ describe("applyDirectoryEvent", () => {
     expect(store.message[dropped.id]).toBeUndefined()
     expect(store.part[message.id]).toBeUndefined()
     expect(store.session_diff[dropped.id]).toBeUndefined()
+    expect(store.supervisor[dropped.id]).toBeUndefined()
     expect(store.todo[dropped.id]).toBeUndefined()
     expect(store.permission[dropped.id]).toBeUndefined()
     expect(store.question[dropped.id]).toBeUndefined()
@@ -324,6 +368,45 @@ describe("applyDirectoryEvent", () => {
     cleanupDroppedSessionCaches(store, setStore, store.session)
 
     expect(store.part.msg_1).toBeUndefined()
+  })
+
+  test("tracks supervisor state events by session", () => {
+    const [store, setStore] = createStore(baseState())
+
+    applyDirectoryEvent({
+      event: { type: "supervisor.state.updated", properties: { sessionID: "ses_1", state: supervisorState("ses_1") } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.supervisor.ses_1?.status).toBe("uncertain")
+
+    applyDirectoryEvent({
+      event: {
+        type: "supervisor.recommendation.created",
+        properties: {
+          sessionID: "ses_1",
+          recommendation: {
+            source: "model",
+            action: "nudge",
+            trigger: "missing_validation",
+            message: "Run tests before finishing.",
+            evidence: ["bun test"],
+          },
+          state: { ...supervisorState("ses_1"), status: "drifting" },
+        },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.supervisor.ses_1?.status).toBe("drifting")
   })
 
   test("upserts and removes messages while clearing orphaned parts", () => {
