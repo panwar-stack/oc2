@@ -612,6 +612,26 @@ export function latest(msgs: WithParts[]) {
   return { user, assistant, finished, tasks }
 }
 
+export function latestPrimaryUser(msgs: WithParts[]) {
+  let user: User | undefined
+  for (const msg of msgs) {
+    if (msg.info.role !== "user") continue
+    if (isSupervisorRecommendationUser(msg)) continue
+    if (!user || msg.info.id > user.id) user = msg.info
+  }
+  return user
+}
+
+function isSupervisorRecommendationUser(msg: WithParts) {
+  return (
+    (msg.info.role === "user" &&
+      msg.info.agent === "supervisor" &&
+      msg.info.model.providerID === "supervisor" &&
+      msg.info.model.modelID === "supervisor") ||
+    msg.parts.some((part) => part.type === "text" && part.synthetic && part.metadata?.supervisor !== undefined)
+  )
+}
+
 export function fromError(
   e: unknown,
   ctx: { providerID: ProviderV2.ID; aborted?: boolean },

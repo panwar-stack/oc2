@@ -1341,7 +1341,8 @@ export const layer = Layer.effect(
             Effect.provideService(Database.Service, database),
           )
 
-          const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
+          const { assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
+          const lastUser = MessageV2.latestPrimaryUser(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
           const primaryLastUserMsg = msgs.findLast((msg) => msg.info.role === "user" && msg.info.id === lastUser.id)

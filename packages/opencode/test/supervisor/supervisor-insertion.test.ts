@@ -257,6 +257,8 @@ describe("supervisor recommendation insertion", () => {
       expect(part?.type === "text" ? part.text : "").toContain("Evidence:")
       expect(part?.type === "text" ? part.text : "").toContain("- command:bun test")
       expect(part?.type === "text" ? part.metadata?.supervisor : undefined).toMatchObject({ inserted })
+      expect(MessageV2.latest(messages).user?.id === inserted?.messageID).toBe(true)
+      expect(MessageV2.latestPrimaryUser(messages)?.id === message.id).toBe(true)
 
       const modelMessages = yield* MessageV2.toModelMessagesEffect(messages, model)
       const modelText = modelMessages.flatMap((message) =>
