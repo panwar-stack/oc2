@@ -1585,6 +1585,10 @@ export function shouldRenderUserMessageTextPart(part: TextPart) {
   return !part.synthetic || part.metadata?.supervisor !== undefined
 }
 
+function isSupervisorRecommendationTextPart(part: Part) {
+  return part.type === "text" && part.synthetic && part.metadata?.supervisor !== undefined
+}
+
 function UserMessage(props: {
   message: UserMessage
   parts: Part[]
@@ -1612,6 +1616,7 @@ function UserMessage(props: {
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
+  const supervisorRecommendation = createMemo(() => props.parts.some(isSupervisorRecommendationTextPart))
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
@@ -1621,7 +1626,7 @@ function UserMessage(props: {
         <box
           id={props.message.id}
           border={["left"]}
-          borderColor={color()}
+          borderColor={supervisorRecommendation() ? theme.warning : color()}
           customBorderChars={SplitBorder.customBorderChars}
           marginTop={props.index === 0 ? 0 : 1}
         >
@@ -1636,9 +1641,14 @@ function UserMessage(props: {
             paddingTop={1}
             paddingBottom={1}
             paddingLeft={2}
-            backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
+            backgroundColor={hover() || supervisorRecommendation() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
+            <Show when={supervisorRecommendation()}>
+              <text fg={theme.warning} attributes={TextAttributes.BOLD} paddingBottom={1}>
+                Supervisor recommendation
+              </text>
+            </Show>
             <text fg={theme.text}>{text()}</text>
             <Show when={files().length}>
               <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">
