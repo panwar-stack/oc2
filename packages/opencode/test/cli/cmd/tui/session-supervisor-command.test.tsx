@@ -9,17 +9,24 @@ import { onCleanup, onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
 import { createTuiResolvedConfig } from "../../../fixture/tui-runtime"
 import { ArgsProvider } from "../../../../src/cli/cmd/tui/context/args"
+import { EditorContextProvider } from "../../../../src/cli/cmd/tui/context/editor"
 import { createExit, ExitProvider } from "../../../../src/cli/cmd/tui/context/exit"
 import { KVProvider } from "../../../../src/cli/cmd/tui/context/kv"
+import { LocalProvider } from "../../../../src/cli/cmd/tui/context/local"
 import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
-import { RouteProvider } from "../../../../src/cli/cmd/tui/context/route"
+import { RouteProvider, useRoute } from "../../../../src/cli/cmd/tui/context/route"
 import { SDKProvider } from "../../../../src/cli/cmd/tui/context/sdk"
 import { SyncProvider } from "../../../../src/cli/cmd/tui/context/sync"
 import { ThemeProvider } from "../../../../src/cli/cmd/tui/context/theme"
 import { TuiConfigProvider } from "../../../../src/cli/cmd/tui/context/tui-config"
+import { Prompt, type PromptRef } from "../../../../src/cli/cmd/tui/component/prompt"
+import { FrecencyProvider } from "../../../../src/cli/cmd/tui/component/prompt/frecency"
+import { PromptHistoryProvider } from "../../../../src/cli/cmd/tui/component/prompt/history"
+import { PromptStashProvider } from "../../../../src/cli/cmd/tui/component/prompt/stash"
 import {
   OpencodeKeymapProvider,
   registerOpencodeKeymap,
+  useBindings,
   useCommandSlashes,
   useOpencodeKeymap,
 } from "../../../../src/cli/cmd/tui/keymap"
@@ -52,6 +59,37 @@ test("registers /supervisor on session and home routes", async () => {
     expect(home.toast.currentToast?.message).toBe("Open a session to configure supervisor")
   } finally {
     await home.cleanup()
+  }
+})
+
+test("typed internal slash dispatches locally before session commands", async () => {
+  const supervisor = await mount({ route: { type: "session", sessionID }, withPrompt: true, withActivitySlash: true })
+  try {
+    await wait(() => supervisor.slashes().some((entry) => entry.display === "/supervisor activity"))
+    const before = supervisor.requests.length
+    supervisor.prompt.set({ input: "/supervisor activity", parts: [] })
+    supervisor.prompt.submit()
+    await wait(() => supervisor.prompt.current.input === "")
+    await wait(() => supervisor.activityRuns > 0)
+    expect(sessionSubmitRequests(supervisor.requests.slice(before))).toEqual([])
+  } finally {
+    await supervisor.cleanup()
+  }
+})
+
+test("typed internal slash without a session shows local toast", async () => {
+  const supervisor = await mount({ route: { type: "home" }, withPrompt: true, withActivitySlash: true })
+  try {
+    await wait(() => supervisor.slashes().some((entry) => entry.display === "/supervisor activity"))
+    const before = supervisor.requests.length
+    supervisor.prompt.set({ input: "/supervisor activity", parts: [] })
+    supervisor.prompt.submit()
+    await wait(() => supervisor.toast.currentToast?.variant === "error")
+    expect(supervisor.toast.currentToast?.message).toBe("Open a session to view supervisor activity")
+    await wait(() => supervisor.prompt.current.input === "")
+    expect(sessionSubmitRequests(supervisor.requests.slice(before))).toEqual([])
+  } finally {
+    await supervisor.cleanup()
   }
 })
 
@@ -170,16 +208,24 @@ async function patchFrom(action: (supervisor: Awaited<ReturnType<typeof mount>>)
   }
 }
 
-async function mount(input: { route: { type: "session"; sessionID: string } | { type: "home" }; failUpdates?: boolean }) {
+async function mount(input: {
+  route: { type: "session"; sessionID: string } | { type: "home" }
+  failUpdates?: boolean
+  withActivitySlash?: boolean
+  withPrompt?: boolean
+}) {
   const previous = Global.Path.state
   const tmp = await tmpdir()
   Global.Path.state = tmp.path
   await Bun.write(`${tmp.path}/kv.json`, "{}")
   const events = createEventSource()
   const patches: SupervisorSettingsPatch[] = []
+  const requests: { method: string; pathname: string }[] = []
+  let activityRuns = 0
   let gets = 0
   let slashes!: ReturnType<typeof useCommandSlashes>
   let keymap!: ReturnType<typeof useOpencodeKeymap>
+  let prompt: PromptRef | undefined
   let toast!: ReturnType<typeof useToast>
   let ready!: () => void
   const mounted = new Promise<void>((resolve) => {
@@ -189,6 +235,7 @@ async function mount(input: { route: { type: "session"; sessionID: string } | { 
   const fetch = (async (request: RequestInfo | URL) => {
     const url = new URL(request instanceof Request ? request.url : String(request))
     const method = request instanceof Request ? request.method : "GET"
+    requests.push({ method, pathname: url.pathname })
     if (url.pathname === `/session/${sessionID}/supervisor` && method === "GET") {
       gets++
       return json(state())
@@ -201,9 +248,13 @@ async function mount(input: { route: { type: "session"; sessionID: string } | { 
     }
     if (url.pathname === "/session") return json([session()])
     if (url.pathname === `/session/${sessionID}`) return json(session())
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo`) return json([])
+    if (url.pathname === `/session/${sessionID}/diff`) return json([])
     if (/^\/session\/[^/]+\/root$/.test(url.pathname)) return json([])
     switch (url.pathname) {
       case "/agent":
+        return json([{ name: "build", mode: "primary", hidden: false }])
       case "/command":
       case "/experimental/workspace":
       case "/experimental/workspace/status":
@@ -217,7 +268,21 @@ async function mount(input: { route: { type: "session"; sessionID: string } | { 
       case "/session/status":
         return json({})
       case "/config/providers":
-        return json({ providers: {}, default: {} })
+        return json({
+          providers: [
+            {
+              id: "test",
+              name: "Test",
+              models: {
+                model: {
+                  id: "model",
+                  name: "Model",
+                },
+              },
+            },
+          ],
+          default: { test: "model" },
+        })
       case "/experimental/console":
         return json({ consoleManagedProviders: [], switchableOrgCount: 0 })
       case "/path":
@@ -225,7 +290,7 @@ async function mount(input: { route: { type: "session"; sessionID: string } | { 
       case "/project/current":
         return json({ id: "proj_test" })
       case "/provider":
-        return json({ all: [], default: {}, connected: [] })
+        return json({ all: [], default: { test: "model" }, connected: [] })
       case "/vcs":
         return json({ branch: "main" })
     }
@@ -238,6 +303,35 @@ async function mount(input: { route: { type: "session"; sessionID: string } | { 
     toast = useToast()
     onMount(ready)
     return <box />
+  }
+
+  function TestActivitySlashCommand() {
+    const route = useRoute()
+    const toast = useToast()
+
+    useBindings(() => ({
+      commands: [
+        {
+          namespace: "palette",
+          name: "test.supervisor.activity",
+          title: "Show supervisor activity",
+          category: "Session",
+          slashName: "supervisor activity",
+          run: () => {
+            activityRuns++
+            if (route.data.type === "session") return
+            toast.show({ message: "Open a session to view supervisor activity", variant: "error" })
+          },
+        },
+      ],
+    }))
+
+    return null
+  }
+
+  function MaybePrompt() {
+    if (!input.withPrompt) return null
+    return <Prompt sessionID={input.route.type === "session" ? input.route.sessionID : undefined} ref={(ref) => (prompt = ref)} />
   }
 
   function Harness() {
@@ -259,10 +353,22 @@ async function mount(input: { route: { type: "session"; sessionID: string } | { 
                       <ProjectProvider>
                         <SyncProvider>
                           <ThemeProvider mode="dark">
-                            <DialogProvider>
-                              <SessionSupervisorCommand />
-                              <Probe />
-                            </DialogProvider>
+                            <LocalProvider>
+                              <PromptStashProvider>
+                                <DialogProvider>
+                                  <PromptHistoryProvider>
+                                    <FrecencyProvider>
+                                      <EditorContextProvider>
+                                        <SessionSupervisorCommand />
+                                        {input.withActivitySlash ? <TestActivitySlashCommand /> : null}
+                                        <MaybePrompt />
+                                        <Probe />
+                                      </EditorContextProvider>
+                                    </FrecencyProvider>
+                                  </PromptHistoryProvider>
+                                </DialogProvider>
+                              </PromptStashProvider>
+                            </LocalProvider>
                           </ThemeProvider>
                         </SyncProvider>
                       </ProjectProvider>
@@ -287,14 +393,30 @@ async function mount(input: { route: { type: "session"; sessionID: string } | { 
     },
     keymap,
     patches,
+    requests,
     slashes,
     toast,
+    get activityRuns() {
+      return activityRuns
+    },
+    get prompt() {
+      if (!prompt) throw new Error("expected prompt")
+      return prompt
+    },
     async cleanup() {
       app.renderer.destroy()
       Global.Path.state = previous
       await tmp[Symbol.asyncDispose]()
     },
   }
+}
+
+function sessionSubmitRequests(requests: { method: string; pathname: string }[]) {
+  return requests.filter(
+    (request) =>
+      (request.method === "POST" && request.pathname === "/session") ||
+      /^\/session\/[^/]+\/(command|message)$/.test(request.pathname),
+  )
 }
 
 function session() {
