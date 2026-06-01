@@ -1566,6 +1566,10 @@ const MIME_BADGE: Record<string, string> = {
   "application/x-directory": "dir",
 }
 
+export function shouldRenderUserMessageTextPart(part: TextPart) {
+  return !part.synthetic || part.metadata?.supervisor !== undefined
+}
+
 function UserMessage(props: {
   message: UserMessage
   parts: Part[]
@@ -1578,7 +1582,7 @@ function UserMessage(props: {
   const text = createMemo(() => {
     const texts = props.parts
       .map((x) => {
-        if (x.type === "text" && !x.synthetic) {
+        if (x.type === "text" && shouldRenderUserMessageTextPart(x)) {
           return x.text
         }
         return null
