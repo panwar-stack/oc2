@@ -997,6 +997,14 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({ path: route("/session/{sessionID}/diff", { sessionID: ctx.state.id }), headers: ctx.headers() }))
     .json(200, array),
   http.protected
+    .get("/session/{sessionID}/supervisor/activity", "session.supervisor.activity")
+    .seeded((ctx) => ctx.session({ title: "Supervisor activity session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/supervisor/activity", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, array, "status"),
+  http.protected
     .get("/session/{sessionID}/message", "session.messages")
     .seeded((ctx) => ctx.session({ title: "Messages session" }))
     .at((ctx) => ({ path: route("/session/{sessionID}/message", { sessionID: ctx.state.id }), headers: ctx.headers() }))

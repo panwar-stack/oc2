@@ -41,7 +41,14 @@ function addMessage(sessionID: SessionID) {
   })
 }
 
-function updateTool(input: { sessionID: SessionID; messageID: MessageID; command: string; tool?: string; exitCode?: number }) {
+function updateTool(input: {
+  sessionID: SessionID
+  messageID: MessageID
+  command: string
+  tool?: string
+  exitCode?: number
+  output?: string
+}) {
   return Effect.gen(function* () {
     const session = yield* Session.Service
     return yield* session.updatePart({
@@ -54,7 +61,7 @@ function updateTool(input: { sessionID: SessionID; messageID: MessageID; command
       state: {
         status: "completed",
         input: { command: input.command },
-        output: "",
+        output: input.output ?? "",
         title: input.command,
         metadata: input.exitCode === undefined ? {} : { exitCode: input.exitCode },
         time: { start: Date.now(), end: Date.now() },
@@ -297,6 +304,102 @@ describe("supervisor state service", () => {
       expect(state.filesTouched).toHaveLength(25)
       expect(state.commandsRun).toHaveLength(20)
       expect(state.validationsRun).toHaveLength(10)
+    }),
+  )
+
+  it.instance("returns supervisor activity newest first", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const supervisor = yield* SupervisorState.Service
+      const info = yield* session.create({})
+      const message = yield* addMessage(info.id)
+      yield* supervisor.updateSettings({ sessionID: info.id, patch: { mode: "observe" } })
+
+      yield* updatePatch({ sessionID: info.id, messageID: message.id, files: ["src/app.ts"] })
+      yield* updateTool({ sessionID: info.id, messageID: message.id, command: "bun test", exitCode: 0 })
+
+      const activity = yield* supervisor.getActivity(info.id)
+      expect(activity.map((item) => item.type).slice(0, 3)).toEqual(["validation", "command", "file"])
+      expect(activity[0]?.time).toBeGreaterThanOrEqual(activity[1]?.time ?? 0)
+      expect(activity[1]?.time).toBeGreaterThanOrEqual(activity[2]?.time ?? 0)
+    }),
+  )
+
+  it.instance("bounds supervisor activity to the latest 100 entries", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const supervisor = yield* SupervisorState.Service
+      yield* supervisor.init()
+      const info = yield* session.create({})
+      const message = yield* addMessage(info.id)
+      yield* supervisor.updateSettings({ sessionID: info.id, patch: { mode: "observe" } })
+
+      yield* Effect.forEach(
+        Array.from({ length: 120 }, (_, index) => index),
+        (index) => updatePatch({ sessionID: info.id, messageID: message.id, files: [`activity-${index}.ts`] }),
+        { discard: true },
+      )
+
+      const activity = yield* pollWithTimeout(
+        supervisor.getActivity(info.id).pipe(
+          Effect.map((activity) =>
+            activity.length === 100 && JSON.stringify(activity).includes("activity-119.ts") ? activity : undefined,
+          ),
+        ),
+        "supervisor activity was not bounded",
+      )
+      expect(JSON.stringify(activity)).toContain("activity-119.ts")
+      expect(JSON.stringify(activity)).not.toContain("activity-0.ts")
+    }),
+  )
+
+  it.instance("dedupes supervisor activity across repeated rebuilds", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const supervisor = yield* SupervisorState.Service
+      const info = yield* session.create({})
+      const message = yield* addMessage(info.id)
+      yield* supervisor.updateSettings({ sessionID: info.id, patch: { mode: "observe" } })
+      yield* updatePatch({ sessionID: info.id, messageID: message.id, files: ["src/app.ts"] })
+      yield* updateTool({ sessionID: info.id, messageID: message.id, command: "bun test", exitCode: 0 })
+
+      const first = yield* supervisor.getActivity(info.id)
+      yield* supervisor.get(info.id)
+      const second = yield* supervisor.getActivity(info.id)
+
+      expect(second.map((item) => item.id)).toEqual(first.map((item) => item.id))
+    }),
+  )
+
+  it.instance("stores observable-only supervisor activity payloads", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const supervisor = yield* SupervisorState.Service
+      const info = yield* session.create({})
+      const message = yield* addMessage(info.id)
+      yield* supervisor.updateSettings({ sessionID: info.id, patch: { mode: "observe" } })
+      yield* session.updatePart({
+        id: PartID.ascending(),
+        sessionID: info.id,
+        messageID: message.id,
+        type: "text",
+        text: "SECRET prompt text should not leak",
+      })
+      yield* updateTool({
+        sessionID: info.id,
+        messageID: message.id,
+        command: "bun test",
+        exitCode: 1,
+        output: "SECRET raw command output should not leak",
+      })
+      yield* updatePatch({ sessionID: info.id, messageID: message.id, files: ["src/app.ts"] })
+
+      const serialized = JSON.stringify(yield* supervisor.getActivity(info.id))
+      expect(serialized).toContain("bun test")
+      expect(serialized).toContain("src/app.ts")
+      expect(serialized).not.toContain("SECRET")
+      expect(serialized).not.toContain("recentEvents")
+      expect(serialized).not.toContain("raw command output")
     }),
   )
 })

@@ -260,6 +260,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* SessionError.mapStorageNotFound(supervisorState.getReport(ctx.params.sessionID))
     })
 
+    const getSupervisorActivity = Effect.fn("SessionHttpApi.getSupervisorActivity")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionError.mapStorageNotFound(supervisorState.getActivity(ctx.params.sessionID))
+    })
+
     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {
       params: { sessionID: SessionID }
       payload?: typeof ForkPayload.Type
@@ -487,6 +494,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("update", update)
       .handle("getSupervisor", getSupervisor)
       .handle("updateSupervisor", updateSupervisor)
+      .handle("getSupervisorActivity", getSupervisorActivity)
       .handle("getSupervisorReport", getSupervisorReport)
       .handleRaw("fork", forkRaw)
       .handle("abort", abort)

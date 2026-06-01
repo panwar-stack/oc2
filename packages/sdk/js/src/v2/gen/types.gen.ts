@@ -2963,6 +2963,31 @@ export type SessionRoot = {
   primary: boolean
 }
 
+export type SupervisorActivityType = "file" | "command" | "validation" | "risk" | "recommendation" | "settings"
+
+export type SupervisorActivityMetadata = {
+  file?: string
+  command?: string
+  exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  validation?: boolean
+  repeatedFailureCount?: number
+  trigger?: SupervisorTrigger
+  action?: SupervisorAction
+  inserted?: boolean
+}
+
+export type SupervisorActivity = {
+  id: string
+  sessionID: string
+  time: number
+  type: SupervisorActivityType
+  severity?: "info" | "warning" | "high"
+  title: string
+  message?: string
+  evidence: Array<string>
+  metadata?: SupervisorActivityMetadata
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -9110,6 +9135,41 @@ export type SessionSupervisorUpdateResponses = {
 }
 
 export type SessionSupervisorUpdateResponse = SessionSupervisorUpdateResponses[keyof SessionSupervisorUpdateResponses]
+
+export type SessionSupervisorActivityData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/supervisor/activity"
+}
+
+export type SessionSupervisorActivityErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionSupervisorActivityError = SessionSupervisorActivityErrors[keyof SessionSupervisorActivityErrors]
+
+export type SessionSupervisorActivityResponses = {
+  /**
+   * Get supervisor activity
+   */
+  200: Array<SupervisorActivity>
+}
+
+export type SessionSupervisorActivityResponse =
+  SessionSupervisorActivityResponses[keyof SessionSupervisorActivityResponses]
 
 export type SessionSupervisorReportData = {
   body?: never

@@ -94,6 +94,36 @@ export const Risk = Schema.Struct({
 }).annotate({ identifier: "SupervisorRisk" })
 export type Risk = Types.DeepMutable<Schema.Schema.Type<typeof Risk>>
 
+export const ActivityType = Schema.Literals(["file", "command", "validation", "risk", "recommendation", "settings"]).annotate({
+  identifier: "SupervisorActivityType",
+})
+export type ActivityType = Schema.Schema.Type<typeof ActivityType>
+
+export const ActivityMetadata = Schema.Struct({
+  file: optionalOmitUndefined(Schema.String),
+  command: optionalOmitUndefined(Schema.String),
+  exitCode: optionalOmitUndefined(Schema.Number),
+  validation: optionalOmitUndefined(Schema.Boolean),
+  repeatedFailureCount: optionalOmitUndefined(NonNegativeInt),
+  trigger: optionalOmitUndefined(Trigger),
+  action: optionalOmitUndefined(Action),
+  inserted: optionalOmitUndefined(Schema.Boolean),
+}).annotate({ identifier: "SupervisorActivityMetadata" })
+export type ActivityMetadata = Types.DeepMutable<Schema.Schema.Type<typeof ActivityMetadata>>
+
+export const Activity = Schema.Struct({
+  id: Schema.String,
+  sessionID: SessionID,
+  time: NonNegativeInt,
+  type: ActivityType,
+  severity: optionalOmitUndefined(Schema.Literals(["info", "warning", "high"])),
+  title: Schema.String,
+  message: optionalOmitUndefined(Schema.String),
+  evidence: Schema.Array(Schema.String),
+  metadata: optionalOmitUndefined(ActivityMetadata),
+}).annotate({ identifier: "SupervisorActivity" })
+export type Activity = Types.DeepMutable<Schema.Schema.Type<typeof Activity>>
+
 export const Recommendation = Schema.Struct({
   source: Schema.Literal("model"),
   action: Action,

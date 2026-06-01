@@ -21,6 +21,7 @@ const MAX_FILES = 25
 const MAX_COMMANDS = 20
 const MAX_VALIDATIONS = 10
 const MAX_RECENT_EVENTS = 40
+const MAX_ACTIVITY = 100
 const MODEL_ONLY_TRIGGERS = [
   "wrong_localization",
   "evidence_mismatch",
@@ -69,6 +70,8 @@ type PendingInsertion = {
 type State = {
   derived: Map<SessionID, Derived>
   recommendations: Map<SessionID, Supervisor.Recommendation[]>
+  activities: Map<SessionID, Supervisor.Activity[]>
+  activityKeys: Map<SessionID, Set<string>>
   pendingInsertions: Map<SessionID, PendingInsertion>
   recommendationKeys: Map<SessionID, Set<string>>
   lastReviewAt: Map<SessionID, number>
@@ -90,6 +93,7 @@ type ReviewBoundary = "event" | "step" | "idle"
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly get: (sessionID: SessionID) => Effect.Effect<Supervisor.State>
+  readonly getActivity: (sessionID: SessionID) => Effect.Effect<Supervisor.Activity[]>
   readonly getReport: (sessionID: SessionID) => Effect.Effect<Supervisor.Report>
   readonly flushPendingInsertion: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly updateSettings: (input: {
@@ -118,6 +122,8 @@ export const layer: Layer.Layer<
         Effect.succeed({
           derived: new Map(),
           recommendations: new Map(),
+          activities: new Map(),
+          activityKeys: new Map(),
           pendingInsertions: new Map(),
           recommendationKeys: new Map(),
           lastReviewAt: new Map(),
@@ -130,6 +136,11 @@ export const layer: Layer.Layer<
 
     const get = Effect.fn("SupervisorState.get")(function* (sessionID: SessionID) {
       return yield* rebuild(sessionID, { publish: false })
+    })
+
+    const getActivity = Effect.fn("SupervisorState.getActivity")(function* (sessionID: SessionID) {
+      yield* rebuild(sessionID, { publish: false })
+      return (yield* InstanceState.get(state)).activities.get(sessionID) ?? []
     })
 
     const getReport = Effect.fn("SupervisorState.getReport")(function* (sessionID: SessionID) {
@@ -145,6 +156,7 @@ export const layer: Layer.Layer<
       patch: Supervisor.SettingsPatch
     }) {
       const info = yield* session.get(input.sessionID).pipe(Effect.orDie)
+      const before = Supervisor.state({ sessionID: input.sessionID, config: yield* config.get(), session: info.supervisor })
       const settings = Supervisor.applySettingsPatch({
         current: info.supervisor,
         patch: input.patch,
@@ -152,6 +164,7 @@ export const layer: Layer.Layer<
       })
       yield* session.setSupervisorSettings({ sessionID: input.sessionID, supervisor: settings })
       const next = yield* rebuild(input.sessionID, { publish: false })
+      recordActivity(yield* InstanceState.get(state), settingsActivity(input.sessionID, before, next, settings?.updatedAt ?? Date.now()))
       yield* bus.publish(Supervisor.Event.SettingsUpdated, { sessionID: input.sessionID, settings, state: next })
       return next
     })
@@ -182,6 +195,8 @@ export const layer: Layer.Layer<
           Effect.orElseSucceed((): SnapshotDerived => ({ derived: emptyDerived(), recommendations: [] })),
         )
         const current = data.derived.get(sessionID)
+        const previous = current ?? emptyDerived()
+        const previousState = overlay(base, previous, latestRecommendation(data, sessionID), { report: options.report })
         const derived = mergeDerived(fromSnapshots.derived, current)
         data.derived.set(sessionID, derived)
         if (fromSnapshots.recommendations.length > 0) {
@@ -194,8 +209,12 @@ export const layer: Layer.Layer<
               ),
             ),
           )
+          fromSnapshots.recommendations.forEach((recommendation) =>
+            recordActivity(data, recommendationActivity(sessionID, recommendation)),
+          )
         }
         const next = overlay(base, derived, latestRecommendation(data, sessionID), { report: options.report })
+        recordDerivedActivities(data, sessionID, current, derived, previousState, next, derived.updatedAt)
         if (options.publish) yield* bus.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
         return next
       })
@@ -231,9 +250,13 @@ export const layer: Layer.Layer<
           normalized.type === "part"
             ? deriveFromPart(normalized.part, base.config.effective, data.roots, Date.now())
             : normalized.derived
-        const derived = mergeDerived(data.derived.get(normalized.sessionID) ?? emptyDerived(), eventDerived)
+        const current = data.derived.get(normalized.sessionID)
+        const previous = current ?? emptyDerived()
+        const previousState = overlay(base, previous, latestRecommendation(data, normalized.sessionID))
+        const derived = mergeDerived(previous, eventDerived)
         data.derived.set(normalized.sessionID, derived)
         const next = overlay(base, derived, latestRecommendation(data, normalized.sessionID))
+        recordDerivedActivities(data, normalized.sessionID, current, eventDerived, previousState, next, eventDerived.updatedAt)
         yield* bus.publish(Supervisor.Event.StateUpdated, {
           sessionID: normalized.sessionID,
           state: next,
@@ -330,6 +353,7 @@ export const layer: Layer.Layer<
         const insertedRecommendation = { ...recommendation, inserted }
         data.recommendations.set(sessionID, [...(data.recommendations.get(sessionID) ?? []), insertedRecommendation])
         data.recommendationKeys.set(sessionID, new Set([...(data.recommendationKeys.get(sessionID) ?? []), key]))
+        recordActivity(data, recommendationActivity(sessionID, insertedRecommendation))
 
         yield* session.updateMessage({
           id: inserted.messageID,
@@ -383,7 +407,7 @@ export const layer: Layer.Layer<
       })
     }
 
-    return Service.of({ init, get, getReport, flushPendingInsertion, updateSettings })
+    return Service.of({ init, get, getActivity, getReport, flushPendingInsertion, updateSettings })
   }),
 )
 
@@ -784,6 +808,159 @@ function statusWithRisks(status: Supervisor.State["status"], risks: Supervisor.R
 
 function latestRecommendation(state: State, sessionID: SessionID) {
   return state.recommendations.get(sessionID)?.at(-1)
+}
+
+function recordDerivedActivities(
+  state: State,
+  sessionID: SessionID,
+  previous: Derived | undefined,
+  observed: Derived,
+  previousState: Supervisor.State,
+  next: Supervisor.State,
+  time: number,
+) {
+  const before = previous ?? emptyDerived()
+  observed.filesTouched
+    .filter((file) => !before.filesTouched.includes(file))
+    .forEach((file) => recordActivity(state, fileActivity(sessionID, file, time)))
+  observed.commandsRun
+    .filter(
+      (command) =>
+        !before.commandsRun.some((item) => item.command === command.command && item.exitCode === command.exitCode),
+    )
+    .forEach((command) => recordActivity(state, commandActivity(sessionID, command, time)))
+  observed.validationsRun
+    .filter((command) => !before.validationsRun.includes(command))
+    .forEach((command) => recordActivity(state, validationActivity(sessionID, command, time)))
+  next.risks
+    .filter((risk) => !previousState.risks.some((item) => riskKey(item) === riskKey(risk)))
+    .forEach((risk) => recordActivity(state, riskActivity(sessionID, risk, time)))
+}
+
+function recordActivity(state: State, activity: Supervisor.Activity) {
+  if (state.activityKeys.get(activity.sessionID)?.has(activity.id)) return
+  state.activityKeys.set(activity.sessionID, new Set([...(state.activityKeys.get(activity.sessionID) ?? []), activity.id]))
+  state.activities.set(
+    activity.sessionID,
+    [activity, ...(state.activities.get(activity.sessionID) ?? [])]
+      .sort((left, right) => right.time - left.time)
+      .slice(0, MAX_ACTIVITY),
+  )
+}
+
+function fileActivity(sessionID: SessionID, file: string, time: number): Supervisor.Activity {
+  return {
+    id: activityID(sessionID, "file", file),
+    sessionID,
+    time,
+    type: "file",
+    title: "touched",
+    message: boundedActivityText(file),
+    evidence: [`file:${boundedActivityText(file)}`],
+    metadata: { file },
+  }
+}
+
+function commandActivity(sessionID: SessionID, command: Command, time: number): Supervisor.Activity {
+  return {
+    id: activityID(sessionID, "command", command.command, command.exitCode ?? "unknown"),
+    sessionID,
+    time,
+    type: "command",
+    severity: command.exitCode === undefined || command.exitCode === 0 ? "info" : "warning",
+    title: command.exitCode === undefined ? "observed" : command.exitCode === 0 ? "success" : "failure",
+    message: boundedActivityText(command.command),
+    evidence: command.exitCode === undefined ? [] : [`exit:${command.exitCode}`],
+    metadata:
+      command.exitCode === undefined
+        ? { command: command.command, validation: command.validation, repeatedFailureCount: command.repeatedFailureCount }
+        : {
+            command: command.command,
+            exitCode: command.exitCode,
+            validation: command.validation,
+            repeatedFailureCount: command.repeatedFailureCount,
+          },
+  }
+}
+
+function validationActivity(sessionID: SessionID, command: string, time: number): Supervisor.Activity {
+  return {
+    id: activityID(sessionID, "validation", command),
+    sessionID,
+    time,
+    type: "validation",
+    severity: "info",
+    title: "success",
+    message: boundedActivityText(command),
+    evidence: [`validation:${boundedActivityText(command)}`],
+    metadata: { command, validation: true },
+  }
+}
+
+function riskActivity(sessionID: SessionID, risk: Supervisor.Risk, time: number): Supervisor.Activity {
+  return {
+    id: activityID(sessionID, "risk", riskKey(risk)),
+    sessionID,
+    time,
+    type: "risk",
+    severity: risk.severity,
+    title: risk.trigger,
+    message: boundedActivityText(risk.message),
+    evidence: risk.evidence.slice(0, 5).map(boundedActivityText),
+    metadata: { trigger: risk.trigger },
+  }
+}
+
+function recommendationActivity(sessionID: SessionID, recommendation: Supervisor.Recommendation): Supervisor.Activity {
+  return {
+    id: activityID(
+      sessionID,
+      "recommendation",
+      recommendation.trigger,
+      recommendation.action,
+      recommendation.message,
+      recommendation.evidence,
+      recommendation.inserted?.insertedAt ?? "created",
+    ),
+    sessionID,
+    time: recommendation.inserted?.insertedAt ?? Date.now(),
+    type: "recommendation",
+    severity: recommendation.action === "warn" ? "warning" : "info",
+    title: recommendation.trigger,
+    message: boundedActivityText(recommendation.message),
+    evidence: recommendation.evidence.slice(0, 5).map(boundedActivityText),
+    metadata: { trigger: recommendation.trigger, action: recommendation.action, inserted: recommendation.inserted !== undefined },
+  }
+}
+
+function settingsActivity(
+  sessionID: SessionID,
+  before: Supervisor.State,
+  after: Supervisor.State,
+  time: number,
+): Supervisor.Activity {
+  return {
+    id: activityID(sessionID, "settings", time, before.mode, after.mode),
+    sessionID,
+    time,
+    type: "settings",
+    severity: "info",
+    title: before.mode === after.mode ? "settings updated" : "mode changed",
+    message: before.mode === after.mode ? undefined : `${before.mode} -> ${after.mode}`,
+    evidence: [`mode:${after.mode}`, `source:${after.config.modeSource}`],
+  }
+}
+
+function riskKey(risk: Supervisor.Risk) {
+  return JSON.stringify({ trigger: risk.trigger, severity: risk.severity, message: risk.message, evidence: risk.evidence })
+}
+
+function activityID(sessionID: SessionID, type: Supervisor.ActivityType, ...parts: unknown[]) {
+  return `${sessionID}:${type}:${JSON.stringify(parts)}`
+}
+
+function boundedActivityText(text: string) {
+  return text.length <= 240 ? text : `${text.slice(0, 237).trimEnd()}...`
 }
 
 function hasRecommendationKey(state: State, sessionID: SessionID, key: string) {

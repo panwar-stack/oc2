@@ -238,6 +238,8 @@ import type {
   SessionStatusResponses,
   SessionSummarizeErrors,
   SessionSummarizeResponses,
+  SessionSupervisorActivityErrors,
+  SessionSupervisorActivityResponses,
   SessionSupervisorGetErrors,
   SessionSupervisorGetResponses,
   SessionSupervisorReportErrors,
@@ -3888,6 +3890,42 @@ export class Supervisor extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Get session supervisor activity
+   *
+   * Retrieve bounded observable supervisor activity for a session.
+   */
+  public activity<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionSupervisorActivityResponses,
+      SessionSupervisorActivityErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/supervisor/activity",
+      ...options,
+      ...params,
     })
   }
 
