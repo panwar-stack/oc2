@@ -312,6 +312,52 @@ describe("tool.team_spawn", () => {
     ),
   )
 
+  it.live("marks a finished teammate completed before the lead wake observes it", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const observedCompletionWakeStatuses: string[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) => Effect.succeed(reply(input, "work complete")),
+            wake: (sessionID) =>
+              Effect.gen(function* () {
+                const pending = yield* team.getPendingMessages(lead.id, info.id)
+                if (pending.some((message) => message.body.includes("completed and returned this result"))) {
+                  observedCompletionWakeStatuses.push(
+                    (yield* team.getMembers(info.id)).find((member) => member.name === "worker")?.status ?? "missing",
+                  )
+                }
+                return reply({ sessionID, parts: [] }, "lead woke")
+              }),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Do the work",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          yield* waitUntil(() => Effect.sync(() => observedCompletionWakeStatuses.length > 0))
+          expect(result.title).toBe("Teammate Completed")
+          expect(observedCompletionWakeStatuses).toContain("completed")
+          expect(observedCompletionWakeStatuses).not.toContain("active")
+          expect((yield* team.getMembers(info.id)).find((member) => member.name === "worker")?.status).toBe(
+            "completed",
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("starts independent teammates in parallel", () =>
     provideTmpdirInstance(
       () =>

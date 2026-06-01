@@ -323,6 +323,7 @@ export const TeamSpawnTool = Tool.define(
                   return "Teammate stopped before completing."
                 }
                 const output = result.parts.findLast((part) => part.type === "text")?.text ?? ""
+                yield* team.updateMemberStatus(member.id, "completed", output)
                 yield* notifyLead(
                   member.session_id,
                   [
@@ -333,7 +334,6 @@ export const TeamSpawnTool = Tool.define(
                     "</teammate_result>",
                   ].join("\n"),
                 )
-                yield* team.updateMemberStatus(member.id, "completed", output)
                 yield* startReadyBlockedMembers(member.session_id)
                 return output || "(no text result)"
               }).pipe(
