@@ -30,7 +30,7 @@ import { createEventSource, directory, json, wait } from "./sync-fixture"
 
 const sessionID = "ses_supervisor_command"
 
-test("registers /supervisor only for session routes", async () => {
+test("registers /supervisor on session and home routes", async () => {
   const session = await mount({ route: { type: "session", sessionID } })
   try {
     await wait(() => session.slashes().some((entry) => entry.display === "/supervisor"))
@@ -43,7 +43,10 @@ test("registers /supervisor only for session routes", async () => {
 
   const home = await mount({ route: { type: "home" } })
   try {
-    expect(home.slashes().some((entry) => entry.display === "/supervisor")).toBe(false)
+    await wait(() => home.slashes().some((entry) => entry.display === "/supervisor"))
+    expect(home.slashes().find((entry) => entry.display === "/supervisor")?.description).toBe(
+      "Configure supervisor",
+    )
     home.keymap.dispatchCommand("session.supervisor")
     await wait(() => home.toast.currentToast?.variant === "error")
     expect(home.toast.currentToast?.message).toBe("Open a session to configure supervisor")

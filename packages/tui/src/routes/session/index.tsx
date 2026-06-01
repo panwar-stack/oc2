@@ -270,7 +270,6 @@ export function SessionSupervisorCommand() {
       title: "Configure supervisor",
       category: "Session",
       slashName: "supervisor",
-      hidden: sessionID() === undefined,
       run: () => {
         const id = sessionID()
         if (!id) {
