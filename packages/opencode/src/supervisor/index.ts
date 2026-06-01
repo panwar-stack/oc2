@@ -59,10 +59,15 @@ type SnapshotDerived = {
   derived: Derived
   recommendations: Supervisor.Recommendation[]
 }
+type PendingInsertion = {
+  recommendation: Supervisor.Recommendation
+  derived: Derived
+  configGeneration: number
+}
 type State = {
   derived: Map<SessionID, Derived>
   recommendations: Map<SessionID, Supervisor.Recommendation[]>
-  pendingInsertions: Map<SessionID, Supervisor.Recommendation>
+  pendingInsertions: Map<SessionID, PendingInsertion>
   recommendationKeys: Map<SessionID, Set<string>>
   lastReviewAt: Map<SessionID, number>
   configKeys: Map<SessionID, string>
@@ -84,6 +89,7 @@ export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly get: (sessionID: SessionID) => Effect.Effect<Supervisor.State>
   readonly getReport: (sessionID: SessionID) => Effect.Effect<Supervisor.Report>
+  readonly flushPendingInsertion: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly updateSettings: (input: {
     sessionID: SessionID
     patch: Supervisor.SettingsPatch
@@ -230,7 +236,9 @@ export const layer: Layer.Layer<
           sessionID: normalized.sessionID,
           state: next,
         })
-        if (normalized.boundary === "idle") yield* flushPendingInsertion(normalized.sessionID, derived)
+        const hadPendingInsertion = normalized.boundary === "idle" && data.pendingInsertions.has(normalized.sessionID)
+        if (normalized.boundary === "idle") yield* flushPendingInsertion(normalized.sessionID)
+        if (hadPendingInsertion) return
         if (normalized.boundary && shouldReview(base.config.effective.review_cadence, normalized.boundary)) {
           yield* maybeReview(normalized.sessionID, base, derived).pipe(Effect.forkIn(scope, { startImmediately: true }))
         }
@@ -263,78 +271,87 @@ export const layer: Layer.Layer<
         if ((data.recommendations.get(sessionID)?.length ?? 0) >= latestBase.config.effective.max_recommendations_per_session) return
         if (hasRecommendationKey(data, sessionID, recommendationKey(current, recommendation))) return
 
-        yield* enqueueInsertion(sessionID, recommendation, derived)
+        yield* enqueueInsertion(sessionID, recommendation, derived, configGeneration)
       })
     }
 
-    function enqueueInsertion(sessionID: SessionID, recommendation: Supervisor.Recommendation, derived: Derived) {
+    function enqueueInsertion(
+      sessionID: SessionID,
+      recommendation: Supervisor.Recommendation,
+      derived: Derived,
+      configGeneration: number,
+    ) {
       return Effect.gen(function* () {
         const data = yield* InstanceState.get(state)
         if ((yield* sessionStatus.get(sessionID)).type === "idle") {
-          yield* insertRecommendation(sessionID, recommendation, derived)
+          yield* insertRecommendation(sessionID, recommendation, derived, { requireIdle: true })
           return
         }
-        data.pendingInsertions.set(sessionID, recommendation)
+        data.pendingInsertions.set(sessionID, { recommendation, derived, configGeneration })
       })
     }
 
-    function flushPendingInsertion(sessionID: SessionID, derived: Derived) {
-      return Effect.gen(function* () {
-        const data = yield* InstanceState.get(state)
-        const recommendation = data.pendingInsertions.get(sessionID)
-        if (!recommendation) return
-        data.pendingInsertions.delete(sessionID)
-        yield* insertRecommendation(sessionID, recommendation, derived)
-      })
-    }
+    const flushPendingInsertion = Effect.fn("SupervisorState.flushPendingInsertion")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      const pending = data.pendingInsertions.get(sessionID)
+      if (!pending) return false
+      data.pendingInsertions.delete(sessionID)
+      const latestInfo = yield* session.get(sessionID).pipe(Effect.orDie)
+      const latestBase = Supervisor.state({ sessionID, config: yield* config.get(), session: latestInfo.supervisor })
+      const latestGeneration = observeConfig(data, sessionID, latestBase.config.effective)
+      if (latestBase.mode !== "advise") return false
+      if (latestGeneration !== pending.configGeneration) return false
+      if (!latestBase.config.effective.insert_recommendations) return false
+      return yield* insertRecommendation(sessionID, pending.recommendation, pending.derived, { requireIdle: false })
+    })
 
-    function insertRecommendation(sessionID: SessionID, recommendation: Supervisor.Recommendation, derived: Derived) {
+    function insertRecommendation(
+      sessionID: SessionID,
+      recommendation: Supervisor.Recommendation,
+      derived: Derived,
+      options: { requireIdle: boolean },
+    ) {
       return Effect.gen(function* () {
         const data = yield* InstanceState.get(state)
         const latestInfo = yield* session.get(sessionID).pipe(Effect.orDie)
         const latestBase = Supervisor.state({ sessionID, config: yield* config.get(), session: latestInfo.supervisor })
         observeConfig(data, sessionID, latestBase.config.effective)
-        if (latestBase.mode !== "advise") return
-        if ((data.recommendations.get(sessionID)?.length ?? 0) >= latestBase.config.effective.max_recommendations_per_session) return
-        if ((yield* sessionStatus.get(sessionID)).type !== "idle") {
-          data.pendingInsertions.set(sessionID, recommendation)
-          return
-        }
+        if (latestBase.mode !== "advise") return false
+        if (!latestBase.config.effective.insert_recommendations) return false
+        if ((data.recommendations.get(sessionID)?.length ?? 0) >= latestBase.config.effective.max_recommendations_per_session) return false
+        if (options.requireIdle && (yield* sessionStatus.get(sessionID)).type !== "idle") return false
 
         const insertedAt = Date.now()
         const key = recommendationKey(overlay(latestBase, derived, latestRecommendation(data, sessionID)), recommendation)
-        if (hasRecommendationKey(data, sessionID, key)) return
-        const inserted = latestBase.config.effective.insert_recommendations
-          ? { messageID: MessageID.ascending(), partID: PartID.ascending(), insertedAt }
-          : undefined
-        const insertedRecommendation = inserted ? { ...recommendation, inserted } : recommendation
+        if (hasRecommendationKey(data, sessionID, key)) return false
+        const inserted = { messageID: MessageID.ascending(), partID: PartID.ascending(), insertedAt }
+        const insertedRecommendation = { ...recommendation, inserted }
         data.recommendations.set(sessionID, [...(data.recommendations.get(sessionID) ?? []), insertedRecommendation])
         data.recommendationKeys.set(sessionID, new Set([...(data.recommendationKeys.get(sessionID) ?? []), key]))
 
-        if (inserted) {
-          yield* session.updateMessage({
-            id: inserted.messageID,
-            role: "user",
-            sessionID,
-            agent: "supervisor",
-            model: { providerID: "supervisor", modelID: "supervisor" },
-            time: { created: insertedAt },
-          } as MessageV2.User)
-          yield* session.updatePart({
-            id: inserted.partID,
-            sessionID,
-            messageID: inserted.messageID,
-            type: "text",
-            text: recommendationText(insertedRecommendation, latestBase.config.effective.max_recommendation_chars),
-            synthetic: true,
-            metadata: { supervisor: insertedRecommendation },
-            time: { start: insertedAt, end: insertedAt },
-          })
-        }
+        yield* session.updateMessage({
+          id: inserted.messageID,
+          role: "user",
+          sessionID,
+          agent: "supervisor",
+          model: { providerID: "supervisor", modelID: "supervisor" },
+          time: { created: insertedAt },
+        } as MessageV2.User)
+        yield* session.updatePart({
+          id: inserted.partID,
+          sessionID,
+          messageID: inserted.messageID,
+          type: "text",
+          text: recommendationText(insertedRecommendation, latestBase.config.effective.max_recommendation_chars),
+          synthetic: true,
+          metadata: { supervisor: insertedRecommendation },
+          time: { start: insertedAt, end: insertedAt },
+        })
 
         const next = overlay(latestBase, derived, insertedRecommendation)
         yield* bus.publish(Supervisor.Event.RecommendationCreated, { sessionID, recommendation: insertedRecommendation, state: next })
         yield* bus.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
+        return true
       })
     }
 
@@ -364,7 +381,7 @@ export const layer: Layer.Layer<
       })
     }
 
-    return Service.of({ init, get, getReport, updateSettings })
+    return Service.of({ init, get, getReport, flushPendingInsertion, updateSettings })
   }),
 )
 
