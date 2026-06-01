@@ -19,13 +19,14 @@ Set global defaults in `opencode.json` with the `supervisor` key.
   "supervisor": {
     "mode": "observe",
     "recommendation_model": "anthropic/claude-sonnet-4-5",
+    "recommendation_variant": "fast",
     "review_cadence": "step",
     "insert_recommendations": true
   }
 }
 ```
 
-`recommendation_model` is independent from the primary session model. This lets you run a stronger or higher-quantized supervisor over a faster or cheaper coding model. If omitted, OpenCode resolves the supervisor model from top-level `model`, then `small_model`; if neither is available, it can still emit state and risks but will not create model recommendations.
+`recommendation_model` is independent from the primary session model, and `recommendation_variant` selects an optional variant for that model. This lets you run a stronger or higher-quantized supervisor over a faster or cheaper coding model. If omitted, OpenCode resolves the supervisor model from top-level `model`, then `small_model`; if neither is available, it can still emit state and risks but will not create model recommendations.
 
 [See all config keys and defaults](/docs/config#supervisor).
 
@@ -109,13 +110,15 @@ Settings patch fields are optional. Omitted fields keep their current value, `nu
 {
   "mode": "advise",
   "insert_recommendations": true,
-  "recommendation_model": "anthropic/claude-sonnet-4-5"
+  "recommendation_model": "anthropic/claude-sonnet-4-5",
+  "recommendation_variant": "fast"
 }
 ```
 
 ```json title="Clear one override"
 {
-  "recommendation_model": null
+  "recommendation_model": null,
+  "recommendation_variant": null
 }
 ```
 

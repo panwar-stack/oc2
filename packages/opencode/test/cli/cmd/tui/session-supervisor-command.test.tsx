@@ -84,6 +84,17 @@ test("sends API payloads for mode changes, reset, toggle, and runtime params", a
       supervisor.keymap.dispatchCommand("dialog.select.next")
       supervisor.keymap.dispatchCommand("dialog.select.next")
       supervisor.keymap.dispatchCommand("dialog.select.submit")
+      supervisor.app.mockInput.pressEnter()
+    }),
+  ).toMatchObject({ recommendation_variant: "fast" })
+
+  expect(
+    await patchFrom((supervisor) => {
+      supervisor.keymap.dispatchCommand("dialog.select.next")
+      supervisor.keymap.dispatchCommand("dialog.select.next")
+      supervisor.keymap.dispatchCommand("dialog.select.next")
+      supervisor.keymap.dispatchCommand("dialog.select.next")
+      supervisor.keymap.dispatchCommand("dialog.select.submit")
       supervisor.keymap.dispatchCommand("dialog.select.next")
       supervisor.keymap.dispatchCommand("dialog.select.submit")
     }),
@@ -91,7 +102,7 @@ test("sends API payloads for mode changes, reset, toggle, and runtime params", a
 
   expect(
     await patchFrom((supervisor) => {
-      for (let i = 0; i < 4; i++) supervisor.keymap.dispatchCommand("dialog.select.next")
+      for (let i = 0; i < 5; i++) supervisor.keymap.dispatchCommand("dialog.select.next")
       supervisor.keymap.dispatchCommand("dialog.select.submit")
       supervisor.app.mockInput.pressEnter()
     }),
@@ -110,7 +121,7 @@ test("shows error toast on local validation and API failure", async () => {
   const validation = await mount({ route: { type: "session", sessionID } })
   try {
     await open(validation)
-    for (let i = 0; i < 4; i++) validation.keymap.dispatchCommand("dialog.select.next")
+    for (let i = 0; i < 5; i++) validation.keymap.dispatchCommand("dialog.select.next")
     validation.keymap.dispatchCommand("dialog.select.submit")
     await wait(() => validation.app.renderer.currentFocusedEditor instanceof TextareaRenderable)
     const textarea = validation.app.renderer.currentFocusedEditor
@@ -295,6 +306,7 @@ function session() {
     supervisor: {
       mode: "advise" as const,
       recommendation_model: "test/supervisor",
+      recommendation_variant: "fast",
       insert_recommendations: true,
       updatedAt: 1,
     },
@@ -312,6 +324,7 @@ function state(): SupervisorState {
       effective: {
         mode: "advise",
         recommendation_model: "test/supervisor",
+        recommendation_variant: "fast",
         recommendation_timeout_ms: 15000,
         review_cadence: "step",
         min_review_interval_ms: 10000,

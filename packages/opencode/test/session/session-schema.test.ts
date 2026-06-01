@@ -86,6 +86,7 @@ describe("Session schema", () => {
       supervisor: {
         mode: "advise",
         recommendation_model: "anthropic/claude-sonnet-4",
+        recommendation_variant: "fast",
         insert_recommendations: false,
         updatedAt: 10,
       },
@@ -94,6 +95,7 @@ describe("Session schema", () => {
     expect(encoded.supervisor).toEqual({
       mode: "advise",
       recommendation_model: "anthropic/claude-sonnet-4",
+      recommendation_variant: "fast",
       insert_recommendations: false,
       updatedAt: 10,
     })
@@ -102,12 +104,16 @@ describe("Session schema", () => {
   test("resolves supervisor settings with session precedence and model fallback", () => {
     expect(
       Supervisor.resolveEffectiveConfig({
-        config: { model: "test/default", supervisor: { mode: "observe", broad_diff_file_limit: 7 } },
-        session: { mode: "advise", max_recommendation_chars: 400, updatedAt: 20 },
+        config: {
+          model: "test/default",
+          supervisor: { mode: "observe", recommendation_variant: "global", broad_diff_file_limit: 7 },
+        },
+        session: { mode: "advise", recommendation_variant: "session", max_recommendation_chars: 400, updatedAt: 20 },
       }),
     ).toMatchObject({
       mode: "advise",
       recommendation_model: "test/default",
+      recommendation_variant: "session",
       broad_diff_file_limit: 7,
       max_recommendation_chars: 400,
       insert_recommendations: true,

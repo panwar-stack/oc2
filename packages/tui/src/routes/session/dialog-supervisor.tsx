@@ -13,6 +13,7 @@ type SupervisorAction =
   | { type: "mode" }
   | { type: "insert" }
   | { type: "model" }
+  | { type: "variant" }
   | { type: "cadence" }
   | { type: "number"; key: NumberKey; title: string }
   | { type: "reset" }
@@ -67,6 +68,12 @@ export function DialogSupervisor(props: { sessionID: string }) {
       value: { type: "model" },
       category: "Runtime",
       description: `Provider/model used for recommendations (${source(state(), "recommendation_model", fallback()?.recommendation_model)})`,
+    },
+    {
+      title: `Recommendation variant: ${effective()?.recommendation_variant ?? fallback()?.recommendation_variant ?? "default"}`,
+      value: { type: "variant" },
+      category: "Runtime",
+      description: `Model variant used for recommendations (${source(state(), "recommendation_variant", fallback()?.recommendation_variant)})`,
     },
     {
       title: `Review cadence: ${effective()?.review_cadence ?? fallback()?.review_cadence ?? "loading"}`,
@@ -127,6 +134,15 @@ export function DialogSupervisor(props: { sessionID: string }) {
     await update({ recommendation_model: value.trim() || null }, "Recommendation model updated")
   }
 
+  async function editVariant() {
+    const value = await DialogPrompt.show(dialog, "Recommendation Variant", {
+      value: effective()?.recommendation_variant ?? fallback()?.recommendation_variant ?? "",
+      placeholder: "variant",
+    })
+    if (value === null) return
+    await update({ recommendation_variant: value.trim() || null }, "Recommendation variant updated")
+  }
+
   function selectCadence() {
     dialog.replace(() => (
       <DialogSelect
@@ -175,6 +191,7 @@ export function DialogSupervisor(props: { sessionID: string }) {
             "Recommendation insertion updated",
           )
         if (option.value.type === "model") void editModel()
+        if (option.value.type === "variant") void editVariant()
         if (option.value.type === "cadence") selectCadence()
         if (option.value.type === "number") void editNumber(option.value)
         if (option.value.type === "reset") void reset()

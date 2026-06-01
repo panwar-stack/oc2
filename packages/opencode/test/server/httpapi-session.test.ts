@@ -319,6 +319,7 @@ describe("session HttpApi", () => {
             effective: {
               mode: "observe",
               recommendation_model: "test/global",
+              recommendation_variant: "fast",
               insert_recommendations: true,
             },
           },
@@ -338,6 +339,7 @@ describe("session HttpApi", () => {
           body: JSON.stringify({
             mode: "advise",
             recommendation_model: "test/session",
+            recommendation_variant: "accurate",
             insert_recommendations: false,
             sensitive_path_globs: ["**/secret/**"],
           }),
@@ -349,12 +351,14 @@ describe("session HttpApi", () => {
             session: {
               mode: "advise",
               recommendation_model: "test/session",
+              recommendation_variant: "accurate",
               insert_recommendations: false,
               sensitive_path_globs: ["**/secret/**"],
             },
             effective: {
               mode: "advise",
               recommendation_model: "test/session",
+              recommendation_variant: "accurate",
               insert_recommendations: false,
             },
           },
@@ -363,6 +367,7 @@ describe("session HttpApi", () => {
         expect((yield* Session.use.get(session.id)).supervisor).toMatchObject({
           mode: "advise",
           recommendation_model: "test/session",
+          recommendation_variant: "accurate",
         })
         expect(events).toContain(Session.Event.Updated.type)
         expect(events).toContain(Supervisor.Event.SettingsUpdated.type)
@@ -378,14 +383,14 @@ describe("session HttpApi", () => {
         const cleared = yield* requestJson<Supervisor.State>(url, {
           headers,
           method: "PATCH",
-          body: JSON.stringify({ mode: null, recommendation_model: null }),
+          body: JSON.stringify({ mode: null, recommendation_model: null, recommendation_variant: null }),
         })
         expect(cleared).toMatchObject({
           mode: "observe",
           config: {
             modeSource: "global",
             session: { insert_recommendations: false, sensitive_path_globs: ["**/secret/**"] },
-            effective: { mode: "observe", recommendation_model: "test/global" },
+            effective: { mode: "observe", recommendation_model: "test/global", recommendation_variant: "fast" },
           },
         })
 
@@ -402,7 +407,7 @@ describe("session HttpApi", () => {
       config: {
         formatter: false,
         lsp: false,
-        supervisor: { mode: "observe", recommendation_model: "test/global" },
+        supervisor: { mode: "observe", recommendation_model: "test/global", recommendation_variant: "fast" },
       },
     },
   )

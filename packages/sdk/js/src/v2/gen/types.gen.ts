@@ -163,6 +163,7 @@ export type SupervisorReviewCadence = "step" | "event" | "idle"
 export type SupervisorSessionSettings = {
   mode?: SupervisorMode
   recommendation_model?: string
+  recommendation_variant?: string
   recommendation_timeout_ms?: number
   review_cadence?: SupervisorReviewCadence
   min_review_interval_ms?: number
@@ -179,6 +180,7 @@ export type SupervisorSessionSettings = {
 export type SupervisorEffectiveConfig = {
   mode: SupervisorMode
   recommendation_model?: string
+  recommendation_variant?: string
   recommendation_timeout_ms: number
   review_cadence: SupervisorReviewCadence
   min_review_interval_ms: number
@@ -224,6 +226,7 @@ export type SupervisorRecommendation = {
   model?: {
     providerID: string
     modelID: string
+    variant?: string
   }
   inserted?: {
     messageID?: string
@@ -2101,6 +2104,7 @@ export type MemoryConfig = {
 export type SupervisorConfig = {
   mode?: SupervisorMode
   recommendation_model?: string
+  recommendation_variant?: string
   recommendation_timeout_ms?: number
   review_cadence?: SupervisorReviewCadence
   min_review_interval_ms?: number
@@ -2499,6 +2503,7 @@ export type SupervisorSettingsPatch = {
   reset?: boolean
   mode?: SupervisorMode | null
   recommendation_model?: string | null
+  recommendation_variant?: string | null
   recommendation_timeout_ms?: number | null
   review_cadence?: SupervisorReviewCadence | null
   min_review_interval_ms?: number | null

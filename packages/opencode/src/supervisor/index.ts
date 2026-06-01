@@ -2,6 +2,7 @@ import { Bus } from "@/bus"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { Provider } from "@/provider/provider"
+import { ProviderTransform } from "@/provider/transform"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -14,6 +15,7 @@ import { Context, Effect, Layer, Schema, Scope } from "effect"
 import * as Option from "effect/Option"
 import * as Stream from "effect/Stream"
 import path from "node:path"
+import { mergeDeep } from "remeda"
 
 const MAX_FILES = 25
 const MAX_COMMANDS = 20
@@ -582,7 +584,7 @@ export function buildRecommendationInput(
     sessionID: state.sessionID,
     status: state.status,
     summary: state.summary,
-    supervisorModel: model,
+    supervisorModel: model ? { ...model, variant: state.config.effective.recommendation_variant } : undefined,
     allowedTriggers: [...ALL_TRIGGERS],
     triggeredRisks: state.risks,
     filesTouched: state.filesTouched.slice(0, MAX_FILES),
@@ -598,7 +600,7 @@ export function buildRecommendationInput(
 export function validateRecommendationOutput(input: {
   state: Supervisor.State
   output: unknown
-  model?: { providerID: string; modelID: string }
+  model?: { providerID: string; modelID: string; variant?: string }
 }): Supervisor.Recommendation | undefined {
   const decoded = Schema.decodeUnknownOption(Supervisor.RecommendationOutput)(input.output)
   if (Option.isNone(decoded)) return
@@ -658,6 +660,14 @@ function createRecommendation(input: { state: Supervisor.State }) {
     if (!model) return
     const language = yield* provider.getLanguage(model).pipe(Effect.catch(() => Effect.succeed(undefined)))
     if (!language) return
+    const variant = input.state.config.effective.recommendation_variant
+    const options = mergeDeep(
+      mergeDeep(
+        ProviderTransform.options({ model, sessionID: input.state.sessionID }),
+        model.options ?? {},
+      ),
+      variant ? (model.variants?.[variant] ?? {}) : {},
+    )
     const recommendationInput = buildRecommendationInput(input.state)
     const messages: ModelMessage[] = [
       {
@@ -675,6 +685,7 @@ function createRecommendation(input: { state: Supervisor.State }) {
         model: language,
         messages,
         temperature: 0,
+        providerOptions: ProviderTransform.providerOptions(model, options),
         schema: Object.assign(
           Schema.toStandardSchemaV1(Supervisor.RecommendationOutput),
           Schema.toStandardJSONSchemaV1(Supervisor.RecommendationOutput),
@@ -684,7 +695,7 @@ function createRecommendation(input: { state: Supervisor.State }) {
     return validateRecommendationOutput({
       state: input.state,
       output,
-      model: { providerID: parsed.providerID, modelID: parsed.modelID },
+      model: { providerID: parsed.providerID, modelID: parsed.modelID, variant },
     })
   })
 }

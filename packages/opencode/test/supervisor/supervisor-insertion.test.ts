@@ -21,6 +21,7 @@ void Log.init({ print: false })
 type Recommendation = Schema.Schema.Type<typeof Supervisor.Recommendation>
 
 let generationEvents: Queue.Queue<void> | undefined
+let providerOptionEvents: Queue.Queue<unknown> | undefined
 
 const model: Provider.Model = {
   id: ModelID.make("test"),
@@ -40,6 +41,7 @@ const model: Provider.Model = {
   limit: { context: 1000, output: 1000 },
   status: "active",
   options: {},
+  variants: { fast: { reasoningEffort: "low" } },
   headers: {},
   release_date: "2026-01-01",
 }
@@ -52,6 +54,7 @@ const language: LanguageModelV3 = {
   doGenerate: (options) =>
     Promise.resolve().then(() => {
       if (generationEvents) Queue.offerUnsafe(generationEvents, undefined)
+      if (providerOptionEvents) Queue.offerUnsafe(providerOptionEvents, options.providerOptions)
       const prompt = options.prompt.flatMap((message) =>
         message.role === "user" ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])) : [],
       ).at(-1)
@@ -163,6 +166,7 @@ function configureSupervisor(input: {
       patch: {
         mode: input.mode ?? "advise",
         recommendation_model: "test/test",
+        recommendation_variant: "fast",
         recommendation_timeout_ms: 1000,
         review_cadence: "step",
         min_review_interval_ms: 1,
@@ -232,6 +236,7 @@ describe("supervisor recommendation insertion", () => {
       const message = yield* addMessage(info.id)
       const events = yield* subscribeRecommendations(info.id)
       generationEvents = yield* Queue.unbounded<void>()
+      providerOptionEvents = yield* Queue.unbounded<unknown>()
 
       yield* supervisor.init()
       yield* configureSupervisor({ sessionID: info.id, max: 1 })
@@ -239,6 +244,9 @@ describe("supervisor recommendation insertion", () => {
       yield* updateFailedCommand({ sessionID: info.id, messageID: message.id })
 
       yield* awaitWithTimeout(Queue.take(generationEvents), "recommendation was not generated while busy")
+      expect(yield* awaitWithTimeout(Queue.take(providerOptionEvents), "recommendation provider options were not captured")).toMatchObject({
+        test: { reasoningEffort: "low" },
+      })
       yield* expectNoRecommendation(events)
       yield* status.set(info.id, { type: "idle" })
 

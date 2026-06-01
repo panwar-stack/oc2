@@ -17,6 +17,9 @@ export const Info = Schema.Struct({
   recommendation_model: Schema.optional(ConfigModelID).annotate({
     description: "Supervisor recommendation model in provider/model format.",
   }),
+  recommendation_variant: Schema.optional(Schema.String).annotate({
+    description: "Supervisor recommendation model variant.",
+  }),
   recommendation_timeout_ms: Schema.optional(PositiveInt),
   review_cadence: Schema.optional(ReviewCadence),
   min_review_interval_ms: Schema.optional(PositiveInt),

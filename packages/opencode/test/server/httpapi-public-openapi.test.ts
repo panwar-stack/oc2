@@ -247,6 +247,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
     for (const key of [
       "mode",
       "recommendation_model",
+      "recommendation_variant",
       "recommendation_timeout_ms",
       "review_cadence",
       "min_review_interval_ms",

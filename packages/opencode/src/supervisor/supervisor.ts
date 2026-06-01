@@ -14,6 +14,7 @@ export type ReviewCadence = ConfigSupervisor.ReviewCadence
 const SettingsFields = {
   mode: optionalOmitUndefined(Mode),
   recommendation_model: optionalOmitUndefined(ConfigModelID),
+  recommendation_variant: optionalOmitUndefined(Schema.String),
   recommendation_timeout_ms: optionalOmitUndefined(PositiveInt),
   review_cadence: optionalOmitUndefined(ReviewCadence),
   min_review_interval_ms: optionalOmitUndefined(PositiveInt),
@@ -36,6 +37,7 @@ export const SettingsPatch = Schema.Struct({
   reset: Schema.optional(Schema.Boolean),
   mode: Schema.optional(Schema.NullOr(Mode)),
   recommendation_model: Schema.optional(Schema.NullOr(ConfigModelID)),
+  recommendation_variant: Schema.optional(Schema.NullOr(Schema.String)),
   recommendation_timeout_ms: Schema.optional(Schema.NullOr(PositiveInt)),
   review_cadence: Schema.optional(Schema.NullOr(ReviewCadence)),
   min_review_interval_ms: Schema.optional(Schema.NullOr(PositiveInt)),
@@ -52,6 +54,7 @@ export type SettingsPatch = Schema.Schema.Type<typeof SettingsPatch>
 export const EffectiveConfig = Schema.Struct({
   mode: Mode,
   recommendation_model: optionalOmitUndefined(ConfigModelID),
+  recommendation_variant: optionalOmitUndefined(Schema.String),
   recommendation_timeout_ms: PositiveInt,
   review_cadence: ReviewCadence,
   min_review_interval_ms: PositiveInt,
@@ -101,6 +104,7 @@ export const Recommendation = Schema.Struct({
     Schema.Struct({
       providerID: Schema.String,
       modelID: Schema.String,
+      variant: optionalOmitUndefined(Schema.String),
     }),
   ),
   inserted: optionalOmitUndefined(
@@ -121,6 +125,7 @@ export const RecommendationInput = Schema.Struct({
     Schema.Struct({
       providerID: Schema.String,
       modelID: Schema.String,
+      variant: optionalOmitUndefined(Schema.String),
     }),
   ),
   allowedTriggers: Schema.Array(Trigger),
@@ -279,7 +284,7 @@ export const defaults = {
   ],
   insert_recommendations: true,
   max_recommendations_per_session: 8,
-} satisfies Omit<EffectiveConfig, "recommendation_model">
+} satisfies Omit<EffectiveConfig, "recommendation_model" | "recommendation_variant">
 
 export function resolveEffectiveConfig(input: { config: Config.Info; session?: SessionSettings }): EffectiveConfig {
   return {
@@ -291,6 +296,7 @@ export function resolveEffectiveConfig(input: { config: Config.Info; session?: S
       input.config.supervisor?.recommendation_model ??
       input.config.model ??
       input.config.small_model,
+    recommendation_variant: input.session?.recommendation_variant ?? input.config.supervisor?.recommendation_variant,
   }
 }
 
