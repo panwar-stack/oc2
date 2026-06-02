@@ -21,7 +21,10 @@ void Log.init({ print: false })
 type Recommendation = Schema.Schema.Type<typeof Supervisor.Recommendation>
 
 let generationEvents: Queue.Queue<void> | undefined
+let generationRelease: Queue.Queue<void> | undefined
 let providerOptionEvents: Queue.Queue<unknown> | undefined
+let activeGenerations = 0
+let maxActiveGenerations = 0
 
 const model: Provider.Model = {
   id: ModelID.make("test"),
@@ -52,45 +55,56 @@ const language: LanguageModelV3 = {
   modelId: "test",
   supportedUrls: {},
   doGenerate: (options) =>
-    Promise.resolve().then(() => {
+    Promise.resolve().then(async () => {
+      activeGenerations++
+      maxActiveGenerations = Math.max(maxActiveGenerations, activeGenerations)
       if (generationEvents) Queue.offerUnsafe(generationEvents, undefined)
-      if (providerOptionEvents) Queue.offerUnsafe(providerOptionEvents, options.providerOptions)
-      const prompt = options.prompt.flatMap((message) =>
-        message.role === "user" ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])) : [],
-      ).at(-1)
-      const repeatedFailure = prompt?.includes('"trigger":"repeated_command_failure"') ?? false
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              repeatedFailure
-                ? {
-                    recommend: true,
-                    action: "nudge",
-                    trigger: "repeated_command_failure",
-                    message: "Inspect the failing command before continuing.",
-                    evidence: ["command:bun test"],
-                  }
-                : {
-                    recommend: true,
-                    action: "nudge",
-                    trigger: "missing_validation",
-                    message: "Run validation before wrapping up.",
-                    evidence: ["file:src/app.ts"],
-                  },
-            ),
+      try {
+        if (generationRelease) await yieldRelease(generationRelease)
+        if (providerOptionEvents) Queue.offerUnsafe(providerOptionEvents, options.providerOptions)
+        const prompt = options.prompt.flatMap((message) =>
+          message.role === "user" ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])) : [],
+        ).at(-1)
+        const repeatedFailure = prompt?.includes('"trigger":"repeated_command_failure"') ?? false
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                repeatedFailure
+                  ? {
+                      recommend: true,
+                      action: "nudge",
+                      trigger: "repeated_command_failure",
+                      message: "Inspect the failing command before continuing.",
+                      evidence: ["command:bun test"],
+                    }
+                  : {
+                      recommend: true,
+                      action: "nudge",
+                      trigger: "missing_validation",
+                      message: "Run validation before wrapping up.",
+                      evidence: ["file:src/app.ts"],
+                    },
+              ),
+            },
+          ],
+          finishReason: { unified: "stop" as const, raw: "stop" },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 1, reasoning: 0 },
           },
-        ],
-        finishReason: { unified: "stop" as const, raw: "stop" },
-        usage: {
-          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
-          outputTokens: { total: 1, text: 1, reasoning: 0 },
-        },
-        warnings: [],
+          warnings: [],
+        }
+      } finally {
+        activeGenerations--
       }
     }),
   doStream: () => Promise.reject(new Error("streaming is not used")),
+}
+
+async function yieldRelease(queue: Queue.Queue<void>) {
+  await Effect.runPromise(Queue.take(queue))
 }
 
 const it = testEffect(
@@ -227,6 +241,48 @@ function expectNoRecommendation(events: Queue.Queue<Recommendation>) {
 }
 
 describe("supervisor recommendation insertion", () => {
+  it.instance("limits concurrent supervisor recommendation generation per instance", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const status = yield* SessionStatus.Service
+      const supervisor = yield* SupervisorState.Service
+      generationEvents = yield* Queue.unbounded<void>()
+      generationRelease = yield* Queue.unbounded<void>()
+      activeGenerations = 0
+      maxActiveGenerations = 0
+
+      yield* supervisor.init()
+      const sessions = yield* Effect.all(
+        [undefined, undefined, undefined].map(() =>
+          Effect.gen(function* () {
+            const info = yield* session.create({})
+            const message = yield* addMessage(info.id)
+            yield* configureSupervisor({ sessionID: info.id })
+            yield* status.set(info.id, { type: "busy" })
+            return { info, message }
+          }),
+        ),
+        { concurrency: "unbounded" },
+      )
+
+      yield* Effect.all(
+        sessions.map((item) => updateFailedCommand({ sessionID: item.info.id, messageID: item.message.id })),
+        { concurrency: "unbounded", discard: true },
+      )
+      yield* awaitWithTimeout(Queue.take(generationEvents), "first recommendation did not start")
+      yield* awaitWithTimeout(Queue.take(generationEvents), "second recommendation did not start")
+      expect(Option.isNone(yield* Queue.take(generationEvents).pipe(Effect.timeoutOption("100 millis")))).toBe(true)
+
+      yield* Queue.offer(generationRelease, undefined)
+      yield* awaitWithTimeout(Queue.take(generationEvents), "third recommendation did not start after a permit was released")
+      expect(maxActiveGenerations).toBe(2)
+
+      yield* Queue.offer(generationRelease, undefined)
+      yield* Queue.offer(generationRelease, undefined)
+      generationRelease = undefined
+    }),
+  )
+
   it.instance("queues on step while busy and inserts a visible synthetic user text part at idle", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

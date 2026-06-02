@@ -13,6 +13,7 @@ import { Supervisor } from "@/supervisor/supervisor"
 import { generateObject, type ModelMessage } from "ai"
 import { Context, Effect, Layer, Schema, Scope } from "effect"
 import * as Option from "effect/Option"
+import * as Semaphore from "effect/Semaphore"
 import * as Stream from "effect/Stream"
 import path from "node:path"
 import { mergeDeep } from "remeda"
@@ -77,6 +78,7 @@ type State = {
   lastReviewAt: Map<SessionID, number>
   configKeys: Map<SessionID, string>
   configGenerations: Map<SessionID, number>
+  recommendationLimiter: Semaphore.Semaphore
   roots: string[]
 }
 
@@ -129,6 +131,7 @@ export const layer: Layer.Layer<
           lastReviewAt: new Map(),
           configKeys: new Map(),
           configGenerations: new Map(),
+          recommendationLimiter: Semaphore.makeUnsafe(2),
           roots: [ctx.directory, ctx.worktree].filter((root) => root !== "/"),
         }),
       ),
@@ -282,12 +285,14 @@ export const layer: Layer.Layer<
         data.lastReviewAt.set(sessionID, Date.now())
         const configGeneration = observeConfig(data, sessionID, base.config.effective)
 
-        const recommendation = yield* createRecommendation({ state: current }).pipe(
-          Effect.timeoutOrElse({
-            duration: `${base.config.effective.recommendation_timeout_ms} millis`,
-            orElse: () => Effect.succeed(undefined),
-          }),
-          Effect.catch(() => Effect.succeed(undefined)),
+        const recommendation = yield* data.recommendationLimiter.withPermits(1)(
+          createRecommendation({ state: current }).pipe(
+            Effect.timeoutOrElse({
+              duration: `${base.config.effective.recommendation_timeout_ms} millis`,
+              orElse: () => Effect.succeed(undefined),
+            }),
+            Effect.catch(() => Effect.succeed(undefined)),
+          ),
         )
         if (!recommendation) return
 
@@ -706,17 +711,26 @@ function createRecommendation(input: { state: Supervisor.State }) {
         content: JSON.stringify(recommendationInput),
       },
     ]
-    const output = yield* Effect.promise(() =>
-      generateObject({
-        model: language,
-        messages,
-        temperature: 0,
-        providerOptions: ProviderTransform.providerOptions(model, options),
-        schema: Object.assign(
-          Schema.toStandardSchemaV1(Supervisor.RecommendationOutput),
-          Schema.toStandardJSONSchemaV1(Supervisor.RecommendationOutput),
-        ),
-      }).then((result) => result.object),
+    const output = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const abort = yield* Effect.acquireRelease(
+          Effect.sync(() => new AbortController()),
+          (abort) => Effect.sync(() => abort.abort()),
+        )
+        return yield* Effect.promise(() =>
+          generateObject({
+            model: language,
+            messages,
+            temperature: 0,
+            providerOptions: ProviderTransform.providerOptions(model, options),
+            abortSignal: abort.signal,
+            schema: Object.assign(
+              Schema.toStandardSchemaV1(Supervisor.RecommendationOutput),
+              Schema.toStandardJSONSchemaV1(Supervisor.RecommendationOutput),
+            ),
+          }).then((result) => result.object),
+        )
+      }),
     )
     return validateRecommendationOutput({
       state: input.state,

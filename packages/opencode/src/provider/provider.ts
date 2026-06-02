@@ -1824,7 +1824,9 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const envs = yield* env.all()
       const key = `${model.providerID}/${model.id}`
-      if (s.models.has(key)) return s.models.get(key)!
+      const cacheable = model.providerID !== "gitlab" || !model.id.startsWith("duo-workflow-")
+      const cached = cacheable ? s.models.get(key) : undefined
+      if (cached) return cached
 
       const provider = s.providers[model.providerID]
       return yield* EffectPromise.refineRejection(
@@ -1841,7 +1843,7 @@ export const layer = Layer.effect(
                 model,
               )
             : sdk.languageModel(model.api.id)
-          s.models.set(key, language)
+          if (cacheable) s.models.set(key, language)
           return language
         },
         (cause) =>
