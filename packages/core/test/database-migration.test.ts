@@ -19,6 +19,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import sessionMetadataMigration from "@opencode-ai/core/database/migration/20260511173437_session-metadata"
+import sessionProcessingSupervisorMigration from "@opencode-ai/core/database/migration/20260511180000_session_processing_supervisor"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -485,6 +486,24 @@ describe("DatabaseMigration", () => {
         expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual([
           { id: "20260511173437_session-metadata" },
           { id: "20260530232709_lovely_romulus" },
+        ])
+      }),
+    )
+  })
+
+  test("does not replay a drifted session processing column", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY, time_processing integer DEFAULT 0 NOT NULL)`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionProcessingSupervisorMigration])
+
+        expect(
+          (yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name),
+        ).toContain("supervisor")
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
+          { id: "20260511180000_session_processing_supervisor" },
         ])
       }),
     )
