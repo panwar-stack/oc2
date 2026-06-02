@@ -108,7 +108,9 @@ export function fromRow(row: SessionRow): Info {
     metadata: row.metadata ?? undefined,
     revert,
     permission: row.permission ? [...row.permission] : undefined,
-    supervisor: row.supervisor ? Schema.decodeUnknownSync(Supervisor.SessionSettings)(row.supervisor) : undefined,
+    supervisor: row.supervisor
+      ? (structuredClone(Schema.decodeUnknownSync(Supervisor.SessionSettings)(row.supervisor)) as Supervisor.SessionSettings)
+      : undefined,
     time: {
       created: row.time_created,
       updated: row.time_updated,
@@ -1126,7 +1128,7 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       supervisor?: Supervisor.SessionSettings
     }) {
-      yield* patch(input.sessionID, { time: { updated: Date.now() }, supervisor: input.supervisor })
+      yield* patch(input.sessionID, { time: { updated: Date.now() }, supervisor: input.supervisor }).pipe(Effect.orDie)
     })
 
     const clearRevert = Effect.fn("Session.clearRevert")(function* (sessionID: SessionID) {

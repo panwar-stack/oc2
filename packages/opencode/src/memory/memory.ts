@@ -10,7 +10,7 @@ import * as Option from "effect/Option"
 import { Auth } from "@/auth"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
-import { Database, type TxOrDb } from "@/storage/db"
+import { Database } from "@opencode-ai/core/database/database"
 import {
   RepositoryMemoryCommitTable,
   RepositoryMemoryFileActivityTable,
@@ -261,48 +261,46 @@ export function identity(reference: string | Reference): RepositoryIdentity {
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const db = <T>(fn: (d: TxOrDb) => T) => Effect.sync(() => Database.use(fn))
+    const { db } = yield* Database.Service
 
     const getRepository = Effect.fn("Memory.getRepository")(function* (repositoryIdentity: string) {
-      return yield* db((d) =>
-        d
-          .select()
-          .from(RepositoryMemoryRepositoryTable)
-          .where(eq(RepositoryMemoryRepositoryTable.identity, repositoryIdentity))
-          .get(),
-      )
+      return yield* db
+        .select()
+        .from(RepositoryMemoryRepositoryTable)
+        .where(eq(RepositoryMemoryRepositoryTable.identity, repositoryIdentity))
+        .get()
+        .pipe(Effect.orDie)
     })
 
     const ensureRepository = Effect.fn("Memory.ensureRepository")(function* (input: RepositoryInput) {
       const normalized = identity(input.reference)
       const now = Date.now()
-      yield* db((d) =>
-        d
-          .insert(RepositoryMemoryRepositoryTable)
-          .values({
-            id: crypto.randomUUID(),
-            identity: normalized.identity,
+      yield* db
+        .insert(RepositoryMemoryRepositoryTable)
+        .values({
+          id: crypto.randomUUID(),
+          identity: normalized.identity,
+          provider: normalized.provider,
+          owner: normalized.owner,
+          name: normalized.name,
+          default_branch: input.default_branch,
+          base_commit: input.base_commit,
+          time_created: now,
+          time_updated: now,
+        })
+        .onConflictDoUpdate({
+          target: RepositoryMemoryRepositoryTable.identity,
+          set: {
             provider: normalized.provider,
             owner: normalized.owner,
             name: normalized.name,
             default_branch: input.default_branch,
             base_commit: input.base_commit,
-            time_created: now,
             time_updated: now,
-          })
-          .onConflictDoUpdate({
-            target: RepositoryMemoryRepositoryTable.identity,
-            set: {
-              provider: normalized.provider,
-              owner: normalized.owner,
-              name: normalized.name,
-              default_branch: input.default_branch,
-              base_commit: input.base_commit,
-              time_updated: now,
-            },
-          })
-          .run(),
-      )
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
       return yield* getRepository(normalized.identity).pipe(
         Effect.flatMap((row) => (row ? Effect.succeed(row) : Effect.die(new Error("repository memory upsert failed")))),
       )
@@ -317,49 +315,47 @@ export const layer = Layer.effect(
       yield* Effect.forEach(
         chunks(commits, SQLITE_WRITE_BATCH_SIZE),
         (batch) =>
-          db((d) =>
-            d
-              .delete(RepositoryMemoryCommitTable)
-              .where(
-                and(
-                  eq(RepositoryMemoryCommitTable.repository_id, repository_id),
-                  inArray(
-                    RepositoryMemoryCommitTable.hash,
-                    batch.map((commit) => commit.hash),
-                  ),
+          db
+            .delete(RepositoryMemoryCommitTable)
+            .where(
+              and(
+                eq(RepositoryMemoryCommitTable.repository_id, repository_id),
+                inArray(
+                  RepositoryMemoryCommitTable.hash,
+                  batch.map((commit) => commit.hash),
                 ),
-              )
-              .run(),
-          ),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie),
         { discard: true },
       )
       yield* Effect.forEach(
         chunks(commits, SQLITE_WRITE_BATCH_SIZE),
         (batch) =>
-          db((d) =>
-            d
-              .insert(RepositoryMemoryCommitTable)
-              .values(
-                batch.map((commit) => ({
-                  id: crypto.randomUUID(),
-                  repository_id,
-                  hash: commit.hash,
-                  message: commit.message,
-                  author_time: commit.author_time,
-                  branch: commit.branch,
-                  base_commit: commit.base_commit,
-                  changed_files: JSON.stringify(commit.changed_files),
-                  diff: commit.diff,
-                  issue_number: commit.issue_number,
-                  issue_title: commit.issue_title,
-                  issue_body: commit.issue_body,
-                  token_text: commit.token_text,
-                  time_created: now,
-                  time_updated: now,
-                })),
-              )
-              .run(),
-          ),
+          db
+            .insert(RepositoryMemoryCommitTable)
+            .values(
+              batch.map((commit) => ({
+                id: crypto.randomUUID(),
+                repository_id,
+                hash: commit.hash,
+                message: commit.message,
+                author_time: commit.author_time,
+                branch: commit.branch,
+                base_commit: commit.base_commit,
+                changed_files: JSON.stringify(commit.changed_files),
+                diff: commit.diff,
+                issue_number: commit.issue_number,
+                issue_title: commit.issue_title,
+                issue_body: commit.issue_body,
+                token_text: commit.token_text,
+                time_created: now,
+                time_updated: now,
+              })),
+            )
+            .run()
+            .pipe(Effect.orDie),
         { discard: true },
       )
       return commits.length
@@ -370,33 +366,31 @@ export const layer = Layer.effect(
       files: readonly FileActivityInput[],
     ) {
       const now = Date.now()
-      yield* db((d) =>
-        d
-          .delete(RepositoryMemoryFileActivityTable)
-          .where(eq(RepositoryMemoryFileActivityTable.repository_id, repository_id))
-          .run(),
-      )
+      yield* db
+        .delete(RepositoryMemoryFileActivityTable)
+        .where(eq(RepositoryMemoryFileActivityTable.repository_id, repository_id))
+        .run()
+        .pipe(Effect.orDie)
       if (!files.length) return 0
       yield* Effect.forEach(
         chunks(files, SQLITE_WRITE_BATCH_SIZE),
         (batch) =>
-          db((d) =>
-            d
-              .insert(RepositoryMemoryFileActivityTable)
-              .values(
-                batch.map((file) => ({
-                  id: crypto.randomUUID(),
-                  repository_id,
-                  path: file.path,
-                  edit_count: file.edit_count,
-                  last_modified: file.last_modified,
-                  co_changed_files: JSON.stringify(file.co_changed_files),
-                  time_created: now,
-                  time_updated: now,
-                })),
-              )
-              .run(),
-          ),
+          db
+            .insert(RepositoryMemoryFileActivityTable)
+            .values(
+              batch.map((file) => ({
+                id: crypto.randomUUID(),
+                repository_id,
+                path: file.path,
+                edit_count: file.edit_count,
+                last_modified: file.last_modified,
+                co_changed_files: JSON.stringify(file.co_changed_files),
+                time_created: now,
+                time_updated: now,
+              })),
+            )
+            .run()
+            .pipe(Effect.orDie),
         { discard: true },
       )
       return files.length
@@ -406,19 +400,18 @@ export const layer = Layer.effect(
       repository_id: string,
       paths: readonly string[],
     ) {
-      yield* db((d) =>
-        d
-          .delete(RepositoryMemoryFileSummaryTable)
-          .where(
-            paths.length
-              ? and(
-                  eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
-                  not(inArray(RepositoryMemoryFileSummaryTable.path, [...paths])),
-                )
-              : eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
-          )
-          .run(),
-      )
+      yield* db
+        .delete(RepositoryMemoryFileSummaryTable)
+        .where(
+          paths.length
+            ? and(
+                eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
+                not(inArray(RepositoryMemoryFileSummaryTable.path, [...paths])),
+              )
+            : eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
+        )
+        .run()
+        .pipe(Effect.orDie)
     })
 
     const currentRepository = Effect.fn("Memory.currentRepository")(function* (worktree = process.cwd()) {
@@ -448,9 +441,11 @@ export const layer = Layer.effect(
       })
       if (input.onProgress)
         yield* input.onProgress({ phase: "store", indexed: commits.indexed.length, skipped: commits.skipped })
-      yield* db((d) =>
-        d.delete(RepositoryMemoryCommitTable).where(eq(RepositoryMemoryCommitTable.repository_id, repository.id)).run(),
-      )
+      yield* db
+        .delete(RepositoryMemoryCommitTable)
+        .where(eq(RepositoryMemoryCommitTable.repository_id, repository.id))
+        .run()
+        .pipe(Effect.orDie)
       yield* upsertCommits(repository.id, commits.indexed)
       if (input.onProgress) yield* input.onProgress({ phase: "activity" })
       const activity = fileActivity(commits.indexed)
@@ -482,53 +477,63 @@ export const layer = Layer.effect(
     const status = Effect.fn("Memory.status")(function* (repositoryIdentity: string) {
       const repository = yield* getRepository(repositoryIdentity)
       if (!repository) return undefined
-      const counts = yield* db((d) => ({
-        commits:
-          d
-            .select({ count: sql<number>`count(*)` })
-            .from(RepositoryMemoryCommitTable)
-            .where(eq(RepositoryMemoryCommitTable.repository_id, repository.id))
-            .get()?.count ?? 0,
-        file_activity:
-          d
-            .select({ count: sql<number>`count(*)` })
-            .from(RepositoryMemoryFileActivityTable)
-            .where(eq(RepositoryMemoryFileActivityTable.repository_id, repository.id))
-            .get()?.count ?? 0,
-        summaries:
-          d
-            .select({ count: sql<number>`count(*)` })
-            .from(RepositoryMemoryFileSummaryTable)
-            .where(eq(RepositoryMemoryFileSummaryTable.repository_id, repository.id))
-            .get()?.count ?? 0,
-      }))
+      const counts = yield* Effect.all({
+        commits: db
+          .select({ count: sql<number>`count(*)` })
+          .from(RepositoryMemoryCommitTable)
+          .where(eq(RepositoryMemoryCommitTable.repository_id, repository.id))
+          .get()
+          .pipe(
+            Effect.map((row) => row?.count ?? 0),
+            Effect.orDie,
+          ),
+        file_activity: db
+          .select({ count: sql<number>`count(*)` })
+          .from(RepositoryMemoryFileActivityTable)
+          .where(eq(RepositoryMemoryFileActivityTable.repository_id, repository.id))
+          .get()
+          .pipe(
+            Effect.map((row) => row?.count ?? 0),
+            Effect.orDie,
+          ),
+        summaries: db
+          .select({ count: sql<number>`count(*)` })
+          .from(RepositoryMemoryFileSummaryTable)
+          .where(eq(RepositoryMemoryFileSummaryTable.repository_id, repository.id))
+          .get()
+          .pipe(
+            Effect.map((row) => row?.count ?? 0),
+            Effect.orDie,
+          ),
+      })
       return { repository, ...counts }
     })
 
     const clearRepository = Effect.fn("Memory.clearRepository")(function* (repositoryIdentity: string) {
       const repository = yield* getRepository(repositoryIdentity)
       if (!repository) return false
-      yield* db((d) =>
-        d.delete(RepositoryMemoryRepositoryTable).where(eq(RepositoryMemoryRepositoryTable.id, repository.id)).run(),
-      )
+      yield* db
+        .delete(RepositoryMemoryRepositoryTable)
+        .where(eq(RepositoryMemoryRepositoryTable.id, repository.id))
+        .run()
+        .pipe(Effect.orDie)
       return true
     })
 
     const getCommit = Effect.fn("Memory.getCommit")(function* (input: { repository_id: string; hash: string }) {
-      const matches = yield* db((d) =>
-        d
-          .select()
-          .from(RepositoryMemoryCommitTable)
-          .where(
-            and(
-              eq(RepositoryMemoryCommitTable.repository_id, input.repository_id),
-              like(RepositoryMemoryCommitTable.hash, `${input.hash}%`),
-            ),
-          )
-          .orderBy(desc(RepositoryMemoryCommitTable.author_time))
-          .limit(2)
-          .all(),
-      )
+      const matches = yield* db
+        .select()
+        .from(RepositoryMemoryCommitTable)
+        .where(
+          and(
+            eq(RepositoryMemoryCommitTable.repository_id, input.repository_id),
+            like(RepositoryMemoryCommitTable.hash, `${input.hash}%`),
+          ),
+        )
+        .orderBy(desc(RepositoryMemoryCommitTable.author_time))
+        .limit(2)
+        .all()
+        .pipe(Effect.orDie)
       if (matches.length > 1) return yield* Effect.fail(new Error(`Ambiguous commit hash prefix: ${input.hash}`))
       return matches[0]
     })
@@ -540,15 +545,14 @@ export const layer = Layer.effect(
     }) {
       return rankDocuments(
         input.query,
-        yield* db((d) =>
-          d
-            .select({ id: RepositoryMemoryCommitTable.id, token_text: RepositoryMemoryCommitTable.token_text })
-            .from(RepositoryMemoryCommitTable)
-            .where(eq(RepositoryMemoryCommitTable.repository_id, input.repository_id))
-            .orderBy(desc(RepositoryMemoryCommitTable.author_time))
-            .limit(DEFAULT_CORPUS_LIMITS.commits)
-            .all(),
-        ),
+        yield* db
+          .select({ id: RepositoryMemoryCommitTable.id, token_text: RepositoryMemoryCommitTable.token_text })
+          .from(RepositoryMemoryCommitTable)
+          .where(eq(RepositoryMemoryCommitTable.repository_id, input.repository_id))
+          .orderBy(desc(RepositoryMemoryCommitTable.author_time))
+          .limit(DEFAULT_CORPUS_LIMITS.commits)
+          .all()
+          .pipe(Effect.orDie),
         input.limit ?? DEFAULT_LIMITS.commits,
       )
     })
@@ -560,18 +564,17 @@ export const layer = Layer.effect(
     }) {
       const ranked = yield* searchCommits(input)
       if (!ranked.length) return []
-      const rows = yield* db((d) =>
-        d
-          .select()
-          .from(RepositoryMemoryCommitTable)
-          .where(
-            inArray(
-              RepositoryMemoryCommitTable.id,
-              ranked.map((item) => item.id),
-            ),
-          )
-          .all(),
-      )
+      const rows = yield* db
+        .select()
+        .from(RepositoryMemoryCommitTable)
+        .where(
+          inArray(
+            RepositoryMemoryCommitTable.id,
+            ranked.map((item) => item.id),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
       return ranked
         .map((item) => {
           const row = rows.find((candidate) => candidate.id === item.id)
@@ -588,18 +591,17 @@ export const layer = Layer.effect(
     }) {
       return rankDocuments(
         input.query,
-        yield* db((d) =>
-          d
-            .select({
-              id: RepositoryMemoryFileSummaryTable.id,
-              token_text: RepositoryMemoryFileSummaryTable.token_text,
-            })
-            .from(RepositoryMemoryFileSummaryTable)
-            .where(eq(RepositoryMemoryFileSummaryTable.repository_id, input.repository_id))
-            .orderBy(desc(RepositoryMemoryFileSummaryTable.time_generated))
-            .limit(DEFAULT_CORPUS_LIMITS.summaries)
-            .all(),
-        ),
+        yield* db
+          .select({
+            id: RepositoryMemoryFileSummaryTable.id,
+            token_text: RepositoryMemoryFileSummaryTable.token_text,
+          })
+          .from(RepositoryMemoryFileSummaryTable)
+          .where(eq(RepositoryMemoryFileSummaryTable.repository_id, input.repository_id))
+          .orderBy(desc(RepositoryMemoryFileSummaryTable.time_generated))
+          .limit(DEFAULT_CORPUS_LIMITS.summaries)
+          .all()
+          .pipe(Effect.orDie),
         input.limit ?? DEFAULT_LIMITS.summaries,
       )
     })
@@ -611,18 +613,17 @@ export const layer = Layer.effect(
     }) {
       const ranked = yield* searchSummaries(input)
       if (!ranked.length) return []
-      const rows = yield* db((d) =>
-        d
-          .select()
-          .from(RepositoryMemoryFileSummaryTable)
-          .where(
-            inArray(
-              RepositoryMemoryFileSummaryTable.id,
-              ranked.map((item) => item.id),
-            ),
-          )
-          .all(),
-      )
+      const rows = yield* db
+        .select()
+        .from(RepositoryMemoryFileSummaryTable)
+        .where(
+          inArray(
+            RepositoryMemoryFileSummaryTable.id,
+            ranked.map((item) => item.id),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
       return ranked
         .map((item) => {
           const row = rows.find((candidate) => candidate.id === item.id)
@@ -637,18 +638,17 @@ export const layer = Layer.effect(
       path: string
       worktree?: string
     }) {
-      const row = yield* db((d) =>
-        d
-          .select()
-          .from(RepositoryMemoryFileSummaryTable)
-          .where(
-            and(
-              eq(RepositoryMemoryFileSummaryTable.repository_id, input.repository_id),
-              eq(RepositoryMemoryFileSummaryTable.path, input.path),
-            ),
-          )
-          .get(),
-      )
+      const row = yield* db
+        .select()
+        .from(RepositoryMemoryFileSummaryTable)
+        .where(
+          and(
+            eq(RepositoryMemoryFileSummaryTable.repository_id, input.repository_id),
+            eq(RepositoryMemoryFileSummaryTable.path, input.path),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
       if (!row) return undefined
       if (!input.worktree) return { ...row, stale: false, missing: false }
       const source = yield* readSummarySource(input.worktree, input.path).pipe(
@@ -668,25 +668,24 @@ export const layer = Layer.effect(
 
     const logRetrieval = Effect.fn("Memory.logRetrieval")(function* (input: RetrievalLogInput) {
       const now = Date.now()
-      yield* db((d) =>
-        d
-          .insert(RepositoryMemoryRetrievalLogTable)
-          .values({
-            id: crypto.randomUUID(),
-            repository_id: input.repository_id,
-            session_id: input.session_id,
-            issue_identifier: input.issue_identifier,
-            tool: input.tool,
-            query: input.query,
-            returned_items: JSON.stringify(input.returned_items),
-            selected_items: input.selected_items ? JSON.stringify(input.selected_items) : undefined,
-            final_files: input.final_files ? JSON.stringify(input.final_files) : undefined,
-            outcome: input.outcome,
-            time_created: now,
-            time_updated: now,
-          })
-          .run(),
-      )
+      yield* db
+        .insert(RepositoryMemoryRetrievalLogTable)
+        .values({
+          id: crypto.randomUUID(),
+          repository_id: input.repository_id,
+          session_id: input.session_id,
+          issue_identifier: input.issue_identifier,
+          tool: input.tool,
+          query: input.query,
+          returned_items: JSON.stringify(input.returned_items),
+          selected_items: input.selected_items ? JSON.stringify(input.selected_items) : undefined,
+          final_files: input.final_files ? JSON.stringify(input.final_files) : undefined,
+          outcome: input.outcome,
+          time_created: now,
+          time_updated: now,
+        })
+        .run()
+        .pipe(Effect.orDie)
     })
 
     const generateFileSummaries = Effect.fn("Memory.generateFileSummaries")(function* (input: {
@@ -702,19 +701,18 @@ export const layer = Layer.effect(
         yield* pruneFileSummaries(input.repository_id, [])
         return { requested: 0, generated: 0, reused: 0, failed: 0, failures: [] }
       }
-      const files = yield* db((d) =>
-        d
-          .select()
-          .from(RepositoryMemoryFileActivityTable)
-          .where(eq(RepositoryMemoryFileActivityTable.repository_id, input.repository_id))
-          .orderBy(
-            desc(RepositoryMemoryFileActivityTable.edit_count),
-            desc(RepositoryMemoryFileActivityTable.last_modified),
-            asc(RepositoryMemoryFileActivityTable.path),
-          )
-          .limit(limit)
-          .all(),
-      )
+      const files = yield* db
+        .select()
+        .from(RepositoryMemoryFileActivityTable)
+        .where(eq(RepositoryMemoryFileActivityTable.repository_id, input.repository_id))
+        .orderBy(
+          desc(RepositoryMemoryFileActivityTable.edit_count),
+          desc(RepositoryMemoryFileActivityTable.last_modified),
+          asc(RepositoryMemoryFileActivityTable.path),
+        )
+        .limit(limit)
+        .all()
+        .pipe(Effect.orDie)
       yield* pruneFileSummaries(
         input.repository_id,
         files.map((file) => file.path),
@@ -763,44 +761,41 @@ export const layer = Layer.effect(
         }),
       )
       if (source.type === "failed") {
-        yield* db((d) =>
-          d
-            .delete(RepositoryMemoryFileSummaryTable)
-            .where(
-              and(
-                eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
-                eq(RepositoryMemoryFileSummaryTable.path, file.path),
-              ),
-            )
-            .run(),
-        )
-        return source
-      }
-      const existing = yield* db((d) =>
-        d
-          .select()
-          .from(RepositoryMemoryFileSummaryTable)
+        yield* db
+          .delete(RepositoryMemoryFileSummaryTable)
           .where(
             and(
               eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
               eq(RepositoryMemoryFileSummaryTable.path, file.path),
             ),
           )
-          .get(),
-      )
-      if (existing?.source_hash === source.source_hash) {
-        yield* db((d) =>
-          d
-            .update(RepositoryMemoryFileSummaryTable)
-            .set({ time_generated: Date.now(), time_updated: Date.now() })
-            .where(
-              and(
-                eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
-                eq(RepositoryMemoryFileSummaryTable.path, file.path),
-              ),
-            )
-            .run(),
+          .run()
+          .pipe(Effect.orDie)
+        return source
+      }
+      const existing = yield* db
+        .select()
+        .from(RepositoryMemoryFileSummaryTable)
+        .where(
+          and(
+            eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
+            eq(RepositoryMemoryFileSummaryTable.path, file.path),
+          ),
         )
+        .get()
+        .pipe(Effect.orDie)
+      if (existing?.source_hash === source.source_hash) {
+        yield* db
+          .update(RepositoryMemoryFileSummaryTable)
+          .set({ time_generated: Date.now(), time_updated: Date.now() })
+          .where(
+            and(
+              eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
+              eq(RepositoryMemoryFileSummaryTable.path, file.path),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
         return { type: "reused" as const, path: file.path }
       }
       const generated = yield* generator({
@@ -817,22 +812,7 @@ export const layer = Layer.effect(
         }),
       )
       if (generated.type === "failed") {
-        yield* db((d) =>
-          d
-            .delete(RepositoryMemoryFileSummaryTable)
-            .where(
-              and(
-                eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
-                eq(RepositoryMemoryFileSummaryTable.path, file.path),
-              ),
-            )
-            .run(),
-        )
-        return generated
-      }
-      const now = Date.now()
-      yield* db((d) =>
-        d
+        yield* db
           .delete(RepositoryMemoryFileSummaryTable)
           .where(
             and(
@@ -840,26 +820,38 @@ export const layer = Layer.effect(
               eq(RepositoryMemoryFileSummaryTable.path, file.path),
             ),
           )
-          .run(),
-      )
-      yield* db((d) =>
-        d
-          .insert(RepositoryMemoryFileSummaryTable)
-          .values({
-            id: crypto.randomUUID(),
-            repository_id,
-            path: file.path,
-            source_hash: source.source_hash,
-            summary: generated.summary,
-            important_symbols: JSON.stringify(generated.important_symbols),
-            token_text: tokenText([file.path, generated.summary, generated.important_symbols.join(" ")].join("\n")),
-            model_id: generated.model_id,
-            time_generated: now,
-            time_created: now,
-            time_updated: now,
-          })
-          .run(),
-      )
+          .run()
+          .pipe(Effect.orDie)
+        return generated
+      }
+      const now = Date.now()
+      yield* db
+        .delete(RepositoryMemoryFileSummaryTable)
+        .where(
+          and(
+            eq(RepositoryMemoryFileSummaryTable.repository_id, repository_id),
+            eq(RepositoryMemoryFileSummaryTable.path, file.path),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(RepositoryMemoryFileSummaryTable)
+        .values({
+          id: crypto.randomUUID(),
+          repository_id,
+          path: file.path,
+          source_hash: source.source_hash,
+          summary: generated.summary,
+          important_symbols: JSON.stringify(generated.important_symbols),
+          token_text: tokenText([file.path, generated.summary, generated.important_symbols.join(" ")].join("\n")),
+          model_id: generated.model_id,
+          time_generated: now,
+          time_created: now,
+          time_updated: now,
+        })
+        .run()
+        .pipe(Effect.orDie)
       return { type: "generated" as const, path: file.path }
     })
 
@@ -892,7 +884,7 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer
+export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))
 
 function git(cwd: string, args: readonly string[]) {
   return Effect.promise(() =>

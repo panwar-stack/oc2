@@ -1193,8 +1193,8 @@ it.live(
         const memory = yield* Memory.Service
         const current = yield* memory.currentRepository(dir)
         const repository = yield* memory.ensureRepository({ reference: current.provider === "file" ? pathToFileURL(dir).href : current.identity })
-        Database.use((db) =>
-          db
+        yield* Database.Service.use((database) =>
+          database.db
             .insert(RepositoryMemoryCommitTable)
             .values({
               id: `${repository.id}-commit`,
@@ -2299,17 +2299,17 @@ unix(
               .shell({ sessionID: chat.id, agent: "build", command: "printf first && sleep 0.2 && printf second" })
               .pipe(Effect.forkChild)
 
-            yield* Effect.promise(async () => {
-              const start = Date.now()
-              while (Date.now() - start < 5000) {
-                const msgs = await MessageV2.filterCompacted(MessageV2.stream(chat.id))
+            yield* pollWithTimeout(
+              Effect.gen(function* () {
+                const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
                 const taskMsg = msgs.find((item) => item.info.role === "assistant")
                 const tool = taskMsg ? toolPart(taskMsg.parts) : undefined
-                if (tool?.state.status === "running" && tool.state.metadata?.output.includes("first")) return
-                await new Promise((done) => setTimeout(done, 20))
-              }
-              throw new Error("timed out waiting for running shell metadata")
-            })
+                return tool?.state.status === "running" && tool.state.metadata?.output.includes("first")
+                  ? true
+                  : undefined
+              }),
+              "timed out waiting for running shell metadata",
+            )
 
             const exit = yield* Fiber.await(fiber)
             expect(Exit.isSuccess(exit)).toBe(true)

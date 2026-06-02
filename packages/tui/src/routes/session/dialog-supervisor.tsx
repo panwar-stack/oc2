@@ -6,7 +6,6 @@ import { DialogPrompt } from "../../ui/dialog-prompt"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
 import { useDialog } from "../../ui/dialog"
 import { useSDK } from "../../context/sdk"
-import { useSync } from "../../context/sync"
 import { useToast } from "../../ui/toast"
 
 type SupervisorAction =
@@ -38,9 +37,7 @@ const numberFields: { key: NumberKey; title: string; description: string }[] = [
 export function DialogSupervisor(props: { sessionID: string }) {
   const dialog = useDialog()
   const sdk = useSDK()
-  const sync = useSync()
   const toast = useToast()
-  const session = createMemo(() => sync.session.get(props.sessionID))
   const [state, { refetch }] = createResource(
     () => props.sessionID,
     async (sessionID) => {
@@ -49,7 +46,7 @@ export function DialogSupervisor(props: { sessionID: string }) {
     },
   )
   const effective = createMemo(() => state()?.config.effective)
-  const fallback = createMemo(() => session()?.supervisor)
+  const fallback = createMemo(() => state()?.config.session)
   const options = createMemo<DialogSelectOption<SupervisorAction>[]>(() => [
     {
       title: `Mode: ${effective()?.mode ?? fallback()?.mode ?? "loading"}`,

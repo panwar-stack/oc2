@@ -14,6 +14,7 @@ import {
   Part,
   StructuredOutputError,
   SubtaskPart,
+  TextPart,
   User,
   WithParts,
   type ToolPart,
@@ -47,7 +48,24 @@ interface FetchDecompressionError extends Error {
 }
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
-export { isMedia }
+export {
+  APIError,
+  AbortedError,
+  Assistant,
+  AuthError,
+  CompactionPart,
+  ContextOverflowError,
+  Info,
+  OutputLengthError,
+  Part,
+  StructuredOutputError,
+  SubtaskPart,
+  TextPart,
+  User,
+  WithParts,
+  isMedia,
+  type ToolPart,
+}
 
 function truncateToolOutput(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text

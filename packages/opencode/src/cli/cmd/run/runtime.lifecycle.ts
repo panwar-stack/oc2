@@ -403,7 +403,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
             }
 
             footer.resetForReplay(true)
-            renderer.resetSplitFooterForReplay({ clearSavedLines: true })
             const splash = splashInfo(next.sessionTitle ?? input.sessionTitle, next.history)
             renderer.writeToScrollback(
               entrySplash({

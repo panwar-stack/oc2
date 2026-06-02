@@ -11,7 +11,21 @@ import "@opencode-ai/core/catalog"
 import "@opencode-ai/core/session/event"
 import { Context, Effect, Layer } from "effect"
 
-export class Service extends Context.Service<Service, EventV2.Interface>()("@opencode/EventV2Bridge") {}
+type LegacyBusEvent<D extends EventV2.Definition = EventV2.Definition> = {
+  type: D["type"]
+  properties: EventV2.Data<D>
+  data: EventV2.Data<D>
+}
+export interface Interface extends EventV2.Interface {
+  subscribeCallback<D extends EventV2.Definition>(
+    definition: D,
+    callback: (event: LegacyBusEvent<D>) => void,
+  ): Effect.Effect<() => void>
+  subscribeCallback(type: string, callback: (event: LegacyBusEvent) => void): Effect.Effect<() => void>
+  subscribeAllCallback(callback: (event: LegacyBusEvent) => void): Effect.Effect<() => void>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@opencode/EventV2Bridge") {}
 
 export const layer = Layer.effect(
   Service,
@@ -67,7 +81,28 @@ export const layer = Layer.effect(
     )
     yield* Effect.addFinalizer(() => unsubscribe)
 
-    return Service.of({ ...events, publish })
+    const legacyEvent = <D extends EventV2.Definition>(event: EventV2.Payload<D>): LegacyBusEvent<D> => ({
+      type: event.type,
+      properties: event.data,
+      data: event.data,
+    })
+    const eventType = (input: string | EventV2.Definition) => (typeof input === "string" ? input : input.type)
+    return Service.of({
+      ...events,
+      publish,
+      subscribeCallback: (type: string | EventV2.Definition, callback: (event: LegacyBusEvent) => void) =>
+        events
+          .listen((event) =>
+            Effect.sync(() => {
+              if (event.type === eventType(type)) callback(legacyEvent(event))
+            }),
+          )
+          .pipe(Effect.map((off) => () => Effect.runSync(off))),
+      subscribeAllCallback: (callback) =>
+        events
+          .listen((event) => Effect.sync(() => callback(legacyEvent(event))))
+          .pipe(Effect.map((off) => () => Effect.runSync(off))),
+    })
   }),
 )
 

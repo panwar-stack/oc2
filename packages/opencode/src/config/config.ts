@@ -33,7 +33,7 @@ import { ConfigPaths } from "./paths"
 import { ConfigPlugin } from "./plugin"
 import { ConfigSupervisor } from "./supervisor"
 import { ConfigVariable } from "./variable"
-import { InvalidError } from "./error"
+import { InvalidError } from "@opencode-ai/core/v1/config/error"
 import { Npm } from "@opencode-ai/core/npm"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 
@@ -172,7 +172,8 @@ const Sandbox = Schema.Struct({
   description: "Docker execution sandbox profiles for future sandboxed shell execution",
 })
 
-const InfoSchema = ConfigV1.Info.extend({
+const InfoSchema = Schema.Struct({
+  ...ConfigV1.Info.fields,
   sandbox: Schema.optional(Sandbox),
   supervisor: Schema.optional(ConfigSupervisor.Info).annotate({
     description: "Supervisor configuration. Session-level supervisor settings override these defaults.",

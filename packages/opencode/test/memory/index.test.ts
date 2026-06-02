@@ -15,7 +15,7 @@ import { tokenText } from "@/memory/search"
 import { testEffect } from "../lib/effect"
 import { tmpdir } from "../fixture/fixture"
 
-const it = testEffect(Layer.mergeAll(Memory.defaultLayer))
+const it = testEffect(Layer.mergeAll(Memory.defaultLayer, Database.defaultLayer))
 
 describe("Memory local git indexing", () => {
   it.live("indexes commits and file activity from a local repository", () =>
@@ -115,33 +115,39 @@ describe("Memory local git indexing", () => {
 
       const memory = yield* Memory.Service
       const full = yield* memory.indexLocalRepository({ worktree: tmp.path, maxCommits: 10, noGithub: true })
-      Database.use((db) => {
-        db.insert(RepositoryMemoryFileSummaryTable)
-          .values({
-            id: crypto.randomUUID(),
-            repository_id: full.repository.id,
-            path: "src/future.ts",
-            source_hash: "summary-source",
-            summary: "preserved summary",
-            important_symbols: JSON.stringify([]),
-            token_text: tokenText("preserved summary futureMemory"),
-            time_generated: Date.now(),
-            time_created: Date.now(),
-            time_updated: Date.now(),
-          })
-          .run()
-        db.insert(RepositoryMemoryRetrievalLogTable)
-          .values({
-            id: crypto.randomUUID(),
-            repository_id: full.repository.id,
-            tool: "test",
-            query: "futureMemory",
-            returned_items: JSON.stringify([]),
-            time_created: Date.now(),
-            time_updated: Date.now(),
-          })
-          .run()
-      })
+      yield* Database.Database.Service.use((database) =>
+        database.db.transaction(() =>
+          Effect.gen(function* () {
+            yield* database.db
+              .insert(RepositoryMemoryFileSummaryTable)
+              .values({
+                id: crypto.randomUUID(),
+                repository_id: full.repository.id,
+                path: "src/future.ts",
+                source_hash: "summary-source",
+                summary: "preserved summary",
+                important_symbols: JSON.stringify([]),
+                token_text: tokenText("preserved summary futureMemory"),
+                time_generated: Date.now(),
+                time_created: Date.now(),
+                time_updated: Date.now(),
+              })
+              .run()
+            yield* database.db
+              .insert(RepositoryMemoryRetrievalLogTable)
+              .values({
+                id: crypto.randomUUID(),
+                repository_id: full.repository.id,
+                tool: "test",
+                query: "futureMemory",
+                returned_items: JSON.stringify([]),
+                time_created: Date.now(),
+                time_updated: Date.now(),
+              })
+              .run()
+          }),
+        ),
+      )
 
       const narrowed = yield* memory.indexLocalRepository({
         worktree: tmp.path,
@@ -158,15 +164,15 @@ describe("Memory local git indexing", () => {
         repository_id: narrowed.repository.id,
         query: "middleMemory",
       })
-      const summaries = Database.use((db) =>
-        db
+      const summaries = yield* Database.Database.Service.use((database) =>
+        database.db
           .select()
           .from(RepositoryMemoryFileSummaryTable)
           .where(eq(RepositoryMemoryFileSummaryTable.repository_id, narrowed.repository.id))
           .all(),
       )
-      const logs = Database.use((db) =>
-        db
+      const logs = yield* Database.Database.Service.use((database) =>
+        database.db
           .select()
           .from(RepositoryMemoryRetrievalLogTable)
           .where(eq(RepositoryMemoryRetrievalLogTable.repository_id, narrowed.repository.id))
@@ -277,25 +283,33 @@ describe("Memory local git indexing", () => {
 
       const memory = yield* Memory.Service
       const linked = yield* memory.indexLocalRepository({ worktree: tmp.path, maxCommits: 10 })
-      const linkedIssues = Database.use((db) =>
-        db
+      const linkedIssues = yield* Database.Service.use((database) =>
+        database.db
           .select({ issue_number: RepositoryMemoryCommitTable.issue_number })
           .from(RepositoryMemoryCommitTable)
           .where(eq(RepositoryMemoryCommitTable.repository_id, linked.repository.id))
           .all()
-          .map((commit) => commit.issue_number)
-          .filter((issue) => issue !== null)
-          .toSorted(),
+          .pipe(
+            Effect.map((commits) =>
+              commits
+                .map((commit) => commit.issue_number)
+                .filter((issue): issue is number => issue !== null)
+                .toSorted(),
+            ),
+          ),
       )
       yield* memory.indexLocalRepository({ worktree: tmp.path, maxCommits: 10, noGithub: true })
-      const disabledIssues = Database.use((db) =>
-        db
+      const disabledIssues = yield* Database.Service.use((database) =>
+        database.db
           .select({ issue_number: RepositoryMemoryCommitTable.issue_number })
           .from(RepositoryMemoryCommitTable)
           .where(eq(RepositoryMemoryCommitTable.repository_id, linked.repository.id))
           .all()
-          .map((commit) => commit.issue_number)
-          .filter((issue) => issue !== null),
+          .pipe(
+            Effect.map((commits) =>
+              commits.map((commit) => commit.issue_number).filter((issue): issue is number => issue !== null),
+            ),
+          ),
       )
 
       expect(linkedIssues).toEqual([42, 77])

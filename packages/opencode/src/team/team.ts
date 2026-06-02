@@ -1,9 +1,9 @@
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionID } from "@/session/schema"
 import { SessionRunState } from "@/session/run-state"
-import { Bus } from "@/bus"
-import { BusEvent } from "@/bus/bus-event"
-import { TuiEvent } from "@/cli/cmd/tui/event"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { TuiEvent } from "@/server/tui-event"
+import { EventV2 } from "@opencode-ai/core/event"
 import { Context, Effect, Layer, Schema, Option } from "effect"
 import { eq, and, asc } from "drizzle-orm"
 import {
@@ -42,7 +42,7 @@ export interface Interface {
     model?: { providerID: string; modelID: string }
     rolePrompt: string
     planMode?: boolean
-    workMode?: string
+    workMode?: "plan" | "implement"
     dependencyIDs?: string[]
   }) => Effect.Effect<any>
   updateMemberStatus: (memberID: string, status: string, result?: string) => Effect.Effect<Option.Option<any>>
@@ -78,40 +78,40 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Team") {}
 
-const TeamCreated = BusEvent.define("team.created", Schema.Struct({ teamID: Schema.String }))
-const TeamClosed = BusEvent.define("team.closed", Schema.Struct({ teamID: Schema.String }))
-const MemberUpdated = BusEvent.define(
-  "team.member.updated",
-  Schema.Struct({ memberID: Schema.String, sessionID: Schema.String, status: Schema.String }),
-)
-const MessageReceived = BusEvent.define(
-  "team.message.received",
-  Schema.Struct({ messageID: Schema.String, teamID: Schema.String, sender: Schema.String }),
-)
+const TeamCreated = EventV2.define({ type: "team.created", schema: { teamID: Schema.String } })
+const TeamClosed = EventV2.define({ type: "team.closed", schema: { teamID: Schema.String } })
+const MemberUpdated = EventV2.define({
+  type: "team.member.updated",
+  schema: { memberID: Schema.String, sessionID: Schema.String, status: Schema.String },
+})
+const MessageReceived = EventV2.define({
+  type: "team.message.received",
+  schema: { messageID: Schema.String, teamID: Schema.String, sender: Schema.String },
+})
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const bus = yield* Bus.Service
+    const events = yield* EventV2Bridge.Service
     const runState = yield* SessionRunState.Service
-    const db = () => Database.Client()
+    const { db } = yield* Database.Service
 
     const create = Effect.fn("Team.create")(function* (input: { name: string; goal: string; leadSessionID: string }) {
-      const existing = Database.use(() =>
-        db()
-          .select()
-          .from(TeamTable)
-          .where(and(eq(TeamTable.lead_session_id, input.leadSessionID), eq(TeamTable.status, "active")))
-          .get(),
-      )
+      const existing = yield* db
+        .select()
+        .from(TeamTable)
+        .where(and(eq(TeamTable.lead_session_id, input.leadSessionID), eq(TeamTable.status, "active")))
+        .get()
+        .pipe(Effect.orDie)
       if (existing) {
         return yield* Effect.die(new Error("Lead session already has an active team"))
       }
 
       const id = crypto.randomUUID()
       const now = Date.now()
-      Database.use(() => {
-        const values: any = {
+      yield* db
+        .insert(TeamTable)
+        .values({
           id,
           name: input.name,
           goal: input.goal,
@@ -119,11 +119,11 @@ export const layer = Layer.effect(
           status: "active",
           time_created: now,
           time_updated: now,
-        }
-        db().insert(TeamTable).values(values).run()
-      })
-      yield* bus.publish(TeamCreated, { teamID: id })
-      yield* bus.publish(TuiEvent.ToastShow, {
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(TeamCreated, { teamID: id })
+      yield* events.publish(TuiEvent.ToastShow, {
         title: "Team Created",
         message: `Team "${input.name}" is ready. Add members with team_spawn.`,
         variant: "success",
@@ -141,42 +141,34 @@ export const layer = Layer.effect(
     })
 
     const getActive = Effect.fn("Team.getActive")(function* (leadSessionID: string) {
-      const row = Database.use(() =>
-        db()
-          .select()
-          .from(TeamTable)
-          .where(and(eq(TeamTable.lead_session_id, leadSessionID), eq(TeamTable.status, "active")))
-          .get(),
-      )
+      const row = yield* db
+        .select()
+        .from(TeamTable)
+        .where(and(eq(TeamTable.lead_session_id, leadSessionID), eq(TeamTable.status, "active")))
+        .get()
+        .pipe(Effect.orDie)
       return toOption(row)
     })
 
     const get = Effect.fn("Team.get")(function* (teamID: string) {
-      const row = Database.use(() => db().select().from(TeamTable).where(eq(TeamTable.id, teamID)).get())
+      const row = yield* db.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get().pipe(Effect.orDie)
       return toOption(row)
     })
 
     const shutdown = Effect.fn("Team.shutdown")(function* (teamID: string) {
       const now = Date.now()
-      Database.transaction(() => {
-        db()
-          .update(TeamTable)
-          .set({ status: "closed", time_updated: now } as any)
-          .where(eq(TeamTable.id, teamID))
-          .run()
-        const members = db().select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all()
-        for (const m of members) {
-          if (m.status !== "completed" && m.status !== "cancelled") {
-            db()
-              .update(TeamMemberTable)
-              .set({ status: "cancelled", time_updated: now } as any)
-              .where(eq(TeamMemberTable.id, m.id))
-              .run()
-          }
-        }
-      })
-      const allMembers = Database.use(() =>
-        db().select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all(),
+      yield* db.update(TeamTable).set({ status: "closed", time_updated: now }).where(eq(TeamTable.id, teamID)).run().pipe(Effect.orDie)
+      const allMembers = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all().pipe(Effect.orDie)
+      yield* Effect.forEach(
+        allMembers.filter((member) => member.status !== "completed" && member.status !== "cancelled"),
+        (member) =>
+          db
+            .update(TeamMemberTable)
+            .set({ status: "cancelled", time_updated: now })
+            .where(eq(TeamMemberTable.id, member.id))
+            .run()
+            .pipe(Effect.orDie),
+        { concurrency: "unbounded", discard: true },
       )
       yield* Effect.forEach(
         allMembers,
@@ -186,15 +178,15 @@ export const layer = Layer.effect(
       yield* Effect.forEach(
         allMembers,
         (member) =>
-          bus.publish(MemberUpdated, {
+          events.publish(MemberUpdated, {
             memberID: member.id,
             sessionID: member.session_id,
-            status: member.status,
+            status: member.status === "completed" || member.status === "cancelled" ? member.status : "cancelled",
           }),
         { concurrency: "unbounded", discard: true },
       )
-      yield* bus.publish(TeamClosed, { teamID })
-      yield* bus.publish(TuiEvent.ToastShow, {
+      yield* events.publish(TeamClosed, { teamID })
+      yield* events.publish(TuiEvent.ToastShow, {
         title: "Team Shut Down",
         message: "The team has been closed and all active members cancelled.",
         variant: "info",
@@ -210,13 +202,14 @@ export const layer = Layer.effect(
       model?: { providerID: string; modelID: string }
       rolePrompt: string
       planMode?: boolean
-      workMode?: string
+      workMode?: "plan" | "implement"
       dependencyIDs?: string[]
     }) {
       const id = crypto.randomUUID()
       const now = Date.now()
-      Database.use(() => {
-        const values: any = {
+      yield* db
+        .insert(TeamMemberTable)
+        .values({
           id,
           team_id: input.teamID,
           session_id: input.sessionID,
@@ -231,9 +224,9 @@ export const layer = Layer.effect(
           result: null,
           time_created: now,
           time_updated: now,
-        }
-        db().insert(TeamMemberTable).values(values).run()
-      })
+        })
+        .run()
+        .pipe(Effect.orDie)
       return {
         id,
         team_id: input.teamID,
@@ -260,40 +253,33 @@ export const layer = Layer.effect(
       const now = Date.now()
       const setData: Record<string, unknown> = { status, time_updated: now }
       if (result !== undefined) setData.result = result
-      Database.use(() =>
-        db()
-          .update(TeamMemberTable)
-          .set(setData as any)
-          .where(eq(TeamMemberTable.id, memberID))
-          .run(),
-      )
-      const row = Database.use(() => db().select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get())
+      yield* db.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run().pipe(Effect.orDie)
+      const row = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get().pipe(Effect.orDie)
       if (!row) return Option.none()
-      yield* bus.publish(MemberUpdated, { memberID: row.id, sessionID: row.session_id, status: row.status })
+      yield* events.publish(MemberUpdated, { memberID: row.id, sessionID: row.session_id, status: row.status })
 
       if (row.status === "completed" || row.status === "idle") {
         const statusText = row.status === "completed" ? "completed their work" : "became idle"
-        const team = Database.use(() => db().select().from(TeamTable).where(eq(TeamTable.id, row.team_id)).get())
+        const team = yield* db.select().from(TeamTable).where(eq(TeamTable.id, row.team_id)).get().pipe(Effect.orDie)
         if (team) {
           const msgId = crypto.randomUUID()
           const msgNow = Date.now()
-          Database.use(() => {
-            db()
-              .insert(TeamMessageTable)
-              .values({
-                id: msgId,
-                team_id: row.team_id,
-                sender: row.session_id,
-                recipients: [team.lead_session_id],
-                body: `Teammate ${row.name} (${row.agent_type}) has ${statusText}.`,
-                delivery_status: "pending",
-                time_created: msgNow,
-                time_updated: msgNow,
-              } as any)
-              .run()
-          })
-          yield* bus.publish(MessageReceived, { messageID: msgId, teamID: row.team_id, sender: row.session_id })
-          yield* bus.publish(TuiEvent.ToastShow, {
+          yield* db
+            .insert(TeamMessageTable)
+            .values({
+              id: msgId,
+              team_id: row.team_id,
+              sender: row.session_id,
+              recipients: [team.lead_session_id],
+              body: `Teammate ${row.name} (${row.agent_type}) has ${statusText}.`,
+              delivery_status: "pending",
+              time_created: msgNow,
+              time_updated: msgNow,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          yield* events.publish(MessageReceived, { messageID: msgId, teamID: row.team_id, sender: row.session_id })
+          yield* events.publish(TuiEvent.ToastShow, {
             title: "Teammate Update",
             message: `${row.name} (${row.agent_type}) has ${statusText}.`,
             variant: "info",
@@ -321,35 +307,33 @@ export const layer = Layer.effect(
     })
 
     const getMembers = Effect.fn("Team.getMembers")(function* (teamID: string) {
-      return Database.use(() =>
-        db()
-          .select()
-          .from(TeamMemberTable)
-          .where(eq(TeamMemberTable.team_id, teamID))
-          .all()
-          .map((row) => ({
-            id: row.id,
-            team_id: row.team_id,
-            session_id: row.session_id,
-            name: row.name,
-            agent_type: row.agent_type,
-            model: row.model,
-            role_prompt: row.role_prompt,
-            status: row.status,
-            plan_mode: row.plan_mode,
-            work_mode: row.work_mode,
-            dependency_ids: row.dependency_ids,
-            result: row.result,
-            time_created: row.time_created,
-            time_updated: row.time_updated,
-          })),
+      return (yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all().pipe(Effect.orDie)).map(
+        (row) => ({
+          id: row.id,
+          team_id: row.team_id,
+          session_id: row.session_id,
+          name: row.name,
+          agent_type: row.agent_type,
+          model: row.model,
+          role_prompt: row.role_prompt,
+          status: row.status,
+          plan_mode: row.plan_mode,
+          work_mode: row.work_mode,
+          dependency_ids: row.dependency_ids,
+          result: row.result,
+          time_created: row.time_created,
+          time_updated: row.time_updated,
+        }),
       )
     })
 
     const getMemberBySession = Effect.fn("Team.getMemberBySession")(function* (sessionID: string) {
-      const row = Database.use(() =>
-        db().select().from(TeamMemberTable).where(eq(TeamMemberTable.session_id, sessionID)).get(),
-      )
+      const row = yield* db
+        .select()
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       if (!row) return Option.none()
       return Option.some({
         id: row.id,
@@ -388,8 +372,9 @@ export const layer = Layer.effect(
     }) {
       const id = crypto.randomUUID()
       const now = Date.now()
-      Database.use(() => {
-        const values: any = {
+      yield* db
+        .insert(TeamTaskTable)
+        .values({
           id,
           team_id: input.teamID,
           description: input.description,
@@ -399,9 +384,9 @@ export const layer = Layer.effect(
           metadata: input.metadata ?? null,
           time_created: now,
           time_updated: now,
-        }
-        db().insert(TeamTaskTable).values(values).run()
-      })
+        })
+        .run()
+        .pipe(Effect.orDie)
       return {
         id,
         team_id: input.teamID,
@@ -423,14 +408,8 @@ export const layer = Layer.effect(
       const setData: Record<string, unknown> = { time_updated: now }
       if (update.status !== undefined) setData.status = update.status
       if (update.assignee !== undefined) setData.assignee = update.assignee
-      Database.use(() =>
-        db()
-          .update(TeamTaskTable)
-          .set(setData as any)
-          .where(eq(TeamTaskTable.id, taskID))
-          .run(),
-      )
-      const row = Database.use(() => db().select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get())
+      yield* db.update(TeamTaskTable).set(setData).where(eq(TeamTaskTable.id, taskID)).run().pipe(Effect.orDie)
+      const row = yield* db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get().pipe(Effect.orDie)
       if (!row) return Option.none()
       return Option.some({
         id: row.id,
@@ -447,26 +426,31 @@ export const layer = Layer.effect(
 
     const claimTask = Effect.fn("Team.claimTask")(function* (taskID: string, assignee: string) {
       const now = Date.now()
-      const result = Database.transaction(() => {
-        const current = db().select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get()
+      const result = yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+        const current = yield* tx.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get()
         if (!current || current.status !== "pending") return null
         if (current.dependency_ids) {
           const deps = current.dependency_ids as string[]
-          const incomplete = db()
+          const incomplete = (yield* tx
             .select()
             .from(TeamTaskTable)
             .where(eq(TeamTaskTable.team_id, current.team_id))
-            .all()
+            .all())
             .filter((t) => deps.includes(t.id) && t.status !== "completed" && t.status !== "cancelled")
           if (incomplete.length > 0) return null
         }
-        db()
+        yield* tx
           .update(TeamTaskTable)
           .set({ status: "in_progress", assignee, time_updated: now } as any)
           .where(eq(TeamTaskTable.id, taskID))
           .run()
-        return db().select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get()
-      })
+        return yield* tx.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get()
+          }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
       if (!result) return Option.none()
       return Option.some({
         id: result.id,
@@ -482,23 +466,18 @@ export const layer = Layer.effect(
     })
 
     const getTasks = Effect.fn("Team.getTasks")(function* (teamID: string) {
-      return Database.use(() =>
-        db()
-          .select()
-          .from(TeamTaskTable)
-          .where(eq(TeamTaskTable.team_id, teamID))
-          .all()
-          .map((row) => ({
-            id: row.id,
-            team_id: row.team_id,
-            description: row.description,
-            status: row.status,
-            assignee: row.assignee,
-            dependency_ids: row.dependency_ids,
-            metadata: row.metadata,
-            time_created: row.time_created,
-            time_updated: row.time_updated,
-          })),
+      return (yield* db.select().from(TeamTaskTable).where(eq(TeamTaskTable.team_id, teamID)).all().pipe(Effect.orDie)).map(
+        (row) => ({
+          id: row.id,
+          team_id: row.team_id,
+          description: row.description,
+          status: row.status,
+          assignee: row.assignee,
+          dependency_ids: row.dependency_ids,
+          metadata: row.metadata,
+          time_created: row.time_created,
+          time_updated: row.time_updated,
+        }),
       )
     })
 
@@ -511,8 +490,12 @@ export const layer = Layer.effect(
       const id = crypto.randomUUID()
       const now = Date.now()
       const recipients = [...new Set(input.recipients)]
-      Database.transaction(() => {
-        const values: any = {
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+        yield* tx
+          .insert(TeamMessageTable)
+          .values({
           id,
           team_id: input.teamID,
           sender: input.sender,
@@ -521,10 +504,12 @@ export const layer = Layer.effect(
           delivery_status: "pending",
           time_created: now,
           time_updated: now,
-        }
-        db().insert(TeamMessageTable).values(values).run()
-        for (const recipient of recipients) {
-          db()
+        })
+          .run()
+        yield* Effect.forEach(
+          recipients,
+          (recipient) =>
+            tx
             .insert(TeamMessageRecipientTable)
             .values({
               id: crypto.randomUUID(),
@@ -534,11 +519,15 @@ export const layer = Layer.effect(
               delivery_status: "pending",
               time_created: now,
               time_updated: now,
-            } as any)
-            .run()
-        }
-      })
-      yield* bus.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender })
+            })
+              .run(),
+          { discard: true },
+        )
+          }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+      yield* events.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender })
       return {
         id,
         team_id: input.teamID,
@@ -552,22 +541,17 @@ export const layer = Layer.effect(
     })
 
     const getMessages = Effect.fn("Team.getMessages")(function* (teamID: string) {
-      return Database.use(() =>
-        db()
-          .select()
-          .from(TeamMessageTable)
-          .where(eq(TeamMessageTable.team_id, teamID))
-          .all()
-          .map((row) => ({
-            id: row.id,
-            team_id: row.team_id,
-            sender: row.sender,
-            recipients: row.recipients,
-            body: row.body,
-            delivery_status: row.delivery_status,
-            time_created: row.time_created,
-            time_updated: row.time_updated,
-          })),
+      return (yield* db.select().from(TeamMessageTable).where(eq(TeamMessageTable.team_id, teamID)).all().pipe(Effect.orDie)).map(
+        (row) => ({
+          id: row.id,
+          team_id: row.team_id,
+          sender: row.sender,
+          recipients: row.recipients,
+          body: row.body,
+          delivery_status: row.delivery_status,
+          time_created: row.time_created,
+          time_updated: row.time_updated,
+        }),
       )
     })
 
@@ -575,29 +559,28 @@ export const layer = Layer.effect(
       recipientSession: string,
       teamID: string,
     ) {
-      const rows = Database.use(() =>
-        db()
-          .select({
-            id: TeamMessageTable.id,
-            team_id: TeamMessageTable.team_id,
-            sender: TeamMessageTable.sender,
-            recipients: TeamMessageTable.recipients,
-            body: TeamMessageTable.body,
-            delivery_status: TeamMessageRecipientTable.delivery_status,
-            time_created: TeamMessageTable.time_created,
-            time_updated: TeamMessageTable.time_updated,
-          })
-          .from(TeamMessageTable)
-          .innerJoin(TeamMessageRecipientTable, eq(TeamMessageRecipientTable.message_id, TeamMessageTable.id))
-          .where(
-            and(
-              eq(TeamMessageRecipientTable.team_id, teamID),
-              eq(TeamMessageRecipientTable.recipient, recipientSession),
-              eq(TeamMessageRecipientTable.delivery_status, "pending"),
-            ),
-          )
-          .all(),
-      )
+      const rows = yield* db
+        .select({
+          id: TeamMessageTable.id,
+          team_id: TeamMessageTable.team_id,
+          sender: TeamMessageTable.sender,
+          recipients: TeamMessageTable.recipients,
+          body: TeamMessageTable.body,
+          delivery_status: TeamMessageRecipientTable.delivery_status,
+          time_created: TeamMessageTable.time_created,
+          time_updated: TeamMessageTable.time_updated,
+        })
+        .from(TeamMessageTable)
+        .innerJoin(TeamMessageRecipientTable, eq(TeamMessageRecipientTable.message_id, TeamMessageTable.id))
+        .where(
+          and(
+            eq(TeamMessageRecipientTable.team_id, teamID),
+            eq(TeamMessageRecipientTable.recipient, recipientSession),
+            eq(TeamMessageRecipientTable.delivery_status, "pending"),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
       return rows.map((row) => ({
         id: row.id,
         team_id: row.team_id,
@@ -615,40 +598,29 @@ export const layer = Layer.effect(
       recipientSession?: string,
     ) {
       const now = Date.now()
-      Database.use(() =>
-        db()
-          .update(TeamMessageRecipientTable)
-          .set({ delivery_status: "delivered", time_updated: now } as any)
-          .where(
-            recipientSession
-              ? and(
-                  eq(TeamMessageRecipientTable.message_id, messageID),
-                  eq(TeamMessageRecipientTable.recipient, recipientSession),
-                )
-              : eq(TeamMessageRecipientTable.message_id, messageID),
-          )
-          .run(),
-      )
-      const pending = Database.use(() =>
-        db()
-          .select()
-          .from(TeamMessageRecipientTable)
-          .where(
-            and(
-              eq(TeamMessageRecipientTable.message_id, messageID),
-              eq(TeamMessageRecipientTable.delivery_status, "pending"),
-            ),
-          )
-          .all(),
-      )
+      yield* db
+        .update(TeamMessageRecipientTable)
+        .set({ delivery_status: "delivered", time_updated: now })
+        .where(
+          recipientSession
+            ? and(eq(TeamMessageRecipientTable.message_id, messageID), eq(TeamMessageRecipientTable.recipient, recipientSession))
+            : eq(TeamMessageRecipientTable.message_id, messageID),
+        )
+        .run()
+        .pipe(Effect.orDie)
+      const pending = yield* db
+        .select()
+        .from(TeamMessageRecipientTable)
+        .where(and(eq(TeamMessageRecipientTable.message_id, messageID), eq(TeamMessageRecipientTable.delivery_status, "pending")))
+        .all()
+        .pipe(Effect.orDie)
       if (pending.length > 0) return
-      Database.use(() =>
-        db()
-          .update(TeamMessageTable)
-          .set({ delivery_status: "delivered", time_updated: now } as any)
-          .where(eq(TeamMessageTable.id, messageID))
-          .run(),
-      )
+      yield* db
+        .update(TeamMessageTable)
+        .set({ delivery_status: "delivered", time_updated: now })
+        .where(eq(TeamMessageTable.id, messageID))
+        .run()
+        .pipe(Effect.orDie)
     })
 
     const createUsageEvent = Effect.fn("Team.createUsageEvent")(function* (input: {
@@ -667,41 +639,38 @@ export const layer = Layer.effect(
         metadata: input.metadata ?? {},
         time_created: Date.now(),
       }
-      Database.use(() =>
-        db()
-          .insert(TeamUsageEventTable)
-          .values({
-            id: event.id,
-            team_id: event.team_id,
-            session_id: event.session_id ?? null,
-            member_id: event.member_id ?? null,
-            type: event.type,
-            metadata: event.metadata,
-            time_created: event.time_created,
-          })
-          .run(),
-      )
+      yield* db
+        .insert(TeamUsageEventTable)
+        .values({
+          id: event.id,
+          team_id: event.team_id,
+          session_id: event.session_id ?? null,
+          member_id: event.member_id ?? null,
+          type: event.type,
+          metadata: event.metadata,
+          time_created: event.time_created,
+        })
+        .run()
+        .pipe(Effect.orDie)
       return event
     })
 
     const getUsageEvents = Effect.fn("Team.getUsageEvents")(function* (teamID: string) {
-      return Database.use(() =>
-        db()
-          .select()
-          .from(TeamUsageEventTable)
-          .where(eq(TeamUsageEventTable.team_id, teamID))
-          .orderBy(asc(TeamUsageEventTable.time_created), asc(TeamUsageEventTable.id))
-          .all()
-          .map((row) => ({
-            id: row.id,
-            team_id: row.team_id,
-            session_id: row.session_id ?? undefined,
-            member_id: row.member_id ?? undefined,
-            type: row.type,
-            metadata: row.metadata,
-            time_created: row.time_created,
-          })),
-      )
+      return (yield* db
+        .select()
+        .from(TeamUsageEventTable)
+        .where(eq(TeamUsageEventTable.team_id, teamID))
+        .orderBy(asc(TeamUsageEventTable.time_created), asc(TeamUsageEventTable.id))
+        .all()
+        .pipe(Effect.orDie)).map((row) => ({
+        id: row.id,
+        team_id: row.team_id,
+        session_id: row.session_id ?? undefined,
+        member_id: row.member_id ?? undefined,
+        type: row.type,
+        metadata: row.metadata,
+        time_created: row.time_created,
+      }))
     })
 
     return Service.of({
@@ -728,6 +697,10 @@ export const layer = Layer.effect(
   }).pipe(Effect.withSpan("Team.layer")),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(SessionRunState.defaultLayer), Layer.provide(Bus.layer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(SessionRunState.defaultLayer),
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+)
 
 export * as Team from "./team"

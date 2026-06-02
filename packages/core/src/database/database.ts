@@ -3,6 +3,7 @@ export * as Database from "./database"
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { layer as sqliteLayer } from "#sqlite"
 import { Context, Effect, Layer } from "effect"
+import { makeRuntime } from "../effect/runtime"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
 import { isAbsolute, join } from "path"
@@ -58,3 +59,27 @@ export const defaultLayer = Layer.unwrap(
     return layerFromPath(path())
   }),
 ).pipe(Layer.provide(Global.defaultLayer))
+
+const runtime = makeRuntime(Service, defaultLayer)
+
+export function Client() {
+  return runtime.runSync((service) => Effect.succeed(service.db))
+}
+
+export function use<T>(fn: (db: Interface["db"]) => Effect.Effect<T, unknown, Service>): T
+export function use<T>(fn: (db: Interface["db"]) => T): T
+export function use<T>(fn: (db: Interface["db"]) => T | Effect.Effect<T, unknown, Service>) {
+  return runtime.runSync((service) => {
+    const result = fn(service.db)
+    return Effect.isEffect(result) ? result : Effect.succeed(result)
+  })
+}
+
+export function transaction<T>(fn: (db: Interface["db"]) => T) {
+  return use((db) =>
+    db.transaction(() => {
+      const result = fn(db)
+      return Effect.isEffect(result) ? result : Effect.succeed(result)
+    }, { behavior: "immediate" }),
+  )
+}

@@ -46,7 +46,24 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventTuiPromptAppend2
+  | EventTuiCommandExecute2
+  | EventTuiToastShow2
+  | EventTuiSessionSelect2
+  | EventMcpToolsChanged
+  | EventMcpBrowserOpenFailed
+  | EventPermissionV2Asked
+  | EventPermissionV2Replied
+  | EventPermissionAsked
+  | EventPermissionReplied
+  | EventCommandExecuted
+  | EventProjectDirectoriesUpdated
+  | EventProjectUpdated
   | EventMessagePartDelta
+  | EventSupervisorSettingsUpdated
+  | EventSupervisorStateUpdated
+  | EventSupervisorRecommendationCreated
+  | EventSupervisorReportCompleted
   | EventSessionDiff
   | EventSessionError
   | EventInstallationUpdated
@@ -55,8 +72,6 @@ export type Event =
   | EventAccountAdded
   | EventAccountRemoved
   | EventAccountSwitched
-  | EventPermissionV2Asked
-  | EventPermissionV2Replied
   | EventFileWatcherUpdated
   | EventPtyCreated
   | EventPtyUpdated
@@ -67,37 +82,22 @@ export type Event =
   | EventQuestionV2Rejected
   | EventTodoUpdated
   | EventLspUpdated
-  | EventPermissionAsked
-  | EventPermissionReplied
-  | EventTuiPromptAppend2
-  | EventTuiCommandExecute2
-  | EventTuiToastShow2
-  | EventTuiSessionSelect2
-  | EventMcpToolsChanged
-  | EventMcpBrowserOpenFailed
-  | EventCommandExecuted
-  | EventProjectDirectoriesUpdated
-  | EventProjectUpdated
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
   | EventSessionStatus
   | EventSessionIdle
+  | EventSessionCompacted
   | EventTeamCreated
   | EventTeamClosed
   | EventTeamMemberUpdated
   | EventTeamMessageReceived
-  | EventSessionCompacted
   | EventVcsBranchUpdated
   | EventWorktreeReady
   | EventWorktreeFailed
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
-  | EventSupervisorSettingsUpdated
-  | EventSupervisorStateUpdated
-  | EventSupervisorRecommendationCreated
-  | EventSupervisorReportCompleted
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -154,127 +154,6 @@ export type MoveSessionError = {
   data: {
     message: string
   }
-}
-
-export type SupervisorMode = "off" | "observe" | "advise"
-
-export type SupervisorReviewCadence = "step" | "event" | "idle"
-
-export type SupervisorSessionSettings = {
-  mode?: SupervisorMode
-  recommendation_model?: string
-  recommendation_variant?: string
-  recommendation_timeout_ms?: number
-  review_cadence?: SupervisorReviewCadence
-  min_review_interval_ms?: number
-  max_recommendation_chars?: number
-  max_repeated_command_failures?: number
-  broad_diff_file_limit?: number
-  sensitive_path_globs?: Array<string>
-  validation_command_patterns?: Array<string>
-  insert_recommendations?: boolean
-  max_recommendations_per_session?: number
-  updatedAt: number
-}
-
-export type SupervisorEffectiveConfig = {
-  mode: SupervisorMode
-  recommendation_model?: string
-  recommendation_variant?: string
-  recommendation_timeout_ms: number
-  review_cadence: SupervisorReviewCadence
-  min_review_interval_ms: number
-  max_recommendation_chars: number
-  max_repeated_command_failures: number
-  broad_diff_file_limit: number
-  sensitive_path_globs: Array<string>
-  validation_command_patterns: Array<string>
-  insert_recommendations: boolean
-  max_recommendations_per_session: number
-}
-
-export type SupervisorStatus = "on_track" | "uncertain" | "drifting" | "blocked" | "high_risk"
-
-export type SupervisorTrigger =
-  | "missing_reproduction"
-  | "repeated_command_failure"
-  | "missing_validation"
-  | "scope_expansion"
-  | "risky_edit"
-  | "wrong_localization"
-  | "evidence_mismatch"
-  | "validation_mismatch"
-  | "premature_success"
-  | "less_optimal_action"
-  | "trajectory_drift"
-
-export type SupervisorRisk = {
-  trigger: SupervisorTrigger
-  severity: "info" | "warning" | "high"
-  evidence: Array<string>
-  message: string
-}
-
-export type SupervisorAction = "nudge" | "ask" | "warn"
-
-export type SupervisorRecommendation = {
-  source: "model"
-  action: SupervisorAction
-  trigger: SupervisorTrigger
-  message: string
-  evidence: Array<string>
-  model?: {
-    providerID: string
-    modelID: string
-    variant?: string
-  }
-  inserted?: {
-    messageID?: string
-    partID?: string
-    insertedAt: number
-  }
-}
-
-export type SupervisorState = {
-  sessionID: string
-  mode: SupervisorMode
-  config: {
-    modeSource: "global" | "session"
-    globalMode: SupervisorMode
-    session?: SupervisorSessionSettings
-    effective: SupervisorEffectiveConfig
-  }
-  status: SupervisorStatus
-  summary?: string
-  filesTouched: Array<string>
-  commandsRun: Array<{
-    command: string
-    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    validation: boolean
-    repeatedFailureCount: number
-  }>
-  validationsRun: Array<string>
-  risks: Array<SupervisorRisk>
-  recommendation?: SupervisorRecommendation
-  updatedAt: number
-}
-
-export type SupervisorReport = {
-  sessionID: string
-  status: SupervisorStatus
-  summary?: string
-  filesTouched: Array<string>
-  commandsRun: Array<{
-    command: string
-    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    validation: boolean
-    repeatedFailureCount: number
-  }>
-  validationsRun: Array<string>
-  risks: Array<SupervisorRisk>
-  recommendations: Array<SupervisorRecommendation>
-  evidence: Array<string>
-  generatedAt: number
 }
 
 export type SnapshotFileDiff = {
@@ -338,7 +217,7 @@ export type Session = {
     updated: number
     compacting?: number
     archived?: number
-    processing: number
+    processing?: number
   }
   permission?: PermissionRuleset
   revert?: {
@@ -347,7 +226,6 @@ export type Session = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type OutputFormatText = {
@@ -681,6 +559,7 @@ export type StepFinishPart = {
   type: "step-finish"
   reason: string
   snapshot?: string
+  duration?: number
   cost: number
   tokens: {
     total?: number
@@ -765,6 +644,127 @@ export type Prompt = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   references?: Array<PromptReferenceAttachment>
+}
+
+export type SupervisorMode = "off" | "observe" | "advise"
+
+export type SupervisorReviewCadence = "step" | "event" | "idle"
+
+export type SupervisorSessionSettings = {
+  mode?: SupervisorMode
+  recommendation_model?: string
+  recommendation_variant?: string
+  recommendation_timeout_ms?: number
+  review_cadence?: SupervisorReviewCadence
+  min_review_interval_ms?: number
+  max_recommendation_chars?: number
+  max_repeated_command_failures?: number
+  broad_diff_file_limit?: number
+  sensitive_path_globs?: Array<string>
+  validation_command_patterns?: Array<string>
+  insert_recommendations?: boolean
+  max_recommendations_per_session?: number
+  updatedAt: number
+}
+
+export type SupervisorEffectiveConfig = {
+  mode: SupervisorMode
+  recommendation_model?: string
+  recommendation_variant?: string
+  recommendation_timeout_ms: number
+  review_cadence: SupervisorReviewCadence
+  min_review_interval_ms: number
+  max_recommendation_chars: number
+  max_repeated_command_failures: number
+  broad_diff_file_limit: number
+  sensitive_path_globs: Array<string>
+  validation_command_patterns: Array<string>
+  insert_recommendations: boolean
+  max_recommendations_per_session: number
+}
+
+export type SupervisorStatus = "on_track" | "uncertain" | "drifting" | "blocked" | "high_risk"
+
+export type SupervisorTrigger =
+  | "missing_reproduction"
+  | "repeated_command_failure"
+  | "missing_validation"
+  | "scope_expansion"
+  | "risky_edit"
+  | "wrong_localization"
+  | "evidence_mismatch"
+  | "validation_mismatch"
+  | "premature_success"
+  | "less_optimal_action"
+  | "trajectory_drift"
+
+export type SupervisorRisk = {
+  trigger: SupervisorTrigger
+  severity: "info" | "warning" | "high"
+  evidence: Array<string>
+  message: string
+}
+
+export type SupervisorAction = "nudge" | "ask" | "warn"
+
+export type SupervisorRecommendation = {
+  source: "model"
+  action: SupervisorAction
+  trigger: SupervisorTrigger
+  message: string
+  evidence: Array<string>
+  model?: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  inserted?: {
+    messageID?: string
+    partID?: string
+    insertedAt: number
+  }
+}
+
+export type SupervisorState = {
+  sessionID: string
+  mode: SupervisorMode
+  config: {
+    modeSource: "global" | "session"
+    globalMode: SupervisorMode
+    session?: SupervisorSessionSettings
+    effective: SupervisorEffectiveConfig
+  }
+  status: SupervisorStatus
+  summary?: string
+  filesTouched: Array<string>
+  commandsRun: Array<{
+    command: string
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    validation: boolean
+    repeatedFailureCount: number
+  }>
+  validationsRun: Array<string>
+  risks: Array<SupervisorRisk>
+  recommendation?: SupervisorRecommendation
+  updatedAt: number
+}
+
+export type SupervisorReport = {
+  sessionID: string
+  status: SupervisorStatus
+  summary?: string
+  filesTouched: Array<string>
+  commandsRun: Array<{
+    command: string
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    validation: boolean
+    repeatedFailureCount: number
+  }>
+  validationsRun: Array<string>
+  risks: Array<SupervisorRisk>
+  recommendations: Array<SupervisorRecommendation>
+  evidence: Array<string>
+  generatedAt: number
 }
 
 export type Pty = {
@@ -1327,6 +1327,167 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "tui.prompt.append"
+        properties: {
+          text: string
+        }
+      }
+    | {
+        id: string
+        type: "tui.command.execute"
+        properties: {
+          command:
+            | "session.list"
+            | "session.new"
+            | "session.share"
+            | "session.interrupt"
+            | "session.compact"
+            | "session.page.up"
+            | "session.page.down"
+            | "session.line.up"
+            | "session.line.down"
+            | "session.half.page.up"
+            | "session.half.page.down"
+            | "session.first"
+            | "session.last"
+            | "prompt.clear"
+            | "prompt.submit"
+            | "agent.cycle"
+            | string
+        }
+      }
+    | {
+        id: string
+        type: "tui.toast.show"
+        properties: {
+          title?: string
+          message: string
+          variant: "info" | "success" | "warning" | "error"
+          duration?: number
+        }
+      }
+    | {
+        id: string
+        type: "tui.session.select"
+        properties: {
+          /**
+           * Session ID to navigate to
+           */
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.tools.changed"
+        properties: {
+          server: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.browser.open.failed"
+        properties: {
+          mcpName: string
+          url: string
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.asked"
+        properties: {
+          id: string
+          sessionID: string
+          action: string
+          resources: Array<string>
+          save?: Array<string>
+          metadata?: {
+            [key: string]: unknown
+          }
+          source?: PermissionV2Source
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          reply: PermissionV2Reply
+        }
+      }
+    | {
+        id: string
+        type: "permission.asked"
+        properties: {
+          id: string
+          sessionID: string
+          permission: string
+          patterns: Array<string>
+          metadata: {
+            [key: string]: unknown
+          }
+          always: Array<string>
+          tool?: {
+            messageID: string
+            callID: string
+          }
+        }
+      }
+    | {
+        id: string
+        type: "permission.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          reply: "once" | "always" | "reject"
+        }
+      }
+    | {
+        id: string
+        type: "command.executed"
+        properties: {
+          name: string
+          sessionID: string
+          arguments: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "project.directories.updated"
+        properties: {
+          projectID: string
+        }
+      }
+    | {
+        id: string
+        type: "project.updated"
+        properties: {
+          id: string
+          worktree: string
+          vcs?: "git"
+          name?: string
+          icon?: {
+            url?: string
+            override?: string
+            color?: string
+          }
+          commands?: {
+            /**
+             * Startup script to run when creating a new workspace (worktree)
+             */
+            start?: string
+          }
+          time: {
+            created: number
+            updated: number
+            initialized?: number
+          }
+          sandboxes: Array<string>
+        }
+      }
+    | {
+        id: string
         type: "message.part.delta"
         properties: {
           sessionID: string
@@ -1334,6 +1495,40 @@ export type GlobalEvent = {
           partID: string
           field: string
           delta: string
+        }
+      }
+    | {
+        id: string
+        type: "supervisor.settings.updated"
+        properties: {
+          sessionID: string
+          settings?: SupervisorSessionSettings
+          state: SupervisorState
+        }
+      }
+    | {
+        id: string
+        type: "supervisor.state.updated"
+        properties: {
+          sessionID: string
+          state: SupervisorState
+        }
+      }
+    | {
+        id: string
+        type: "supervisor.recommendation.created"
+        properties: {
+          sessionID: string
+          recommendation: SupervisorRecommendation
+          state: SupervisorState
+        }
+      }
+    | {
+        id: string
+        type: "supervisor.report.completed"
+        properties: {
+          sessionID: string
+          report: SupervisorReport
         }
       }
     | {
@@ -1401,30 +1596,6 @@ export type GlobalEvent = {
           serviceID: string
           from?: string
           to?: string
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.asked"
-        properties: {
-          id: string
-          sessionID: string
-          action: string
-          resources: Array<string>
-          save?: Array<string>
-          metadata?: {
-            [key: string]: unknown
-          }
-          source?: PermissionV2Source
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          reply: PermissionV2Reply
         }
       }
     | {
@@ -1511,143 +1682,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "permission.asked"
-        properties: {
-          id: string
-          sessionID: string
-          permission: string
-          patterns: Array<string>
-          metadata: {
-            [key: string]: unknown
-          }
-          always: Array<string>
-          tool?: {
-            messageID: string
-            callID: string
-          }
-        }
-      }
-    | {
-        id: string
-        type: "permission.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          reply: "once" | "always" | "reject"
-        }
-      }
-    | {
-        id: string
-        type: "tui.prompt.append"
-        properties: {
-          text: string
-        }
-      }
-    | {
-        id: string
-        type: "tui.command.execute"
-        properties: {
-          command:
-            | "session.list"
-            | "session.new"
-            | "session.share"
-            | "session.interrupt"
-            | "session.compact"
-            | "session.page.up"
-            | "session.page.down"
-            | "session.line.up"
-            | "session.line.down"
-            | "session.half.page.up"
-            | "session.half.page.down"
-            | "session.first"
-            | "session.last"
-            | "prompt.clear"
-            | "prompt.submit"
-            | "agent.cycle"
-            | string
-        }
-      }
-    | {
-        id: string
-        type: "tui.toast.show"
-        properties: {
-          title?: string
-          message: string
-          variant: "info" | "success" | "warning" | "error"
-          duration?: number
-        }
-      }
-    | {
-        id: string
-        type: "tui.session.select"
-        properties: {
-          /**
-           * Session ID to navigate to
-           */
-          sessionID: string
-        }
-      }
-    | {
-        id: string
-        type: "mcp.tools.changed"
-        properties: {
-          server: string
-        }
-      }
-    | {
-        id: string
-        type: "mcp.browser.open.failed"
-        properties: {
-          mcpName: string
-          url: string
-        }
-      }
-    | {
-        id: string
-        type: "command.executed"
-        properties: {
-          name: string
-          sessionID: string
-          arguments: string
-          messageID: string
-        }
-      }
-    | {
-        id: string
-        type: "project.directories.updated"
-        properties: {
-          projectID: string
-        }
-      }
-    | {
-        id: string
-        type: "project.updated"
-        properties: {
-          id: string
-          worktree: string
-          vcs?: "git"
-          name?: string
-          icon?: {
-            url?: string
-            override?: string
-            color?: string
-          }
-          commands?: {
-            /**
-             * Startup script to run when creating a new workspace (worktree)
-             */
-            start?: string
-          }
-          time: {
-            created: number
-            updated: number
-            initialized?: number
-          }
-          sandboxes: Array<string>
-        }
-      }
-    | {
-        id: string
         type: "question.asked"
         properties: {
           id: string
@@ -1700,6 +1734,38 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "team.created"
+        properties: {
+          teamID: string
+        }
+      }
+    | {
+        id: string
+        type: "team.closed"
+        properties: {
+          teamID: string
+        }
+      }
+    | {
+        id: string
+        type: "team.member.updated"
+        properties: {
+          memberID: string
+          sessionID: string
+          status: string
+        }
+      }
+    | {
+        id: string
+        type: "team.message.received"
+        properties: {
+          messageID: string
+          teamID: string
+          sender: string
+        }
+      }
+    | {
+        id: string
         type: "vcs.branch.updated"
         properties: {
           branch?: string
@@ -1742,10 +1808,6 @@ export type GlobalEvent = {
           status: "connected" | "connecting" | "disconnected" | "error"
         }
       }
-    | EventSupervisorSettingsUpdated
-    | EventSupervisorStateUpdated
-    | EventSupervisorRecommendationCreated
-    | EventSupervisorReportCompleted
     | {
         id: string
         type: "server.connected"
@@ -1795,45 +1857,6 @@ export type GlobalEvent = {
     | SyncEventSessionNextRetried
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextCompactionEnded
-}
-
-export type SandboxPathToken = string
-
-export type SandboxProfile = {
-  filesystem?: {
-    read?: Array<SandboxPathToken>
-    write?: Array<SandboxPathToken>
-    protected?: Array<SandboxPathToken>
-  }
-  network?:
-    | {
-        mode: "none"
-      }
-    | {
-        mode: "allowlist"
-        hosts: Array<string>
-      }
-    | {
-        mode: "full"
-        requiresApproval?: boolean
-      }
-  process?: {
-    hideHostProcesses?: boolean
-    killTreeOnExit?: boolean
-  }
-  resources?: {
-    memoryMegabytes?: number
-    processLimit?: number
-    timeSeconds?: number
-  }
-}
-
-export type SandboxConfig = {
-  enabled?: boolean
-  defaultProfile?: string
-  profiles?: {
-    [key: string]: SandboxProfile
-  }
 }
 
 /**
@@ -2101,22 +2124,6 @@ export type MemoryConfig = {
   }
 }
 
-export type SupervisorConfig = {
-  mode?: SupervisorMode
-  recommendation_model?: string
-  recommendation_variant?: string
-  recommendation_timeout_ms?: number
-  review_cadence?: SupervisorReviewCadence
-  min_review_interval_ms?: number
-  max_recommendation_chars?: number
-  max_repeated_command_failures?: number
-  broad_diff_file_limit?: number
-  sensitive_path_globs?: Array<string>
-  validation_command_patterns?: Array<string>
-  insert_recommendations?: boolean
-  max_recommendations_per_session?: number
-}
-
 /**
  * @deprecated Always uses stretch layout.
  */
@@ -2136,7 +2143,6 @@ export type AttachmentConfig = {
 export type Config = {
   $schema?: string
   shell?: string
-  sandbox?: SandboxConfig
   logLevel?: LogLevel
   server?: ServerConfig
   command?: {
@@ -2177,7 +2183,6 @@ export type Config = {
   enabled_providers?: Array<string>
   model?: string
   small_model?: string
-  supervisor?: SupervisorConfig
   default_agent?: string
   username?: string
   mode?: {
@@ -2273,6 +2278,7 @@ export type Config = {
     continue_loop_on_deny?: boolean
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
+    agent_teams?: boolean
   }
 }
 
@@ -2499,23 +2505,6 @@ export type McpResource = {
   client: string
 }
 
-export type SupervisorSettingsPatch = {
-  reset?: boolean
-  mode?: SupervisorMode | null
-  recommendation_model?: string | null
-  recommendation_variant?: string | null
-  recommendation_timeout_ms?: number | null
-  review_cadence?: SupervisorReviewCadence | null
-  min_review_interval_ms?: number | null
-  max_recommendation_chars?: number | null
-  max_repeated_command_failures?: number | null
-  broad_diff_file_limit?: number | null
-  sensitive_path_globs?: Array<string> | null
-  validation_command_patterns?: Array<string> | null
-  insert_recommendations?: boolean | null
-  max_recommendations_per_session?: number | null
-}
-
 export type Symbol = {
   name: string
   kind: number
@@ -2738,6 +2727,13 @@ export type MemoryCommitSearchResponse = {
   commits: Array<MemoryCommitSearchItem>
 }
 
+export type NotFoundError = {
+  name: "NotFoundError"
+  data: {
+    message: string
+  }
+}
+
 export type MemoryCommitResponse = {
   repository: string
   hash: string
@@ -2944,11 +2940,114 @@ export type ReferenceDescriptor =
       message: string
     }
 
-export type NotFoundError = {
-  name: "NotFoundError"
-  data: {
-    message: string
+export type Session1 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
   }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
+}
+
+export type Session2 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
 }
 
 export type SessionRoot = {
@@ -2961,6 +3060,133 @@ export type SessionRoot = {
   path?: string
   created: number
   primary: boolean
+}
+
+export type Session3 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
+}
+
+export type Session4 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
+}
+
+export type SupervisorSettingsPatch = {
+  reset?: boolean
+  mode?: SupervisorMode | null
+  recommendation_model?: string | null
+  recommendation_variant?: string | null
+  recommendation_timeout_ms?: number | null
+  review_cadence?: SupervisorReviewCadence | null
+  min_review_interval_ms?: number | null
+  max_recommendation_chars?: number | null
+  max_repeated_command_failures?: number | null
+  broad_diff_file_limit?: number | null
+  sensitive_path_globs?: Array<string> | null
+  validation_command_patterns?: Array<string> | null
+  insert_recommendations?: boolean | null
+  max_recommendations_per_session?: number | null
 }
 
 export type SupervisorActivityType = "file" | "command" | "validation" | "risk" | "recommendation" | "settings"
@@ -2986,6 +3212,171 @@ export type SupervisorActivity = {
   message?: string
   evidence: Array<string>
   metadata?: SupervisorActivityMetadata
+}
+
+export type Session5 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
+}
+
+export type Session6 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
+}
+
+export type Session7 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
 }
 
 export type TextPartInput = {
@@ -3040,6 +3431,226 @@ export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
   message: string
+}
+
+export type Session8 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
+}
+
+export type Session9 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+    processing: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  supervisor?: SupervisorSessionSettings
+}
+
+export type TeamInfo = {
+  id: string
+  name: string
+  goal: string
+  lead_session_id: string
+  status: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TeamEvalNode = {
+  id: string
+  type: "team" | "member" | "task" | "message" | "session_step" | "tool_call" | "result"
+  ref: string
+  label?: string
+  status?: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  metadata?: {
+    [key: string]: unknown
+  }
+}
+
+export type TeamEvalEdge = {
+  id: string
+  type: "lead_to_member" | "depends_on" | "message_to" | "produces" | "contains" | "session_event" | "propagates_to"
+  from: string
+  to: string
+  metadata?: {
+    [key: string]: unknown
+  }
+}
+
+export type TeamEvalFinding = {
+  id: string
+  severity: "info" | "warning" | "error"
+  category:
+    | "planning.goal_or_decomposition"
+    | "planning.missing_or_wrong_dependency"
+    | "execution.unknown_agent"
+    | "execution.cancelled_member"
+    | "execution.empty_result"
+    | "execution.stuck_or_blocked"
+    | "messaging.pending_delivery"
+    | "messaging.missing_progress"
+    | "integration.context_loss"
+    | "integration.premature_shutdown"
+    | "structure.unexpected_or_missing_edge"
+    | "shallow_usage"
+    | "missing_task_list"
+    | "missing_final_report"
+  node_id: string
+  message: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  root_cause: boolean
+  propagated_from?: string
+  metadata?: {
+    [key: string]: unknown
+  }
+}
+
+export type TeamUsageMetrics = {
+  work_item_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  task_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  member_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  dependency_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  plan_mode_member_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  plan_approval_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  broadcast_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  final_report_generated: boolean
+  shallow_usage: boolean
+}
+
+export type TeamEvalReport = {
+  team_id: string
+  generated_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  nodes: Array<TeamEvalNode>
+  edges: Array<TeamEvalEdge>
+  findings: Array<TeamEvalFinding>
+  summary: {
+    node_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    edge_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    root_cause_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    propagated_failure_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    structural_deviation_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    longest_dependency_chain: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    usage: TeamUsageMetrics
+  }
+}
+
+export type TeamTask = {
+  id: string
+  team_id: string
+  description: string
+  status: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TeamMessage = {
+  id: string
+  team_id: string
+  sender: string
+  recipients: Array<string>
+  body: string
+  delivery_status: string
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type EventTuiPromptAppend = {
@@ -3174,116 +3785,6 @@ export type ProviderNotFoundError = {
   message: string
 }
 
-export type TeamInfo = {
-  id: string
-  name: string
-  goal: string
-  lead_session_id: string
-  status: string
-  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-}
-
-export type TeamEvalNode = {
-  id: string
-  type: "team" | "member" | "task" | "message" | "session_step" | "tool_call" | "result"
-  ref: string
-  label?: string
-  status?: string
-  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  time_updated?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  metadata?: {
-    [key: string]: unknown
-  }
-}
-
-export type TeamEvalEdge = {
-  id: string
-  type: "lead_to_member" | "depends_on" | "message_to" | "produces" | "contains" | "session_event" | "propagates_to"
-  from: string
-  to: string
-  metadata?: {
-    [key: string]: unknown
-  }
-}
-
-export type TeamEvalFinding = {
-  id: string
-  severity: "info" | "warning" | "error"
-  category:
-    | "planning.goal_or_decomposition"
-    | "planning.missing_or_wrong_dependency"
-    | "execution.unknown_agent"
-    | "execution.cancelled_member"
-    | "execution.empty_result"
-    | "execution.stuck_or_blocked"
-    | "messaging.pending_delivery"
-    | "messaging.missing_progress"
-    | "integration.context_loss"
-    | "integration.premature_shutdown"
-    | "structure.unexpected_or_missing_edge"
-    | "shallow_usage"
-    | "missing_task_list"
-    | "missing_final_report"
-  node_id: string
-  message: string
-  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  root_cause: boolean
-  propagated_from?: string
-  metadata?: {
-    [key: string]: unknown
-  }
-}
-
-export type TeamUsageMetrics = {
-  work_item_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  task_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  member_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  dependency_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  plan_mode_member_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  plan_approval_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  broadcast_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  final_report_generated: boolean
-  shallow_usage: boolean
-}
-
-export type TeamEvalReport = {
-  team_id: string
-  generated_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  nodes: Array<TeamEvalNode>
-  edges: Array<TeamEvalEdge>
-  findings: Array<TeamEvalFinding>
-  summary: {
-    node_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    edge_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    root_cause_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    propagated_failure_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    structural_deviation_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    longest_dependency_chain: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    usage: TeamUsageMetrics
-  }
-}
-
-export type TeamTask = {
-  id: string
-  team_id: string
-  description: string
-  status: string
-  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-}
-
-export type TeamMessage = {
-  id: string
-  team_id: string
-  sender: string
-  recipients: Array<string>
-  body: string
-  delivery_status: string
-  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-}
-
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
 }
@@ -3341,6 +3842,48 @@ export type EventTuiSessionSelect2 = {
      */
     sessionID: string
   }
+}
+
+export type SupervisorState3 = {
+  sessionID: string
+  mode: SupervisorMode
+  config: {
+    modeSource: "global" | "session"
+    globalMode: SupervisorMode
+    session?: SupervisorSessionSettings
+    effective: SupervisorEffectiveConfig
+  }
+  status: SupervisorStatus
+  summary?: string
+  filesTouched: Array<string>
+  commandsRun: Array<{
+    command: string
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity"
+    validation: boolean
+    repeatedFailureCount: number
+  }>
+  validationsRun: Array<string>
+  risks: Array<SupervisorRisk>
+  recommendation?: SupervisorRecommendation
+  updatedAt: number
+}
+
+export type SupervisorReport2 = {
+  sessionID: string
+  status: SupervisorStatus
+  summary?: string
+  filesTouched: Array<string>
+  commandsRun: Array<{
+    command: string
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity"
+    validation: boolean
+    repeatedFailureCount: number
+  }>
+  validationsRun: Array<string>
+  risks: Array<SupervisorRisk>
+  recommendations: Array<SupervisorRecommendation>
+  evidence: Array<string>
+  generatedAt: number
 }
 
 export type MoveSessionDestination = {
@@ -3521,6 +4064,14 @@ export type SessionNextRetryError = {
   }
 }
 
+export type PermissionV2Source = {
+  type: "tool"
+  messageID: string
+  callID: string
+}
+
+export type PermissionV2Reply = "once" | "always" | "reject"
+
 export type AuthOAuthCredential = {
   type: "oauth"
   refresh: string
@@ -3544,14 +4095,6 @@ export type AuthInfo = {
   description: string
   credential: AuthCredential
 }
-
-export type PermissionV2Source = {
-  type: "tool"
-  messageID: string
-  callID: string
-}
-
-export type PermissionV2Reply = "once" | "always" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -4322,7 +4865,6 @@ export type SessionV2Info = {
     created: number
     updated: number
     archived?: number
-    processing: number
   }
   title: string
   location: LocationRef
@@ -5302,6 +5844,125 @@ export type EventSessionNextCompactionEnded = {
   }
 }
 
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
+  }
+}
+
+export type EventPermissionV2Asked = {
+  id: string
+  type: "permission.v2.asked"
+  properties: {
+    id: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    save?: Array<string>
+    metadata?: {
+      [key: string]: unknown
+    }
+    source?: PermissionV2Source
+  }
+}
+
+export type EventPermissionV2Replied = {
+  id: string
+  type: "permission.v2.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: PermissionV2Reply
+  }
+}
+
+export type EventPermissionAsked = {
+  id: string
+  type: "permission.asked"
+  properties: {
+    id: string
+    sessionID: string
+    permission: string
+    patterns: Array<string>
+    metadata: {
+      [key: string]: unknown
+    }
+    always: Array<string>
+    tool?: {
+      messageID: string
+      callID: string
+    }
+  }
+}
+
+export type EventPermissionReplied = {
+  id: string
+  type: "permission.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: "once" | "always" | "reject"
+  }
+}
+
+export type EventCommandExecuted = {
+  id: string
+  type: "command.executed"
+  properties: {
+    name: string
+    sessionID: string
+    arguments: string
+    messageID: string
+  }
+}
+
+export type EventProjectDirectoriesUpdated = {
+  id: string
+  type: "project.directories.updated"
+  properties: {
+    projectID: string
+  }
+}
+
+export type EventProjectUpdated = {
+  id: string
+  type: "project.updated"
+  properties: {
+    id: string
+    worktree: string
+    vcs?: "git"
+    name?: string
+    icon?: {
+      url?: string
+      override?: string
+      color?: string
+    }
+    commands?: {
+      /**
+       * Startup script to run when creating a new workspace (worktree)
+       */
+      start?: string
+    }
+    time: {
+      created: number
+      updated: number
+      initialized?: number
+    }
+    sandboxes: Array<string>
+  }
+}
+
 export type EventMessagePartDelta = {
   id: string
   type: "message.part.delta"
@@ -5311,6 +5972,44 @@ export type EventMessagePartDelta = {
     partID: string
     field: string
     delta: string
+  }
+}
+
+export type EventSupervisorSettingsUpdated = {
+  id: string
+  type: "supervisor.settings.updated"
+  properties: {
+    sessionID: string
+    settings?: SupervisorSessionSettings
+    state: SupervisorState3
+  }
+}
+
+export type EventSupervisorStateUpdated = {
+  id: string
+  type: "supervisor.state.updated"
+  properties: {
+    sessionID: string
+    state: SupervisorState3
+  }
+}
+
+export type EventSupervisorRecommendationCreated = {
+  id: string
+  type: "supervisor.recommendation.created"
+  properties: {
+    sessionID: string
+    recommendation: SupervisorRecommendation
+    state: SupervisorState3
+  }
+}
+
+export type EventSupervisorReportCompleted = {
+  id: string
+  type: "supervisor.report.completed"
+  properties: {
+    sessionID: string
+    report: SupervisorReport2
   }
 }
 
@@ -5389,32 +6088,6 @@ export type EventAccountSwitched = {
   }
 }
 
-export type EventPermissionV2Asked = {
-  id: string
-  type: "permission.v2.asked"
-  properties: {
-    id: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    save?: Array<string>
-    metadata?: {
-      [key: string]: unknown
-    }
-    source?: PermissionV2Source
-  }
-}
-
-export type EventPermissionV2Replied = {
-  id: string
-  type: "permission.v2.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    reply: PermissionV2Reply
-  }
-}
-
 export type EventFileWatcherUpdated = {
   id: string
   type: "file.watcher.updated"
@@ -5490,42 +6163,6 @@ export type EventQuestionV2Rejected = {
   }
 }
 
-export type EventTeamCreated = {
-  id: string
-  type: "team.created"
-  properties: {
-    teamID: string
-  }
-}
-
-export type EventTeamClosed = {
-  id: string
-  type: "team.closed"
-  properties: {
-    teamID: string
-  }
-}
-
-export type EventTeamMemberUpdated = {
-  id: string
-  type: "team.member.updated"
-  properties: {
-    memberID: string
-    sessionID: string
-    status: string
-  }
-}
-
-export type EventTeamMessageReceived = {
-  id: string
-  type: "team.message.received"
-  properties: {
-    messageID: string
-    teamID: string
-    sender: string
-  }
-}
-
 export type EventTodoUpdated = {
   id: string
   type: "todo.updated"
@@ -5540,99 +6177,6 @@ export type EventLspUpdated = {
   type: "lsp.updated"
   properties: {
     [key: string]: unknown
-  }
-}
-
-export type EventPermissionAsked = {
-  id: string
-  type: "permission.asked"
-  properties: {
-    id: string
-    sessionID: string
-    permission: string
-    patterns: Array<string>
-    metadata: {
-      [key: string]: unknown
-    }
-    always: Array<string>
-    tool?: {
-      messageID: string
-      callID: string
-    }
-  }
-}
-
-export type EventPermissionReplied = {
-  id: string
-  type: "permission.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    reply: "once" | "always" | "reject"
-  }
-}
-
-export type EventMcpToolsChanged = {
-  id: string
-  type: "mcp.tools.changed"
-  properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
-  }
-}
-
-export type EventCommandExecuted = {
-  id: string
-  type: "command.executed"
-  properties: {
-    name: string
-    sessionID: string
-    arguments: string
-    messageID: string
-  }
-}
-
-export type EventProjectDirectoriesUpdated = {
-  id: string
-  type: "project.directories.updated"
-  properties: {
-    projectID: string
-  }
-}
-
-export type EventProjectUpdated = {
-  id: string
-  type: "project.updated"
-  properties: {
-    id: string
-    worktree: string
-    vcs?: "git"
-    name?: string
-    icon?: {
-      url?: string
-      override?: string
-      color?: string
-    }
-    commands?: {
-      /**
-       * Startup script to run when creating a new workspace (worktree)
-       */
-      start?: string
-    }
-    time: {
-      created: number
-      updated: number
-      initialized?: number
-    }
-    sandboxes: Array<string>
   }
 }
 
@@ -5694,6 +6238,42 @@ export type EventSessionCompacted = {
   }
 }
 
+export type EventTeamCreated = {
+  id: string
+  type: "team.created"
+  properties: {
+    teamID: string
+  }
+}
+
+export type EventTeamClosed = {
+  id: string
+  type: "team.closed"
+  properties: {
+    teamID: string
+  }
+}
+
+export type EventTeamMemberUpdated = {
+  id: string
+  type: "team.member.updated"
+  properties: {
+    memberID: string
+    sessionID: string
+    status: string
+  }
+}
+
+export type EventTeamMessageReceived = {
+  id: string
+  type: "team.message.received"
+  properties: {
+    messageID: string
+    teamID: string
+    sender: string
+  }
+}
+
 export type EventVcsBranchUpdated = {
   id: string
   type: "vcs.branch.updated"
@@ -5741,44 +6321,6 @@ export type EventWorkspaceStatus = {
   properties: {
     workspaceID: string
     status: "connected" | "connecting" | "disconnected" | "error"
-  }
-}
-
-export type EventSupervisorSettingsUpdated = {
-  id: string
-  type: "supervisor.settings.updated"
-  properties: {
-    sessionID: string
-    settings?: SupervisorSessionSettings
-    state: SupervisorState
-  }
-}
-
-export type EventSupervisorStateUpdated = {
-  id: string
-  type: "supervisor.state.updated"
-  properties: {
-    sessionID: string
-    state: SupervisorState
-  }
-}
-
-export type EventSupervisorRecommendationCreated = {
-  id: string
-  type: "supervisor.recommendation.created"
-  properties: {
-    sessionID: string
-    recommendation: SupervisorRecommendation
-    state: SupervisorState
-  }
-}
-
-export type EventSupervisorReportCompleted = {
-  id: string
-  type: "supervisor.report.completed"
-  properties: {
-    sessionID: string
-    report: SupervisorReport
   }
 }
 
@@ -8440,6 +8982,223 @@ export type ReferenceListResponses = {
 
 export type ReferenceListResponse = ReferenceListResponses[keyof ReferenceListResponses]
 
+export type SessionListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    scope?: "project"
+    path?: string
+    roots?: boolean | "true" | "false"
+    start?: number
+    search?: string
+    limit?: number
+  }
+  url: "/session"
+}
+
+export type SessionListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SessionListError = SessionListErrors[keyof SessionListErrors]
+
+export type SessionListResponses = {
+  /**
+   * List of sessions
+   */
+  200: Array<Session1>
+}
+
+export type SessionListResponse = SessionListResponses[keyof SessionListResponses]
+
+export type SessionCreateData = {
+  body?: {
+    parentID?: string
+    title?: string
+    agent?: string
+    model?: {
+      id: string
+      providerID: string
+      variant?: string
+    }
+    metadata?: {
+      [key: string]: unknown
+    }
+    permission?: PermissionRuleset
+    workspaceID?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session"
+}
+
+export type SessionCreateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type SessionCreateError = SessionCreateErrors[keyof SessionCreateErrors]
+
+export type SessionCreateResponses = {
+  /**
+   * Successfully created session
+   */
+  200: Session3
+}
+
+export type SessionCreateResponse = SessionCreateResponses[keyof SessionCreateResponses]
+
+export type SessionStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/status"
+}
+
+export type SessionStatusErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type SessionStatusError = SessionStatusErrors[keyof SessionStatusErrors]
+
+export type SessionStatusResponses = {
+  /**
+   * Get session status
+   */
+  200: {
+    [key: string]: SessionStatus
+  }
+}
+
+export type SessionStatusResponse = SessionStatusResponses[keyof SessionStatusResponses]
+
+export type SessionDeleteData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}"
+}
+
+export type SessionDeleteErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
+
+export type SessionDeleteResponses = {
+  /**
+   * Successfully deleted session
+   */
+  200: boolean
+}
+
+export type SessionDeleteResponse = SessionDeleteResponses[keyof SessionDeleteResponses]
+
+export type SessionGetData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}"
+}
+
+export type SessionGetErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionGetError = SessionGetErrors[keyof SessionGetErrors]
+
+export type SessionGetResponses = {
+  /**
+   * Get session
+   */
+  200: Session2
+}
+
+export type SessionGetResponse = SessionGetResponses[keyof SessionGetResponses]
+
+export type SessionUpdateData = {
+  body?: {
+    title?: string
+    metadata?: {
+      [key: string]: unknown
+    }
+    permission?: PermissionRuleset
+    time?: {
+      archived?: number
+    }
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}"
+}
+
+export type SessionUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionUpdateError = SessionUpdateErrors[keyof SessionUpdateErrors]
+
+export type SessionUpdateResponses = {
+  /**
+   * Successfully updated session
+   */
+  200: Session4
+}
+
+export type SessionUpdateResponse = SessionUpdateResponses[keyof SessionUpdateResponses]
+
 export type SessionRootListData = {
   body?: never
   path: {
@@ -8584,223 +9343,6 @@ export type SessionRootUpdateResponses = {
 
 export type SessionRootUpdateResponse = SessionRootUpdateResponses[keyof SessionRootUpdateResponses]
 
-export type SessionListData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-    scope?: "project"
-    path?: string
-    roots?: boolean | "true" | "false"
-    start?: number
-    search?: string
-    limit?: number
-  }
-  url: "/session"
-}
-
-export type SessionListErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type SessionListError = SessionListErrors[keyof SessionListErrors]
-
-export type SessionListResponses = {
-  /**
-   * List of sessions
-   */
-  200: Array<Session>
-}
-
-export type SessionListResponse = SessionListResponses[keyof SessionListResponses]
-
-export type SessionCreateData = {
-  body?: {
-    parentID?: string
-    title?: string
-    agent?: string
-    model?: {
-      id: string
-      providerID: string
-      variant?: string
-    }
-    metadata?: {
-      [key: string]: unknown
-    }
-    permission?: PermissionRuleset
-    workspaceID?: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session"
-}
-
-export type SessionCreateErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type SessionCreateError = SessionCreateErrors[keyof SessionCreateErrors]
-
-export type SessionCreateResponses = {
-  /**
-   * Successfully created session
-   */
-  200: Session
-}
-
-export type SessionCreateResponse = SessionCreateResponses[keyof SessionCreateResponses]
-
-export type SessionStatusData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/status"
-}
-
-export type SessionStatusErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type SessionStatusError = SessionStatusErrors[keyof SessionStatusErrors]
-
-export type SessionStatusResponses = {
-  /**
-   * Get session status
-   */
-  200: {
-    [key: string]: SessionStatus
-  }
-}
-
-export type SessionStatusResponse = SessionStatusResponses[keyof SessionStatusResponses]
-
-export type SessionDeleteData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}"
-}
-
-export type SessionDeleteErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
-
-export type SessionDeleteResponses = {
-  /**
-   * Successfully deleted session
-   */
-  200: boolean
-}
-
-export type SessionDeleteResponse = SessionDeleteResponses[keyof SessionDeleteResponses]
-
-export type SessionGetData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}"
-}
-
-export type SessionGetErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionGetError = SessionGetErrors[keyof SessionGetErrors]
-
-export type SessionGetResponses = {
-  /**
-   * Get session
-   */
-  200: Session
-}
-
-export type SessionGetResponse = SessionGetResponses[keyof SessionGetResponses]
-
-export type SessionUpdateData = {
-  body?: {
-    title?: string
-    metadata?: {
-      [key: string]: unknown
-    }
-    permission?: PermissionRuleset
-    time?: {
-      archived?: number
-    }
-  }
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}"
-}
-
-export type SessionUpdateErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionUpdateError = SessionUpdateErrors[keyof SessionUpdateErrors]
-
-export type SessionUpdateResponses = {
-  /**
-   * Successfully updated session
-   */
-  200: Session
-}
-
-export type SessionUpdateResponse = SessionUpdateResponses[keyof SessionUpdateResponses]
-
 export type SessionChildrenData = {
   body?: never
   path: {
@@ -8830,7 +9372,7 @@ export type SessionChildrenResponses = {
   /**
    * List of children
    */
-  200: Array<Session>
+  200: Array<Session1>
 }
 
 export type SessionChildrenResponse = SessionChildrenResponses[keyof SessionChildrenResponses]
@@ -9236,7 +9778,7 @@ export type SessionForkResponses = {
   /**
    * 200
    */
-  200: Session
+  200: Session5
 }
 
 export type SessionForkResponse = SessionForkResponses[keyof SessionForkResponses]
@@ -9342,7 +9884,7 @@ export type SessionUnshareResponses = {
   /**
    * Successfully unshared session
    */
-  200: Session
+  200: Session7
 }
 
 export type SessionUnshareResponse = SessionUnshareResponses[keyof SessionUnshareResponses]
@@ -9380,7 +9922,7 @@ export type SessionShareResponses = {
   /**
    * Successfully shared session
    */
-  200: Session
+  200: Session6
 }
 
 export type SessionShareResponse = SessionShareResponses[keyof SessionShareResponses]
@@ -9609,7 +10151,7 @@ export type SessionRevertResponses = {
   /**
    * Updated session
    */
-  200: Session
+  200: Session8
 }
 
 export type SessionRevertResponse = SessionRevertResponses[keyof SessionRevertResponses]
@@ -9647,7 +10189,7 @@ export type SessionUnrevertResponses = {
   /**
    * Updated session
    */
-  200: Session
+  200: Session9
 }
 
 export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnrevertResponses]
@@ -9899,6 +10441,168 @@ export type SyncHistoryListResponses = {
 }
 
 export type SyncHistoryListResponse = SyncHistoryListResponses[keyof SyncHistoryListResponses]
+
+export type TeamGetData = {
+  body?: never
+  path?: never
+  query: {
+    sessionID: string
+  }
+  url: "/team"
+}
+
+export type TeamGetErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type TeamGetError = TeamGetErrors[keyof TeamGetErrors]
+
+export type TeamGetResponses = {
+  /**
+   * Team info
+   */
+  200: TeamInfo
+}
+
+export type TeamGetResponse = TeamGetResponses[keyof TeamGetResponses]
+
+export type TeamEvalData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: never
+  url: "/team/{teamID}/eval"
+}
+
+export type TeamEvalErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type TeamEvalError = TeamEvalErrors[keyof TeamEvalErrors]
+
+export type TeamEvalResponses = {
+  /**
+   * Team evaluation report
+   */
+  200: TeamEvalReport
+}
+
+export type TeamEvalResponse = TeamEvalResponses[keyof TeamEvalResponses]
+
+export type TeamGetByIdData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: never
+  url: "/team/{teamID}"
+}
+
+export type TeamGetByIdErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type TeamGetByIdError = TeamGetByIdErrors[keyof TeamGetByIdErrors]
+
+export type TeamGetByIdResponses = {
+  /**
+   * Team info
+   */
+  200: TeamInfo
+}
+
+export type TeamGetByIdResponse = TeamGetByIdResponses[keyof TeamGetByIdResponses]
+
+export type TeamTasksData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: never
+  url: "/team/{teamID}/tasks"
+}
+
+export type TeamTasksErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type TeamTasksError = TeamTasksErrors[keyof TeamTasksErrors]
+
+export type TeamTasksResponses = {
+  /**
+   * Team tasks
+   */
+  200: Array<TeamTask>
+}
+
+export type TeamTasksResponse = TeamTasksResponses[keyof TeamTasksResponses]
+
+export type TeamMessagesData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: never
+  url: "/team/{teamID}/messages"
+}
+
+export type TeamMessagesErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type TeamMessagesError = TeamMessagesErrors[keyof TeamMessagesErrors]
+
+export type TeamMessagesResponses = {
+  /**
+   * Team messages
+   */
+  200: Array<TeamMessage>
+}
+
+export type TeamMessagesResponse = TeamMessagesResponses[keyof TeamMessagesResponses]
+
+export type TeamShutdownData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query?: never
+  url: "/team/{teamID}/shutdown"
+}
+
+export type TeamShutdownErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type TeamShutdownError = TeamShutdownErrors[keyof TeamShutdownErrors]
+
+export type TeamShutdownResponses = {
+  /**
+   * Team shut down
+   */
+  200: boolean
+}
+
+export type TeamShutdownResponse = TeamShutdownResponses[keyof TeamShutdownResponses]
 
 export type TuiAppendPromptData = {
   body?: {
@@ -10963,185 +11667,6 @@ export type V2ProviderGetResponses = {
 }
 
 export type V2ProviderGetResponse = V2ProviderGetResponses[keyof V2ProviderGetResponses]
-
-export type TeamGetData = {
-  body?: never
-  path?: never
-  query: {
-    directory?: string
-    workspace?: string
-    sessionID: string
-  }
-  url: "/team"
-}
-
-export type TeamGetErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TeamGetError = TeamGetErrors[keyof TeamGetErrors]
-
-export type TeamGetResponses = {
-  /**
-   * Team info
-   */
-  200: TeamInfo
-}
-
-export type TeamGetResponse = TeamGetResponses[keyof TeamGetResponses]
-
-export type TeamEvalData = {
-  body?: never
-  path: {
-    teamID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/team/{teamID}/eval"
-}
-
-export type TeamEvalErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TeamEvalError = TeamEvalErrors[keyof TeamEvalErrors]
-
-export type TeamEvalResponses = {
-  /**
-   * Team evaluation report
-   */
-  200: TeamEvalReport
-}
-
-export type TeamEvalResponse = TeamEvalResponses[keyof TeamEvalResponses]
-
-export type TeamGetByIdData = {
-  body?: never
-  path: {
-    teamID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/team/{teamID}"
-}
-
-export type TeamGetByIdErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TeamGetByIdError = TeamGetByIdErrors[keyof TeamGetByIdErrors]
-
-export type TeamGetByIdResponses = {
-  /**
-   * Team info
-   */
-  200: TeamInfo
-}
-
-export type TeamGetByIdResponse = TeamGetByIdResponses[keyof TeamGetByIdResponses]
-
-export type TeamTasksData = {
-  body?: never
-  path: {
-    teamID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/team/{teamID}/tasks"
-}
-
-export type TeamTasksErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TeamTasksError = TeamTasksErrors[keyof TeamTasksErrors]
-
-export type TeamTasksResponses = {
-  /**
-   * Team tasks
-   */
-  200: Array<TeamTask>
-}
-
-export type TeamTasksResponse = TeamTasksResponses[keyof TeamTasksResponses]
-
-export type TeamMessagesData = {
-  body?: never
-  path: {
-    teamID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/team/{teamID}/messages"
-}
-
-export type TeamMessagesErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TeamMessagesError = TeamMessagesErrors[keyof TeamMessagesErrors]
-
-export type TeamMessagesResponses = {
-  /**
-   * Team messages
-   */
-  200: Array<TeamMessage>
-}
-
-export type TeamMessagesResponse = TeamMessagesResponses[keyof TeamMessagesResponses]
-
-export type TeamShutdownData = {
-  body?: never
-  path: {
-    teamID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/team/{teamID}/shutdown"
-}
-
-export type TeamShutdownErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TeamShutdownError = TeamShutdownErrors[keyof TeamShutdownErrors]
-
-export type TeamShutdownResponses = {
-  /**
-   * Team shut down
-   */
-  200: boolean
-}
-
-export type TeamShutdownResponse = TeamShutdownResponses[keyof TeamShutdownResponses]
 
 export type V2PermissionRequestListData = {
   body?: never

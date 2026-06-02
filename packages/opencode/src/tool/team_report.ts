@@ -4,9 +4,9 @@ import { Team } from "@/team/team"
 import { Config } from "@/config/config"
 import * as Tool from "./tool"
 import DESCRIPTION from "./team_report.txt"
-import { Database } from "@/storage/db"
+import { Database } from "@opencode-ai/core/database/database"
 import { TeamTable, TeamMessageRecipientTable } from "@/team/team.sql"
-import { SessionTable } from "@/session/session.sql"
+import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionID } from "@/session/schema"
 import { TeamEval, type TeamEvalFindingSeverity, type TeamUsageMetrics } from "@/team/eval"
 
@@ -62,11 +62,13 @@ function severityRank(severity: TeamEvalFindingSeverity) {
   return 0
 }
 
-export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unknown>, Team.Service | Config.Service>(
+export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unknown>, Team.Service | Config.Service | Database.Service>(
   "team_report",
   Effect.gen(function* () {
     const team = yield* Team.Service
     const config = yield* Config.Service
+    const database = yield* Database.Service
+    const { db } = database
 
     return {
       description: DESCRIPTION,
@@ -83,16 +85,14 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
             params.lead_session_id ?? (Option.isSome(context) ? context.value.team.lead_session_id : undefined)
           const teamID = params.team_id
           const explicitTeam = teamID
-            ? Database.use(() => Database.Client().select().from(TeamTable).where(eq(TeamTable.id, teamID)).get())
+            ? yield* db.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get().pipe(Effect.orDie)
             : undefined
           const latestTeamForLead = leadSessionID
-            ? (() => {
-                const rows = Database.use(() =>
-                  Database.Client().select().from(TeamTable).where(eq(TeamTable.lead_session_id, leadSessionID)).all(),
-                )
+            ? yield* Effect.gen(function* () {
+                const rows = yield* db.select().from(TeamTable).where(eq(TeamTable.lead_session_id, leadSessionID)).all().pipe(Effect.orDie)
                 rows.sort((a, b) => b.time_updated - a.time_updated)
                 return rows[0]
-              })()
+              })
             : undefined
           const teams = params.team_id ? explicitTeam : latestTeamForLead
 
@@ -118,26 +118,17 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
           const members = yield* team.getMembers(teams.id)
           const tasks = yield* team.getTasks(teams.id)
           const messages = yield* team.getMessages(teams.id)
-          const recipients = Database.use(() =>
-            Database.Client()
-              .select()
-              .from(TeamMessageRecipientTable)
-              .where(eq(TeamMessageRecipientTable.team_id, teams.id))
-              .all(),
-          )
+          const recipients = yield* db
+            .select()
+            .from(TeamMessageRecipientTable)
+            .where(eq(TeamMessageRecipientTable.team_id, teams.id))
+            .all()
+            .pipe(Effect.orDie)
 
           const teamSessionRows = yield* Effect.forEach(
             Array.from(new Set([teams.lead_session_id, ...members.map((member) => member.session_id)])),
             (sessionID) =>
-              Effect.sync(() =>
-                Database.use(() =>
-                  Database.Client()
-                    .select()
-                    .from(SessionTable)
-                    .where(eq(SessionTable.id, SessionID.make(sessionID)))
-                    .get(),
-                ),
-              ),
+              db.select().from(SessionTable).where(eq(SessionTable.id, SessionID.make(sessionID))).get().pipe(Effect.orDie),
             { concurrency: "unbounded" },
           ).pipe(
             Effect.map((rows) => rows.filter((row): row is NonNullable<(typeof rows)[number]> => row !== undefined)),
@@ -146,15 +137,7 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
           const compareRows = yield* Effect.forEach(
             Array.from(new Set(params.compare_session_ids ?? [])),
             (sessionID) =>
-              Effect.sync(() =>
-                Database.use(() =>
-                  Database.Client()
-                    .select()
-                    .from(SessionTable)
-                    .where(eq(SessionTable.id, SessionID.make(sessionID)))
-                    .get(),
-                ),
-              ),
+              db.select().from(SessionTable).where(eq(SessionTable.id, SessionID.make(sessionID))).get().pipe(Effect.orDie),
             { concurrency: "unbounded" },
           ).pipe(
             Effect.map((rows) => rows.filter((row): row is NonNullable<(typeof rows)[number]> => row !== undefined)),
@@ -162,11 +145,7 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
           const compareChildren = yield* Effect.forEach(
             compareRows,
             (row) =>
-              Effect.sync(() =>
-                Database.use(() =>
-                  Database.Client().select().from(SessionTable).where(eq(SessionTable.parent_id, row.id)).all(),
-                ),
-              ),
+              db.select().from(SessionTable).where(eq(SessionTable.parent_id, row.id)).all().pipe(Effect.orDie),
             { concurrency: "unbounded" },
           )
           const compareChildCountBySession = new Map(
@@ -193,10 +172,10 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
               metadata: { generated_at: Date.now() },
             })
           }
-          const evalReport = yield* TeamEval.build(teams.id)
+          const evalReport = yield* TeamEval.build(teams.id).pipe(Effect.provideService(Database.Service, database))
           const rollupReports = yield* Effect.forEach(
-            Database.use(() => Database.Client().select().from(TeamTable).all()),
-            (row) => TeamEval.build(row.id),
+            yield* db.select().from(TeamTable).all().pipe(Effect.orDie),
+            (row) => TeamEval.build(row.id).pipe(Effect.provideService(Database.Service, database)),
             { concurrency: "unbounded" },
           )
           const rollup = usageRollup(

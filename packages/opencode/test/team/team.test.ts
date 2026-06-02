@@ -88,9 +88,10 @@ describe("team", () => {
 
         const unsubscribe = yield* bus.subscribeAllCallback((event) => {
           if (event.type !== "team.member.updated") return
+          const properties = event.properties as { sessionID: string; status: string }
           events.push({
-            sessionID: event.properties.sessionID,
-            status: event.properties.status,
+            sessionID: properties.sessionID,
+            status: properties.status,
           })
         })
 
@@ -237,8 +238,8 @@ describe("team", () => {
         const readableTeam = yield* team.get(info.id)
 
         expect(events).toHaveLength(2)
-        expect(events[0]).toEqual(expect.objectContaining({ id: first.id, metadata: {} }))
-        expect(events[1]).toEqual(
+        expect(events.find((event) => event.id === first.id)).toEqual(expect.objectContaining({ id: first.id, metadata: {} }))
+        expect(events.find((event) => event.id === second.id)).toEqual(
           expect.objectContaining({
             id: second.id,
             team_id: info.id,

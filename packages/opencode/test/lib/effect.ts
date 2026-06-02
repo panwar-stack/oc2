@@ -33,9 +33,9 @@ function instanceArgs<E, R>(
 
 const body = <A, E, R>(value: Body<A, E, R>) => Effect.suspend(() => (typeof value === "function" ? value() : value))
 
-type Runner = <A, E, R, E2>(value: Body<A, E, R | Scope.Scope>, layer: Layer.Layer<R, E2>) => Promise<A>
+type Runner = <A, E>(value: Body<A, E, unknown>, layer: Layer.Layer<unknown, unknown, unknown>) => Promise<A>
 
-const isolatedRun: Runner = (value, layer) =>
+const isolatedRun: Runner = <A, E>(value: Body<A, E, unknown>, layer: Layer.Layer<unknown, unknown, unknown>) =>
   Effect.gen(function* () {
     const exit = yield* body(value).pipe(Effect.scoped, Effect.provide(layer), Effect.exit)
     if (Exit.isFailure(exit)) {
@@ -44,13 +44,13 @@ const isolatedRun: Runner = (value, layer) =>
       }
     }
     return yield* exit
-  }).pipe(Effect.runPromise)
+  }).pipe((effect) => Effect.runPromise(effect as Effect.Effect<A, unknown, never>))
 
 // Builds the test layer through the shared process-wide memoMap so cached
 // services (Bus, Session, …) match Server.Default's instances. Use for tests
 // that publish to an in-process HTTP server and need pub/sub identity with
 // the server's handlers.
-const sharedRun: Runner = (value, layer) =>
+const sharedRun: Runner = <A, E>(value: Body<A, E, unknown>, layer: Layer.Layer<unknown, unknown, unknown>) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make()
     const ctx = yield* Layer.buildWithMemoMap(layer, memoMap, scope)
@@ -62,65 +62,69 @@ const sharedRun: Runner = (value, layer) =>
       }
     }
     return yield* exit
-  }).pipe(Effect.runPromise)
+  }).pipe((effect) => Effect.runPromise(effect as Effect.Effect<A, unknown, never>))
 
-const make = <R, E>(testLayer: Layer.Layer<R, E>, liveLayer: Layer.Layer<R, E>, run: Runner = isolatedRun) => {
-  const effect = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test(name, () => run(value, testLayer), opts)
+const make = <R, E, RIn = never>(
+  testLayer: Layer.Layer<R, E, RIn>,
+  liveLayer: Layer.Layer<R, E, RIn>,
+  run: Runner = isolatedRun,
+) => {
+  const effect = <A, E2>(name: string, value: Body<A, E2, unknown>, opts?: number | TestOptions) =>
+    test(name, () => run(value, testLayer as Layer.Layer<unknown, unknown, unknown>), opts)
 
-  effect.only = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test.only(name, () => run(value, testLayer), opts)
+  effect.only = <A, E2>(name: string, value: Body<A, E2, unknown>, opts?: number | TestOptions) =>
+    test.only(name, () => run(value, testLayer as Layer.Layer<unknown, unknown, unknown>), opts)
 
-  effect.skip = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test.skip(name, () => run(value, testLayer), opts)
+  effect.skip = <A, E2>(name: string, value: Body<A, E2, unknown>, opts?: number | TestOptions) =>
+    test.skip(name, () => run(value, testLayer as Layer.Layer<unknown, unknown, unknown>), opts)
 
-  const live = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test(name, () => run(value, liveLayer), opts)
+  const live = <A, E2>(name: string, value: Body<A, E2, unknown>, opts?: number | TestOptions) =>
+    test(name, () => run(value, liveLayer as Layer.Layer<unknown, unknown, unknown>), opts)
 
-  live.only = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test.only(name, () => run(value, liveLayer), opts)
+  live.only = <A, E2>(name: string, value: Body<A, E2, unknown>, opts?: number | TestOptions) =>
+    test.only(name, () => run(value, liveLayer as Layer.Layer<unknown, unknown, unknown>), opts)
 
-  live.skip = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test.skip(name, () => run(value, liveLayer), opts)
+  live.skip = <A, E2>(name: string, value: Body<A, E2, unknown>, opts?: number | TestOptions) =>
+    test.skip(name, () => run(value, liveLayer as Layer.Layer<unknown, unknown, unknown>), opts)
 
   const instance = <A, E2, E3 = never>(
     name: string,
-    value: Body<A, E2, R | InstanceStore.Service | TestInstance | Scope.Scope>,
+    value: Body<A, E2, unknown>,
     options?: InstanceOptions<E3, R | Scope.Scope> | number | TestOptions,
     opts?: number | TestOptions,
   ) => {
     const args = instanceArgs(options, opts)
     return test(
       name,
-      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer),
+      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer as Layer.Layer<unknown, unknown, unknown>),
       args.testOptions,
     )
   }
 
   instance.only = <A, E2, E3 = never>(
     name: string,
-    value: Body<A, E2, R | InstanceStore.Service | TestInstance | Scope.Scope>,
+    value: Body<A, E2, unknown>,
     options?: InstanceOptions<E3, R | Scope.Scope> | number | TestOptions,
     opts?: number | TestOptions,
   ) => {
     const args = instanceArgs(options, opts)
     return test.only(
       name,
-      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer),
+      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer as Layer.Layer<unknown, unknown, unknown>),
       args.testOptions,
     )
   }
 
   instance.skip = <A, E2, E3 = never>(
     name: string,
-    value: Body<A, E2, R | InstanceStore.Service | TestInstance | Scope.Scope>,
+    value: Body<A, E2, unknown>,
     options?: InstanceOptions<E3, R | Scope.Scope> | number | TestOptions,
     opts?: number | TestOptions,
   ) => {
     const args = instanceArgs(options, opts)
     return test.skip(
       name,
-      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer),
+      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer as Layer.Layer<unknown, unknown, unknown>),
       args.testOptions,
     )
   }
@@ -136,15 +140,22 @@ const liveEnv = TestConsole.layer
 
 export const it = make<never, never>(testEnv, liveEnv)
 
-export const testEffect = <R, E>(layer: Layer.Layer<R, E>) =>
-  make<R, E>(Layer.provideMerge(layer, testEnv), Layer.provideMerge(layer, liveEnv))
+export const testEffect = <R, E, RIn>(layer: Layer.Layer<R, E, RIn>) =>
+  make(
+    Layer.provideMerge(layer, testEnv) as Layer.Layer<unknown, unknown, unknown>,
+    Layer.provideMerge(layer, liveEnv) as Layer.Layer<unknown, unknown, unknown>,
+  )
 
 // Variant of `testEffect` that builds the test layer through the shared
 // process-wide memoMap so services like Bus/Session resolve to the same
 // instances Server.Default uses. Use when a test needs pub/sub identity with
 // an in-process HTTP server — most tests should stick with `testEffect`.
-export const testEffectShared = <R, E>(layer: Layer.Layer<R, E>) =>
-  make<R, E>(Layer.provideMerge(layer, testEnv), Layer.provideMerge(layer, liveEnv), sharedRun)
+export const testEffectShared = <R, E, RIn>(layer: Layer.Layer<R, E, RIn>) =>
+  make(
+    Layer.provideMerge(layer, testEnv) as Layer.Layer<unknown, unknown, unknown>,
+    Layer.provideMerge(layer, liveEnv) as Layer.Layer<unknown, unknown, unknown>,
+    sharedRun,
+  )
 
 export const awaitWithTimeout = <A, E, R>(
   self: Effect.Effect<A, E, R>,

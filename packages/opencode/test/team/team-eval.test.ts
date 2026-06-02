@@ -10,7 +10,7 @@ import { Effect, Layer } from "effect"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(Layer.mergeAll(Team.defaultLayer, Bus.layer, CrossSpawnSpawner.defaultLayer))
+const it = testEffect(Layer.mergeAll(Team.defaultLayer, Bus.layer, Database.defaultLayer, CrossSpawnSpawner.defaultLayer))
 
 describe("team eval", () => {
   it.live("builds team DAG nodes and edges", () =>
@@ -205,7 +205,7 @@ describe("team eval", () => {
 
         yield* team.updateMemberStatus(active.id, "active")
         yield* team.updateMemberStatus(cancelled.id, "cancelled")
-        closeTeam(info.id)
+        yield* closeTeam(info.id)
 
         const report = yield* TeamEval.build(info.id)
 
@@ -244,7 +244,7 @@ describe("team eval", () => {
           recipients: [member.session_id],
           body: "Pending when closed",
         })
-        closeTeam(info.id)
+        yield* closeTeam(info.id)
 
         const report = yield* TeamEval.build(info.id, {
           expectedEdges: [{ type: "depends_on", from: node("member", "missing-a"), to: node("member", "missing-b") }],
@@ -453,7 +453,7 @@ describe("team eval", () => {
         yield* team.updateMemberStatus(first.id, "completed", "a result")
         yield* team.updateMemberStatus(second.id, "completed", "b result")
         yield* team.updateMemberStatus(third.id, "completed", "c result")
-        closeTeam(info.id)
+        yield* closeTeam(info.id)
 
         const report = yield* TeamEval.build(info.id)
 
@@ -584,7 +584,7 @@ describe("team eval", () => {
         })
 
         yield* team.updateMemberStatus(recipient.id, "completed", "recipient completed before close")
-        closeTeam(info.id)
+        yield* closeTeam(info.id)
 
         const report = yield* TeamEval.build(info.id)
         const pending = finding(report, "messaging.pending_delivery", node("message", message.id))
@@ -652,8 +652,8 @@ function categories(report: TeamEvalReport) {
 }
 
 function closeTeam(teamID: string) {
-  Database.use(() =>
-    Database.Client()
+  return Database.Database.Service.use((database) =>
+    database.db
       .update(TeamTable)
       .set({ status: "closed", time_updated: Date.now() })
       .where(eq(TeamTable.id, teamID))

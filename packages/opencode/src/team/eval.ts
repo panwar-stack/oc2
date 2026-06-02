@@ -1,4 +1,4 @@
-import { Database } from "@/storage/db"
+import { Database } from "@opencode-ai/core/database/database"
 import { Effect, Schema } from "effect"
 import { eq } from "drizzle-orm"
 import {
@@ -121,20 +121,19 @@ export const build = Effect.fn("TeamEval.build")(function* (
   teamID: string,
   options?: { expectedEdges?: TeamEvalExpectedEdge[] },
 ) {
-  const rows = Database.use(() => {
-    const db = Database.Client()
-    return {
-      team: db.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get(),
-      members: db.select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all(),
-      tasks: db.select().from(TeamTaskTable).where(eq(TeamTaskTable.team_id, teamID)).all(),
-      messages: db.select().from(TeamMessageTable).where(eq(TeamMessageTable.team_id, teamID)).all(),
-      recipients: db
-        .select()
-        .from(TeamMessageRecipientTable)
-        .where(eq(TeamMessageRecipientTable.team_id, teamID))
-        .all(),
-      usageEvents: db.select().from(TeamUsageEventTable).where(eq(TeamUsageEventTable.team_id, teamID)).all(),
-    }
+  const { db } = yield* Database.Service
+  const rows = yield* Effect.all({
+    team: db.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get().pipe(Effect.orDie),
+    members: db.select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all().pipe(Effect.orDie),
+    tasks: db.select().from(TeamTaskTable).where(eq(TeamTaskTable.team_id, teamID)).all().pipe(Effect.orDie),
+    messages: db.select().from(TeamMessageTable).where(eq(TeamMessageTable.team_id, teamID)).all().pipe(Effect.orDie),
+    recipients: db
+      .select()
+      .from(TeamMessageRecipientTable)
+      .where(eq(TeamMessageRecipientTable.team_id, teamID))
+      .all()
+      .pipe(Effect.orDie),
+    usageEvents: db.select().from(TeamUsageEventTable).where(eq(TeamUsageEventTable.team_id, teamID)).all().pipe(Effect.orDie),
   })
 
   if (!rows.team) return yield* new NotFoundError({ teamID })

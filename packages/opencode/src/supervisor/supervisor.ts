@@ -1,8 +1,8 @@
-import { BusEvent } from "@/bus/bus-event"
 import type { Config } from "@/config/config"
 import { ConfigModelID } from "@/config/model-id"
 import { ConfigSupervisor } from "@/config/supervisor"
 import { SessionID } from "@/session/schema"
+import { EventV2 } from "@opencode-ai/core/event"
 import { NonNegativeInt, optionalOmitUndefined, PositiveInt } from "@opencode-ai/core/schema"
 import { Schema, Types } from "effect"
 
@@ -13,7 +13,7 @@ export type ReviewCadence = ConfigSupervisor.ReviewCadence
 
 const SettingsFields = {
   mode: optionalOmitUndefined(Mode),
-  recommendation_model: optionalOmitUndefined(ConfigModelID),
+  recommendation_model: optionalOmitUndefined(ConfigModelID.ID),
   recommendation_variant: optionalOmitUndefined(Schema.String),
   recommendation_timeout_ms: optionalOmitUndefined(PositiveInt),
   review_cadence: optionalOmitUndefined(ReviewCadence),
@@ -36,7 +36,7 @@ export type SessionSettings = Types.DeepMutable<Schema.Schema.Type<typeof Sessio
 export const SettingsPatch = Schema.Struct({
   reset: Schema.optional(Schema.Boolean),
   mode: Schema.optional(Schema.NullOr(Mode)),
-  recommendation_model: Schema.optional(Schema.NullOr(ConfigModelID)),
+  recommendation_model: Schema.optional(Schema.NullOr(ConfigModelID.ID)),
   recommendation_variant: Schema.optional(Schema.NullOr(Schema.String)),
   recommendation_timeout_ms: Schema.optional(Schema.NullOr(PositiveInt)),
   review_cadence: Schema.optional(Schema.NullOr(ReviewCadence)),
@@ -53,7 +53,7 @@ export type SettingsPatch = Schema.Schema.Type<typeof SettingsPatch>
 
 export const EffectiveConfig = Schema.Struct({
   mode: Mode,
-  recommendation_model: optionalOmitUndefined(ConfigModelID),
+  recommendation_model: optionalOmitUndefined(ConfigModelID.ID),
   recommendation_variant: optionalOmitUndefined(Schema.String),
   recommendation_timeout_ms: PositiveInt,
   review_cadence: ReviewCadence,
@@ -226,37 +226,44 @@ export const State = Schema.Struct({
 }).annotate({ identifier: "SupervisorState" })
 export type State = Types.DeepMutable<Schema.Schema.Type<typeof State>>
 
+function defineEvent<const Type extends string, Fields extends Schema.Struct.Fields>(input: {
+  readonly type: Type
+  readonly schema: Fields
+}) {
+  return Object.assign(EventV2.define(input), { properties: Schema.Struct(input.schema) })
+}
+
 export const Event = {
-  SettingsUpdated: BusEvent.define(
-    "supervisor.settings.updated",
-    Schema.Struct({
+  SettingsUpdated: defineEvent({
+    type: "supervisor.settings.updated",
+    schema: {
       sessionID: SessionID,
       settings: optionalOmitUndefined(SessionSettings),
       state: State,
-    }),
-  ),
-  StateUpdated: BusEvent.define(
-    "supervisor.state.updated",
-    Schema.Struct({
+    },
+  }),
+  StateUpdated: defineEvent({
+    type: "supervisor.state.updated",
+    schema: {
       sessionID: SessionID,
       state: State,
-    }),
-  ),
-  RecommendationCreated: BusEvent.define(
-    "supervisor.recommendation.created",
-    Schema.Struct({
+    },
+  }),
+  RecommendationCreated: defineEvent({
+    type: "supervisor.recommendation.created",
+    schema: {
       sessionID: SessionID,
       recommendation: Recommendation,
       state: State,
-    }),
-  ),
-  ReportCompleted: BusEvent.define(
-    "supervisor.report.completed",
-    Schema.Struct({
+    },
+  }),
+  ReportCompleted: defineEvent({
+    type: "supervisor.report.completed",
+    schema: {
       sessionID: SessionID,
       report: Report,
-    }),
-  ),
+    },
+  }),
 }
 
 function StateCommandArray() {

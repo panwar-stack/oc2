@@ -1,5 +1,5 @@
-import { Bus } from "@/bus"
 import { Config } from "@/config/config"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -109,11 +109,11 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Su
 export const layer: Layer.Layer<
   Service,
   never,
-  Bus.Service | Config.Service | Session.Service | SessionStatus.Service | SessionSummary.Service
+  EventV2Bridge.Service | Config.Service | Session.Service | SessionStatus.Service | SessionSummary.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const bus = yield* Bus.Service
+    const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
     const session = yield* Session.Service
     const sessionStatus = yield* SessionStatus.Service
@@ -150,7 +150,7 @@ export const layer: Layer.Layer<
       const next = yield* rebuild(sessionID, { publish: false, report: true })
       const data = yield* InstanceState.get(state)
       const report = buildReport(next, data.recommendations.get(sessionID) ?? [])
-      yield* bus.publish(Supervisor.Event.ReportCompleted, { sessionID, report })
+      yield* events.publish(Supervisor.Event.ReportCompleted, { sessionID, report })
       return report
     })
 
@@ -168,12 +168,12 @@ export const layer: Layer.Layer<
       yield* session.setSupervisorSettings({ sessionID: input.sessionID, supervisor: settings })
       const next = yield* rebuild(input.sessionID, { publish: false })
       recordActivity(yield* InstanceState.get(state), settingsActivity(input.sessionID, before, next, settings?.updatedAt ?? Date.now()))
-      yield* bus.publish(Supervisor.Event.SettingsUpdated, { sessionID: input.sessionID, settings, state: next })
+      yield* events.publish(Supervisor.Event.SettingsUpdated, { sessionID: input.sessionID, settings, state: next })
       return next
     })
 
     const init = Effect.fn("SupervisorState.init")(function* () {
-      const stream = yield* Scope.provide(scope)(bus.subscribeAll())
+      const stream = events.all().pipe(Stream.map((event) => ({ type: event.type, properties: event.data })))
       yield* stream.pipe(Stream.runForEach(handleEvent), Effect.forkIn(scope))
     })
 
@@ -218,7 +218,7 @@ export const layer: Layer.Layer<
         }
         const next = overlay(base, derived, latestRecommendation(data, sessionID), { report: options.report })
         recordDerivedActivities(data, sessionID, current, derived, previousState, next, derived.updatedAt)
-        if (options.publish) yield* bus.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
+        if (options.publish) yield* events.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
         return next
       })
     }
@@ -260,7 +260,7 @@ export const layer: Layer.Layer<
         data.derived.set(normalized.sessionID, derived)
         const next = overlay(base, derived, latestRecommendation(data, normalized.sessionID))
         recordDerivedActivities(data, normalized.sessionID, current, eventDerived, previousState, next, eventDerived.updatedAt)
-        yield* bus.publish(Supervisor.Event.StateUpdated, {
+        yield* events.publish(Supervisor.Event.StateUpdated, {
           sessionID: normalized.sessionID,
           state: next,
         })
@@ -382,8 +382,8 @@ export const layer: Layer.Layer<
         })
 
         const next = overlay(latestBase, derived, insertedRecommendation)
-        yield* bus.publish(Supervisor.Event.RecommendationCreated, { sessionID, recommendation: insertedRecommendation, state: next })
-        yield* bus.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
+        yield* events.publish(Supervisor.Event.RecommendationCreated, { sessionID, recommendation: insertedRecommendation, state: next })
+        yield* events.publish(Supervisor.Event.StateUpdated, { sessionID, state: next })
         return true
       })
     }
@@ -420,7 +420,7 @@ export const layer: Layer.Layer<
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
-    Layer.provide(Bus.layer),
+    Layer.provide(EventV2Bridge.defaultLayer),
     Layer.provide(Config.defaultLayer),
     Layer.provide(Session.defaultLayer),
     Layer.provide(SessionStatus.defaultLayer),

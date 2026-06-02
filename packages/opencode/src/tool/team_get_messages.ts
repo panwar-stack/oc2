@@ -4,6 +4,7 @@ import { Team } from "@/team/team"
 import { Config } from "@/config/config"
 // Used to inspect stored tool parts when guarding against repeated empty mailbox polls.
 import { MessageV2 } from "@/session/message-v2"
+import { Database } from "@opencode-ai/core/database/database"
 import { Effect, Option, Schema } from "effect"
 
 const Parameters = Schema.Struct({})
@@ -13,6 +14,7 @@ export const TeamGetMessagesTool = Tool.define(
   Effect.gen(function* () {
     const team = yield* Team.Service
     const config = yield* Config.Service
+    const database = yield* Database.Service
 
     return {
       description: DESCRIPTION,
@@ -43,7 +45,7 @@ export const TeamGetMessagesTool = Tool.define(
                 (message) => message.info.role === "assistant" && (!lastUser || message.info.id > lastUser.info.id),
               )
               .flatMap((message) => message.parts),
-            ...MessageV2.parts(ctx.messageID),
+            ...(yield* MessageV2.parts(ctx.messageID).pipe(Effect.provideService(Database.Service, database))),
           ]
           // Count only completed empty reads, so actual pending messages still deliver normally.
           const previousEmptyChecks = previousParts.filter(
