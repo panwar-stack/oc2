@@ -226,6 +226,7 @@ export type Session = {
     snapshot?: string
     diff?: string
   }
+  supervisor?: unknown
 }
 
 export type OutputFormatText = {
@@ -4864,6 +4865,7 @@ export type SessionV2Info = {
   time: {
     created: number
     updated: number
+    processing: number
     archived?: number
   }
   title: string

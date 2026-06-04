@@ -301,6 +301,7 @@ describe("session HttpApi", () => {
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
+        const database = yield* Database.Service
         const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
         const session = yield* createSession({ title: "supervisor" })
         const url = pathFor(SessionPaths.supervisor, { sessionID: session.id })
@@ -364,6 +365,23 @@ describe("session HttpApi", () => {
           },
         })
         expect(typeof updated.config.session?.updatedAt).toBe("number")
+        expect(
+          (
+            yield* database.db
+              .select({ supervisor: SessionTable.supervisor })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, session.id))
+              .get()
+              .pipe(Effect.orDie)
+          )?.supervisor,
+        ).toMatchObject({
+          mode: "advise",
+          recommendation_model: "test/session",
+          recommendation_variant: "accurate",
+          insert_recommendations: false,
+          sensitive_path_globs: ["**/secret/**"],
+          updatedAt: updated.config.session?.updatedAt,
+        })
         expect((yield* Session.use.get(session.id)).supervisor).toMatchObject({
           mode: "advise",
           recommendation_model: "test/session",
@@ -400,6 +418,16 @@ describe("session HttpApi", () => {
           body: JSON.stringify({ reset: true }),
         })
         expect(reset.config.session).toBeUndefined()
+        expect(
+          (
+            yield* database.db
+              .select({ supervisor: SessionTable.supervisor })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, session.id))
+              .get()
+              .pipe(Effect.orDie)
+          )?.supervisor,
+        ).toBeNull()
         expect((yield* Session.use.get(session.id)).supervisor).toBeUndefined()
       }),
     {
