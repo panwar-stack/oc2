@@ -78,7 +78,7 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     time_processing: info.time.processing ?? 0,
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
-    supervisor: info.supervisor ?? null,
+    supervisor: null,
   }
 }
 

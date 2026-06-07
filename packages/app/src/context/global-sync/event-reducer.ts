@@ -9,7 +9,6 @@ import type {
   Session,
   SessionStatus,
   SnapshotFileDiff,
-  SupervisorState,
   Todo,
 } from "@opencode-ai/sdk/v2/client"
 import type { State, VcsCache } from "./types"
@@ -72,7 +71,6 @@ export function cleanupDroppedSessionCaches(
   const stale = [
     ...Object.keys(store.message),
     ...Object.keys(store.session_diff),
-    ...Object.keys(store.supervisor),
     ...Object.keys(store.todo),
     ...Object.keys(store.permission),
     ...Object.keys(store.question),
@@ -173,13 +171,6 @@ export function applyDirectoryEvent(input: {
     case "session.diff": {
       const props = event.properties as { sessionID: string; diff: SnapshotFileDiff[] }
       input.setStore("session_diff", props.sessionID, reconcile(list(props.diff), { key: "file" }))
-      break
-    }
-    case "supervisor.settings.updated":
-    case "supervisor.state.updated":
-    case "supervisor.recommendation.created": {
-      const props = event.properties as { sessionID: string; state: SupervisorState }
-      input.setStore("supervisor", props.sessionID, reconcile(props.state))
       break
     }
     case "todo.updated": {

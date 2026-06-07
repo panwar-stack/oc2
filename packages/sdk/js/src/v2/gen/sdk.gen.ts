@@ -238,14 +238,6 @@ import type {
   SessionStatusResponses,
   SessionSummarizeErrors,
   SessionSummarizeResponses,
-  SessionSupervisorActivityErrors,
-  SessionSupervisorActivityResponses,
-  SessionSupervisorGetErrors,
-  SessionSupervisorGetResponses,
-  SessionSupervisorReportErrors,
-  SessionSupervisorReportResponses,
-  SessionSupervisorUpdateErrors,
-  SessionSupervisorUpdateResponses,
   SessionTodoErrors,
   SessionTodoResponses,
   SessionUnrevertErrors,
@@ -255,7 +247,6 @@ import type {
   SessionUpdateErrors,
   SessionUpdateResponses,
   SubtaskPartInput,
-  SupervisorSettingsPatch,
   SyncHistoryListErrors,
   SyncHistoryListResponses,
   SyncReplayErrors,
@@ -3813,159 +3804,6 @@ export class Root extends HeyApiClient {
   }
 }
 
-export class Supervisor extends HeyApiClient {
-  /**
-   * Get session supervisor state
-   *
-   * Get the effective supervisor config and current derived supervisor state for a session.
-   */
-  public get<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      SessionSupervisorGetResponses,
-      SessionSupervisorGetErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/supervisor",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Update session supervisor settings
-   *
-   * Update durable per-session supervisor setting overrides.
-   */
-  public update<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-      supervisorSettingsPatch?: SupervisorSettingsPatch
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "supervisorSettingsPatch", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).patch<
-      SessionSupervisorUpdateResponses,
-      SessionSupervisorUpdateErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/supervisor",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Get session supervisor activity
-   *
-   * Retrieve bounded observable supervisor activity for a session.
-   */
-  public activity<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      SessionSupervisorActivityResponses,
-      SessionSupervisorActivityErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/supervisor/activity",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Get session supervisor report
-   *
-   * Generate and return a supervisor report from observable session state.
-   */
-  public report<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      SessionSupervisorReportResponses,
-      SessionSupervisorReportErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/supervisor/report",
-      ...options,
-      ...params,
-    })
-  }
-}
-
 export class Session2 extends HeyApiClient {
   /**
    * List sessions
@@ -4936,11 +4774,6 @@ export class Session2 extends HeyApiClient {
   private _root?: Root
   get root(): Root {
     return (this._root ??= new Root({ client: this.client }))
-  }
-
-  private _supervisor?: Supervisor
-  get supervisor(): Supervisor {
-    return (this._supervisor ??= new Supervisor({ client: this.client }))
   }
 }
 

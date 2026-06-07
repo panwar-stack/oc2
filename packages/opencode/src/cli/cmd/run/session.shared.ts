@@ -18,7 +18,7 @@ type Turn = {
 }
 
 function visibleTextPart(part: Extract<SessionMessages[number]["parts"][number], { type: "text" }>) {
-  return !part.synthetic || part.metadata?.supervisor !== undefined
+  return !part.synthetic
 }
 
 export type RunSession = {

@@ -60,10 +60,6 @@ export type Event =
   | EventProjectDirectoriesUpdated
   | EventProjectUpdated
   | EventMessagePartDelta
-  | EventSupervisorSettingsUpdated
-  | EventSupervisorStateUpdated
-  | EventSupervisorRecommendationCreated
-  | EventSupervisorReportCompleted
   | EventSessionDiff
   | EventSessionError
   | EventInstallationUpdated
@@ -226,7 +222,6 @@ export type Session = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: unknown
 }
 
 export type OutputFormatText = {
@@ -645,127 +640,6 @@ export type Prompt = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   references?: Array<PromptReferenceAttachment>
-}
-
-export type SupervisorMode = "off" | "observe" | "advise"
-
-export type SupervisorReviewCadence = "step" | "event" | "idle"
-
-export type SupervisorSessionSettings = {
-  mode?: SupervisorMode
-  recommendation_model?: string
-  recommendation_variant?: string
-  recommendation_timeout_ms?: number
-  review_cadence?: SupervisorReviewCadence
-  min_review_interval_ms?: number
-  max_recommendation_chars?: number
-  max_repeated_command_failures?: number
-  broad_diff_file_limit?: number
-  sensitive_path_globs?: Array<string>
-  validation_command_patterns?: Array<string>
-  insert_recommendations?: boolean
-  max_recommendations_per_session?: number
-  updatedAt: number
-}
-
-export type SupervisorEffectiveConfig = {
-  mode: SupervisorMode
-  recommendation_model?: string
-  recommendation_variant?: string
-  recommendation_timeout_ms: number
-  review_cadence: SupervisorReviewCadence
-  min_review_interval_ms: number
-  max_recommendation_chars: number
-  max_repeated_command_failures: number
-  broad_diff_file_limit: number
-  sensitive_path_globs: Array<string>
-  validation_command_patterns: Array<string>
-  insert_recommendations: boolean
-  max_recommendations_per_session: number
-}
-
-export type SupervisorStatus = "on_track" | "uncertain" | "drifting" | "blocked" | "high_risk"
-
-export type SupervisorTrigger =
-  | "missing_reproduction"
-  | "repeated_command_failure"
-  | "missing_validation"
-  | "scope_expansion"
-  | "risky_edit"
-  | "wrong_localization"
-  | "evidence_mismatch"
-  | "validation_mismatch"
-  | "premature_success"
-  | "less_optimal_action"
-  | "trajectory_drift"
-
-export type SupervisorRisk = {
-  trigger: SupervisorTrigger
-  severity: "info" | "warning" | "high"
-  evidence: Array<string>
-  message: string
-}
-
-export type SupervisorAction = "nudge" | "ask" | "warn"
-
-export type SupervisorRecommendation = {
-  source: "model"
-  action: SupervisorAction
-  trigger: SupervisorTrigger
-  message: string
-  evidence: Array<string>
-  model?: {
-    providerID: string
-    modelID: string
-    variant?: string
-  }
-  inserted?: {
-    messageID?: string
-    partID?: string
-    insertedAt: number
-  }
-}
-
-export type SupervisorState = {
-  sessionID: string
-  mode: SupervisorMode
-  config: {
-    modeSource: "global" | "session"
-    globalMode: SupervisorMode
-    session?: SupervisorSessionSettings
-    effective: SupervisorEffectiveConfig
-  }
-  status: SupervisorStatus
-  summary?: string
-  filesTouched: Array<string>
-  commandsRun: Array<{
-    command: string
-    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    validation: boolean
-    repeatedFailureCount: number
-  }>
-  validationsRun: Array<string>
-  risks: Array<SupervisorRisk>
-  recommendation?: SupervisorRecommendation
-  updatedAt: number
-}
-
-export type SupervisorReport = {
-  sessionID: string
-  status: SupervisorStatus
-  summary?: string
-  filesTouched: Array<string>
-  commandsRun: Array<{
-    command: string
-    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    validation: boolean
-    repeatedFailureCount: number
-  }>
-  validationsRun: Array<string>
-  risks: Array<SupervisorRisk>
-  recommendations: Array<SupervisorRecommendation>
-  evidence: Array<string>
-  generatedAt: number
 }
 
 export type Pty = {
@@ -1496,40 +1370,6 @@ export type GlobalEvent = {
           partID: string
           field: string
           delta: string
-        }
-      }
-    | {
-        id: string
-        type: "supervisor.settings.updated"
-        properties: {
-          sessionID: string
-          settings?: SupervisorSessionSettings
-          state: SupervisorState
-        }
-      }
-    | {
-        id: string
-        type: "supervisor.state.updated"
-        properties: {
-          sessionID: string
-          state: SupervisorState
-        }
-      }
-    | {
-        id: string
-        type: "supervisor.recommendation.created"
-        properties: {
-          sessionID: string
-          recommendation: SupervisorRecommendation
-          state: SupervisorState
-        }
-      }
-    | {
-        id: string
-        type: "supervisor.report.completed"
-        properties: {
-          sessionID: string
-          report: SupervisorReport
         }
       }
     | {
@@ -2494,7 +2334,6 @@ export type GlobalSession = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
   project: ProjectSummary | null
 }
 
@@ -2993,7 +2832,6 @@ export type Session1 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type Session2 = {
@@ -3048,7 +2886,6 @@ export type Session2 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type SessionRoot = {
@@ -3115,7 +2952,6 @@ export type Session3 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type Session4 = {
@@ -3170,49 +3006,6 @@ export type Session4 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
-}
-
-export type SupervisorSettingsPatch = {
-  reset?: boolean
-  mode?: SupervisorMode | null
-  recommendation_model?: string | null
-  recommendation_variant?: string | null
-  recommendation_timeout_ms?: number | null
-  review_cadence?: SupervisorReviewCadence | null
-  min_review_interval_ms?: number | null
-  max_recommendation_chars?: number | null
-  max_repeated_command_failures?: number | null
-  broad_diff_file_limit?: number | null
-  sensitive_path_globs?: Array<string> | null
-  validation_command_patterns?: Array<string> | null
-  insert_recommendations?: boolean | null
-  max_recommendations_per_session?: number | null
-}
-
-export type SupervisorActivityType = "file" | "command" | "validation" | "risk" | "recommendation" | "settings"
-
-export type SupervisorActivityMetadata = {
-  file?: string
-  command?: string
-  exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  validation?: boolean
-  repeatedFailureCount?: number
-  trigger?: SupervisorTrigger
-  action?: SupervisorAction
-  inserted?: boolean
-}
-
-export type SupervisorActivity = {
-  id: string
-  sessionID: string
-  time: number
-  type: SupervisorActivityType
-  severity?: "info" | "warning" | "high"
-  title: string
-  message?: string
-  evidence: Array<string>
-  metadata?: SupervisorActivityMetadata
 }
 
 export type Session5 = {
@@ -3267,7 +3060,6 @@ export type Session5 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type Session6 = {
@@ -3322,7 +3114,6 @@ export type Session6 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type Session7 = {
@@ -3377,7 +3168,6 @@ export type Session7 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type TextPartInput = {
@@ -3486,7 +3276,6 @@ export type Session8 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type Session9 = {
@@ -3541,7 +3330,6 @@ export type Session9 = {
     snapshot?: string
     diff?: string
   }
-  supervisor?: SupervisorSessionSettings
 }
 
 export type TeamInfo = {
@@ -3843,48 +3631,6 @@ export type EventTuiSessionSelect2 = {
      */
     sessionID: string
   }
-}
-
-export type SupervisorState3 = {
-  sessionID: string
-  mode: SupervisorMode
-  config: {
-    modeSource: "global" | "session"
-    globalMode: SupervisorMode
-    session?: SupervisorSessionSettings
-    effective: SupervisorEffectiveConfig
-  }
-  status: SupervisorStatus
-  summary?: string
-  filesTouched: Array<string>
-  commandsRun: Array<{
-    command: string
-    exitCode?: number | "NaN" | "Infinity" | "-Infinity"
-    validation: boolean
-    repeatedFailureCount: number
-  }>
-  validationsRun: Array<string>
-  risks: Array<SupervisorRisk>
-  recommendation?: SupervisorRecommendation
-  updatedAt: number
-}
-
-export type SupervisorReport2 = {
-  sessionID: string
-  status: SupervisorStatus
-  summary?: string
-  filesTouched: Array<string>
-  commandsRun: Array<{
-    command: string
-    exitCode?: number | "NaN" | "Infinity" | "-Infinity"
-    validation: boolean
-    repeatedFailureCount: number
-  }>
-  validationsRun: Array<string>
-  risks: Array<SupervisorRisk>
-  recommendations: Array<SupervisorRecommendation>
-  evidence: Array<string>
-  generatedAt: number
 }
 
 export type MoveSessionDestination = {
@@ -5974,44 +5720,6 @@ export type EventMessagePartDelta = {
     partID: string
     field: string
     delta: string
-  }
-}
-
-export type EventSupervisorSettingsUpdated = {
-  id: string
-  type: "supervisor.settings.updated"
-  properties: {
-    sessionID: string
-    settings?: SupervisorSessionSettings
-    state: SupervisorState3
-  }
-}
-
-export type EventSupervisorStateUpdated = {
-  id: string
-  type: "supervisor.state.updated"
-  properties: {
-    sessionID: string
-    state: SupervisorState3
-  }
-}
-
-export type EventSupervisorRecommendationCreated = {
-  id: string
-  type: "supervisor.recommendation.created"
-  properties: {
-    sessionID: string
-    recommendation: SupervisorRecommendation
-    state: SupervisorState3
-  }
-}
-
-export type EventSupervisorReportCompleted = {
-  id: string
-  type: "supervisor.report.completed"
-  properties: {
-    sessionID: string
-    report: SupervisorReport2
   }
 }
 
@@ -9611,143 +9319,6 @@ export type SessionMessageResponses = {
 }
 
 export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessageResponses]
-
-export type SessionSupervisorGetData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/supervisor"
-}
-
-export type SessionSupervisorGetErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionSupervisorGetError = SessionSupervisorGetErrors[keyof SessionSupervisorGetErrors]
-
-export type SessionSupervisorGetResponses = {
-  /**
-   * Get supervisor state
-   */
-  200: SupervisorState
-}
-
-export type SessionSupervisorGetResponse = SessionSupervisorGetResponses[keyof SessionSupervisorGetResponses]
-
-export type SessionSupervisorUpdateData = {
-  body?: SupervisorSettingsPatch
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/supervisor"
-}
-
-export type SessionSupervisorUpdateErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionSupervisorUpdateError = SessionSupervisorUpdateErrors[keyof SessionSupervisorUpdateErrors]
-
-export type SessionSupervisorUpdateResponses = {
-  /**
-   * Updated supervisor state
-   */
-  200: SupervisorState
-}
-
-export type SessionSupervisorUpdateResponse = SessionSupervisorUpdateResponses[keyof SessionSupervisorUpdateResponses]
-
-export type SessionSupervisorActivityData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/supervisor/activity"
-}
-
-export type SessionSupervisorActivityErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionSupervisorActivityError = SessionSupervisorActivityErrors[keyof SessionSupervisorActivityErrors]
-
-export type SessionSupervisorActivityResponses = {
-  /**
-   * Get supervisor activity
-   */
-  200: Array<SupervisorActivity>
-}
-
-export type SessionSupervisorActivityResponse =
-  SessionSupervisorActivityResponses[keyof SessionSupervisorActivityResponses]
-
-export type SessionSupervisorReportData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/supervisor/report"
-}
-
-export type SessionSupervisorReportErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionSupervisorReportError = SessionSupervisorReportErrors[keyof SessionSupervisorReportErrors]
-
-export type SessionSupervisorReportResponses = {
-  /**
-   * Get supervisor report
-   */
-  200: SupervisorReport
-}
-
-export type SessionSupervisorReportResponse = SessionSupervisorReportResponses[keyof SessionSupervisorReportResponses]
 
 export type SessionForkData = {
   body?: {

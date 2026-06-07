@@ -254,7 +254,6 @@ export default defineConfig({
             "rules",
             "agents",
             "agent-teams",
-            "supervisor",
             "models",
             "themes",
             "keybinds",

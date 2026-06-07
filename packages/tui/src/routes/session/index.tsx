@@ -84,8 +84,6 @@ import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { DialogRoots } from "./dialog-roots"
-import { DialogSupervisor } from "./dialog-supervisor"
-import { DialogSupervisorActivity } from "./dialog-supervisor-activity"
 import { collectExportSessionFromClient } from "../../util/session-export"
 
 addDefaultParsers(parsers.parsers)
@@ -254,51 +252,6 @@ export function SessionRootsCommand() {
 
   useBindings(() => ({
     commands: rootsCommands(),
-  }))
-
-  return null
-}
-
-export function SessionSupervisorCommand() {
-  const route = useRoute()
-  const dialog = useDialog()
-  const toast = useToast()
-  const sessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
-  const commands = createMemo(() => [
-    {
-      namespace: "palette",
-      name: "session.supervisor",
-      title: "Configure supervisor",
-      category: "Session",
-      slashName: "supervisor",
-      run: () => {
-        const id = sessionID()
-        if (!id) {
-          toast.show({ message: "Open a session to configure supervisor", variant: "error" })
-          return
-        }
-        dialog.replace(() => <DialogSupervisor sessionID={id} />)
-      },
-    },
-    {
-      namespace: "palette",
-      name: "session.supervisor.activity",
-      title: "Show supervisor activity",
-      category: "Session",
-      slashName: "supervisor activity",
-      run: () => {
-        const id = sessionID()
-        if (!id) {
-          toast.show({ message: "Open a session to view supervisor activity", variant: "error" })
-          return
-        }
-        dialog.replace(() => <DialogSupervisorActivity sessionID={id} />)
-      },
-    },
-  ])
-
-  useBindings(() => ({
-    commands: commands(),
   }))
 
   return null
@@ -1581,14 +1534,6 @@ const MIME_BADGE: Record<string, string> = {
   "application/x-directory": "dir",
 }
 
-export function shouldRenderUserMessageTextPart(part: TextPart) {
-  return !part.synthetic || part.metadata?.supervisor !== undefined
-}
-
-function isSupervisorRecommendationTextPart(part: Part) {
-  return part.type === "text" && part.synthetic && part.metadata?.supervisor !== undefined
-}
-
 function UserMessage(props: {
   message: UserMessage
   parts: Part[]
@@ -1601,7 +1546,7 @@ function UserMessage(props: {
   const text = createMemo(() => {
     const texts = props.parts
       .map((x) => {
-        if (x.type === "text" && shouldRenderUserMessageTextPart(x)) {
+        if (x.type === "text" && !x.synthetic) {
           return x.text
         }
         return null
@@ -1616,7 +1561,6 @@ function UserMessage(props: {
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
-  const supervisorRecommendation = createMemo(() => props.parts.some(isSupervisorRecommendationTextPart))
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
@@ -1626,7 +1570,7 @@ function UserMessage(props: {
         <box
           id={props.message.id}
           border={["left"]}
-          borderColor={supervisorRecommendation() ? theme.warning : color()}
+          borderColor={color()}
           customBorderChars={SplitBorder.customBorderChars}
           marginTop={props.index === 0 ? 0 : 1}
         >
@@ -1641,14 +1585,9 @@ function UserMessage(props: {
             paddingTop={1}
             paddingBottom={1}
             paddingLeft={2}
-            backgroundColor={hover() || supervisorRecommendation() ? theme.backgroundElement : theme.backgroundPanel}
+            backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
-            <Show when={supervisorRecommendation()}>
-              <text fg={theme.warning} attributes={TextAttributes.BOLD} paddingBottom={1}>
-                Supervisor recommendation
-              </text>
-            </Show>
             <text fg={theme.text}>{text()}</text>
             <Show when={files().length}>
               <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">

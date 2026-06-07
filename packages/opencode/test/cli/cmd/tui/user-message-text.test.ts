@@ -1,21 +1,37 @@
 import { expect, test } from "bun:test"
-import type { TextPart } from "@opencode-ai/sdk/v2"
-import { shouldRenderUserMessageTextPart } from "../../../../src/cli/cmd/tui/routes/session"
+import { messagePrompt } from "../../../../src/cli/cmd/run/session.shared"
 
-test("renders only non-synthetic and supervisor synthetic user text", () => {
-  expect(shouldRenderUserMessageTextPart(part({ synthetic: false }))).toBe(true)
-  expect(shouldRenderUserMessageTextPart(part({ synthetic: true }))).toBe(false)
-  expect(shouldRenderUserMessageTextPart(part({ synthetic: true, metadata: { supervisor: { id: "rec_1" } } }))).toBe(true)
-  expect(shouldRenderUserMessageTextPart(part({ synthetic: true, metadata: { other: true } }))).toBe(false)
+test("ignores synthetic user text", () => {
+  const prompt = messagePrompt({
+    info: {
+      id: "msg_1",
+      sessionID: "ses_1",
+      role: "user",
+      agent: "build",
+      model: { providerID: "test", modelID: "test" },
+      time: { created: 1 },
+    },
+    parts: [
+      {
+        id: "prt_1",
+        sessionID: "ses_1",
+        messageID: "msg_1",
+        type: "text",
+        text: "visible",
+        synthetic: false,
+      },
+      {
+        id: "prt_2",
+        sessionID: "ses_1",
+        messageID: "msg_1",
+        type: "text",
+        text: "hidden",
+        synthetic: true,
+        metadata: { supervisor: { id: "rec_1" } },
+      },
+    ],
+  })
+
+  expect(prompt.text).toBe("visible")
+  expect(prompt.parts).toEqual([])
 })
-
-function part(input: Pick<TextPart, "synthetic" | "metadata">): TextPart {
-  return {
-    id: "prt_1",
-    sessionID: "ses_1",
-    messageID: "msg_1",
-    type: "text",
-    text: "message",
-    ...input,
-  }
-}

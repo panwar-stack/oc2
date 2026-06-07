@@ -321,14 +321,6 @@ const { providers, default: defaults } = await client.config.providers()
 | `session.unrevert({ path })`                               | Restore reverted messages          | Returns <a href={typesUrl}><code>Session</code></a>                                                                                                                                                                      |
 | `postSessionByIdPermissionsByPermissionId({ path, body })` | Respond to a permission request    | Returns `boolean`                                                                                                                                                                                                        |
 
-Supervisor session endpoints are exposed by the v2 SDK under `client.supervisor`.
-
-| Method | Description | Response |
-| ------ | ----------- | -------- |
-| `supervisor.get({ sessionID })` | Get the effective supervisor config and current state for a session | <a href={typesV2Url}><code>SupervisorState</code></a> |
-| `supervisor.update({ sessionID, supervisorSettingsPatch })` | Update durable per-session supervisor overrides | <a href={typesV2Url}><code>SupervisorState</code></a> |
-| `supervisor.report({ sessionID })` | Generate and return a supervisor report | <a href={typesV2Url}><code>SupervisorReport</code></a> |
-
 ---
 
 #### Examples
@@ -359,11 +351,6 @@ await client.session.prompt({
   },
 })
 
-// Enable advisory supervision for this session
-await client.supervisor.update({
-  sessionID: session.id,
-  supervisorSettingsPatch: { mode: "advise", insert_recommendations: true },
-})
 ```
 
 ---
@@ -514,5 +501,3 @@ for await (const event of events.stream) {
   console.log("Event:", event.type, event.properties)
 }
 ```
-
-Supervisor events include `supervisor.state.updated`, `supervisor.recommendation.created`, `supervisor.settings.updated`, and `supervisor.report.completed`.

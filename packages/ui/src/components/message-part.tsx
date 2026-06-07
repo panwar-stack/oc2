@@ -1052,16 +1052,9 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
   const copied = () => state.copied
   const busy = () => state.busy
 
-  const textPart = createMemo(
-    () =>
-      props.parts?.find((p) => p.type === "text" && (!(p as TextPart).synthetic || (p as TextPart).metadata?.supervisor)) as
-        | TextPart
-        | undefined,
-  )
+  const textPart = createMemo(() => props.parts?.find((p) => p.type === "text" && !(p as TextPart).synthetic) as TextPart | undefined)
 
   const text = createMemo(() => textPart()?.text || "")
-
-  const supervisorRecommendation = createMemo(() => textPart()?.synthetic && textPart()?.metadata?.supervisor !== undefined)
 
   const files = createMemo(() => (props.parts?.filter((p) => p.type === "file") as FilePart[]) ?? [])
 
@@ -1122,11 +1115,7 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
   }
 
   return (
-    <div
-      data-component="user-message"
-      data-supervisor-recommendation={supervisorRecommendation() ? "true" : undefined}
-      data-timeline-part-id={textPart()?.id}
-    >
+    <div data-component="user-message" data-timeline-part-id={textPart()?.id}>
       <Show when={attachments().length > 0}>
         <div data-slot="user-message-attachments">
           <For each={attachments()}>
@@ -1165,9 +1154,6 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
         <>
           <div data-slot="user-message-body">
             <div data-slot="user-message-text">
-              <Show when={supervisorRecommendation()}>
-                <div data-slot="user-message-supervisor-label">Supervisor recommendation</div>
-              </Show>
               <HighlightedText text={text()} references={inlineFiles()} agents={agents()} />
             </div>
           </div>
