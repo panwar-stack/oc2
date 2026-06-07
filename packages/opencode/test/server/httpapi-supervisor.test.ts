@@ -133,7 +133,7 @@ afterEach(async () => {
 
 describe("supervisor HttpApi", () => {
   it.instance(
-    "GET returns derived supervisor state",
+    "GET returns inert supervisor state",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
@@ -146,14 +146,14 @@ describe("supervisor HttpApi", () => {
         })
 
         expect(state.mode).toBe("observe")
-        expect(state.commandsRun[0]).toMatchObject({ command: "bun typecheck", validation: true, exitCode: 0 })
-        expect(state.validationsRun).toEqual(["bun typecheck"])
+        expect(state.commandsRun).toEqual([])
+        expect(state.validationsRun).toEqual([])
         expect(state.risks).toEqual([])
       }),
     { config: { formatter: false, lsp: false, supervisor: { mode: "observe" } } },
   )
 
-  it.instance("PATCH uses supervisor service settings flow", () =>
+  it.instance("PATCH persists supervisor settings", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const session = yield* Session.use.create({ title: "patch" })
@@ -171,7 +171,7 @@ describe("supervisor HttpApi", () => {
   )
 
   it.instance(
-    "GET report returns observable supervisor report",
+    "GET report returns inert supervisor report",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
@@ -184,8 +184,9 @@ describe("supervisor HttpApi", () => {
         )
 
         expect(report.sessionID).toBe(session.id)
-        expect(report.filesTouched).toEqual(["src/app.ts"])
-        expect(report.risks.map((risk) => risk.trigger)).toContain("missing_validation")
+        expect(report.filesTouched).toEqual([])
+        expect(report.risks).toEqual([])
+        expect(report.recommendations).toEqual([])
         expect(JSON.stringify(report)).not.toContain("raw output")
       }),
     { config: { formatter: false, lsp: false, supervisor: { mode: "observe" } } },

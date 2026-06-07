@@ -53,7 +53,6 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
-import { SupervisorState } from "@/supervisor"
 import { Team } from "@/team/team"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
@@ -258,7 +257,6 @@ export function createRoutes(
       SessionSummary.defaultLayer,
       ShareNext.defaultLayer,
       Snapshot.defaultLayer,
-      SupervisorState.defaultLayer,
       EventV2Bridge.defaultLayer,
       EventV2.defaultLayer,
       Skill.defaultLayer,

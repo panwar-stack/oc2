@@ -2,7 +2,6 @@ import type { Config } from "@/config/config"
 import { ConfigModelID } from "@/config/model-id"
 import { ConfigSupervisor } from "@/config/supervisor"
 import { SessionID } from "@/session/schema"
-import { EventV2 } from "@opencode-ai/core/event"
 import { NonNegativeInt, optionalOmitUndefined, PositiveInt } from "@opencode-ai/core/schema"
 import { Schema, Types } from "effect"
 
@@ -225,46 +224,6 @@ export const State = Schema.Struct({
   updatedAt: NonNegativeInt,
 }).annotate({ identifier: "SupervisorState" })
 export type State = Types.DeepMutable<Schema.Schema.Type<typeof State>>
-
-function defineEvent<const Type extends string, Fields extends Schema.Struct.Fields>(input: {
-  readonly type: Type
-  readonly schema: Fields
-}) {
-  return Object.assign(EventV2.define(input), { properties: Schema.Struct(input.schema) })
-}
-
-export const Event = {
-  SettingsUpdated: defineEvent({
-    type: "supervisor.settings.updated",
-    schema: {
-      sessionID: SessionID,
-      settings: optionalOmitUndefined(SessionSettings),
-      state: State,
-    },
-  }),
-  StateUpdated: defineEvent({
-    type: "supervisor.state.updated",
-    schema: {
-      sessionID: SessionID,
-      state: State,
-    },
-  }),
-  RecommendationCreated: defineEvent({
-    type: "supervisor.recommendation.created",
-    schema: {
-      sessionID: SessionID,
-      recommendation: Recommendation,
-      state: State,
-    },
-  }),
-  ReportCompleted: defineEvent({
-    type: "supervisor.report.completed",
-    schema: {
-      sessionID: SessionID,
-      report: Report,
-    },
-  }),
-}
 
 function StateCommandArray() {
   return Schema.Array(

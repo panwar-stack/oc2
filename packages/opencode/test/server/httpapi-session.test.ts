@@ -328,11 +328,7 @@ describe("session HttpApi", () => {
 
         const events: string[] = []
         const unsubscribeSession = subscribeGlobal(Session.Event.Updated.type, (event) => events.push(event.type))
-        const unsubscribeSupervisor = subscribeGlobal(Supervisor.Event.SettingsUpdated.type, (event) =>
-          events.push(event.type),
-        )
         yield* Effect.addFinalizer(() => Effect.sync(unsubscribeSession))
-        yield* Effect.addFinalizer(() => Effect.sync(unsubscribeSupervisor))
 
         const updated = yield* requestJson<Supervisor.State>(url, {
           headers,
@@ -388,7 +384,6 @@ describe("session HttpApi", () => {
           recommendation_variant: "accurate",
         })
         expect(events).toContain(Session.Event.Updated.type)
-        expect(events).toContain(Supervisor.Event.SettingsUpdated.type)
 
         const invalid = yield* request(url, {
           headers,

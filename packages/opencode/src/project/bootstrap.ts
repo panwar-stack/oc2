@@ -12,7 +12,6 @@ import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { Reference } from "@/reference/reference"
-import { SupervisorState } from "@/supervisor"
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -32,7 +31,6 @@ export const layer = Layer.effect(
     const search = yield* Search.Service
     const shareNext = yield* ShareNext.Service
     const snapshot = yield* Snapshot.Service
-    const supervisorState = yield* SupervisorState.Service
     const vcs = yield* Vcs.Service
 
     // once we dispose the service - also release all the internal fff resources
@@ -54,7 +52,7 @@ export const layer = Layer.effect(
       // Each service self-manages its own slow work via Effect.forkScoped against
       // its per-instance state scope. We just await materialization here.
       yield* Effect.forEach(
-        [reference, lsp, shareNext, format, vcs, snapshot, project, supervisorState],
+        [reference, lsp, shareNext, format, vcs, snapshot, project],
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
@@ -75,7 +73,6 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
     Search.defaultLayer,
     ShareNext.defaultLayer,
     Snapshot.defaultLayer,
-    SupervisorState.defaultLayer,
     Vcs.defaultLayer,
   ]),
 )

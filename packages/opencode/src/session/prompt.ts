@@ -64,7 +64,6 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 import { Team } from "@/team/team"
-import { SupervisorState } from "@/supervisor"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1347,12 +1346,6 @@ export const layer = Layer.effect(
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
           const primaryLastUserMsg = msgs.findLast((msg) => msg.info.role === "user" && msg.info.id === lastUser.id)
           if (yield* deliverTeamMessages({ session, lastUser }).pipe(Effect.orDie)) continue
-          const supervisor = yield* Effect.serviceOption(SupervisorState.Service)
-          if (Option.isSome(supervisor) && (yield* supervisor.value.flushPendingInsertion(sessionID))) {
-            msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-          }
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
