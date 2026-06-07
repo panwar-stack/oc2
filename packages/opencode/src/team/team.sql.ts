@@ -29,7 +29,7 @@ export const TeamMemberTable = sqliteTable(
     session_id: text().notNull(),
     name: text().notNull(),
     agent_type: text().notNull(),
-    model: text({ mode: "json" }).$type<{ providerID: string; modelID: string } | null>(),
+    model: text({ mode: "json" }).$type<{ providerID: string; modelID: string; variant?: string } | null>(),
     role_prompt: text().notNull(),
     status: text({ enum: ["starting", "blocked", "active", "idle", "completed", "cancelled"] })
       .notNull()

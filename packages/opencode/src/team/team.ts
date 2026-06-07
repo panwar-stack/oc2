@@ -39,7 +39,7 @@ export interface Interface {
     sessionID: string
     name: string
     agentType: string
-    model?: { providerID: string; modelID: string }
+    model?: { providerID: string; modelID: string; variant?: string }
     rolePrompt: string
     planMode?: boolean
     workMode?: "plan" | "implement"
@@ -199,7 +199,7 @@ export const layer = Layer.effect(
       sessionID: string
       name: string
       agentType: string
-      model?: { providerID: string; modelID: string }
+      model?: { providerID: string; modelID: string; variant?: string }
       rolePrompt: string
       planMode?: boolean
       workMode?: "plan" | "implement"

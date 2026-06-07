@@ -11,6 +11,7 @@ import { TeamSpawnTool } from "@/tool/team_spawn"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Database } from "@opencode-ai/core/database/database"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -23,6 +24,10 @@ const ref = {
   providerID: ProviderID.make("test"),
   modelID: ModelID.make("test-model"),
 }
+const explicitRef = {
+  providerID: ProviderID.make("openai"),
+  modelID: ModelID.make("gpt-4"),
+}
 
 const it = testEffect(
   Layer.mergeAll(
@@ -32,6 +37,7 @@ const it = testEffect(
     Session.defaultLayer,
     Team.defaultLayer,
     Truncate.defaultLayer,
+    Database.defaultLayer,
   ),
 )
 
@@ -59,6 +65,7 @@ const seed = Effect.fn("TeamSpawnTest.seed")(function* () {
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     modelID: ref.modelID,
     providerID: ref.providerID,
+    variant: "lead-variant",
     time: { created: Date.now() },
   }
   yield* sessions.updateMessage(assistant)
@@ -118,6 +125,97 @@ const waitUntil = Effect.fn("TeamSpawnTest.waitUntil")(function* (predicate: () 
 })
 
 describe("tool.team_spawn", () => {
+  it.live("inherits lead model and variant for teammates without explicit model", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.sync(() => {
+                calls.push(input)
+                return reply(input, "work complete")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Do the work",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const child = (yield* sessions.children(lead.id))[0]
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
+          expect(calls[0]?.model).toEqual(ref)
+          expect(calls[0]?.variant).toBe("lead-variant")
+          expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "lead-variant" })
+          expect(member?.model).toEqual({ ...ref, variant: "lead-variant" })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("uses explicit teammate model without inheriting lead variant", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.sync(() => {
+                calls.push(input)
+                return reply(input, "work complete")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "model_worker",
+              role_prompt: "Do the work",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const child = (yield* sessions.children(lead.id))[0]
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
+          expect(calls[0]?.model).toEqual(explicitRef)
+          expect(calls[0]?.variant).toBeUndefined()
+          expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "lead-variant" })
+          expect(member?.model).toEqual(explicitRef)
+        }),
+      {
+        config: {
+          experimental: { agent_teams: true },
+          agent: {
+            model_worker: {
+              model: "openai/gpt-4",
+            },
+          },
+        },
+      },
+    ),
+  )
+
   it.live("does not create an inert teammate when prompt operations are unavailable", () =>
     provideTmpdirInstance(
       () =>
@@ -281,6 +379,7 @@ describe("tool.team_spawn", () => {
 
           const blocked = (yield* team.getMembers(info.id)).find((member) => member.name === "implementer")
           expect(blocked?.status).toBe("blocked")
+          expect(blocked?.model).toEqual({ ...ref, variant: "lead-variant" })
           expect(calls).toHaveLength(1)
           const architect = (yield* team.getMembers(info.id)).find((member) => member.name === "architect")
           expect(architect).toBeDefined()
@@ -297,6 +396,8 @@ describe("tool.team_spawn", () => {
           )
 
           expect(calls).toHaveLength(2)
+          expect(calls[1]?.model).toEqual(ref)
+          expect(calls[1]?.variant).toBe("lead-variant")
           expect(calls[1]?.tools).toEqual({ team_create: false, team_spawn: false })
           const architectResult = yield* Fiber.join(architectFiber)
           expect(architectDone).toBe(true)

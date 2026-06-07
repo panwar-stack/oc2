@@ -2,6 +2,7 @@ import * as Tool from "./tool"
 import DESCRIPTION from "./team_spawn.txt"
 import { Team } from "@/team/team"
 import { Session } from "@/session/session"
+import { MessageV2 } from "@/session/message-v2"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import type { TaskPromptOps } from "./task"
@@ -9,6 +10,7 @@ import { wakeTeamSession } from "./team_wake"
 import { EffectBridge } from "@/effect/bridge"
 import { SessionID } from "@/session/schema"
 import { Cause, Effect, Exit, Schema, Scope, Option } from "effect"
+import { Database } from "@opencode-ai/core/database/database"
 
 const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "Name for this teammate" }),
@@ -67,6 +69,7 @@ export const TeamSpawnTool = Tool.define(
     const agent = yield* Agent.Service
     const config = yield* Config.Service
     const scope = yield* Scope.Scope
+    const database = yield* Database.Service
 
     return {
       description: DESCRIPTION,
@@ -122,6 +125,18 @@ export const TeamSpawnTool = Tool.define(
             }
           }
 
+          const leadMessage = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.orDie,
+          )
+          if (leadMessage.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
+          const leadVariant = leadMessage.info.variant === "default" ? undefined : leadMessage.info.variant
+          const leadSessionModel = {
+            id: leadMessage.info.modelID,
+            providerID: leadMessage.info.providerID,
+            ...(leadVariant ? { variant: leadVariant } : {}),
+          }
+
           const existingMembers = yield* team.getMembers(teamID)
           const requestedDependencies = [...new Set([...(params.depends_on ?? []), ...(params.wait_for ?? [])])]
           const dependencyIDs = requestedDependencies
@@ -161,17 +176,26 @@ export const TeamSpawnTool = Tool.define(
           const childSession = yield* sessions.create({
             parentID: ctx.sessionID,
             title: `${params.name} (@${ag.name} teammate)`,
+            model: leadSessionModel,
             permission: permissionRules,
           })
 
-          const model = ag.model
+          const inheritsLeadModel = !ag.model
+          const model = ag.model ?? {
+            providerID: leadMessage.info.providerID,
+            modelID: leadMessage.info.modelID,
+          }
 
           const member = yield* team.addMember({
             teamID,
             sessionID: childSession.id,
             name: params.name,
             agentType: params.agent_type,
-            model: model?.modelID ? { providerID: model.providerID, modelID: model.modelID } : undefined,
+            model: {
+              providerID: model.providerID,
+              modelID: model.modelID,
+              ...(inheritsLeadModel && leadVariant ? { variant: leadVariant } : {}),
+            },
             rolePrompt: params.role_prompt,
             planMode: requirePlanApproval,
             workMode: requirePlanApproval ? "plan" : "implement",
@@ -304,7 +328,10 @@ export const TeamSpawnTool = Tool.define(
                 )
                 const result = yield* ops.prompt({
                   sessionID: member.session_id,
-                  model: nextAgent.model,
+                  model: member.model
+                    ? { providerID: member.model.providerID, modelID: member.model.modelID }
+                    : undefined,
+                  variant: member.model?.variant,
                   agent: nextAgent.name,
                   tools: {
                     ...NestedTeamTools,
