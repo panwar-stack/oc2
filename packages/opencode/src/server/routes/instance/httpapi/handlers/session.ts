@@ -3,7 +3,6 @@ import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
-import { Config } from "@/config/config"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
@@ -14,7 +13,6 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
-import { Supervisor } from "@/supervisor/supervisor"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
@@ -35,7 +33,6 @@ import {
   PromptPayload,
   RevertPayload,
   ShellPayload,
-  SupervisorSettingsPayload,
   SummarizePayload,
   UpdateRootPayload,
   UpdatePayload,
@@ -57,7 +54,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const promptSvc = yield* SessionPrompt.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
-    const config = yield* Config.Service
     const runState = yield* SessionRunState.Service
     const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
@@ -235,53 +231,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         yield* session.setArchived({ sessionID: ctx.params.sessionID, time: ctx.payload.time.archived })
       }
       return yield* requireSession(ctx.params.sessionID)
-    })
-
-    const getSupervisor = Effect.fn("SessionHttpApi.getSupervisor")(function* (ctx: {
-      params: { sessionID: SessionID }
-    }) {
-      const info = yield* requireSession(ctx.params.sessionID)
-      return Supervisor.state({ sessionID: ctx.params.sessionID, config: yield* config.get(), session: info.supervisor })
-    })
-
-    const updateSupervisor = Effect.fn("SessionHttpApi.updateSupervisor")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof SupervisorSettingsPayload.Type
-    }) {
-      const info = yield* requireSession(ctx.params.sessionID)
-      const supervisor = Supervisor.applySettingsPatch({
-        current: info.supervisor,
-        patch: ctx.payload,
-        updatedAt: Date.now(),
-      })
-      yield* session.setSupervisorSettings({ sessionID: ctx.params.sessionID, supervisor })
-      return Supervisor.state({ sessionID: ctx.params.sessionID, config: yield* config.get(), session: supervisor })
-    })
-
-    const getSupervisorReport = Effect.fn("SessionHttpApi.getSupervisorReport")(function* (ctx: {
-      params: { sessionID: SessionID }
-    }) {
-      const info = yield* requireSession(ctx.params.sessionID)
-      const state = Supervisor.state({ sessionID: ctx.params.sessionID, config: yield* config.get(), session: info.supervisor })
-      return {
-        sessionID: state.sessionID,
-        status: state.status,
-        summary: state.summary,
-        filesTouched: state.filesTouched,
-        commandsRun: state.commandsRun,
-        validationsRun: state.validationsRun,
-        risks: state.risks,
-        recommendations: [],
-        evidence: [],
-        generatedAt: Date.now(),
-      }
-    })
-
-    const getSupervisorActivity = Effect.fn("SessionHttpApi.getSupervisorActivity")(function* (ctx: {
-      params: { sessionID: SessionID }
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      return []
     })
 
     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {
@@ -509,10 +458,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handleRaw("create", createRaw)
       .handle("remove", remove)
       .handle("update", update)
-      .handle("getSupervisor", getSupervisor)
-      .handle("updateSupervisor", updateSupervisor)
-      .handle("getSupervisorActivity", getSupervisorActivity)
-      .handle("getSupervisorReport", getSupervisorReport)
       .handleRaw("fork", forkRaw)
       .handle("abort", abort)
       .handle("init", init)

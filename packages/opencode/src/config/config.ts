@@ -31,7 +31,6 @@ import { ConfigManaged } from "./managed"
 import { ConfigParse } from "./parse"
 import { ConfigPaths } from "./paths"
 import { ConfigPlugin } from "./plugin"
-import { ConfigSupervisor } from "./supervisor"
 import { ConfigVariable } from "./variable"
 import { InvalidError } from "@opencode-ai/core/v1/config/error"
 import { Npm } from "@opencode-ai/core/npm"
@@ -175,14 +174,10 @@ const Sandbox = Schema.Struct({
 const InfoSchema = Schema.Struct({
   ...ConfigV1.Info.fields,
   sandbox: Schema.optional(Sandbox),
-  supervisor: Schema.optional(ConfigSupervisor.Info).annotate({
-    description: "Supervisor configuration. Session-level supervisor settings override these defaults.",
-  }),
-})
+}).annotate({ identifier: "Config" })
 
 type Info = ConfigV1.Info & {
   sandbox?: Schema.Schema.Type<typeof Sandbox>
-  supervisor?: ConfigSupervisor.Info
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
   // with the file and scope it came from so later runtime code can make location-sensitive decisions.
   plugin_origins?: ConfigPlugin.Origin[]
