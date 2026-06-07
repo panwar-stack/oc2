@@ -145,7 +145,6 @@ export function toRow(info: Info) {
     time_processing: info.time.processing,
     revert: info.revert ?? null,
     permission: info.permission,
-    supervisor: null,
     time_created: info.time.created,
     time_updated: info.time.updated,
     time_compacting: info.time.compacting,

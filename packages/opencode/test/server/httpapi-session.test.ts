@@ -295,30 +295,6 @@ describe("session HttpApi", () => {
     }),
   )
 
-  it.instance("ignores persisted legacy supervisor JSON", () =>
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const database = yield* Database.Service
-      const session = yield* createSession({ title: "legacy supervisor" })
-      yield* database.db
-        .update(SessionTable)
-        .set({ supervisor: { malformed: true } })
-        .where(eq(SessionTable.id, session.id))
-        .run()
-        .pipe(Effect.orDie)
-
-      expect(Object.hasOwn((yield* Session.use.get(session.id)) as Record<string, unknown>, "supervisor")).toBe(false)
-      expect(
-        Object.hasOwn(
-          (yield* requestJson<Session.Info>(pathFor(SessionPaths.get, { sessionID: session.id }), {
-            headers: { "x-opencode-directory": test.directory },
-          })) as Record<string, unknown>,
-          "supervisor",
-        ),
-      ).toBe(false)
-    }),
-  )
-
   it.instance(
     "returns declared not found errors for read routes",
     () =>

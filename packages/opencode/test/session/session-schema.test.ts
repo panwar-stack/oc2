@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
 import { Schema } from "effect"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { MessageID, SessionID } from "../../src/session/schema"
@@ -77,14 +76,5 @@ describe("Session schema", () => {
     for (const key of ["partID", "snapshot", "diff"]) {
       expect(Object.hasOwn(encoded.revert as Record<string, unknown>, key)).toBe(false)
     }
-  })
-
-  test("session supervisor migration adds nullable json column", () => {
-    expect(
-      readFileSync(
-        new URL("../../migration/20260531203016_session_supervisor_settings/migration.sql", import.meta.url),
-        "utf-8",
-      ).trim(),
-    ).toBe("ALTER TABLE `session` ADD `supervisor` text;")
   })
 })

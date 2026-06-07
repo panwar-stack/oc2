@@ -19,7 +19,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import sessionMetadataMigration from "@opencode-ai/core/database/migration/20260511173437_session-metadata"
-import sessionProcessingSupervisorMigration from "@opencode-ai/core/database/migration/20260511180000_session_processing_supervisor"
+import sessionProcessingMigration from "@opencode-ai/core/database/migration/20260511180000_session_processing"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -497,13 +497,14 @@ describe("DatabaseMigration", () => {
         const db = yield* makeDb
         yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY, time_processing integer DEFAULT 0 NOT NULL)`)
 
-        yield* DatabaseMigration.applyOnly(db, [sessionProcessingSupervisorMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionProcessingMigration])
 
-        expect(
-          (yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name),
-        ).toContain("supervisor")
+        expect((yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name)).toEqual([
+          "id",
+          "time_processing",
+        ])
         expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
-          { id: "20260511180000_session_processing_supervisor" },
+          { id: "20260511180000_session_processing" },
         ])
       }),
     )

@@ -54,7 +54,6 @@ export const SessionTable = sqliteTable(
       providerID: string
       variant?: string
     }>(),
-    supervisor: text({ mode: "json" }).$type<unknown>(),
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
