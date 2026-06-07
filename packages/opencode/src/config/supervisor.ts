@@ -13,7 +13,7 @@ export const ReviewCadence = Schema.Literals(["step", "event", "idle"]).annotate
 export type ReviewCadence = Schema.Schema.Type<typeof ReviewCadence>
 
 export const Info = Schema.Struct({
-  mode: Schema.optional(Mode).annotate({ description: "Supervisor mode. Defaults to off." }),
+  mode: Schema.optional(Mode).annotate({ description: "Supervisor mode. Defaults to advise." }),
   recommendation_model: Schema.optional(ConfigModelID.ID).annotate({
     description: "Supervisor recommendation model in provider/model format.",
   }),

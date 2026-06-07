@@ -92,7 +92,7 @@ describe("supervisor state service", () => {
       const info = yield* session.create({})
       const state = yield* supervisor.get(info.id)
 
-      expect(state.mode).toBe("off")
+      expect(state.mode).toBe("advise")
       expect(state.filesTouched).toEqual([])
       expect(state.commandsRun).toEqual([])
       expect(state.risks).toEqual([])
@@ -105,6 +105,7 @@ describe("supervisor state service", () => {
       const supervisor = yield* SupervisorState.Service
       yield* supervisor.init()
       const info = yield* session.create({})
+      yield* supervisor.updateSettings({ sessionID: info.id, patch: { mode: "off" } })
       const message = yield* addMessage(info.id)
 
       yield* updateTool({ sessionID: info.id, messageID: message.id, command: "bun test", exitCode: 0 })

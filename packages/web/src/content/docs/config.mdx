@@ -503,7 +503,7 @@ Available options:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `mode` | `"off"` | Effective behavior for sessions without an override: `"off"`, `"observe"`, or `"advise"`. |
+| `mode` | `"advise"` | Effective behavior for sessions without an override: `"off"`, `"observe"`, or `"advise"`. |
 | `recommendation_model` | `model`, then `small_model`, then none | Supervisor model in `provider/model` format. Set this explicitly when the primary coding model is weaker or lower-quantized than the desired reviewer. |
 | `recommendation_timeout_ms` | `15000` | Timeout for supervisor recommendation model calls. |
 | `review_cadence` | `"step"` | Review cadence: `"step"`, `"event"`, or `"idle"`. The supervisor reviews meaningful state changes, not every streamed token. |

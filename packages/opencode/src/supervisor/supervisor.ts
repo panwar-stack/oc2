@@ -278,7 +278,7 @@ function StateCommandArray() {
 }
 
 export const defaults = {
-  mode: "off",
+  mode: "advise",
   recommendation_timeout_ms: 15000,
   review_cadence: "step",
   min_review_interval_ms: 10000,
