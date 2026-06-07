@@ -27,7 +27,7 @@ test("ignores synthetic user text", () => {
         type: "text",
         text: "hidden",
         synthetic: true,
-        metadata: { supervisor: { id: "rec_1" } },
+        metadata: {},
       },
     ],
   })

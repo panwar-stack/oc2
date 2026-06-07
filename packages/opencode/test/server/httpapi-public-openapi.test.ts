@@ -226,15 +226,6 @@ describe("PublicApi OpenAPI v2 errors", () => {
     }
   })
 
-  test("does not document session supervisor routes", () => {
-    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-
-    expect(spec.paths["/session/{sessionID}/supervisor"]).toBeUndefined()
-    expect(spec.paths["/session/{sessionID}/supervisor/activity"]).toBeUndefined()
-    expect(spec.paths["/session/{sessionID}/supervisor/report"]).toBeUndefined()
-    expect(spec.components?.schemas?.SupervisorSettingsPatch).toBeUndefined()
-  })
-
   test("documents permission and question not-found errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 
