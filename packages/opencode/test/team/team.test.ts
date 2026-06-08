@@ -433,7 +433,7 @@ describe("team", () => {
     ),
   )
 
-  it.live("auto-notification on member completion notifies lead", () =>
+  it.live("auto-notification on member status creates pending mailbox delivery for lead", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const team = yield* Team.Service
@@ -450,26 +450,18 @@ describe("team", () => {
           rolePrompt: "Build stuff",
         })
 
-        // Update member to completed — subscriber should auto-notify the lead
         yield* team.updateMemberStatus(member.id, "completed")
 
-        // Poll for the notification message (subscriber runs in forked fiber)
-        let notified = false
-        for (let i = 0; i < 20; i++) {
-          const msgs = yield* team.getMessages(teamInfo.id)
-          const found = msgs.find(
-            (m: any) =>
-              m.sender === member.session_id &&
-              m.recipients.includes(leadSessionID) &&
-              m.body.includes("completed their work"),
-          )
-          if (found) {
-            notified = true
-            break
-          }
-          yield* Effect.sleep("5 millis")
-        }
-        expect(notified).toBe(true)
+        const pending = yield* team.getPendingMessages(leadSessionID, teamInfo.id)
+        expect(pending.length).toBe(1)
+        expect(pending[0].sender).toBe(member.session_id)
+        expect(pending[0].recipients).toContain(leadSessionID)
+        expect(pending[0].body).toContain("completed their work")
+
+        yield* team.markMessageDelivered(pending[0].id, leadSessionID)
+
+        const delivered = yield* team.getPendingMessages(leadSessionID, teamInfo.id)
+        expect(delivered.length).toBe(0)
       }),
     ),
   )

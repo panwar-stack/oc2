@@ -1239,7 +1239,7 @@ export const layer = Layer.effect(
     }) {
       const context = yield* team.getContext(input.session.id)
       if (Option.isNone(context)) return false
-      const messages = yield* team.getPendingMessages(input.session.id, context.value.team.id)
+      const messages = yield* team.claimPendingMessages(input.session.id, context.value.team.id)
       if (messages.length === 0) return false
 
       const members = yield* team.getMembers(context.value.team.id)

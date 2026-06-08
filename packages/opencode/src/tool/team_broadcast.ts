@@ -3,7 +3,7 @@ import DESCRIPTION from "./team_broadcast.txt"
 import { Team } from "@/team/team"
 import { Config } from "@/config/config"
 import type { TaskPromptOps } from "./task"
-import { wakeTeamSession } from "./team_wake"
+import { wakeTeamSession, wakeTeamSessionBounded } from "./team_wake"
 import { Effect, Option, Schema, Scope } from "effect"
 
 const Parameters = Schema.Struct({
@@ -58,7 +58,7 @@ export const TeamBroadcastTool = Tool.define(
               recipients,
               (recipient) =>
                 lead
-                  ? wakeTeamSession(promptOps, recipient).pipe(Effect.ignore)
+                  ? wakeTeamSessionBounded(promptOps, recipient).pipe(Effect.ignore)
                   : wakeTeamSession(promptOps, recipient).pipe(Effect.ignore, Effect.forkIn(scope)),
               { concurrency: "unbounded", discard: true },
             )
@@ -68,7 +68,7 @@ export const TeamBroadcastTool = Tool.define(
             output: [
               `Sent to ${recipients.length} recipient(s).`,
               lead
-                ? "Lead session waited for woken teammate run(s) to finish."
+                ? "Lead session waited briefly for woken teammate run(s) to finish; wake waits are bounded."
                 : "Delivery is asynchronous. Busy recipients will only see this when their current run reaches the next prompt boundary.",
               lead
                 ? "Check team_get_messages once for teammate responses before deciding the next coordination step."

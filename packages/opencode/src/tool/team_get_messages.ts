@@ -29,7 +29,7 @@ export const TeamGetMessagesTool = Tool.define(
           // A missing team is still an empty read, not a repeated-poll signal.
           if (Option.isNone(context))
             return { title: "Team Messages", output: "No active team.", metadata: { count: 0, repeated: false } }
-          const messages = yield* team.getPendingMessages(ctx.sessionID, context.value.team.id)
+          const messages = yield* team.claimPendingMessages(ctx.sessionID, context.value.team.id)
           // Members are needed for both empty-mailbox status summaries and sender labels below.
           const members = yield* team.getMembers(context.value.team.id)
           // Include member status in empty-mailbox guidance so the lead can see work is still active without polling.
@@ -80,12 +80,6 @@ export const TeamGetMessagesTool = Tool.define(
               metadata: { count: 0, repeated: previousEmptyChecks > 0 },
             }
           }
-
-          // Once messages are returned, preserve normal delivery semantics by marking only this recipient delivered.
-          yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, ctx.sessionID), {
-            concurrency: "unbounded",
-            discard: true,
-          })
           const senderName = (sender: string) => {
             if (sender === context.value.team.lead_session_id) return "lead"
             return members.find((member) => member.session_id === sender)?.name ?? sender

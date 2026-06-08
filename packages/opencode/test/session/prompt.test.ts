@@ -1255,6 +1255,57 @@ it.live("does not inject lead team guidance into teammate sessions", () =>
   ),
 )
 
+it.live("injects team mailbox messages into prompts and consumes the pending delivery", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const team = yield* Team.Service
+      const lead = yield* sessions.create({ title: "Lead" })
+      const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+      const info = yield* team.create({ name: "mailbox-team", goal: "Coordinate work", leadSessionID: lead.id })
+      yield* team.addMember({
+        teamID: info.id,
+        sessionID: worker.id,
+        name: "worker",
+        agentType: "build",
+        rolePrompt: "Report progress",
+      })
+      yield* prompt.prompt({
+        sessionID: lead.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "start coordinating" }],
+      })
+      yield* team.sendMessage({
+        teamID: info.id,
+        sender: worker.id,
+        recipients: [lead.id],
+        body: "Worker is ready.",
+      })
+      yield* llm.text("done")
+
+      yield* prompt.loop({ sessionID: lead.id })
+
+      expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
+      const teamMessageParts = (yield* sessions.messages({ sessionID: lead.id }))
+        .flatMap((message) => message.parts)
+        .filter((part): part is SessionLegacy.TextPart => part.type === "text" && part.text.includes("Worker is ready."))
+      expect(teamMessageParts).toHaveLength(1)
+      expect(teamMessageParts[0].text).toContain("<team-messages>")
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("Worker is ready."))).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: { agent_teams: true },
+      }),
+    },
+  ),
+)
+
 it.live(
   "does not inject removed memory guidance into prompts",
   () =>

@@ -9,11 +9,16 @@ import { Team } from "@/team/team"
 import { TeamBroadcastTool } from "@/tool/team_broadcast"
 import { TeamGetMessagesTool } from "@/tool/team_get_messages"
 import { TeamPlanDecideTool } from "@/tool/team_plan_decide"
+import { TeamSendMessageTool } from "@/tool/team_send_message"
+import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
+import { wakeTeamSession } from "@/tool/team_wake"
+import { Database } from "@opencode-ai/core/database/database"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import type { SessionLegacy } from "@opencode-ai/core/session/legacy"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -29,6 +34,7 @@ const it = testEffect(
     Agent.defaultLayer,
     Config.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
+    Database.defaultLayer,
     Session.defaultLayer,
     Team.defaultLayer,
     Truncate.defaultLayer,
@@ -80,6 +86,7 @@ function context(input: {
   assistant: MessageV2.Assistant
   callID?: string
   messages?: MessageV2.WithParts[]
+  extra?: { [key: string]: unknown }
 }) {
   return {
     sessionID: input.lead.id,
@@ -88,10 +95,25 @@ function context(input: {
     agent: "build",
     abort: new AbortController().signal,
     messages: input.messages ?? [],
+    extra: input.extra,
     metadata: () => Effect.void,
     ask: () => Effect.void,
   }
 }
+
+function promptOps(input: {
+  response: SessionLegacy.WithParts
+  wake?: () => Effect.Effect<SessionLegacy.WithParts>
+}): TaskPromptOps {
+  return {
+    cancel: () => Effect.void,
+    resolvePromptParts: () => Effect.succeed([]),
+    prompt: () => Effect.succeed(input.response),
+    wake: input.wake ?? (() => Effect.succeed(input.response)),
+  }
+}
+
+const responseFor = (assistant: MessageV2.Assistant): SessionLegacy.WithParts => ({ info: assistant, parts: [] })
 
 const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.Assistant }) =>
   Session.Service.use((sessions) =>
@@ -193,6 +215,145 @@ describe("tool.team_get_messages", () => {
           expect(result.title).toBe("Team Messages")
           expect(result.output).toContain("Implementation is complete.")
           expect(result.metadata.count).toBe(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("delivers a pending message to only one concurrent team_get_messages caller", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info, member } = yield* seed()
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: member.session_id,
+            recipients: [lead.id],
+            body: "Concurrent delivery check.",
+          })
+          const tool = yield* TeamGetMessagesTool
+          const def = yield* tool.init()
+
+          const results = yield* Effect.all(
+            [
+              def.execute({}, context({ lead, assistant, callID: "read-a" })),
+              def.execute({}, context({ lead, assistant, callID: "read-b" })),
+            ],
+            { concurrency: "unbounded" },
+          )
+
+          expect(results.reduce((count, result) => count + result.metadata.count, 0)).toBe(1)
+          expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+})
+
+describe("team message wake safety", () => {
+  it.live("wakeTeamSession intentionally wakes the target twice", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { assistant, member } = yield* seed()
+          const wakeCount = { value: 0 }
+
+          yield* wakeTeamSession(
+            promptOps({
+              response: responseFor(assistant),
+              wake: () =>
+                Effect.sync(() => {
+                  wakeCount.value++
+                }).pipe(Effect.as(responseFor(assistant))),
+            }),
+            member.session_id,
+          )
+
+          expect(wakeCount.value).toBe(2)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("team_send_message bounds lead wake waits", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { lead, assistant } = yield* seed()
+          const tool = yield* TeamSendMessageTool
+          const def = yield* tool.init()
+
+          const result = yield* awaitWithTimeout(
+            def.execute(
+              { recipient: "worker", body: "Please review." },
+              context({
+                lead,
+                assistant,
+                extra: { promptOps: promptOps({ response: responseFor(assistant), wake: () => Effect.never }) },
+              }),
+            ),
+            "team_send_message wake wait was unbounded",
+            "3 seconds",
+          )
+
+          expect(result.title).toBe("Message Sent")
+          expect(result.output).toContain("wake waits are bounded")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("team_broadcast bounds lead wake waits", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { lead, assistant } = yield* seed()
+          const tool = yield* TeamBroadcastTool
+          const def = yield* tool.init()
+
+          const result = yield* awaitWithTimeout(
+            def.execute(
+              { body: "Scope changed." },
+              context({
+                lead,
+                assistant,
+                extra: { promptOps: promptOps({ response: responseFor(assistant), wake: () => Effect.never }) },
+              }),
+            ),
+            "team_broadcast wake wait was unbounded",
+            "3 seconds",
+          )
+
+          expect(result.title).toBe("Broadcast Sent")
+          expect(result.output).toContain("wake waits are bounded")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("team_plan_decide bounds lead wake waits", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { lead, assistant, member } = yield* seed()
+          const tool = yield* TeamPlanDecideTool
+          const def = yield* tool.init()
+
+          const result = yield* awaitWithTimeout(
+            def.execute(
+              { member_name: member.name, decision: "reject", feedback: "Revise." },
+              context({
+                lead,
+                assistant,
+                extra: { promptOps: promptOps({ response: responseFor(assistant), wake: () => Effect.never }) },
+              }),
+            ),
+            "team_plan_decide wake wait was unbounded",
+            "3 seconds",
+          )
+
+          expect(result.title).toBe("Plan Rejected")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
