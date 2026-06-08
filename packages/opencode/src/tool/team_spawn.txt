@@ -10,7 +10,9 @@ Prefer several focused teammates over one broad teammate when the work can proce
 Spawn multiple independent teammates in one parallel tool-call batch whenever possible.
 Use depends_on or wait_for when this teammate must wait for one or more teammate names/session IDs to complete before starting.
 For risky or broad edits, set plan_mode so the teammate must submit a plan for lead approval before implementation.
-Use variant only with an exact available variant key shown in the team lead prompt for the teammate's effective model. Omit variant for default behavior.
+Use variant only with an exact available variant key shown in the team lead prompt for the teammate's effective model. Omit variant for default behavior or when variant names are uncertain.
+Use lower reasoning-effort variants only for simple, well-scoped work with precise instructions. Use default or medium variants for bounded implementation, moderate debugging, and verification that requires judgment. Use default or the highest appropriate variant for ambiguous root-cause analysis, architecture decisions, security-sensitive changes, broad refactors, and adversarial review.
+Keep model and variant choices out of role_prompt; the lead owns variant selection through this tool.
 Before implementation starts on multi-step team work, make sure shared tasks have owners; use team_task_create dependencies when one task needs another result.
 
 After teammate results return, check team_get_messages ONCE for any pending handoff or blocker messages before deciding the next coordination step. You will be automatically woken when teammates send you messages — DO NOT poll team_get_messages in a loop.

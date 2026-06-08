@@ -167,6 +167,18 @@ Inside the teammate run:
 
 When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. The lead resumes after the relevant running teammates finish, then it can integrate results and decide the next coordination step.
 
+## Model Variants
+
+Teammates keep the lead session's selected provider/model unless the selected teammate agent has an explicit model configured. `team_spawn` does not expose a teammate `model` parameter.
+
+When the active model exposes variants, the lead prompt lists the exact variant keys for that current model. The lead may pass `variant` to `team_spawn` to choose one of those exposed variants for a teammate's task complexity. If the lead omits `variant`, inherited lead-model teammates keep the lead's current variant, and explicit-agent-model teammates leave variant resolution to the normal session prompt path.
+
+`team_spawn` validates explicit variants against the teammate's effective model before creating the child session or member row. Invalid variants fail the tool call instead of falling back silently.
+
+For dependency-blocked teammates, the resolved provider/model and any lead-selected or lead-inherited variant are stored in `team_member.model` at spawn time. When the teammate later starts, it uses that stored model object rather than recomputing from the lead's current session state.
+
+This first pass is intentionally tool-driven. There is no central scheduler, automatic model ranking, cost optimizer, post-hoc quality scorer, SQLite migration, or public HTTP team schema change for variants.
+
 ## Dependencies
 
 Dependencies are teammate-level dependencies, not task-list dependencies.

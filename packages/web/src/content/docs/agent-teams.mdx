@@ -79,6 +79,14 @@ Teammates are background child sessions. Each teammate has:
 
 Teammates send kickoff, progress, blocker, handoff, and completion updates through the team mailbox.
 
+### Model variants
+
+Teammates inherit the lead session's provider/model by default. When the current model exposes teammate variants, the lead prompt shows the exact variant keys and the lead may choose one per `team_spawn` call.
+
+Use lower reasoning-effort variants only for simple, well-scoped work with precise instructions. Omit `variant` for default behavior, or when the available variant names are uncertain. A teammate that waits on dependencies keeps the variant chosen when it was spawned.
+
+Agent teams do not automatically rank models, optimize cost, or choose variants for you.
+
 ### Dependencies
 
 Use `depends_on` or `wait_for` when a teammate must wait for another teammate to complete.
