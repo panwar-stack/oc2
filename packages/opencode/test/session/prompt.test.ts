@@ -26,7 +26,7 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable } from "@opencode-ai/core/session/sql"
+import { SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -1100,8 +1100,106 @@ it.live("injects team orchestration guidance for primary lead sessions when agen
             body.includes("Agent team orchestration is enabled") &&
             body.includes("team_create") &&
             body.includes("team_spawn") &&
+            body.includes("Current teammate model: test/test-model") &&
+            body.includes("The current teammate model exposes no teammate variants") &&
+            body.includes("Omit team_spawn.variant for default behavior") &&
             body.includes("Lead checklist") &&
             body.includes("run a final team report"),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: { agent_teams: true },
+      }),
+    },
+  ),
+)
+
+it.live("injects available teammate variants into team lead guidance", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+      yield* llm.text("done")
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "review a focused diff" }],
+      })
+
+      const bodies = (yield* llm.inputs).map((input) => JSON.stringify(input))
+      expect(
+        bodies.some(
+          (body) =>
+            body.includes("Current teammate model: test/test-model") &&
+            body.includes("Available teammate variants for this model: low, medium, high") &&
+            body.includes("Use team_spawn.variant only with one of these exact values") &&
+            !body.includes("default, low"),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => {
+        const config = providerCfg(url)
+        return {
+          ...config,
+          experimental: { agent_teams: true },
+          provider: {
+            ...config.provider,
+            test: {
+              ...config.provider.test,
+              models: {
+                ...config.provider.test.models,
+                "test-model": {
+                  ...config.provider.test.models["test-model"],
+                  variants: { default: {}, low: {}, medium: {}, high: {} },
+                },
+              },
+            },
+          },
+        }
+      },
+    },
+  ),
+)
+
+it.live("tells team leads to omit variants when current model lookup fails", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Missing model" })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "decompose a migration" }],
+      })
+      yield* Database.Service.use((database) =>
+        database.db
+          .update(SessionTable)
+          .set({ model: { providerID: "missing", id: "missing-model" } })
+          .where(eq(SessionTable.id, chat.id))
+          .run(),
+      )
+      yield* llm.text("done")
+
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const bodies = (yield* llm.inputs).map((input) => JSON.stringify(input))
+      expect(
+        bodies.some(
+          (body) =>
+            body.includes("Current teammate model: missing/missing-model") &&
+            body.includes("Could not resolve teammate variants for the current model") &&
+            body.includes("Omit team_spawn.variant rather than guessing"),
         ),
       ).toBe(true)
     }),

@@ -1294,8 +1294,24 @@ export const layer = Layer.effect(
       if (Option.isSome(context) && context.value.member) return
       if (Option.isNone(context) && input.session.parentID) return
 
+      const current = yield* currentModel(input.session.id)
+      const modelExit = yield* provider.getModel(current.providerID, current.modelID).pipe(Effect.exit)
+      const variantKeys = Exit.isSuccess(modelExit)
+        ? Object.keys(modelExit.value.variants ?? {}).filter((variant) => variant !== "default")
+        : []
+      const variantGuidance = Exit.isFailure(modelExit)
+        ? ["Could not resolve teammate variants for the current model. Omit team_spawn.variant rather than guessing."]
+        : variantKeys.length > 0
+          ? [
+              `Available teammate variants for this model: ${variantKeys.join(", ")}`,
+              "Use team_spawn.variant only with one of these exact values. Omit variant for default behavior.",
+            ]
+          : ["The current teammate model exposes no teammate variants. Omit team_spawn.variant for default behavior."]
+
       const guidance = [
         "Agent team orchestration is enabled.",
+        `Current teammate model: ${current.providerID}/${current.modelID}`,
+        ...variantGuidance,
         "For non-trivial tasks, create a team with team_create early and use team_spawn to delegate independent work before doing local implementation.",
         "Use teammates aggressively to save lead-session context: delegate broad searches, file reads, investigation, implementation slices, review, and verification when those can run independently.",
         "Spawn multiple independent teammates in parallel whenever possible. Use dependencies only when one teammate truly needs another teammate's result.",
