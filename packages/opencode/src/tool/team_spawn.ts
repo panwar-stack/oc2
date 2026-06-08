@@ -5,6 +5,7 @@ import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
+import { Provider } from "@/provider/provider"
 import type { TaskPromptOps } from "./task"
 import { wakeTeamSession } from "./team_wake"
 import { EffectBridge } from "@/effect/bridge"
@@ -23,6 +24,9 @@ const Parameters = Schema.Struct({
     description: "Alias for depends_on",
   }),
   plan_mode: Schema.optional(Schema.Boolean).annotate({ description: "Start in plan mode requiring lead approval" }),
+  variant: Schema.optional(Schema.String).annotate({
+    description: "Optional variant of the teammate's effective model, selected by the lead for this task's complexity",
+  }),
 })
 
 type Metadata = {
@@ -68,6 +72,7 @@ export const TeamSpawnTool = Tool.define(
     const sessions = yield* Session.Service
     const agent = yield* Agent.Service
     const config = yield* Config.Service
+    const provider = yield* Provider.Service
     const scope = yield* Scope.Scope
     const database = yield* Database.Service
 
@@ -136,6 +141,44 @@ export const TeamSpawnTool = Tool.define(
             providerID: leadMessage.info.providerID,
             ...(leadVariant ? { variant: leadVariant } : {}),
           }
+          const inheritsLeadModel = !ag.model
+          const model = ag.model ?? {
+            providerID: leadMessage.info.providerID,
+            modelID: leadMessage.info.modelID,
+          }
+
+          if (params.variant) {
+            const modelExit = yield* provider.getModel(model.providerID, model.modelID).pipe(Effect.exit)
+            if (Exit.isFailure(modelExit)) {
+              const error = Cause.squash(modelExit.cause)
+              const hint = Provider.ModelNotFoundError.isInstance(error)
+                ? error.suggestions?.length
+                  ? ` Did you mean: ${error.suggestions.join(", ")}?`
+                  : ""
+                : ""
+              return {
+                title: "Team Spawn Failed",
+                output: `Model not found: ${model.providerID}/${model.modelID}.${hint}`,
+                metadata: {} as Metadata,
+              }
+            }
+            const variants = Object.keys(modelExit.value.variants ?? {})
+            if (variants.length === 0) {
+              return {
+                title: "Team Spawn Failed",
+                output: `Model ${model.providerID}/${model.modelID} exposes no teammate variants. Omit team_spawn.variant for default behavior.`,
+                metadata: {} as Metadata,
+              }
+            }
+            if (params.variant === "default" || !variants.includes(params.variant)) {
+              return {
+                title: "Team Spawn Failed",
+                output: `Invalid teammate variant "${params.variant}" for ${model.providerID}/${model.modelID}. Available variants: ${variants.join(", ")}. Omit team_spawn.variant for default behavior.`,
+                metadata: {} as Metadata,
+              }
+            }
+          }
+          const effectiveVariant = params.variant ?? (inheritsLeadModel ? leadVariant : undefined)
 
           const existingMembers = yield* team.getMembers(teamID)
           const requestedDependencies = [...new Set([...(params.depends_on ?? []), ...(params.wait_for ?? [])])]
@@ -176,15 +219,15 @@ export const TeamSpawnTool = Tool.define(
           const childSession = yield* sessions.create({
             parentID: ctx.sessionID,
             title: `${params.name} (@${ag.name} teammate)`,
-            model: leadSessionModel,
+            model: inheritsLeadModel
+              ? {
+                  id: leadMessage.info.modelID,
+                  providerID: leadMessage.info.providerID,
+                  ...(effectiveVariant ? { variant: effectiveVariant } : {}),
+                }
+              : leadSessionModel,
             permission: permissionRules,
           })
-
-          const inheritsLeadModel = !ag.model
-          const model = ag.model ?? {
-            providerID: leadMessage.info.providerID,
-            modelID: leadMessage.info.modelID,
-          }
 
           const member = yield* team.addMember({
             teamID,
@@ -194,7 +237,7 @@ export const TeamSpawnTool = Tool.define(
             model: {
               providerID: model.providerID,
               modelID: model.modelID,
-              ...(inheritsLeadModel && leadVariant ? { variant: leadVariant } : {}),
+              ...((params.variant || inheritsLeadModel) && effectiveVariant ? { variant: effectiveVariant } : {}),
             },
             rolePrompt: params.role_prompt,
             planMode: requirePlanApproval,

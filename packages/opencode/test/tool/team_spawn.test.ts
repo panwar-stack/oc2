@@ -4,6 +4,7 @@ import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageV2 } from "@/session/message-v2"
 import type { SessionPrompt } from "@/session/prompt"
+import { Provider } from "@/provider/provider"
 import { MessageID, PartID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
@@ -14,6 +15,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Database } from "@opencode-ai/core/database/database"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
+import { ProviderTest } from "../fake/provider"
 import { testEffect } from "../lib/effect"
 
 afterEach(async () => {
@@ -28,6 +30,24 @@ const explicitRef = {
   providerID: ProviderID.make("openai"),
   modelID: ModelID.make("gpt-4"),
 }
+const leadModel = ProviderTest.model({
+  id: ref.modelID,
+  providerID: ref.providerID,
+  variants: { "lead-variant": {}, low: {}, high: {} },
+})
+const explicitModel = ProviderTest.model({
+  id: explicitRef.modelID,
+  providerID: explicitRef.providerID,
+  variants: { "agent-low": {}, "agent-high": {} },
+})
+const provider = ProviderTest.fake({
+  model: leadModel,
+  getModel: (providerID, modelID) => {
+    if (providerID === leadModel.providerID && modelID === leadModel.id) return Effect.succeed(leadModel)
+    if (providerID === explicitModel.providerID && modelID === explicitModel.id) return Effect.succeed(explicitModel)
+    return Effect.fail(new Provider.ModelNotFoundError({ providerID, modelID }))
+  },
+})
 
 const it = testEffect(
   Layer.mergeAll(
@@ -38,6 +58,7 @@ const it = testEffect(
     Team.defaultLayer,
     Truncate.defaultLayer,
     Database.defaultLayer,
+    provider.layer,
   ),
 )
 
@@ -202,6 +223,141 @@ describe("tool.team_spawn", () => {
           expect(calls[0]?.variant).toBeUndefined()
           expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "lead-variant" })
           expect(member?.model).toEqual(explicitRef)
+        }),
+      {
+        config: {
+          experimental: { agent_teams: true },
+            agent: {
+              model_worker: {
+                model: "openai/gpt-4",
+                variant: "agent-high",
+              },
+            },
+          },
+      },
+    ),
+  )
+
+  it.live("explicit requested variant overrides inherited lead variant", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.sync(() => {
+                calls.push(input)
+                return reply(input, "work complete")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Do the work",
+              variant: "low",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const child = (yield* sessions.children(lead.id))[0]
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
+          expect(result.title).toBe("Teammate Completed")
+          expect(calls[0]?.model).toEqual(ref)
+          expect(calls[0]?.variant).toBe("low")
+          expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "low" })
+          expect(member?.model).toEqual({ ...ref, variant: "low" })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("invalid requested variant fails before teammate creation", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: () => Effect.die(new Error("should not resolve prompt parts")),
+            prompt: () => Effect.die(new Error("should not prompt")),
+            wake: () => Effect.die(new Error("should not wake")),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Do the work",
+              variant: "missing",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          expect(result.title).toBe("Team Spawn Failed")
+          expect(result.output).toContain('Invalid teammate variant "missing"')
+          expect(result.output).toContain("test/test-model")
+          expect(result.output).toContain("low")
+          expect(result.output).toContain("high")
+          expect(result.output).toContain("Omit team_spawn.variant")
+          expect(yield* team.getMembers(info.id)).toHaveLength(0)
+          expect(yield* sessions.children(lead.id)).toHaveLength(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("requested variant validates against explicit teammate agent model", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.sync(() => {
+                calls.push(input)
+                return reply(input, "work complete")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "model_worker",
+              role_prompt: "Do the work",
+              variant: "agent-low",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const child = (yield* sessions.children(lead.id))[0]
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
+          expect(result.title).toBe("Teammate Completed")
+          expect(calls[0]?.model).toEqual(explicitRef)
+          expect(calls[0]?.variant).toBe("agent-low")
+          expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "lead-variant" })
+          expect(member?.model).toEqual({ ...explicitRef, variant: "agent-low" })
         }),
       {
         config: {
