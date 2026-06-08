@@ -213,7 +213,6 @@ export function Prompt(props: PromptProps) {
   const workspace = usePromptWorkspace(props.sessionID)
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
   const [cursorVersion, setCursorVersion] = createSignal(0)
-  const currentProviderLabel = createMemo(() => local.model.parsed().provider)
   const hasRightContent = createMemo(() => Boolean(props.right))
 
   function promptModelWarning() {
@@ -261,6 +260,38 @@ export function Prompt(props: PromptProps) {
     const messages = sync.data.message[props.sessionID]
     if (!messages) return undefined
     return messages.findLast((m): m is UserMessage => m.role === "user")
+  })
+
+  const displayModel = createMemo(() => {
+    const localModel = local.model.current()
+    const localDisplayModel = localModel ? { ...localModel, variant: local.model.variant.current() } : undefined
+    if (!props.sessionID) return localDisplayModel
+
+    const session = sync.session.get(props.sessionID)
+    if (!session?.parentID) return localDisplayModel
+
+    const messages = sync.data.message[props.sessionID]
+    const message = messages?.findLast(
+      (item): item is UserMessage | AssistantMessage =>
+        item.role === "user" || (item.role === "assistant" && Boolean(item.providerID && item.modelID)),
+    )
+    if (message?.role === "user") return message.model
+    if (message) return { providerID: message.providerID, modelID: message.modelID, variant: message.variant }
+    if (session.model) return { providerID: session.model.providerID, modelID: session.model.id, variant: session.model.variant }
+    return localDisplayModel
+  })
+
+  const displayModelMeta = createMemo(() => {
+    const model = displayModel()
+    if (!model) return { ...local.model.parsed(), variant: undefined }
+    const provider = sync.data.provider.find((item) => item.id === model.providerID)
+    const info = provider?.models[model.modelID]
+    return {
+      provider: provider?.name ?? model.providerID,
+      model: info?.name ?? model.modelID,
+      reasoning: info?.capabilities?.reasoning ?? false,
+      variant: model.variant,
+    }
   })
 
   const usage = createMemo(() => {
@@ -1307,10 +1338,7 @@ export function Prompt(props: PromptProps) {
   })
 
   const showVariant = createMemo(() => {
-    const variants = local.model.variant.list()
-    if (variants.length === 0) return false
-    const current = local.model.variant.current()
-    return !!current
+    return !!displayModelMeta().variant
   })
 
   const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
@@ -1467,14 +1495,14 @@ export function Prompt(props: PromptProps) {
                             flexShrink={0}
                             fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
                           >
-                            {local.model.parsed().model}
+                            {displayModelMeta().model}
                           </text>
-                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentProviderLabel()}</text>
+                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{displayModelMeta().provider}</text>
                           <Show when={showVariant()}>
                             <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
                             <text>
                               <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
-                                {local.model.variant.current()}
+                                {displayModelMeta().variant}
                               </span>
                             </text>
                           </Show>

@@ -136,21 +136,21 @@ export const TeamSpawnTool = Tool.define(
           )
           if (leadMessage.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
           const leadVariant = leadMessage.info.variant === "default" ? undefined : leadMessage.info.variant
-          const leadSessionModel = {
-            id: leadMessage.info.modelID,
-            providerID: leadMessage.info.providerID,
-            ...(leadVariant ? { variant: leadVariant } : {}),
-          }
           const inheritsLeadModel = !ag.model
           const model = ag.model ?? {
             providerID: leadMessage.info.providerID,
             modelID: leadMessage.info.modelID,
           }
 
+          const modelExit =
+            params.variant || (!inheritsLeadModel && ag.variant)
+              ? yield* provider.getModel(model.providerID, model.modelID).pipe(Effect.exit)
+              : undefined
           if (params.variant) {
-            const modelExit = yield* provider.getModel(model.providerID, model.modelID).pipe(Effect.exit)
-            if (Exit.isFailure(modelExit)) {
-              const error = Cause.squash(modelExit.cause)
+            const requestedModelExit = modelExit
+            if (!requestedModelExit) return yield* Effect.die(new Error("Model lookup did not run for requested variant"))
+            if (Exit.isFailure(requestedModelExit)) {
+              const error = Cause.squash(requestedModelExit.cause)
               const hint = Provider.ModelNotFoundError.isInstance(error)
                 ? error.suggestions?.length
                   ? ` Did you mean: ${error.suggestions.join(", ")}?`
@@ -162,7 +162,7 @@ export const TeamSpawnTool = Tool.define(
                 metadata: {} as Metadata,
               }
             }
-            const variants = Object.keys(modelExit.value.variants ?? {})
+            const variants = Object.keys(requestedModelExit.value.variants ?? {})
             if (variants.length === 0) {
               return {
                 title: "Team Spawn Failed",
@@ -178,7 +178,13 @@ export const TeamSpawnTool = Tool.define(
               }
             }
           }
-          const effectiveVariant = params.variant ?? (inheritsLeadModel ? leadVariant : undefined)
+          const agentVariant =
+            !params.variant && !inheritsLeadModel && ag.variant && modelExit && Exit.isSuccess(modelExit)
+              ? modelExit.value.variants?.[ag.variant]
+                ? ag.variant
+                : undefined
+              : undefined
+          const effectiveVariant = params.variant ?? (inheritsLeadModel ? leadVariant : agentVariant)
 
           const existingMembers = yield* team.getMembers(teamID)
           const requestedDependencies = [...new Set([...(params.depends_on ?? []), ...(params.wait_for ?? [])])]
@@ -219,13 +225,11 @@ export const TeamSpawnTool = Tool.define(
           const childSession = yield* sessions.create({
             parentID: ctx.sessionID,
             title: `${params.name} (@${ag.name} teammate)`,
-            model: inheritsLeadModel
-              ? {
-                  id: leadMessage.info.modelID,
-                  providerID: leadMessage.info.providerID,
-                  ...(effectiveVariant ? { variant: effectiveVariant } : {}),
-                }
-              : leadSessionModel,
+            model: {
+              id: model.modelID,
+              providerID: model.providerID,
+              ...(effectiveVariant ? { variant: effectiveVariant } : {}),
+            },
             permission: permissionRules,
           })
 
