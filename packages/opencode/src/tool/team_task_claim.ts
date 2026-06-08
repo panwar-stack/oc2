@@ -23,11 +23,17 @@ export const TeamTaskClaimTool = Tool.define(
             return { title: "Task Claim", output: "Agent teams disabled.", metadata: {} }
           const context = yield* team.getContext(ctx.sessionID)
           if (Option.isNone(context)) return { title: "Task Claim", output: "No active team.", metadata: {} }
-          const result = yield* team.claimTask(params.task_id, ctx.sessionID)
+          const result = yield* team.claimTask(context.value.team.id, params.task_id, ctx.sessionID)
           if (Option.isNone(result))
             return { title: "Task Claim Failed", output: "Cannot claim this task.", metadata: {} }
           return { title: "Task Claimed", output: `Task claimed: ${result.value.id.slice(0, 8)}`, metadata: {} }
-        }).pipe(Effect.orDie),
+        }).pipe(
+          Effect.catchIf(
+            (error): error is Error => error instanceof Error,
+            (error) => Effect.succeed({ title: "Task Claim Failed", output: error.message, metadata: {} }),
+          ),
+          Effect.orDie,
+        ),
     }
   }),
 )

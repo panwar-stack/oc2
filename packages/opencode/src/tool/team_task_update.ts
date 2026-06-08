@@ -27,17 +27,27 @@ export const TeamTaskUpdateTool = Tool.define(
             return { title: "Task Update", output: "Agent teams disabled.", metadata: {} }
           const context = yield* team.getContext(ctx.sessionID)
           if (Option.isNone(context)) return { title: "Task Update", output: "No active team.", metadata: {} }
-          const result = yield* team.updateTask(params.task_id, {
+          const current = yield* team.getTask(context.value.team.id, params.task_id)
+          if (Option.isNone(current)) return { title: "Task Update Failed", output: "Task not found.", metadata: {} }
+          if (context.value.team.lead_session_id !== ctx.sessionID && current.value.assignee !== ctx.sessionID)
+            return { title: "Task Update Failed", output: "Only the lead or assigned teammate can update this task.", metadata: {} }
+          const result = yield* team.updateTask(context.value.team.id, params.task_id, {
             status: params.status,
             assignee: params.assignee,
           })
           if (Option.isNone(result)) return { title: "Task Update Failed", output: "Task not found.", metadata: {} }
           return {
             title: "Task Updated",
-            output: `Task ${params.task_id.slice(0, 8)} → ${result.value.status}`,
+            output: `Task ${result.value.id.slice(0, 8)} → ${result.value.status}`,
             metadata: {},
           }
-        }).pipe(Effect.orDie),
+        }).pipe(
+          Effect.catchIf(
+            (error): error is Error => error instanceof Error,
+            (error) => Effect.succeed({ title: "Task Update Failed", output: error.message, metadata: {} }),
+          ),
+          Effect.orDie,
+        ),
     }
   }),
 )

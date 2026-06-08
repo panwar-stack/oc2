@@ -199,12 +199,12 @@ describe("team", () => {
         const tasks = yield* team.getTasks(teamInfo.id)
         expect(tasks.length).toBe(2)
 
-        const claimResult = yield* team.claimTask(task2.id, "ses_child")
+        const claimResult = yield* team.claimTask(teamInfo.id, task2.id, "ses_child")
         expect(Option.isNone(claimResult)).toBe(true)
 
-        yield* team.updateTask(task1.id, { status: "completed" })
+        yield* team.updateTask(teamInfo.id, task1.id, { status: "completed" })
 
-        const claim2 = yield* team.claimTask(task2.id, "ses_child")
+        const claim2 = yield* team.claimTask(teamInfo.id, task2.id, "ses_child")
         expect(Option.isSome(claim2)).toBe(true)
         expect(unwrap(claim2).status).toBe("in_progress")
         expect(unwrap(claim2).assignee).toBe("ses_child")

@@ -55,12 +55,14 @@ export interface Interface {
     assignee?: string
     dependencyIDs?: string[]
     metadata?: Record<string, unknown>
-  }) => Effect.Effect<any>
+  }) => Effect.Effect<any, Error>
+  getTask: (teamID: string, taskID: string) => Effect.Effect<Option.Option<any>, Error>
   updateTask: (
+    teamID: string,
     taskID: string,
     update: Partial<{ status: string; assignee: string }>,
-  ) => Effect.Effect<Option.Option<any>>
-  claimTask: (taskID: string, assignee: string) => Effect.Effect<Option.Option<any>>
+  ) => Effect.Effect<Option.Option<any>, Error>
+  claimTask: (teamID: string, taskID: string, assignee: string) => Effect.Effect<Option.Option<any>, Error>
   getTasks: (teamID: string) => Effect.Effect<any[]>
   sendMessage: (input: { teamID: string; sender: string; recipients: string[]; body: string }) => Effect.Effect<any>
   getMessages: (teamID: string) => Effect.Effect<any[]>
@@ -360,6 +362,13 @@ export const layer = Layer.effect(
       dependencyIDs?: string[]
       metadata?: Record<string, unknown>
     }) {
+      const dependencyIDs = yield* Effect.forEach(input.dependencyIDs ?? [], (dependencyID) =>
+        Effect.gen(function* () {
+          const resolved = yield* resolveTaskID(input.teamID, dependencyID)
+          if (Option.isNone(resolved)) return yield* Effect.fail(new Error(`Task dependency not found: ${dependencyID}`))
+          return resolved.value
+        }),
+      )
       const id = crypto.randomUUID()
       const now = Date.now()
       yield* db
@@ -370,7 +379,7 @@ export const layer = Layer.effect(
           description: input.description,
           status: "pending",
           assignee: input.assignee ?? null,
-          dependency_ids: input.dependencyIDs ?? null,
+          dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : null,
           metadata: input.metadata ?? null,
           time_created: now,
           time_updated: now,
@@ -383,23 +392,22 @@ export const layer = Layer.effect(
         description: input.description,
         status: "pending",
         assignee: input.assignee,
-        dependency_ids: input.dependencyIDs,
+        dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : undefined,
         metadata: input.metadata,
         time_created: now,
         time_updated: now,
       }
     })
 
-    const updateTask = Effect.fn("Team.updateTask")(function* (
-      taskID: string,
-      update: Partial<{ status: string; assignee: string }>,
-    ) {
-      const now = Date.now()
-      const setData: Record<string, unknown> = { time_updated: now }
-      if (update.status !== undefined) setData.status = update.status
-      if (update.assignee !== undefined) setData.assignee = update.assignee
-      yield* db.update(TeamTaskTable).set(setData).where(eq(TeamTaskTable.id, taskID)).run().pipe(Effect.orDie)
-      const row = yield* db.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get().pipe(Effect.orDie)
+    const getTask = Effect.fn("Team.getTask")(function* (teamID: string, taskID: string) {
+      const resolved = yield* resolveTaskID(teamID, taskID)
+      if (Option.isNone(resolved)) return Option.none()
+      const row = yield* db
+        .select()
+        .from(TeamTaskTable)
+        .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+        .get()
+        .pipe(Effect.orDie)
       if (!row) return Option.none()
       return Option.some({
         id: row.id,
@@ -414,29 +422,76 @@ export const layer = Layer.effect(
       })
     })
 
-    const claimTask = Effect.fn("Team.claimTask")(function* (taskID: string, assignee: string) {
+    const updateTask = Effect.fn("Team.updateTask")(function* (
+      teamID: string,
+      taskID: string,
+      update: Partial<{ status: string; assignee: string }>,
+    ) {
+      const resolved = yield* resolveTaskID(teamID, taskID)
+      if (Option.isNone(resolved)) return Option.none()
+      const now = Date.now()
+      const setData: Record<string, unknown> = { time_updated: now }
+      if (update.status !== undefined) setData.status = update.status
+      if (update.assignee !== undefined) setData.assignee = update.assignee
+      yield* db
+        .update(TeamTaskTable)
+        .set(setData)
+        .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+        .run()
+        .pipe(Effect.orDie)
+      const row = yield* db
+        .select()
+        .from(TeamTaskTable)
+        .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return Option.none()
+      return Option.some({
+        id: row.id,
+        team_id: row.team_id,
+        description: row.description,
+        status: row.status,
+        assignee: row.assignee,
+        dependency_ids: row.dependency_ids,
+        metadata: row.metadata,
+        time_created: row.time_created,
+        time_updated: row.time_updated,
+      })
+    })
+
+    const claimTask = Effect.fn("Team.claimTask")(function* (teamID: string, taskID: string, assignee: string) {
+      const resolved = yield* resolveTaskID(teamID, taskID)
+      if (Option.isNone(resolved)) return Option.none()
       const now = Date.now()
       const result = yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
-        const current = yield* tx.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get()
+        const current = yield* tx
+          .select()
+          .from(TeamTaskTable)
+          .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+          .get()
         if (!current || current.status !== "pending") return null
         if (current.dependency_ids) {
-          const deps = current.dependency_ids as string[]
-          const incomplete = (yield* tx
+          const deps = current.dependency_ids
+          const completed = (yield* tx
             .select()
             .from(TeamTaskTable)
             .where(eq(TeamTaskTable.team_id, current.team_id))
             .all())
-            .filter((t) => deps.includes(t.id) && t.status !== "completed" && t.status !== "cancelled")
-          if (incomplete.length > 0) return null
+            .filter((t) => deps.includes(t.id) && t.status === "completed")
+          if (!deps.every((id) => completed.some((t) => t.id === id))) return null
         }
         yield* tx
           .update(TeamTaskTable)
-          .set({ status: "in_progress", assignee, time_updated: now } as any)
-          .where(eq(TeamTaskTable.id, taskID))
+          .set({ status: "in_progress", assignee, time_updated: now })
+          .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
           .run()
-        return yield* tx.select().from(TeamTaskTable).where(eq(TeamTaskTable.id, taskID)).get()
+        return yield* tx
+          .select()
+          .from(TeamTaskTable)
+          .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+          .get()
           }),
           { behavior: "immediate" },
         )
@@ -468,6 +523,28 @@ export const layer = Layer.effect(
           time_created: row.time_created,
           time_updated: row.time_updated,
         }),
+      )
+    })
+
+    const resolveTaskID = Effect.fn("Team.resolveTaskID")(function* (teamID: string, taskID: string) {
+      const exact = yield* db
+        .select({ id: TeamTaskTable.id })
+        .from(TeamTaskTable)
+        .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, taskID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (exact) return Option.some(exact.id)
+      const matches = (yield* db
+        .select({ id: TeamTaskTable.id })
+        .from(TeamTaskTable)
+        .where(eq(TeamTaskTable.team_id, teamID))
+        .all()
+        .pipe(Effect.orDie)).filter((task) => task.id.startsWith(taskID))
+      if (matches.length === 0) return Option.none()
+      const match = matches[0]
+      if (matches.length === 1 && match) return Option.some(match.id)
+      return yield* Effect.fail(
+        new Error(`Ambiguous task ID prefix "${taskID}". Matching tasks: ${matches.map((task) => task.id.slice(0, 8)).join(", ")}`),
       )
     })
 
@@ -749,6 +826,7 @@ export const layer = Layer.effect(
       getMemberBySession,
       getContext,
       createTask,
+      getTask,
       updateTask,
       claimTask,
       getTasks,

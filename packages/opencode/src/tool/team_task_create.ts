@@ -38,7 +38,13 @@ export const TeamTaskCreateTool = Tool.define(
             output: `Task: ${task.id.slice(0, 8)} - ${task.description}`,
             metadata: { taskID: task.id },
           }
-        }).pipe(Effect.orDie),
+        }).pipe(
+          Effect.catchIf(
+            (error): error is Error => error instanceof Error,
+            (error) => Effect.succeed({ title: "Task Create Failed", output: error.message, metadata: {} }),
+          ),
+          Effect.orDie,
+        ),
     }
   }),
 )
