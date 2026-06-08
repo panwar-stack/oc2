@@ -35,7 +35,7 @@ function statusLabel(status: { type: string } | undefined, teamStatus: string | 
 
 function isMemberWorking(status: { type: string } | undefined, teamStatus: string | undefined) {
   if (teamStatus === "completed" || teamStatus === "cancelled") return false
-  return status?.type === "busy" || teamStatus === "starting" || teamStatus === "active"
+  return status?.type === "busy" || teamStatus === "starting"
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
