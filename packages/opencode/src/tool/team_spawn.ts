@@ -187,18 +187,34 @@ export const TeamSpawnTool = Tool.define(
           const effectiveVariant = params.variant ?? (inheritsLeadModel ? leadVariant : agentVariant)
 
           const existingMembers = yield* team.getMembers(teamID)
+          if (existingMembers.some((member) => member.name === params.name)) {
+            return {
+              title: "Team Spawn Failed",
+              output: `A teammate named '${params.name}' already exists. Choose a unique teammate name.`,
+              metadata: {} as Metadata,
+            }
+          }
           const requestedDependencies = [...new Set([...(params.depends_on ?? []), ...(params.wait_for ?? [])])]
-          const dependencyIDs = requestedDependencies
-            .map(
-              (dependency) =>
-                existingMembers.find((member) => member.name === dependency || member.session_id === dependency)
-                  ?.session_id,
-            )
-            .filter((dependency): dependency is string => dependency !== undefined)
-          const missingDependencies = requestedDependencies.filter(
-            (dependency) =>
-              !existingMembers.some((member) => member.name === dependency || member.session_id === dependency),
-          )
+          const resolvedDependencies = requestedDependencies.map((dependency) => {
+            const sessionMatch = existingMembers.find((member) => member.session_id === dependency)
+            if (sessionMatch) return { dependency, sessionID: sessionMatch.session_id }
+            const nameMatches = existingMembers.filter((member) => member.name === dependency)
+            if (nameMatches.length === 1) return { dependency, sessionID: nameMatches[0]?.session_id }
+            return { dependency, ambiguous: nameMatches.length > 1 }
+          })
+          const ambiguousDependencies = resolvedDependencies
+            .filter((dependency) => dependency.ambiguous)
+            .map((dependency) => dependency.dependency)
+          if (ambiguousDependencies.length > 0) {
+            return {
+              title: "Team Spawn Failed",
+              output: `Dependency teammate name(s) are ambiguous; use session IDs instead: ${ambiguousDependencies.join(", ")}`,
+              metadata: {} as Metadata,
+            }
+          }
+          const missingDependencies = resolvedDependencies
+            .filter((dependency) => dependency.sessionID === undefined)
+            .map((dependency) => dependency.dependency)
           if (missingDependencies.length > 0) {
             return {
               title: "Team Spawn Failed",
@@ -206,6 +222,9 @@ export const TeamSpawnTool = Tool.define(
               metadata: {} as Metadata,
             }
           }
+          const dependencyIDs = resolvedDependencies
+            .map((dependency) => dependency.sessionID)
+            .filter((dependency): dependency is string => dependency !== undefined)
 
           const requirePlanApproval = params.plan_mode ?? false
           const permissionRules = [

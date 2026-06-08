@@ -31,23 +31,25 @@ export const TeamPlanDecideTool = Tool.define(
           const activeTeam = yield* team.getActive(ctx.sessionID)
           if (Option.isNone(activeTeam)) return { title: "Plan Decide Failed", output: "No active team.", metadata: {} }
           const members = yield* team.getMembers(activeTeam.value.id)
-          const target = members.find((m: any) => m.name === params.member_name)
+          const sessionMatch = members.find((member) => member.session_id === params.member_name)
+          const nameMatches = sessionMatch ? [] : members.filter((member) => member.name === params.member_name)
+          if (!sessionMatch && nameMatches.length > 1) {
+            return {
+              title: "Plan Decide Failed",
+              output: `Member name '${params.member_name}' is ambiguous. Use a session ID instead.`,
+              metadata: {},
+            }
+          }
+          const target = sessionMatch ?? nameMatches[0]
           if (!target) return { title: "Plan Decide Failed", output: `No member '${params.member_name}'`, metadata: {} }
+          if (!target.plan_mode) {
+            return { title: "Plan Decide Failed", output: `Member '${params.member_name}' is not in plan mode.`, metadata: {} }
+          }
 
           if (params.decision === "approve") {
-            yield* team.updateMemberStatus(target.id, "active")
+            yield* team.approveMemberPlan(target.id)
             const session = yield* sessions.get(target.session_id)
-            const newPermission = (session.permission ?? []).filter(
-              (rule: Permission.Rule) =>
-                !(
-                  rule.action === "deny" &&
-                  rule.pattern === "*" &&
-                  (rule.permission === "edit" ||
-                    rule.permission === "write" ||
-                    rule.permission === "bash" ||
-                    rule.permission === "apply_patch")
-                ),
-            )
+            const newPermission = removePlanModePermissionOverlay(session.permission ?? [])
             yield* sessions.setPermission({ sessionID: target.session_id, permission: newPermission })
             yield* team.sendMessage({
               teamID: activeTeam.value.id,
@@ -98,3 +100,25 @@ export const TeamPlanDecideTool = Tool.define(
     }
   }),
 )
+
+function removePlanModePermissionOverlay(rules: Permission.Rule[]) {
+  const removed = new Set<string>()
+  return rules.reduceRight<Permission.Rule[]>((result, rule) => {
+    if (isPlanModePermissionRule(rule) && !removed.has(rule.permission)) {
+      removed.add(rule.permission)
+      return result
+    }
+    return [rule, ...result]
+  }, [])
+}
+
+function isPlanModePermissionRule(rule: Permission.Rule) {
+  return (
+    rule.action === "deny" &&
+    rule.pattern === "*" &&
+    (rule.permission === "bash" ||
+      rule.permission === "write" ||
+      rule.permission === "edit" ||
+      rule.permission === "apply_patch")
+  )
+}

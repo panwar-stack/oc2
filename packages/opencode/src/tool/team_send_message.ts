@@ -32,18 +32,30 @@ export const TeamSendMessageTool = Tool.define(
             .split(",")
             .map((recipient) => recipient.trim())
             .filter((recipient) => recipient.length > 0)
-          const recipientIDs = requested
-            .map((recipient) => {
-              if (recipient === "lead" || recipient === "lead_session" || recipient === "lead_session_id") {
-                return context.value.team.lead_session_id
-              }
-              return members.find((member) => member.name === recipient || member.session_id === recipient)?.session_id
-            })
-            .filter((recipient): recipient is string => recipient !== undefined)
-          const missing = requested.filter((recipient) => {
-            if (recipient === "lead" || recipient === "lead_session" || recipient === "lead_session_id") return false
-            return !members.some((member) => member.name === recipient || member.session_id === recipient)
+          const resolved = requested.map((recipient) => {
+            if (recipient === "lead" || recipient === "lead_session" || recipient === "lead_session_id") {
+              return { recipient, sessionID: context.value.team.lead_session_id }
+            }
+            const sessionMatch = members.find((member) => member.session_id === recipient)
+            if (sessionMatch) return { recipient, sessionID: sessionMatch.session_id }
+            const nameMatches = members.filter((member) => member.name === recipient)
+            if (nameMatches.length === 1) return { recipient, sessionID: nameMatches[0]?.session_id }
+            return { recipient, ambiguous: nameMatches.length > 1 }
           })
+          const ambiguous = resolved.filter((recipient) => recipient.ambiguous).map((recipient) => recipient.recipient)
+          if (ambiguous.length > 0) {
+            return {
+              title: "Team Message",
+              output: `Recipient name(s) are ambiguous; use session IDs instead: ${ambiguous.join(", ")}`,
+              metadata: {},
+            }
+          }
+          const recipientIDs = resolved
+            .map((recipient) => recipient.sessionID)
+            .filter((recipient): recipient is string => recipient !== undefined)
+          const missing = resolved
+            .filter((recipient) => recipient.sessionID === undefined)
+            .map((recipient) => recipient.recipient)
           if (missing.length > 0) {
             return { title: "Team Message", output: `Recipient '${missing.join(", ")}' not found.`, metadata: {} }
           }

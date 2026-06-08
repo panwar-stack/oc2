@@ -400,6 +400,100 @@ describe("tool.team_spawn", () => {
     ),
   )
 
+  it.live("rejects duplicate teammate names before creating a child session", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const existing = yield* sessions.create({ parentID: lead.id, title: "Existing worker" })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: existing.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Existing work",
+          })
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: () => Effect.die(new Error("should not resolve prompt parts")),
+            prompt: () => Effect.die(new Error("should not prompt")),
+            wake: () => Effect.die(new Error("should not wake")),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Duplicate work",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          expect(result.title).toBe("Team Spawn Failed")
+          expect(result.output).toContain("already exists")
+          expect(yield* team.getMembers(info.id)).toHaveLength(1)
+          expect(yield* sessions.children(lead.id)).toHaveLength(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects ambiguous dependency names", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const first = yield* sessions.create({ parentID: lead.id, title: "First worker" })
+          const second = yield* sessions.create({ parentID: lead.id, title: "Second worker" })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: first.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "First work",
+          })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: second.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Second work",
+          })
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: () => Effect.die(new Error("should not resolve prompt parts")),
+            prompt: () => Effect.die(new Error("should not prompt")),
+            wake: () => Effect.die(new Error("should not wake")),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "implementer",
+              agent_type: "general",
+              role_prompt: "Implement after worker",
+              depends_on: ["worker"],
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          expect(result.title).toBe("Team Spawn Failed")
+          expect(result.output).toContain("ambiguous")
+          expect(result.output).toContain("session IDs")
+          expect(yield* team.getMembers(info.id)).toHaveLength(2)
+          expect(yield* sessions.children(lead.id)).toHaveLength(2)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("rejects direct calls from teammate sessions before creating nested teammates", () =>
     provideTmpdirInstance(
       () =>

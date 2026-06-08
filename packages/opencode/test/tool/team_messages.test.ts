@@ -9,10 +9,12 @@ import { Team } from "@/team/team"
 import { TeamBroadcastTool } from "@/tool/team_broadcast"
 import { TeamGetMessagesTool } from "@/tool/team_get_messages"
 import { TeamPlanDecideTool } from "@/tool/team_plan_decide"
+import { TeamPlanSubmitTool } from "@/tool/team_plan_submit"
 import { TeamSendMessageTool } from "@/tool/team_send_message"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { wakeTeamSession } from "@/tool/team_wake"
+import { Permission } from "@/permission"
 import { Database } from "@opencode-ai/core/database/database"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import type { SessionLegacy } from "@opencode-ai/core/session/legacy"
@@ -41,7 +43,10 @@ const it = testEffect(
   ),
 )
 
-const seed = Effect.fn("TeamMessagesTest.seed")(function* () {
+const seed = Effect.fn("TeamMessagesTest.seed")(function* (input?: {
+  planMode?: boolean
+  permission?: Permission.Ruleset
+}) {
   const sessions = yield* Session.Service
   const team = yield* Team.Service
   const lead = yield* sessions.create({ title: "Lead" })
@@ -69,16 +74,18 @@ const seed = Effect.fn("TeamMessagesTest.seed")(function* () {
   }
   yield* sessions.updateMessage(assistant)
   const info = yield* team.create({ name: "messages-team", goal: "Coordinate work", leadSessionID: lead.id })
-  const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+  const worker = yield* sessions.create({ parentID: lead.id, title: "Worker", permission: input?.permission })
   const member = yield* team.addMember({
     teamID: info.id,
     sessionID: worker.id,
     name: "worker",
     agentType: "general",
     rolePrompt: "Do the work",
+    planMode: input?.planMode,
+    workMode: input?.planMode ? "plan" : "implement",
   })
   yield* team.updateMemberStatus(member.id, "active")
-  return { lead, user, assistant, info, member }
+  return { lead, user, assistant, info, worker, member }
 })
 
 function context(input: {
@@ -114,6 +121,23 @@ function promptOps(input: {
 }
 
 const responseFor = (assistant: MessageV2.Assistant): SessionLegacy.WithParts => ({ info: assistant, parts: [] })
+
+const planModePermission: Permission.Ruleset = [
+  { permission: "bash", pattern: "*", action: "deny" },
+  { permission: "external_directory", pattern: "/tmp/*", action: "deny" },
+  { permission: "bash", pattern: "*", action: "deny" },
+  { permission: "write", pattern: "*", action: "deny" },
+  { permission: "edit", pattern: "*", action: "deny" },
+  { permission: "apply_patch", pattern: "*", action: "deny" },
+]
+
+const inheritedPermissionAfterApproval: Permission.Ruleset = [
+  { permission: "bash", pattern: "*", action: "deny" },
+  { permission: "external_directory", pattern: "/tmp/*", action: "deny" },
+]
+
+const expectedPermission = (rules: Permission.Ruleset): { permission: string; pattern: string; action: Permission.Action }[] =>
+  rules.map((rule) => ({ permission: rule.permission, pattern: rule.pattern, action: rule.action }))
 
 const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.Assistant }) =>
   Session.Service.use((sessions) =>
@@ -251,6 +275,236 @@ describe("tool.team_get_messages", () => {
   )
 })
 
+describe("tool.team_send_message", () => {
+  it.live("rejects ambiguous recipient names", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          const duplicate = yield* sessions.create({ parentID: lead.id, title: "Duplicate worker" })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: duplicate.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Duplicate work",
+          })
+          const tool = yield* TeamSendMessageTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { recipient: "worker", body: "Please review." },
+            context({ lead, assistant }),
+          )
+
+          expect(result.title).toBe("Team Message")
+          expect(result.output).toContain("ambiguous")
+          expect(result.output).toContain("session IDs")
+          expect(yield* team.getPendingMessages(duplicate.id, info.id)).toHaveLength(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("sends to a session ID when names are ambiguous", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info, member } = yield* seed()
+          const duplicate = yield* sessions.create({ parentID: lead.id, title: "Duplicate worker" })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: duplicate.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Duplicate work",
+          })
+          const tool = yield* TeamSendMessageTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { recipient: member.session_id, body: "Please review." },
+            context({ lead, assistant }),
+          )
+
+          expect(result.title).toBe("Message Sent")
+          expect(yield* team.getPendingMessages(member.session_id, info.id)).toHaveLength(1)
+          expect(yield* team.getPendingMessages(duplicate.id, info.id)).toHaveLength(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+})
+
+describe("tool.team_plan_submit", () => {
+  it.live("allows plan-mode members to submit plans", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { assistant, info, lead, worker } = yield* seed({ planMode: true })
+          const tool = yield* TeamPlanSubmitTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({ plan: "I will inspect then patch." }, context({ lead: worker, assistant }))
+
+          expect(result.title).toBe("Plan Submitted")
+          expect(result.output).toContain("Plan submitted")
+          expect((yield* team.getPendingMessages(lead.id, info.id))[0]?.body).toContain("I will inspect then patch")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects non-members", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const { assistant, lead } = yield* seed({ planMode: true })
+          const outsider = yield* sessions.create({ title: "Outsider" })
+          const tool = yield* TeamPlanSubmitTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({ plan: "I should not submit." }, context({ lead: outsider, assistant }))
+
+          expect(result.title).toBe("Plan Submit Failed")
+          expect(result.output).toContain("Not a team member")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects members that are not in plan mode", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { assistant, worker } = yield* seed()
+          const tool = yield* TeamPlanSubmitTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({ plan: "I should not submit." }, context({ lead: worker, assistant }))
+
+          expect(result.title).toBe("Plan Submit Failed")
+          expect(result.output).toContain("Not in plan mode")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+})
+
+describe("tool.team_plan_decide", () => {
+  it.live("rejects non-plan-mode members", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { assistant, lead, member } = yield* seed()
+          const tool = yield* TeamPlanDecideTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { member_name: member.name, decision: "approve", feedback: "Proceed." },
+            context({ lead, assistant }),
+          )
+
+          expect(result.title).toBe("Plan Decide Failed")
+          expect(result.output).toContain("not in plan mode")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects ambiguous member names", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { assistant, info, lead } = yield* seed({ planMode: true })
+          const duplicate = yield* sessions.create({ parentID: lead.id, title: "Duplicate worker" })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: duplicate.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Duplicate work",
+            planMode: true,
+            workMode: "plan",
+          })
+          const tool = yield* TeamPlanDecideTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { member_name: "worker", decision: "reject", feedback: "Revise." },
+            context({ lead, assistant }),
+          )
+
+          expect(result.title).toBe("Plan Decide Failed")
+          expect(result.output).toContain("ambiguous")
+          expect(result.output).toContain("session ID")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("approval clears plan mode and removes only the plan-mode permission overlay", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { assistant, lead, member } = yield* seed({ planMode: true, permission: planModePermission })
+          const tool = yield* TeamPlanDecideTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { member_name: member.session_id, decision: "approve", feedback: "Proceed." },
+            context({ lead, assistant }),
+          )
+
+          const approved = (yield* team.getMembers(member.team_id)).find((candidate) => candidate.id === member.id)
+          expect(result.title).toBe("Plan Approved")
+          expect(approved?.plan_mode).toBe(false)
+          expect(approved?.work_mode).toBe("implement")
+          expect(approved?.status).toBe("active")
+          expect((yield* sessions.get(member.session_id)).permission).toEqual(
+            expectedPermission(inheritedPermissionAfterApproval),
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejection keeps plan-mode restrictions intact", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { assistant, lead, member } = yield* seed({ planMode: true, permission: planModePermission })
+          const tool = yield* TeamPlanDecideTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { member_name: member.name, decision: "reject", feedback: "Revise." },
+            context({ lead, assistant }),
+          )
+
+          const rejected = (yield* team.getMembers(member.team_id)).find((candidate) => candidate.id === member.id)
+          expect(result.title).toBe("Plan Rejected")
+          expect(rejected?.plan_mode).toBe(true)
+          expect(rejected?.work_mode).toBe("plan")
+          expect((yield* sessions.get(member.session_id)).permission).toEqual(expectedPermission(planModePermission))
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+})
+
 describe("team message wake safety", () => {
   it.live("wakeTeamSession intentionally wakes the target twice", () =>
     provideTmpdirInstance(
@@ -336,7 +590,7 @@ describe("team message wake safety", () => {
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
-          const { lead, assistant, member } = yield* seed()
+          const { lead, assistant, member } = yield* seed({ planMode: true })
           const tool = yield* TeamPlanDecideTool
           const def = yield* tool.init()
 
@@ -394,7 +648,7 @@ describe("team message usage events", () => {
       () =>
         Effect.gen(function* () {
           const team = yield* Team.Service
-          const { lead, assistant, info, member } = yield* seed()
+          const { lead, assistant, info, member } = yield* seed({ planMode: true })
           const tool = yield* TeamPlanDecideTool
           const def = yield* tool.init()
 
@@ -429,7 +683,7 @@ describe("team message usage events", () => {
       () =>
         Effect.gen(function* () {
           const team = yield* Team.Service
-          const { lead, assistant, info, member } = yield* seed()
+          const { lead, assistant, info, member } = yield* seed({ planMode: true })
           const tool = yield* TeamPlanDecideTool
           const def = yield* tool.init()
 

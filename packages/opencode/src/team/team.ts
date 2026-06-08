@@ -46,6 +46,7 @@ export interface Interface {
     dependencyIDs?: string[]
   }) => Effect.Effect<any>
   updateMemberStatus: (memberID: string, status: string, result?: string) => Effect.Effect<Option.Option<any>>
+  approveMemberPlan: (memberID: string) => Effect.Effect<Option.Option<any>>
   getMembers: (teamID: string) => Effect.Effect<any[]>
   getMemberBySession: (sessionID: string) => Effect.Effect<Option.Option<any>>
   getContext: (sessionID: string) => Effect.Effect<Option.Option<{ team: any; member?: any }>>
@@ -280,6 +281,35 @@ export const layer = Layer.effect(
         }
       }
 
+      return Option.some({
+        id: row.id,
+        team_id: row.team_id,
+        session_id: row.session_id,
+        name: row.name,
+        agent_type: row.agent_type,
+        model: row.model,
+        role_prompt: row.role_prompt,
+        status: row.status,
+        plan_mode: row.plan_mode,
+        work_mode: row.work_mode,
+        dependency_ids: row.dependency_ids,
+        result: row.result,
+        time_created: row.time_created,
+        time_updated: row.time_updated,
+      })
+    })
+
+    const approveMemberPlan = Effect.fn("Team.approveMemberPlan")(function* (memberID: string) {
+      const now = Date.now()
+      yield* db
+        .update(TeamMemberTable)
+        .set({ status: "active", plan_mode: false, work_mode: "implement", time_updated: now })
+        .where(eq(TeamMemberTable.id, memberID))
+        .run()
+        .pipe(Effect.orDie)
+      const row = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get().pipe(Effect.orDie)
+      if (!row) return Option.none()
+      yield* events.publish(MemberUpdated, { memberID: row.id, sessionID: row.session_id, status: row.status })
       return Option.some({
         id: row.id,
         team_id: row.team_id,
@@ -822,6 +852,7 @@ export const layer = Layer.effect(
       shutdown,
       addMember,
       updateMemberStatus,
+      approveMemberPlan,
       getMembers,
       getMemberBySession,
       getContext,
