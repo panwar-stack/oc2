@@ -94,21 +94,26 @@ export function DialogTeam(props: { focusTab?: Tab }) {
 
   const teamID = createMemo(() => team()?.id)
   const teamsEnabled = createMemo(() => sync.data.config.experimental?.agent_teams === true)
+  const teamAccess = createMemo(() => {
+    const id = teamID()
+    if (!id) return undefined
+    return { teamID: id, sessionID: sessionID() }
+  })
 
   const [tasks] = createResource(
-    () => teamID(),
-    (id) =>
+    () => teamAccess(),
+    (access) =>
       sdk.client.team
-        .tasks({ teamID: id })
+        .tasks(access)
         .then((res) => (res.data ?? []) as TeamTask[])
         .catch(() => [] as TeamTask[]),
   )
 
   const [messages] = createResource(
-    () => teamID(),
-    (id) =>
+    () => teamAccess(),
+    (access) =>
       sdk.client.team
-        .messages({ teamID: id })
+        .messages(access)
         .then((res) => (res.data ?? []) as TeamMessage[])
         .catch(() => [] as TeamMessage[]),
   )
@@ -266,7 +271,7 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                     <box {...SplitBorder} border={["top"]} borderColor={theme.border} paddingTop={1}>
                       <box
                         onMouseUp={() => {
-                          void sdk.client.team.shutdown({ teamID: info.id }).then(() => dialog.clear())
+                          void sdk.client.team.shutdown({ teamID: info.id, sessionID: sessionID() }).then(() => dialog.clear())
                         }}
                       >
                         <text fg={theme.error}>Shutdown Team</text>

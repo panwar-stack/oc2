@@ -3427,6 +3427,11 @@ export type TeamTask = {
   team_id: string
   description: string
   status: string
+  assignee?: string
+  dependency_ids?: Array<string>
+  metadata?: {
+    [key: string]: unknown
+  }
   time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
@@ -10047,7 +10052,9 @@ export type TeamEvalData = {
   path: {
     teamID: string
   }
-  query?: never
+  query: {
+    sessionID: string
+  }
   url: "/team/{teamID}/eval"
 }
 
@@ -10074,7 +10081,9 @@ export type TeamGetByIdData = {
   path: {
     teamID: string
   }
-  query?: never
+  query: {
+    sessionID: string
+  }
   url: "/team/{teamID}"
 }
 
@@ -10101,7 +10110,9 @@ export type TeamTasksData = {
   path: {
     teamID: string
   }
-  query?: never
+  query: {
+    sessionID: string
+  }
   url: "/team/{teamID}/tasks"
 }
 
@@ -10128,7 +10139,9 @@ export type TeamMessagesData = {
   path: {
     teamID: string
   }
-  query?: never
+  query: {
+    sessionID: string
+  }
   url: "/team/{teamID}/messages"
 }
 
@@ -10155,7 +10168,9 @@ export type TeamShutdownData = {
   path: {
     teamID: string
   }
-  query?: never
+  query: {
+    sessionID: string
+  }
   url: "/team/{teamID}/shutdown"
 }
 

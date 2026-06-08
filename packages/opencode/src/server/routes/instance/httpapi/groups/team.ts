@@ -36,6 +36,9 @@ const TeamTaskSchema = Schema.Struct({
   team_id: Schema.String,
   description: Schema.String,
   status: Schema.String,
+  assignee: Schema.optionalKey(Schema.String),
+  dependency_ids: Schema.optionalKey(Schema.Array(Schema.String)),
+  metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
   time_created: Schema.Number,
   time_updated: Schema.Number,
 }).annotate({ identifier: "TeamTask" })
@@ -160,6 +163,10 @@ export const TeamQuery = Schema.Struct({
   sessionID: Schema.String,
 })
 
+const TeamAccessQuery = Schema.Struct({
+  sessionID: Schema.String,
+})
+
 export const TeamApi = HttpApi.make("team").add(
   HttpApiGroup.make("team")
     .add(
@@ -176,6 +183,7 @@ export const TeamApi = HttpApi.make("team").add(
       ),
       HttpApiEndpoint.get("getEval", `${TeamPaths.root}/:teamID/eval`, {
         params: { teamID: Schema.String },
+        query: TeamAccessQuery,
         success: described(TeamEvalReportSchema, "Team evaluation report"),
         error: HttpApiError.BadRequest,
       }).annotateMerge(
@@ -187,6 +195,7 @@ export const TeamApi = HttpApi.make("team").add(
       ),
       HttpApiEndpoint.get("getByTeam", `${TeamPaths.root}/:teamID`, {
         params: { teamID: Schema.String },
+        query: TeamAccessQuery,
         success: described(TeamInfoSchema, "Team info"),
         error: HttpApiError.BadRequest,
       }).annotateMerge(
@@ -198,6 +207,7 @@ export const TeamApi = HttpApi.make("team").add(
       ),
       HttpApiEndpoint.get("getTasks", `${TeamPaths.root}/:teamID/tasks`, {
         params: { teamID: Schema.String },
+        query: TeamAccessQuery,
         success: described(Schema.Array(TeamTaskSchema), "Team tasks"),
         error: HttpApiError.BadRequest,
       }).annotateMerge(
@@ -209,6 +219,7 @@ export const TeamApi = HttpApi.make("team").add(
       ),
       HttpApiEndpoint.get("getMessages", `${TeamPaths.root}/:teamID/messages`, {
         params: { teamID: Schema.String },
+        query: TeamAccessQuery,
         success: described(Schema.Array(TeamMessageSchema), "Team messages"),
         error: HttpApiError.BadRequest,
       }).annotateMerge(
@@ -220,6 +231,7 @@ export const TeamApi = HttpApi.make("team").add(
       ),
       HttpApiEndpoint.post("shutdown", `${TeamPaths.root}/:teamID/shutdown`, {
         params: { teamID: Schema.String },
+        query: TeamAccessQuery,
         success: described(Schema.Boolean, "Team shut down"),
         error: HttpApiError.BadRequest,
       }).annotateMerge(

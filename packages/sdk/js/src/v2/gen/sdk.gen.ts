@@ -5052,10 +5052,21 @@ export class Team extends HeyApiClient {
   public eval<ThrowOnError extends boolean = false>(
     parameters: {
       teamID: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "teamID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<TeamEvalResponses, TeamEvalErrors, ThrowOnError>({
       url: "/team/{teamID}/eval",
       ...options,
@@ -5071,10 +5082,21 @@ export class Team extends HeyApiClient {
   public getById<ThrowOnError extends boolean = false>(
     parameters: {
       teamID: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "teamID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<TeamGetByIdResponses, TeamGetByIdErrors, ThrowOnError>({
       url: "/team/{teamID}",
       ...options,
@@ -5090,10 +5112,21 @@ export class Team extends HeyApiClient {
   public tasks<ThrowOnError extends boolean = false>(
     parameters: {
       teamID: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "teamID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<TeamTasksResponses, TeamTasksErrors, ThrowOnError>({
       url: "/team/{teamID}/tasks",
       ...options,
@@ -5109,10 +5142,21 @@ export class Team extends HeyApiClient {
   public messages<ThrowOnError extends boolean = false>(
     parameters: {
       teamID: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "teamID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<TeamMessagesResponses, TeamMessagesErrors, ThrowOnError>({
       url: "/team/{teamID}/messages",
       ...options,
@@ -5128,10 +5172,21 @@ export class Team extends HeyApiClient {
   public shutdown<ThrowOnError extends boolean = false>(
     parameters: {
       teamID: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "teamID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).post<TeamShutdownResponses, TeamShutdownErrors, ThrowOnError>({
       url: "/team/{teamID}/shutdown",
       ...options,
