@@ -79,6 +79,8 @@ Teammates are background child sessions. Each teammate has:
 
 Teammates send kickoff, progress, blocker, handoff, and completion updates through the team mailbox.
 
+Teammate names must be unique within a team. If older team data contains duplicate names, name-based targeting rejects the ambiguous name and asks for a session ID instead. Session IDs are always authoritative for message recipients, dependency references, and plan decisions.
+
 ### Model variants
 
 Teammates inherit the lead session's provider/model by default. When the current model exposes teammate variants, the lead prompt shows the exact variant keys and the lead may choose one per `team_spawn` call.
@@ -91,7 +93,7 @@ Agent teams do not automatically rank models, optimize cost, or choose variants 
 
 Use `depends_on` or `wait_for` when a teammate must wait for another teammate to complete.
 
-Dependencies can refer to teammate names or teammate session IDs. A blocked teammate starts automatically after all dependencies complete.
+Dependencies can refer to teammate names or teammate session IDs. A blocked teammate starts automatically after all dependencies complete. If a teammate name is ambiguous, use the dependency teammate's session ID.
 
 ### Mailbox
 
@@ -104,11 +106,17 @@ Team members communicate through mailbox messages. Messages can target:
 
 Messages wake idle recipients when possible and are delivered on their next loop iteration.
 
+Mailbox delivery is tracked per recipient. Reports count persisted recipient rows as `pending` or `delivered`; `read` counts appear only if stored delivery state actually records a read transition.
+
 ### Shared tasks
 
 The shared task list tracks work across the team. Tasks can have statuses, assignees, and dependency task IDs.
 
 Creating a task records tracking state only. It does not spawn a teammate or wake an existing teammate.
+
+Task tools display short IDs, but `team_task_claim` and `team_task_update` accept either a full task ID or an unambiguous prefix within the current team. Ambiguous prefixes fail without changing task state and list the matching task prefixes.
+
+A pending task can be claimed only after all dependency tasks in the same team are `completed`. Cancelled dependencies do not unblock claims.
 
 ### Plan approval
 
@@ -122,6 +130,8 @@ Plan mode blocks:
 - `apply_patch`
 
 Rejecting a plan sends feedback back to the teammate and keeps the teammate in plan mode.
+
+Approving a plan is only valid for a teammate that is currently in plan mode. Approval removes the plan-mode deny overlay, switches the teammate to implementation mode, sends an approval message, and wakes the teammate. Rejection keeps the plan-mode restrictions intact.
 
 ---
 
@@ -144,6 +154,8 @@ These tools are used by OpenCode agents when agent teams are enabled.
 | `team_plan_decide`  | Approve or reject a teammate plan.                                                      |
 | `team_report`       | Generate a post-session effectiveness report with usage metrics and findings.           |
 | `team_shutdown`     | Close the active team and cancel active teammates.                                      |
+
+`team_report` uses persisted team state for deterministic findings, including blocked teammates, pending mailbox rows on closed teams, shallow usage, missing task lists, and missing final reports for non-trivial completed teams.
 
 ---
 

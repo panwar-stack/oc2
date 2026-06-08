@@ -88,6 +88,7 @@ const TeamEvalFindingCategorySchema = Schema.Literals([
   "integration.context_loss",
   "integration.premature_shutdown",
   "structure.unexpected_or_missing_edge",
+  "member.ambiguous_name",
   "shallow_usage",
   "missing_task_list",
   "missing_final_report",

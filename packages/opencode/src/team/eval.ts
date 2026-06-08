@@ -35,6 +35,7 @@ export type TeamEvalFindingCategory =
   | "integration.context_loss"
   | "integration.premature_shutdown"
   | "structure.unexpected_or_missing_edge"
+  | "member.ambiguous_name"
   | "shallow_usage"
   | "missing_task_list"
   | "missing_final_report"
@@ -343,6 +344,7 @@ function deterministicFindings(
   usage: TeamUsageMetrics,
 ) {
   const memberBySession = new Map(members.map((member) => [member.session_id, member]))
+  const membersByName = Map.groupBy(members, (member) => member.name)
   const taskByID = new Map(tasks.map((task) => [task.id, task]))
   const messageByID = new Map(messages.map((message) => [message.id, message]))
   const activeMembers = members.filter((member) => ["active", "starting", "blocked"].includes(member.status))
@@ -404,6 +406,21 @@ function deterministicFindings(
         ),
       ].filter(isDefined)
     }),
+    ...Array.from(membersByName.entries()).flatMap(([name, duplicateMembers]) =>
+      duplicateMembers.length > 1
+        ? [
+            finding("member.ambiguous_name", "warning", nodeID("team", team.id), duplicateMembers[0]?.time_created ?? team.time_created, {
+              message: `Teammate name "${name}" is used by ${duplicateMembers.length} members; name-based resolution is ambiguous.`,
+              suffix: `ambiguous-name:${name}`,
+              metadata: {
+                name,
+                member_ids: duplicateMembers.map((member) => member.id),
+                session_ids: duplicateMembers.map((member) => member.session_id),
+              },
+            }),
+          ]
+        : [],
+    ),
     ...tasks.flatMap((task) =>
       (task.dependency_ids ?? [])
         .filter((dependencyID) => !taskByID.has(dependencyID))

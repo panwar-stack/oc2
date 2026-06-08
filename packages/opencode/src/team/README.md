@@ -190,6 +190,10 @@ Dependencies are teammate-level dependencies, not task-list dependencies.
 
 Both are resolved against existing teammate names or session IDs.
 
+Teammate names must be unique inside a team. `team_spawn` rejects a new teammate when an active team already has that name.
+
+Name resolution still handles old data that may contain duplicates. If a dependency name matches more than one teammate, `team_spawn` fails and asks the lead to use a session ID. Session IDs are authoritative and bypass name ambiguity.
+
 If a dependency is missing, spawn fails. If a dependency exists but is not completed, the new member is marked `blocked`.
 
 When a teammate completes, `startReadyBlockedMembers` checks blocked members that reference the completed session. A blocked member starts only when every dependency session has status `completed`.
@@ -215,11 +219,17 @@ Common tools:
 
 Sending a message also tries to wake recipients through `wakeTeamSession`.
 
+Message recipient resolution follows the same identity rule as teammate dependencies. `lead` resolves to the lead session, a teammate session ID is authoritative, and a teammate name must match exactly one member. Ambiguous names fail without sending a message so older duplicate-name teams do not silently route to the wrong recipient.
+
+Every logical message must have one `team_message_recipient` row per recipient. Delivery state is tracked on recipient rows, not just on `team_message`, so reports and evals can distinguish pending and delivered recipients.
+
+Pending mailbox delivery is a claim operation. `team_get_messages` and prompt injection claim pending recipient rows before returning them, so concurrent reads should not deliver the same pending message twice.
+
 ## How Waking Works
 
 Waking is intentionally simple.
 
-`wakeTeamSession` calls `ops.loop` twice for the target session. This nudges an idle recipient session to continue its normal prompt loop.
+`wakeTeamSession` calls `ops.wake` twice for the target session. This nudges an idle recipient session to continue its normal prompt loop.
 
 The actual delivery happens in `SessionPrompt.deliverTeamMessages`:
 
@@ -231,6 +241,8 @@ The actual delivery happens in `SessionPrompt.deliverTeamMessages`:
 6. Continue the prompt loop.
 
 So a teammate does not need to poll forever. If another participant sends a message, the recipient is woken and sees the message as a normal prompt input on the next loop.
+
+Lead-initiated wake waits are bounded. Lead tools briefly wait for woken teammate runs, while teammate-initiated delivery remains asynchronous so teammate work is not blocked.
 
 ## Plan Mode
 
@@ -257,6 +269,10 @@ The flow is:
 
 Plan mode is not a separate model mode. It is implemented with session permission rules plus mailbox coordination.
 
+`team_plan_decide` can target a teammate by session ID or by an unambiguous name. Ambiguous names fail and ask for a session ID.
+
+Plan decisions only apply to teammates that are currently in plan mode. Approval removes only the plan-mode deny overlay for `bash`, `write`, `edit`, and `apply_patch`, then updates the member to implementation mode. Rejection sends feedback and keeps the plan-mode restrictions intact.
+
 ## Shared Tasks
 
 Shared tasks are separate from teammate dependencies.
@@ -270,7 +286,13 @@ They live in `team_task` and are manipulated by:
 
 Creating a task only records tracking state. It does not spawn or wake a teammate.
 
-Claiming a task enforces task dependency IDs. A pending task cannot be claimed until all dependency tasks are completed or cancelled.
+Task IDs passed to `team_task_claim`, `team_task_update`, and task dependencies may be full IDs or unambiguous prefixes scoped to the current team. Ambiguous prefixes fail with the matching short prefixes and must not mutate state.
+
+Task lookup, updates, and claims are always scoped by `team_id`; a task ID from another team must not be resolved or mutated.
+
+Claiming a task enforces task dependency IDs. A pending task cannot be claimed until all dependency tasks in the same team are `completed`. `cancelled` dependencies do not count as satisfied.
+
+`team_task_update` is restricted to the lead session or the current task assignee. `team_task_claim` assigns the claiming session ID and moves the task from `pending` to `in_progress` in one transaction.
 
 Use this for shared work tracking inside a team. Use `depends_on` / `wait_for` when one teammate should not start until another teammate completes.
 
@@ -293,6 +315,10 @@ The usage summary contains:
 Rollups in `team_report` use teams with at least one teammate as the denominator. The report includes percentages for task-list usage, dependency modeling, plan-mode usage, final report generation, and shallow usage.
 
 The shallow-usage anti-pattern is "spawn teammates and summarize" without modeling work. It is surfaced as a finding, not blocked at runtime. A non-trivial team with at least three work items also gets findings when it has no shared tasks or when a completed team has no final report.
+
+Report message counts are based on persisted recipient rows. `pending` means the recipient row has not been claimed for prompt injection or `team_get_messages`; `delivered` means it has. Do not report `read` counts unless a real read transition exists in stored delivery state.
+
+Evaluation findings must stay deterministic. Current findings are derived from persisted team state, including missing dependencies, cancelled members, blocked members whose dependencies are complete, blocked members with cancelled dependencies, pending delivery rows on closed teams, shallow usage, missing task lists for non-trivial teams, and missing final reports for non-trivial completed teams.
 
 ## Status Events And UI
 

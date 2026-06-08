@@ -1,11 +1,11 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Option } from "effect"
+import { Deferred, Effect, Layer, Option } from "effect"
 import { Team } from "@/team/team"
 import { Bus } from "@/bus"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Permission } from "@/permission"
 import { provideTmpdirInstance } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.mergeAll(Team.defaultLayer, Bus.layer, CrossSpawnSpawner.defaultLayer))
 
@@ -66,6 +66,8 @@ describe("team", () => {
         const bus = yield* Bus.Service
         const leadSessionID = "ses_test_lead_shutdown_status"
         const events: { sessionID: string; status: string }[] = []
+        const receivedFinalStatuses = yield* Deferred.make<void>()
+        let finalStatusesReceived = false
 
         const created = yield* team.create({ name: "shutdown-status", goal: "Goal", leadSessionID })
         const completed = yield* team.addMember({
@@ -93,10 +95,18 @@ describe("team", () => {
             sessionID: properties.sessionID,
             status: properties.status,
           })
+          if (
+            !finalStatusesReceived &&
+            events.some((event) => event.sessionID === completed.session_id && event.status === "completed") &&
+            events.some((event) => event.sessionID === active.session_id && event.status === "cancelled")
+          ) {
+            finalStatusesReceived = true
+            Deferred.doneUnsafe(receivedFinalStatuses, Effect.void)
+          }
         })
 
         yield* team.shutdown(created.id)
-        yield* Effect.sleep("10 millis")
+        yield* awaitWithTimeout(Deferred.await(receivedFinalStatuses), "shutdown member status events were not published")
         yield* Effect.sync(unsubscribe)
 
         expect(events).toContainEqual({ sessionID: completed.session_id, status: "completed" })

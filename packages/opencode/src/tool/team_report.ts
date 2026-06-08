@@ -194,8 +194,7 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
           const pendingTasks = tasks.filter((item) => item.status === "pending")
           const taskDependencyDefined = tasks.filter((task) => !!task.dependency_ids?.length)
 
-          const messageDelivered = recipients.filter((item) => item.delivery_status === "delivered")
-          const messageRead = recipients.filter((item) => item.delivery_status === "read")
+          const messageDelivered = recipients.filter((item) => item.delivery_status !== "pending")
           const messagePending = recipients.filter((item) => item.delivery_status === "pending")
           const messageCreatedAt = new Map(messages.map((message) => [message.id, message.time_created]))
           const messageDeliveryMs = recipients
@@ -279,9 +278,9 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
             pct(canceledMembers.length, members.length) > 20
               ? "Cancellation rate is high; check dependency chains or spawn gating in lead orchestration."
               : "Member completion and cancellation rates look stable.",
-            messageRead.length > 0
-              ? `Mailbox reads captured for ${pct(messageRead.length, recipients.length).toFixed(1)}% of recipient deliveries.`
-              : "No read-marked mailbox rows were found.",
+            messagePending.length > 0
+              ? `${messagePending.length} recipient row(s) are still pending delivery.`
+              : "No recipient rows remain pending delivery.",
           ]
           const usage = evalReport.summary.usage
 
@@ -330,7 +329,6 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
             `- messages: ${messages.length}`,
             `- recipient rows: ${recipients.length}`,
             `- delivered: ${messageDelivered.length} (${pct(messageDelivered.length, recipients.length).toFixed(1)}%)`,
-            `- read: ${messageRead.length} (${pct(messageRead.length, recipients.length).toFixed(1)}%)`,
             `- pending: ${messagePending.length} (${pct(messagePending.length, recipients.length).toFixed(1)}%)`,
             `- message delivery avg/p50: ${durationText(messageDeliveryAvg)} / ${durationText(messageDeliveryP50)}`,
             "",
@@ -386,7 +384,6 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
                 total: messages.length,
                 recipient_count: recipients.length,
                 delivered: messageDelivered.length,
-                read: messageRead.length,
                 pending: messagePending.length,
               },
               costs: {

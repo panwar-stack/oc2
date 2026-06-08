@@ -3,7 +3,7 @@ import { Bus } from "@/bus"
 import { Database } from "@/storage/db"
 import { TeamEval, type TeamEvalFindingCategory, type TeamEvalReport } from "@/team/eval"
 import { Team } from "@/team/team"
-import { TeamTable } from "@/team/team.sql"
+import { TeamMemberTable, TeamTable, TeamTaskTable } from "@/team/team.sql"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
@@ -112,11 +112,23 @@ describe("team eval", () => {
           rolePrompt: "Depend on a missing member",
           dependencyIDs: ["ses_eval_missing_dependency"],
         })
-        yield* team.createTask({
-          teamID: info.id,
-          description: "Task with missing dependency",
-          dependencyIDs: ["task_missing_dependency"],
-        })
+        const now = Date.now()
+        yield* Database.Database.Service.use((database) =>
+          database.db
+            .insert(TeamTaskTable)
+            .values({
+              id: "task_eval_missing_dependency_holder",
+              team_id: info.id,
+              description: "Task with missing dependency",
+              status: "pending",
+              assignee: null,
+              dependency_ids: ["task_missing_dependency"],
+              metadata: null,
+              time_created: now,
+              time_updated: now,
+            })
+            .run(),
+        )
 
         yield* team.updateMemberStatus(empty.id, "completed")
 
@@ -253,6 +265,72 @@ describe("team eval", () => {
         expect(categories(report)).toContain("messaging.pending_delivery")
         expect(categories(report)).toContain("structure.unexpected_or_missing_edge")
         expect(report.summary.structural_deviation_count).toBe(1)
+      }),
+    ),
+  )
+
+  it.live("reports legacy duplicate teammate names as ambiguous", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({
+          name: "eval-duplicate-names",
+          goal: "Detect ambiguous legacy names",
+          leadSessionID: "ses_eval_lead_duplicate_names",
+        })
+        const now = Date.now()
+        yield* Database.Database.Service.use((database) =>
+          database.db
+            .insert(TeamMemberTable)
+            .values([
+              {
+                id: "mem_eval_duplicate_name_first",
+                team_id: info.id,
+                session_id: "ses_eval_duplicate_name_first",
+                name: "worker",
+                agent_type: "general",
+                model: null,
+                role_prompt: "Do first work",
+                status: "completed",
+                plan_mode: false,
+                work_mode: "implement",
+                dependency_ids: null,
+                result: "first result",
+                time_created: now,
+                time_updated: now,
+              },
+              {
+                id: "mem_eval_duplicate_name_second",
+                team_id: info.id,
+                session_id: "ses_eval_duplicate_name_second",
+                name: "worker",
+                agent_type: "general",
+                model: null,
+                role_prompt: "Do second work",
+                status: "completed",
+                plan_mode: false,
+                work_mode: "implement",
+                dependency_ids: null,
+                result: "second result",
+                time_created: now + 1,
+                time_updated: now + 1,
+              },
+            ])
+            .run(),
+        )
+        yield* team.createTask({ teamID: info.id, description: "Track duplicate-name audit" })
+
+        const report = yield* TeamEval.build(info.id)
+        const duplicateName = finding(report, "member.ambiguous_name", node("team", info.id))
+
+        expect(duplicateName?.root_cause).toBe(true)
+        expect(duplicateName?.message).toContain('Teammate name "worker" is used by 2 members')
+        expect(duplicateName?.metadata).toEqual(
+          expect.objectContaining({
+            name: "worker",
+            session_ids: ["ses_eval_duplicate_name_first", "ses_eval_duplicate_name_second"],
+          }),
+        )
       }),
     ),
   )

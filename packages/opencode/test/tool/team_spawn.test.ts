@@ -16,7 +16,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { ProviderTest } from "../fake/provider"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -138,11 +138,12 @@ function context(input: { lead: Session.Info; assistant: MessageV2.Assistant; pr
 }
 
 const waitUntil = Effect.fn("TeamSpawnTest.waitUntil")(function* (predicate: () => Effect.Effect<boolean>) {
-  for (let i = 0; i < 100; i++) {
-    if (yield* predicate()) return
-    yield* Effect.sleep("10 millis")
-  }
-  throw new Error("Timed out waiting for condition")
+  yield* pollWithTimeout(
+    Effect.gen(function* () {
+      return (yield* predicate()) ? true : undefined
+    }),
+    "Timed out waiting for condition",
+  )
 })
 
 describe("tool.team_spawn", () => {

@@ -4,6 +4,7 @@ import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageID, type SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
+import { Database } from "@/storage/db"
 import type { TeamEvalReport } from "@/team/eval"
 import { Team } from "@/team/team"
 import { TeamReportTool } from "@/tool/team_report"
@@ -23,6 +24,7 @@ const it = testEffect(
   Layer.mergeAll(
     Agent.defaultLayer,
     Config.defaultLayer,
+    Database.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     Session.defaultLayer,
     Team.defaultLayer,
@@ -109,6 +111,47 @@ describe("tool.team_report", () => {
           expect(result.metadata.usage).toEqual(expect.objectContaining({ shallow_usage: false }))
           expect(evalReport.summary.root_cause_count).toBe(0)
           expect(evalReport.nodes.some((node) => node.id === `team:${info.id}`)).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("omits read metrics while preserving delivery metrics", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({
+            name: "delivery-report-team",
+            goal: "Evaluate delivery metrics",
+            leadSessionID: lead.id,
+          })
+          const worker = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_delivery_worker",
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Receive the message",
+          })
+          const message = yield* team.sendMessage({
+            teamID: info.id,
+            sender: info.lead_session_id,
+            recipients: [worker.session_id],
+            body: "Delivery metrics only.",
+          })
+          yield* team.markMessageDelivered(message.id, worker.session_id)
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id }, context(lead.id))
+
+          expect(result.output).toContain("- delivered: 1 (100.0%)")
+          expect(result.output).toContain("- pending: 0 (0.0%)")
+          expect(result.output).toContain("- message delivery avg/p50:")
+          expect(result.output).not.toContain("- read:")
+          expect(result.metadata.messages).toEqual({ total: 1, recipient_count: 1, delivered: 1, pending: 0 })
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
