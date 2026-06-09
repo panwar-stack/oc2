@@ -44,7 +44,7 @@ const truncateLayer = Layer.succeed(
 
 const it = testEffect(
   Layer.mergeAll(
-    Memory.defaultLayer,
+    Layer.provideMerge(Memory.layer, Database.defaultLayer),
     agentLayer,
     truncateLayer,
     TestConfig.layer({ get: () => Effect.succeed({ memory: { search_commit_limit: 5, search_summary_limit: 3 } }) }),
@@ -166,7 +166,8 @@ describe("tool.memory", () => {
       yield* tool.execute({ queries: ["github logging"], repository: repository.identity }, context([], sessionID))
       Memory.clearRetrievalContext(sessionID)
 
-      const log = Database.use((db) => db.select().from(memory.tables.retrievalLog).all()).find((row) => row.session_id === sessionID)
+      const logs = yield* Database.Service.use((database) => database.db.select().from(memory.tables.retrievalLog).all())
+      const log = logs.find((row) => row.session_id === sessionID)
       expect(log?.session_id).toBe(sessionID)
       expect(log?.issue_identifier).toBe("github.com/opencode-ai/opencode#5")
       expect(log?.tool).toBe("memory_search_commit")
@@ -201,8 +202,8 @@ describe("tool.memory", () => {
   it.live("searches and views cached file summaries", () =>
     Effect.gen(function* () {
       const repository = yield* seedRepository("summary")
-      Database.use((db) =>
-        db
+      yield* Database.Service.use((database) =>
+        database.db
           .insert(RepositoryMemoryFileSummaryTable)
           .values({
             id: `${repository.id}-summary`,

@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
+import { Global } from "@opencode-ai/core/global"
 import { tmpdir } from "../../../fixture/fixture"
 import { json, mount, wait } from "./sync-fixture"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
-import { rootDirectoryLabel } from "../../../../src/cli/cmd/tui/routes/session/footer"
+import { rootDirectoryLabel } from "../../../../src/routes/session/footer"
 
 function branchEvent(branch: string, workspace?: string): GlobalEvent {
   return {

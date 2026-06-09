@@ -7,14 +7,25 @@ import path from "path"
 
 const target = "20260519040526_session_roots"
 
-function migrations() {
-  return readdirSync(path.join(import.meta.dirname, "../../migration"), { withFileTypes: true })
+function readMigrations(folder: string) {
+  return readdirSync(folder, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => ({
       name: entry.name,
       timestamp: Number(entry.name.split("_")[0]),
-      sql: readFileSync(path.join(import.meta.dirname, "../../migration", entry.name, "migration.sql"), "utf-8"),
+      sql: readFileSync(path.join(folder, entry.name, "migration.sql"), "utf-8"),
     }))
+}
+
+function migrations() {
+  return Array.from(
+    new Map(
+      [
+        ...readMigrations(path.join(import.meta.dirname, "../../../core/migration")),
+        ...readMigrations(path.join(import.meta.dirname, "../../migration")),
+      ].map((entry) => [entry.name, entry]),
+    ).values(),
+  )
     .sort((a, b) => a.timestamp - b.timestamp)
 }
 

@@ -1,4 +1,6 @@
-import type { OpencodeClient, Session as ClientSession, SessionMessagesResponse } from "@opencode-ai/sdk/v2"
+import type { OpencodeClient, Session as ClientSession } from "@opencode-ai/sdk/v2"
+
+type ClientSessionMessage = NonNullable<Awaited<ReturnType<OpencodeClient["session"]["messages"]>>["data"]>[number]
 
 export type ExportSessionNode<TInfo extends { id: string; time: { created: number } }, TMessage> = {
   info: TInfo
@@ -6,7 +8,7 @@ export type ExportSessionNode<TInfo extends { id: string; time: { created: numbe
   children: ExportSessionNode<TInfo, TMessage>[]
 }
 
-export type ExportSession = ExportSessionNode<ClientSession, SessionMessagesResponse[number]>
+export type ExportSession = ExportSessionNode<ClientSession, ClientSessionMessage>
 
 export type ExportSessionCollector<TInfo extends { id: string; time: { created: number } }, TMessage> = {
   get: (sessionID: string) => Promise<TInfo>

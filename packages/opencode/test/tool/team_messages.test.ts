@@ -1,5 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageV2 } from "@/session/message-v2"
@@ -17,7 +18,6 @@ import { wakeTeamSession } from "@/tool/team_wake"
 import { Permission } from "@/permission"
 import { Database } from "@opencode-ai/core/database/database"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import type { SessionLegacy } from "@opencode-ai/core/session/legacy"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
@@ -109,8 +109,8 @@ function context(input: {
 }
 
 function promptOps(input: {
-  response: SessionLegacy.WithParts
-  wake?: () => Effect.Effect<SessionLegacy.WithParts>
+  response: SessionV1.WithParts
+  wake?: () => Effect.Effect<SessionV1.WithParts>
 }): TaskPromptOps {
   return {
     cancel: () => Effect.void,
@@ -120,7 +120,7 @@ function promptOps(input: {
   }
 }
 
-const responseFor = (assistant: MessageV2.Assistant): SessionLegacy.WithParts => ({ info: assistant, parts: [] })
+const responseFor = (assistant: MessageV2.Assistant): SessionV1.WithParts => ({ info: assistant, parts: [] })
 
 const planModePermission: Permission.Ruleset = [
   { permission: "bash", pattern: "*", action: "deny" },

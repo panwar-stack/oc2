@@ -11,7 +11,7 @@ import { Database } from "@/storage/db"
 import { tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(Layer.mergeAll(Memory.defaultLayer))
+const it = testEffect(Layer.mergeAll(Memory.defaultLayer, Database.defaultLayer))
 
 describe("Memory eval", () => {
   it.live("evaluates cutoff-scoped localization and logs retrievals", () =>
@@ -41,12 +41,13 @@ describe("Memory eval", () => {
 
       const memory = yield* Memory.Service
       const result = yield* MemoryEval.run(memory, { issuesPath, worktree: tmp.path, maxCommits: 10, summaries: 0 })
-      const logs = Database.use((db) =>
-        db
+      const logs = yield* Database.Database.Service.use((database) =>
+        database.db
           .select()
           .from(RepositoryMemoryRetrievalLogTable)
           .where(eq(RepositoryMemoryRetrievalLogTable.issue_identifier, "issue-login"))
-          .all(),
+          .all()
+          .pipe(Effect.orDie),
       )
 
       expect(result.commit.hits_at_1).toBe(1)

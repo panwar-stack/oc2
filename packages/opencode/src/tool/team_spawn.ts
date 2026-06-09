@@ -241,13 +241,14 @@ export const TeamSpawnTool = Tool.define(
             )
           }
 
+          const childVariant = inheritsLeadModel ? effectiveVariant : leadVariant
           const childSession = yield* sessions.create({
             parentID: ctx.sessionID,
             title: `${params.name} (@${ag.name} teammate)`,
             model: {
-              id: model.modelID,
-              providerID: model.providerID,
-              ...(effectiveVariant ? { variant: effectiveVariant } : {}),
+              id: leadMessage.info.modelID,
+              providerID: leadMessage.info.providerID,
+              ...(childVariant ? { variant: childVariant } : {}),
             },
             permission: permissionRules,
           })

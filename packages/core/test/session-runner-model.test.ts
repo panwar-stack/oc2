@@ -138,7 +138,7 @@ describe("SessionRunnerModel", () => {
         },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0), processing: 0 },
         location: { directory: AbsolutePath.make("/project") },
       })
 
@@ -178,7 +178,7 @@ describe("SessionRunnerModel", () => {
         model: { id: catalog.id, providerID: catalog.providerID, variant: ModelV2.VariantID.make("high") },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0), processing: 0 },
         location: { directory: AbsolutePath.make("/project") },
       })
 
@@ -212,7 +212,7 @@ describe("SessionRunnerModel", () => {
         model: { id: catalog.id, providerID: catalog.providerID, variant: ModelV2.VariantID.make("high") },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0), processing: 0 },
         location: { directory: AbsolutePath.make("/project") },
       })
 

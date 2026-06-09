@@ -5,20 +5,20 @@ import { testRender, useRenderer } from "@opentui/solid"
 import { Global } from "@opencode-ai/core/global"
 import { onCleanup, onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
-import { createTuiResolvedConfig } from "../../../fixture/tui-runtime"
-import { ArgsProvider } from "../../../../src/cli/cmd/tui/context/args"
-import { createExit, ExitProvider } from "../../../../src/cli/cmd/tui/context/exit"
-import { KVProvider } from "../../../../src/cli/cmd/tui/context/kv"
-import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
-import { SDKProvider } from "../../../../src/cli/cmd/tui/context/sdk"
-import { SyncProvider, useSync } from "../../../../src/cli/cmd/tui/context/sync"
-import { ThemeProvider } from "../../../../src/cli/cmd/tui/context/theme"
-import { TuiConfigProvider } from "../../../../src/cli/cmd/tui/context/tui-config"
-import { OpencodeKeymapProvider, registerOpencodeKeymap } from "../../../../src/cli/cmd/tui/keymap"
-import { DialogRoots } from "../../../../src/cli/cmd/tui/routes/session/dialog-roots"
-import { DialogProvider } from "../../../../src/cli/cmd/tui/ui/dialog"
-import { ToastProvider } from "../../../../src/cli/cmd/tui/ui/toast"
-import { createEventSource, directory, json, wait } from "./sync-fixture"
+import { createTuiResolvedConfig } from "../../../../../tui/test/fixture/tui-runtime"
+import { TestTuiContexts } from "../../../../../tui/test/fixture/tui-environment"
+import { ArgsProvider } from "../../../../../tui/src/context/args"
+import { KVProvider } from "../../../../../tui/src/context/kv"
+import { ProjectProvider } from "../../../../../tui/src/context/project"
+import { SDKProvider } from "../../../../../tui/src/context/sdk"
+import { SyncProvider, useSync } from "../../../../../tui/src/context/sync"
+import { ThemeProvider } from "../../../../../tui/src/context/theme"
+import { TuiConfigProvider } from "../../../../../tui/src/config"
+import { OpencodeKeymapProvider, registerOpencodeKeymap } from "../../../../../tui/src/keymap"
+import { DialogRoots } from "../../../../../tui/src/routes/session/dialog-roots"
+import { DialogProvider } from "../../../../../tui/src/ui/dialog"
+import { ToastProvider } from "../../../../../tui/src/ui/toast"
+import { createEventSource, directory, json, wait } from "../../../../../tui/test/cli/cmd/tui/sync-fixture"
 
 const sessionID = "ses_dialog_roots"
 const session = {
@@ -123,8 +123,8 @@ test("dialog roots renders with its own path formatter provider", async () => {
 
     return (
       <OpencodeKeymapProvider keymap={keymap}>
-        <ArgsProvider>
-          <ExitProvider exit={createExit(async () => {})}>
+        <TestTuiContexts paths={{ state: Global.Path.state }}>
+          <ArgsProvider>
             <KVProvider>
               <TuiConfigProvider config={config}>
                 <SDKProvider url="http://test" directory={directory} fetch={fetchRoots} events={events.source}>
@@ -144,8 +144,8 @@ test("dialog roots renders with its own path formatter provider", async () => {
                 </SDKProvider>
               </TuiConfigProvider>
             </KVProvider>
-          </ExitProvider>
-        </ArgsProvider>
+          </ArgsProvider>
+        </TestTuiContexts>
       </OpencodeKeymapProvider>
     )
   }

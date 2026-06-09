@@ -350,6 +350,33 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({ path: `/find/symbol?${new URLSearchParams({ query: "hello" })}`, headers: ctx.headers() }))
     .json(200, array),
   http.protected
+    .post("/memory/index", "memory.index")
+    .mutating()
+    .at((ctx) => ({
+      path: "/memory/index",
+      headers: ctx.headers(),
+      body: { max_commits: 1, summaries: 0, no_github: true },
+    }))
+    .json(200, object, "status"),
+  http.protected.get("/memory/status", "memory.status").json(200, object, "status"),
+  http.protected
+    .post("/memory/search/commit", "memory.searchCommit")
+    .at((ctx) => ({ path: "/memory/search/commit", headers: ctx.headers(), body: { query: "missing" } }))
+    .json(404, object, "status"),
+  http.protected
+    .get("/memory/commit/{hash}", "memory.commit")
+    .at((ctx) => ({ path: route("/memory/commit/{hash}", { hash: "abc123" }), headers: ctx.headers() }))
+    .json(404, object, "status"),
+  http.protected
+    .post("/memory/search/summary", "memory.searchSummary")
+    .at((ctx) => ({ path: "/memory/search/summary", headers: ctx.headers(), body: { query: "missing" } }))
+    .json(404, object, "status"),
+  http.protected
+    .get("/memory/summary", "memory.summary")
+    .at((ctx) => ({ path: `/memory/summary?${new URLSearchParams({ path: "src/missing.ts" })}`, headers: ctx.headers() }))
+    .json(404, object, "status"),
+  http.protected.delete("/memory", "memory.clear").mutating().json(200, object, "status"),
+  http.protected
     .get("/event", "event.stream")
     .stream()
     .status(
@@ -918,6 +945,40 @@ const scenarios: Scenario[] = [
     }))
     .status(404),
   http.protected
+    .get("/session/{sessionID}/root", "session.root.list")
+    .seeded((ctx) => ctx.session({ title: "Root list session" }))
+    .at((ctx) => ({ path: route("/session/{sessionID}/root", { sessionID: ctx.state.id }), headers: ctx.headers() }))
+    .json(200, array, "status"),
+  http.protected
+    .post("/session/{sessionID}/root", "session.root.add")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Root add duplicate session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/root", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { directory: ctx.directory },
+    }))
+    .status(400),
+  http.protected
+    .patch("/session/{sessionID}/root/{rootID}", "session.root.update")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Root update missing session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/root/{rootID}", { sessionID: ctx.state.id, rootID: "sesroot_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: { name: "missing" },
+    }))
+    .status(404),
+  http.protected
+    .delete("/session/{sessionID}/root/{rootID}", "session.root.delete")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Root delete missing session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/root/{rootID}", { sessionID: ctx.state.id, rootID: "sesroot_httpapi_missing" }),
+      headers: ctx.headers(),
+    }))
+    .status(404),
+  http.protected
     .patch("/session/{sessionID}", "session.update")
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Before rename" }))
@@ -1470,6 +1531,46 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  http.protected
+    .get("/team", "team.get")
+    .at((ctx) => ({ path: `/team?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`, headers: ctx.headers() }))
+    .status(400),
+  http.protected
+    .get("/team/{teamID}", "team.getById")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .get("/team/{teamID}/eval", "team.eval")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/eval", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .get("/team/{teamID}/messages", "team.messages")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/messages", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .get("/team/{teamID}/tasks", "team.tasks")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/tasks", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/team/{teamID}/shutdown", "team.shutdown")
+    .mutating()
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/shutdown", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
   http.protected
     .post("/global/upgrade", "global.upgrade")
     .global()

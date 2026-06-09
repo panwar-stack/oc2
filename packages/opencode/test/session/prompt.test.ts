@@ -1291,7 +1291,7 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
       expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
       const teamMessageParts = (yield* sessions.messages({ sessionID: lead.id }))
         .flatMap((message) => message.parts)
-        .filter((part): part is SessionLegacy.TextPart => part.type === "text" && part.text.includes("Worker is ready."))
+        .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Worker is ready."))
       expect(teamMessageParts).toHaveLength(1)
       expect(teamMessageParts[0].text).toContain("<team-messages>")
       expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("Worker is ready."))).toBe(true)

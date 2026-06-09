@@ -111,7 +111,7 @@ function createStepFinishPart(sessionID: SessionIDType, duration: number) {
       role: "user",
       sessionID,
       agent: "build",
-      model: { providerID: ProviderV2.ID.make("test"), modelID: ProviderV2.ModelID.make("test") },
+      model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
       time: { created: Date.now() },
     })
     return yield* svc.updatePart({
@@ -389,9 +389,9 @@ describe("session HttpApi", () => {
         expect(children[0]?.time.processing).toBe(0)
 
         expect(
-          (yield* requestJson<{ items: Session.Info[] }>(`/api/session`, {
+          (yield* requestJson<{ data: Session.Info[] }>(`/api/session`, {
             headers,
-          })).items.find((item) => item.id === parent.id)?.time.processing,
+          })).data.find((item) => item.id === parent.id)?.time.processing,
         ).toBe(0)
 
         expect(
@@ -758,7 +758,7 @@ describe("session HttpApi", () => {
         ).toBe(1234)
 
         expect(
-          (yield* requestJson<{ items: Session.Info[] }>(`/api/session`, { headers })).items.find(
+          (yield* requestJson<{ data: Session.Info[] }>(`/api/session`, { headers })).data.find(
             (item) => item.id === child.id,
           )?.time.processing,
         ).toBe(1234)

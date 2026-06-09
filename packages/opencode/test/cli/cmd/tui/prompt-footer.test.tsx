@@ -5,26 +5,27 @@ import { createBindingLookup } from "@opentui/keymap/extras"
 import { Global } from "@opencode-ai/core/global"
 import { onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
-import { ArgsProvider } from "../../../../src/cli/cmd/tui/context/args"
-import { createExit, ExitProvider } from "../../../../src/cli/cmd/tui/context/exit"
-import { KVProvider } from "../../../../src/cli/cmd/tui/context/kv"
-import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
-import { RouteProvider } from "../../../../src/cli/cmd/tui/context/route"
-import { SDKProvider } from "../../../../src/cli/cmd/tui/context/sdk"
-import { SyncProvider, useSync } from "../../../../src/cli/cmd/tui/context/sync"
-import { ThemeProvider } from "../../../../src/cli/cmd/tui/context/theme"
-import { TuiConfigProvider } from "../../../../src/cli/cmd/tui/context/tui-config"
-import { LocalProvider } from "../../../../src/cli/cmd/tui/context/local"
-import { EditorContextProvider } from "../../../../src/cli/cmd/tui/context/editor"
-import { DialogProvider } from "../../../../src/cli/cmd/tui/ui/dialog"
-import { ToastProvider } from "../../../../src/cli/cmd/tui/ui/toast"
-import { PromptHistoryProvider } from "../../../../src/cli/cmd/tui/component/prompt/history"
-import { PromptStashProvider } from "../../../../src/cli/cmd/tui/component/prompt/stash"
-import { createEventSource, directory, json, wait, worktree } from "./sync-fixture"
+import { ArgsProvider } from "../../../../../tui/src/context/args"
+import { KVProvider } from "../../../../../tui/src/context/kv"
+import { ProjectProvider } from "../../../../../tui/src/context/project"
+import { RouteProvider } from "../../../../../tui/src/context/route"
+import { SDKProvider } from "../../../../../tui/src/context/sdk"
+import { SyncProvider, useSync } from "../../../../../tui/src/context/sync"
+import { ThemeProvider } from "../../../../../tui/src/context/theme"
+import { TuiConfigProvider } from "../../../../../tui/src/config"
+import { LocalProvider } from "../../../../../tui/src/context/local"
+import { EditorContextProvider } from "../../../../../tui/src/context/editor"
+import { DialogProvider } from "../../../../../tui/src/ui/dialog"
+import { ToastProvider } from "../../../../../tui/src/ui/toast"
+import { PromptHistoryProvider } from "../../../../../tui/src/component/prompt/history"
+import { PromptStashProvider } from "../../../../../tui/src/component/prompt/stash"
+import { createEventSource, directory, json, wait, worktree } from "../../../../../tui/test/cli/cmd/tui/sync-fixture"
+import { TestTuiContexts } from "../../../../../tui/test/fixture/tui-environment"
 
-mock.module("../../../../src/cli/cmd/tui/keymap", () => ({
+mock.module("../../../../../tui/src/keymap", () => ({
   useBindings: () => {},
   useCommandShortcut: (command: string) => () => (command === "command.palette.show" ? "ctrl+p" : "tab"),
+  useCommandSlashes: () => () => [],
   useLeaderActive: () => () => false,
   useOpencodeModeStack: () => ({ push: () => () => {} }),
   useOpencodeKeymap: () => ({
@@ -32,11 +33,11 @@ mock.module("../../../../src/cli/cmd/tui/keymap", () => ({
   }),
 }))
 
-mock.module("../../../../src/cli/cmd/tui/component/prompt/autocomplete", () => ({
+mock.module("../../../../../tui/src/component/prompt/autocomplete", () => ({
   Autocomplete: () => <box />,
 }))
 
-mock.module("../../../../src/cli/cmd/tui/context/command-palette", () => ({
+mock.module("../../../../../tui/src/context/command-palette", () => ({
   CommandPaletteProvider: (props: { children: unknown }) => props.children,
   useCommandPalette: () => ({
     hide: () => {},
@@ -146,7 +147,7 @@ const fetchForPrompt = (async (input: RequestInfo | URL) => {
 }) as typeof globalThis.fetch
 
 async function mountPrompt(props: { sessionID?: string }) {
-  const { Prompt } = await import("../../../../src/cli/cmd/tui/component/prompt")
+  const { Prompt } = await import("../../../../../tui/src/component/prompt")
   const events = createEventSource()
   let sync!: ReturnType<typeof useSync>
   let ready!: () => void
@@ -162,8 +163,8 @@ async function mountPrompt(props: { sessionID?: string }) {
 
   const app = await testRender(
     () => (
-      <ArgsProvider>
-        <ExitProvider exit={createExit(async () => {})}>
+      <TestTuiContexts paths={{ state: Global.Path.state }}>
+        <ArgsProvider>
           <KVProvider>
             <ToastProvider>
               <RouteProvider
@@ -181,6 +182,7 @@ async function mountPrompt(props: { sessionID?: string }) {
                     },
                     keybinds: createBindingLookup({}),
                     leader_timeout: 2_000,
+                    mouse: true,
                   }}
                 >
                   <SDKProvider url="http://test" directory={directory} fetch={fetchForPrompt} events={events.source}>
@@ -208,8 +210,8 @@ async function mountPrompt(props: { sessionID?: string }) {
               </RouteProvider>
             </ToastProvider>
           </KVProvider>
-        </ExitProvider>
-      </ArgsProvider>
+        </ArgsProvider>
+      </TestTuiContexts>
     ),
     { width: 100, height: 8 },
   )

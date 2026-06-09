@@ -10,7 +10,7 @@ import { Database } from "@/storage/db"
 import { testEffect } from "../lib/effect"
 import { tmpdir } from "../fixture/fixture"
 
-const it = testEffect(Layer.mergeAll(Memory.defaultLayer))
+const it = testEffect(Layer.mergeAll(Memory.defaultLayer, Database.defaultLayer))
 
 describe("Memory file summaries", () => {
   it.live("generates searchable summaries for top active files", () =>
@@ -72,12 +72,13 @@ describe("Memory file summaries", () => {
         limit: 1,
         generator: summaryGenerator("unused summary", ["unused"]),
       })
-      const before = Database.use((db) =>
-        db
+      const before = yield* Database.Database.Service.use((database) =>
+        database.db
           .select()
           .from(RepositoryMemoryFileSummaryTable)
           .where(eq(RepositoryMemoryFileSummaryTable.repository_id, first.repository.id))
-          .get(),
+          .get()
+          .pipe(Effect.orDie),
       )
 
       yield* Effect.promise(() =>
@@ -89,12 +90,13 @@ describe("Memory file summaries", () => {
         limit: 1,
         generator: summaryGenerator("refreshed summary", ["loginRedirect"]),
       })
-      const after = Database.use((db) =>
-        db
+      const after = yield* Database.Database.Service.use((database) =>
+        database.db
           .select()
           .from(RepositoryMemoryFileSummaryTable)
           .where(eq(RepositoryMemoryFileSummaryTable.repository_id, first.repository.id))
-          .get(),
+          .get()
+          .pipe(Effect.orDie),
       )
 
       expect(first.summaries.generated).toBe(1)

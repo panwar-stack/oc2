@@ -85,12 +85,17 @@ export const layer = Layer.effect(
     const context = yield* Effect.context()
     const runFork = Effect.runForkWith(context)
     const subscriptions: ParcelWatcher.AsyncSubscription[] = []
+    const changeOnlyCreates = new Set<string>()
     yield* Effect.addFinalizer(() =>
       Effect.promise(() => Promise.allSettled(subscriptions.map((subscription) => subscription.unsubscribe()))),
     )
 
     const callback: ParcelWatcher.SubscribeCallback = (_error, updates) => {
       for (const update of updates) {
+        if (update.type === "create" && changeOnlyCreates.has(update.path)) {
+          runFork(events.publish(Event.Updated, { file: update.path, event: "change" }))
+          continue
+        }
         if (update.type === "create") runFork(events.publish(Event.Updated, { file: update.path, event: "add" }))
         if (update.type === "update") runFork(events.publish(Event.Updated, { file: update.path, event: "change" }))
         if (update.type === "delete") runFork(events.publish(Event.Updated, { file: update.path, event: "unlink" }))
@@ -123,6 +128,7 @@ export const layer = Layer.effect(
       const resolved = yield* git.dir(location.directory)
       const vcs = resolved ? yield* fs.realPath(resolved).pipe(Effect.catch(() => Effect.succeed(resolved))) : undefined
       if (vcs && !config.includes(".git") && !config.includes(vcs) && (!resolved || !config.includes(resolved))) {
+        changeOnlyCreates.add(path.join(vcs, "HEAD"))
         const ignore = (yield* fs.readDirectoryEntries(vcs).pipe(Effect.catch(() => Effect.succeed([])))).flatMap(
           (entry) => (entry.name === "HEAD" ? [] : [entry.name]),
         )

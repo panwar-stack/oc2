@@ -175,8 +175,9 @@ const InfoSchema = Schema.Struct({
   ...ConfigV1.Info.fields,
   sandbox: Schema.optional(Sandbox),
 }).annotate({ identifier: "Config" })
+export const Info = InfoSchema
 
-type Info = ConfigV1.Info & {
+export type Info = ConfigV1.Info & {
   sandbox?: Schema.Schema.Type<typeof Sandbox>
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
   // with the file and scope it came from so later runtime code can make location-sensitive decisions.

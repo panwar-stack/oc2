@@ -2,6 +2,11 @@ import type { SessionV1 } from "@opencode-ai/core/v1/session"
 
 export { parseGitHubRemote } from "@/util/repository"
 
+export function githubIssueIdentifier(input: { owner: string; repo: string; issueId?: number }) {
+  if (!input.issueId) return
+  return `github.com/${input.owner}/${input.repo}#${input.issueId}`
+}
+
 /**
  * Extracts displayable text from assistant response parts.
  * Returns null for non-text responses (signals summary needed).

@@ -523,6 +523,7 @@ describe("tool.task", () => {
             return reply(input, "background done")
           })
         },
+        wake: (sessionID) => Effect.succeed(reply({ sessionID, agent: "general", model: ref, parts: [] }, "background done")),
       }
 
       const fiber = yield* def

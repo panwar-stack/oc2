@@ -28,6 +28,11 @@ export interface Interface {
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }
 
+export type Action = PermissionV1.Action
+export type Request = PermissionV1.Request
+export type Rule = PermissionV1.Rule
+export type Ruleset = PermissionV1.Ruleset
+
 interface PendingEntry {
   info: PermissionV1.Request
   deferred: Deferred.Deferred<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>

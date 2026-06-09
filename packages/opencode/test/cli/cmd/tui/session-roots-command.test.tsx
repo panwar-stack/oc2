@@ -5,22 +5,22 @@ import { testRender, useRenderer } from "@opentui/solid"
 import { Global } from "@opencode-ai/core/global"
 import { onCleanup, onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
-import { createTuiResolvedConfig } from "../../../fixture/tui-runtime"
-import { ArgsProvider } from "../../../../src/cli/cmd/tui/context/args"
-import { createExit, ExitProvider } from "../../../../src/cli/cmd/tui/context/exit"
-import { KVProvider } from "../../../../src/cli/cmd/tui/context/kv"
-import { LocalProvider } from "../../../../src/cli/cmd/tui/context/local"
-import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
-import { RouteProvider } from "../../../../src/cli/cmd/tui/context/route"
-import { SDKProvider } from "../../../../src/cli/cmd/tui/context/sdk"
-import { SyncProvider } from "../../../../src/cli/cmd/tui/context/sync"
-import { ThemeProvider } from "../../../../src/cli/cmd/tui/context/theme"
-import { TuiConfigProvider } from "../../../../src/cli/cmd/tui/context/tui-config"
-import { OpencodeKeymapProvider, registerOpencodeKeymap, useCommandSlashes } from "../../../../src/cli/cmd/tui/keymap"
-import { SessionRootsCommand } from "../../../../src/cli/cmd/tui/routes/session"
-import { DialogProvider } from "../../../../src/cli/cmd/tui/ui/dialog"
-import { ToastProvider } from "../../../../src/cli/cmd/tui/ui/toast"
-import { createEventSource, createFetch, directory, json, wait } from "./sync-fixture"
+import { createTuiResolvedConfig } from "../../../../../tui/test/fixture/tui-runtime"
+import { TestTuiContexts } from "../../../../../tui/test/fixture/tui-environment"
+import { ArgsProvider } from "../../../../../tui/src/context/args"
+import { KVProvider } from "../../../../../tui/src/context/kv"
+import { LocalProvider } from "../../../../../tui/src/context/local"
+import { ProjectProvider } from "../../../../../tui/src/context/project"
+import { RouteProvider } from "../../../../../tui/src/context/route"
+import { SDKProvider } from "../../../../../tui/src/context/sdk"
+import { SyncProvider } from "../../../../../tui/src/context/sync"
+import { ThemeProvider } from "../../../../../tui/src/context/theme"
+import { TuiConfigProvider } from "../../../../../tui/src/config"
+import { OpencodeKeymapProvider, registerOpencodeKeymap, useCommandSlashes } from "../../../../../tui/src/keymap"
+import { SessionRootsCommand } from "../../../../../tui/src/routes/session"
+import { DialogProvider } from "../../../../../tui/src/ui/dialog"
+import { ToastProvider } from "../../../../../tui/src/ui/toast"
+import { createEventSource, createFetch, directory, json, wait } from "../../../../../tui/test/cli/cmd/tui/sync-fixture"
 
 const sessionID = "ses_roots_command"
 
@@ -30,7 +30,7 @@ test("registers /roots as soon as the current route is a session", async () => {
   Global.Path.state = tmp.path
   await Bun.write(`${tmp.path}/kv.json`, "{}")
   const events = createEventSource()
-  const calls = createFetch((url) => {
+  const calls = createFetch((url: URL) => {
     if (url.pathname === `/session/${sessionID}`) {
       return json({
         id: sessionID,
@@ -64,8 +64,8 @@ test("registers /roots as soon as the current route is a session", async () => {
 
     return (
       <OpencodeKeymapProvider keymap={keymap}>
-        <ArgsProvider>
-          <ExitProvider exit={createExit(async () => {})}>
+        <TestTuiContexts paths={{ state: Global.Path.state }}>
+          <ArgsProvider>
             <KVProvider>
               <ToastProvider>
                 <RouteProvider initialRoute={{ type: "session", sessionID }}>
@@ -88,8 +88,8 @@ test("registers /roots as soon as the current route is a session", async () => {
                 </RouteProvider>
               </ToastProvider>
             </KVProvider>
-          </ExitProvider>
-        </ArgsProvider>
+          </ArgsProvider>
+        </TestTuiContexts>
       </OpencodeKeymapProvider>
     )
   }
@@ -98,8 +98,8 @@ test("registers /roots as soon as the current route is a session", async () => {
 
   try {
     await mounted
-    await wait(() => slashes().some((entry) => entry.display === "/roots"))
-    const roots = slashes().find((entry) => entry.display === "/roots")
+    await wait(() => slashes().some((entry: { display: string }) => entry.display === "/roots"))
+    const roots = slashes().find((entry: { display: string }) => entry.display === "/roots")
 
     expect(roots?.description).toBe("Manage roots")
     expect(roots?.aliases).toEqual(["/cwd", "/dirs"])
