@@ -349,14 +349,23 @@ describe("Session", () => {
 
       const restarted = yield* Effect.gen(function* () {
         const session = yield* SessionNs.Service
-        return yield* session.listRoots(created.sessionID)
+        const roots = yield* session.listRoots(created.sessionID)
+        const listed = yield* session.list({ directory: secondary }).pipe(
+          Effect.provideService(InstanceRef, {
+            directory: secondary,
+            worktree: created.secondaryRoot.worktree,
+            project: { ...project, id: created.secondaryRoot.projectID, worktree: created.secondaryRoot.worktree },
+          }),
+        )
+        return { roots, listed }
       }).pipe(Effect.provide(sessionRestartLayer(dbPath, project)), Effect.scoped)
 
-      expect(restarted).toHaveLength(2)
-      expect(new Set(restarted.map((root) => root.id)).size).toBe(2)
-      expect(restarted.filter((root) => root.primary)).toHaveLength(1)
-      expect(restarted.find((root) => root.id === created.primaryRoot.id)).toEqual(created.primaryRoot)
-      expect(restarted.find((root) => root.id === created.secondaryRoot.id)).toEqual(created.secondaryRoot)
+      expect(restarted.roots).toHaveLength(2)
+      expect(new Set(restarted.roots.map((root) => root.id)).size).toBe(2)
+      expect(restarted.roots.filter((root) => root.primary)).toHaveLength(1)
+      expect(restarted.roots.find((root) => root.id === created.primaryRoot.id)).toEqual(created.primaryRoot)
+      expect(restarted.roots.find((root) => root.id === created.secondaryRoot.id)).toEqual(created.secondaryRoot)
+      expect(restarted.listed.map((session) => session.id)).toEqual([created.sessionID])
     }),
   )
 

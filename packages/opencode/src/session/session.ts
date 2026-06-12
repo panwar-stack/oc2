@@ -1286,29 +1286,45 @@ function listByProject(
     experimentalWorkspaces: boolean
   },
 ) {
-  const conditions = [eq(SessionTable.project_id, input.projectID)]
+  const conditions: SQL[] = []
+  const primaryConditions: SQL[] = [eq(SessionTable.project_id, input.projectID)]
+  const rootConditions: SQL[] = [eq(SessionRootTable.project_id, input.projectID)]
 
   if (input.workspaceID) {
     conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
   }
   if (input.path !== undefined) {
     if (input.path) {
-      const conds = [
+      const primaryPathConditions = [
         eq(SessionTable.path, input.path),
         like(SessionTable.path, sql.param(`${input.path}/%`, SessionTable.path)),
       ]
+      const rootPathConditions = [
+        eq(SessionRootTable.path, input.path),
+        like(SessionRootTable.path, sql.param(`${input.path}/%`, SessionRootTable.path)),
+      ]
 
-      conditions.push(
+      primaryConditions.push(
         input.directory
-          ? or(...conds, and(isNull(SessionTable.path), eq(SessionTable.directory, input.directory))!)!
-          : or(...conds)!,
+          ? or(...primaryPathConditions, and(isNull(SessionTable.path), eq(SessionTable.directory, input.directory))!)!
+          : or(...primaryPathConditions)!,
+      )
+      rootConditions.push(
+        or(...rootPathConditions)!,
       )
     }
   } else if (input.scope !== "project") {
     if (input.directory) {
-      conditions.push(eq(SessionTable.directory, input.directory))
+      primaryConditions.push(eq(SessionTable.directory, input.directory))
+      rootConditions.push(eq(SessionRootTable.directory, input.directory))
     }
   }
+  conditions.push(
+    or(
+      and(...primaryConditions)!,
+      sql`exists (select 1 from ${SessionRootTable} where ${and(eq(SessionRootTable.session_id, SessionTable.id), ...rootConditions)})`,
+    )!,
+  )
   if (input.roots) {
     conditions.push(isNull(SessionTable.parent_id))
   }

@@ -24,7 +24,7 @@ import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@opencode-ai/core/database/database"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionMessageTable, SessionRootTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -241,6 +241,12 @@ const clearSessionPath = (sessionID: SessionIDType) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db.update(SessionTable).set({ path: null }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+    yield* db
+      .update(SessionRootTable)
+      .set({ path: null })
+      .where(eq(SessionRootTable.session_id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
   })
 
 function request(path: string, init?: RequestInit) {
@@ -882,6 +888,11 @@ describe("session HttpApi", () => {
           body: JSON.stringify({ directory: other, name: "other" }),
         })
         expect(added).toMatchObject({ directory: other, name: "other", primary: false })
+
+        const listedFromSecondary = yield* requestJson<Session.Info[]>(SessionPaths.list, {
+          headers: { ...headers, "x-opencode-directory": other },
+        })
+        expect(listedFromSecondary.filter((item) => item.id === session.id)).toHaveLength(1)
 
         const duplicate = yield* request(pathFor(SessionPaths.roots, { sessionID: session.id }), {
           method: "POST",
