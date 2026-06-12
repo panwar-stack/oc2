@@ -102,7 +102,7 @@ test("registers /roots as soon as the current route is a session", async () => {
     const roots = slashes().find((entry: { display: string }) => entry.display === "/roots")
 
     expect(roots?.description).toBe("Manage roots")
-    expect(roots?.aliases).toEqual(["/cwd", "/dirs"])
+    expect(roots?.aliases).toEqual(["/root", "/cwd", "/dirs"])
   } finally {
     app.renderer.destroy()
     Global.Path.state = previous

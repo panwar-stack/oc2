@@ -203,7 +203,7 @@ export function SessionRootsCommand() {
       title: "Manage roots",
       category: "Session",
       slashName: "roots",
-      slashAliases: ["cwd", "dirs"],
+      slashAliases: ["root", "cwd", "dirs"],
       enabled: route.data.type === "home" || sessionID() !== undefined,
       run: () => {
         const id = sessionID()

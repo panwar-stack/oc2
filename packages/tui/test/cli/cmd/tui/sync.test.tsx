@@ -110,6 +110,82 @@ describe("tui sync", () => {
     }
   })
 
+  test("hydrates session roots through root list", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const sessionID = "ses_hydrate_roots"
+    const staleRoots = [
+      {
+        id: "root_stale",
+        sessionID,
+        directory: "/tmp/stale",
+        worktree: "/tmp/stale",
+        projectID: "proj_stale",
+        created: 0,
+        primary: true,
+      },
+    ]
+    const roots = [
+      {
+        id: "root_primary",
+        sessionID,
+        directory: "/tmp/repo-a",
+        worktree: "/tmp/repo-a",
+        projectID: "proj_a",
+        created: 1,
+        primary: true,
+      },
+      {
+        id: "root_extra",
+        sessionID,
+        name: "api",
+        directory: "/tmp/repo-b",
+        worktree: "/tmp/repo-b",
+        projectID: "proj_b",
+        created: 2,
+        primary: false,
+      },
+    ]
+    let rootRequests = 0
+    const { app, sync } = await mount((url) => {
+      if (url.pathname === `/session/${sessionID}`) {
+        return json({
+          id: sessionID,
+          title: "Hydrate roots",
+          time: { created: 1, updated: 1 },
+          version: "1.0.0",
+          directory: "/tmp/repo-a",
+          project_id: "proj_a",
+          cost: 0,
+        })
+      }
+      if (url.pathname === `/session/${sessionID}/root`) {
+        rootRequests++
+        return json(roots)
+      }
+      if (
+        url.pathname === `/session/${sessionID}/message` ||
+        url.pathname === `/session/${sessionID}/todo` ||
+        url.pathname === `/session/${sessionID}/diff`
+      )
+        return json([])
+    })
+
+    try {
+      sync.set("session_root", sessionID, staleRoots)
+
+      await sync.session.sync(sessionID)
+
+      expect(rootRequests).toBe(1)
+      expect(sync.data.session_root[sessionID]).toEqual(roots)
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
   test("refresh scopes sessions by default and lists project sessions when disabled", async () => {
     await using tmp = await tmpdir()
     await Bun.write(`${tmp.path}/kv.json`, "{}")

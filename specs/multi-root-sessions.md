@@ -127,7 +127,8 @@ Best first-pass UX:
 - Rename root
 - Make primary
 - Remove root
-- Add aliases `/cwd` and `/dirs` for discoverability.
+- Add aliases `/root`, `/cwd`, and `/dirs` for discoverability.
+- Persist roots in `session_root`; session hydration must reload them from `GET /session/:sessionID/root` so process or TUI restarts do not drop secondary roots.
 - Do not implement slash arguments in the first pass because current local slash commands invoke dialogs/toggles, not parsed argument handlers.
 - Footer should show the primary directory and root count, for example `/repo-a +2 roots`.
 - When a root is added, append a system reminder to the session context: `The session can now work in another directory: <name or path> at <absolute path>.`
