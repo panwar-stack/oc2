@@ -185,7 +185,11 @@ export const layer = Layer.effect(
         (member) =>
           db
             .update(TeamMemberTable)
-            .set({ status: "cancelled", time_updated: now })
+            .set({
+              status: "cancelled",
+              time_updated: now,
+              ...(member.lifecycle === "daemon" ? { daemon_state: "cancelled" as const, daemon_last_active: now } : {}),
+            })
             .where(eq(TeamMemberTable.id, member.id))
             .run()
             .pipe(Effect.orDie),

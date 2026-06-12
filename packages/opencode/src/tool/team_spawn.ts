@@ -27,6 +27,9 @@ const Parameters = Schema.Struct({
   variant: Schema.optional(Schema.String).annotate({
     description: "Optional variant of the teammate's effective model, selected by the lead for this task's complexity",
   }),
+  lifecycle: Schema.optional(Schema.Literals(["task", "daemon"])).annotate({
+    description: "Whether this teammate is a finite task worker or a long-lived daemon teammate",
+  }),
 })
 
 type Metadata = {
@@ -111,6 +114,7 @@ export const TeamSpawnTool = Tool.define(
             return { title: "Team Spawn Failed", output: "No active team found.", metadata: {} as Metadata }
           }
           const teamID = activeTeam.value.id
+          const lifecycle = params.lifecycle ?? "task"
 
           const ag = yield* agent.get(params.agent_type)
           if (!ag) {
@@ -267,6 +271,9 @@ export const TeamSpawnTool = Tool.define(
             planMode: requirePlanApproval,
             workMode: requirePlanApproval ? "plan" : "implement",
             dependencyIDs,
+            lifecycle,
+            daemonState: lifecycle === "daemon" ? "initializing" : null,
+            daemonLastActive: lifecycle === "daemon" ? Date.now() : null,
           })
 
           const dependencyResults = (members: any[], dependencies: string[]) => {
@@ -332,7 +339,12 @@ export const TeamSpawnTool = Tool.define(
                 const dependencies = member.dependency_ids ?? []
                 if (member.status !== "blocked" || !dependencies.includes(completedSessionID)) return false
                 return dependencies.every((dependency: string) =>
-                  members.some((candidate) => candidate.session_id === dependency && candidate.status === "completed"),
+                  members.some(
+                    (candidate) =>
+                      candidate.session_id === dependency &&
+                      candidate.status === "completed" &&
+                      candidate.lifecycle !== "daemon",
+                  ),
                 )
               })
               yield* Effect.forEach(
@@ -382,7 +394,13 @@ export const TeamSpawnTool = Tool.define(
                   return "Teammate did not start because the team is no longer active."
                 }
 
-                yield* team.updateMemberStatus(member.id, "active")
+                yield* team.updateMemberStatus(
+                  member.id,
+                  "active",
+                  member.lifecycle === "daemon"
+                    ? { daemonState: "running", daemonLastActive: Date.now(), daemonError: null }
+                    : undefined,
+                )
                 yield* notifyLead(
                   member.session_id,
                   [
@@ -417,6 +435,14 @@ export const TeamSpawnTool = Tool.define(
                   return "Teammate stopped before completing."
                 }
                 const output = result.parts.findLast((part) => part.type === "text")?.text ?? ""
+                if (member.lifecycle === "daemon") {
+                  yield* team.updateMemberStatus(member.id, "idle", {
+                    daemonState: "idle",
+                    daemonLastActive: Date.now(),
+                    daemonError: null,
+                  })
+                  return output || "Daemon teammate initialized."
+                }
                 yield* team.updateMemberStatus(member.id, "completed", output)
                 yield* notifyLead(
                   member.session_id,
@@ -435,7 +461,17 @@ export const TeamSpawnTool = Tool.define(
                   Effect.gen(function* () {
                     if (Cause.hasInterruptsOnly(cause)) return yield* Effect.interrupt
                     const error = Cause.squash(cause)
-                    yield* team.updateMemberStatus(member.id, "cancelled")
+                    yield* team.updateMemberStatus(
+                      member.id,
+                      "cancelled",
+                      member.lifecycle === "daemon"
+                        ? {
+                            daemonState: "error",
+                            daemonLastActive: Date.now(),
+                            daemonError: error instanceof Error ? error.message : String(error),
+                          }
+                        : undefined,
+                    )
                     const latestTeam = yield* team.get(teamID)
                     const message = `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${error instanceof Error ? error.message : String(error)}`
                     if (Option.isNone(latestTeam) || latestTeam.value.status !== "active") return message
@@ -451,7 +487,10 @@ export const TeamSpawnTool = Tool.define(
           const blocked = dependencyIDs.some(
             (dependency) =>
               !latestMembers.some(
-                (candidate) => candidate.session_id === dependency && candidate.status === "completed",
+                (candidate) =>
+                  candidate.session_id === dependency &&
+                  candidate.status === "completed" &&
+                  candidate.lifecycle !== "daemon",
               ),
           )
           if (blocked) {
@@ -475,7 +514,15 @@ export const TeamSpawnTool = Tool.define(
 
           const runCancel = yield* EffectBridge.make()
           const cancelMember = Effect.gen(function* () {
-            yield* team.updateMemberStatus(member.id, "cancelled").pipe(Effect.ignore)
+            yield* team
+              .updateMemberStatus(
+                member.id,
+                "cancelled",
+                member.lifecycle === "daemon"
+                  ? { daemonState: "cancelled", daemonLastActive: Date.now() }
+                  : undefined,
+              )
+              .pipe(Effect.ignore)
             yield* ops.cancel(SessionID.make(member.session_id)).pipe(Effect.ignore)
           })
           function onAbort() {
@@ -490,6 +537,23 @@ export const TeamSpawnTool = Tool.define(
             () =>
               Effect.gen(function* () {
                 const result = yield* startMember(member, dependencyResults(latestMembers, dependencyIDs))
+                const current = yield* team.getMemberBySession(member.session_id)
+                if (member.lifecycle === "daemon") {
+                  const failed = Option.isSome(current) && current.value.daemon_state === "error"
+                  return {
+                    title: failed ? "Daemon Teammate Initialization Failed" : "Daemon Teammate Initialized",
+                    output: [
+                      failed
+                        ? `Daemon teammate initialization failed: ${member.name} (${member.session_id}) [${member.agent_type}]`
+                        : `Daemon teammate initialized: ${member.name} (${member.session_id}) [${member.agent_type}]`,
+                      "",
+                      "<teammate_result>",
+                      result,
+                      "</teammate_result>",
+                    ].join("\n"),
+                    metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
+                  }
+                }
                 return {
                   title: "Teammate Completed",
                   output: [

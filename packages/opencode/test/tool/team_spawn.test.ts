@@ -373,6 +373,140 @@ describe("tool.team_spawn", () => {
     ),
   )
 
+  it.live("initializes daemon teammates without completing them", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.sync(() => {
+                calls.push(input)
+                return reply(input, "initialized")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "sentinel",
+              agent_type: "general",
+              role_prompt: "Watch for integration risks",
+              lifecycle: "daemon",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "sentinel")
+          expect(result.title).toBe("Daemon Teammate Initialized")
+          expect(result.output).toContain("initialized")
+          expect(calls).toHaveLength(1)
+          expect(member?.lifecycle).toBe("daemon")
+          expect(member?.status).toBe("idle")
+          expect(member?.daemon_state).toBe("idle")
+          expect(member?.daemon_last_active).toBeNumber()
+          expect(member?.daemon_error).toBeNull()
+          expect(member?.result).toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("records daemon initialization failure", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: () =>
+              Effect.sync(() => {
+                throw new Error("boom")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "sentinel",
+              agent_type: "general",
+              role_prompt: "Watch for integration risks",
+              lifecycle: "daemon",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "sentinel")
+          expect(result.title).toBe("Daemon Teammate Initialization Failed")
+          expect(result.output).toContain("boom")
+          expect(member?.lifecycle).toBe("daemon")
+          expect(member?.status).toBe("cancelled")
+          expect(member?.daemon_state).toBe("error")
+          expect(member?.daemon_error).toBe("boom")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("does not unblock dependents from daemon initialization", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.sync(() => {
+                calls.push(input)
+                return reply(input, "initialized")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          yield* def.execute(
+            {
+              name: "sentinel",
+              agent_type: "general",
+              role_prompt: "Watch for integration risks",
+              lifecycle: "daemon",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+          const result = yield* def.execute(
+            {
+              name: "implementer",
+              agent_type: "general",
+              role_prompt: "Implement after sentinel handoff",
+              depends_on: ["sentinel"],
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const members = yield* team.getMembers(info.id)
+          expect(result.title).toBe("Teammate Spawned")
+          expect(members.find((member) => member.name === "sentinel")?.status).toBe("idle")
+          expect(members.find((member) => member.name === "implementer")?.status).toBe("blocked")
+          expect(calls).toHaveLength(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("does not create an inert teammate when prompt operations are unavailable", () =>
     provideTmpdirInstance(
       () =>

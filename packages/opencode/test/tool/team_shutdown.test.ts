@@ -123,6 +123,38 @@ describe("tool.team_shutdown", () => {
       { config: { experimental: { agent_teams: true } } },
     ),
   )
+
+  it.live("cancels daemon state on shutdown", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "shutdown-daemon", goal: "Close", leadSessionID: lead.id })
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_shutdown_daemon",
+            name: "sentinel",
+            agentType: "general",
+            rolePrompt: "Monitor",
+            lifecycle: "daemon",
+            daemonState: "idle",
+          })
+          yield* team.updateMemberStatus(daemon.id, "idle", { daemonState: "idle" })
+          const tool = yield* TeamShutdownTool
+          const def = yield* tool.init()
+
+          yield* def.execute({}, context(lead.id))
+          const member = (yield* team.getMembers(info.id)).find((member) => member.id === daemon.id)
+
+          expect(member?.status).toBe("cancelled")
+          expect(member?.daemon_state).toBe("cancelled")
+          expect(member?.daemon_last_active).toBeNumber()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
 })
 
 function context(sessionID: SessionID): Context {
