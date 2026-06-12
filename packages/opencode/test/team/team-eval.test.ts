@@ -335,6 +335,134 @@ describe("team eval", () => {
     ),
   )
 
+  it.live("reports daemon lifecycle findings", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "eval-daemons", goal: "Evaluate daemons", leadSessionID: "ses_eval_daemon_lead" })
+        const idle = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_daemon_idle",
+          name: "idle-daemon",
+          agentType: "general",
+          rolePrompt: "Monitor",
+          lifecycle: "daemon",
+          daemonState: "idle",
+        })
+        const failed = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_daemon_failed",
+          name: "failed-daemon",
+          agentType: "general",
+          rolePrompt: "Monitor failures",
+          lifecycle: "daemon",
+          daemonState: "error",
+          daemonError: "boom",
+        })
+        const finite = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_daemon_completed",
+          name: "completed-daemon",
+          agentType: "general",
+          rolePrompt: "Should stay daemon",
+          lifecycle: "daemon",
+          daemonState: "idle",
+        })
+
+        yield* team.updateMemberStatus(idle.id, "idle", { daemonState: "idle" })
+        yield* team.updateMemberStatus(failed.id, "cancelled", { daemonState: "error", daemonError: "boom" })
+        yield* team.updateMemberStatus(finite.id, "completed")
+
+        const report = yield* TeamEval.build(info.id)
+        const daemonNode = report.nodes.find((item) => item.id === node("member", idle.session_id))
+
+        expect(daemonNode?.metadata).toEqual(expect.objectContaining({ lifecycle: "daemon", daemon_state: "idle" }))
+        expect(categories(report)).toContain("daemon_without_activity")
+        expect(categories(report)).toContain("daemon_error")
+        expect(categories(report)).toContain("daemon_used_for_finite_task")
+        expect(categories(report)).not.toContain("execution.cancelled_member")
+      }),
+    )
+  )
+
+  it.live("detects daemon final result messages without counting automatic idle messages as activity", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "eval-daemon-message", goal: "Evaluate daemon messages", leadSessionID: "ses_eval_daemon_message_lead" })
+        const daemon = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_daemon_message",
+          name: "sentinel",
+          agentType: "general",
+          rolePrompt: "Monitor",
+          lifecycle: "daemon",
+          daemonState: "idle",
+        })
+        yield* team.updateMemberStatus(daemon.id, "idle", { daemonState: "idle", daemonLastActive: Date.now() - 1 })
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: daemon.session_id,
+          recipients: [info.lead_session_id],
+          body: ["Daemon completed and returned this result:", "", "<teammate_result>", "done", "</teammate_result>"].join("\n"),
+        })
+
+        const report = yield* TeamEval.build(info.id)
+
+        expect(categories(report)).toContain("daemon_used_for_finite_task")
+      }),
+    )
+  )
+
+  it.live("reports daemon left active after shutdown", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "eval-daemon-shutdown", goal: "Close daemons", leadSessionID: "ses_eval_daemon_shutdown_lead" })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_daemon_left_active",
+          name: "left-active",
+          agentType: "general",
+          rolePrompt: "Monitor",
+          lifecycle: "daemon",
+          daemonState: "idle",
+        })
+        yield* closeTeam(info.id)
+
+        const report = yield* TeamEval.build(info.id)
+
+        expect(categories(report)).toContain("daemon_left_active_on_shutdown")
+      }),
+    )
+  )
+
+  it.live("does not report errored cancelled daemon as left active after shutdown", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "eval-daemon-error-shutdown", goal: "Close errored daemons", leadSessionID: "ses_eval_daemon_error_shutdown_lead" })
+        const daemon = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_daemon_error_shutdown",
+          name: "errored",
+          agentType: "general",
+          rolePrompt: "Monitor",
+          lifecycle: "daemon",
+          daemonState: "error",
+          daemonError: "boom",
+        })
+        yield* team.updateMemberStatus(daemon.id, "cancelled", { daemonState: "error", daemonError: "boom" })
+        yield* closeTeam(info.id)
+
+        const report = yield* TeamEval.build(info.id)
+
+        expect(categories(report)).not.toContain("daemon_left_active_on_shutdown")
+        expect(categories(report)).toContain("daemon_error")
+      }),
+    )
+  )
+
   it.live("reports no findings for completed independent teammate fixture", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {

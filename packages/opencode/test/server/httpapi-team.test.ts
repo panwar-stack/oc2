@@ -74,6 +74,33 @@ describe("team HttpApi", () => {
     }),
   )
 
+  it.instance("returns daemon evaluation findings", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const team = yield* Team.Service
+      const info = yield* team.create({ name: "http-daemon-eval", goal: "Expose daemon eval", leadSessionID: "ses_http_daemon_eval_lead" })
+      const daemon = yield* team.addMember({
+        teamID: info.id,
+        sessionID: "ses_http_daemon_eval_member",
+        name: "sentinel",
+        agentType: "general",
+        rolePrompt: "Monitor",
+        lifecycle: "daemon",
+        daemonState: "error",
+        daemonError: "boom",
+      })
+      yield* team.updateMemberStatus(daemon.id, "cancelled", { daemonState: "error", daemonError: "boom" })
+
+      const response = yield* request(withSession(`${TeamPaths.root}/${info.id}/eval`, info.lead_session_id), {
+        headers: { "x-opencode-directory": test.directory },
+      })
+      const body = yield* responseJson(response)
+
+      expect(response.status, JSON.stringify(body)).toBe(200)
+      expect(body.findings).toContainEqual(expect.objectContaining({ category: "daemon_error" }))
+    })
+  )
+
   it.instance("returns authorized team resources", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

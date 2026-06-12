@@ -48,6 +48,21 @@ const CommunicationGuidance = [
   "- When you send a message via team_send_message or team_broadcast, recipients are automatically woken. Do not poll team_get_messages in a loop — check once and continue working.",
 ].join("\n")
 
+const DaemonGuidance = [
+  "Daemon teammate guidance:",
+  "- You are a daemon teammate.",
+  "- Your assignment is long-lived and remains active until the team shuts down.",
+  "- Do not treat the first response as final completion.",
+  "- Work in cycles: inspect, act, report, then wait when there is no useful work.",
+  "- Use team_send_message to alert the lead when your assignment discovers something actionable.",
+  "- Use team_get_messages at natural boundaries, not in a polling loop.",
+  "- If your assignment requires periodic or external triggers, explain what trigger you need instead of inventing an unbounded loop.",
+  "- Never mark yourself done unless explicitly cancelled or told the daemon assignment is over.",
+].join("\n")
+
+const TaskCompletionGuidance =
+  "When your assigned work is complete, put the concrete result in your final answer so it can be sent back to the lead automatically."
+
 const MemberTools = [
   "Available team tools (use these to coordinate with the team):",
   "- team_send_message: Send a message to the lead (recipient 'lead') or a specific teammate by name/session ID. Recipients are woken automatically.",
@@ -383,7 +398,7 @@ export const TeamSpawnTool = Tool.define(
                     ? ["Current teammates:", ...teammates].join("\n")
                     : "No other teammates are registered yet.",
                   CommunicationGuidance,
-                  "When your assigned work is complete, put the concrete result in your final answer so it can be sent back to the lead automatically.",
+                  member.lifecycle === "daemon" ? DaemonGuidance : TaskCompletionGuidance,
                   extraPrompt,
                   member.role_prompt,
                 ].join("\n\n"),

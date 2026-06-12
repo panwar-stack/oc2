@@ -86,7 +86,7 @@ export const {
         [sessionID: string]: SessionStatus
       }
       team_member_status: {
-        [sessionID: string]: string
+        [sessionID: string]: { status: string; lifecycle?: string; daemonState?: string | null }
       }
       session_diff: {
         [sessionID: string]: SnapshotFileDiff[]
@@ -313,7 +313,15 @@ export const {
         }
 
         case "team.member.updated": {
-          setStore("team_member_status", event.properties.sessionID, event.properties.status)
+          const properties = event.properties as typeof event.properties & {
+            lifecycle?: string
+            daemonState?: string | null
+          }
+          setStore("team_member_status", event.properties.sessionID, {
+            status: properties.status,
+            lifecycle: properties.lifecycle,
+            daemonState: properties.daemonState,
+          })
           break
         }
 

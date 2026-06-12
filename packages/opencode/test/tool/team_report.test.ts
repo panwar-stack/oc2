@@ -116,6 +116,43 @@ describe("tool.team_report", () => {
     ),
   )
 
+  it.live("includes daemon metrics", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "daemon-report-team", goal: "Monitor", leadSessionID: lead.id })
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_daemon",
+            name: "sentinel",
+            agentType: "general",
+            rolePrompt: "Monitor risks",
+            lifecycle: "daemon",
+            daemonState: "idle",
+          })
+          yield* team.updateMemberStatus(daemon.id, "idle", { daemonState: "idle" })
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id }, context(lead.id))
+
+          expect(result.output).toContain("## Daemons")
+          expect(result.output).toContain("- daemon members: 1")
+          expect(result.output).toContain("- idle daemons: 1")
+          expect(result.metadata.daemon).toEqual({
+            daemon_member_count: 1,
+            active_daemon_count: 0,
+            idle_daemon_count: 1,
+            daemon_error_count: 0,
+          })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("omits read metrics while preserving delivery metrics", () =>
     provideTmpdirInstance(
       () =>

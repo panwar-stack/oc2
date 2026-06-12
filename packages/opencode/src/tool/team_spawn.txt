@@ -9,6 +9,9 @@ Use this aggressively for independent research, file reading, implementation sli
 Prefer several focused teammates over one broad teammate when the work can proceed in parallel.
 Spawn multiple independent teammates in one parallel tool-call batch whenever possible.
 Use depends_on or wait_for when this teammate must wait for one or more teammate names/session IDs to complete before starting.
+Use lifecycle="daemon" only for long-lived monitoring, sentinel, rolling-checklist, or similar assignments. lifecycle defaults to "task" for finite work.
+Daemon spawn returns after initialization, not after team shutdown. A daemon remains registered and usually becomes idle between mailbox-driven work cycles.
+Do not use daemon teammates for ordinary finite research, implementation, review, or verification tasks.
 For risky or broad edits, set plan_mode so the teammate must submit a plan for lead approval before implementation.
 Use variant only with an exact available variant key shown in the team lead prompt for the teammate's effective model. Omit variant for default behavior or when variant names are uncertain.
 Use lower reasoning-effort variants only for simple, well-scoped work with precise instructions. Use default or medium variants for bounded implementation, moderate debugging, and verification that requires judgment. Use default or the highest appropriate variant for ambiguous root-cause analysis, architecture decisions, security-sensitive changes, broad refactors, and adversarial review.

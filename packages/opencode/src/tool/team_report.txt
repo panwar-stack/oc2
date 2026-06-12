@@ -2,6 +2,7 @@ Generate a post-session effectiveness report for an agent team.
 
 Use this after team orchestration to see:
 - teammate throughput and lifecycle distribution
+- daemon teammate counts, idle/running/error state, and deterministic daemon findings
 - dependency and task progress behavior
 - mailbox/message delivery behavior
 - session cost and token impact

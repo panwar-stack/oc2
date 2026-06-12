@@ -39,6 +39,10 @@ export type TeamEvalFindingCategory =
   | "shallow_usage"
   | "missing_task_list"
   | "missing_final_report"
+  | "daemon_without_activity"
+  | "daemon_error"
+  | "daemon_left_active_on_shutdown"
+  | "daemon_used_for_finite_task"
 
 export type TeamEvalNode = {
   id: string
@@ -196,6 +200,10 @@ function reportFromRows(
         plan_mode: member.plan_mode,
         work_mode: member.work_mode,
         dependency_ids: member.dependency_ids ?? [],
+        lifecycle: member.lifecycle,
+        daemon_state: member.daemon_state,
+        daemon_last_active: member.daemon_last_active,
+        daemon_error: member.daemon_error,
       },
     })),
     ...tasks.map((task) => ({
@@ -348,6 +356,7 @@ function deterministicFindings(
   const taskByID = new Map(tasks.map((task) => [task.id, task]))
   const messageByID = new Map(messages.map((message) => [message.id, message]))
   const activeMembers = members.filter((member) => ["active", "starting", "blocked"].includes(member.status))
+  const daemonMembers = members.filter((member) => member.lifecycle === "daemon")
   return [
     ...members.flatMap((member) => {
       const dependencyIDs = member.dependency_ids ?? []
@@ -359,7 +368,7 @@ function deterministicFindings(
         (dependencyID) => memberBySession.get(dependencyID)?.status === "completed",
       )
       return [
-        member.status === "cancelled"
+        member.status === "cancelled" && member.lifecycle !== "daemon"
           ? finding("execution.cancelled_member", "error", nodeID("member", member.session_id), member.time_updated, {
               message: `Member ${member.name} was cancelled.`,
               suffix: "cancelled",
@@ -388,6 +397,34 @@ function deterministicFindings(
           ? finding("execution.empty_result", "warning", nodeID("member", member.session_id), member.time_updated, {
               message: `Member ${member.name} completed without a result.`,
               suffix: "empty-result",
+              metadata: { session_id: member.session_id, member_id: member.id },
+            })
+          : undefined,
+        member.lifecycle === "daemon" && member.daemon_state === "error"
+          ? finding("daemon_error", "error", nodeID("member", member.session_id), member.time_updated, {
+              message: `Daemon teammate ${member.name} entered error state${member.daemon_error ? `: ${member.daemon_error}` : "."}`,
+              suffix: "daemon-error",
+              metadata: { session_id: member.session_id, member_id: member.id, daemon_error: member.daemon_error },
+            })
+          : undefined,
+        member.lifecycle === "daemon" && member.status === "completed"
+          ? finding("daemon_used_for_finite_task", "warning", nodeID("member", member.session_id), member.time_updated, {
+              message: `Daemon teammate ${member.name} completed like a finite task teammate.`,
+              suffix: "daemon-completed",
+              metadata: { session_id: member.session_id, member_id: member.id },
+            })
+          : undefined,
+        member.lifecycle === "daemon" && daemonSentFinalResult(member, messages)
+          ? finding("daemon_used_for_finite_task", "warning", nodeID("member", member.session_id), member.time_updated, {
+              message: `Daemon teammate ${member.name} sent a final-result-shaped message like a finite task teammate.`,
+              suffix: "daemon-final-result-message",
+              metadata: { session_id: member.session_id, member_id: member.id },
+            })
+          : undefined,
+        member.lifecycle === "daemon" && !daemonHadMailboxActivity(member, messages)
+          ? finding("daemon_without_activity", "info", nodeID("member", member.session_id), member.time_updated, {
+              message: `Daemon teammate ${member.name} has no mailbox activity after initialization.`,
+              suffix: "daemon-without-activity",
               metadata: { session_id: member.session_id, member_id: member.id },
             })
           : undefined,
@@ -437,6 +474,17 @@ function deterministicFindings(
           message: `Team closed with ${activeMembers.length} active, starting, or blocked member(s).`,
           suffix: "premature-shutdown",
           metadata: { member_session_ids: activeMembers.map((member) => member.session_id) },
+        })
+      : undefined,
+    team.status === "closed" && daemonMembers.some((member) => member.status !== "cancelled")
+      ? finding("daemon_left_active_on_shutdown", "error", nodeID("team", team.id), team.time_updated, {
+          message: "Team closed without cancelling every daemon teammate.",
+          suffix: "daemon-left-active-on-shutdown",
+          metadata: {
+            member_session_ids: daemonMembers
+              .filter((member) => member.status !== "cancelled")
+              .map((member) => member.session_id),
+          },
         })
       : undefined,
     ...(team.status === "closed"
@@ -585,6 +633,33 @@ function hasResult(member: MemberRow) {
 function isCompletedTeam(team: TeamRow, members: MemberRow[]) {
   if (team.status !== "closed") return false
   return members.every((member) => !["active", "starting", "blocked"].includes(member.status))
+}
+
+function daemonHadMailboxActivity(member: MemberRow, messages: MessageRow[]) {
+  const initializedAt = member.daemon_last_active ?? member.time_created
+  return messages.some(
+    (message) =>
+      message.time_created > initializedAt &&
+      (message.sender === member.session_id || message.recipients.includes(member.session_id)) &&
+      !isAutomaticDaemonStatusMessage(member, message),
+  )
+}
+
+function daemonSentFinalResult(member: MemberRow, messages: MessageRow[]) {
+  return messages.some(
+    (message) =>
+      message.sender === member.session_id &&
+      (message.body.includes("<teammate_result>") || message.body.includes("completed and returned this result")),
+  )
+}
+
+function isAutomaticDaemonStatusMessage(member: MemberRow, message: MessageRow) {
+  return (
+    message.sender === member.session_id &&
+    (message.body.startsWith(`Teammate ${member.name} (${member.agent_type}) started.`) ||
+      message.body === `Teammate ${member.name} (${member.agent_type}) has became idle.` ||
+      message.body === `Teammate ${member.name} (${member.agent_type}) has completed their work.`)
+  )
 }
 
 function finding(

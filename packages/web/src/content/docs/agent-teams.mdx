@@ -76,10 +76,30 @@ Teammates are background child sessions. Each teammate has:
 - a role prompt
 - optional dependencies
 - optional plan approval mode
+- a lifecycle: finite `task` by default, or long-lived `daemon`
 
 Teammates send kickoff, progress, blocker, handoff, and completion updates through the team mailbox.
 
 Teammate names must be unique within a team. If older team data contains duplicate names, name-based targeting rejects the ambiguous name and asks for a session ID instead. Session IDs are always authoritative for message recipients, dependency references, and plan decisions.
+
+### Daemon teammates
+
+Daemon teammates are long-lived team members for monitoring, sentinels, rolling checklists, and similar assignments that remain valid until the team shuts down.
+
+Spawn one with `team_spawn` and `lifecycle: "daemon"`. The daemon receives the lead-provided `role_prompt`, performs one initialization work cycle, and then stays registered as `idle` or `running` instead of completing like a finite task teammate.
+
+Use daemon teammates when the assignment is genuinely open-ended, for example:
+
+- watch team coordination and report unresolved blockers
+- maintain a rolling integration checklist during a refactor
+- inspect incoming mailbox messages for actionable risks
+- monitor a running workflow when another tool or user message wakes it
+
+Do not use daemon teammates for ordinary finite research, implementation, review, or verification tasks. Those should remain normal task teammates.
+
+Daemon teammates communicate through the existing mailbox. They should use `team_send_message` when they discover something actionable and `team_get_messages` only at natural boundaries, not in a polling loop. If a daemon needs a periodic timer, file watcher, log tail, or other external trigger, it should report that missing trigger instead of inventing an unbounded loop.
+
+Daemon teammates do not satisfy `depends_on` just because they initialized. Depend on a finite setup or handoff teammate when another teammate needs a completed result.
 
 ### Model variants
 
@@ -94,6 +114,8 @@ Agent teams do not automatically rank models, optimize cost, or choose variants 
 Use `depends_on` or `wait_for` when a teammate must wait for another teammate to complete.
 
 Dependencies can refer to teammate names or teammate session IDs. A blocked teammate starts automatically after all dependencies complete. If a teammate name is ambiguous, use the dependency teammate's session ID.
+
+Daemon teammates are not completion dependencies. A daemon can wait on completed task teammates before initialization, but downstream task teammates are not unblocked by daemon initialization or idle state.
 
 ### Mailbox
 
@@ -155,7 +177,7 @@ These tools are used by OpenCode agents when agent teams are enabled.
 | `team_report`       | Generate a post-session effectiveness report with usage metrics and findings.           |
 | `team_shutdown`     | Close the active team and cancel active teammates.                                      |
 
-`team_report` uses persisted team state for deterministic findings, including blocked teammates, pending mailbox rows on closed teams, shallow usage, missing task lists, and missing final reports for non-trivial completed teams.
+`team_report` uses persisted team state for deterministic findings, including blocked teammates, pending mailbox rows on closed teams, shallow usage, missing task lists, missing final reports for non-trivial completed teams, and daemon lifecycle issues such as daemon errors or daemons left active after shutdown.
 
 ---
 
@@ -169,7 +191,7 @@ Agent teams add a team sidebar section and a team panel.
 | `team_task_list`    | `<leader>k`  | Open the team panel on the task list.                      |
 | `team_cycle_lead`   | `<leader>up` | Navigate from a teammate session back to the lead session. |
 
-The team panel shows the team goal, teammate statuses, pending permissions or questions, shared tasks, and team messages. It can also shut down the team.
+The team panel shows the team goal, teammate statuses, daemon state, pending permissions or questions, shared tasks, and team messages. It can also shut down the team.
 
 Regular child-session navigation still works for teammate sessions:
 
@@ -217,7 +239,7 @@ Dependencies must match an existing teammate name or teammate session ID. Spawn 
 
 ### Teammate is waiting
 
-A teammate with dependencies remains blocked until all dependency teammates complete. A teammate in plan mode waits until the lead approves or rejects the submitted plan.
+A teammate with dependencies remains blocked until all dependency task teammates complete. Daemon initialization does not unblock dependents. A teammate in plan mode waits until the lead approves or rejects the submitted plan.
 
 ### Team no longer needed
 

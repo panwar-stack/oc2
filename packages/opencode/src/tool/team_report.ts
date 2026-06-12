@@ -158,6 +158,13 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
           const completedMembers = members.filter((member) => member.status === "completed")
           const canceledMembers = members.filter((member) => member.status === "cancelled")
           const blockedMembers = members.filter((member) => member.status === "blocked")
+          const daemonMembers = members.filter((member) => member.lifecycle === "daemon")
+          const daemonMetrics = {
+            daemon_member_count: daemonMembers.length,
+            active_daemon_count: daemonMembers.filter((member) => member.daemon_state === "running").length,
+            idle_daemon_count: daemonMembers.filter((member) => member.daemon_state === "idle").length,
+            daemon_error_count: daemonMembers.filter((member) => member.daemon_state === "error").length,
+          }
           const memberDependencyDefined = members.filter((member) => !!member.dependency_ids?.length)
           const activeMembers = members.filter((member) => member.status === "active")
           const startedMembers = members.filter((member) => member.status === "starting")
@@ -325,6 +332,12 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
             `- final report generated: ${usage.final_report_generated ? "yes" : "no"}`,
             `- shallow usage: ${usage.shallow_usage ? "yes" : "no"}`,
             "",
+            "## Daemons",
+            `- daemon members: ${daemonMetrics.daemon_member_count}`,
+            `- active daemons: ${daemonMetrics.active_daemon_count}`,
+            `- idle daemons: ${daemonMetrics.idle_daemon_count}`,
+            `- daemon errors: ${daemonMetrics.daemon_error_count}`,
+            "",
             "## Messaging",
             `- messages: ${messages.length}`,
             `- recipient rows: ${recipients.length}`,
@@ -391,6 +404,7 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
                 tokens: teamSessionTokens,
               },
               usage,
+              daemon: daemonMetrics,
               usage_rollup: rollup,
               eval: evalReport,
             },

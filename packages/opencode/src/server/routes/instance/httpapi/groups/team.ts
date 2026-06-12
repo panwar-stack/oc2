@@ -23,6 +23,10 @@ const TeamMemberSchema = Schema.Struct({
   agent_type: Schema.String,
   role_prompt: Schema.String,
   status: Schema.String,
+  lifecycle: Schema.String,
+  daemon_state: Schema.NullOr(Schema.String),
+  daemon_last_active: Schema.NullOr(Schema.Number),
+  daemon_error: Schema.NullOr(Schema.String),
   plan_mode: Schema.Boolean,
   work_mode: Schema.String,
   dependency_ids: Schema.NullOr(Schema.Array(Schema.String)),
@@ -92,6 +96,10 @@ const TeamEvalFindingCategorySchema = Schema.Literals([
   "shallow_usage",
   "missing_task_list",
   "missing_final_report",
+  "daemon_without_activity",
+  "daemon_error",
+  "daemon_left_active_on_shutdown",
+  "daemon_used_for_finite_task",
 ])
 
 const TeamEvalMetadataSchema = Schema.Record(Schema.String, Schema.Unknown)

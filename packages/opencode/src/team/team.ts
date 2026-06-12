@@ -103,7 +103,13 @@ const TeamCreated = EventV2.define({ type: "team.created", schema: { teamID: Sch
 const TeamClosed = EventV2.define({ type: "team.closed", schema: { teamID: Schema.String } })
 const MemberUpdated = EventV2.define({
   type: "team.member.updated",
-  schema: { memberID: Schema.String, sessionID: Schema.String, status: Schema.String },
+  schema: {
+    memberID: Schema.String,
+    sessionID: Schema.String,
+    status: Schema.String,
+    lifecycle: Schema.optional(Schema.String),
+    daemonState: Schema.optional(Schema.String),
+  },
 })
 const MessageReceived = EventV2.define({
   type: "team.message.received",
@@ -207,6 +213,8 @@ export const layer = Layer.effect(
             memberID: member.id,
             sessionID: member.session_id,
             status: member.status === "completed" || member.status === "cancelled" ? member.status : "cancelled",
+            lifecycle: member.lifecycle,
+            daemonState: member.lifecycle === "daemon" ? "cancelled" : (member.daemon_state ?? undefined),
           }),
         { concurrency: "unbounded", discard: true },
       )
@@ -297,7 +305,13 @@ export const layer = Layer.effect(
       yield* db.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run().pipe(Effect.orDie)
       const row = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get().pipe(Effect.orDie)
       if (!row) return Option.none()
-      yield* events.publish(MemberUpdated, { memberID: row.id, sessionID: row.session_id, status: row.status })
+      yield* events.publish(MemberUpdated, {
+        memberID: row.id,
+        sessionID: row.session_id,
+        status: row.status,
+        lifecycle: row.lifecycle,
+        daemonState: row.daemon_state ?? undefined,
+      })
 
       if (row.status === "completed" || row.status === "idle") {
         const statusText = row.status === "completed" ? "completed their work" : "became idle"
@@ -350,7 +364,13 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
       const row = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get().pipe(Effect.orDie)
       if (!row) return Option.none()
-      yield* events.publish(MemberUpdated, { memberID: row.id, sessionID: row.session_id, status: row.status })
+      yield* events.publish(MemberUpdated, {
+        memberID: row.id,
+        sessionID: row.session_id,
+        status: row.status,
+        lifecycle: row.lifecycle,
+        daemonState: row.daemon_state ?? undefined,
+      })
       return Option.some({
         id: row.id,
         team_id: row.team_id,

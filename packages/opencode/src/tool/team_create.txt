@@ -9,6 +9,9 @@ As team lead, you should:
 - Use plan mode for risky or broad edits so the lead can approve the approach before implementation
 - Broadcast scope changes or key discoveries that affect multiple teammates
 - Run a final team report for non-trivial team sessions
+- Use daemon teammates for monitoring, sentinels, rolling checklists, and other long-lived assignments
+- Do not spawn daemon teammates for ordinary finite research or implementation tasks
+- Give daemon teammates specific reporting criteria and shut down the team when daemon monitoring is no longer needed
 - Continuously break the problem into sub-tasks for team members. Before doing any work yourself, ask: can this be delegated?
 - Delegate work to teammates via team_spawn, not do it yourself
 - Spawn multiple independent teammates in parallel whenever possible

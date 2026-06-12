@@ -89,6 +89,8 @@ Then it calls `team.addMember` to store:
 - work mode
 - dependency session IDs
 - final result
+- lifecycle (`task` or `daemon`)
+- daemon state and error fields for daemon teammates
 
 The child session is what actually runs the model. The team member row is the coordination record for that session.
 
@@ -167,6 +169,26 @@ Inside the teammate run:
 
 When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. The lead resumes after the relevant running teammates finish, then it can integrate results and decide the next coordination step.
 
+## Daemon Teammates
+
+Daemon teammates are team members with `lifecycle: "daemon"`.
+
+They are for long-lived assignments such as monitoring, sentinels, rolling checklists, or coordination-risk tracking. They are not a special watcher subsystem and they do not introduce timers, log tails, file watchers, or scheduler tools.
+
+Daemon lifecycle invariants:
+
+- `team_spawn` still creates a normal child session and `team_member` row.
+- The lead-provided `role_prompt` is the durable daemon assignment.
+- Initialization runs one normal prompt cycle and then returns to the lead.
+- A successful daemon initialization moves the member to `status: "idle"` and `daemon_state: "idle"`, not `completed`.
+- A daemon prompt failure moves the member to `status: "cancelled"`, `daemon_state: "error"`, and records `daemon_error`.
+- Daemons use mailbox messages for lead communication and wake behavior.
+- Daemons must use `team_get_messages` at natural boundaries, not in a polling loop.
+- Daemons do not satisfy teammate `depends_on` relationships merely by initializing or becoming idle.
+- `team_shutdown` cancels daemon sessions and records `daemon_state: "cancelled"`.
+
+Future trigger providers should feed or wake daemon teammates through mailbox/wake paths. They should remain separate from the base daemon lifecycle.
+
 ## Model Variants
 
 Teammates keep the lead session's selected provider/model unless the selected teammate agent has an explicit model configured. `team_spawn` does not expose a teammate `model` parameter.
@@ -196,7 +218,7 @@ Name resolution still handles old data that may contain duplicates. If a depende
 
 If a dependency is missing, spawn fails. If a dependency exists but is not completed, the new member is marked `blocked`.
 
-When a teammate completes, `startReadyBlockedMembers` checks blocked members that reference the completed session. A blocked member starts only when every dependency session has status `completed`.
+When a task teammate completes, `startReadyBlockedMembers` checks blocked members that reference the completed session. A blocked member starts only when every dependency session has status `completed` and is not a daemon teammate.
 
 When it starts, the dependency results are injected into the prompt under `Dependency results:`.
 

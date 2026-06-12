@@ -1594,6 +1594,8 @@ export type GlobalEvent = {
           memberID: string
           sessionID: string
           status: string
+          lifecycle?: string
+          daemonState?: string
         }
       }
     | {
@@ -3384,6 +3386,10 @@ export type TeamEvalFinding = {
     | "shallow_usage"
     | "missing_task_list"
     | "missing_final_report"
+    | "daemon_without_activity"
+    | "daemon_error"
+    | "daemon_left_active_on_shutdown"
+    | "daemon_used_for_finite_task"
   node_id: string
   message: string
   time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -5977,6 +5983,8 @@ export type EventTeamMemberUpdated = {
     memberID: string
     sessionID: string
     status: string
+    lifecycle?: string
+    daemonState?: string
   }
 }
 
