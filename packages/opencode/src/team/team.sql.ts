@@ -34,6 +34,12 @@ export const TeamMemberTable = sqliteTable(
     status: text({ enum: ["starting", "blocked", "active", "idle", "completed", "cancelled"] })
       .notNull()
       .default("starting"),
+    lifecycle: text({ enum: ["task", "daemon"] })
+      .notNull()
+      .default("task"),
+    daemon_state: text({ enum: ["initializing", "running", "idle", "cancelled", "error"] }),
+    daemon_last_active: integer(),
+    daemon_error: text(),
     plan_mode: integer({ mode: "boolean" }).notNull().default(false),
     work_mode: text({ enum: ["plan", "implement"] })
       .notNull()

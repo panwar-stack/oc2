@@ -135,10 +135,18 @@ describe("team", () => {
         expect(member.name).toBe("builder")
         expect(member.agent_type).toBe("build")
         expect(member.status).toBe("starting")
+        expect(member.lifecycle).toBe("task")
+        expect(member.daemon_state).toBeNull()
+        expect(member.daemon_last_active).toBeNull()
+        expect(member.daemon_error).toBeNull()
 
         const members = yield* team.getMembers(teamInfo.id)
         expect(members.length).toBe(1)
         expect(members[0].name).toBe("builder")
+        expect(members[0].lifecycle).toBe("task")
+        expect(members[0].daemon_state).toBeNull()
+        expect(members[0].daemon_last_active).toBeNull()
+        expect(members[0].daemon_error).toBeNull()
 
         const bySession = yield* team.getMemberBySession("ses_test_child_1")
         expect(Option.isSome(bySession)).toBe(true)
@@ -151,6 +159,57 @@ describe("team", () => {
         const memberContext = yield* team.getContext("ses_test_child_1")
         expect(Option.isSome(memberContext)).toBe(true)
         expect(unwrap(memberContext).member.id).toBe(member.id)
+      }),
+    ),
+  )
+
+  it.live("persists daemon member lifecycle fields", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_daemon_persist"
+
+        yield* team.create({ name: "daemon-team", goal: "Goal", leadSessionID })
+        const teamInfo = unwrap(yield* team.getActive(leadSessionID))
+        const lastActive = Date.now()
+
+        const member = yield* team.addMember({
+          teamID: teamInfo.id,
+          sessionID: "ses_daemon_child_1",
+          name: "sentinel",
+          agentType: "general",
+          rolePrompt: "Monitor for risks",
+          lifecycle: "daemon",
+          daemonState: "initializing",
+          daemonLastActive: lastActive,
+        })
+
+        expect(member.lifecycle).toBe("daemon")
+        expect(member.daemon_state).toBe("initializing")
+        expect(member.daemon_last_active).toBe(lastActive)
+        expect(member.daemon_error).toBeNull()
+
+        const updated = yield* team.updateMemberStatus(member.id, "idle", {
+          daemonState: "idle",
+          daemonLastActive: lastActive + 1,
+          daemonError: "waiting for trigger",
+        })
+        expect(Option.isSome(updated)).toBe(true)
+        expect(unwrap(updated).lifecycle).toBe("daemon")
+        expect(unwrap(updated).daemon_state).toBe("idle")
+        expect(unwrap(updated).daemon_last_active).toBe(lastActive + 1)
+        expect(unwrap(updated).daemon_error).toBe("waiting for trigger")
+
+        const members = yield* team.getMembers(teamInfo.id)
+        expect(members[0].lifecycle).toBe("daemon")
+        expect(members[0].daemon_state).toBe("idle")
+        expect(members[0].daemon_last_active).toBe(lastActive + 1)
+        expect(members[0].daemon_error).toBe("waiting for trigger")
+
+        const bySession = yield* team.getMemberBySession("ses_daemon_child_1")
+        expect(Option.isSome(bySession)).toBe(true)
+        expect(unwrap(bySession).lifecycle).toBe("daemon")
+        expect(unwrap(bySession).daemon_state).toBe("idle")
       }),
     ),
   )

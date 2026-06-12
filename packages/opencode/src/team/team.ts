@@ -17,6 +17,15 @@ import {
 
 const toOption = <T>(v: T | null | undefined): Option.Option<T> => (v != null ? Option.some(v) : Option.none())
 
+type TeamMemberLifecycle = "task" | "daemon"
+type TeamMemberDaemonState = "initializing" | "running" | "idle" | "cancelled" | "error"
+type TeamMemberStatusUpdate = {
+  result?: string
+  daemonState?: TeamMemberDaemonState | null
+  daemonLastActive?: number | null
+  daemonError?: string | null
+}
+
 export type UsageEventType = "plan_approved" | "plan_rejected" | "broadcast_sent" | "report_generated"
 
 export type UsageEvent = {
@@ -44,8 +53,16 @@ export interface Interface {
     planMode?: boolean
     workMode?: "plan" | "implement"
     dependencyIDs?: string[]
+    lifecycle?: TeamMemberLifecycle
+    daemonState?: TeamMemberDaemonState | null
+    daemonLastActive?: number | null
+    daemonError?: string | null
   }) => Effect.Effect<any>
-  updateMemberStatus: (memberID: string, status: string, result?: string) => Effect.Effect<Option.Option<any>>
+  updateMemberStatus: (
+    memberID: string,
+    status: string,
+    resultOrUpdate?: string | TeamMemberStatusUpdate,
+  ) => Effect.Effect<Option.Option<any>>
   approveMemberPlan: (memberID: string) => Effect.Effect<Option.Option<any>>
   getMembers: (teamID: string) => Effect.Effect<any[]>
   getMemberBySession: (sessionID: string) => Effect.Effect<Option.Option<any>>
@@ -208,6 +225,10 @@ export const layer = Layer.effect(
       planMode?: boolean
       workMode?: "plan" | "implement"
       dependencyIDs?: string[]
+      lifecycle?: TeamMemberLifecycle
+      daemonState?: TeamMemberDaemonState | null
+      daemonLastActive?: number | null
+      daemonError?: string | null
     }) {
       const id = crypto.randomUUID()
       const now = Date.now()
@@ -222,6 +243,10 @@ export const layer = Layer.effect(
           model: input.model ?? null,
           role_prompt: input.rolePrompt,
           status: "starting",
+          lifecycle: input.lifecycle ?? "task",
+          daemon_state: input.daemonState ?? null,
+          daemon_last_active: input.daemonLastActive ?? null,
+          daemon_error: input.daemonError ?? null,
           plan_mode: input.planMode ?? false,
           work_mode: input.workMode ?? "implement",
           dependency_ids: input.dependencyIDs ?? null,
@@ -240,6 +265,10 @@ export const layer = Layer.effect(
         model: input.model,
         role_prompt: input.rolePrompt,
         status: "starting",
+        lifecycle: input.lifecycle ?? "task",
+        daemon_state: input.daemonState ?? null,
+        daemon_last_active: input.daemonLastActive ?? null,
+        daemon_error: input.daemonError ?? null,
         plan_mode: input.planMode ?? false,
         work_mode: input.workMode ?? "implement",
         dependency_ids: input.dependencyIDs,
@@ -252,11 +281,15 @@ export const layer = Layer.effect(
     const updateMemberStatus = Effect.fn("Team.updateMemberStatus")(function* (
       memberID: string,
       status: string,
-      result?: string,
+      resultOrUpdate?: string | TeamMemberStatusUpdate,
     ) {
       const now = Date.now()
+      const update = typeof resultOrUpdate === "string" ? { result: resultOrUpdate } : resultOrUpdate
       const setData: Record<string, unknown> = { status, time_updated: now }
-      if (result !== undefined) setData.result = result
+      if (update?.result !== undefined) setData.result = update.result
+      if (update?.daemonState !== undefined) setData.daemon_state = update.daemonState
+      if (update?.daemonLastActive !== undefined) setData.daemon_last_active = update.daemonLastActive
+      if (update?.daemonError !== undefined) setData.daemon_error = update.daemonError
       yield* db.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run().pipe(Effect.orDie)
       const row = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get().pipe(Effect.orDie)
       if (!row) return Option.none()
@@ -290,6 +323,10 @@ export const layer = Layer.effect(
         model: row.model,
         role_prompt: row.role_prompt,
         status: row.status,
+        lifecycle: row.lifecycle,
+        daemon_state: row.daemon_state,
+        daemon_last_active: row.daemon_last_active,
+        daemon_error: row.daemon_error,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -319,6 +356,10 @@ export const layer = Layer.effect(
         model: row.model,
         role_prompt: row.role_prompt,
         status: row.status,
+        lifecycle: row.lifecycle,
+        daemon_state: row.daemon_state,
+        daemon_last_active: row.daemon_last_active,
+        daemon_error: row.daemon_error,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -339,6 +380,10 @@ export const layer = Layer.effect(
           model: row.model,
           role_prompt: row.role_prompt,
           status: row.status,
+          lifecycle: row.lifecycle,
+          daemon_state: row.daemon_state,
+          daemon_last_active: row.daemon_last_active,
+          daemon_error: row.daemon_error,
           plan_mode: row.plan_mode,
           work_mode: row.work_mode,
           dependency_ids: row.dependency_ids,
@@ -366,6 +411,10 @@ export const layer = Layer.effect(
         model: row.model,
         role_prompt: row.role_prompt,
         status: row.status,
+        lifecycle: row.lifecycle,
+        daemon_state: row.daemon_state,
+        daemon_last_active: row.daemon_last_active,
+        daemon_error: row.daemon_error,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
