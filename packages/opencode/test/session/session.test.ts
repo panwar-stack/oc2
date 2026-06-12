@@ -12,7 +12,7 @@ import { Project } from "@/project/project"
 import path from "path"
 import * as Log from "@opencode-ai/core/util/log"
 import { MessageV2 } from "../../src/session/message-v2"
-import { MessageID, PartID, type SessionID } from "../../src/session/schema"
+import { MessageID, PartID, type SessionID, type SessionRootID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -79,6 +79,12 @@ const insertProject = (project: Project.Info) =>
       .run()
       .pipe(Effect.orDie),
   )
+
+const expectPrimaryRoot = (roots: SessionNs.RootInfo[], rootID: SessionRootID) => {
+  const primary = roots.filter((root) => root.primary)
+  expect(primary).toHaveLength(1)
+  expect(primary[0]?.id).toBe(rootID)
+}
 
 describe("session.created event", () => {
   it.instance("should emit session.created event when session is created", () =>
@@ -283,6 +289,7 @@ describe("Session", () => {
       const other = yield* tmpdirScoped({ git: true })
       const added = yield* session.addRoot({ sessionID: info.id, directory: other, name: "other" })
       expect(added).toMatchObject({ directory: other, name: "other", primary: false })
+      expectPrimaryRoot(yield* session.listRoots(info.id), initialRoots[0]!.id)
 
       const duplicate = yield* session.addRoot({ sessionID: info.id, directory: other }).pipe(Effect.exit)
       expect(Exit.isFailure(duplicate)).toBe(true)
@@ -296,11 +303,13 @@ describe("Session", () => {
       expect(primary).toMatchObject({ id: added.id, name: "renamed", primary: true })
       expect((yield* session.get(info.id)).directory).toBe(other)
       expect((yield* session.getPrimaryRoot(info.id)).id).toBe(added.id)
+      expectPrimaryRoot(yield* session.listRoots(info.id), added.id)
 
       yield* session.removeRoot({ sessionID: info.id, rootID: added.id })
       const remaining = yield* session.listRoots(info.id)
       expect(remaining).toHaveLength(1)
       expect(remaining[0]).toMatchObject({ id: initialRoots[0]?.id, primary: true })
+      expectPrimaryRoot(remaining, initialRoots[0]!.id)
       expect((yield* session.get(info.id)).directory).toBe(info.directory)
 
       const lastDelete = yield* session.removeRoot({ sessionID: info.id, rootID: remaining[0]!.id }).pipe(Effect.exit)
@@ -362,10 +371,51 @@ describe("Session", () => {
 
       expect(restarted.roots).toHaveLength(2)
       expect(new Set(restarted.roots.map((root) => root.id)).size).toBe(2)
-      expect(restarted.roots.filter((root) => root.primary)).toHaveLength(1)
+      expectPrimaryRoot(restarted.roots, created.primaryRoot.id)
       expect(restarted.roots.find((root) => root.id === created.primaryRoot.id)).toEqual(created.primaryRoot)
       expect(restarted.roots.find((root) => root.id === created.secondaryRoot.id)).toEqual(created.secondaryRoot)
       expect(restarted.listed.map((session) => session.id)).toEqual([created.sessionID])
+    }),
+  )
+
+  it.live("keeps one promoted primary root across service restarts", () =>
+    Effect.gen(function* () {
+      const dbDir = yield* tmpdirScoped()
+      const primary = yield* tmpdirScoped({ git: true })
+      const secondary = yield* tmpdirScoped({ git: true })
+      const dbPath = path.join(dbDir, "restart-promoted.db")
+      const now = Date.now()
+      const project = {
+        id: ProjectV2.ID.make("restart-promoted-primary"),
+        worktree: primary,
+        vcs: "git" as const,
+        time: { created: now, updated: now },
+        sandboxes: [primary, secondary],
+      } satisfies Project.Info
+
+      const created = yield* Effect.gen(function* () {
+        yield* insertProject(project)
+        const session = yield* SessionNs.Service
+        const info = yield* session.create({ title: "restart promoted root" }).pipe(
+          Effect.provideService(InstanceRef, {
+            directory: primary,
+            worktree: primary,
+            project,
+          }),
+        )
+        const added = yield* session.addRoot({ sessionID: info.id, directory: secondary, name: "secondary" })
+        const promoted = yield* session.updateRoot({ sessionID: info.id, rootID: added.id, primary: true })
+        expectPrimaryRoot(yield* session.listRoots(info.id), promoted.id)
+        return { sessionID: info.id, promoted }
+      }).pipe(Effect.provide(sessionRestartLayer(dbPath, project)), Effect.scoped)
+
+      const restarted = yield* Effect.gen(function* () {
+        const session = yield* SessionNs.Service
+        return yield* session.listRoots(created.sessionID)
+      }).pipe(Effect.provide(sessionRestartLayer(dbPath, project)), Effect.scoped)
+
+      expectPrimaryRoot(restarted, created.promoted.id)
+      expect(restarted.find((root) => root.id === created.promoted.id)).toEqual(created.promoted)
     }),
   )
 
