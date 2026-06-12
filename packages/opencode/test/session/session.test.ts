@@ -2,10 +2,14 @@ import { describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { ProjectV2 } from "@opencode-ai/core/project"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
+import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { Deferred, Effect, Exit, Layer } from "effect"
 import { Session as SessionNs } from "@/session/session"
 import { Project } from "@/project/project"
+import path from "path"
 import * as Log from "@opencode-ai/core/util/log"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
@@ -17,6 +21,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { GlobalBus } from "@/bus/global"
+import { InstanceRef } from "@/effect/instance-ref"
 
 void Log.init({ print: false })
 
@@ -43,6 +48,37 @@ const awaitDeferred = <T>(deferred: Deferred.Deferred<T>, message: string) =>
   )
 
 const remove = (id: SessionID) => SessionNs.use.remove(id)
+
+const sessionRestartLayer = (dbPath: string, project: Project.Info) =>
+  Layer.mergeAll(
+    Database.layerFromPath(dbPath),
+    EventV2.defaultLayer,
+    EventV2Bridge.layer,
+    SessionProjector.layer,
+    RuntimeFlags.layer({ experimentalWorkspaces: false }),
+    BackgroundJob.defaultLayer,
+    Layer.mock(Project.Service, {
+      fromDirectory: (directory) => Effect.succeed({ project, sandbox: directory }),
+    }),
+    SessionNs.layer,
+  )
+
+const insertProject = (project: Project.Info) =>
+  Database.Service.use(({ db }) =>
+    db
+      .insert(ProjectTable)
+      .values({
+        id: project.id,
+        worktree: AbsolutePath.make(project.worktree),
+        vcs: project.vcs,
+        time_created: project.time.created,
+        time_updated: project.time.updated,
+        sandboxes: project.sandboxes.map((sandbox) => AbsolutePath.make(sandbox)),
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie),
+  )
 
 describe("session.created event", () => {
   it.instance("should emit session.created event when session is created", () =>
@@ -271,6 +307,56 @@ describe("Session", () => {
       expect(Exit.isFailure(lastDelete)).toBe(true)
 
       yield* session.remove(info.id)
+    }),
+  )
+
+  it.live("persists session roots across service restarts", () =>
+    Effect.gen(function* () {
+      const dbDir = yield* tmpdirScoped()
+      const primary = yield* tmpdirScoped({ git: true })
+      const secondary = yield* tmpdirScoped({ git: true })
+      const dbPath = path.join(dbDir, "restart.db")
+      const now = Date.now()
+      const project = {
+        id: ProjectV2.ID.make("restart-persistence"),
+        worktree: primary,
+        vcs: "git" as const,
+        time: { created: now, updated: now },
+        sandboxes: [primary, secondary],
+      } satisfies Project.Info
+
+      const created = yield* Effect.gen(function* () {
+        yield* insertProject(project)
+        const session = yield* SessionNs.Service
+        const info = yield* session.create({ title: "restart roots" }).pipe(
+          Effect.provideService(InstanceRef, {
+            directory: primary,
+            worktree: primary,
+            project,
+          }),
+        )
+        const initialRoots = yield* session.listRoots(info.id)
+        expect(initialRoots).toHaveLength(1)
+
+        const primaryRoot = yield* session.getPrimaryRoot(info.id)
+        const secondaryRoot = yield* session.addRoot({ sessionID: info.id, directory: secondary, name: "secondary" })
+        const roots = yield* session.listRoots(info.id)
+        expect(roots).toHaveLength(2)
+        expect(roots.filter((root) => root.primary)).toHaveLength(1)
+
+        return { sessionID: info.id, primaryRoot, secondaryRoot }
+      }).pipe(Effect.provide(sessionRestartLayer(dbPath, project)), Effect.scoped)
+
+      const restarted = yield* Effect.gen(function* () {
+        const session = yield* SessionNs.Service
+        return yield* session.listRoots(created.sessionID)
+      }).pipe(Effect.provide(sessionRestartLayer(dbPath, project)), Effect.scoped)
+
+      expect(restarted).toHaveLength(2)
+      expect(new Set(restarted.map((root) => root.id)).size).toBe(2)
+      expect(restarted.filter((root) => root.primary)).toHaveLength(1)
+      expect(restarted.find((root) => root.id === created.primaryRoot.id)).toEqual(created.primaryRoot)
+      expect(restarted.find((root) => root.id === created.secondaryRoot.id)).toEqual(created.secondaryRoot)
     }),
   )
 
