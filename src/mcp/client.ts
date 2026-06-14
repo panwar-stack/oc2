@@ -42,6 +42,12 @@ export type McpClientFactory = (server: ResolvedMcpServerConfig) => Promise<McpC
 
 export class McpAuthRequiredError extends Error {
   override readonly name = "McpAuthRequiredError"
+  readonly metadataUrl?: string
+
+  constructor(message: string, metadataUrl?: string) {
+    super(message)
+    this.metadataUrl = metadataUrl
+  }
 }
 
 interface JsonRpcResponse {
@@ -65,14 +71,21 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     | undefined
 
   const request = async (method: string, params: Record<string, unknown> | undefined, signal: AbortSignal) => {
+    const headers: Record<string, string> = { "content-type": "application/json", ...server.headers }
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json", ...server.headers },
+      headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
       signal,
     })
-    if (response.status === 401 || response.status === 403)
+    if (response.status === 401 || response.status === 403) {
+      const authHeader = response.headers.get("www-authenticate")
+      const metadataUrl = extractResourceMetadata(authHeader)
+      if (metadataUrl) {
+        throw new McpAuthRequiredError(`MCP server requires authentication`, metadataUrl)
+      }
       throw new McpAuthRequiredError("MCP server requires authentication")
+    }
     if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
     return unwrapResponse((await response.json()) as JsonRpcResponse)
   }
@@ -438,4 +451,10 @@ function normalizePromptResult(value: unknown): McpPromptResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function extractResourceMetadata(authHeader: string | null): string | undefined {
+  if (!authHeader) return undefined
+  const match = authHeader.match(/resource_metadata="([^"]+)"/)
+  return match ? match[1] : undefined
 }

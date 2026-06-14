@@ -156,7 +156,10 @@ export function createMcpService(options: McpServiceOptions): McpService {
       return state.status
     } catch (error) {
       if (error instanceof McpAuthRequiredError) {
-        setStatus(state, createMcpStatus(serverId, "auth_required"))
+        setStatus(state, {
+          ...createMcpStatus(serverId, "auth_required"),
+          authUrl: error.metadataUrl,
+        })
         return state.status
       }
       setStatus(state, failedStatus(serverId, error))

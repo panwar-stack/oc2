@@ -28,7 +28,7 @@ Implemented foundations:
 
 Not implemented yet:
 
-- Full MCP OAuth callback flow. OAuth-required servers are surfaced as `auth_required` until that later slice is implemented.
+- Dynamic root updates during long-running TUI sessions (roots are static per run).
 
 See `specs/01-oc2-spec.md`, `specs/02-implementation-plan.md`, and the release docs in `docs/` for the target architecture and shipped behavior.
 
@@ -125,7 +125,7 @@ bun run start export <session-id> --format markdown
 bun run start export <session-id> --format json --recursive
 ```
 
-MCP servers use the canonical `oc2` config shape. Enabled servers start before one-shot agent runs; `oc2 mcp test <id>` starts one configured server and reports discovered tools. Discovered tools are exposed as `mcp_<server>_<tool>` and are invoked through the normal tool scheduler, permission service, and output bounding path. OAuth configuration is recognized, but full browser callback flow is deferred; those servers report `auth_required`.
+MCP servers use the canonical `oc2` config shape. Enabled servers start before one-shot agent runs; `oc2 mcp test <id>` starts one configured server and reports discovered tools. Discovered tools are exposed as `mcp_<server>_<tool>` and are invoked through the normal tool scheduler, permission service, and output bounding path. Remote HTTP/SSE servers with OAuth metadata respond with `auth_required` and an actionable PRM URL for browser authorization flow. Stdio servers use environment/config credentials by default.
 
 ```jsonc
 {
@@ -145,6 +145,11 @@ MCP servers use the canonical `oc2` config shape. Enabled servers start before o
       "transport": "http",
       "url": "https://example.test/mcp",
       "headers": { "authorization": "Bearer ${TOKEN}" },
+      "oauth": {
+        "enabled": true,
+        "clientId": "my-mcp-client",
+        "scopes": ["mcp:tools"],
+      },
     },
   },
 }

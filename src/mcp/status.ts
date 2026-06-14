@@ -15,6 +15,7 @@ export interface McpServerStatus {
   readonly tools: readonly string[]
   readonly resourceCount?: number
   readonly promptCount?: number
+  readonly authUrl?: string
   readonly error?: RuntimeErrorShape
 }
 
