@@ -27,6 +27,23 @@ export * from "./model/stream"
 export * from "./model/fake-provider"
 export * from "./model/ai-sdk-provider"
 export * from "./model/model-service"
+export { ToolExecutionError, toolError, toModelToolDefinition } from "./tools/tool"
+export type {
+  ToolContext,
+  ToolDefinition,
+  ToolErrorResult,
+  ToolErrorShape,
+  ToolExecutionResult,
+  ToolPermissionDecision,
+  ToolPermissionRequest,
+  ToolSuccessResult,
+} from "./tools/tool"
+export * from "./tools/output"
+export * from "./tools/roots"
+export * from "./tools/permissions"
+export * from "./tools/registry"
+export * from "./tools/execution"
+export * from "./tools/builtins/index"
 
 if (import.meta.main) {
   const result = await runCli()
