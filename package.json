@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint -c oxlint.json src test",
     "format": "prettier --write .",
-    "diagnostics": "bun run typecheck && bun run lint && bun test"
+    "diagnostics": "bun run typecheck && bun run lint && bun test",
+    "smoke:tui": "bun src/index.ts tui --model fake/test"
   },
   "devDependencies": {
     "@tsconfig/bun": "1.0.9",

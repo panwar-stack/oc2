@@ -7,6 +7,7 @@ import { runDependencyChecks } from "../diagnostics/dependency-checks"
 import { createDiagnosticReport } from "../diagnostics/diagnostics"
 import type { ModelProvider } from "../model/provider"
 import { createSessionRunService } from "../session/run"
+import { launchTui, type TuiLaunchOptions } from "../tui/app"
 import { VERSION } from "../version"
 import { formatRootHelp, parseCommand, type ParsedCommand } from "./commands"
 import {
@@ -31,6 +32,7 @@ export interface CliOptions extends LoadConfigOptions {
   streams?: CliStreams
   writeFile?: (path: string, contents: string) => Promise<void>
   modelProviders?: readonly ModelProvider[]
+  tuiLauncher?: (options: TuiLaunchOptions) => Promise<void>
 }
 
 export interface CliResult {
@@ -73,7 +75,24 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
       return runPrompt(command, undefined, options)
     case "resume":
       return runPrompt(command, command.sessionId, options)
+    case "tui":
+      return tui(command, options)
   }
+}
+
+async function tui(command: Extract<ParsedCommand, { name: "tui" }>, options: CliOptions): Promise<CliResult> {
+  const loaded = await loadConfig(options)
+  const paths = getConfigPaths(options)
+  const launcher = options.tuiLauncher ?? launchTui
+  await launcher({
+    config: loaded.config,
+    cwd: paths.cwd,
+    dataDir: paths.dataDir,
+    sessionId: command.sessionId,
+    model: command.model,
+    providers: options.modelProviders,
+  })
+  return { exitCode: 0 }
 }
 
 async function diagnostics(json: boolean, options: CliOptions): Promise<CliResult> {

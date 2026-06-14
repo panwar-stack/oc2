@@ -1,4 +1,4 @@
-export type CommandName = "version" | "diagnostics" | "config" | "tools" | "run" | "resume" | "help"
+export type CommandName = "version" | "diagnostics" | "config" | "tools" | "run" | "resume" | "tui" | "help"
 
 export type ParsedCommand =
   | { name: "version"; json: boolean }
@@ -10,6 +10,7 @@ export type ParsedCommand =
   | { name: "run"; help: true }
   | { name: "run"; help?: false; prompt: string; json: boolean; model?: string; tools: readonly string[]; disabledTools: readonly string[]; mcp: readonly string[]; disabledMcp: readonly string[] }
   | { name: "resume"; sessionId: string; run: string; json: boolean; model?: string }
+  | { name: "tui"; sessionId?: string; model?: string }
   | { name: "help" }
 
 export interface ParseSuccess {
@@ -31,6 +32,7 @@ export const commandDescriptions = {
   tools: "List configured tools",
   run: "Run a one-shot prompt",
   resume: "Resume a previous session",
+  tui: "Open the interactive terminal UI",
 } satisfies Record<Exclude<CommandName, "help">, string>
 
 /** Parses top-level CLI arguments into command objects without performing side effects. */
@@ -54,12 +56,21 @@ export function parseCommand(argv: string[]): ParseResult {
       return parseRun(rest)
     case "resume":
       return parseResume(rest)
+    case "tui":
+      return parseTui(rest)
     default:
       if (!command.startsWith("-")) {
         return { ok: false, message: `Unknown command: ${command}` }
       }
       return { ok: false, message: `Unknown option: ${command}` }
   }
+}
+
+function parseTui(argv: string[]): ParseResult {
+  const parsed = parseFlagValues(argv, new Set(), new Set(["--session", "--model"]))
+  if (!parsed.ok) return parsed
+  if (parsed.positionals.length > 0) return { ok: false, message: "tui does not accept positional arguments" }
+  return { ok: true, command: { name: "tui", sessionId: parsed.values.get("--session")?.[0], model: parsed.values.get("--model")?.[0] } }
 }
 
 /** Formats the root help text shared by help output and parse errors. */

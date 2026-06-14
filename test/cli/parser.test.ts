@@ -28,6 +28,13 @@ test("parses run help and execution", () => {
   expect(parseCommand(["run", "hello"])).toEqual({ ok: true, command: { name: "run", prompt: "hello", json: false, model: undefined, tools: [], disabledTools: [], mcp: [], disabledMcp: [] } })
 })
 
+test("parses tui resume and model flags", () => {
+  expect(parseCommand(["tui", "--session", "session-1", "--model", "fake/test"])).toEqual({
+    ok: true,
+    command: { name: "tui", sessionId: "session-1", model: "fake/test" },
+  })
+})
+
 test("rejects unknown commands and invalid arguments", () => {
   expect(parseCommand(["unknown"])).toEqual({ ok: false, message: "Unknown command: unknown" })
   expect(parseCommand(["version", "extra"])).toEqual({

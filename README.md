@@ -2,7 +2,7 @@
 
 `oc2` is a local-first TypeScript/Bun coding harness built from `SPEC.md`.
 
-The project is implemented as a single Bun package with a small runtime core and thin CLI entry point. It is still in early implementation: foundational services and one-shot prompt execution are present, while the interactive TUI, MCP runtime, subagents, and agent teams are not available yet.
+The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, and a minimal interactive TUI shell are present, while the MCP runtime, subagents, and agent teams are not available yet.
 
 ## Current Status
 
@@ -18,11 +18,11 @@ Implemented foundations:
 - Model provider abstractions, stream collection, fake provider, AI SDK adapter, and model service events.
 - Tool registry primitives, execution result helpers, permission policy checks, workspace root validation, and safe built-in tool definitions.
 - Main agent profile resolution, model context construction, model/tool loop execution, and persisted one-shot session runs.
+- Minimal terminal TUI shell with projected runtime state, prompt submission, streaming assistant text, tool status display, resume, cancellation, and side-panel toggle.
 - Logging redaction helpers and test fixtures.
 
 Not implemented yet:
 
-- Interactive TUI.
 - MCP server runtime and tool invocation.
 - Subagents, agent teams, daemon teammates, and team reports.
 
@@ -57,7 +57,7 @@ Design principles from the spec that are already reflected in the code:
 
 - `src/index.ts` is the Bun executable entry point and public barrel export for implemented runtime modules. It runs the CLI only when invoked directly.
 - `src/version.ts` contains the package version constant used by the CLI and public exports.
-- `src/cli` contains command parsing, command dispatch, and text/JSON output formatting. Current commands cover help, version, diagnostics, config, tools listing, `run`, and `resume --run`.
+- `src/cli` contains command parsing, command dispatch, and text/JSON output formatting. Current commands cover help, version, diagnostics, config, tools listing, `run`, `resume --run`, and `tui`.
 - `src/config` owns JSONC configuration discovery, loading, merging, validation, defaults, path handling, and environment overrides. Its schema already includes future-facing sections for models, tools, MCP, agents, runtime limits, and TUI settings.
 - `src/diagnostics` collects environment and dependency health information and turns it into structured reports for `oc2 diagnostics`.
 - `src/events` defines the runtime event contract, in-process event bus, and projector helpers. Event categories include implemented session/model/scheduler events plus planned tool, permission, MCP, subagent, and team events.
@@ -68,9 +68,10 @@ Design principles from the spec that are already reflected in the code:
 - `src/agent` defines the main agent profile, system prompt, model context loop, and persisted tool-result handling for non-interactive runs.
 - `src/scheduler` implements bounded async task scheduling with priorities, per-kind limits, cancellation propagation, timeouts, snapshots, and scheduler events. It is the planned coordination primitive for model, tool, MCP, subagent, and team-member work.
 - `src/tools` defines the built-in tool contract, registry, permission handling, workspace-root checks, output shaping, and safe built-ins for file search, file IO, shell execution, patching, web fetches, questions, and todo tracking. Tool invocation is implemented at the subsystem level and is ready to be wired into prompt execution.
+- `src/tui` contains the minimal terminal UI shell, keymap, projected UI state, and small text-rendered session components. It renders from runtime event state instead of polling runtime internals.
 - `src/testing` contains shared fixtures used by tests.
 
-The spec also calls for future top-level areas such as `runtime`, `mcp`, `subagent`, `team`, `tui`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, and scheduler primitives.
+The spec also calls for future top-level areas such as `runtime`, `mcp`, `subagent`, `team`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, and TUI primitives.
 
 ## CLI
 
@@ -90,12 +91,21 @@ Available commands:
 - `oc2 tools list [--json]` lists configured tools.
 - `oc2 run <prompt> [--json] [--model <provider/model>]` runs a one-shot prompt through the main agent.
 - `oc2 resume <session-id> --run <prompt> [--json]` appends a prompt to an existing session and runs the main agent.
+- `oc2 tui [--session <id>] [--model <provider/model>]` opens the minimal interactive terminal UI.
 
 The default `fake/test` model returns a deterministic response for local smoke tests:
 
 ```sh
 bun src/index.ts run "hello" --json --model fake/test
 ```
+
+Open the minimal TUI shell with the same fake model:
+
+```sh
+bun src/index.ts tui --model fake/test
+```
+
+The TUI supports prompt submission, streamed assistant text, visible tool status, `Ctrl+C` cancellation/exit, `Ctrl+S` side-panel toggle, and basic resume with `--session <id>`. MCP, team, permission, and subagent panels are intentionally deferred to later implementation slices.
 
 ## Configuration
 
@@ -143,7 +153,8 @@ Defaults use the fake model provider:
 - `bun run lint` runs oxlint.
 - `bun run format` formats the repository with Prettier.
 - `bun run diagnostics` runs typecheck, lint, and tests.
+- `bun run smoke:tui` opens the manual TUI smoke command with the fake model.
 
 ## Development
 
-This repository uses Bun, strict TypeScript, oxlint, and Prettier. Public runtime modules are exported from `src/index.ts`; tests live under `test/` and cover the implemented CLI, config, diagnostics, event, scheduler, persistence, session, model, agent, tool, and logging slices.
+This repository uses Bun, strict TypeScript, oxlint, and Prettier. Public runtime modules are exported from `src/index.ts`; tests live under `test/` and cover the implemented CLI, config, diagnostics, event, scheduler, persistence, session, model, agent, tool, TUI, and logging slices.
