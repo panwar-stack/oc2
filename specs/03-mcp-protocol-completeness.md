@@ -158,7 +158,7 @@ Verification:
 
 - `bun run diagnostics`
 - `bun test test/mcp`
-- `bun src/index.ts mcp list --json`
+- `bun run start mcp list --json`
 
 Review:
 

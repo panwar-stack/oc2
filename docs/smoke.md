@@ -8,9 +8,9 @@ bun run typecheck
 bun run lint
 bun run diagnostics
 bun run check
-bun src/index.ts version --json
-bun src/index.ts diagnostics --json
-bun src/index.ts run "hello" --json --model fake/test
+bun run start version --json
+bun run start diagnostics --json
+bun run start run "hello" --json --model fake/test
 ```
 
 Expected smoke output highlights:

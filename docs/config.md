@@ -87,7 +87,7 @@ Permission rules have this shape:
 ## Command Overrides
 
 ```sh
-bun src/index.ts run "hello" --json --model fake/test
-bun src/index.ts run "inspect" --root . --tool read --no-tool bash
-bun src/index.ts run "search docs" --mcp localDocs --no-mcp remoteSearch
+bun run start run "hello" --json --model fake/test
+bun run start run "inspect" --root . --tool read --no-tool bash
+bun run start run "search docs" --mcp localDocs --no-mcp remoteSearch
 ```

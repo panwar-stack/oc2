@@ -299,9 +299,9 @@ Verification:
 - `bun test test/cli`
 - `bun run typecheck`
 - `bun run lint`
-- `bun src/index.ts version --json`
-- `bun src/index.ts diagnostics --json`
-- `bun src/index.ts run --help`
+- `bun run start version --json`
+- `bun run start diagnostics --json`
+- `bun run start run --help`
 
 Review:
 
@@ -359,7 +359,7 @@ Verification:
 - `bun test test/agent test/session test/cli/run.test.ts`
 - `bun run typecheck`
 - `bun run lint`
-- `bun src/index.ts run "hello" --json --model fake/test`
+- `bun run start run "hello" --json --model fake/test`
 
 Review:
 
@@ -379,7 +379,7 @@ Verification:
 - `bun test test/tui`
 - `bun run typecheck`
 - `bun run lint`
-- `bun src/index.ts tui --model fake/test`
+- `bun run start tui --model fake/test`
 
 Review:
 
@@ -401,8 +401,8 @@ Verification:
 - `bun test test/mcp`
 - `bun run typecheck`
 - `bun run lint`
-- `bun src/index.ts mcp list`
-- `bun src/index.ts mcp test <fake-server-id>`
+- `bun run start mcp list`
+- `bun run start mcp test <fake-server-id>`
 
 Review:
 
@@ -479,7 +479,7 @@ Verification:
 - `bun test test/tui`
 - `bun run typecheck`
 - `bun run lint`
-- `bun src/index.ts tui --model fake/test`
+- `bun run start tui --model fake/test`
 
 Review:
 
@@ -499,8 +499,8 @@ Verification:
 - `bun test test/session test/cli/export.test.ts test/tools/memory.test.ts`
 - `bun run typecheck`
 - `bun run lint`
-- `bun src/index.ts export <fixture-session-id> --format markdown`
-- `bun src/index.ts export <fixture-session-id> --format json`
+- `bun run start export <fixture-session-id> --format markdown`
+- `bun run start export <fixture-session-id> --format json`
 
 Review:
 
@@ -522,9 +522,9 @@ Verification:
 - `bun run typecheck`
 - `bun run lint`
 - `bun run diagnostics`
-- `bun src/index.ts version --json`
-- `bun src/index.ts diagnostics --json`
-- `bun src/index.ts run "hello" --json --model fake/test`
+- `bun run start version --json`
+- `bun run start diagnostics --json`
+- `bun run start run "hello" --json --model fake/test`
 
 Review:
 

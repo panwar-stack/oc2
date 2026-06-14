@@ -8,6 +8,7 @@
   },
   "packageManager": "bun@1.3.14",
   "scripts": {
+    "start": "bun src/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "bun run format && oxlint -c oxlint.json --import-plugin --report-unused-disable-directives src test",
@@ -15,7 +16,7 @@
     "format:check": "prettier --check .",
     "check": "bun run typecheck && bun run format:check && oxlint -c oxlint.json --import-plugin --report-unused-disable-directives src test && bun test",
     "diagnostics": "bun run typecheck && bun run lint && bun run format:check && bun test",
-    "smoke:tui": "bun src/index.ts tui --model fake/test"
+    "smoke:tui": "bun run start tui --model fake/test"
   },
   "devDependencies": {
     "@tsconfig/bun": "1.0.9",

@@ -86,9 +86,9 @@ OAuth config is recognized so a server can be marked auth-aware, but the full br
 ## Commands
 
 ```sh
-bun src/index.ts mcp list
-bun src/index.ts mcp enable localDocs
-bun src/index.ts mcp disable remoteSearch
-bun src/index.ts mcp test localDocs --json
-bun src/index.ts run "use local docs" --mcp localDocs --no-mcp remoteSearch
+bun run start mcp list
+bun run start mcp enable localDocs
+bun run start mcp disable remoteSearch
+bun run start mcp test localDocs --json
+bun run start run "use local docs" --mcp localDocs --no-mcp remoteSearch
 ```

@@ -89,10 +89,10 @@ Install dependencies with the Bun version pinned in `package.json`:
 bun install
 ```
 
-Run the CLI through Bun while the package is private:
+Run the CLI through the package script while the package is private:
 
 ```sh
-bun src/index.ts --help
+bun run start --help
 ```
 
 Available commands:
@@ -115,14 +115,14 @@ Available commands:
 The default `fake/test` model returns a deterministic response for local smoke tests:
 
 ```sh
-bun src/index.ts run "hello" --json --model fake/test
+bun run start run "hello" --json --model fake/test
 ```
 
 Use repeated `--root <path>` values with `run` or `tui` to add allowed workspace roots for file tools. Repeated `--tool`, `--no-tool`, `--mcp`, and `--no-mcp` flags override configured tools and MCP servers for that run only. Export transcripts as Markdown or JSON:
 
 ```sh
-bun src/index.ts export <session-id> --format markdown
-bun src/index.ts export <session-id> --format json --recursive
+bun run start export <session-id> --format markdown
+bun run start export <session-id> --format json --recursive
 ```
 
 MCP servers use the canonical `oc2` config shape. Enabled servers start before one-shot agent runs; `oc2 mcp test <id>` starts one configured server and reports discovered tools. Discovered tools are exposed as `mcp_<server>_<tool>` and are invoked through the normal tool scheduler, permission service, and output bounding path. OAuth configuration is recognized, but full browser callback flow is deferred; those servers report `auth_required`.
@@ -153,7 +153,7 @@ MCP servers use the canonical `oc2` config shape. Enabled servers start before o
 Open the minimal TUI shell with the same fake model:
 
 ```sh
-bun src/index.ts tui --model fake/test
+bun run start tui --model fake/test
 ```
 
 The TUI supports prompt submission, streamed assistant text, visible tool status, pending team plan approval projection, team report availability projection, MCP server status, permission requests and denials, question prompt display, agent task status, `Ctrl+C` cancellation/exit, `Ctrl+S` side-panel toggle, `Ctrl+T` team panel toggle, `Ctrl+M` MCP panel toggle when distinguishable, empty-prompt Enter as the raw-terminal fallback for `Ctrl+M`, `Esc` panel/dialog close, and basic resume with `--session <id>`. Narrow terminals hide side panels during rendering so prompt input remains available.
