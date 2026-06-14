@@ -1,6 +1,6 @@
 # oc2
 
-`oc2` is a local-first TypeScript/Bun coding harness built from `SPEC.md`.
+`oc2` is a local-first TypeScript/Bun coding harness built from `specs/01-oc2-spec.md`.
 
 The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, a minimal interactive TUI shell, the first MCP runtime slice, subagent runtime primitives, and agent team core services are present.
 
@@ -29,11 +29,11 @@ Not implemented yet:
 - Team plan approval, team reports, and TUI team panels.
 - Full MCP OAuth callback flow. OAuth-required servers are surfaced as `auth_required` until that later slice is implemented.
 
-See `SPEC.md` and `IMPLEMENTATION_PLAN.md` for the target architecture and remaining slices.
+See `specs/01-oc2-spec.md` and `specs/02-implementation-plan.md` for the target architecture and remaining slices.
 
 ## Project Design
 
-`oc2` follows the architecture described in `SPEC.md`: a local-first runtime core with thin adapters around it. The current package keeps the runtime explicit and in-process instead of copying the larger `opencode` monolith or introducing a monorepo before it is needed.
+`oc2` follows the architecture described in `specs/01-oc2-spec.md`: a local-first runtime core with thin adapters around it. The current package keeps the runtime explicit and in-process instead of copying the larger `opencode` monolith or introducing a monorepo before it is needed.
 
 The intended dependency direction is:
 

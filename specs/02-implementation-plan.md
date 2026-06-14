@@ -2,16 +2,16 @@
 
 ## Goal
 
-Build `oc2` as a local-first TypeScript/Bun coding harness from the existing `SPEC.md`. The implementation must start from a blank project directory and deliver a small, explicit runtime core with thin CLI and TUI adapters.
+Build `oc2` as a local-first TypeScript/Bun coding harness from the existing `specs/01-oc2-spec.md`. The implementation must start from a blank project directory and deliver a small, explicit runtime core with thin CLI and TUI adapters.
 
 Use `/Users/srpanwar/Documents/Workspace/brain/opencode` as a reference repository, not a source tree to copy wholesale. Default to the split v2 packages for architecture (`packages/cli`, `packages/tui`, `packages/core`, `packages/llm`, `packages/server`) and selectively port mature local-only features from `packages/opencode`.
 
 ## Current State
 
-- `/Users/srpanwar/Documents/Workspace/brain/oc2/SPEC.md` is the only file currently present in `oc2`.
+- `/Users/srpanwar/Documents/Workspace/brain/oc2/specs/01-oc2-spec.md` is the initial technical specification for `oc2`.
 - `/Users/srpanwar/Documents/Workspace/brain/oc2` is not a git repository.
 - There is no `package.json`, `bun.lock`, `tsconfig.json`, `oxlint.json`, `src/`, `test/`, CLI, runtime, TUI, persistence layer, or tooling yet.
-- `SPEC.md` already defines the target architecture, data shapes, runtime flows, TUI/CLI behavior, MCP behavior, team behavior, migration phases, dependencies, test expectations, and quality gates.
+- `specs/01-oc2-spec.md` already defines the target architecture, data shapes, runtime flows, TUI/CLI behavior, MCP behavior, team behavior, migration phases, dependencies, test expectations, and quality gates.
 - The reference repo is `/Users/srpanwar/Documents/Workspace/brain/opencode` on `master` at `5e2f62879f`.
 - The reference repo has two overlapping eras:
 - Split v2 packages: `packages/cli`, `packages/tui`, `packages/core`, `packages/server`, `packages/llm`.
@@ -65,7 +65,9 @@ oc2/
   tsconfig.json
   oxlint.json
   README.md
-  SPEC.md
+  specs/
+    01-oc2-spec.md
+    02-implementation-plan.md
   src/
     index.ts
     cli/
@@ -243,7 +245,7 @@ Verification:
 
 Review:
 
-Reviewer must compare config behavior against `SPEC.md` sections 7, 8, 10, and 14 and confirm no opencode v1/v2 MCP naming drift was preserved.
+Reviewer must compare config behavior against `specs/01-oc2-spec.md` sections 7, 8, 10, and 14 and confirm no opencode v1/v2 MCP naming drift was preserved.
 
 ### PR 3: Runtime Events And Scheduler
 
@@ -308,7 +310,7 @@ Reviewer must verify command behavior is implemented through runtime/config serv
 ### PR 6: Model Provider Abstraction With Fake Provider
 
 - Add `src/model/provider.ts`, `model-service.ts`, `stream.ts`, `ai-sdk-provider.ts`.
-- Implement `ModelProvider`, `ModelRequest`, and `ModelEvent` contracts from `SPEC.md`.
+- Implement `ModelProvider`, `ModelRequest`, and `ModelEvent` contracts from `specs/01-oc2-spec.md`.
 - Add a fake provider for deterministic tests.
 - Support streaming text deltas, reasoning deltas, tool-call events, usage events, done, cancellation, and retry-safe error classification.
 - Add OpenAI, Anthropic, OpenAI-compatible, and custom local endpoint config shapes, but gate real provider calls behind env/API key checks.
@@ -533,7 +535,7 @@ Reviewer must verify docs match actual commands and no deferred/out-of-scope fea
 For every PR slice:
 
 - Spawn or assign a fresh read-only reviewer after the implementation diff exists.
-- Reviewer input must include the slice tasks, `SPEC.md`, and the diff.
+- Reviewer input must include the slice tasks, `specs/01-oc2-spec.md`, and the diff.
 - Reviewer must check for scope creep, missing tests, hidden globals, unbounded concurrency, secret persistence, permission bypasses, and copied legacy architecture.
 - Implementation is not complete until reviewer findings are resolved or explicitly accepted with rationale.
 

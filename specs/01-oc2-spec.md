@@ -416,7 +416,9 @@ oc2/
   tsconfig.json
   oxlint.json
   README.md
-  SPEC.md
+  specs/
+    01-oc2-spec.md
+    02-implementation-plan.md
   src/
     index.ts
     cli/
