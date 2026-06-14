@@ -6,6 +6,7 @@ import { resolveMainAgentProfile } from "../agent/profiles"
 import type { Oc2Config } from "../config/schema"
 import { createRuntimeEventBus, type RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
+import { redactText, redactValue } from "../logging/redaction"
 import { createMcpService, createMcpToolConfigEntries } from "../mcp/mcp-service"
 import type { McpClientFactory, McpHostHandlers } from "../mcp/client"
 import { createModelService, type ModelService, type ModelServiceOptions } from "../model/model-service"
@@ -135,7 +136,7 @@ export class SessionRunService {
       })
     }
     const runConfig = applyRunSelections(this.config, input)
-    let samplingActive = false
+    const activeSamplingServers = new Set<string>()
     const hostHandlers: McpHostHandlers = {
       rootsList: async (_signal: AbortSignal) => {
         return session.workspaceRoots.map((root) => ({
@@ -144,7 +145,7 @@ export class SessionRunService {
         }))
       },
       samplingCreateMessage: async (serverId: string, params: Record<string, unknown>, signal: AbortSignal) => {
-        if (samplingActive) {
+        if (activeSamplingServers.has(serverId)) {
           return {
             model: "",
             stopReason: "refusal",
@@ -154,10 +155,10 @@ export class SessionRunService {
         }
 
         const samplingAction = `mcp.sampling:${serverId}`
-        const samplingPermission = runConfig.mcp?.[serverId]?.toolPermissions?.find(
-          (rule) => rule.match === samplingAction,
+        const samplingAllowed = (runConfig.mcp?.[serverId]?.toolPermissions ?? []).some(
+          (rule) => rule.match === samplingAction && rule.decision === "allow",
         )
-        if (!samplingPermission || samplingPermission.decision !== "allow") {
+        if (!samplingAllowed) {
           return {
             model: "",
             stopReason: "refusal",
@@ -166,15 +167,17 @@ export class SessionRunService {
           }
         }
 
-        samplingActive = true
+        activeSamplingServers.add(serverId)
         try {
-          const messages = (params.messages as Array<{ role: string; content: unknown }>) ?? []
+          const safeParams = redactValue(params) as Record<string, unknown>
+          const messages = (safeParams.messages as Array<{ role: string; content: unknown }>) ?? []
           const modelMessages = messages.map((m) => ({
             role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
-            content:
+            content: redactText(
               typeof m.content === "object" && m.content !== null
                 ? (((m.content as Record<string, unknown>).text as string) ?? JSON.stringify(m.content))
                 : String(m.content),
+            ),
           }))
 
           const maxTokens = typeof params.maxTokens === "number" ? params.maxTokens : undefined
@@ -186,6 +189,7 @@ export class SessionRunService {
             tools: [],
             maxTokens,
             signal,
+            providerOptions: { source: "mcp.sampling", serverId },
           })
 
           return {
@@ -195,7 +199,7 @@ export class SessionRunService {
             content: { type: "text", text: result.text },
           }
         } finally {
-          samplingActive = false
+          activeSamplingServers.delete(serverId)
         }
       },
       elicitationCreate: async (_serverId: string, params: Record<string, unknown>, signal: AbortSignal) => {

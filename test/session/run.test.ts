@@ -5,6 +5,7 @@ import { z } from "zod"
 
 import {
   createSessionRunService,
+  createRuntimeEventBus,
   createToolRegistry,
   defaultConfig,
   ModelProviderError,
@@ -13,6 +14,11 @@ import {
   type McpHostHandlers,
   type McpInitializeInput,
   type McpInitializeResult,
+  type ModelContext,
+  type ModelEvent,
+  type ModelInfo,
+  type ModelProvider,
+  type ModelRequest,
   type ToolDefinition,
 } from "../../src"
 import { createScriptedModelProvider, simpleAssistantEvents } from "../agent/helpers"
@@ -141,6 +147,165 @@ test("run wires MCP roots handler from normal session workspace roots", async ()
     pathToFileURL(resolve(cwd, "../reference space")).href,
   ])
   expect(roots[0]!.uri).toContain("project%20space")
+  db.close()
+})
+
+test("MCP sampling is denied by default in normal session runs", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents, simpleAssistantEvents])
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withSamplingMcpConfig(),
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const result = await capturedHandlers!.samplingCreateMessage!(
+    "sampler",
+    { messages: [{ role: "user", content: { type: "text", text: "hello" } }] },
+    new AbortController().signal,
+  )
+
+  expect((result as any).stopReason).toBe("refusal")
+  expect(provider.requests).toHaveLength(1)
+  db.close()
+})
+
+test("MCP sampling requires exact mcp.sampling server permission", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents, simpleAssistantEvents])
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withSamplingMcpConfig([{ match: "mcp.sampling", decision: "allow" }]),
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const result = await capturedHandlers!.samplingCreateMessage!(
+    "sampler",
+    { messages: [{ role: "user", content: { type: "text", text: "hello" } }] },
+    new AbortController().signal,
+  )
+
+  expect((result as any).stopReason).toBe("refusal")
+  expect(provider.requests).toHaveLength(1)
+  db.close()
+})
+
+test("MCP sampling uses explicit permission and isolated redacted model request", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const events = createRuntimeEventBus()
+  const published: unknown[] = []
+  events.all((event) => published.push(event))
+  const provider = createScriptedModelProvider([
+    simpleAssistantEvents,
+    [{ type: "text-delta", text: "sample response" }, { type: "done" }],
+  ])
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withSamplingMcpConfig([{ match: "mcp.sampling:sampler", decision: "allow" }]),
+    cwd: "/repo",
+    database: db,
+    events,
+    providers: [provider],
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  const run = await service.run({ prompt: "normal prompt", model: "fake/test" })
+  const result = await capturedHandlers!.samplingCreateMessage!(
+    "sampler",
+    {
+      messages: [
+        { role: "user", content: { type: "text", text: "Authorization: Bearer secret-token" } },
+        { role: "assistant", content: "api_key=sk-secret123456" },
+      ],
+      maxTokens: 12,
+    },
+    new AbortController().signal,
+  )
+
+  expect((result as any).content.text).toBe("sample response")
+  expect(provider.requests).toHaveLength(2)
+  const samplingRequest = provider.requests[1]!
+  expect(samplingRequest.sessionId).toBe(run.sessionId)
+  expect(samplingRequest.modelId).toBe("test")
+  expect(samplingRequest.maxTokens).toBe(12)
+  expect(samplingRequest.tools).toEqual([])
+  expect(samplingRequest.providerOptions).toEqual({ source: "mcp.sampling", serverId: "sampler" })
+  expect(samplingRequest.messages).toEqual([
+    { role: "user", content: "Authorization: Bearer [REDACTED]" },
+    { role: "assistant", content: "api_key=[REDACTED]" },
+  ])
+  expect(JSON.stringify(provider.requests)).not.toContain("secret-token")
+  expect(JSON.stringify(published)).not.toContain("secret-token")
+  db.close()
+})
+
+test("MCP sampling rejects recursive in-flight sampling for the same server", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([
+    simpleAssistantEvents,
+    [{ type: "text-delta", text: "slow sample" }, { type: "done" }],
+  ], { delayMs: 50 })
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withSamplingMcpConfig([{ match: "mcp.sampling:sampler", decision: "allow" }]),
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const first = capturedHandlers!.samplingCreateMessage!(
+    "sampler",
+    { messages: [{ role: "user", content: { text: "first" } }] },
+    new AbortController().signal,
+  )
+  await waitFor(async () => provider.requests.length === 2)
+  const second = await capturedHandlers!.samplingCreateMessage!(
+    "sampler",
+    { messages: [{ role: "user", content: { text: "second" } }] },
+    new AbortController().signal,
+  )
+  const firstResult = await first
+
+  expect((second as any).stopReason).toBe("refusal")
+  expect((firstResult as any).content.text).toBe("slow sample")
+  expect(provider.requests).toHaveLength(2)
+  db.close()
+})
+
+test("MCP sampling propagates cancellation to the model provider", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createBlockingProvider()
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withSamplingMcpConfig([{ match: "mcp.sampling:sampler", decision: "allow" }]),
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const abort = new AbortController()
+  const sampling = capturedHandlers!.samplingCreateMessage!(
+    "sampler",
+    { messages: [{ role: "user", content: { text: "cancel" } }] },
+    abort.signal,
+  )
+  await waitFor(async () => provider.requests.length === 2)
+  abort.abort(new Error("sampling cancelled"))
+
+  await expect(sampling).rejects.toThrow("cancelled")
+  expect(provider.requests[1]!.signal.aborted).toBe(true)
   db.close()
 })
 
@@ -347,5 +512,54 @@ function fakeMcpClient(input: {
       input.onHandlers?.(handlers)
     },
     async close() {},
+  }
+}
+
+function withSamplingMcpConfig(toolPermissions: { match: string; decision: "allow" | "deny" | "ask" }[] = []) {
+  return {
+    ...defaultConfig,
+    mcp: {
+      sampler: {
+        enabled: true,
+        transport: "stdio" as const,
+        command: "fake",
+        args: [],
+        env: {},
+        headers: {},
+        toolPermissions,
+        startupTimeoutMs: 10_000,
+      },
+    },
+  }
+}
+
+async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 2_000): Promise<void> {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    if (await predicate()) return
+    await Bun.sleep(10)
+  }
+  throw new Error("timed out waiting for condition")
+}
+
+function createBlockingProvider(): ModelProvider & { requests: ModelRequest[] } {
+  const requests: ModelRequest[] = []
+  return {
+    id: "fake",
+    name: "Blocking Fake",
+    requests,
+    async listModels(): Promise<readonly ModelInfo[]> {
+      return [{ id: "test", supportsTools: true }]
+    },
+    async *stream(request: ModelRequest, _context: ModelContext): AsyncIterable<ModelEvent> {
+      requests.push(request)
+      if (requests.length === 1) {
+        yield* simpleAssistantEvents
+        return
+      }
+      await new Promise((_, reject) => {
+        request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true })
+      })
+    },
   }
 }

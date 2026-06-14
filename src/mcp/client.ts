@@ -213,6 +213,7 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
   })
 
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+  const hostRequests = new Map<string | number, AbortController>()
   const changed = new Map<ListChangedKind, () => void>()
   let hostHandlers: McpHostHandlers = {}
   let id = 0
@@ -233,8 +234,11 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
         })
         return
       }
-      void handler(new AbortController().signal).then(
+      const controller = new AbortController()
+      hostRequests.set(requestId, controller)
+      void handler(controller.signal).then(
         (roots) => {
+          hostRequests.delete(requestId)
           const resultRoots = roots.map((r) => {
             const uri = r.uri.includes("://") ? r.uri : `file://${r.uri}`
             return { uri, name: r.name }
@@ -242,12 +246,13 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
           transport.send({ jsonrpc: "2.0", id: requestId, result: { roots: resultRoots } })
         },
         (err) => {
+          hostRequests.delete(requestId)
           transport.send({
             jsonrpc: "2.0",
             id: requestId,
             error: {
               code: -32603,
-              message: err instanceof Error ? err.message : String(err),
+              message: redactText(err instanceof Error ? err.message : String(err)),
             },
           })
         },
@@ -265,17 +270,21 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
         })
         return
       }
-      void handler("", params, new AbortController().signal).then(
+      const controller = new AbortController()
+      hostRequests.set(requestId, controller)
+      void handler(server.id, params, controller.signal).then(
         (result) => {
+          hostRequests.delete(requestId)
           transport.send({ jsonrpc: "2.0", id: requestId, result })
         },
         (err) => {
+          hostRequests.delete(requestId)
           transport.send({
             jsonrpc: "2.0",
             id: requestId,
             error: {
               code: -32603,
-              message: err instanceof Error ? err.message : String(err),
+              message: redactText(err instanceof Error ? err.message : String(err)),
             },
           })
         },
@@ -293,17 +302,21 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
         })
         return
       }
-      void handler("", params, new AbortController().signal).then(
+      const controller = new AbortController()
+      hostRequests.set(requestId, controller)
+      void handler(server.id, params, controller.signal).then(
         (result) => {
+          hostRequests.delete(requestId)
           transport.send({ jsonrpc: "2.0", id: requestId, result })
         },
         (err) => {
+          hostRequests.delete(requestId)
           transport.send({
             jsonrpc: "2.0",
             id: requestId,
             error: {
               code: -32603,
-              message: err instanceof Error ? err.message : String(err),
+              message: redactText(err instanceof Error ? err.message : String(err)),
             },
           })
         },
@@ -334,6 +347,15 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
     }
     if (method === LIST_CHANGED_METHODS.roots) {
       changed.get("roots")?.()
+      return
+    }
+    if (method === "notifications/cancelled") {
+      const params = (message.params as Record<string, unknown> | undefined) ?? {}
+      const requestId = params.requestId as string | number | undefined
+      if (requestId !== undefined) {
+        hostRequests.get(requestId)?.abort(new Error(String(params.reason ?? "MCP request cancelled")))
+        hostRequests.delete(requestId)
+      }
       return
     }
     if (message.id === undefined) return
@@ -418,6 +440,8 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
       changed.set("tools", callback)
     },
     async close() {
+      for (const controller of hostRequests.values()) controller.abort(new Error("MCP client closed"))
+      hostRequests.clear()
       for (const [requestId, waiter] of pending) {
         pending.delete(requestId)
         transport

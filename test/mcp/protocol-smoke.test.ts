@@ -254,6 +254,79 @@ test("roots/list handler returns workspace roots when server requests", async ()
   }
 }, 15_000)
 
+test("sampling/createMessage handler receives configured server id", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  let capturedServerId = ""
+  try {
+    client.setHostHandlers({
+      samplingCreateMessage: async (serverId) => {
+        capturedServerId = serverId
+        return {
+          model: "test",
+          stopReason: "endTurn",
+          role: "assistant",
+          content: { type: "text", text: "sampled" },
+        }
+      },
+    })
+    await client.initialize(
+      {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: { sampling: {} },
+        clientInfo: { name: "oc2-smoke" },
+      },
+      controller.signal,
+    )
+    const result = await client.callTool("request_sampling", {}, controller.signal)
+    expect(result).toBeDefined()
+    expect(result.isError).toBeFalsy()
+    expect(capturedServerId).toBe("fake")
+  } finally {
+    await client.close()
+  }
+}, 15_000)
+
+test("sampling/createMessage handler signal aborts on server cancellation notification", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  let aborted = false
+  try {
+    client.setHostHandlers({
+      samplingCreateMessage: async (_serverId, _params, signal) => {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted = true
+              resolve()
+            },
+            { once: true },
+          )
+        })
+        return {
+          model: "test",
+          stopReason: "refusal",
+          role: "assistant",
+          content: { type: "text", text: "cancelled" },
+        }
+      },
+    })
+    await client.initialize(
+      {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: { sampling: {} },
+        clientInfo: { name: "oc2-smoke" },
+      },
+      controller.signal,
+    )
+    await client.callTool("request_sampling_cancel", {}, controller.signal)
+    expect(aborted).toBe(true)
+  } finally {
+    await client.close()
+  }
+}, 15_000)
+
 test("close() resolves cleanly after initialize", async () => {
   const client = (await createMcpClient(stdioServer())) as McpClient
   const controller = new AbortController()

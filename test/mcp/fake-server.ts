@@ -60,6 +60,16 @@ async function main() {
                   description: "Sends roots/list to client and returns response",
                   inputSchema: { type: "object", properties: {} },
                 },
+                {
+                  name: "request_sampling",
+                  description: "Sends sampling/createMessage to client and returns response",
+                  inputSchema: { type: "object", properties: {} },
+                },
+                {
+                  name: "request_sampling_cancel",
+                  description: "Sends sampling/createMessage then cancellation to client",
+                  inputSchema: { type: "object", properties: {} },
+                },
               ],
             },
           })
@@ -86,6 +96,47 @@ async function main() {
                 `${JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "roots/list", params: {} })}\n`,
               ),
             )
+            continue
+          }
+          if (toolName === "request_sampling") {
+            const requestId = nextRequestId++
+            pendingRequests.set(requestId, message.id as number)
+            Bun.stdout.write(
+              encoder.encode(
+                `${JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: requestId,
+                  method: "sampling/createMessage",
+                  params: { messages: [{ role: "user", content: { type: "text", text: "sample" } }] },
+                })}\n`,
+              ),
+            )
+            continue
+          }
+          if (toolName === "request_sampling_cancel") {
+            const requestId = nextRequestId++
+            pendingRequests.set(requestId, message.id as number)
+            Bun.stdout.write(
+              encoder.encode(
+                `${JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: requestId,
+                  method: "sampling/createMessage",
+                  params: { messages: [{ role: "user", content: { type: "text", text: "cancel sample" } }] },
+                })}\n`,
+              ),
+            )
+            setTimeout(() => {
+              Bun.stdout.write(
+                encoder.encode(
+                  `${JSON.stringify({
+                    jsonrpc: "2.0",
+                    method: "notifications/cancelled",
+                    params: { requestId, reason: "server cancelled sampling" },
+                  })}\n`,
+                ),
+              )
+            }, 10)
             continue
           }
           write({
