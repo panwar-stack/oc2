@@ -2,7 +2,7 @@
 
 `oc2` is a local-first TypeScript/Bun coding harness built from `SPEC.md`.
 
-The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, a minimal interactive TUI shell, and the first MCP runtime slice are present, while subagents and agent teams are not available yet.
+The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, a minimal interactive TUI shell, the first MCP runtime slice, and subagent runtime primitives are present, while agent teams are not available yet.
 
 ## Current Status
 
@@ -20,11 +20,12 @@ Implemented foundations:
 - Main agent profile resolution, model context construction, model/tool loop execution, and persisted one-shot session runs.
 - Minimal terminal TUI shell with projected runtime state, prompt submission, streaming assistant text, tool status display, resume, cancellation, and side-panel toggle.
 - MCP config, status events, startup/test lifecycle, tool discovery, `tools/list_changed` refresh, namespaced MCP tool registration, and normal tool-executor invocation with permissions.
+- Subagent service, permission derivation, and tool adapter for child sessions with `parentSessionId`, bounded scheduling, timeout/cancellation propagation, and recursive delegation disabled by default.
 - Logging redaction helpers and test fixtures.
 
 Not implemented yet:
 
-- Subagents, agent teams, daemon teammates, and team reports.
+- Agent teams, daemon teammates, and team reports.
 - Full MCP OAuth callback flow. OAuth-required servers are surfaced as `auth_required` until that later slice is implemented.
 
 See `SPEC.md` and `IMPLEMENTATION_PLAN.md` for the target architecture and remaining slices.
@@ -70,10 +71,11 @@ Design principles from the spec that are already reflected in the code:
 - `src/scheduler` implements bounded async task scheduling with priorities, per-kind limits, cancellation propagation, timeouts, snapshots, and scheduler events. It is the planned coordination primitive for model, tool, MCP, subagent, and team-member work.
 - `src/tools` defines the built-in tool contract, registry, permission handling, workspace-root checks, output shaping, and safe built-ins for file search, file IO, shell execution, patching, web fetches, questions, and todo tracking. MCP tools are materialized into the same registry and executor path.
 - `src/mcp` manages canonical MCP config entries, stdio/HTTP/SSE-style client startup, server statuses, tool discovery, `tools/list_changed` refresh, auth-required status detection, and conversion of MCP tools into namespaced oc2 tools.
+- `src/subagent` creates child sessions for subagent profiles, derives child tool permissions from parent denies and child allows, disables recursive subagent/team tools by default, and exposes the runtime through a normal `subagent` tool definition.
 - `src/tui` contains the minimal terminal UI shell, keymap, projected UI state, and small text-rendered session components. It renders from runtime event state instead of polling runtime internals.
 - `src/testing` contains shared fixtures used by tests.
 
-The spec also calls for future top-level areas such as `runtime`, `subagent`, `team`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, MCP, and TUI primitives.
+The spec also calls for future top-level areas such as `runtime`, `team`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, MCP, subagent, and TUI primitives.
 
 ## CLI
 

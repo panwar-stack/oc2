@@ -41,6 +41,9 @@ export * from "./mcp/config"
 export * from "./mcp/mcp-service"
 export * from "./mcp/status"
 export * from "./mcp/tools"
+export * from "./subagent/permissions"
+export * from "./subagent/subagent-service"
+export * from "./subagent/subagent-tool"
 export { ToolExecutionError, toolError, toModelToolDefinition } from "./tools/tool"
 export type {
   ToolContext,

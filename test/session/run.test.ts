@@ -122,6 +122,33 @@ test("per-run disabled tools are enforced during execution", async () => {
   db.close()
 })
 
+test("run exposes subagent tool through the default runtime registry", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const config = {
+    ...defaultConfig,
+    agents: { worker: { mode: "subagent" as const, allowedTools: [], maxIterations: 20 } },
+  }
+  const provider = createScriptedModelProvider([
+    [
+      {
+        type: "tool-call",
+        call: { id: "subagent-1", name: "subagent", arguments: { agentId: "worker", prompt: "child task" } },
+      },
+      { type: "done" },
+    ],
+    simpleAssistantEvents,
+    simpleAssistantEvents,
+  ])
+  const service = createSessionRunService({ config, cwd: "/repo", database: db, providers: [provider] })
+
+  const result = await service.run({ prompt: "delegate", model: "fake/test" })
+
+  expect(result.toolCalls).toEqual([{ id: "subagent-1", name: "subagent", input: { agentId: "worker", prompt: "child task" }, ok: true }])
+  expect(provider.requests[0]?.tools.map((tool) => tool.name)).toContain("subagent")
+  expect(service.sessions.listSessions().some((session) => session.parentSessionId === result.sessionId)).toBe(true)
+  db.close()
+})
+
 test("fatal model error leaves session resumable", async () => {
   const db = openOc2Database({ path: ":memory:" })
   const failing = {

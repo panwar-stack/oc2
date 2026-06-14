@@ -80,17 +80,20 @@ export class ToolExecutionError extends Error implements ToolErrorShape {
   readonly code: string
   readonly recoverable: boolean
   readonly details?: Record<string, unknown>
+  readonly runtimeError?: RuntimeErrorShape
 
   constructor(input: {
     readonly code: string
     readonly message: string
     readonly recoverable?: boolean
     readonly details?: Record<string, unknown>
+    readonly runtimeError?: RuntimeErrorShape
   }) {
     super(input.message)
     this.code = input.code
     this.recoverable = input.recoverable ?? true
     this.details = input.details
+    this.runtimeError = input.runtimeError
   }
 
   toJSON(): ToolErrorShape {
@@ -100,6 +103,7 @@ export class ToolExecutionError extends Error implements ToolErrorShape {
       message: this.message,
       recoverable: this.recoverable,
       details: this.details,
+      runtimeError: this.runtimeError,
     }
   }
 }

@@ -14,6 +14,8 @@ import { createSessionService, type SessionService } from "./session-service"
 import { createBuiltInToolRegistry } from "../tools/builtins/index"
 import { createToolExecutor } from "../tools/execution"
 import type { ToolRegistry } from "../tools/registry"
+import { createSubAgentService } from "../subagent/subagent-service"
+import { createSubAgentTool } from "../subagent/subagent-tool"
 
 export interface SessionRunServiceOptions {
   readonly config: Oc2Config
@@ -137,6 +139,18 @@ export class SessionRunService {
       events: this.events,
       config: agentConfig,
     })
+    this.registry.register(
+      createSubAgentTool({
+        service: createSubAgentService({
+          config: agentConfig,
+          sessions: this.sessions,
+          models: this.models,
+          registry: this.registry,
+          scheduler: this.scheduler,
+          events: this.events,
+        }),
+      }),
+    )
     const agent = new MainAgent({ sessions: this.sessions, models: this.models, registry: this.registry, tools })
     try {
       const result = await agent.run({
