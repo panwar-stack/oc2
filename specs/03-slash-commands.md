@@ -5,6 +5,7 @@
 Add a slash command system to the oc2 TUI that mirrors opencode's prompt-based command dispatch (`/review`, `/clarify`, `/help`, etc.), wire up the 5 existing skill markdown files in `src/skills/` that have no loader tool, and expose existing-but-unwired features (session listing, memory logs, agent panel toggle, missing CLI commands, keyboard shortcuts).
 
 The slash system has two dispatch paths:
+
 1. **TUI-local commands** — keyboard shortcuts and UI state changes handled entirely client-side (exit, clear, help, panel toggles)
 2. **Backend commands** — named prompt templates that expand via `$ARGUMENTS` substitution and inject into the AI model loop (review, clarify, spec-planner, spec-implement, team-report, init)
 
@@ -88,8 +89,8 @@ readonly showSessionList: boolean    // Whether session switcher view is visible
 
 ```ts
 export interface SlashMatch {
-  readonly name: string          // e.g., "review"
-  readonly display: string       // e.g., "/review"
+  readonly name: string // e.g., "review"
+  readonly display: string // e.g., "/review"
   readonly description: string
   readonly source: "tui" | "builtin" | "user" | "skill" | "mcp"
 }
@@ -124,7 +125,9 @@ When `slashActive` is true, the `SlashSuggestions` component renders below `Prom
 ```ts
 // src/tui/components/SlashSuggestions.tsx
 export function SlashSuggestions({
-  matches, width, active,
+  matches,
+  width,
+  active,
 }: {
   readonly matches: readonly SlashMatch[]
   readonly width?: number
@@ -133,6 +136,7 @@ export function SlashSuggestions({
 ```
 
 Rendering behavior:
+
 - Only unique commands by name (deduplicate across sources).
 - Cap display at 5 matches. Show `/... and N more` if truncated.
 - Truncate descriptions to fit within terminal `width` (default 80).
@@ -141,6 +145,7 @@ Rendering behavior:
 - Slash suggestions **replace** the side panel area when visible (mutually exclusive with side panel). When `slashActive` is true, `SessionView` renders `SlashSuggestions` instead of `SidePanel`.
 
 Example output:
+
 ```
 Prompt> /rev
   /review  review changes [builtin]
@@ -148,6 +153,7 @@ Prompt> /rev
 ```
 
 When `slashQuery` is empty (input is `/`), show all commands:
+
 ```
 Prompt> /
   /review   review changes [builtin]
@@ -159,13 +165,13 @@ Prompt> /
 
 ### Keyboard Shortcuts (New & Updated)
 
-| Key | Action | Implementation |
-|-----|--------|---------------|
-| `Ctrl+L` | Clear visible messages | Add `clear-messages` action to keymap; new `clearMessages()` state reducer |
-| `Ctrl+R` | Show session switcher | Add `session-switcher` action; TUI state flag `showSessionList` |
-| `Ctrl+A` | Toggle agent panel | Wire existing `toggleAgentPanel()` to `Ctrl+A` (`\u0001`) |
+| Key         | Action                  | Implementation                                                                      |
+| ----------- | ----------------------- | ----------------------------------------------------------------------------------- |
+| `Ctrl+L`    | Clear visible messages  | Add `clear-messages` action to keymap; new `clearMessages()` state reducer          |
+| `Ctrl+R`    | Show session switcher   | Add `session-switcher` action; TUI state flag `showSessionList`                     |
+| `Ctrl+A`    | Toggle agent panel      | Wire existing `toggleAgentPanel()` to `Ctrl+A` (`\u0001`)                           |
 | `Alt+Enter` | Insert newline in input | Detect escape prefix `\e` + `\r`/`\n` in `parseTuiKey()`, return `"newline"` action |
-| `Tab` | Complete slash command | When `slashActive`, complete to first match; add `tab` action type |
+| `Tab`       | Complete slash command  | When `slashActive`, complete to first match; add `tab` action type                  |
 
 **Technical note on Alt+Enter:** In raw terminal mode, plain Enter sends `\r` (0x0D). Most terminals do NOT distinguish Shift+Enter from Enter at the byte level. Alt+Enter reliably sends `\e\r` or `\e\n` (escape prefix), which is detectable in the existing character-by-character parser. Do not attempt Shift+Enter detection.
 
@@ -175,14 +181,14 @@ Prompt> /
 
 Loaded at registry creation time. Each maps to a skill file reference or an inline template:
 
-| Command | Template Source | Template Content | Subtask |
-|---------|---------------|------------------|---------|
-| `review` | Inline | `"Review the following code changes for correctness, security, and style issues. Focus on the diff provided below.\n\n$ARGUMENTS"` | `true` |
-| `clarify` | `skill:clarify` (loads `src/skills/clarify.md`) | Skill file content at resolve time | `false` |
-| `spec-planner` | `skill:spec-planner` | Skill file content at resolve time | `false` |
-| `spec-implement` | `skill:spec-implement` | Skill file content at resolve time | `false` |
-| `team-report` | `skill:team-report` | Skill file content at resolve time | `false` |
-| `init` | `skill:initialize` | Skill file content at resolve time | `false` |
+| Command          | Template Source                                 | Template Content                                                                                                                   | Subtask |
+| ---------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `review`         | Inline                                          | `"Review the following code changes for correctness, security, and style issues. Focus on the diff provided below.\n\n$ARGUMENTS"` | `true`  |
+| `clarify`        | `skill:clarify` (loads `src/skills/clarify.md`) | Skill file content at resolve time                                                                                                 | `false` |
+| `spec-planner`   | `skill:spec-planner`                            | Skill file content at resolve time                                                                                                 | `false` |
+| `spec-implement` | `skill:spec-implement`                          | Skill file content at resolve time                                                                                                 | `false` |
+| `team-report`    | `skill:team-report`                             | Skill file content at resolve time                                                                                                 | `false` |
+| `init`           | `skill:initialize`                              | Skill file content at resolve time                                                                                                 | `false` |
 
 ### Skill File Loading
 
@@ -222,6 +228,7 @@ aliases: ["security-review"]
 agent: "security-agent"
 subtask: true
 ---
+
 Review the following changes for security vulnerabilities: $ARGUMENTS
 ```
 
@@ -235,18 +242,18 @@ Leave config-inline command definitions and MCP prompt commands to future work. 
 
 ### CLI Commands
 
-| New/Old | Command | Uses | File |
-|----------|---------|------|------|
-| New | `oc2 sessions list` | `SessionService.listSessions()` | `src/cli/commands.ts`, `src/cli/index.ts` |
-| Missing | `oc2 tools enable <name>` | Config set via `setJsoncPath()`, path `tools.<name>.enabled` | `src/cli/commands.ts`, `src/cli/index.ts` |
-| Missing | `oc2 tools disable <name>` | Config set via `setJsoncPath()`, path `tools.<name>.enabled` | `src/cli/commands.ts`, `src/cli/index.ts` |
-| New | `oc2 memory list [--repository <path>]` | `RepositoryMemoryRepository.listRetrievalLogs(cwd)` | `src/cli/commands.ts`, `src/cli/index.ts` |
-| Missing | `oc2 run ... --team` | Pass team flag through to `SessionRunService` | `src/cli/commands.ts`, `src/session/run.ts` |
-| Missing | `oc2 run ... --timeout <ms>` | Pass to `RunPromptInput.timeoutMs` | `src/cli/commands.ts`, `src/session/run.ts` |
-| Missing | `oc2 run ... --max-concurrency <n>` | Pass to `RunPromptInput.maxConcurrency` | `src/cli/commands.ts`, `src/session/run.ts` |
-| Missing | `oc2 resume <id> --tui` | Launch TUI for existing session without `--run` | `src/cli/commands.ts`, `src/cli/index.ts` |
-| — | `oc2 run ... --provider <id>` | **Removed** — redundant with `--model <provider/model>` which already encodes provider; `parseModel()` at `run.ts:221` splits on `/` | — |
-| — | `oc2 run ... --no-tui` | **Removed** — CLI is already non-interactive; no `run` code path invokes TUI | — |
+| New/Old | Command                                 | Uses                                                                                                                                 | File                                        |
+| ------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| New     | `oc2 sessions list`                     | `SessionService.listSessions()`                                                                                                      | `src/cli/commands.ts`, `src/cli/index.ts`   |
+| Missing | `oc2 tools enable <name>`               | Config set via `setJsoncPath()`, path `tools.<name>.enabled`                                                                         | `src/cli/commands.ts`, `src/cli/index.ts`   |
+| Missing | `oc2 tools disable <name>`              | Config set via `setJsoncPath()`, path `tools.<name>.enabled`                                                                         | `src/cli/commands.ts`, `src/cli/index.ts`   |
+| New     | `oc2 memory list [--repository <path>]` | `RepositoryMemoryRepository.listRetrievalLogs(cwd)`                                                                                  | `src/cli/commands.ts`, `src/cli/index.ts`   |
+| Missing | `oc2 run ... --team`                    | Pass team flag through to `SessionRunService`                                                                                        | `src/cli/commands.ts`, `src/session/run.ts` |
+| Missing | `oc2 run ... --timeout <ms>`            | Pass to `RunPromptInput.timeoutMs`                                                                                                   | `src/cli/commands.ts`, `src/session/run.ts` |
+| Missing | `oc2 run ... --max-concurrency <n>`     | Pass to `RunPromptInput.maxConcurrency`                                                                                              | `src/cli/commands.ts`, `src/session/run.ts` |
+| Missing | `oc2 resume <id> --tui`                 | Launch TUI for existing session without `--run`                                                                                      | `src/cli/commands.ts`, `src/cli/index.ts`   |
+| —       | `oc2 run ... --provider <id>`           | **Removed** — redundant with `--model <provider/model>` which already encodes provider; `parseModel()` at `run.ts:221` splits on `/` | —                                           |
+| —       | `oc2 run ... --no-tui`                  | **Removed** — CLI is already non-interactive; no `run` code path invokes TUI                                                         | —                                           |
 
 ### CLI Command Parsing Changes
 
@@ -292,9 +299,9 @@ In `src/session/run.ts`:
     readonly roots?: readonly string[]
     readonly signal?: AbortSignal
     // NEW:
-    readonly team?: boolean       // When true, include team tools in run
-    readonly timeoutMs?: number   // Override config.runtime.defaultTimeoutMs
-    readonly maxConcurrency?: number  // Override scheduler concurrency limits
+    readonly team?: boolean // When true, include team tools in run
+    readonly timeoutMs?: number // Override config.runtime.defaultTimeoutMs
+    readonly maxConcurrency?: number // Override scheduler concurrency limits
   }
   ```
 - In `SessionRunService.run()`: if `input.team` is true, ensure team tools are registered (they are already always registered at `run.ts:172-174`, so this flag controls whether team-related system instructions are included in the agent prompt)
@@ -338,6 +345,7 @@ In `src/tui/app.tsx`:
 ### TUI Rendering Changes
 
 In `src/tui/components/SlashSuggestions.tsx` (new component):
+
 - Function signature: `SlashSuggestions({ matches, width, active }): string`
 - Returns empty string when `active` is false
 - Renders deduplicated matches as `"  /<name>  <description>"` lines, capped at 5
@@ -345,11 +353,13 @@ In `src/tui/components/SlashSuggestions.tsx` (new component):
 - Descriptions truncated to fit `width - 4` (accounting for `"  "` prefix)
 
 In `src/tui/components/SessionView.tsx`:
+
 - Accept `slashState: { active, matches }` and pass to rendering
 - When `slashActive` is true, render `SlashSuggestions` **instead of** `SidePanel` (mutual exclusion)
 - Pass `width` from options to SlashSuggestions
 
 In `src/tui/components/PromptInput.tsx`:
+
 - No changes needed; slash suggestions are rendered as a separate component below
 
 ## Implementation Slices
@@ -393,18 +403,23 @@ Reviewer must verify: (a) skill tool reads from `src/skills/` and is bounded to 
   - Wire `Ctrl+A` to existing `toggleAgentPanel()` at `state.ts:396`
   - Confirm `projectTuiEvent` needs no changes (slash state is TUI-local)
 - Create `src/tui/components/SlashSuggestions.tsx`:
+
   ```ts
   export function SlashSuggestions({
-    matches, width, active,
+    matches,
+    width,
+    active,
   }: {
     readonly matches: readonly SlashMatch[]
     readonly width?: number
     readonly active: boolean
   }): string
   ```
+
   - Returns empty string when `active` is false
   - Deduplicates by name, caps at 5 matches, truncates descriptions to `width - 4`
   - Shows `"[ESC to cancel]"` footer
+
 - Modify `src/tui/components/SessionView.tsx`:
   - When `slashActive` is true, render `SlashSuggestions` instead of `SidePanel` (mutual exclusion)
   - Pass `width` from options
@@ -436,8 +451,8 @@ Reviewer must verify: (a) slash detection handles `/` at position 0 only (not mi
 - Add `command(input: CommandInput)` method to `SessionRunService` in `src/session/run.ts`:
   ```ts
   export interface CommandInput {
-    readonly name: string        // e.g., "review"
-    readonly arguments: string   // everything after command name
+    readonly name: string // e.g., "review"
+    readonly arguments: string // everything after command name
     readonly sessionId: string
     readonly model?: string
     readonly agent?: string

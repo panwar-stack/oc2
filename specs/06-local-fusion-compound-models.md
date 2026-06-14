@@ -59,15 +59,15 @@ type ProviderConfig =
   | { type: "local"; baseURL: string; apiKeyEnv?: string; allowUnauthenticated?: boolean }
 
 interface FusionModelRef {
-  provider: string       // key into config.providers
+  provider: string // key into config.providers
   model: string
   temperature?: number
   maxTokens?: number
 }
 
 interface FusionPanelConfig extends FusionModelRef {
-  id?: string            // defaults to "panel-<index>"
-  role?: string          // brief role description injected into panel system prompt
+  id?: string // defaults to "panel-<index>"
+  role?: string // brief role description injected into panel system prompt
   promptPrefix?: string
   timeoutMs?: number
   maxIterations?: number
@@ -75,19 +75,19 @@ interface FusionPanelConfig extends FusionModelRef {
 
 interface FusionToolPolicyConfig {
   mode: "inherit" | "read-only" | "none"
-  allow?: string[]       // tool names to explicitly allow (applied BEFORE deny rules)
-  deny?: string[]        // tool names to explicitly deny (applied AFTER allow rules)
+  allow?: string[] // tool names to explicitly allow (applied BEFORE deny rules)
+  deny?: string[] // tool names to explicitly deny (applied AFTER allow rules)
 }
 
 interface FusionRecipeConfig {
   description?: string
-  panels: FusionPanelConfig[]       // at least 1
+  panels: FusionPanelConfig[] // at least 1
   judge: FusionModelRef
   synthesizer: FusionModelRef
-  minSuccessfulPanels?: number      // default: 1
-  maxParallelPanels?: number        // default: panels.length
+  minSuccessfulPanels?: number // default: 1
+  maxParallelPanels?: number // default: panels.length
   timeoutMs?: number
-  toolPolicy?: FusionToolPolicyConfig  // default: { mode: "inherit" }
+  toolPolicy?: FusionToolPolicyConfig // default: { mode: "inherit" }
 }
 ```
 
@@ -95,8 +95,8 @@ interface FusionRecipeConfig {
 
 ```ts
 runtime: {
-  maxConcurrentModels: number           // default: 4
-  maxConcurrentFusionPanels: number     // default: 4
+  maxConcurrentModels: number // default: 4
+  maxConcurrentFusionPanels: number // default: 4
   // ...existing fields preserved
 }
 ```
@@ -130,17 +130,17 @@ runtime: {
     "openrouter": {
       "type": "openai-compatible",
       "baseURL": "https://openrouter.ai/api/v1",
-      "apiKeyEnv": "OPENROUTER_API_KEY"
+      "apiKeyEnv": "OPENROUTER_API_KEY",
     },
     "openai": { "type": "openai", "apiKeyEnv": "OPENAI_API_KEY" },
-    "local": { "type": "local", "baseURL": "http://localhost:11434/v1", "allowUnauthenticated": true }
+    "local": { "type": "local", "baseURL": "http://localhost:11434/v1", "allowUnauthenticated": true },
   },
   "fusion": {
     "research": {
       "panels": [
         { "provider": "openrouter", "model": "google/gemini-3-flash", "role": "fast web-oriented researcher" },
         { "provider": "openrouter", "model": "moonshotai/kimi-k2.6", "role": "long-context critic" },
-        { "provider": "local", "model": "deepseek-v4-pro", "role": "code and shell-focused analyst" }
+        { "provider": "local", "model": "deepseek-v4-pro", "role": "code and shell-focused analyst" },
       ],
       "judge": { "provider": "openrouter", "model": "anthropic/claude-sonnet-4.5" },
       "synthesizer": { "provider": "openai", "model": "gpt-5.5" },
@@ -148,11 +148,11 @@ runtime: {
       "maxParallelPanels": 3,
       "toolPolicy": {
         "mode": "inherit",
-        "deny": ["write", "edit", "apply_patch", "bash"]
-      }
-    }
+        "deny": ["write", "edit", "apply_patch", "bash"],
+      },
+    },
   },
-  "runtime": { "maxConcurrentModels": 4, "maxConcurrentFusionPanels": 4 }
+  "runtime": { "maxConcurrentModels": 4, "maxConcurrentFusionPanels": 4 },
 }
 ```
 
@@ -166,7 +166,7 @@ interface FusionSessionMetadata {
     runId: string
     recipeId: string
     stage: "panel" | "judge" | "synthesizer"
-    panelId?: string       // set only for panel children
+    panelId?: string // set only for panel children
     provider: string
     model: string
   }
@@ -183,11 +183,11 @@ interface FusionJudgeReport {
   uniqueInsights: { panelId: string; insight: string }[]
   blindSpots: string[]
   failedPanels: { panelId: string; error: string }[]
-  rawText: string            // always preserved verbatim
+  rawText: string // always preserved verbatim
 }
 ```
 
-If the judge model call succeeds but the response text cannot be parsed into the structured shape, the `FusionJudgeReport` is populated with `rawText` and empty/default arrays for all structured fields. This is non-fatal; synthesis proceeds. Judge *failure* means the model call itself failed (network error, timeout, cancellation, etc.) — only that is fatal.
+If the judge model call succeeds but the response text cannot be parsed into the structured shape, the `FusionJudgeReport` is populated with `rawText` and empty/default arrays for all structured fields. This is non-fatal; synthesis proceeds. Judge _failure_ means the model call itself failed (network error, timeout, cancellation, etc.) — only that is fatal.
 
 ### Panel result shape
 
@@ -292,16 +292,16 @@ Share the recursive tool name constant list between `src/subagent/permissions.ts
 
 ### Failure behavior
 
-| Condition | Parent status | Parent message | RuntimeError |
-|---|---|---|---|
-| Unknown recipe | `failed` | Failure text with recipe ID | `invalid_task`, recoverable: true |
-| `< minSuccessfulPanels` complete | `failed` | Listing each failed panel and its error | `task_failed`, recoverable: true |
-| Judge model call fails | `failed` | Judge error text | `task_failed`, cause from provider |
-| Judge response valid (even with empty structured fields) | proceed | — | — |
-| Judge response unparseable | proceed; `rawText` preserved, empty structured arrays | — | — |
-| Synthesizer model call fails | `failed` | Synthesizer error text | `task_failed`, cause from provider |
-| Parent cancellation | `cancelled` | "Run was cancelled" | `cancelled`, recoverable: true |
-| Overall timeout | `failed` | "Fusion run timed out after Nms" | `timed_out`, recoverable: true |
+| Condition                                                | Parent status                                         | Parent message                          | RuntimeError                       |
+| -------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------- | ---------------------------------- |
+| Unknown recipe                                           | `failed`                                              | Failure text with recipe ID             | `invalid_task`, recoverable: true  |
+| `< minSuccessfulPanels` complete                         | `failed`                                              | Listing each failed panel and its error | `task_failed`, recoverable: true   |
+| Judge model call fails                                   | `failed`                                              | Judge error text                        | `task_failed`, cause from provider |
+| Judge response valid (even with empty structured fields) | proceed                                               | —                                       | —                                  |
+| Judge response unparseable                               | proceed; `rawText` preserved, empty structured arrays | —                                       | —                                  |
+| Synthesizer model call fails                             | `failed`                                              | Synthesizer error text                  | `task_failed`, cause from provider |
+| Parent cancellation                                      | `cancelled`                                           | "Run was cancelled"                     | `cancelled`, recoverable: true     |
+| Overall timeout                                          | `failed`                                              | "Fusion run timed out after Nms"        | `timed_out`, recoverable: true     |
 
 ### Cancellation and timeout propagation
 
@@ -317,7 +317,7 @@ Share the recursive tool name constant list between `src/subagent/permissions.ts
 
 ### Resume semantics
 
-- `SessionRunService.run` currently parses `input.model` via `parseModel()` at `src/session/run.ts:96` but uses it only for *new* sessions. For resumed sessions (line 98-99), the persisted session's provider/model is used. Therefore `resume --model fusion/research` on a non-Fusion session will not route to Fusion.
+- `SessionRunService.run` currently parses `input.model` via `parseModel()` at `src/session/run.ts:96` but uses it only for _new_ sessions. For resumed sessions (line 98-99), the persisted session's provider/model is used. Therefore `resume --model fusion/research` on a non-Fusion session will not route to Fusion.
 - PR 1 changes: if `input.model` is provided and the resolved session's persisted `providerId` differs, reject with `RuntimeError` code `invalid_task` and message `"Cannot override model provider for a resumed session"`. This ensures Fusion runs must start from a new session. Leave model-only changes (same provider, different model) as future work.
 - `resume --run` on an existing Fusion parent session with no `--model` flag continues to route through `SessionRunService` normally; it will re-run Fusion because `session.providerId === "fusion"`.
 

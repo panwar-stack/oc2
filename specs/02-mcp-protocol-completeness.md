@@ -26,6 +26,7 @@ Use the official TypeScript MCP SDK if it reduces protocol risk, but keep the ex
 - Must treat roots as advisory protocol scope, not a security boundary.
 - Must not implement generic MCP server hosting in first pass; this spec is for `oc2` as an MCP host/client.
 - Must not add programmatic tool calling/code-mode in first pass; it requires a separate sandbox security spec.
+- Commit after each PR is done
 
 ## Protocol Surface
 
