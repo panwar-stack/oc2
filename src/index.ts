@@ -22,6 +22,11 @@ export * from "./persistence/repositories/mcp"
 export * from "./session/message"
 export * from "./session/session-service"
 export * from "./session/transcript"
+export * from "./model/provider"
+export * from "./model/stream"
+export * from "./model/fake-provider"
+export * from "./model/ai-sdk-provider"
+export * from "./model/model-service"
 
 if (import.meta.main) {
   const result = await runCli()

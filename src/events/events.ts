@@ -80,7 +80,7 @@ export interface RuntimeEventMap {
   "session.updated": { readonly sessionId: string; readonly status?: string }
   "message.updated": { readonly sessionId: string; readonly messageId: string }
   "model.started": { readonly sessionId?: string; readonly taskId?: string; readonly model?: string }
-  "model.delta": { readonly sessionId?: string; readonly taskId?: string; readonly delta: string }
+  "model.delta": { readonly sessionId?: string; readonly taskId?: string; readonly delta: string; readonly modelEvent?: unknown }
   "model.completed": { readonly sessionId?: string; readonly taskId?: string }
   "model.failed": { readonly sessionId?: string; readonly taskId?: string; readonly error: RuntimeErrorShape }
   "tool.started": { readonly sessionId?: string; readonly taskId?: string; readonly toolName: string }
