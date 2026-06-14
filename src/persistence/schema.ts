@@ -1,5 +1,5 @@
 /** Current SQLite schema version mirrored into PRAGMA user_version. */
-export const CURRENT_SCHEMA_VERSION = 2
+export const CURRENT_SCHEMA_VERSION = 3
 
 /** Runtime statuses valid for persisted sessions and execution records. */
 export const SESSION_STATUSES = [

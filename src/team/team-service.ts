@@ -24,6 +24,7 @@ import type { ToolPermissionService } from "../tools/permissions"
 import type { ToolRegistry } from "../tools/registry"
 import { recipientKeysForSession, resolveTeamRecipients } from "./mailbox"
 import { buildTeamMemberPrompt } from "./prompts"
+import { buildTeamReport, type TeamReport } from "./team-report"
 
 export interface TeamServiceOptions {
   readonly config: Oc2Config
@@ -44,6 +45,7 @@ export interface TeamSpawnInput {
   readonly dependsOn?: readonly string[]
   readonly lifecycle?: TeamMemberLifecycle
   readonly daemonReportingCriteria?: string
+  readonly planMode?: boolean
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
 }
@@ -89,6 +91,7 @@ export class TeamService {
     })
     const blocked =
       dependencyIds.length > 0 && !dependencyIds.every((id) => this.teams.getMember(id)?.status === "completed")
+    const planMode = input.planMode ?? false
     if (!blocked && this.teams.activeMemberCount(team.id) >= this.options.config.runtime.maxConcurrentTeamMembers) {
       throw invalidTeam(`Team member limit reached for team ${team.id}`)
     }
@@ -110,17 +113,140 @@ export class TeamService {
       name: input.name,
       agentId: profile.id,
       rolePrompt: input.rolePrompt,
-      status: blocked ? "blocked" : "starting",
+      status: blocked ? "blocked" : planMode ? "plan_pending" : "starting",
       lifecycle,
       daemonReportingCriteria: input.daemonReportingCriteria,
       dependencyIds,
+      planMode,
     })
     this.options.events?.publish({
       type: "team.member.updated",
-      payload: { teamId: team.id, memberId: member.id, status: member.status },
+      payload: {
+        teamId: team.id,
+        memberId: member.id,
+        memberName: member.name,
+        status: member.status,
+        planStatus: member.planStatus,
+      },
     })
     if (!blocked) this.startMember(team, member, profile, input.timeoutMs, input.signal)
     return member
+  }
+
+  submitPlan(input: { readonly sessionId: string; readonly teamId?: string; readonly plan: string }): TeamMemberRecord {
+    const team = this.resolveTeam(input.sessionId, input.teamId)
+    if (team.status !== "active") throw invalidTeam(`Team is not active: ${team.id}`)
+    const member = this.teams.getMemberByNameOrSession(team.id, input.sessionId)
+    if (!member) throw invalidTeam(`Only a team member can submit a plan for team ${team.id}`)
+    if (!member.planMode) throw invalidTeam(`Team member ${member.name} is not in plan mode`)
+    if (member.planStatus === "approved") throw invalidTeam(`Team member ${member.name} already has an approved plan`)
+    const now = new Date().toISOString()
+    const updated = this.teams.updateMember(member.id, {
+      status: "plan_pending",
+      planStatus: "submitted",
+      planText: input.plan,
+      planSubmittedAt: now,
+      now,
+    })
+    this.mailbox.send({
+      teamId: team.id,
+      sender: member.name,
+      recipients: ["lead"],
+      body: `PLAN SUBMITTED by ${member.name}:\n\n${input.plan}`,
+      now,
+    })
+    this.options.events?.publish({
+      type: "team.member.updated",
+      payload: {
+        teamId: team.id,
+        memberId: member.id,
+        memberName: member.name,
+        status: updated.status,
+        planStatus: updated.planStatus,
+      },
+    })
+    return updated
+  }
+
+  decidePlan(input: {
+    readonly leadSessionId: string
+    readonly teamId?: string
+    readonly member: string
+    readonly decision: "approved" | "rejected"
+    readonly feedback?: string
+    readonly timeoutMs?: number
+    readonly signal?: AbortSignal
+  }): TeamMemberRecord {
+    const team = this.resolveLeadTeam(input.leadSessionId, input.teamId)
+    if (team.status !== "active") throw invalidTeam(`Team is not active: ${team.id}`)
+    const member = this.teams.getMemberByNameOrSession(team.id, input.member)
+    if (!member) throw invalidTeam(`Team member not found for plan decision: ${input.member}`)
+    if (!member.planMode) throw invalidTeam(`Team member ${member.name} is not in plan mode`)
+    if (member.planStatus !== "submitted" && input.decision === "approved") {
+      throw invalidTeam(`Team member ${member.name} has not submitted a plan`)
+    }
+    const now = new Date().toISOString()
+    const approved = input.decision === "approved"
+    const dependenciesComplete = member.dependencyIds.every((id) => this.teams.getMember(id)?.status === "completed")
+    const capacityAvailable =
+      this.teams.activeMemberCount(team.id) < this.options.config.runtime.maxConcurrentTeamMembers
+    const canStartNow = approved && dependenciesComplete && capacityAvailable
+    const planningRunActive = this.activeHandles.has(member.id)
+    const nextStatus = approved
+      ? canStartNow && !planningRunActive
+        ? "starting"
+        : planningRunActive
+          ? "plan_pending"
+          : "blocked"
+      : "plan_pending"
+    const updated = this.teams.updateMember(member.id, {
+      status: nextStatus,
+      planMode: !approved,
+      planStatus: input.decision,
+      planDecision: input.decision,
+      planFeedback: input.feedback,
+      planDecidedAt: now,
+      now,
+    })
+    this.mailbox.send({
+      teamId: team.id,
+      sender: "lead",
+      recipients: [member.name],
+      body: `PLAN ${approved ? "APPROVED" : "REJECTED"} for ${member.name}${input.feedback ? `:\n\n${input.feedback}` : "."}`,
+      now,
+    })
+    this.options.events?.publish({
+      type: "team.member.updated",
+      payload: {
+        teamId: team.id,
+        memberId: member.id,
+        memberName: member.name,
+        status: updated.status,
+        planStatus: updated.planStatus,
+      },
+    })
+    if (canStartNow && !planningRunActive) {
+      const profile = resolveSubAgentProfile(this.options.config, member.agentId)
+      if (!profile) throw invalidTeam(`Team agent profile not found or not team-enabled: ${member.agentId}`)
+      this.startMember(team, updated, profile, input.timeoutMs, input.signal)
+    }
+    return updated
+  }
+
+  report(input: { readonly sessionId: string; readonly teamId?: string }): TeamReport {
+    const team = this.resolveTeam(input.sessionId, input.teamId)
+    const report = buildTeamReport({
+      team,
+      members: this.teams.listMembers(team.id),
+      tasks: this.tasks.list(team.id),
+      messages: this.mailbox.list(team.id),
+      mailboxCounts: this.mailbox.counts(team.id),
+    })
+    this.options.events?.publish({
+      type: "team.updated",
+      payload: { teamId: team.id, status: team.status, reportAvailable: true },
+    })
+    return report
   }
 
   shutdown(input: { readonly leadSessionId: string; readonly teamId?: string }): TeamRecord {
@@ -249,22 +375,34 @@ export class TeamService {
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
   ): void {
+    const runWasPlanning = member.planMode && member.planStatus !== "approved"
     const handle = this.options.scheduler.schedule<MainAgentRunResult>({
       kind: "team-member",
       parent: signal,
       timeoutMs: timeoutMs ?? profile.timeoutMs ?? this.options.config.runtime.defaultTimeoutMs,
       run: async ({ signal: childSignal }) => {
+        const current = this.teams.getMember(member.id)
+        const planning = current?.planMode === true && current.planStatus !== "approved"
+        if (
+          current?.planMode &&
+          current.planStatus !== "approved" &&
+          current.status !== "plan_pending" &&
+          current.status !== "starting"
+        ) {
+          throw invalidTeam(`Team member ${member.name} cannot start before plan approval`)
+        }
         this.teams.updateMember(member.id, {
           status: "active",
           daemonState: member.lifecycle === "daemon" ? "running" : undefined,
         })
         this.options.events?.publish({
           type: "team.member.updated",
-          payload: { teamId: team.id, memberId: member.id, status: "active" },
+          payload: { teamId: team.id, memberId: member.id, memberName: member.name, status: "active" },
         })
         const session = this.options.sessions.sessions.tryStartRun(member.sessionId)
         if (!session) throw invalidTeam(`Team member session is already running: ${member.sessionId}`)
-        const result = await this.createAgent().run({
+        const runConfig = planning ? planModeConfig(this.options.config) : this.options.config
+        const result = await this.createAgent(runConfig).run({
           session,
           profile,
           prompt: buildTeamMemberPrompt({
@@ -274,7 +412,7 @@ export class TeamService {
             rolePrompt: member.rolePrompt,
             daemonReportingCriteria: member.daemonReportingCriteria,
           }),
-          config: this.options.config,
+          config: runConfig,
           signal: childSignal,
         })
         this.options.sessions.sessions.updateStatus(member.sessionId, result.status)
@@ -289,6 +427,37 @@ export class TeamService {
       const currentTeam = this.teams.get(team.id)
       if (!current || current.status === "cancelled" || currentTeam?.status === "shutdown") return
       const error = scheduled.error?.toJSON()
+      const latest = this.teams.getMember(member.id)
+      if (runWasPlanning) {
+        const updated = this.teams.updateMember(member.id, {
+          status: "plan_pending",
+          result: scheduled.value?.text,
+        })
+        this.options.events?.publish({
+          type: "team.member.updated",
+          payload: {
+            teamId: team.id,
+            memberId: member.id,
+            memberName: member.name,
+            status: updated.status,
+            planStatus: updated.planStatus,
+          },
+        })
+        const activeTeam = this.teams.get(team.id)
+        if (latest?.planStatus === "approved" && !latest.planMode && activeTeam?.status === "active") {
+          const approvedProfile = resolveSubAgentProfile(this.options.config, latest.agentId)
+          if (
+            approvedProfile &&
+            this.teams.activeMemberCount(team.id) < this.options.config.runtime.maxConcurrentTeamMembers
+          ) {
+            const starting = this.teams.updateMember(member.id, { status: "starting" })
+            this.startMember(team, starting, approvedProfile, undefined, undefined)
+          } else {
+            this.teams.updateMember(member.id, { status: "blocked" })
+          }
+        }
+        return
+      }
       const status =
         member.lifecycle === "daemon" && !error
           ? "idle"
@@ -305,7 +474,7 @@ export class TeamService {
       })
       this.options.events?.publish({
         type: "team.member.updated",
-        payload: { teamId: team.id, memberId: member.id, status: updated.status },
+        payload: { teamId: team.id, memberId: member.id, memberName: member.name, status: updated.status },
       })
       if (error) {
         this.mailbox.send({
@@ -326,12 +495,12 @@ export class TeamService {
     })
   }
 
-  private createAgent(): MainAgent {
+  private createAgent(config: Oc2Config): MainAgent {
     const tools: ToolExecutor = createToolExecutor({
       registry: this.options.registry,
       scheduler: this.options.scheduler,
       events: this.options.events,
-      config: this.options.config,
+      config,
       permissions: this.options.permissions,
     })
     return new MainAgent({
@@ -406,4 +575,28 @@ export const createTeamService = (options: TeamServiceOptions): TeamService => n
 
 function invalidTeam(message: string): RuntimeError {
   return new RuntimeError({ code: "invalid_task", message, recoverable: true, kind: "team" })
+}
+
+function planModeConfig(config: Oc2Config): Oc2Config {
+  const disabled = [
+    "write",
+    "edit",
+    "apply_patch",
+    "bash",
+    "subagent",
+    "team_create",
+    "team_spawn",
+    "team_send_message",
+    "team_broadcast",
+    "team_task_create",
+    "team_task_claim",
+    "team_task_update",
+    "team_task_list",
+    "team_shutdown",
+    "team_plan_decide",
+    "team_report",
+  ]
+  const tools = { ...config.tools }
+  for (const name of disabled) tools[name] = { ...tools[name], enabled: false }
+  return { ...config, tools }
 }

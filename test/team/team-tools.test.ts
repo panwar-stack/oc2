@@ -26,7 +26,7 @@ const config = {
   },
 }
 
-test("team tools register only PR 12 team tool names", () => {
+test("team tools register PR 13 plan and report tool names", () => {
   const { registry, db } = createFixture()
 
   expect(
@@ -38,6 +38,9 @@ test("team tools register only PR 12 team tool names", () => {
     "team_broadcast",
     "team_create",
     "team_get_messages",
+    "team_plan_decide",
+    "team_plan_submit",
+    "team_report",
     "team_send_message",
     "team_shutdown",
     "team_spawn",
@@ -46,8 +49,6 @@ test("team tools register only PR 12 team tool names", () => {
     "team_task_list",
     "team_task_update",
   ])
-  expect(registry.get("team_report")).toBeUndefined()
-  expect(registry.get("team_plan_submit")).toBeUndefined()
   db.close()
 })
 

@@ -127,3 +127,62 @@ test("run completion helpers preserve cancellation and surface submit errors", (
   expect(failed).toMatchObject({ running: false, status: "failed" })
   expect(failed.errors).toEqual(["bad resume"])
 })
+
+test("projects pending plan approvals and report availability", () => {
+  let state = createInitialTuiState(true)
+  state = applyTuiEvent(state, {
+    id: "1",
+    timestamp: new Date(),
+    type: "team.member.updated",
+    payload: {
+      teamId: "team-1",
+      memberId: "member-1",
+      memberName: "planner",
+      status: "plan_pending",
+      planStatus: "submitted",
+    },
+  })
+  state = applyTuiEvent(state, {
+    id: "2",
+    timestamp: new Date(),
+    type: "team.updated",
+    payload: { teamId: "team-1", status: "active", reportAvailable: true },
+  })
+
+  expect(state.pendingPlanApprovals).toEqual([
+    { teamId: "team-1", memberId: "member-1", memberName: "planner", status: "plan_pending" },
+  ])
+  expect(state.teamReportAvailable).toBe(true)
+
+  state = applyTuiEvent(state, {
+    id: "3",
+    timestamp: new Date(),
+    type: "team.member.updated",
+    payload: { teamId: "team-1", memberId: "member-1", status: "starting", planStatus: "approved" },
+  })
+  expect(state.pendingPlanApprovals).toEqual([])
+})
+
+test("clears pending plan approvals when a team shuts down", () => {
+  let state = createInitialTuiState(true)
+  state = applyTuiEvent(state, {
+    id: "1",
+    timestamp: new Date(),
+    type: "team.member.updated",
+    payload: {
+      teamId: "team-1",
+      memberId: "member-1",
+      memberName: "planner",
+      status: "plan_pending",
+      planStatus: "submitted",
+    },
+  })
+  state = applyTuiEvent(state, {
+    id: "2",
+    timestamp: new Date(),
+    type: "team.updated",
+    payload: { teamId: "team-1", status: "shutdown" },
+  })
+
+  expect(state.pendingPlanApprovals).toEqual([])
+})

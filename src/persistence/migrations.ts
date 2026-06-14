@@ -17,6 +17,18 @@ export const migrations: readonly Migration[] = [
     id: "0002_agent_team_core",
     sql: createTeamSchemaSql,
   },
+  {
+    id: "0003_team_plan_approval",
+    sql: `
+ALTER TABLE team_members ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE team_members ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE team_members ADD COLUMN plan_text TEXT;
+ALTER TABLE team_members ADD COLUMN plan_decision TEXT;
+ALTER TABLE team_members ADD COLUMN plan_feedback TEXT;
+ALTER TABLE team_members ADD COLUMN plan_submitted_at TEXT;
+ALTER TABLE team_members ADD COLUMN plan_decided_at TEXT;
+`,
+  },
 ]
 
 interface MigrationRow {

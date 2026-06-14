@@ -16,6 +16,13 @@ export interface DeliveredTeamMessage extends TeamMailboxMessage {
   readonly recipient: string
 }
 
+export interface TeamMailboxCounts {
+  readonly messages: number
+  readonly recipientDeliveries: number
+  readonly pendingDeliveries: number
+  readonly deliveredDeliveries: number
+}
+
 interface MessageRow {
   readonly id: string
   readonly team_id: string
@@ -72,6 +79,40 @@ export class TeamMailboxRepository {
   get(id: string): TeamMailboxMessage | undefined {
     const row = this.db.query<MessageRow, [string]>("SELECT * FROM team_messages WHERE id = ?").get(id)
     return row ? toMessage(row) : undefined
+  }
+
+  list(teamId: string): readonly TeamMailboxMessage[] {
+    return this.db
+      .query<MessageRow, [string]>("SELECT * FROM team_messages WHERE team_id = ? ORDER BY created_at, id")
+      .all(teamId)
+      .map(toMessage)
+  }
+
+  counts(teamId: string): TeamMailboxCounts {
+    const messages =
+      this.db
+        .query<{ readonly count: number }, [string]>("SELECT COUNT(*) AS count FROM team_messages WHERE team_id = ?")
+        .get(teamId)?.count ?? 0
+    const recipientDeliveries =
+      this.db
+        .query<
+          { readonly count: number },
+          [string]
+        >("SELECT COUNT(*) AS count FROM team_message_recipients WHERE team_id = ?")
+        .get(teamId)?.count ?? 0
+    const pendingDeliveries =
+      this.db
+        .query<
+          { readonly count: number },
+          [string]
+        >("SELECT COUNT(*) AS count FROM team_message_recipients WHERE team_id = ? AND delivery_status = 'pending'")
+        .get(teamId)?.count ?? 0
+    return {
+      messages,
+      recipientDeliveries,
+      pendingDeliveries,
+      deliveredDeliveries: recipientDeliveries - pendingDeliveries,
+    }
   }
 
   deliver(

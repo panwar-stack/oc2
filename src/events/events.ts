@@ -102,8 +102,14 @@ export interface RuntimeEventMap {
   "permission.requested": { readonly permissionId: string; readonly toolName?: string }
   "permission.resolved": { readonly permissionId: string; readonly decision: "allow" | "deny" }
   "subagent.updated": { readonly subagentId: string; readonly status: string; readonly taskId?: string }
-  "team.updated": { readonly teamId: string; readonly status: string }
-  "team.member.updated": { readonly teamId: string; readonly memberId: string; readonly status: string }
+  "team.updated": { readonly teamId: string; readonly status: string; readonly reportAvailable?: boolean }
+  "team.member.updated": {
+    readonly teamId: string
+    readonly memberId: string
+    readonly memberName?: string
+    readonly status: string
+    readonly planStatus?: string
+  }
   "team.task.updated": { readonly teamId: string; readonly taskId: string; readonly status: string }
   "team.message.delivered": { readonly teamId: string; readonly messageId: string; readonly recipientId: string }
   "mcp.status": { readonly serverId: string; readonly status: string; readonly error?: RuntimeErrorShape }

@@ -3,9 +3,18 @@ import type { RuntimeErrorShape } from "../../events/events"
 import { fromJson, toJson } from "./json"
 
 export type TeamStatus = "active" | "shutdown"
-export type TeamMemberStatus = "starting" | "blocked" | "active" | "idle" | "completed" | "failed" | "cancelled"
+export type TeamMemberStatus =
+  | "starting"
+  | "blocked"
+  | "plan_pending"
+  | "active"
+  | "idle"
+  | "completed"
+  | "failed"
+  | "cancelled"
 export type TeamMemberLifecycle = "task" | "daemon"
 export type DaemonState = "initializing" | "running" | "idle" | "cancelled" | "error"
+export type TeamPlanStatus = "none" | "submitted" | "approved" | "rejected"
 
 export interface TeamRecord {
   readonly id: string
@@ -32,6 +41,13 @@ export interface TeamMemberRecord {
   readonly daemonLastActiveAt?: string
   readonly daemonError?: RuntimeErrorShape
   readonly dependencyIds: readonly string[]
+  readonly planMode: boolean
+  readonly planStatus: TeamPlanStatus
+  readonly planText?: string
+  readonly planDecision?: "approved" | "rejected"
+  readonly planFeedback?: string
+  readonly planSubmittedAt?: string
+  readonly planDecidedAt?: string
   readonly result?: string
   readonly createdAt: string
   readonly updatedAt: string
@@ -55,6 +71,7 @@ export interface CreateTeamMemberInput {
   readonly daemonReportingCriteria?: string
   readonly dependencyIds?: readonly string[]
   readonly schedulerTaskId?: string
+  readonly planMode?: boolean
   readonly now?: string
 }
 
@@ -64,6 +81,13 @@ export interface UpdateTeamMemberInput {
   readonly daemonError?: RuntimeErrorShape
   readonly result?: string
   readonly schedulerTaskId?: string
+  readonly planMode?: boolean
+  readonly planStatus?: TeamPlanStatus
+  readonly planText?: string
+  readonly planDecision?: "approved" | "rejected"
+  readonly planFeedback?: string
+  readonly planSubmittedAt?: string
+  readonly planDecidedAt?: string
   readonly now?: string
 }
 
@@ -92,6 +116,13 @@ interface TeamMemberRow {
   readonly daemon_last_active_at: string | null
   readonly daemon_error_json: string | null
   readonly dependency_ids_json: string
+  readonly plan_mode: number
+  readonly plan_status: TeamPlanStatus
+  readonly plan_text: string | null
+  readonly plan_decision: "approved" | "rejected" | null
+  readonly plan_feedback: string | null
+  readonly plan_submitted_at: string | null
+  readonly plan_decided_at: string | null
   readonly result: string | null
   readonly created_at: string
   readonly updated_at: string
@@ -147,7 +178,7 @@ export class TeamRepository {
       .query(
         `UPDATE team_members
          SET status = 'cancelled', daemon_state = CASE WHEN lifecycle = 'daemon' THEN 'cancelled' ELSE daemon_state END, updated_at = ?
-         WHERE team_id = ? AND status IN ('starting', 'blocked', 'active', 'idle')`,
+         WHERE team_id = ? AND status IN ('starting', 'blocked', 'plan_pending', 'active', 'idle')`,
       )
       .run(now, teamId)
     return this.get(teamId) as TeamRecord
@@ -160,8 +191,9 @@ export class TeamRepository {
       .query(
         `INSERT INTO team_members
          (id, team_id, session_id, scheduler_task_id, name, agent_id, role_prompt, status, lifecycle, daemon_state, daemon_reporting_criteria,
-          daemon_last_active_at, daemon_error_json, dependency_ids_json, result, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           daemon_last_active_at, daemon_error_json, dependency_ids_json, plan_mode, plan_status, plan_text, plan_decision, plan_feedback,
+           plan_submitted_at, plan_decided_at, result, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -178,6 +210,13 @@ export class TeamRepository {
         null,
         null,
         toJson(input.dependencyIds ?? []),
+        input.planMode ? 1 : 0,
+        "none",
+        null,
+        null,
+        null,
+        null,
+        null,
         null,
         now,
         now,
@@ -243,8 +282,10 @@ export class TeamRepository {
     this.db
       .query(
         `UPDATE team_members
-         SET status = ?, scheduler_task_id = ?, daemon_state = ?, daemon_last_active_at = ?, daemon_error_json = ?, result = ?, updated_at = ?
-         WHERE id = ?`,
+          SET status = ?, scheduler_task_id = ?, daemon_state = ?, daemon_last_active_at = ?, daemon_error_json = ?,
+              plan_mode = ?, plan_status = ?, plan_text = ?, plan_decision = ?, plan_feedback = ?, plan_submitted_at = ?, plan_decided_at = ?,
+              result = ?, updated_at = ?
+          WHERE id = ?`,
       )
       .run(
         input.status ?? existing.status,
@@ -252,6 +293,13 @@ export class TeamRepository {
         daemonState ?? null,
         daemonState ? now : (existing.daemonLastActiveAt ?? null),
         input.daemonError ? toJson(input.daemonError) : existing.daemonError ? toJson(existing.daemonError) : null,
+        input.planMode === undefined ? (existing.planMode ? 1 : 0) : input.planMode ? 1 : 0,
+        input.planStatus ?? existing.planStatus,
+        input.planText ?? existing.planText ?? null,
+        input.planDecision ?? existing.planDecision ?? null,
+        input.planFeedback ?? existing.planFeedback ?? null,
+        input.planSubmittedAt ?? existing.planSubmittedAt ?? null,
+        input.planDecidedAt ?? existing.planDecidedAt ?? null,
         input.result ?? existing.result ?? null,
         now,
         id,
@@ -294,6 +342,13 @@ function toMemberRecord(row: TeamMemberRow): TeamMemberRecord {
     daemonLastActiveAt: row.daemon_last_active_at ?? undefined,
     daemonError: fromJson<RuntimeErrorShape | undefined>(row.daemon_error_json, undefined),
     dependencyIds: fromJson<readonly string[]>(row.dependency_ids_json, []),
+    planMode: row.plan_mode === 1,
+    planStatus: row.plan_status,
+    planText: row.plan_text ?? undefined,
+    planDecision: row.plan_decision ?? undefined,
+    planFeedback: row.plan_feedback ?? undefined,
+    planSubmittedAt: row.plan_submitted_at ?? undefined,
+    planDecidedAt: row.plan_decided_at ?? undefined,
     result: row.result ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

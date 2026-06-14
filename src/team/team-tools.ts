@@ -17,6 +17,7 @@ const spawnInput = optionalTeamId.extend({
   dependsOn: z.array(z.string().min(1)).optional(),
   lifecycle: z.enum(["task", "daemon"]).optional(),
   daemonReportingCriteria: z.string().min(1).optional(),
+  planMode: z.boolean().optional(),
   timeoutMs: z.number().int().positive().optional(),
 })
 const sendInput = optionalTeamId.extend({ recipient: z.string().min(1), body: z.string().min(1) })
@@ -35,8 +36,16 @@ const taskUpdateInput = z.object({
 })
 const taskListInput = optionalTeamId
 const shutdownInput = optionalTeamId
+const planSubmitInput = optionalTeamId.extend({ plan: z.string().min(1) })
+const planDecideInput = optionalTeamId.extend({
+  member: z.string().min(1),
+  decision: z.enum(["approved", "rejected"]),
+  feedback: z.string().min(1).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+})
+const reportInput = optionalTeamId
 
-/** Creates all PR #12 team tool definitions backed by one team service. */
+/** Creates all team tool definitions backed by one team service. */
 export function createTeamTools(options: TeamToolOptions): readonly ToolDefinition[] {
   return [
     tool("team_create", "Create one active agent team for the current lead session.", createInput, {
@@ -56,6 +65,7 @@ export function createTeamTools(options: TeamToolOptions): readonly ToolDefiniti
           dependsOn: { type: "array", items: { type: "string" } },
           lifecycle: { type: "string", enum: ["task", "daemon"] },
           daemonReportingCriteria: stringProperty("Required reporting criteria for daemon members"),
+          planMode: { type: "boolean", description: "Require lead plan approval before implementation starts" },
           timeoutMs: numberProperty("Optional teammate timeout in milliseconds"),
         },
         ["name", "agentId", "rolePrompt"],
@@ -166,6 +176,40 @@ export function createTeamTools(options: TeamToolOptions): readonly ToolDefiniti
       resource: (input) => input.teamId ?? "team",
       execute: (input, context) =>
         options.service.shutdown({ ...input, leadSessionId: requireSession(context, "team_shutdown") }),
+    }),
+    tool("team_plan_submit", "Submit a plan for lead approval when running in plan mode.", planSubmitInput, {
+      schema: objectSchema({ teamId: stringProperty("Optional team id"), plan: stringProperty("Plan text") }, ["plan"]),
+      action: "team.plan.submit",
+      resource: (input) => input.teamId ?? "team",
+      execute: (input, context) =>
+        options.service.submitPlan({ ...input, sessionId: requireSession(context, "team_plan_submit") }),
+    }),
+    tool("team_plan_decide", "Approve or reject a teammate plan submission.", planDecideInput, {
+      schema: objectSchema(
+        {
+          teamId: stringProperty("Optional team id"),
+          member: stringProperty("Member name or session id"),
+          decision: { type: "string", enum: ["approved", "rejected"] },
+          feedback: stringProperty("Optional decision feedback"),
+          timeoutMs: numberProperty("Optional teammate timeout in milliseconds"),
+        },
+        ["member", "decision"],
+      ),
+      action: "team.plan.decide",
+      resource: (input) => input.member,
+      execute: (input, context) =>
+        options.service.decidePlan({
+          ...input,
+          leadSessionId: requireSession(context, "team_plan_decide"),
+          signal: context.signal,
+        }),
+    }),
+    tool("team_report", "Generate a deterministic persisted-state team report.", reportInput, {
+      schema: objectSchema({ teamId: stringProperty("Optional team id") }),
+      action: "team.report",
+      resource: (input) => input.teamId ?? "team",
+      execute: (input, context) =>
+        options.service.report({ ...input, sessionId: requireSession(context, "team_report") }),
     }),
   ]
 }

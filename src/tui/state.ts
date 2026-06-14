@@ -16,6 +16,13 @@ export interface TuiToolCallView {
   readonly error?: string
 }
 
+export interface TuiPlanApprovalView {
+  readonly teamId: string
+  readonly memberId: string
+  readonly memberName: string
+  readonly status: string
+}
+
 export interface TuiState {
   readonly sessionId?: string
   readonly status: RuntimeStatus
@@ -25,6 +32,8 @@ export interface TuiState {
   readonly errors: readonly string[]
   readonly sidePanel: boolean
   readonly running: boolean
+  readonly pendingPlanApprovals: readonly TuiPlanApprovalView[]
+  readonly teamReportAvailable: boolean
 }
 
 export const createInitialTuiState = (sidePanel = true): TuiState => ({
@@ -35,6 +44,8 @@ export const createInitialTuiState = (sidePanel = true): TuiState => ({
   errors: [],
   sidePanel,
   running: false,
+  pendingPlanApprovals: [],
+  teamReportAvailable: false,
 })
 
 /** Projects runtime events into the narrow state needed by the minimal terminal UI. */
@@ -121,6 +132,38 @@ export const projectTuiEvent: RuntimeEventProjector<TuiState> = (state, event) =
       const payload = event.payload as RuntimeEventMap["error"]
       return appendError(state, payload.error.message)
     }
+    case "team.member.updated": {
+      const payload = event.payload as RuntimeEventMap["team.member.updated"]
+      if (payload.planStatus === "submitted") {
+        return {
+          ...state,
+          pendingPlanApprovals: upsertPlanApproval(state.pendingPlanApprovals, {
+            teamId: payload.teamId,
+            memberId: payload.memberId,
+            memberName: payload.memberName ?? payload.memberId,
+            status: payload.status,
+          }),
+        }
+      }
+      if (payload.planStatus === "approved" || payload.planStatus === "rejected") {
+        return {
+          ...state,
+          pendingPlanApprovals: state.pendingPlanApprovals.filter((approval) => approval.memberId !== payload.memberId),
+        }
+      }
+      return state
+    }
+    case "team.updated": {
+      const payload = event.payload as RuntimeEventMap["team.updated"]
+      if (payload.status === "shutdown") {
+        return {
+          ...state,
+          pendingPlanApprovals: state.pendingPlanApprovals.filter((approval) => approval.teamId !== payload.teamId),
+          teamReportAvailable: payload.reportAvailable ? true : state.teamReportAvailable,
+        }
+      }
+      return payload.reportAvailable ? { ...state, teamReportAvailable: true } : state
+    }
     default:
       return state
   }
@@ -197,6 +240,15 @@ function upsertToolCall(calls: readonly TuiToolCallView[], next: TuiToolCallView
   const index = calls.findIndex((call) => call.id === next.id)
   if (index === -1) return [...calls, next]
   return calls.map((call, current) => (current === index ? { ...call, ...next } : call))
+}
+
+function upsertPlanApproval(
+  approvals: readonly TuiPlanApprovalView[],
+  next: TuiPlanApprovalView,
+): readonly TuiPlanApprovalView[] {
+  const index = approvals.findIndex((approval) => approval.memberId === next.memberId)
+  if (index === -1) return [...approvals, next]
+  return approvals.map((approval, current) => (current === index ? { ...approval, ...next } : approval))
 }
 
 function partsToText(parts: readonly MessagePart[]): string {

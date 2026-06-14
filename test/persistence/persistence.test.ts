@@ -22,11 +22,19 @@ const tempDbPath = (): string => {
 test("database migrations create PR4 tables and are idempotent", () => {
   const dbPath = tempDbPath()
   const first = openOc2Database({ path: dbPath })
-  expect(getAppliedMigrationIds(first.sqlite)).toEqual(["0001_persistence_session_storage", "0002_agent_team_core"])
+  expect(getAppliedMigrationIds(first.sqlite)).toEqual([
+    "0001_persistence_session_storage",
+    "0002_agent_team_core",
+    "0003_team_plan_approval",
+  ])
   first.close()
 
   const second = openOc2Database({ path: dbPath })
-  expect(getAppliedMigrationIds(second.sqlite)).toEqual(["0001_persistence_session_storage", "0002_agent_team_core"])
+  expect(getAppliedMigrationIds(second.sqlite)).toEqual([
+    "0001_persistence_session_storage",
+    "0002_agent_team_core",
+    "0003_team_plan_approval",
+  ])
   const table = second.sqlite
     .query<{ readonly name: string }, [string]>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
     .get("workspace_roots")

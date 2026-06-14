@@ -21,12 +21,13 @@ Implemented foundations:
 - Minimal terminal TUI shell with projected runtime state, prompt submission, streaming assistant text, tool status display, resume, cancellation, and side-panel toggle.
 - MCP config, status events, startup/test lifecycle, tool discovery, `tools/list_changed` refresh, namespaced MCP tool registration, and normal tool-executor invocation with permissions.
 - Subagent service, permission derivation, and tool adapter for child sessions with `parentSessionId`, bounded scheduling, timeout/cancellation propagation, and recursive delegation disabled by default.
-- Agent team service, mailbox delivery, shared task claims, teammate child sessions, daemon lifecycle state, dependency gates, shutdown handling, and PR 12 team tool definitions.
+- Agent team service, mailbox delivery, shared task claims, teammate child sessions, daemon lifecycle state, dependency gates, shutdown handling, plan approval gates, and deterministic team reports.
+- TUI projected state for pending team plan approvals and generated report availability.
 - Logging redaction helpers and test fixtures.
 
 Not implemented yet:
 
-- Team plan approval, team reports, and TUI team panels.
+- Full TUI team panels beyond pending plan/report projection.
 - Full MCP OAuth callback flow. OAuth-required servers are surfaced as `auth_required` until that later slice is implemented.
 
 See `specs/01-oc2-spec.md` and `specs/02-implementation-plan.md` for the target architecture and remaining slices.
@@ -73,8 +74,8 @@ Design principles from the spec that are already reflected in the code:
 - `src/tools` defines the built-in tool contract, registry, permission handling, workspace-root checks, output shaping, and safe built-ins for file search, file IO, shell execution, patching, web fetches, questions, and todo tracking. MCP tools are materialized into the same registry and executor path.
 - `src/mcp` manages canonical MCP config entries, stdio/HTTP/SSE-style client startup, server statuses, tool discovery, `tools/list_changed` refresh, auth-required status detection, and conversion of MCP tools into namespaced oc2 tools.
 - `src/subagent` creates child sessions for subagent profiles, derives child tool permissions from parent denies and child allows, disables recursive subagent/team tools by default, and exposes the runtime through a normal `subagent` tool definition.
-- `src/team` coordinates one active team per lead session, teammate child sessions scheduled as `team-member` work, mailbox send/broadcast/delivery, transactional shared task claims, dependency-gated spawns, daemon lifecycle state, and shutdown.
-- `src/tui` contains the minimal terminal UI shell, keymap, projected UI state, and small text-rendered session components. It renders from runtime event state instead of polling runtime internals.
+- `src/team` coordinates one active team per lead session, teammate child sessions scheduled as `team-member` work, mailbox send/broadcast/delivery, transactional shared task claims, dependency-gated spawns, daemon lifecycle state, plan approval state, deterministic reporting, and shutdown.
+- `src/tui` contains the minimal terminal UI shell, keymap, projected UI state, and small text-rendered session components. It renders from runtime event state instead of polling runtime internals, including pending team plan approvals and report availability.
 - `src/testing` contains shared fixtures used by tests.
 
 The spec also calls for future top-level areas such as `runtime` and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, MCP, subagent, team, and TUI primitives.
@@ -140,7 +141,9 @@ Open the minimal TUI shell with the same fake model:
 bun src/index.ts tui --model fake/test
 ```
 
-The TUI supports prompt submission, streamed assistant text, visible tool status, `Ctrl+C` cancellation/exit, `Ctrl+S` side-panel toggle, and basic resume with `--session <id>`. MCP, team, permission, and subagent panels are intentionally deferred to later implementation slices.
+The TUI supports prompt submission, streamed assistant text, visible tool status, pending team plan approval projection, team report availability projection, `Ctrl+C` cancellation/exit, `Ctrl+S` side-panel toggle, and basic resume with `--session <id>`. Full MCP, team, permission, and subagent panels are intentionally deferred to later implementation slices.
+
+Team runtime tools include `team_plan_submit`, `team_plan_decide`, and `team_report`. Plan-mode teammates remain in `plan_pending` until the lead approves the submitted plan; rejected plans stay gated. Team reports are generated from persisted team state with stable member/task/mailbox counts, daemon state, deterministic findings, runtime/cost placeholders, and residual failures.
 
 ## Configuration
 

@@ -6,5 +6,16 @@ export function SidePanel({ state }: { readonly state: TuiState }): string {
   const tools = state.toolCalls.length
     ? state.toolCalls.map((call) => `- ${ToolCallView({ call })}`).join("\n")
     : "No tool calls."
-  return [`Session: ${state.sessionId ?? "new"}`, `Status: ${state.status}`, "Tools:", tools].join("\n")
+  const plans = state.pendingPlanApprovals.length
+    ? state.pendingPlanApprovals.map((approval) => `- ${approval.memberName}: ${approval.status}`).join("\n")
+    : "No pending plan approvals."
+  return [
+    `Session: ${state.sessionId ?? "new"}`,
+    `Status: ${state.status}`,
+    `Team report: ${state.teamReportAvailable ? "available" : "not generated"}`,
+    "Pending plans:",
+    plans,
+    "Tools:",
+    tools,
+  ].join("\n")
 }

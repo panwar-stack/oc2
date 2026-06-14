@@ -18,6 +18,7 @@ import { createSubAgentService } from "../subagent/subagent-service"
 import { createSubAgentTool } from "../subagent/subagent-tool"
 import { createTeamService } from "../team/team-service"
 import { createTeamTools } from "../team/team-tools"
+import { TeamRepository } from "../persistence/repositories/teams"
 
 export interface SessionRunServiceOptions {
   readonly config: Oc2Config
@@ -102,6 +103,7 @@ export class SessionRunService {
         message: `Session not found: ${input.sessionId}`,
         recoverable: true,
       })
+    this.assertTeamPlanRunAllowed(session.id)
     if (this.active.has(session.id)) {
       throw new RuntimeError({
         code: "invalid_task",
@@ -179,6 +181,21 @@ export class SessionRunService {
       await mcp.close()
       this.active.delete(session.id)
     }
+  }
+
+  private assertTeamPlanRunAllowed(sessionId: string): void {
+    if (!this.database) return
+    const teams = new TeamRepository(this.database.sqlite)
+    const team = teams.getByMemberSession(sessionId)
+    if (!team) return
+    const member = teams.getMemberByNameOrSession(team.id, sessionId)
+    if (!member?.planMode || member.planStatus === "approved") return
+    throw new RuntimeError({
+      code: "invalid_task",
+      message: `Team member ${member.name} cannot run before plan approval`,
+      recoverable: true,
+      kind: "team",
+    })
   }
 }
 
