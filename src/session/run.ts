@@ -5,6 +5,8 @@ import { resolveMainAgentProfile } from "../agent/profiles"
 import type { Oc2Config } from "../config/schema"
 import { createRuntimeEventBus, type RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
+import { createMcpService, createMcpToolConfigEntries } from "../mcp/mcp-service"
+import type { McpClientFactory } from "../mcp/client"
 import { createModelService, type ModelService, type ModelServiceOptions } from "../model/model-service"
 import { openOc2Database, type Oc2Database } from "../persistence/db"
 import { createTaskScheduler, type TaskScheduler } from "../scheduler/scheduler"
@@ -24,6 +26,7 @@ export interface SessionRunServiceOptions {
   readonly registry?: ToolRegistry
   readonly scheduler?: TaskScheduler
   readonly providers?: ModelServiceOptions["providers"]
+  readonly mcpClientFactory?: McpClientFactory
 }
 
 export interface RunPromptInput {
@@ -47,6 +50,7 @@ export class SessionRunService {
   private readonly events: RuntimeEventBus<unknown>
   private readonly config: Oc2Config
   private readonly cwd: string
+  private readonly mcpClientFactory?: McpClientFactory
   private readonly active = new Set<string>()
 
   constructor(options: SessionRunServiceOptions) {
@@ -72,6 +76,7 @@ export class SessionRunService {
       createModelService({ providers: options.providers, scheduler: this.scheduler, events: this.events })
     this.config = options.config
     this.cwd = options.cwd
+    this.mcpClientFactory = options.mcpClientFactory
   }
 
   async run(input: RunPromptInput): Promise<MainAgentRunResult> {
@@ -114,11 +119,23 @@ export class SessionRunService {
       })
     }
     const runConfig = applyRunSelections(this.config, input)
+    const mcp = createMcpService({
+      config: runConfig,
+      registry: this.registry,
+      events: this.events,
+      scheduler: this.scheduler,
+      clientFactory: this.mcpClientFactory,
+    })
+    const mcpStatuses = await mcp.startEnabled(input.signal)
+    const agentConfig = {
+      ...runConfig,
+      tools: { ...runConfig.tools, ...createMcpToolConfigEntries(runConfig, mcpStatuses) },
+    }
     const tools = createToolExecutor({
       registry: this.registry,
       scheduler: this.scheduler,
       events: this.events,
-      config: runConfig,
+      config: agentConfig,
     })
     const agent = new MainAgent({ sessions: this.sessions, models: this.models, registry: this.registry, tools })
     try {
@@ -126,7 +143,7 @@ export class SessionRunService {
         session: started,
         profile,
         prompt: input.prompt,
-        config: runConfig,
+        config: agentConfig,
         signal: input.signal ?? new AbortController().signal,
       })
       this.sessions.sessions.updateStatus(session.id, result.status)
@@ -135,6 +152,7 @@ export class SessionRunService {
       this.sessions.sessions.updateStatus(session.id, "failed")
       throw error
     } finally {
+      await mcp.close()
       this.active.delete(session.id)
     }
   }

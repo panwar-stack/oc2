@@ -5,8 +5,10 @@ import { getConfigPaths } from "../config/paths"
 import { collectEnvironmentInfo } from "../diagnostics/environment"
 import { runDependencyChecks } from "../diagnostics/dependency-checks"
 import { createDiagnosticReport } from "../diagnostics/diagnostics"
+import { createMcpService } from "../mcp/mcp-service"
 import type { ModelProvider } from "../model/provider"
 import { createSessionRunService } from "../session/run"
+import { createBuiltInToolRegistry } from "../tools/builtins/index"
 import { launchTui, type TuiLaunchOptions } from "../tui/app"
 import { VERSION } from "../version"
 import { formatRootHelp, parseCommand, type ParsedCommand } from "./commands"
@@ -15,6 +17,8 @@ import {
   formatConfigValue,
   formatDiagnosticsText,
   formatJson,
+  formatMcpListText,
+  formatMcpStatusText,
   formatRunJson,
   formatRunHelp,
   formatToolsListText,
@@ -70,6 +74,8 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
       return config(command, options)
     case "tools":
       return tools(command.json, options)
+    case "mcp":
+      return mcp(command, options)
     case "run":
       if (command.help) {
         await writeStdout(options.streams?.stdout, formatRunHelp())
@@ -81,6 +87,57 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
     case "tui":
       return tui(command, options)
   }
+}
+
+async function mcp(command: Extract<ParsedCommand, { name: "mcp" }>, options: CliOptions): Promise<CliResult> {
+  if (command.action === "list") {
+    const loaded = await loadConfig(options)
+    const registry = createBuiltInToolRegistry()
+    const service = createMcpService({ config: loaded.config, registry })
+    await writeStdout(
+      options.streams?.stdout,
+      command.json ? formatJson({ servers: service.list() }) : formatMcpListText(service.list()),
+    )
+    return { exitCode: 0 }
+  }
+
+  if (command.action === "test") {
+    const loaded = await loadConfig(options)
+    const registry = createBuiltInToolRegistry()
+    const service = createMcpService({ config: loaded.config, registry })
+    try {
+      const status = await service.test(command.serverId)
+      await writeStdout(
+        options.streams?.stdout,
+        command.json ? formatJson({ server: status }) : formatMcpStatusText(status),
+      )
+      return { exitCode: status.status === "connected" || status.status === "auth_required" ? 0 : 1 }
+    } finally {
+      await service.close()
+    }
+  }
+
+  const loaded = await loadConfig(options)
+  if (!loaded.config.mcp[command.serverId]) {
+    await writeStderr(options.streams?.stderr, `MCP server not found: ${command.serverId}\n`)
+    return { exitCode: 1 }
+  }
+  const paths = getConfigPaths(options)
+  const path = paths.projectConfigPaths[0] ?? `${paths.cwd}/oc2.jsonc`
+  const readFile = options.readFile ?? ((filePath: string) => Bun.file(filePath).text())
+  const fileExists = options.fileExists ?? ((filePath: string) => Bun.file(filePath).exists())
+  const writeFile =
+    options.writeFile ?? ((filePath: string, contents: string) => Bun.write(filePath, contents).then(() => undefined))
+  const existing = (await fileExists(path)) ? await readFile(path) : "{}\n"
+  const updated = setJsoncPath(existing, `mcp.${command.serverId}.enabled`, command.action === "enable")
+  await writeFile(path, updated)
+  await writeStdout(
+    options.streams?.stdout,
+    command.json
+      ? formatJson({ path, serverId: command.serverId, enabled: command.action === "enable" })
+      : `${command.action === "enable" ? "Enabled" : "Disabled"} MCP server ${command.serverId} in ${path}\n`,
+  )
+  return { exitCode: 0 }
 }
 
 async function tui(command: Extract<ParsedCommand, { name: "tui" }>, options: CliOptions): Promise<CliResult> {

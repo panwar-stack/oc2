@@ -35,6 +35,12 @@ export * from "./model/stream"
 export * from "./model/fake-provider"
 export * from "./model/ai-sdk-provider"
 export * from "./model/model-service"
+export * from "./mcp/auth"
+export * from "./mcp/client"
+export * from "./mcp/config"
+export * from "./mcp/mcp-service"
+export * from "./mcp/status"
+export * from "./mcp/tools"
 export { ToolExecutionError, toolError, toModelToolDefinition } from "./tools/tool"
 export type {
   ToolContext,

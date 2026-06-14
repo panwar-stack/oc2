@@ -1,4 +1,4 @@
-export type CommandName = "version" | "diagnostics" | "config" | "tools" | "run" | "resume" | "tui" | "help"
+export type CommandName = "version" | "diagnostics" | "config" | "tools" | "mcp" | "run" | "resume" | "tui" | "help"
 
 export type ParsedCommand =
   | { name: "version"; json: boolean }
@@ -7,6 +7,8 @@ export type ParsedCommand =
   | { name: "config"; action: "get"; key?: string; json: boolean }
   | { name: "config"; action: "set"; key: string; value: string; json: boolean }
   | { name: "tools"; action: "list"; json: boolean }
+  | { name: "mcp"; action: "list"; json: boolean }
+  | { name: "mcp"; action: "enable" | "disable" | "test"; serverId: string; json: boolean }
   | { name: "run"; help: true }
   | {
       name: "run"
@@ -40,6 +42,7 @@ export const commandDescriptions = {
   diagnostics: "Print environment and configuration diagnostics",
   config: "Read or update oc2 configuration",
   tools: "List configured tools",
+  mcp: "Manage MCP servers",
   run: "Run a one-shot prompt",
   resume: "Resume a previous session",
   tui: "Open the interactive terminal UI",
@@ -62,6 +65,8 @@ export function parseCommand(argv: string[]): ParseResult {
       return parseConfig(rest)
     case "tools":
       return parseTools(rest)
+    case "mcp":
+      return parseMcp(rest)
     case "run":
       return parseRun(rest)
     case "resume":
@@ -73,6 +78,24 @@ export function parseCommand(argv: string[]): ParseResult {
         return { ok: false, message: `Unknown command: ${command}` }
       }
       return { ok: false, message: `Unknown option: ${command}` }
+  }
+}
+
+function parseMcp(argv: string[]): ParseResult {
+  const [action, ...rest] = argv
+  const json = hasFlag(rest, "--json")
+  const positionals = withoutKnownFlags(rest)
+
+  switch (action) {
+    case "list":
+      return parseNoPositionals("mcp list", rest, { name: "mcp", action: "list", json })
+    case "enable":
+    case "disable":
+    case "test":
+      if (positionals.length !== 1) return { ok: false, message: `mcp ${action} requires <id>` }
+      return { ok: true, command: { name: "mcp", action, serverId: positionals[0] ?? "", json } }
+    default:
+      return { ok: false, message: "Expected mcp list, mcp enable, mcp disable, or mcp test" }
   }
 }
 

@@ -1,5 +1,7 @@
 import type { Diagnostic, DiagnosticReport } from "../diagnostics/diagnostics"
 import type { MainAgentRunResult } from "../agent/agent"
+import { redactText } from "../logging/redaction"
+import type { McpServerStatus } from "../mcp/status"
 
 export interface JsonVersionOutput {
   name: "oc2"
@@ -56,6 +58,15 @@ export function formatToolsListText(tools: { name: string; enabled: boolean }[])
   return `${tools.map((tool) => `${tool.name}\t${tool.enabled ? "enabled" : "disabled"}`).join("\n")}\n`
 }
 
+export function formatMcpListText(servers: readonly McpServerStatus[]): string {
+  if (servers.length === 0) return "No MCP servers configured.\n"
+  return `${servers.map((server) => formatMcpStatusLine(server)).join("\n")}\n`
+}
+
+export function formatMcpStatusText(server: McpServerStatus): string {
+  return `${formatMcpStatusLine(server)}\n`
+}
+
 export function formatRunHelp(): string {
   return [
     "Usage: oc2 run <prompt> [--json] [--model <provider/model>] [--tool <name>] [--no-tool <name>] [--mcp <id>] [--no-mcp <id>]",
@@ -106,4 +117,9 @@ function countDiagnostics(diagnostics: Diagnostic[]) {
 function formatDiagnosticLine(diagnostic: Diagnostic): string {
   const path = diagnostic.path ? ` (${diagnostic.path})` : ""
   return `[${diagnostic.level}] ${diagnostic.code}: ${diagnostic.message}${path}`
+}
+
+function formatMcpStatusLine(server: McpServerStatus): string {
+  const error = server.error ? `\t${redactText(server.error.message)}` : ""
+  return `${server.serverId}\t${server.status}\t${server.toolCount} tools${error}`
 }

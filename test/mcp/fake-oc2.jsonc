@@ -1,0 +1,11 @@
+{
+  "mcp": {
+    "fake-server-id": {
+      "enabled": true,
+      "transport": "stdio",
+      "command": "bun",
+      "args": ["test/mcp/fake-server.ts"],
+      "startupTimeoutMs": 2000
+    }
+  }
+}

@@ -13,6 +13,25 @@ test("parses basic commands and JSON flags", () => {
     ok: true,
     command: { name: "tools", action: "list", json: true },
   })
+  expect(parseCommand(["mcp", "list", "--json"])).toEqual({
+    ok: true,
+    command: { name: "mcp", action: "list", json: true },
+  })
+})
+
+test("parses MCP management commands", () => {
+  expect(parseCommand(["mcp", "enable", "browser"])).toEqual({
+    ok: true,
+    command: { name: "mcp", action: "enable", serverId: "browser", json: false },
+  })
+  expect(parseCommand(["mcp", "disable", "browser", "--json"])).toEqual({
+    ok: true,
+    command: { name: "mcp", action: "disable", serverId: "browser", json: true },
+  })
+  expect(parseCommand(["mcp", "test", "browser"])).toEqual({
+    ok: true,
+    command: { name: "mcp", action: "test", serverId: "browser", json: false },
+  })
 })
 
 test("parses config get and set", () => {

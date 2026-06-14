@@ -2,13 +2,13 @@
 
 `oc2` is a local-first TypeScript/Bun coding harness built from `SPEC.md`.
 
-The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, and a minimal interactive TUI shell are present, while the MCP runtime, subagents, and agent teams are not available yet.
+The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, a minimal interactive TUI shell, and the first MCP runtime slice are present, while subagents and agent teams are not available yet.
 
 ## Current Status
 
 Implemented foundations:
 
-- CLI parser and output formatting for `version`, `diagnostics`, `config`, `tools list`, `run`, and `resume --run`.
+- CLI parser and output formatting for `version`, `diagnostics`, `config`, `tools list`, `mcp`, `run`, and `resume --run`.
 - JSONC configuration loading, defaults, path discovery, validation, and `config set` updates.
 - Diagnostics for environment, config loading, dependencies, and report formatting.
 - Typed runtime events, an in-process event bus, and event projection helpers.
@@ -19,12 +19,13 @@ Implemented foundations:
 - Tool registry primitives, execution result helpers, permission policy checks, workspace root validation, and safe built-in tool definitions.
 - Main agent profile resolution, model context construction, model/tool loop execution, and persisted one-shot session runs.
 - Minimal terminal TUI shell with projected runtime state, prompt submission, streaming assistant text, tool status display, resume, cancellation, and side-panel toggle.
+- MCP config, status events, startup/test lifecycle, tool discovery, `tools/list_changed` refresh, namespaced MCP tool registration, and normal tool-executor invocation with permissions.
 - Logging redaction helpers and test fixtures.
 
 Not implemented yet:
 
-- MCP server runtime and tool invocation.
 - Subagents, agent teams, daemon teammates, and team reports.
+- Full MCP OAuth callback flow. OAuth-required servers are surfaced as `auth_required` until that later slice is implemented.
 
 See `SPEC.md` and `IMPLEMENTATION_PLAN.md` for the target architecture and remaining slices.
 
@@ -57,7 +58,7 @@ Design principles from the spec that are already reflected in the code:
 
 - `src/index.ts` is the Bun executable entry point and public barrel export for implemented runtime modules. It runs the CLI only when invoked directly.
 - `src/version.ts` contains the package version constant used by the CLI and public exports.
-- `src/cli` contains command parsing, command dispatch, and text/JSON output formatting. Current commands cover help, version, diagnostics, config, tools listing, `run`, `resume --run`, and `tui`.
+- `src/cli` contains command parsing, command dispatch, and text/JSON output formatting. Current commands cover help, version, diagnostics, config, tools listing, MCP listing/testing/toggling, `run`, `resume --run`, and `tui`.
 - `src/config` owns JSONC configuration discovery, loading, merging, validation, defaults, path handling, and environment overrides. Its schema already includes future-facing sections for models, tools, MCP, agents, runtime limits, and TUI settings.
 - `src/diagnostics` collects environment and dependency health information and turns it into structured reports for `oc2 diagnostics`.
 - `src/events` defines the runtime event contract, in-process event bus, and projector helpers. Event categories include implemented session/model/scheduler events plus planned tool, permission, MCP, subagent, and team events.
@@ -67,11 +68,12 @@ Design principles from the spec that are already reflected in the code:
 - `src/session` provides the session service façade over persistence repositories, publishes session/message events, defines session message shapes, exports transcripts as Markdown or JSON, and owns one-shot session run orchestration.
 - `src/agent` defines the main agent profile, system prompt, model context loop, and persisted tool-result handling for non-interactive runs.
 - `src/scheduler` implements bounded async task scheduling with priorities, per-kind limits, cancellation propagation, timeouts, snapshots, and scheduler events. It is the planned coordination primitive for model, tool, MCP, subagent, and team-member work.
-- `src/tools` defines the built-in tool contract, registry, permission handling, workspace-root checks, output shaping, and safe built-ins for file search, file IO, shell execution, patching, web fetches, questions, and todo tracking. Tool invocation is implemented at the subsystem level and is ready to be wired into prompt execution.
+- `src/tools` defines the built-in tool contract, registry, permission handling, workspace-root checks, output shaping, and safe built-ins for file search, file IO, shell execution, patching, web fetches, questions, and todo tracking. MCP tools are materialized into the same registry and executor path.
+- `src/mcp` manages canonical MCP config entries, stdio/HTTP/SSE-style client startup, server statuses, tool discovery, `tools/list_changed` refresh, auth-required status detection, and conversion of MCP tools into namespaced oc2 tools.
 - `src/tui` contains the minimal terminal UI shell, keymap, projected UI state, and small text-rendered session components. It renders from runtime event state instead of polling runtime internals.
 - `src/testing` contains shared fixtures used by tests.
 
-The spec also calls for future top-level areas such as `runtime`, `mcp`, `subagent`, `team`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, and TUI primitives.
+The spec also calls for future top-level areas such as `runtime`, `subagent`, `team`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, MCP, and TUI primitives.
 
 ## CLI
 
@@ -89,6 +91,10 @@ Available commands:
 - `oc2 config get [key] [--json]` prints the full config or a dotted key.
 - `oc2 config set <key> <value> [--json]` writes a dotted key to the project config.
 - `oc2 tools list [--json]` lists configured tools.
+- `oc2 mcp list [--json]` lists configured MCP server statuses without starting new processes.
+- `oc2 mcp enable <id> [--json]` enables a configured MCP server in the project config.
+- `oc2 mcp disable <id> [--json]` disables a configured MCP server in the project config.
+- `oc2 mcp test <id> [--json]` starts one configured MCP server, discovers tools, and reports its status.
 - `oc2 run <prompt> [--json] [--model <provider/model>]` runs a one-shot prompt through the main agent.
 - `oc2 resume <session-id> --run <prompt> [--json]` appends a prompt to an existing session and runs the main agent.
 - `oc2 tui [--session <id>] [--model <provider/model>]` opens the minimal interactive terminal UI.
@@ -97,6 +103,31 @@ The default `fake/test` model returns a deterministic response for local smoke t
 
 ```sh
 bun src/index.ts run "hello" --json --model fake/test
+```
+
+MCP servers use the canonical `oc2` config shape. Enabled servers start before one-shot agent runs; discovered tools are exposed as `mcp_<server>_<tool>` and are invoked through the normal tool scheduler, permission service, and output bounding path. OAuth configuration is recognized, but full browser callback flow is deferred; those servers report `auth_required`.
+
+```jsonc
+{
+  "mcp": {
+    "localDocs": {
+      "enabled": true,
+      "transport": "stdio",
+      "command": "docs-mcp",
+      "args": [],
+      "cwd": ".",
+      "env": {},
+      "toolPermissions": [{ "match": "mcp.invoke:localDocs/*", "decision": "ask" }],
+      "startupTimeoutMs": 10000
+    },
+    "remoteSearch": {
+      "enabled": false,
+      "transport": "http",
+      "url": "https://example.test/mcp",
+      "headers": { "authorization": "Bearer ${TOKEN}" }
+    }
+  }
+}
 ```
 
 Open the minimal TUI shell with the same fake model:
