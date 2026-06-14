@@ -3,13 +3,20 @@
 const encoder = new TextEncoder()
 let sessionId = `sess-${crypto.randomUUID()}`
 const sseClients = new Set<(data: string) => void>()
+const state = {
+  requests: [] as Array<{ method?: string; id?: unknown; sessionId?: string | null; accept?: string | null }>,
+  notifications: [] as Array<{ method?: string; params?: unknown; sessionId?: string | null }>,
+  deleteCount: 0,
+  sseClosed: 0,
+  slowCallStarted: 0,
+}
 
 function notifyChanged(method: string) {
   const data = JSON.stringify({ jsonrpc: "2.0", method })
   for (const send of sseClients) send(data)
 }
 
-function handleRequest(body: Record<string, unknown>): Record<string, unknown> {
+async function handleRequest(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const id = body.id as number | undefined
   const method = body.method as string | undefined
   const params = body.params as Record<string, unknown> | undefined
@@ -39,6 +46,8 @@ function handleRequest(body: Record<string, unknown>): Record<string, unknown> {
       result: {
         tools: [
           { name: "echo", description: "Echo input", inputSchema: { type: "object", properties: {} } },
+          { name: "slow_echo", description: "Delayed echo", inputSchema: { type: "object", properties: {} } },
+          { name: "error_result", description: "Tool result error", inputSchema: { type: "object", properties: {} } },
           {
             name: "trigger_change",
             description: "Trigger list-changed notifications",
@@ -59,6 +68,22 @@ function handleRequest(body: Record<string, unknown>): Record<string, unknown> {
         jsonrpc: "2.0",
         id,
         result: { content: [{ type: "text", text: "all list-changed notifications emitted" }] },
+      }
+    }
+    if (toolName === "slow_echo") {
+      state.slowCallStarted++
+      await Bun.sleep(1_000)
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: { content: [{ type: "text", text: JSON.stringify(params ?? {}) }] },
+      }
+    }
+    if (toolName === "error_result") {
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: { isError: true, content: [{ type: "text", text: "fixture tool error" }] },
       }
     }
     return {
@@ -150,7 +175,8 @@ const server = Bun.serve({
     const url = new URL(req.url)
     const method = req.method.toUpperCase()
 
-    if (method === "DELETE" && url.pathname === "/session") {
+    if (method === "DELETE" && (url.pathname === "/" || url.pathname === "/mcp" || url.pathname === "/session")) {
+      state.deleteCount++
       sessionId = `sess-${crypto.randomUUID()}`
       for (const send of sseClients) send("close")
       sseClients.clear()
@@ -159,6 +185,7 @@ const server = Bun.serve({
 
     if (method === "GET" && url.pathname === "/sse") {
       let closed = false
+      let sendRef: ((data: string) => void) | undefined
       const stream = new ReadableStream({
         start(controller) {
           const send = (data: string) => {
@@ -167,11 +194,14 @@ const server = Bun.serve({
               controller.enqueue(encoder.encode(`data: ${data}\n\n`))
             } catch {}
           }
+          sendRef = send
           sseClients.add(send)
           send(JSON.stringify({ type: "connected", sessionId }))
         },
         cancel() {
           closed = true
+          state.sseClosed++
+          if (sendRef) sseClients.delete(sendRef)
         },
       })
       return new Response(stream, {
@@ -181,6 +211,12 @@ const server = Bun.serve({
           Connection: "keep-alive",
           "Mcp-Session-Id": sessionId,
         },
+      })
+    }
+
+    if (method === "GET" && url.pathname === "/state") {
+      return new Response(JSON.stringify({ ...state, sessionId }), {
+        headers: { "content-type": "application/json" },
       })
     }
 
@@ -209,7 +245,21 @@ const server = Bun.serve({
           },
         )
       }
-      const result = handleRequest(body)
+      if (body.id === undefined) {
+        state.notifications.push({
+          method: body.method as string | undefined,
+          params: body.params,
+          sessionId: req.headers.get("Mcp-Session-Id"),
+        })
+        return new Response(null, { status: 202, headers: { "Mcp-Session-Id": sessionId } })
+      }
+      state.requests.push({
+        method: body.method as string | undefined,
+        id: body.id,
+        sessionId: req.headers.get("Mcp-Session-Id"),
+        accept: req.headers.get("accept"),
+      })
+      const result = await handleRequest(body)
       return new Response(JSON.stringify(result), {
         headers: { "content-type": "application/json", "Mcp-Session-Id": sessionId },
       })

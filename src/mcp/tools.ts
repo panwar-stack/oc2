@@ -2,7 +2,7 @@ import { z } from "zod"
 
 import { ToolExecutionError, type ToolDefinition } from "../tools/tool"
 import { createMcpToolName } from "./config"
-import type { McpClient } from "./client"
+import { McpJsonRpcError, redactMcpError, type McpClient } from "./client"
 import type { McpToolInfo } from "./status"
 
 /** Converts discovered MCP tools into normal oc2 tools handled by the existing executor. */
@@ -25,7 +25,18 @@ export function materializeMcpTool(input: {
     },
     timeoutMs: input.timeoutMs,
     async execute(args, context) {
-      const result = await input.client.callTool(input.tool.name, args, context.signal)
+      let result
+      try {
+        result = await input.client.callTool(input.tool.name, args, context.signal)
+      } catch (error) {
+        if (error instanceof McpJsonRpcError) {
+          throw new ToolExecutionError({
+            code: "mcp_jsonrpc_error",
+            message: redactMcpError(error),
+          })
+        }
+        throw error
+      }
       if (result.isError) {
         throw new ToolExecutionError({
           code: "mcp_tool_failed",

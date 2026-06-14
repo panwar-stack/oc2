@@ -1,5 +1,6 @@
 import type { ResolvedMcpServerConfig } from "./config"
 import type { McpToolInfo } from "./status"
+import { redactText } from "../logging/redaction"
 import {
   normalizeInitializeResult,
   type ListChangedKind,
@@ -11,7 +12,7 @@ import {
   type McpResourceReadResult,
   LIST_CHANGED_METHODS,
 } from "./protocol"
-import { StdioTransport, HttpTransport, type McpTransport } from "./transport"
+import { StdioTransport, HttpTransport, McpHttpAuthRequiredError, type McpTransport } from "./transport"
 
 export interface McpCallResult {
   readonly content?: unknown
@@ -73,7 +74,7 @@ export class McpAuthRequiredError extends Error {
 }
 
 export function redactMcpError(error: McpJsonRpcError): string {
-  return `MCP error ${error.code}: ${error.message}`
+  return `MCP error ${error.code}: ${redactText(error.message)}`
 }
 
 interface JsonRpcResponse {
@@ -97,24 +98,26 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     url: endpoint,
     headers: server.headers,
     transport: server.transport as "http" | "sse",
+    tokenProvider: server.tokenProvider,
   })
+  const httpTransport = transport as HttpTransport
+  const inFlight = new Set<number>()
 
   void transport.start()
 
   transport.onMessage((message) => {
     const method = message.method as string | undefined
-    if (method === "notifications/tools/list_changed") {
-      changed.get("tools")?.()
-    }
+    if (method === LIST_CHANGED_METHODS.tools) changed.get("tools")?.()
+    if (method === LIST_CHANGED_METHODS.resources) changed.get("resources")?.()
+    if (method === LIST_CHANGED_METHODS.prompts) changed.get("prompts")?.()
+    if (method === LIST_CHANGED_METHODS.roots) changed.get("roots")?.()
   })
 
   const request = async (method: string, params: Record<string, unknown> | undefined, signal: AbortSignal) => {
     if (signal.aborted) throw new Error("MCP request cancelled")
     const requestId = ++id
-    let sent = true
-
     const onAbort = () => {
-      if (sent) {
+      if (inFlight.has(requestId)) {
         transport
           .send({
             jsonrpc: "2.0",
@@ -125,41 +128,38 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
       }
     }
     signal.addEventListener("abort", onAbort, { once: true })
+    inFlight.add(requestId)
 
     try {
-      const authHeaders = server.tokenProvider ? await server.tokenProvider() : {}
-      const headers: Record<string, string> = { "content-type": "application/json", ...authHeaders, ...server.headers }
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }),
+      const response = await httpTransport.request(
+        { jsonrpc: "2.0", id: requestId, method, params },
         signal,
-      })
-      sent = false
-      if (response.status === 401 || response.status === 403) {
-        const authHeader = response.headers.get("www-authenticate")
-        const metadataUrl = extractResourceMetadata(authHeader)
-        if (metadataUrl) {
-          throw new McpAuthRequiredError(`MCP server requires authentication`, metadataUrl)
-        }
-        throw new McpAuthRequiredError("MCP server requires authentication")
+      )
+      if (!response) throw new Error("MCP HTTP response did not include a JSON-RPC body")
+      return unwrapResponse(response as JsonRpcResponse)
+    } catch (error) {
+      if (error instanceof McpHttpAuthRequiredError) {
+        throw new McpAuthRequiredError(error.message, error.metadataUrl)
       }
-      if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
-      return unwrapResponse((await response.json()) as JsonRpcResponse)
+      if (signal.aborted) throw new Error("MCP request cancelled")
+      throw error
     } finally {
+      inFlight.delete(requestId)
       signal.removeEventListener("abort", onAbort)
     }
   }
 
   return {
     async initialize(input, signal) {
-      return normalizeInitializeResult(
-        await request(
-          "initialize",
-          { protocolVersion: input.protocolVersion, capabilities: input.capabilities, clientInfo: input.clientInfo },
-          signal,
-        ),
+      const result = normalizeInitializeResult(
+        await request("initialize", {
+          protocolVersion: input.protocolVersion,
+          capabilities: input.capabilities,
+          clientInfo: input.clientInfo,
+        }, signal),
       )
+      await transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }).catch(() => undefined)
+      return result
     },
     async listTools(signal) {
       return normalizeTools(await request("tools/list", undefined, signal))
@@ -186,6 +186,17 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
       changed.set("tools", callback)
     },
     async close() {
+      const cancellations = [...inFlight].map((requestId) =>
+        transport
+          .send({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId, reason: "Client closed" },
+          })
+          .catch(() => undefined),
+      )
+      await Promise.race([Promise.all(cancellations), Bun.sleep(250)]).catch(() => undefined)
+      inFlight.clear()
       await transport.close()
       changed.clear()
     },
@@ -477,6 +488,7 @@ function unwrapResponse(response: JsonRpcResponse): unknown {
   if (response.error) {
     throw new McpJsonRpcError(response.error.code ?? -32603, response.error.message ?? "MCP error", response.error.data)
   }
+  if (!("result" in response)) throw new Error("Invalid JSON-RPC response: missing result")
   return response.result
 }
 
@@ -549,10 +561,4 @@ function normalizePromptResult(value: unknown): McpPromptResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function extractResourceMetadata(authHeader: string | null): string | undefined {
-  if (!authHeader) return undefined
-  const match = authHeader.match(/resource_metadata="([^"]+)"/)
-  return match ? match[1] : undefined
 }

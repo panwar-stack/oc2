@@ -1,6 +1,6 @@
 export interface McpTransport {
   start(): Promise<void>
-  send(message: Record<string, unknown>): Promise<void>
+  send(message: Record<string, unknown>, signal?: AbortSignal): Promise<void>
   onMessage(callback: (message: Record<string, unknown>) => void): void
   onError(callback: (error: Error) => void): void
   onClose(callback: () => void): void
@@ -96,16 +96,28 @@ export interface HttpTransportOptions {
   readonly url: string
   readonly headers?: Record<string, string>
   readonly transport?: "http" | "sse"
+  readonly tokenProvider?: () => Promise<Record<string, string>>
+}
+
+export class McpHttpAuthRequiredError extends Error {
+  override readonly name = "McpHttpAuthRequiredError"
+  readonly metadataUrl?: string
+
+  constructor(message: string, metadataUrl?: string) {
+    super(message)
+    this.metadataUrl = metadataUrl
+  }
 }
 
 export class HttpTransport implements McpTransport {
   private messageCallbacks: Array<(message: Record<string, unknown>) => void> = []
   private errorCallbacks: Array<(error: Error) => void> = []
   private closeCallbacks: Array<() => void> = []
-  private events?: {
-    addEventListener(type: string, listener: (event: { data: string }) => void): void
-    close(): void
-  }
+  private sessionId?: string
+  private closed = false
+  private sseController?: AbortController
+  private readonly controllers = new Set<AbortController>()
+  private readonly readers = new Set<{ cancel(): Promise<unknown> }>()
 
   constructor(private readonly options: HttpTransportOptions) {}
 
@@ -116,51 +128,64 @@ export class HttpTransport implements McpTransport {
   }
 
   private setupSse(): void {
-    const EventSourceCtor = (
-      globalThis as unknown as {
-        EventSource?: new (url: string) => {
-          addEventListener(type: string, listener: (event: { data: string }) => void): void
-          close(): void
-        }
-      }
-    ).EventSource
-    if (!EventSourceCtor) return
-
-    this.events = new EventSourceCtor(this.options.url)
-    this.events.addEventListener("message", (event) => {
-      try {
-        const message = JSON.parse(event.data) as Record<string, unknown>
-        for (const cb of this.messageCallbacks) {
-          cb(message)
-        }
-      } catch {
-        // Non-JSON SSE messages are ignored
-      }
-    })
-    this.events.addEventListener("error", () => {
-      for (const cb of this.errorCallbacks) {
-        cb(new Error("SSE connection error"))
-      }
+    const controller = new AbortController()
+    this.sseController = controller
+    void this.readSse(controller).catch((error) => {
+      if (controller.signal.aborted || this.closed) return
+      for (const cb of this.errorCallbacks) cb(error instanceof Error ? error : new Error(String(error)))
     })
   }
 
-  async send(message: Record<string, unknown>): Promise<void> {
+  async request(message: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown> | undefined> {
+    const response = await this.post(message, signal)
+    if (response.status === 202 || response.status === 204) return undefined
+    const contentType = response.headers.get("content-type") ?? ""
+    if (contentType.includes("text/event-stream")) return await this.readSseResponse(response, signal)
+    if (!contentType.includes("application/json")) {
+      throw new Error("MCP HTTP response was not JSON")
+    }
+    return (await response.json()) as Record<string, unknown>
+  }
+
+  async send(message: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+    const response = await this.post(message, signal)
+    await response.body?.cancel().catch(() => undefined)
+  }
+
+  private async post(message: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
+    if (this.closed) throw new Error("HttpTransport: closed")
+    if (signal?.aborted) throw new Error("MCP request cancelled")
+    const controller = new AbortController()
+    const onAbort = () => controller.abort(signal?.reason)
+    signal?.addEventListener("abort", onAbort, { once: true })
+    this.controllers.add(controller)
     const headers: Record<string, string> = {
       "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...(await this.options.tokenProvider?.()),
       ...this.options.headers,
     }
-    const response = await fetch(this.options.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(message),
-    })
-    if (response.status === 401 || response.status === 403) {
-      const authHeader = response.headers.get("www-authenticate")
-      const metadataUrl = extractResourceMetadata(authHeader)
-      if (metadataUrl) {
-        throw new Error(`MCP server requires authentication (metadata: ${metadataUrl})`)
+    if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId
+    let keepControllerForClose = false
+    try {
+      const response = await fetch(this.postUrl(), {
+        method: "POST",
+        headers,
+        body: JSON.stringify(message),
+        signal: controller.signal,
+      })
+      this.captureSession(response)
+      if (response.status === 401 || response.status === 403) {
+        const authHeader = response.headers.get("www-authenticate")
+        const metadataUrl = extractResourceMetadata(authHeader)
+        throw new McpHttpAuthRequiredError("MCP server requires authentication", metadataUrl)
       }
-      throw new Error("MCP server requires authentication")
+      if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
+      keepControllerForClose = (response.headers.get("content-type") ?? "").includes("text/event-stream")
+      return response
+    } finally {
+      signal?.removeEventListener("abort", onAbort)
+      if (!keepControllerForClose) this.controllers.delete(controller)
     }
   }
 
@@ -177,8 +202,123 @@ export class HttpTransport implements McpTransport {
   }
 
   async close(): Promise<void> {
-    this.events?.close()
-    this.events = undefined
+    if (this.closed) return
+    this.closed = true
+    this.sseController?.abort()
+    this.sseController = undefined
+    for (const controller of this.controllers) controller.abort()
+    this.controllers.clear()
+    for (const reader of this.readers) await reader.cancel().catch(() => undefined)
+    this.readers.clear()
+    if (this.sessionId) {
+      const headers: Record<string, string> = {
+        ...(await this.options.tokenProvider?.().catch(() => ({}))),
+        ...(this.options.headers ?? {}),
+        "Mcp-Session-Id": this.sessionId,
+      }
+      await fetch(this.postUrl(), {
+        method: "DELETE",
+        headers,
+      }).catch(() => undefined)
+    }
+    for (const cb of this.closeCallbacks) cb()
+    this.messageCallbacks = []
+    this.errorCallbacks = []
+    this.closeCallbacks = []
+  }
+
+  private async readSse(controller: AbortController): Promise<void> {
+    const response = await fetch(this.sseUrl(), {
+      headers: { ...(await this.options.tokenProvider?.()), ...(this.options.headers ?? {}) },
+      signal: controller.signal,
+    })
+    this.captureSession(response)
+    if (!response.ok) throw new Error(`MCP SSE ${response.status}`)
+    const reader = response.body?.getReader()
+    if (!reader) return
+    this.readers.add(reader)
+    const decoder = new TextDecoder()
+    let buffer = ""
+    try {
+      while (!controller.signal.aborted) {
+        const read = await reader.read()
+        if (read.done) return
+        buffer += decoder.decode(read.value, { stream: true })
+        const events = buffer.split("\n\n")
+        buffer = events.pop() ?? ""
+        for (const event of events) {
+          for (const line of event.split("\n")) {
+            if (!line.startsWith("data: ")) continue
+            try {
+              const message = JSON.parse(line.slice(6)) as Record<string, unknown>
+              for (const cb of this.messageCallbacks) cb(message)
+            } catch {
+              // Non-JSON SSE data is ignored.
+            }
+          }
+        }
+      }
+    } finally {
+      this.readers.delete(reader)
+    }
+  }
+
+  private async readSseResponse(
+    response: Response,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown> | undefined> {
+    const reader = response.body?.getReader()
+    if (!reader) return undefined
+    const cancel = () => void reader.cancel().catch(() => undefined)
+    signal?.addEventListener("abort", cancel, { once: true })
+    this.readers.add(reader)
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let keepTrackedForClose = false
+    try {
+      while (!signal?.aborted) {
+        const read = await reader.read()
+        if (read.done) return undefined
+        buffer += decoder.decode(read.value, { stream: true })
+        const events = buffer.split("\n\n")
+        buffer = events.pop() ?? ""
+        for (const event of events) {
+          for (const line of event.split("\n")) {
+            if (!line.startsWith("data: ")) continue
+            try {
+              const message = JSON.parse(line.slice(6)) as Record<string, unknown>
+              if ("result" in message || "error" in message) {
+                keepTrackedForClose = true
+                return message
+              }
+              for (const cb of this.messageCallbacks) cb(message)
+            } catch {
+              // Non-JSON SSE data is ignored.
+            }
+          }
+        }
+      }
+      throw new Error("MCP request cancelled")
+    } finally {
+      signal?.removeEventListener("abort", cancel)
+      if (!keepTrackedForClose) this.readers.delete(reader)
+    }
+  }
+
+  private captureSession(response: Response): void {
+    const next = response.headers.get("Mcp-Session-Id")
+    if (next) this.sessionId = next
+  }
+
+  private postUrl(): string {
+    if (this.options.transport !== "sse") return this.options.url
+    if (this.options.url.endsWith("/sse")) return this.options.url.slice(0, -4) || this.options.url
+    return this.options.url
+  }
+
+  private sseUrl(): string {
+    if (this.options.url.endsWith("/sse")) return this.options.url
+    return `${this.options.url.replace(/\/$/, "")}/sse`
   }
 }
 
