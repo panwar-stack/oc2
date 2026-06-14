@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { RuntimeError } from "../events/events"
-import { CURRENT_SCHEMA_VERSION, createSchemaSql } from "./schema"
+import { CURRENT_SCHEMA_VERSION, createSchemaSql, createTeamSchemaSql } from "./schema"
 
 /** Ordered database migration definition applied once by id. */
 export interface Migration {
@@ -12,6 +12,10 @@ export const migrations: readonly Migration[] = [
   {
     id: "0001_persistence_session_storage",
     sql: createSchemaSql,
+  },
+  {
+    id: "0002_agent_team_core",
+    sql: createTeamSchemaSql,
   },
 ]
 

@@ -17,6 +17,7 @@ export interface SessionServiceOptions {
 
 /** High-level session facade that keeps repositories and runtime events in sync. */
 export class SessionService {
+  readonly database: Oc2Database
   readonly sessions: SessionRepository
   readonly messages: MessageRepository
   readonly toolCalls: ToolCallRepository
@@ -24,6 +25,7 @@ export class SessionService {
   private readonly events?: RuntimeEventBus
 
   constructor(options: SessionServiceOptions) {
+    this.database = options.database
     this.sessions = new SessionRepository(options.database.sqlite)
     this.messages = new MessageRepository(options.database.sqlite)
     this.toolCalls = new ToolCallRepository(options.database.sqlite)

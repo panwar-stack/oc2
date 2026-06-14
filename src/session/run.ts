@@ -16,6 +16,8 @@ import { createToolExecutor } from "../tools/execution"
 import type { ToolRegistry } from "../tools/registry"
 import { createSubAgentService } from "../subagent/subagent-service"
 import { createSubAgentTool } from "../subagent/subagent-tool"
+import { createTeamService } from "../team/team-service"
+import { createTeamTools } from "../team/team-tools"
 
 export interface SessionRunServiceOptions {
   readonly config: Oc2Config
@@ -139,18 +141,26 @@ export class SessionRunService {
       events: this.events,
       config: agentConfig,
     })
-    this.registry.register(
-      createSubAgentTool({
-        service: createSubAgentService({
-          config: agentConfig,
-          sessions: this.sessions,
-          models: this.models,
-          registry: this.registry,
-          scheduler: this.scheduler,
-          events: this.events,
-        }),
-      }),
-    )
+    const subagents = createSubAgentService({
+      config: agentConfig,
+      sessions: this.sessions,
+      models: this.models,
+      registry: this.registry,
+      scheduler: this.scheduler,
+      events: this.events,
+    })
+    const teams = createTeamService({
+      config: agentConfig,
+      sessions: this.sessions,
+      models: this.models,
+      registry: this.registry,
+      scheduler: this.scheduler,
+      events: this.events,
+    })
+    this.registry.register(createSubAgentTool({ service: subagents }))
+    for (const teamTool of createTeamTools({ service: teams })) {
+      this.registry.register(teamTool)
+    }
     const agent = new MainAgent({ sessions: this.sessions, models: this.models, registry: this.registry, tools })
     try {
       const result = await agent.run({

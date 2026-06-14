@@ -1,5 +1,5 @@
 /** Current SQLite schema version mirrored into PRAGMA user_version. */
-export const CURRENT_SCHEMA_VERSION = 1
+export const CURRENT_SCHEMA_VERSION = 2
 
 /** Runtime statuses valid for persisted sessions and execution records. */
 export const SESSION_STATUSES = [
@@ -113,4 +113,88 @@ CREATE TABLE IF NOT EXISTS mcp_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mcp_snapshots_server_time ON mcp_snapshots(server_id, created_at DESC);
+`
+
+/** Schema slice for persisted agent teams, members, shared tasks, and mailbox delivery. */
+export const createTeamSchemaSql = `
+CREATE TABLE IF NOT EXISTS teams (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  lead_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_one_active_per_lead
+ON teams(lead_session_id)
+WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_teams_lead_session_id ON teams(lead_session_id);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  scheduler_task_id TEXT,
+  name TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  role_prompt TEXT NOT NULL,
+  status TEXT NOT NULL,
+  lifecycle TEXT NOT NULL,
+  daemon_state TEXT,
+  daemon_reporting_criteria TEXT,
+  daemon_last_active_at TEXT,
+  daemon_error_json TEXT,
+  dependency_ids_json TEXT NOT NULL,
+  result TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(team_id, name),
+  UNIQUE(team_id, session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_members_team_status ON team_members(team_id, status);
+CREATE INDEX IF NOT EXISTS idx_team_members_session_id ON team_members(session_id);
+
+CREATE TABLE IF NOT EXISTS team_tasks (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  status TEXT NOT NULL,
+  assignee TEXT,
+  dependency_ids_json TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_tasks_team_status ON team_tasks(team_id, status);
+
+CREATE TABLE IF NOT EXISTS team_messages (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  sender TEXT NOT NULL,
+  recipients_json TEXT NOT NULL,
+  body TEXT NOT NULL,
+  delivery_status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_messages_team_id ON team_messages(team_id, created_at, id);
+
+CREATE TABLE IF NOT EXISTS team_message_recipients (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES team_messages(id) ON DELETE CASCADE,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  recipient TEXT NOT NULL,
+  delivery_status TEXT NOT NULL,
+  delivered_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_message_recipients_recipient
+ON team_message_recipients(team_id, recipient, delivery_status, created_at);
 `

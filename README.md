@@ -2,7 +2,7 @@
 
 `oc2` is a local-first TypeScript/Bun coding harness built from `SPEC.md`.
 
-The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, a minimal interactive TUI shell, the first MCP runtime slice, and subagent runtime primitives are present, while agent teams are not available yet.
+The project is implemented as a single Bun package with a small runtime core and thin CLI/TUI entry points. It is still in early implementation: foundational services, one-shot prompt execution, a minimal interactive TUI shell, the first MCP runtime slice, subagent runtime primitives, and agent team core services are present.
 
 ## Current Status
 
@@ -21,11 +21,12 @@ Implemented foundations:
 - Minimal terminal TUI shell with projected runtime state, prompt submission, streaming assistant text, tool status display, resume, cancellation, and side-panel toggle.
 - MCP config, status events, startup/test lifecycle, tool discovery, `tools/list_changed` refresh, namespaced MCP tool registration, and normal tool-executor invocation with permissions.
 - Subagent service, permission derivation, and tool adapter for child sessions with `parentSessionId`, bounded scheduling, timeout/cancellation propagation, and recursive delegation disabled by default.
+- Agent team service, mailbox delivery, shared task claims, teammate child sessions, daemon lifecycle state, dependency gates, shutdown handling, and PR 12 team tool definitions.
 - Logging redaction helpers and test fixtures.
 
 Not implemented yet:
 
-- Agent teams, daemon teammates, and team reports.
+- Team plan approval, team reports, and TUI team panels.
 - Full MCP OAuth callback flow. OAuth-required servers are surfaced as `auth_required` until that later slice is implemented.
 
 See `SPEC.md` and `IMPLEMENTATION_PLAN.md` for the target architecture and remaining slices.
@@ -65,17 +66,18 @@ Design principles from the spec that are already reflected in the code:
 - `src/events` defines the runtime event contract, in-process event bus, and projector helpers. Event categories include implemented session/model/scheduler events plus planned tool, permission, MCP, subagent, and team events.
 - `src/logging` provides a small structured logger with log-level filtering and redaction utilities for sensitive values.
 - `src/model` defines model provider interfaces, streaming event types, stream collection helpers, provider error handling, a fake provider, an AI SDK compatible adapter, and the model service that publishes model lifecycle events.
-- `src/persistence` owns local SQLite setup, migrations, schema SQL, and repository classes. It currently persists sessions, workspace roots, messages and parts, tool calls, runtime events, and MCP snapshots.
+- `src/persistence` owns local SQLite setup, migrations, schema SQL, and repository classes. It currently persists sessions, workspace roots, messages and parts, tool calls, runtime events, MCP snapshots, teams, members, shared tasks, and mailbox messages.
 - `src/session` provides the session service façade over persistence repositories, publishes session/message events, defines session message shapes, exports transcripts as Markdown or JSON, and owns one-shot session run orchestration.
 - `src/agent` defines the main agent profile, system prompt, model context loop, and persisted tool-result handling for non-interactive runs.
 - `src/scheduler` implements bounded async task scheduling with priorities, per-kind limits, cancellation propagation, timeouts, snapshots, and scheduler events. It is the planned coordination primitive for model, tool, MCP, subagent, and team-member work.
 - `src/tools` defines the built-in tool contract, registry, permission handling, workspace-root checks, output shaping, and safe built-ins for file search, file IO, shell execution, patching, web fetches, questions, and todo tracking. MCP tools are materialized into the same registry and executor path.
 - `src/mcp` manages canonical MCP config entries, stdio/HTTP/SSE-style client startup, server statuses, tool discovery, `tools/list_changed` refresh, auth-required status detection, and conversion of MCP tools into namespaced oc2 tools.
 - `src/subagent` creates child sessions for subagent profiles, derives child tool permissions from parent denies and child allows, disables recursive subagent/team tools by default, and exposes the runtime through a normal `subagent` tool definition.
+- `src/team` coordinates one active team per lead session, teammate child sessions scheduled as `team-member` work, mailbox send/broadcast/delivery, transactional shared task claims, dependency-gated spawns, daemon lifecycle state, and shutdown.
 - `src/tui` contains the minimal terminal UI shell, keymap, projected UI state, and small text-rendered session components. It renders from runtime event state instead of polling runtime internals.
 - `src/testing` contains shared fixtures used by tests.
 
-The spec also calls for future top-level areas such as `runtime`, `team`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, MCP, subagent, and TUI primitives.
+The spec also calls for future top-level areas such as `runtime` and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, agent, scheduler, MCP, subagent, team, and TUI primitives.
 
 ## CLI
 
