@@ -1,4 +1,8 @@
-export const VERSION = "0.0.0"
+#!/usr/bin/env bun
+
+import { runCli } from "./cli/index"
+
+export { VERSION } from "./version"
 
 export * from "./events/events"
 export * from "./events/event-bus"
@@ -18,3 +22,8 @@ export * from "./persistence/repositories/mcp"
 export * from "./session/message"
 export * from "./session/session-service"
 export * from "./session/transcript"
+
+if (import.meta.main) {
+  const result = await runCli()
+  process.exitCode = result.exitCode
+}
