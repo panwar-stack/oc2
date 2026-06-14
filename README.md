@@ -16,13 +16,13 @@ Implemented foundations:
 - Session service and transcript export helpers.
 - Bounded task scheduler with priority, timeout, cancellation, and parent abort support.
 - Model provider abstractions, stream collection, fake provider, AI SDK adapter, and model service events.
+- Tool registry primitives, execution result helpers, permission policy checks, workspace root validation, and safe built-in tool definitions.
 - Logging redaction helpers and test fixtures.
 
 Not implemented yet:
 
 - `oc2 run` prompt execution.
 - Interactive TUI.
-- Tool registry and built-in coding tools.
 - MCP server runtime and tool invocation.
 - Subagents, agent teams, daemon teammates, and team reports.
 
@@ -41,7 +41,7 @@ CLI/TUI adapters
   -> events and persistence
 ```
 
-Only part of that stack exists today. The code already establishes the shared contracts that future slices will use: typed events, bounded scheduling, JSONC config, SQLite repositories, session/message shapes, and model streaming abstractions.
+Only part of that stack exists today. The code already establishes the shared contracts that future slices will use: typed events, bounded scheduling, JSONC config, SQLite repositories, session/message shapes, model streaming abstractions, and safe tool execution boundaries.
 
 Design principles from the spec that are already reflected in the code:
 
@@ -66,9 +66,10 @@ Design principles from the spec that are already reflected in the code:
 - `src/persistence` owns local SQLite setup, migrations, schema SQL, and repository classes. It currently persists sessions, workspace roots, messages and parts, tool calls, runtime events, and MCP snapshots.
 - `src/session` provides the session service façade over persistence repositories, publishes session/message events, defines session message shapes, and exports transcripts as Markdown or JSON.
 - `src/scheduler` implements bounded async task scheduling with priorities, per-kind limits, cancellation propagation, timeouts, snapshots, and scheduler events. It is the planned coordination primitive for model, tool, MCP, subagent, and team-member work.
+- `src/tools` defines the built-in tool contract, registry, permission handling, workspace-root checks, output shaping, and safe built-ins for file search, file IO, shell execution, patching, web fetches, questions, and todo tracking. Tool invocation is implemented at the subsystem level and is ready to be wired into prompt execution.
 - `src/testing` contains shared fixtures used by tests.
 
-The spec also calls for future top-level areas such as `runtime`, `tools`, `mcp`, `agent`, `subagent`, `team`, `tui`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, and scheduler primitives.
+The spec also calls for future top-level areas such as `runtime`, `mcp`, `agent`, `subagent`, `team`, `tui`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, tools, and scheduler primitives.
 
 ## CLI
 

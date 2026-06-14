@@ -1,3 +1,4 @@
+/** Event names used on the in-process runtime bus and optional persistence. */
 export type RuntimeEventType =
   | "session.created"
   | "session.updated"
@@ -34,6 +35,7 @@ export interface RuntimeErrorShape {
   readonly kind?: string
 }
 
+/** Serializable runtime error used across schedulers, sessions, tools, and providers. */
 export class RuntimeError extends Error implements RuntimeErrorShape {
   override readonly name = "RuntimeError"
   readonly code: RuntimeErrorCode
@@ -75,6 +77,7 @@ export class RuntimeError extends Error implements RuntimeErrorShape {
   }
 }
 
+/** Type-safe payload registry keyed by runtime event type. */
 export interface RuntimeEventMap {
   "session.created": { readonly sessionId: string }
   "session.updated": { readonly sessionId: string; readonly status?: string }
@@ -122,8 +125,10 @@ export type RuntimeEventListener<TEvent extends RuntimeEvent = RuntimeEvent> = (
 
 export type RuntimeEventProjector<TState> = (state: TState, event: RuntimeEvent) => TState
 
+/** Creates a globally unique event id for runtime bus messages. */
 export const createRuntimeEventId = (): string => crypto.randomUUID()
 
+/** Adds id and timestamp metadata to a typed runtime event payload. */
 export const createRuntimeEvent = <TType extends RuntimeEventType>(input: RuntimeEventInput<TType>): RuntimeEvent<TType> => ({
   id: createRuntimeEventId(),
   type: input.type,

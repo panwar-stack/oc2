@@ -51,6 +51,10 @@ interface InternalTask<TResult> {
 const taskKinds: readonly SchedulerTaskKind[] = ["model", "tool", "mcp", "subagent", "team-member"]
 const defaultQueueLimit = 100
 
+/**
+ * Creates a concurrency-limited task scheduler with per-kind queues, timeouts,
+ * cancellation, progress snapshots, and optional runtime events.
+ */
 export const createTaskScheduler = (options: TaskSchedulerOptions): TaskScheduler => {
   const queues = new Map(
     taskKinds.map((kind) => [kind, createTaskQueue<InternalTask<unknown>>(options.queueLimits?.[kind] ?? defaultQueueLimit)]),
@@ -99,6 +103,7 @@ export const createTaskScheduler = (options: TaskSchedulerOptions): TaskSchedule
   }
 
   const cancelTask = (task: InternalTask<unknown>, reason = "Task was cancelled") => {
+    // Queued tasks have not seen their AbortSignal yet, so resolve them immediately.
     if (task.snapshot.status === "queued") {
       failQueued(
         task,
@@ -209,6 +214,7 @@ export const createTaskScheduler = (options: TaskSchedulerOptions): TaskSchedule
         return
       }
       if (task.controller.signal.aborted) {
+        // Parent cancellation can abort a queued task before capacity is available.
         cancelTask(task, "Task was cancelled before it started")
         continue
       }

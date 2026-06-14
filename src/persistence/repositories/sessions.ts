@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite"
 import { fromJson, toJson } from "./json"
 import type { RuntimeStatus } from "../../session/message"
 
+/** Workspace root captured with a session, including read-only access intent. */
 export interface WorkspaceRoot {
   readonly id: string
   readonly path: string
@@ -9,6 +10,7 @@ export interface WorkspaceRoot {
   readonly readonly: boolean
 }
 
+/** Durable session metadata and workspace roots reconstructed from SQLite rows. */
 export interface SessionRecord {
   readonly id: string
   readonly title: string | null
@@ -62,6 +64,7 @@ interface RootRow {
 
 const createId = (): string => crypto.randomUUID()
 
+/** Repository for session metadata and associated workspace roots. */
 export class SessionRepository {
   constructor(private readonly db: Database) {}
 
@@ -93,6 +96,7 @@ export class SessionRepository {
       const insertRoot = this.db.query(
         `INSERT INTO workspace_roots (id, session_id, path, label, readonly, root_index, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
+      // Keep roots in input order so transcript/export consumers get stable workspace context.
       input.workspaceRoots.forEach((root, index) => {
         insertRoot.run(createId(), id, root.path, root.label ?? null, root.readonly ? 1 : 0, index, now)
       })

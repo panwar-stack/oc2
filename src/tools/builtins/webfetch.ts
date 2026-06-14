@@ -8,6 +8,7 @@ const inputSchema = z.object({
   format: z.enum(["text", "markdown", "html"]).optional(),
 })
 
+/** Creates the built-in web fetch tool with protocol, content-type, and response-size guards. */
 export const createWebfetchTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "webfetch",
   description: "Fetch HTTP or HTTPS content with a bounded response size.",

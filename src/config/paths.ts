@@ -16,17 +16,23 @@ export interface ConfigPaths {
   dataDir: string
 }
 
+/** Expands a leading tilde without changing other shell-like syntax. */
 export function expandHome(path: string, homeDir = homedir()): string {
   if (path === "~") return homeDir
   if (path.startsWith("~/")) return `${homeDir}${path.slice(1)}`
   return path
 }
 
+/** Resolves config paths after applying oc2's home-directory expansion rules. */
 export function resolvePath(path: string, baseDir: string, homeDir = homedir()): string {
   const expanded = expandHome(path, homeDir)
   return isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded)
 }
 
+/**
+ * Computes all filesystem paths used by config loading and diagnostics from
+ * process defaults plus OC2_CONFIG/OC2_DATA_DIR overrides.
+ */
 export function getConfigPaths(options: ConfigPathOptions = {}): ConfigPaths {
   const cwd = options.cwd ?? process.cwd()
   const homeDir = options.homeDir ?? homedir()

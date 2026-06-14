@@ -33,6 +33,7 @@ export interface CliResult {
   exitCode: number
 }
 
+/** Runs the oc2 CLI using injectable IO hooks for tests and embedding. */
 export async function runCli(options: CliOptions = {}): Promise<CliResult> {
   const argv = options.argv ?? Bun.argv.slice(2)
   const streams = options.streams ?? {}
@@ -126,6 +127,7 @@ function getPath(value: unknown, path: string): unknown {
 
 function setJsoncPath(source: string, path: string, value: unknown): string {
   const parsed = parse(source)
+  // jsonc-parser can apply edits only against object roots for dotted config paths.
   const base = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? source : "{}\n"
   const edits = modify(base, path.split("."), value, { formattingOptions: { insertSpaces: true, tabSize: 2 } })
   const updated = applyEdits(base, edits)

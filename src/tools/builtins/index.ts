@@ -12,6 +12,7 @@ import { createTodoWriteTool } from "./todowrite"
 import { createWebfetchTool } from "./webfetch"
 import { createWriteTool } from "./write"
 
+/** Instantiates the default built-in tools in the order exposed to the registry. */
 export const createBuiltInTools = (): readonly ToolDefinition[] => [
   createReadTool(),
   createGlobTool(),
@@ -26,6 +27,7 @@ export const createBuiltInTools = (): readonly ToolDefinition[] => [
   createOpenGrepTool(),
 ]
 
+/** Creates a registry preloaded with all built-in tools. */
 export const createBuiltInToolRegistry = (): ToolRegistry => createToolRegistry(createBuiltInTools())
 
 export { createReadTool } from "./read"

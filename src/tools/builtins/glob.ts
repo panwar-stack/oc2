@@ -11,6 +11,7 @@ const inputSchema = z.object({
   path: z.string().min(1).optional(),
 })
 
+/** Creates the built-in glob tool, keeping matches within configured roots even across symlinks. */
 export const createGlobTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "glob",
   description: "Find files by glob pattern inside workspace roots.",
@@ -25,6 +26,7 @@ export const createGlobTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
     const realRoots = await Promise.all(roots.map((root) => realpath(root.path).catch(() => root.path)))
     for await (const match of glob.scan({ cwd: base.path, absolute: true, onlyFiles: false })) {
       const realMatch = await realpath(match).catch(() => match)
+      // Check both lexical and real paths so symlinked entries cannot escape workspace roots.
       if (!roots.some((root) => isInsidePath(root.path, match)) && !realRoots.some((root) => isInsidePath(root, realMatch))) continue
       matches.push(match)
       if (matches.length >= 1_000) break

@@ -111,6 +111,7 @@ export const defaultConfig: Oc2Config = {
   },
 }
 
+/** Known top-level and nested config keys used to warn about misspellings. */
 export const knownConfigKeys = {
   top: new Set(["model", "tools", "mcp", "agents", "runtime", "tui"]),
   model: new Set(["provider", "model"]),

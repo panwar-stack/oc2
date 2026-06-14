@@ -11,6 +11,7 @@ export interface SessionServiceOptions {
   readonly events?: RuntimeEventBus
 }
 
+/** High-level session facade that keeps repositories and runtime events in sync. */
 export class SessionService {
   readonly sessions: SessionRepository
   readonly messages: MessageRepository
@@ -42,6 +43,7 @@ export class SessionService {
 
   appendMessage(input: CreateMessageInput): SessionMessage {
     const message = this.messages.append(input)
+    // Appends affect the visible transcript, so notify the same consumers as message updates.
     this.events?.publish({ type: "message.updated", payload: { sessionId: message.sessionId, messageId: message.id } })
     return message
   }
@@ -53,4 +55,5 @@ export class SessionService {
   }
 }
 
+/** Constructs the repository-backed session service for a database connection. */
 export const createSessionService = (options: SessionServiceOptions): SessionService => new SessionService(options)

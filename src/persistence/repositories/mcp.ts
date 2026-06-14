@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite"
 import { fromJson, toJson } from "./json"
 
+/** Persisted status snapshot for one MCP server. */
 export interface McpSnapshot {
   readonly id: string
   readonly serverId: string
@@ -15,6 +16,7 @@ interface McpSnapshotRow {
   readonly status_json: string
 }
 
+/** Repository for recording and reading latest MCP server status snapshots. */
 export class McpSnapshotRepository {
   constructor(private readonly db: Database) {}
 

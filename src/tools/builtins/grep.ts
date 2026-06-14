@@ -13,6 +13,7 @@ const inputSchema = z.object({
   maxMatches: z.number().int().positive().max(1_000).optional(),
 })
 
+/** Creates the built-in regex search tool with recursive workspace traversal and bounded matches. */
 export const createGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "grep",
   description: "Search text files with a regular expression inside workspace roots.",
@@ -45,6 +46,7 @@ export const createGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
       const lines = text.split("\n")
       for (const [index, line] of lines.entries()) {
         if (regex.test(line)) matches.push({ path: filePath, line: index + 1, text: line.slice(0, 500) })
+        // Reset global/sticky regex state so each line is evaluated independently.
         regex.lastIndex = 0
         if (matches.length >= maxMatches) return { matches, truncated: true }
       }
@@ -53,6 +55,7 @@ export const createGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
   },
 })
 
+/** Recursively collects readable files while skipping common large/generated directories. */
 const collectFiles = async (path: string, include: string | undefined, signal: AbortSignal, roots: readonly string[]): Promise<string[]> => {
   const stat = await lstat(path)
   if (stat.isFile() || stat.isSymbolicLink()) {

@@ -53,8 +53,10 @@ export interface SchedulerTaskHandle<TResult> {
   snapshot(): SchedulerTaskSnapshot
 }
 
+/** Generates unique scheduler task identifiers for callers that do not supply one. */
 export const createTaskId = (): string => crypto.randomUUID()
 
+/** Normalizes arbitrary thrown values into RuntimeError instances tied to a scheduler task. */
 export const toRuntimeError = (error: unknown, input: { taskId: string; kind: SchedulerTaskKind }): RuntimeError => {
   if (error instanceof RuntimeError) {
     return error

@@ -19,6 +19,7 @@ export interface ToolPermissionService {
   decide(request: ToolPermissionRequest, signal: AbortSignal): Promise<ToolPermissionDecision>
 }
 
+/** Builds a permission service that combines configured rules with optionally remembered decisions. */
 export const createToolPermissionService = (options: ToolPermissionServiceOptions = {}): ToolPermissionService => {
   const savedRules: ToolPermissionRule[] = []
 
@@ -42,6 +43,7 @@ export const createToolPermissionService = (options: ToolPermissionServiceOption
   }
 }
 
+/** Throws a tool error unless the permission service explicitly allows the request. */
 export const assertToolPermission = async (
   service: ToolPermissionService,
   request: ToolPermissionRequest,
@@ -53,6 +55,7 @@ export const assertToolPermission = async (
   }
 }
 
+/** Finds the last matching permission rule across tool, action, resource, and compound candidates. */
 export const findDecision = (
   rules: readonly ToolPermissionRule[],
   request: ToolPermissionRequest,
@@ -71,6 +74,7 @@ export const findDecision = (
   return decision
 }
 
+/** Matches simple `*` wildcards without exposing regular-expression syntax in config rules. */
 export const wildcardMatch = (pattern: string, value: string): boolean => {
   if (pattern === "*" || pattern === value) return true
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*")

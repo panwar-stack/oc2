@@ -1,5 +1,6 @@
 import { getConfigPaths, type ConfigPathOptions } from "../config/paths"
 
+/** Collects stable environment metadata for diagnostics output. */
 export function collectEnvironmentInfo(options: ConfigPathOptions = {}): Record<string, unknown> {
   const paths = getConfigPaths(options)
   return {

@@ -3,6 +3,7 @@ import type { RuntimeErrorShape } from "../../events/events"
 import type { RuntimeStatus } from "../../session/message"
 import { fromJson, toJson } from "./json"
 
+/** Durable snapshot of a tool call's latest execution state. */
 export interface PersistedToolCall {
   readonly id: string
   readonly sessionId: string
@@ -29,10 +30,12 @@ interface ToolCallRow {
   readonly error_json: string | null
 }
 
+/** Repository for upserting and reading tool call execution snapshots. */
 export class ToolCallRepository {
   constructor(private readonly db: Database) {}
 
   upsert(call: PersistedToolCall): PersistedToolCall {
+    // Preserve one row per logical call while refreshing its latest state.
     this.db
       .query(
         `INSERT INTO tool_calls

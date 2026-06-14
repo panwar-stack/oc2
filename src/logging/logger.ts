@@ -28,6 +28,7 @@ const levelWeight: Record<LogLevel, number> = {
   error: 40,
 }
 
+/** Creates a structured logger that filters by level and redacts secrets before writing. */
 export function createLogger(options: LoggerOptions = {}): Logger {
   const minimumLevel = options.level ?? "info"
   const sink = options.sink ?? ((entry) => console.error(JSON.stringify(entry)))

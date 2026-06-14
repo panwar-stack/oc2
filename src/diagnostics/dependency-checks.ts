@@ -6,6 +6,10 @@ export interface DependencyCheckOptions {
   commandExists?: (command: string) => boolean | Promise<boolean>
 }
 
+/**
+ * Verifies configured external dependencies that can be checked locally without
+ * starting services, such as stdio MCP commands on PATH.
+ */
 export async function runDependencyChecks(
   config: Oc2Config,
   options: DependencyCheckOptions = {},

@@ -9,6 +9,10 @@ export interface EnvOverrideResult {
   experimentalDockerSandbox: boolean
 }
 
+/**
+ * Converts supported OC2_* environment variables into config overrides and
+ * reports invalid values without throwing during startup.
+ */
 export function loadEnvOverrides(env: Record<string, string | undefined> = process.env): EnvOverrideResult {
   const overrides: Oc2ConfigInput = {}
   const diagnostics: Diagnostic[] = []

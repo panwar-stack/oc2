@@ -18,6 +18,7 @@ export interface ModelServiceOptions {
   readonly scheduler?: TaskScheduler
 }
 
+/** Coordinates provider lookup, runtime event emission, and optional scheduled execution. */
 export interface ModelService {
   register(provider: ModelProvider): void
   get(providerId: string): ModelProvider | undefined
@@ -27,12 +28,14 @@ export interface ModelService {
   collect(providerId: string, request: ModelRequest): Promise<CollectedModelStream>
 }
 
+/** Creates per-request metadata shared with providers and runtime events. */
 export const createModelContext = (providerId: string): ModelContext => ({
   requestId: crypto.randomUUID(),
   providerId,
   startedAt: new Date(),
 })
 
+/** Builds the model facade used by sessions to stream or collect provider output. */
 export const createModelService = (options: ModelServiceOptions = {}): ModelService => {
   const providers = new Map<string, ModelProvider>()
   const initialProviders = options.providers?.length ? options.providers : [createFakeModelProvider()]
@@ -63,6 +66,7 @@ export const createModelService = (options: ModelServiceOptions = {}): ModelServ
 
     try {
       for await (const event of provider.stream(request, context)) {
+        // Only text-like deltas are mirrored to the runtime bus; structured events remain in the provider stream.
         if (event.type === "text-delta" || event.type === "reasoning-delta") {
           options.events?.publish({
             type: "model.delta",
@@ -103,6 +107,7 @@ export const createModelService = (options: ModelServiceOptions = {}): ModelServ
         const controller = new AbortController()
         const onAbort = () => controller.abort(signal.reason)
         try {
+          // Merge caller and scheduler cancellation so providers see a single abort signal.
           if (request.signal.aborted || signal.aborted) {
             controller.abort(request.signal.reason ?? signal.reason)
           }

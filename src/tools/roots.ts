@@ -15,6 +15,7 @@ export interface ResolveWorkspacePathOptions {
   readonly mustExist?: boolean
 }
 
+/** Returns absolute workspace roots, defaulting to the current working directory when none are configured. */
 export const normalizeWorkspaceRoots = (roots: readonly WorkspaceRoot[], cwd = process.cwd()): readonly WorkspaceRoot[] => {
   if (roots.length === 0) {
     return [{ id: "cwd", path: resolve(cwd), readonly: false }]
@@ -22,11 +23,13 @@ export const normalizeWorkspaceRoots = (roots: readonly WorkspaceRoot[], cwd = p
   return roots.map((root) => ({ ...root, path: resolve(root.path) }))
 }
 
+/** Tests whether `child` is equal to or nested under `parent` after path normalization. */
 export const isInsidePath = (parent: string, child: string): boolean => {
   const relation = relative(resolve(parent), resolve(child))
   return relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))
 }
 
+/** Resolves an input path against workspace roots and rejects escapes through relative paths or symlinks. */
 export const resolveWorkspacePath = async (
   inputPath: string,
   roots: readonly WorkspaceRoot[],
@@ -39,6 +42,7 @@ export const resolveWorkspacePath = async (
   const normalizedRoots = normalizeWorkspaceRoots(roots, options.cwd)
   const base = options.cwd ? resolve(options.cwd) : normalizedRoots[0]?.path ?? process.cwd()
   const target = resolve(isAbsolute(inputPath) ? inputPath : resolve(base, inputPath))
+  // New files are checked at their nearest existing ancestor so symlink escapes are still caught.
   const checkPath = options.mustExist ? target : await nearestExistingAncestor(target)
   const realCheckPath = await realpath(checkPath).catch(() => checkPath)
   let realRoot = ""
@@ -67,6 +71,7 @@ export const resolveWorkspacePath = async (
   return { path: target, root }
 }
 
+/** Finds the workspace root that contains both the requested path and its canonical filesystem path. */
 const findWorkspaceRoot = async (
   roots: readonly WorkspaceRoot[],
   target: string,
@@ -83,6 +88,7 @@ const findWorkspaceRoot = async (
   return undefined
 }
 
+/** Walks upward until an existing path can be canonicalized for workspace-boundary checks. */
 const nearestExistingAncestor = async (path: string): Promise<string> => {
   let current = path
   while (true) {

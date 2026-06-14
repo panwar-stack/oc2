@@ -10,6 +10,7 @@ const inputSchema = z.object({
   timeoutMs: z.number().int().positive().max(120_000).optional(),
 })
 
+/** Creates the built-in shell tool, scoped to writable workspace roots and cancellable by abort signal. */
 export const createBashTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "bash",
   description: "Run a bash command in a writable workspace root. Docker sandboxing is not enabled.",

@@ -11,6 +11,7 @@ const inputSchema = z.object({
   content: z.string(),
 })
 
+/** Creates the built-in write tool that creates parent directories inside writable workspace roots. */
 export const createWriteTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "write",
   description: "Write a file inside a writable workspace root.",

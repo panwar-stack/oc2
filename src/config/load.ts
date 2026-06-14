@@ -40,6 +40,10 @@ type ConfigLayer = {
 const defaultReadFile = (path: string) => Bun.file(path).text()
 const defaultFileExists = (path: string) => Bun.file(path).exists()
 
+/**
+ * Loads user, project, explicit, environment, and CLI config layers into a
+ * validated runtime config while preserving diagnostics for recoverable issues.
+ */
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<LoadedConfig> {
   const env = options.env ?? process.env
   const paths = getConfigPaths({ cwd: options.cwd, homeDir: options.homeDir, env })
@@ -122,6 +126,7 @@ function normalizeConfigInput(value: Oc2ConfigInput, sourcePath: string, cwd: st
   const sourceDir = sourcePath.endsWith("oc2.jsonc") || sourcePath.endsWith("config.jsonc") ? dirname(sourcePath) : cwd
   const normalized = deepMerge({}, value) as Oc2ConfigInput
 
+  // MCP cwd values are relative to the config file that declared them, not the invocation cwd.
   for (const server of Object.values(normalized.mcp ?? {})) {
     if (server.cwd) {
       server.cwd = resolvePath(server.cwd, sourceDir, homeDir)
@@ -177,6 +182,7 @@ function warnConfigState(config: Oc2Config, diagnostics: Diagnostic[]) {
 
 function repairConfig(value: unknown): Oc2Config {
   const candidate = isRecord(value) ? value : {}
+  // Keep valid subsections when a merged config fails top-level validation.
   return {
     model: oc2ConfigSchema.shape.model.safeParse(candidate.model).success
       ? oc2ConfigSchema.shape.model.parse(candidate.model)

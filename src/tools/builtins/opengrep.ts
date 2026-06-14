@@ -12,6 +12,7 @@ const inputSchema = z.object({
   exclude: z.string().optional(),
 })
 
+/** Creates the structural-search tool, falling back gracefully when OpenGrep/Semgrep is unavailable. */
 export const createOpenGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "opengrep",
   description: "Run OpenGrep/Semgrep structural search when a local binary is available.",
@@ -45,6 +46,7 @@ export const createOpenGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>
   },
 })
 
+/** Resolves the preferred OpenGrep-compatible binary from environment or PATH. */
 const findOpenGrepBinary = async (): Promise<string | undefined> => {
   if (process.env.OC2_OPENGREP_DISABLE === "1") return undefined
   if (process.env.OC2_OPENGREP_BINARY) return process.env.OC2_OPENGREP_BINARY

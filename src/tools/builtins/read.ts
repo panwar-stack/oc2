@@ -11,6 +11,7 @@ const inputSchema = z.object({
   limit: z.number().int().positive().max(10_000).optional(),
 })
 
+/** Creates the built-in read tool for line-numbered file content and sorted directory listings. */
 export const createReadTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "read",
   description: "Read a file or list a directory inside the workspace roots.",

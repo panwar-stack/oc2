@@ -7,6 +7,7 @@ export interface RuntimeEventBusOptions<TState = unknown> {
   readonly onProjectorError?: (error: unknown, event: RuntimeEvent) => void
 }
 
+/** Synchronous runtime event bus with typed subscriptions and optional projection state. */
 export interface RuntimeEventBus<TState = unknown> {
   publish<TType extends RuntimeEventType>(event: RuntimeEventInput<TType> | RuntimeEvent<TType>): RuntimeEvent<TType>
   subscribe<TType extends RuntimeEventType>(
@@ -17,6 +18,7 @@ export interface RuntimeEventBus<TState = unknown> {
   getState(): TState
 }
 
+/** Creates an in-memory bus that publishes events, notifies listeners, and updates projections. */
 export const createRuntimeEventBus = <TState = undefined>(
   options: RuntimeEventBusOptions<TState> = {},
 ): RuntimeEventBus<TState> => {
@@ -44,6 +46,7 @@ export const createRuntimeEventBus = <TState = undefined>(
         }
       }
 
+      // Notify type-specific listeners before catch-all observers so narrow consumers see events first.
       for (const listener of typedListeners.get(event.type) ?? []) {
         notify(listener, event)
       }

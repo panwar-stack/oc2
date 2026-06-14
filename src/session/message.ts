@@ -1,5 +1,6 @@
 import type { RuntimeErrorShape } from "../events/events"
 
+/** Shared lifecycle states for sessions, messages, tool calls, and scheduled work. */
 export type RuntimeStatus = "idle" | "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "timed_out"
 
 export type MessageRole = "system" | "user" | "assistant" | "tool" | "synthetic"
@@ -26,6 +27,7 @@ export interface ToolResult {
   readonly metadata?: Record<string, unknown>
 }
 
+/** Persistable content fragments that make up a session message transcript. */
 export type MessagePart =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "reasoning"; readonly text: string; readonly redacted?: boolean }
@@ -34,6 +36,7 @@ export type MessagePart =
   | { readonly type: "file"; readonly path: string; readonly mime?: string; readonly text?: string }
   | { readonly type: "event"; readonly eventId: string }
 
+/** Durable message record stored with ordered parts and execution metadata. */
 export interface SessionMessage {
   readonly id: string
   readonly sessionId: string
@@ -48,4 +51,5 @@ export interface SessionMessage {
   readonly error?: RuntimeErrorShape
 }
 
+/** Creates a plain text message part for append/update operations. */
 export const createTextPart = (text: string): MessagePart => ({ type: "text", text })

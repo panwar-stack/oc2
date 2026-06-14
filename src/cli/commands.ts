@@ -30,6 +30,7 @@ export const commandDescriptions = {
   run: "Run a one-shot prompt",
 } satisfies Record<Exclude<CommandName, "help">, string>
 
+/** Parses top-level CLI arguments into command objects without performing side effects. */
 export function parseCommand(argv: string[]): ParseResult {
   const [command = "help", ...rest] = argv
 
@@ -56,6 +57,7 @@ export function parseCommand(argv: string[]): ParseResult {
   }
 }
 
+/** Formats the root help text shared by help output and parse errors. */
 export function formatRootHelp(): string {
   return [
     "Usage: oc2 <command> [options]",

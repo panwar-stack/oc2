@@ -13,6 +13,7 @@ type PatchOperation =
   | { readonly type: "delete"; readonly path: string }
   | { readonly type: "update"; readonly path: string; readonly lines: readonly string[] }
 
+/** Creates the built-in patch tool for the project's simple file-oriented patch envelope. */
 export const createApplyPatchTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "apply_patch",
   description: "Apply a simple file-oriented patch inside writable workspace roots.",
@@ -43,6 +44,7 @@ export const createApplyPatchTool = (): ToolDefinition<z.infer<typeof inputSchem
   },
 })
 
+/** Parses the limited patch envelope into ordered file operations. */
 const parsePatch = (patch: string): PatchOperation[] => {
   const lines = patch.replaceAll("\r\n", "\n").split("\n")
   if (lines[0] !== "*** Begin Patch" || lines.at(-1) !== "*** End Patch") {
@@ -71,6 +73,7 @@ const parsePatch = (patch: string): PatchOperation[] => {
   return operations
 }
 
+/** Applies simplified update hunks by exact line-text replacement or append. */
 const applyUpdate = (original: string, lines: readonly string[]): string => {
   let updated = original
   for (let index = 0; index < lines.length; index += 1) {

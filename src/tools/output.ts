@@ -12,11 +12,13 @@ export interface BoundedOutput {
 const defaultMaxChars = 50 * 1024
 const defaultMaxLines = 2_000
 
+/** Converts arbitrary tool output into the text representation used for transcripts and bounds checks. */
 export const stringifyToolOutput = (value: unknown): string => {
   if (typeof value === "string") return value
   return JSON.stringify(value, null, 2)
 }
 
+/** Applies line and character limits while preserving the original value when no truncation is needed. */
 export const boundToolOutput = (value: unknown, bounds: OutputBounds = {}): BoundedOutput => {
   const maxChars = bounds.maxChars ?? defaultMaxChars
   const maxLines = bounds.maxLines ?? defaultMaxLines

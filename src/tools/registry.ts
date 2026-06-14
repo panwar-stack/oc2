@@ -13,6 +13,7 @@ export interface ToolRegistry {
   unknown(call: ToolCall): ToolExecutionResult
 }
 
+/** Creates a mutable registry that validates tool names and filters disabled tools at read time. */
 export const createToolRegistry = (tools: readonly ToolDefinition[] = []): ToolRegistry => {
   const registry = new Map<string, ToolDefinition>()
   const api: ToolRegistry = {

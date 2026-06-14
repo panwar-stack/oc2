@@ -12,6 +12,7 @@ export interface TaskQueue<TTask> {
   readonly capacity: number
 }
 
+/** Creates a bounded priority queue that preserves FIFO order within the same priority. */
 export const createTaskQueue = <TTask>(capacity: number): TaskQueue<TTask> => {
   let sequence = 0
   const tasks: QueuedTask<TTask>[] = []

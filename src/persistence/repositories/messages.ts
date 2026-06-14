@@ -3,6 +3,7 @@ import type { RuntimeErrorShape } from "../../events/events"
 import type { MessagePart, MessageRole, RuntimeStatus, SessionMessage, TokenUsage } from "../../session/message"
 import { fromJson, toJson } from "./json"
 
+/** Input for creating a durable message and its ordered parts. */
 export interface CreateMessageInput {
   readonly id?: string
   readonly sessionId: string
@@ -16,6 +17,7 @@ export interface CreateMessageInput {
   readonly now?: string
 }
 
+/** Partial message update while preserving fields not explicitly supplied. */
 export interface UpdateMessageInput {
   readonly parts?: readonly MessagePart[]
   readonly status?: RuntimeStatus
@@ -44,6 +46,7 @@ interface PartRow {
 
 const createId = (): string => crypto.randomUUID()
 
+/** Repository for messages and their ordered part rows. */
 export class MessageRepository {
   constructor(private readonly db: Database) {}
 
@@ -71,6 +74,7 @@ export class MessageRepository {
           input.error ? toJson(input.error) : null,
         )
       this.replaceParts(id, input.parts)
+      // Updating the parent session keeps list ordering aligned with transcript activity.
       this.db.query("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now, input.sessionId)
       this.db.exec("COMMIT")
       return this.get(id) as SessionMessage
@@ -126,6 +130,7 @@ export class MessageRepository {
     const insertPart = this.db.query(
       "INSERT INTO message_parts (id, message_id, part_index, type, data_json) VALUES (?, ?, ?, ?, ?)",
     )
+    // Store each part as a full JSON blob so the schema can accept new part variants without migration.
     parts.forEach((part, index) => insertPart.run(createId(), messageId, index, part.type, toJson(part)))
   }
 

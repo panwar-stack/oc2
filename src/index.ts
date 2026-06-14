@@ -45,6 +45,7 @@ export * from "./tools/registry"
 export * from "./tools/execution"
 export * from "./tools/builtins/index"
 
+// Keep library exports available while still allowing this module to act as the bun CLI entrypoint.
 if (import.meta.main) {
   const result = await runCli()
   process.exitCode = result.exitCode

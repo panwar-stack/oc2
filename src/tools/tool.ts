@@ -74,6 +74,7 @@ export interface ToolErrorResult {
 
 export type ToolExecutionResult = ToolSuccessResult | ToolErrorResult
 
+/** Error type tools throw for expected, serializable execution failures. */
 export class ToolExecutionError extends Error implements ToolErrorShape {
   override readonly name = "ToolExecutionError"
   readonly code: string
@@ -98,6 +99,7 @@ export class ToolExecutionError extends Error implements ToolErrorShape {
   }
 }
 
+/** Converts a thrown or pre-shaped tool error into the uniform execution result. */
 export const toolError = (
   call: Pick<ToolCall, "id" | "name">,
   error: ToolExecutionError | ToolErrorShape,
@@ -110,6 +112,7 @@ export const toolError = (
   taskId,
 })
 
+/** Projects an internal tool definition into the schema shape sent to model providers. */
 export const toModelToolDefinition = (tool: ToolDefinition): ModelToolDefinition => ({
   name: tool.name,
   description: tool.description,

@@ -11,6 +11,7 @@ import {
   type ModelToolDefinition,
 } from "./provider"
 
+/** Configuration variants supported by the OpenAI-compatible/Anthropic adapter. */
 export type ModelProviderConfig =
   | { readonly type: "fake"; readonly enabled?: boolean }
   | { readonly type: "openai"; readonly apiKeyEnv?: string; readonly baseURL?: string }
@@ -54,6 +55,7 @@ const defaultApiKeyEnv = (config: ModelProviderConfig): string | undefined => {
   return undefined
 }
 
+/** Resolves the stable provider id exposed to the rest of the model layer. */
 export const providerIdFromConfig = (config: ModelProviderConfig): string => {
   if (config.type === "openai-compatible" || config.type === "local") {
     return config.id
@@ -61,6 +63,7 @@ export const providerIdFromConfig = (config: ModelProviderConfig): string => {
   return config.type
 }
 
+/** Validates provider config before any network call is attempted. */
 export const checkProviderGate = (
   config: ModelProviderConfig,
   env: Record<string, string | undefined> = process.env,
@@ -87,6 +90,7 @@ export const checkProviderGate = (
   return { ok: true, providerId, apiKeyEnv, baseURL }
 }
 
+/** Streams model output from Anthropic or OpenAI-compatible HTTP APIs. */
 export class AiSdkModelProvider implements ModelProvider {
   readonly id: string
   readonly name: string
@@ -219,6 +223,7 @@ export class AiSdkModelProvider implements ModelProvider {
           yield { type: "reasoning-delta", text: reasoning }
         }
         if (Array.isArray(delta.tool_calls)) {
+          // Tool call arguments can arrive over multiple SSE chunks, so keep accumulating by index.
           yield* readOpenAIToolCalls(delta.tool_calls, toolCalls)
         }
         if (choice.finish_reason === "stop") {
@@ -282,6 +287,7 @@ export class AiSdkModelProvider implements ModelProvider {
   }
 }
 
+/** Convenience factory for constructing a configured remote model provider. */
 export const createConfiguredProvider = (
   config: Exclude<ModelProviderConfig, { readonly type: "fake" }>,
   env?: Record<string, string | undefined>,
@@ -342,6 +348,7 @@ async function* readSseData(response: Response, signal: AbortSignal): AsyncItera
         break
       }
       buffer += decoder.decode(value, { stream: true })
+      // SSE messages are separated by blank lines; retain the incomplete tail for the next chunk.
       const parts = buffer.split("\n\n")
       buffer = parts.pop() ?? ""
       for (const part of parts) {

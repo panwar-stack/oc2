@@ -10,6 +10,7 @@ export interface TextTableRow {
   value: string
 }
 
+/** Formats values as stable, newline-terminated JSON for CLI output. */
 export function formatJson(value: unknown): string {
   return `${JSON.stringify(value ?? null, null, 2)}\n`
 }
@@ -22,6 +23,7 @@ export function formatVersionJson(version: string): JsonVersionOutput {
   return { name: "oc2", version }
 }
 
+/** Formats diagnostics for humans while preserving the structured report in JSON mode. */
 export function formatDiagnosticsText(report: DiagnosticReport): string {
   const counts = countDiagnostics(report.diagnostics)
   const lines = [

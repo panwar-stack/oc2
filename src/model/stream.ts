@@ -1,5 +1,6 @@
 import { ModelProviderError, type ModelEvent, type ModelTokenUsage, type ModelToolCall } from "./provider"
 
+/** Final accumulated view of a provider stream, while preserving raw event order. */
 export interface CollectedModelStream {
   readonly text: string
   readonly reasoning: string
@@ -9,12 +10,14 @@ export interface CollectedModelStream {
   readonly done: boolean
 }
 
+/** Throws the normalized cancellation error when a stream should stop. */
 export const assertNotAborted = (signal: AbortSignal): void => {
   if (signal.aborted) {
     throw new ModelProviderError({ message: "Model request was cancelled", classification: "cancelled", retryable: false })
   }
 }
 
+/** Abort-aware delay used by fake and throttled streams. */
 export const sleep = (ms: number, signal?: AbortSignal): Promise<void> => {
   if (ms <= 0) {
     if (signal) {
@@ -52,6 +55,7 @@ export async function* abortableModelStream(
   signal: AbortSignal,
   delayMs = 0,
 ): AsyncIterable<ModelEvent> {
+  // Re-check around the delay so cancellation wins before and after any wait.
   for (const event of events) {
     assertNotAborted(signal)
     await sleep(delayMs, signal)
@@ -60,6 +64,7 @@ export async function* abortableModelStream(
   }
 }
 
+/** Consumes a model stream into text, reasoning, tool calls, usage, and raw events. */
 export const collectModelStream = async (stream: AsyncIterable<ModelEvent>): Promise<CollectedModelStream> => {
   let text = ""
   let reasoning = ""

@@ -1,6 +1,7 @@
 const secretKeyPattern =
   /(?:^|[_-])(?:api[_-]?key|authorization|client[_-]?secret|password|secret|token|access[_-]?token|refresh[_-]?token|cookie|set[_-]?cookie)(?:$|[_-])/i
 
+/** Recursively redacts likely secrets and drops error causes before JSON persistence. */
 export const sanitizeForPersistence = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(sanitizeForPersistence)
   if (!value || typeof value !== "object") return value

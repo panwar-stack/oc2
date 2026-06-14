@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite"
 import type { RuntimeEvent, RuntimeEventType } from "../../events/events"
 import { fromJson, toJson } from "./json"
 
+/** Runtime event shape after conversion to persistence-friendly values. */
 export interface PersistedRuntimeEvent {
   readonly id: string
   readonly type: RuntimeEventType
@@ -18,6 +19,7 @@ interface EventRow {
   readonly payload_json: string
 }
 
+/** Append/read repository for runtime events associated with sessions. */
 export class RuntimeEventRepository {
   constructor(private readonly db: Database) {}
 

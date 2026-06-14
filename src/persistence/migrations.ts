@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite"
 import { RuntimeError } from "../events/events"
 import { CURRENT_SCHEMA_VERSION, createSchemaSql } from "./schema"
 
+/** Ordered database migration definition applied once by id. */
 export interface Migration {
   readonly id: string
   readonly sql: string
@@ -18,6 +19,7 @@ interface MigrationRow {
   readonly id: string
 }
 
+/** Applies pending migrations in a single transaction and updates SQLite user_version. */
 export const applyMigrations = (db: Database): void => {
   db.exec("BEGIN IMMEDIATE")
   try {
@@ -46,5 +48,6 @@ export const applyMigrations = (db: Database): void => {
   }
 }
 
+/** Reads applied migration ids in deterministic order for diagnostics/tests. */
 export const getAppliedMigrationIds = (db: Database): readonly string[] =>
   db.query<MigrationRow, []>("SELECT id FROM migrations ORDER BY id").all().map((row) => row.id)

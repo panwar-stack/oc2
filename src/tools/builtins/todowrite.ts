@@ -11,6 +11,7 @@ const todoSchema = z.object({
 
 const inputSchema = z.object({ todos: z.array(todoSchema) })
 
+/** Creates the built-in todo writer tool backed by the host application's todo state updater. */
 export const createTodoWriteTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "todowrite",
   description: "Record the current structured todo list.",

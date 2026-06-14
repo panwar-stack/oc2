@@ -11,6 +11,7 @@ const inputSchema = z.object({
   multiple: z.boolean().optional(),
 })
 
+/** Creates the built-in question tool backed by the host application's user prompt resolver. */
 export const createQuestionTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "question",
   description: "Ask the user a structured question through an injected resolver.",

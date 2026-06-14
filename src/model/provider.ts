@@ -1,5 +1,6 @@
 import { redactText } from "../logging/redaction"
 
+/** Role names normalized across provider APIs before request adaptation. */
 export type ModelMessageRole = "system" | "user" | "assistant" | "tool"
 
 export interface ModelMessage {
@@ -38,6 +39,7 @@ export interface ModelInfo {
   readonly supportsReasoning?: boolean
 }
 
+/** Provider-agnostic request shape consumed by every model backend. */
 export interface ModelRequest {
   readonly sessionId: string
   readonly modelId: string
@@ -56,6 +58,7 @@ export interface ModelContext {
   readonly metadata?: Record<string, unknown>
 }
 
+/** Incremental events emitted by providers while a model response streams. */
 export type ModelEvent =
   | { readonly type: "text-delta"; readonly text: string }
   | { readonly type: "reasoning-delta"; readonly text: string }
@@ -85,6 +88,7 @@ export interface ClassifiedModelError {
   readonly status?: number
 }
 
+/** Error wrapper that keeps provider failures classified and safe to persist/log. */
 export class ModelProviderError extends Error implements ClassifiedModelError {
   override readonly name = "ModelProviderError"
   readonly classification: ModelErrorClassification
@@ -121,6 +125,7 @@ export class ModelProviderError extends Error implements ClassifiedModelError {
   }
 }
 
+/** Minimal contract implemented by local, fake, and remote model providers. */
 export interface ModelProvider {
   readonly id: string
   readonly name: string
@@ -128,11 +133,13 @@ export interface ModelProvider {
   stream(request: ModelRequest, context: ModelContext): AsyncIterable<ModelEvent>
 }
 
+/** Returns whether the classified provider failure is likely to succeed on retry. */
 export const isRetryableClassification = (classification: ModelErrorClassification): boolean =>
   classification === "rate_limit" ||
   classification === "provider_unavailable" ||
   classification === "transient_network"
 
+/** Best-effort classifier for heterogeneous provider, HTTP, DOM, and thrown errors. */
 export const classifyModelError = (error: unknown): ModelErrorClassification => {
   if (error instanceof ModelProviderError) {
     return error.classification
@@ -190,6 +197,7 @@ export const classifyModelError = (error: unknown): ModelErrorClassification => 
   return "unknown"
 }
 
+/** Converts any thrown value into the normalized provider error used by callers. */
 export const toModelProviderError = (error: unknown, providerId?: string): ModelProviderError => {
   if (error instanceof ModelProviderError) {
     return error

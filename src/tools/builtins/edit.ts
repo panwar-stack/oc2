@@ -11,6 +11,7 @@ const inputSchema = z.object({
   replaceAll: z.boolean().optional(),
 })
 
+/** Creates the built-in exact-string edit tool, rejecting ambiguous single replacements. */
 export const createEditTool = (): ToolDefinition<z.infer<typeof inputSchema>> => ({
   name: "edit",
   description: "Replace text in a file inside a writable workspace root.",

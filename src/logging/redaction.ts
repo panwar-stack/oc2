@@ -4,14 +4,17 @@ const apiKeyPattern = /\b(sk|oc2|anthropic|openai)-[A-Za-z0-9_-]{8,}\b/g
 
 export const REDACTED = "[REDACTED]"
 
+/** Returns true when a field name conventionally carries sensitive material. */
 export function isSecretKey(key: string): boolean {
   return secretKeyPattern.test(key)
 }
 
+/** Redacts inline bearer tokens and common API-key prefixes in free-form text. */
 export function redactText(value: string): string {
   return value.replace(bearerPattern, `Bearer ${REDACTED}`).replace(apiKeyPattern, REDACTED)
 }
 
+/** Recursively redacts strings and object fields before values leave process logs. */
 export function redactValue(value: unknown, parentKey = ""): unknown {
   if (isSecretKey(parentKey)) return REDACTED
   if (typeof value === "string") return redactText(value)

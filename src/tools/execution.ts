@@ -23,6 +23,7 @@ export interface ToolExecutor {
 const createRuntimeErrorShape = (error: ToolExecutionError) =>
   new RuntimeError({ code: "task_failed", message: error.message, recoverable: error.recoverable, details: error.details, kind: "tool" }).toJSON()
 
+/** Coordinates validation, permissions, scheduling, execution, output bounding, and lifecycle events for tool calls. */
 export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor => {
   const defaultTimeoutMs = options.config?.runtime.defaultTimeoutMs
 
@@ -60,6 +61,7 @@ export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor =
           request,
           context.signal,
         )
+        // Configured ask rules use the injected permission service as the interactive resolver above.
         if (options.permissions && findDecision(configRules, request) !== "ask") await assertToolPermission(options.permissions, request, context.signal)
       } catch (error) {
         return toolError(call, error instanceof ToolExecutionError ? error : new ToolExecutionError({ code: "permission_failed", message: String(error) }))
@@ -120,6 +122,7 @@ export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor =
   }
 }
 
+/** Emits the public completion event shape for both direct and scheduled tool executions. */
 const publishCompletion = (events: RuntimeEventBus<unknown> | undefined, result: ToolExecutionResult, sessionId?: string, taskId?: string) => {
   if (result.ok) {
     events?.publish({ type: "tool.completed", payload: { sessionId, taskId, toolName: result.toolName } })

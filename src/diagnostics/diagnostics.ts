@@ -14,6 +14,7 @@ export interface DiagnosticReport {
   diagnostics: Diagnostic[]
 }
 
+/** Creates a diagnostic shape while omitting undefined optional fields. */
 export function createDiagnostic(
   level: DiagnosticLevel,
   code: string,
@@ -29,6 +30,7 @@ export function createDiagnostic(
   }
 }
 
+/** Builds the serializable diagnostics payload emitted by the CLI. */
 export function createDiagnosticReport(
   environment: Record<string, unknown>,
   diagnostics: Diagnostic[],

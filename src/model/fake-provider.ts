@@ -1,6 +1,7 @@
 import { abortableModelStream } from "./stream"
 import { ModelProviderError, type ModelContext, type ModelEvent, type ModelInfo, type ModelProvider, type ModelRequest } from "./provider"
 
+/** Options for deterministic model responses in tests and local development. */
 export interface FakeModelProviderOptions {
   readonly id?: string
   readonly name?: string
@@ -16,6 +17,7 @@ const defaultFakeEvents: readonly ModelEvent[] = [
   { type: "done" },
 ]
 
+/** In-memory provider that emits predefined events without network access. */
 export class FakeModelProvider implements ModelProvider {
   readonly id: string
   readonly name: string
@@ -48,4 +50,5 @@ export class FakeModelProvider implements ModelProvider {
   }
 }
 
+/** Creates the default fake provider used when no real providers are registered. */
 export const createFakeModelProvider = (options?: FakeModelProviderOptions): FakeModelProvider => new FakeModelProvider(options)

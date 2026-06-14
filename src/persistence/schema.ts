@@ -1,5 +1,7 @@
+/** Current SQLite schema version mirrored into PRAGMA user_version. */
 export const CURRENT_SCHEMA_VERSION = 1
 
+/** Runtime statuses valid for persisted sessions and execution records. */
 export const SESSION_STATUSES = [
   "idle",
   "queued",
@@ -11,8 +13,10 @@ export const SESSION_STATUSES = [
   "timed_out",
 ] as const
 
+/** Message roles valid for persisted transcript entries. */
 export const MESSAGE_ROLES = ["system", "user", "assistant", "tool", "synthetic"] as const
 
+/** Initial schema for sessions, messages, tool calls, events, and MCP snapshots. */
 export const createSchemaSql = `
 CREATE TABLE IF NOT EXISTS migrations (
   id TEXT PRIMARY KEY,
