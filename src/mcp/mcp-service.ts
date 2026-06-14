@@ -68,7 +68,14 @@ export function createMcpService(options: McpServiceOptions): McpService {
     options.snapshots?.append({ serverId: state.server.id, status: redacted })
     options.events?.publish({
       type: "mcp.status",
-      payload: { serverId: state.server.id, status: redacted.status, error: redacted.error },
+      payload: {
+        serverId: state.server.id,
+        status: redacted.status,
+        error: redacted.error,
+        toolCount: redacted.toolCount,
+        tools: redacted.tools,
+        authRequired: redacted.status === "auth_required",
+      },
     })
   }
 

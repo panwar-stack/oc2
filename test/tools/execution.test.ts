@@ -4,6 +4,7 @@ import { z } from "zod"
 
 import { createRuntimeEventBus, type RuntimeEventBus } from "../../src/events/event-bus"
 import { createTaskScheduler } from "../../src/scheduler/scheduler"
+import { createQuestionTool } from "../../src/tools/builtins/question"
 import { createToolExecutor } from "../../src/tools/execution"
 import { createToolPermissionService } from "../../src/tools/permissions"
 import { createToolRegistry } from "../../src/tools/registry"
@@ -211,6 +212,43 @@ test("executor does not duplicate injected permission prompts for config ask rul
       ),
     ).resolves.toMatchObject({ ok: true })
     expect(promptCount).toBe(1)
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
+test("question tool execution emits prompt state and resolves through context resolver", async () => {
+  const workspace = await createTempWorkspace()
+  try {
+    const bus = createRuntimeEventBus()
+    const questionEvents: { readonly type: string; readonly payload: unknown }[] = []
+    bus.all((event) => questionEvents.push({ type: event.type, payload: event.payload }))
+    const registry = createToolRegistry([createQuestionTool()])
+    const executor = createToolExecutor({ registry, events: bus })
+
+    const result = await executor.execute(
+      {
+        id: "question-1",
+        name: "question",
+        arguments: {
+          header: "Confirm",
+          question: "Run tests?",
+          options: [{ label: "Yes", description: "run them" }],
+        },
+      },
+      {
+        workspaceRoots: [workspace.root],
+        resolveQuestion: async () => "Yes",
+      },
+    )
+
+    expect(result).toMatchObject({ ok: true, output: { answer: "Yes" } })
+    expect(questionEvents.map((event) => event.type)).toContain("permission.requested")
+    expect(questionEvents.map((event) => event.type)).toContain("permission.resolved")
+    expect(questionEvents.find((event) => event.type === "permission.requested")?.payload).toMatchObject({
+      permissionId: "question-1",
+      question: { header: "Confirm", question: "Run tests?" },
+    })
   } finally {
     await workspace.cleanup()
   }

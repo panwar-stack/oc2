@@ -8,12 +8,15 @@ import { parseTuiKey } from "./keymap"
 import { SessionView } from "./components/SessionView"
 import {
   appendLocalMessage,
+  closeActivePanel,
   completeTuiRun,
   createInitialTuiState,
   failTuiRun,
   hydrateTuiState,
   projectTuiEvent,
+  toggleMcpPanel,
   toggleSidePanel,
+  toggleTeamPanel,
   type TuiState,
 } from "./state"
 
@@ -25,12 +28,16 @@ export interface TuiLaunchOptions {
   readonly model?: string
   readonly providers?: readonly ModelProvider[]
   readonly stdin?: Readable
-  readonly stdout?: { write(chunk: string): unknown }
+  readonly stdout?: { readonly columns?: number; write(chunk: string): unknown }
+}
+
+export interface TuiRenderOptions {
+  readonly width?: number
 }
 
 /** Renders the minimal TUI snapshot as plain terminal text for both runtime and tests. */
-export function renderTui(state: TuiState, input = ""): string {
-  return SessionView({ state, input })
+export function renderTui(state: TuiState, input = "", options: TuiRenderOptions = {}): string {
+  return SessionView({ state, input, options })
 }
 
 /** Launches the dependency-free terminal UI adapter over the session run service. */
@@ -39,12 +46,26 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     initialState: createInitialTuiState(options.config.tui.sidePanel),
     projector: projectTuiEvent,
   })
+  let questionAnswer: ((value: unknown) => void) | undefined
   const service = createSessionRunService({
     config: options.config,
     cwd: options.cwd,
     dataDir: options.dataDir,
     events: eventBus,
     providers: options.providers,
+    resolveQuestion: async (_question, signal) => {
+      return await new Promise<unknown>((resolve) => {
+        questionAnswer = resolve
+        signal.addEventListener(
+          "abort",
+          () => {
+            questionAnswer = undefined
+            resolve(undefined)
+          },
+          { once: true },
+        )
+      })
+    },
   })
   const stdin = options.stdin ?? process.stdin
   const stdout = options.stdout ?? process.stdout
@@ -59,7 +80,7 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   }
 
   const render = () => {
-    stdout.write(`\x1b[2J\x1b[H${renderTui(state, input)}\n`)
+    stdout.write(`\x1b[2J\x1b[H${renderTui(state, input, { width: stdout.columns })}\n`)
   }
   const unsubscribe = eventBus.all((event) => {
     state = projectTuiEvent(state, event)
@@ -68,6 +89,15 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
 
   const submit = async () => {
     const prompt = input.trim()
+    if (state.questionPrompt && questionAnswer) {
+      input = ""
+      const answer = prompt || undefined
+      const resolve = questionAnswer
+      questionAnswer = undefined
+      resolve(answer)
+      render()
+      return
+    }
     if (!prompt || state.running) return
     input = ""
     state = appendLocalMessage(state, "user", prompt)
@@ -117,7 +147,22 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
         resolve()
         return
       }
+      if (chunk === "\r" && !input.trim() && !state.questionPrompt) {
+        state = toggleMcpPanel(state)
+        render()
+        return
+      }
       if (key.action === "toggle-side-panel") state = toggleSidePanel(state)
+      if (key.action === "toggle-team-panel") state = toggleTeamPanel(state)
+      if (key.action === "toggle-mcp-panel") state = toggleMcpPanel(state)
+      if (key.action === "escape") {
+        if (questionAnswer) {
+          const answerQuestion = questionAnswer
+          questionAnswer = undefined
+          answerQuestion(undefined)
+        }
+        state = closeActivePanel(state)
+      }
       if (key.action === "backspace") input = input.slice(0, -1)
       if (key.action === "input") input += key.value ?? ""
       if (key.action === "submit") void submit()

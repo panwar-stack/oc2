@@ -1,6 +1,7 @@
 import type { Oc2Config } from "../config/schema"
 import type { RuntimeEventBus } from "../events/event-bus"
-import { RuntimeError } from "../events/events"
+import { RuntimeError, type RuntimeEventMap } from "../events/events"
+import { redactText } from "../logging/redaction"
 import type { TaskScheduler } from "../scheduler/scheduler"
 import { boundToolOutput, type OutputBounds } from "./output"
 import {
@@ -101,7 +102,37 @@ export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor =
     }
 
     try {
-      const output = await tool.execute(parsed.data, context)
+      const executionContext =
+        tool.name === "question" && context.resolveQuestion
+          ? {
+              ...context,
+              resolveQuestion: async (input: unknown, signal: AbortSignal) => {
+                const permissionId = call.id
+                const prompt = toQuestionPrompt(input)
+                if (prompt) {
+                  options.events?.publish({
+                    type: "permission.requested",
+                    payload: {
+                      permissionId,
+                      toolName: tool.name,
+                      action: "question",
+                      resource: "user",
+                      question: prompt,
+                    },
+                  })
+                }
+                try {
+                  return await context.resolveQuestion?.(input, signal)
+                } finally {
+                  options.events?.publish({
+                    type: "permission.resolved",
+                    payload: { permissionId, decision: "allow", toolName: tool.name },
+                  })
+                }
+              },
+            }
+          : context
+      const output = await tool.execute(parsed.data, executionContext)
       const bounded = boundToolOutput(output, options.outputBounds)
       return {
         ok: true,
@@ -186,6 +217,33 @@ export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor =
       publishCompletion(options.events, result, call.sessionId ?? context.sessionId, scheduled.task.id)
       return result.ok ? { ...result, taskId: scheduled.task.id } : { ...result, taskId: scheduled.task.id }
     },
+  }
+}
+
+function toQuestionPrompt(input: unknown): RuntimeEventMap["permission.requested"]["question"] | undefined {
+  if (!input || typeof input !== "object" || !("question" in input) || typeof input.question !== "string")
+    return undefined
+  const record = input as {
+    readonly question: string
+    readonly header?: unknown
+    readonly options?: unknown
+    readonly multiple?: unknown
+  }
+  const options = Array.isArray(record.options)
+    ? record.options
+        .filter((option): option is { readonly label: string; readonly description?: string } => {
+          return !!option && typeof option === "object" && "label" in option && typeof option.label === "string"
+        })
+        .map((option) => ({
+          label: redactText(option.label),
+          description: option.description ? redactText(option.description) : undefined,
+        }))
+    : []
+  return {
+    question: redactText(record.question),
+    header: typeof record.header === "string" ? redactText(record.header) : undefined,
+    options,
+    multiple: record.multiple === true,
   }
 }
 

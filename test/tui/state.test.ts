@@ -7,9 +7,13 @@ import {
   createInitialTuiState,
   failTuiRun,
   hydrateTuiState,
+  closeActivePanel,
+  toggleMcpPanel,
   toggleSidePanel,
+  toggleTeamPanel,
 } from "../../src/tui/state"
 import { RuntimeError } from "../../src/events/events"
+import { parseTuiKey } from "../../src/tui/keymap"
 
 test("projects model streaming into an assistant message", () => {
   let state = createInitialTuiState(true)
@@ -185,4 +189,155 @@ test("clears pending plan approvals when a team shuts down", () => {
   })
 
   expect(state.pendingPlanApprovals).toEqual([])
+})
+
+test("projects rich team panel data", () => {
+  let state = createInitialTuiState(true)
+  state = applyTuiEvent(state, {
+    id: "1",
+    timestamp: new Date(),
+    type: "team.updated",
+    payload: { teamId: "team-1", status: "active", name: "frontend", goal: "ship panels" },
+  })
+  state = applyTuiEvent(state, {
+    id: "2",
+    timestamp: new Date(),
+    type: "team.member.updated",
+    payload: {
+      teamId: "team-1",
+      memberId: "member-1",
+      memberName: "reviewer",
+      status: "active",
+      lifecycle: "daemon",
+      dependencyIds: ["member-0"],
+      daemonState: "running",
+    },
+  })
+  state = applyTuiEvent(state, {
+    id: "3",
+    timestamp: new Date(),
+    type: "team.task.updated",
+    payload: {
+      teamId: "team-1",
+      taskId: "task-1",
+      status: "in_progress",
+      description: "verify narrow UI",
+      assignee: "reviewer",
+      dependencyIds: ["task-0"],
+    },
+  })
+  state = applyTuiEvent(state, {
+    id: "4",
+    timestamp: new Date(),
+    type: "team.message.delivered",
+    payload: { teamId: "team-1", messageId: "msg-1", recipientId: "lead", sender: "reviewer", body: "ready" },
+  })
+
+  expect(state.teams[0]).toMatchObject({ id: "team-1", name: "frontend", goal: "ship panels" })
+  expect(state.teams[0]?.members[0]).toMatchObject({ name: "reviewer", lifecycle: "daemon", daemonState: "running" })
+  expect(state.teams[0]?.tasks[0]).toMatchObject({ description: "verify narrow UI", assignee: "reviewer" })
+  expect(state.teams[0]?.mailbox[0]).toMatchObject({ sender: "reviewer", body: "ready" })
+})
+
+test("redacts free-form team and question projection fields", () => {
+  let state = createInitialTuiState(true)
+  state = applyTuiEvent(state, {
+    id: "1",
+    timestamp: new Date(),
+    type: "team.updated",
+    payload: { teamId: "team-1", status: "active", name: "sk-1234567890", goal: "Bearer abc123456789" },
+  })
+  state = applyTuiEvent(state, {
+    id: "2",
+    timestamp: new Date(),
+    type: "team.task.updated",
+    payload: { teamId: "team-1", taskId: "task-1", status: "pending", description: "use openai-1234567890" },
+  })
+  state = applyTuiEvent(state, {
+    id: "3",
+    timestamp: new Date(),
+    type: "permission.requested",
+    payload: {
+      permissionId: "q1",
+      toolName: "question",
+      question: {
+        header: "Bearer token123456789",
+        question: "Use sk-abcdefghijkl?",
+        options: [{ label: "openai-1234567890", description: "Bearer abc123456789" }],
+      },
+    },
+  })
+
+  expect(state.teams[0]?.name).toBe("[REDACTED]")
+  expect(state.teams[0]?.goal).toBe("Bearer [REDACTED]")
+  expect(state.teams[0]?.tasks[0]?.description).toBe("use [REDACTED]")
+  expect(state.questionPrompt?.header).toBe("Bearer [REDACTED]")
+  expect(state.questionPrompt?.question).toBe("Use [REDACTED]?")
+  expect(state.questionPrompt?.options[0]).toEqual({ label: "[REDACTED]", description: "Bearer [REDACTED]" })
+})
+
+test("projects MCP, permission, question, diagnostics, and agent status", () => {
+  const error = new RuntimeError({ code: "task_failed", message: "token redacted", kind: "mcp" }).toJSON()
+  let state = createInitialTuiState(true)
+  state = applyTuiEvent(state, {
+    id: "1",
+    timestamp: new Date(),
+    type: "mcp.status",
+    payload: { serverId: "browser", status: "auth_required", toolCount: 2, tools: ["mcp_browser_open"], error },
+  })
+  state = applyTuiEvent(state, {
+    id: "2",
+    timestamp: new Date(),
+    type: "permission.requested",
+    payload: {
+      permissionId: "perm-1",
+      toolName: "bash",
+      action: "execute",
+      resource: "npm test",
+      question: { header: "Proceed?", question: "Run tests?", options: [{ label: "Yes" }], multiple: false },
+    },
+  })
+  state = applyTuiEvent(state, {
+    id: "3",
+    timestamp: new Date(),
+    type: "permission.resolved",
+    payload: { permissionId: "perm-1", decision: "deny", toolName: "bash", reason: "user rejected" },
+  })
+  state = applyTuiEvent(state, {
+    id: "4",
+    timestamp: new Date(),
+    type: "diagnostic.warning",
+    payload: { message: "narrow terminal", code: "tui.narrow" },
+  })
+  state = applyTuiEvent(state, {
+    id: "5",
+    timestamp: new Date(),
+    type: "scheduler.task.updated",
+    payload: { taskId: "agent-1", kind: "team-member", status: "running" },
+  })
+
+  expect(state.mcpServers[0]).toMatchObject({ serverId: "browser", authRequired: true, toolCount: 2 })
+  expect(state.permissions[0]).toMatchObject({ permissionId: "perm-1", status: "deny", reason: "user rejected" })
+  expect(state.questionPrompt).toBeUndefined()
+  expect(state.diagnostics).toEqual([{ message: "narrow terminal", code: "tui.narrow" }])
+  expect(state.agentTasks).toEqual([{ id: "agent-1", kind: "team-member", status: "running" }])
+})
+
+test("toggles PR14 panels and parses shortcuts", () => {
+  let state = createInitialTuiState(true)
+  state = toggleTeamPanel(state)
+  expect(state.activePanel).toBe("team")
+  state = toggleMcpPanel(state)
+  expect(state.activePanel).toBe("mcp")
+  state = closeActivePanel({
+    ...state,
+    questionPrompt: { permissionId: "q1", question: "Q?", options: [], multiple: false },
+  })
+  expect(state.activePanel).toBe("session")
+  expect(state.questionPrompt).toBeUndefined()
+
+  expect(parseTuiKey("\u0014")).toEqual({ action: "toggle-team-panel" })
+  expect(parseTuiKey("\u001b[77~")).toEqual({ action: "toggle-mcp-panel" })
+  expect(parseTuiKey("\u001b")).toEqual({ action: "escape" })
+  expect(parseTuiKey("\r")).toEqual({ action: "submit" })
 })

@@ -1,5 +1,6 @@
 import type { RuntimeEventBus } from "../events/event-bus"
 import type { Oc2Config } from "../config/schema"
+import { redactText } from "../logging/redaction"
 import { ToolExecutionError, type ToolPermissionDecision, type ToolPermissionRequest } from "./tool"
 
 export type ToolPermissionRule = NonNullable<Oc2Config["tools"][string]["permissions"]>[number]
@@ -33,12 +34,26 @@ export const createToolPermissionService = (options: ToolPermissionServiceOption
       if (decision !== "ask") return decision
 
       const permissionId = crypto.randomUUID()
-      options.events?.publish({ type: "permission.requested", payload: { permissionId, toolName: request.toolName } })
+      options.events?.publish({
+        type: "permission.requested",
+        payload: {
+          permissionId,
+          toolName: request.toolName,
+          action: request.action,
+          resource: redactText(request.resource),
+          callId: request.callId,
+          sessionId: request.sessionId,
+        },
+      })
       const resolved = options.resolver ? await options.resolver(request, signal) : "deny"
       const normalized = typeof resolved === "string" ? { decision: resolved } : resolved
       options.events?.publish({
         type: "permission.resolved",
-        payload: { permissionId, decision: normalized.decision === "allow" ? "allow" : "deny" },
+        payload: {
+          permissionId,
+          decision: normalized.decision === "allow" ? "allow" : "deny",
+          toolName: request.toolName,
+        },
       })
 
       if (normalized.remember) {

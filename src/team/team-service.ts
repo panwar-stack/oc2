@@ -4,6 +4,7 @@ import type { Oc2Config } from "../config/schema"
 import type { RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
 import type { ModelService } from "../model/model-service"
+import { redactText } from "../logging/redaction"
 import {
   TeamMailboxRepository,
   type DeliveredTeamMessage,
@@ -66,7 +67,10 @@ export class TeamService {
   create(input: { readonly leadSessionId: string; readonly name: string; readonly goal: string }): TeamRecord {
     this.assertCanOwnTeam(input.leadSessionId)
     const team = this.teams.create(input)
-    this.options.events?.publish({ type: "team.updated", payload: { teamId: team.id, status: team.status } })
+    this.options.events?.publish({
+      type: "team.updated",
+      payload: { teamId: team.id, status: team.status, name: team.name, goal: team.goal },
+    })
     return team
   }
 
@@ -127,6 +131,10 @@ export class TeamService {
         memberName: member.name,
         status: member.status,
         planStatus: member.planStatus,
+        agentId: member.agentId,
+        lifecycle: member.lifecycle,
+        dependencyIds: member.dependencyIds,
+        daemonState: member.daemonState,
       },
     })
     if (!blocked) this.startMember(team, member, profile, input.timeoutMs, input.signal)
@@ -163,6 +171,10 @@ export class TeamService {
         memberName: member.name,
         status: updated.status,
         planStatus: updated.planStatus,
+        agentId: updated.agentId,
+        lifecycle: updated.lifecycle,
+        dependencyIds: updated.dependencyIds,
+        daemonState: updated.daemonState,
       },
     })
     return updated
@@ -223,6 +235,10 @@ export class TeamService {
         memberName: member.name,
         status: updated.status,
         planStatus: updated.planStatus,
+        agentId: updated.agentId,
+        lifecycle: updated.lifecycle,
+        dependencyIds: updated.dependencyIds,
+        daemonState: updated.daemonState,
       },
     })
     if (canStartNow && !planningRunActive) {
@@ -244,7 +260,7 @@ export class TeamService {
     })
     this.options.events?.publish({
       type: "team.updated",
-      payload: { teamId: team.id, status: team.status, reportAvailable: true },
+      payload: { teamId: team.id, status: team.status, name: team.name, goal: team.goal, reportAvailable: true },
     })
     return report
   }
@@ -257,7 +273,10 @@ export class TeamService {
       this.activeHandles.delete(member.id)
     }
     const shutdown = this.teams.shutdown(team.id)
-    this.options.events?.publish({ type: "team.updated", payload: { teamId: team.id, status: shutdown.status } })
+    this.options.events?.publish({
+      type: "team.updated",
+      payload: { teamId: team.id, status: shutdown.status, name: shutdown.name, goal: shutdown.goal },
+    })
     return shutdown
   }
 
@@ -281,7 +300,13 @@ export class TeamService {
     for (const recipient of recipients) {
       this.options.events?.publish({
         type: "team.message.delivered",
-        payload: { teamId: team.id, messageId: message.id, recipientId: recipient },
+        payload: {
+          teamId: team.id,
+          messageId: message.id,
+          recipientId: recipient,
+          sender,
+          body: redactText(message.body),
+        },
       })
     }
     return message
@@ -302,7 +327,13 @@ export class TeamService {
     for (const recipient of recipients) {
       this.options.events?.publish({
         type: "team.message.delivered",
-        payload: { teamId: team.id, messageId: message.id, recipientId: recipient },
+        payload: {
+          teamId: team.id,
+          messageId: message.id,
+          recipientId: recipient,
+          sender,
+          body: redactText(message.body),
+        },
       })
     }
     return message
@@ -334,7 +365,14 @@ export class TeamService {
     })
     this.options.events?.publish({
       type: "team.task.updated",
-      payload: { teamId: team.id, taskId: task.id, status: task.status },
+      payload: {
+        teamId: team.id,
+        taskId: task.id,
+        status: task.status,
+        description: task.description,
+        assignee: task.assignee,
+        dependencyIds: task.dependencyIds,
+      },
     })
     return task
   }
@@ -348,7 +386,14 @@ export class TeamService {
     const task = this.tasks.claim(input.taskId, input.assignee)
     this.options.events?.publish({
       type: "team.task.updated",
-      payload: { teamId: task.teamId, taskId: task.id, status: task.status },
+      payload: {
+        teamId: task.teamId,
+        taskId: task.id,
+        status: task.status,
+        description: task.description,
+        assignee: task.assignee,
+        dependencyIds: task.dependencyIds,
+      },
     })
     return task
   }
@@ -363,7 +408,14 @@ export class TeamService {
     const task = this.tasks.update(input.taskId, { status: input.status, assignee: input.assignee })
     this.options.events?.publish({
       type: "team.task.updated",
-      payload: { teamId: task.teamId, taskId: task.id, status: task.status },
+      payload: {
+        teamId: task.teamId,
+        taskId: task.id,
+        status: task.status,
+        description: task.description,
+        assignee: task.assignee,
+        dependencyIds: task.dependencyIds,
+      },
     })
     return task
   }
@@ -391,13 +443,23 @@ export class TeamService {
         ) {
           throw invalidTeam(`Team member ${member.name} cannot start before plan approval`)
         }
-        this.teams.updateMember(member.id, {
+        const active = this.teams.updateMember(member.id, {
           status: "active",
           daemonState: member.lifecycle === "daemon" ? "running" : undefined,
         })
         this.options.events?.publish({
           type: "team.member.updated",
-          payload: { teamId: team.id, memberId: member.id, memberName: member.name, status: "active" },
+          payload: {
+            teamId: team.id,
+            memberId: member.id,
+            memberName: member.name,
+            status: active.status,
+            planStatus: active.planStatus,
+            agentId: active.agentId,
+            lifecycle: active.lifecycle,
+            dependencyIds: active.dependencyIds,
+            daemonState: active.daemonState,
+          },
         })
         const session = this.options.sessions.sessions.tryStartRun(member.sessionId)
         if (!session) throw invalidTeam(`Team member session is already running: ${member.sessionId}`)
@@ -441,6 +503,10 @@ export class TeamService {
             memberName: member.name,
             status: updated.status,
             planStatus: updated.planStatus,
+            agentId: updated.agentId,
+            lifecycle: updated.lifecycle,
+            dependencyIds: updated.dependencyIds,
+            daemonState: updated.daemonState,
           },
         })
         const activeTeam = this.teams.get(team.id)
@@ -474,7 +540,18 @@ export class TeamService {
       })
       this.options.events?.publish({
         type: "team.member.updated",
-        payload: { teamId: team.id, memberId: member.id, memberName: member.name, status: updated.status },
+        payload: {
+          teamId: team.id,
+          memberId: member.id,
+          memberName: member.name,
+          status: updated.status,
+          planStatus: updated.planStatus,
+          agentId: updated.agentId,
+          lifecycle: updated.lifecycle,
+          dependencyIds: updated.dependencyIds,
+          daemonState: updated.daemonState,
+          daemonError: updated.daemonError,
+        },
       })
       if (error) {
         this.mailbox.send({

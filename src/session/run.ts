@@ -32,6 +32,7 @@ export interface SessionRunServiceOptions {
   readonly scheduler?: TaskScheduler
   readonly providers?: ModelServiceOptions["providers"]
   readonly mcpClientFactory?: McpClientFactory
+  readonly resolveQuestion?: (input: unknown, signal: AbortSignal) => Promise<unknown>
 }
 
 export interface RunPromptInput {
@@ -56,6 +57,7 @@ export class SessionRunService {
   private readonly config: Oc2Config
   private readonly cwd: string
   private readonly mcpClientFactory?: McpClientFactory
+  private readonly resolveQuestion?: (input: unknown, signal: AbortSignal) => Promise<unknown>
   private readonly active = new Set<string>()
 
   constructor(options: SessionRunServiceOptions) {
@@ -82,6 +84,7 @@ export class SessionRunService {
     this.config = options.config
     this.cwd = options.cwd
     this.mcpClientFactory = options.mcpClientFactory
+    this.resolveQuestion = options.resolveQuestion
   }
 
   async run(input: RunPromptInput): Promise<MainAgentRunResult> {
@@ -171,6 +174,7 @@ export class SessionRunService {
         prompt: input.prompt,
         config: agentConfig,
         signal: input.signal ?? new AbortController().signal,
+        resolveQuestion: this.resolveQuestion,
       })
       this.sessions.sessions.updateStatus(session.id, result.status)
       return result

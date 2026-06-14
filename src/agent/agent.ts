@@ -6,6 +6,7 @@ import type { SessionService } from "../session/session-service"
 import { buildAgentModelContext } from "../session/context"
 import { createTextPart, type MessagePart, type SessionMessage, type TokenUsage } from "../session/message"
 import type { ToolExecutor } from "../tools/execution"
+import type { ToolContext } from "../tools/tool"
 import type { ToolRegistry } from "../tools/registry"
 import type { Oc2Config } from "../config/schema"
 import type { AgentProfile } from "./profiles"
@@ -16,6 +17,7 @@ export interface MainAgentRunInput {
   readonly prompt: string
   readonly config: Oc2Config
   readonly signal: AbortSignal
+  readonly resolveQuestion?: ToolContext["resolveQuestion"]
 }
 
 export interface AgentRunToolCall {
@@ -115,6 +117,7 @@ export class MainAgent {
               cwd: input.session.workspaceRoots[0]?.path,
               signal: input.signal,
               sessionId: input.session.id,
+              resolveQuestion: input.resolveQuestion,
             },
           )
           toolCalls.push({ id: call.id, name: call.name, input: call.arguments, ok: result.ok })

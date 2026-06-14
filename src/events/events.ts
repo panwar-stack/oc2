@@ -99,20 +99,75 @@ export interface RuntimeEventMap {
     readonly toolName: string
     readonly error: RuntimeErrorShape
   }
-  "permission.requested": { readonly permissionId: string; readonly toolName?: string }
-  "permission.resolved": { readonly permissionId: string; readonly decision: "allow" | "deny" }
-  "subagent.updated": { readonly subagentId: string; readonly status: string; readonly taskId?: string }
-  "team.updated": { readonly teamId: string; readonly status: string; readonly reportAvailable?: boolean }
+  "permission.requested": {
+    readonly permissionId: string
+    readonly toolName?: string
+    readonly action?: string
+    readonly resource?: string
+    readonly callId?: string
+    readonly sessionId?: string
+    readonly question?: {
+      readonly header?: string
+      readonly question: string
+      readonly options?: readonly { readonly label: string; readonly description?: string }[]
+      readonly multiple?: boolean
+    }
+  }
+  "permission.resolved": {
+    readonly permissionId: string
+    readonly decision: "allow" | "deny"
+    readonly toolName?: string
+    readonly reason?: string
+  }
+  "subagent.updated": {
+    readonly subagentId: string
+    readonly status: string
+    readonly taskId?: string
+    readonly agentId?: string
+    readonly name?: string
+  }
+  "team.updated": {
+    readonly teamId: string
+    readonly status: string
+    readonly reportAvailable?: boolean
+    readonly name?: string
+    readonly goal?: string
+  }
   "team.member.updated": {
     readonly teamId: string
     readonly memberId: string
     readonly memberName?: string
     readonly status: string
     readonly planStatus?: string
+    readonly agentId?: string
+    readonly lifecycle?: string
+    readonly dependencyIds?: readonly string[]
+    readonly daemonState?: string
+    readonly daemonError?: RuntimeErrorShape
   }
-  "team.task.updated": { readonly teamId: string; readonly taskId: string; readonly status: string }
-  "team.message.delivered": { readonly teamId: string; readonly messageId: string; readonly recipientId: string }
-  "mcp.status": { readonly serverId: string; readonly status: string; readonly error?: RuntimeErrorShape }
+  "team.task.updated": {
+    readonly teamId: string
+    readonly taskId: string
+    readonly status: string
+    readonly description?: string
+    readonly assignee?: string
+    readonly dependencyIds?: readonly string[]
+  }
+  "team.message.delivered": {
+    readonly teamId: string
+    readonly messageId: string
+    readonly recipientId: string
+    readonly sender?: string
+    readonly body?: string
+  }
+  "mcp.status": {
+    readonly serverId: string
+    readonly status: string
+    readonly error?: RuntimeErrorShape
+    readonly toolCount?: number
+    readonly tools?: readonly string[]
+    readonly authRequired?: boolean
+  }
   "scheduler.task.updated": {
     readonly taskId: string
     readonly kind: string
