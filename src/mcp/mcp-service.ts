@@ -5,7 +5,13 @@ import { redactText, redactValue } from "../logging/redaction"
 import type { McpSnapshotRepository } from "../persistence/repositories/mcp"
 import type { TaskScheduler } from "../scheduler/scheduler"
 import type { ToolRegistry } from "../tools/registry"
-import { createMcpClient, McpAuthRequiredError, type McpClient, type McpClientFactory } from "./client"
+import {
+  createMcpClient,
+  McpAuthRequiredError,
+  type McpClient,
+  type McpClientFactory,
+  type McpHostHandlers,
+} from "./client"
 import { listMcpServers, type ResolvedMcpServerConfig } from "./config"
 import { requiresDeferredOAuth } from "./auth"
 import { MCP_PROTOCOL_VERSION } from "./protocol"
@@ -20,6 +26,7 @@ export interface McpServiceOptions {
   readonly scheduler?: TaskScheduler
   readonly snapshots?: McpSnapshotRepository
   readonly clientFactory?: McpClientFactory
+  readonly hostHandlers?: McpHostHandlers
 }
 
 export interface McpService {
@@ -126,6 +133,9 @@ export function createMcpService(options: McpServiceOptions): McpService {
     try {
       const client = await (options.clientFactory ?? createMcpClient)(state.server)
       state.client = client
+      if (options.hostHandlers) {
+        client.setHostHandlers(options.hostHandlers)
+      }
       client.onToolsChanged(() => {
         const refreshController = new AbortController()
         void refreshTools(state, client, refreshController.signal).catch((error) =>
@@ -133,8 +143,12 @@ export function createMcpService(options: McpServiceOptions): McpService {
         )
       })
       await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
+        const capabilities: Record<string, unknown> = {}
+        if (options.hostHandlers?.rootsList) capabilities.roots = { listChanged: true }
+        if (options.hostHandlers?.samplingCreateMessage) capabilities.sampling = {}
+        if (options.hostHandlers?.elicitationCreate) capabilities.elicitation = {}
         await client.initialize(
-          { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "oc2" } },
+          { protocolVersion: MCP_PROTOCOL_VERSION, capabilities, clientInfo: { name: "oc2" } },
           timeoutSignal,
         )
         await refreshTools(state, client, timeoutSignal)

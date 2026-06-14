@@ -18,6 +18,12 @@ export interface McpCallResult {
   readonly isError?: boolean
 }
 
+export interface McpHostHandlers {
+  rootsList?(signal: AbortSignal): Promise<readonly { uri: string; name?: string }[]>
+  samplingCreateMessage?(params: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>>
+  elicitationCreate?(params: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>>
+}
+
 export interface McpClient {
   initialize(input: McpInitializeInput, signal: AbortSignal): Promise<McpInitializeResult>
   listTools(signal: AbortSignal): Promise<readonly McpToolInfo[]>
@@ -28,6 +34,7 @@ export interface McpClient {
   getPrompt(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<McpPromptResult>
   onListChanged(kind: ListChangedKind, callback: () => void): void
   onToolsChanged(callback: () => void): void
+  setHostHandlers(handlers: McpHostHandlers): void
   close(): Promise<void>
 }
 
@@ -127,6 +134,7 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     async close() {
       events?.close()
     },
+    setHostHandlers(_handlers: McpHostHandlers) {},
   }
 }
 
@@ -141,7 +149,82 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
   })
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
   const changed = new Map<ListChangedKind, () => void>()
+  let hostHandlers: McpHostHandlers = {}
   let id = 0
+
+  const handleServerRequest = (message: JsonRpcResponse, stdin: { write(input: string): void }) => {
+    const requestId = message.id
+    if (requestId === undefined) return
+    const method = message.method
+    const params = (message as { params?: Record<string, unknown> }).params ?? {}
+    if (method === "roots/list") {
+      const handler = hostHandlers.rootsList
+      if (!handler) {
+        stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "roots/list not supported" } })}\n`,
+        )
+        return
+      }
+      void handler(new AbortController().signal).then(
+        (roots) => {
+          const resultRoots = roots.map((r) => {
+            const uri = r.uri.includes("://") ? r.uri : `file://${r.uri}`
+            return { uri, name: r.name }
+          })
+          stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result: { roots: resultRoots } })}\n`)
+        },
+        (err) => {
+          stdin.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } })}\n`,
+          )
+        },
+      )
+      return
+    }
+    if (method === "sampling/createMessage") {
+      const handler = hostHandlers.samplingCreateMessage
+      if (!handler) {
+        stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "sampling/createMessage not supported" } })}\n`,
+        )
+        return
+      }
+      void handler(params, new AbortController().signal).then(
+        (result) => {
+          stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result })}\n`)
+        },
+        (err) => {
+          stdin.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } })}\n`,
+          )
+        },
+      )
+      return
+    }
+    if (method === "elicitation/create") {
+      const handler = hostHandlers.elicitationCreate
+      if (!handler) {
+        stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "elicitation/create not supported" } })}\n`,
+        )
+        return
+      }
+      void handler(params, new AbortController().signal).then(
+        (result) => {
+          stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result })}\n`)
+        },
+        (err) => {
+          stdin.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } })}\n`,
+          )
+        },
+      )
+      return
+    }
+    stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "Method not found" } })}\n`,
+    )
+  }
 
   void readJsonLines(process.stdout, (message) => {
     if (message.method === LIST_CHANGED_METHODS.tools) {
@@ -163,7 +246,10 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
     if (message.id === undefined) return
     const key = Number(message.id)
     const waiter = pending.get(key)
-    if (!waiter) return
+    if (!waiter) {
+      handleServerRequest(message, process.stdin)
+      return
+    }
     pending.delete(key)
     try {
       waiter.resolve(unwrapResponse(message))
@@ -228,6 +314,9 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
       process.stdin.end()
       process.kill()
       await process.exited.catch(() => undefined)
+    },
+    setHostHandlers(handlers: McpHostHandlers) {
+      hostHandlers = handlers
     },
   }
 }

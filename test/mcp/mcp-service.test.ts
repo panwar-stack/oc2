@@ -9,6 +9,7 @@ import {
   McpAuthRequiredError,
   type McpCallResult,
   type McpClient,
+  type McpHostHandlers,
   type McpInitializeInput,
   type McpInitializeResult,
   type McpToolInfo,
@@ -155,6 +156,35 @@ test("tools/list_changed refreshes registered MCP tools", async () => {
   expect(registry.get("mcp_server_two")).toBeDefined()
 })
 
+test("host handlers are passed to client and setHostHandlers is called", async () => {
+  let handlersSet = false
+  const handlers: McpHostHandlers = {
+    rootsList: async () => [{ uri: "file:///test", name: "test" }],
+  }
+  const registry = createToolRegistry()
+  const config = withMcp({ server: server({ transport: "stdio", command: "fake" }) })
+  const service = createMcpService({
+    config,
+    registry,
+    hostHandlers: handlers,
+    clientFactory: () =>
+      fakeCapabilityClient(
+        [],
+        (caps) => {
+          expect(caps.roots).toBeDefined()
+          expect(caps.sampling).toBeUndefined()
+          expect(caps.elicitation).toBeUndefined()
+        },
+        () => {
+          handlersSet = true
+        },
+      ),
+  })
+
+  await service.startEnabled()
+  expect(handlersSet).toBe(true)
+})
+
 function withMcp(mcp: Oc2Config["mcp"]): Oc2Config {
   return { ...defaultConfig, mcp }
 }
@@ -200,6 +230,44 @@ function fakeClient(
     },
     onListChanged(_kind: string, _callback: () => void) {},
     onToolsChanged(_callback: () => void) {},
+    setHostHandlers(_handlers: unknown) {},
+    async close() {},
+  }
+}
+
+function fakeCapabilityClient(
+  tools: readonly McpToolInfo[],
+  onInitialize: (capabilities: Record<string, unknown>) => void,
+  onHostHandlers: () => void,
+): McpClient {
+  return {
+    async initialize(input, _signal) {
+      onInitialize(input.capabilities as Record<string, unknown>)
+      return {} as McpInitializeResult
+    },
+    async listTools(_signal) {
+      return tools
+    },
+    async callTool(_name, _input, _signal) {
+      return { content: "ok" }
+    },
+    async listResources(_signal) {
+      return []
+    },
+    async readResource(_uri, _signal) {
+      return { contents: [] }
+    },
+    async listPrompts(_signal) {
+      return []
+    },
+    async getPrompt(_name, _args, _signal) {
+      return { messages: [] }
+    },
+    onListChanged(_kind, _callback) {},
+    onToolsChanged(_callback) {},
+    setHostHandlers(_handlers) {
+      onHostHandlers()
+    },
     async close() {},
   }
 }
@@ -238,6 +306,7 @@ function mutableFakeClient(tools: McpToolInfo[]) {
     onToolsChanged(callback) {
       changed.set("tools", callback)
     },
+    setHostHandlers(_handlers: unknown) {},
     async close() {},
   } satisfies McpClient & { tools: McpToolInfo[]; triggerChanged(): void }
 }

@@ -3,13 +3,30 @@
 const encoder = new TextEncoder()
 
 async function main() {
+  let nextRequestId = 1000
+  const pendingRequests = new Map<number, number>()
   for await (const chunk of Bun.stdin.stream()) {
     for (const line of new TextDecoder().decode(chunk).split("\n")) {
       if (!line.trim()) continue
       try {
-        const message = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, unknown> }
+        const message = JSON.parse(line) as {
+          id?: number
+          method?: string
+          params?: Record<string, unknown>
+          result?: unknown
+          error?: unknown
+        }
         if (message.id === undefined) {
           if (message.method === "notifications/initialized") continue
+          continue
+        }
+        const pendingTool = pendingRequests.get(message.id as number)
+        if (pendingTool !== undefined) {
+          pendingRequests.delete(message.id as number)
+          write({
+            id: pendingTool,
+            result: { content: [{ type: "text", text: JSON.stringify(message.result ?? message.error ?? {}) }] },
+          })
           continue
         }
         if (message.method === "initialize") {
@@ -38,6 +55,11 @@ async function main() {
                   description: "Trigger list-changed notifications",
                   inputSchema: { type: "object", properties: {} },
                 },
+                {
+                  name: "request_roots",
+                  description: "Sends roots/list to client and returns response",
+                  inputSchema: { type: "object", properties: {} },
+                },
               ],
             },
           })
@@ -54,6 +76,16 @@ async function main() {
             notifyChanged("notifications/tools/list_changed")
             notifyChanged("notifications/resources/list_changed")
             notifyChanged("notifications/prompts/list_changed")
+            continue
+          }
+          if (toolName === "request_roots") {
+            const requestId = nextRequestId++
+            pendingRequests.set(requestId, message.id as number)
+            Bun.stdout.write(
+              encoder.encode(
+                `${JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "roots/list", params: {} })}\n`,
+              ),
+            )
             continue
           }
           write({

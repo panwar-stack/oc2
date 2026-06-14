@@ -230,3 +230,26 @@ test("prompts/get returns structured result", async () => {
     await client.close()
   }
 }, 15_000)
+
+test("roots/list handler returns workspace roots when server requests", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  try {
+    client.setHostHandlers({
+      rootsList: async (_signal) => [{ uri: "file:///home/test/project", name: "project" }],
+    })
+    await client.initialize(
+      {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: { roots: { listChanged: true } },
+        clientInfo: { name: "oc2-smoke" },
+      },
+      controller.signal,
+    )
+    const result = await client.callTool("request_roots", {}, controller.signal)
+    expect(result).toBeDefined()
+    expect(result.isError).toBeFalsy()
+  } finally {
+    await client.close()
+  }
+}, 15_000)
