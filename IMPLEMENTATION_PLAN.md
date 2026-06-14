@@ -31,6 +31,9 @@ Use `/Users/srpanwar/Documents/Workspace/brain/opencode` as a reference reposito
 - MCP config must use one canonical `oc2` shape; do not preserve opencode v1/v2 naming drift.
 - Docker shell sandboxing is deferred behind design and security review; do not enable it in the first runtime slices.
 - Every PR slice must be reviewed by a fresh read-only reviewer against the plan and diff before it is considered complete.
+- Use Conventional Commits
+- Add comment and function description
+- Update README.md
 
 ## Reference Map
 
@@ -549,5 +552,3 @@ For every PR slice:
 - Should `oc2` initialize as its own git repository in PR 1? Default: yes, if this is intended to be developed independently; otherwise leave git initialization to the user.
 - Should real provider packages be installed in PR 6 or deferred behind fake provider only? Default: install minimal OpenAI, Anthropic, OpenAI-compatible support when the model service is introduced.
 - Should repository memory CLI commands ship in PR 15? Default: include storage and tool first, defer CLI memory if it expands the review size.
-
-Use Conventional Commits
