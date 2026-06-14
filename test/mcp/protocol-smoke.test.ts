@@ -327,6 +327,37 @@ test("sampling/createMessage handler signal aborts on server cancellation notifi
   }
 }, 15_000)
 
+test("elicitation/create handler returns protocol-shaped result", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  let capturedServerId = ""
+  let capturedMessage = ""
+  try {
+    client.setHostHandlers({
+      elicitationCreate: async (serverId, params) => {
+        capturedServerId = serverId
+        capturedMessage = String(params.message ?? "")
+        return { action: "accept", content: { approved: true } }
+      },
+    })
+    await client.initialize(
+      {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: { elicitation: {} },
+        clientInfo: { name: "oc2-smoke" },
+      },
+      controller.signal,
+    )
+    const result = await client.callTool("request_elicitation", {}, controller.signal)
+    expect(result).toBeDefined()
+    expect(result.isError).toBeFalsy()
+    expect(capturedServerId).toBe("fake")
+    expect(capturedMessage).toBe("Approve request?")
+  } finally {
+    await client.close()
+  }
+}, 15_000)
+
 test("close() resolves cleanly after initialize", async () => {
   const client = (await createMcpClient(stdioServer())) as McpClient
   const controller = new AbortController()

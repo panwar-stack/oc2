@@ -309,6 +309,180 @@ test("MCP sampling propagates cancellation to the model provider", async () => {
   db.close()
 })
 
+test("MCP elicitation accepts resolver answer that matches schema", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  let capturedHandlers: McpHostHandlers | undefined
+  const prompts: unknown[] = []
+  const service = createSessionRunService({
+    config: withElicitationMcpConfig(),
+    cwd: "/repo",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+    resolveQuestion: async (input) => {
+      prompts.push(input)
+      return { approved: true }
+    },
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const result = await capturedHandlers!.elicitationCreate!(
+    "elicit",
+    {
+      message: "Approve?",
+      requestedSchema: { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
+    },
+    new AbortController().signal,
+  )
+
+  expect(result).toEqual({ action: "accept", content: { approved: true } })
+  expect(prompts).toEqual([{ question: "Approve?", header: "MCP Server Request", options: [] }])
+  db.close()
+})
+
+test("MCP elicitation declines when resolver returns no answer", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withElicitationMcpConfig(),
+    cwd: "/repo",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+    resolveQuestion: async () => undefined,
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const result = await capturedHandlers!.elicitationCreate!(
+    "elicit",
+    { message: "Approve?" },
+    new AbortController().signal,
+  )
+
+  expect(result).toEqual({ action: "decline" })
+  db.close()
+})
+
+test("MCP elicitation returns cancel when resolver aborts", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withElicitationMcpConfig(),
+    cwd: "/repo",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+    resolveQuestion: async () => {
+      throw new Error("question timed out")
+    },
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const result = await capturedHandlers!.elicitationCreate!(
+    "elicit",
+    { message: "Approve?" },
+    new AbortController().signal,
+  )
+
+  expect(result).toEqual({ action: "cancel" })
+  db.close()
+})
+
+test("MCP elicitation declines invalid answers with deterministic schema reason", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withElicitationMcpConfig(),
+    cwd: "/repo",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+    resolveQuestion: async () => "not an object",
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const result = await capturedHandlers!.elicitationCreate!(
+    "elicit",
+    { message: "Approve?", requestedSchema: { type: "object", required: ["approved"] } },
+    new AbortController().signal,
+  )
+
+  expect((result as any).action).toBe("decline")
+  expect((result as any).reason).toBe("Schema validation failed: expected object")
+  db.close()
+})
+
+test("MCP elicitation validates object property schema mismatch", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  let capturedHandlers: McpHostHandlers | undefined
+  const service = createSessionRunService({
+    config: withElicitationMcpConfig(),
+    cwd: "/repo",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+    resolveQuestion: async () => ({ count: "one", extra: true }),
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  const result = await capturedHandlers!.elicitationCreate!(
+    "elicit",
+    {
+      message: "Count?",
+      requestedSchema: {
+        type: "object",
+        properties: { count: { type: "integer", minimum: 2 } },
+        required: ["count"],
+        additionalProperties: false,
+      },
+    },
+    new AbortController().signal,
+  )
+
+  expect((result as any).action).toBe("decline")
+  expect((result as any).reason).toBe('Schema validation failed: field "count": expected integer')
+  db.close()
+})
+
+test("MCP elicitation visibly marks secret-looking prompts and schemas", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  let capturedHandlers: McpHostHandlers | undefined
+  let promptInput: any
+  const service = createSessionRunService({
+    config: withElicitationMcpConfig(),
+    cwd: "/repo",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+    resolveQuestion: async (input) => {
+      promptInput = input
+      return { apiToken: "redacted-by-test" }
+    },
+    mcpClientFactory: () => fakeMcpClient({ onHandlers: (handlers) => (capturedHandlers = handlers) }),
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+  await capturedHandlers!.elicitationCreate!(
+    "elicit",
+    {
+      message: "Enter value",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          apiToken: { type: "string", description: "API key", default: "Bearer raw-secret-value" },
+        },
+      },
+    },
+    new AbortController().signal,
+  )
+
+  expect(promptInput.header).toContain("SECURITY")
+  expect(promptInput.question).toContain("Enter value")
+  expect(promptInput.question).toContain("apiToken")
+  expect(promptInput.question).toContain("description")
+  expect(promptInput.question).not.toContain("raw-secret-value")
+  db.close()
+})
+
 test("one active model run per session is enforced", async () => {
   const db = openOc2Database({ path: ":memory:" })
   const provider = createScriptedModelProvider([simpleAssistantEvents, simpleAssistantEvents], { delayMs: 20 })
@@ -527,6 +701,24 @@ function withSamplingMcpConfig(toolPermissions: { match: string; decision: "allo
         env: {},
         headers: {},
         toolPermissions,
+        startupTimeoutMs: 10_000,
+      },
+    },
+  }
+}
+
+function withElicitationMcpConfig() {
+  return {
+    ...defaultConfig,
+    mcp: {
+      elicit: {
+        enabled: true,
+        transport: "stdio" as const,
+        command: "fake",
+        args: [],
+        env: {},
+        headers: {},
+        toolPermissions: [],
         startupTimeoutMs: 10_000,
       },
     },

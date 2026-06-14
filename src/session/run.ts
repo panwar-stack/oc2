@@ -205,26 +205,52 @@ export class SessionRunService {
       elicitationCreate: async (_serverId: string, params: Record<string, unknown>, signal: AbortSignal) => {
         const message = typeof params.message === "string" ? params.message : String(params.message ?? "")
         const header = "MCP Server Request"
-        const secretPatterns = ["password", "secret", "token", "api key", "credential", "private key", "passphrase"]
-        const isSecretRequest = secretPatterns.some((p) => message.toLowerCase().includes(p))
+        const schema = params.requestedSchema as Record<string, unknown> | undefined
+        const secretHints = collectSecretLikeSchemaHints(schema)
+        const isSecretRequest = hasSecretLikeText(message) || secretHints.length > 0
         const fullHeader = isSecretRequest ? `${header} - SECURITY: This request may involve secrets` : header
+        const question = secretHints.length > 0 ? `${message}\n\nSecret-looking fields: ${secretHints.join(", ")}` : message
 
-        const answer = this.resolveQuestion
-          ? await this.resolveQuestion(
-              {
-                question: message,
-                header: fullHeader,
-                options: [],
-              },
-              signal,
-            )
-          : undefined
+        let answer: unknown
+        const permissionId = crypto.randomUUID()
+        this.events.publish({
+          type: "permission.requested",
+          payload: {
+            permissionId,
+            toolName: "mcp.elicitation",
+            action: "question",
+            resource: "user",
+            sessionId: session.id,
+            question: { question, header: fullHeader, options: [] },
+          },
+        })
+        try {
+          answer = this.resolveQuestion
+            ? await this.resolveQuestion(
+                {
+                  question,
+                  header: fullHeader,
+                  options: [],
+                },
+                signal,
+              )
+            : undefined
+        } catch {
+          return { action: "cancel" }
+        } finally {
+          this.events.publish({
+            type: "permission.resolved",
+            payload: { permissionId, decision: "allow", toolName: "mcp.elicitation" },
+          })
+        }
 
-        if (answer === undefined || signal.aborted) {
+        if (signal.aborted) {
+          return { action: "cancel" }
+        }
+        if (answer === undefined) {
           return { action: "decline" }
         }
 
-        const schema = params.requestedSchema as Record<string, unknown> | undefined
         if (schema && typeof schema === "object") {
           const validationError = validateAgainstSchema(answer, schema)
           if (validationError) {
@@ -355,21 +381,41 @@ function applyRunSelections(config: Oc2Config, input: RunPromptInput): Oc2Config
 }
 
 function validateAgainstSchema(value: unknown, schema: Record<string, unknown>): string | undefined {
-  if (schema.type === "object" && typeof value === "object" && value !== null) {
+  if (Array.isArray(schema.enum) && !schema.enum.some((item) => JSON.stringify(item) === JSON.stringify(value))) {
+    return "value is not one of the allowed options"
+  }
+  if ("const" in schema && JSON.stringify(schema.const) !== JSON.stringify(value)) return "value does not match const"
+
+  if (schema.type === "object") {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return "expected object"
     const required = Array.isArray(schema.required) ? (schema.required as string[]) : []
     const properties = schema.properties as Record<string, unknown> | undefined
+    const record = value as Record<string, unknown>
     for (const key of required) {
-      if (!(key in (value as Record<string, unknown>))) return `missing required field: ${key}`
+      if (!(key in record)) return `missing required field: ${key}`
     }
     if (properties) {
       for (const [key, propSchema] of Object.entries(properties)) {
-        if (key in (value as Record<string, unknown>)) {
-          const propResult = validateField(
-            (value as Record<string, unknown>)[key],
-            propSchema as Record<string, unknown>,
-          )
+        if (key in record) {
+          const propResult = validateAgainstSchema(record[key], propSchema as Record<string, unknown>)
           if (propResult) return `field "${key}": ${propResult}`
         }
+      }
+    }
+    if (schema.additionalProperties === false && properties) {
+      for (const key of Object.keys(record)) {
+        if (!(key in properties)) return `unexpected field: ${key}`
+      }
+    }
+    return undefined
+  }
+  if (schema.type === "array") {
+    if (!Array.isArray(value)) return "expected array"
+    const itemSchema = schema.items as Record<string, unknown> | undefined
+    if (itemSchema) {
+      for (let index = 0; index < value.length; index++) {
+        const itemResult = validateAgainstSchema(value[index], itemSchema)
+        if (itemResult) return `item ${index}: ${itemResult}`
       }
     }
     return undefined
@@ -380,8 +426,41 @@ function validateAgainstSchema(value: unknown, schema: Record<string, unknown>):
 function validateField(value: unknown, schema: Record<string, unknown>): string | undefined {
   const type = schema.type as string | undefined
   if (type === "string" && typeof value !== "string") return "expected string"
+  if (type === "string" && typeof value === "string") {
+    if (typeof schema.minLength === "number" && value.length < schema.minLength) return `expected at least ${schema.minLength} characters`
+    if (typeof schema.maxLength === "number" && value.length > schema.maxLength) return `expected at most ${schema.maxLength} characters`
+  }
   if (type === "number" && typeof value !== "number") return "expected number"
+  if (type === "number" && typeof value === "number") {
+    if (typeof schema.minimum === "number" && value < schema.minimum) return `expected >= ${schema.minimum}`
+    if (typeof schema.maximum === "number" && value > schema.maximum) return `expected <= ${schema.maximum}`
+  }
   if (type === "boolean" && typeof value !== "boolean") return "expected boolean"
   if (type === "integer" && (typeof value !== "number" || !Number.isInteger(value))) return "expected integer"
+  if (type === "integer" && typeof value === "number") {
+    if (typeof schema.minimum === "number" && value < schema.minimum) return `expected >= ${schema.minimum}`
+    if (typeof schema.maximum === "number" && value > schema.maximum) return `expected <= ${schema.maximum}`
+  }
   return undefined
+}
+
+function hasSecretLikeText(value: string): boolean {
+  return ["password", "secret", "token", "api key", "apikey", "credential", "private key", "passphrase"].some((p) =>
+    value.toLowerCase().includes(p),
+  )
+}
+
+function collectSecretLikeSchemaHints(schema: unknown, path = ""): string[] {
+  if (!schema || typeof schema !== "object") return []
+  if (Array.isArray(schema)) return schema.flatMap((value, index) => collectSecretLikeSchemaHints(value, `${path}[${index}]`))
+  const hints: string[] = []
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    const nextPath = path ? `${path}.${key}` : key
+    if (hasSecretLikeText(key)) hints.push(nextPath)
+    if ((key === "description" || key === "title") && typeof value === "string" && hasSecretLikeText(value)) {
+      hints.push(nextPath)
+    }
+    hints.push(...collectSecretLikeSchemaHints(value, nextPath))
+  }
+  return [...new Set(hints)]
 }

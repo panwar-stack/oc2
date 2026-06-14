@@ -70,6 +70,11 @@ async function main() {
                   description: "Sends sampling/createMessage then cancellation to client",
                   inputSchema: { type: "object", properties: {} },
                 },
+                {
+                  name: "request_elicitation",
+                  description: "Sends elicitation/create to client and returns response",
+                  inputSchema: { type: "object", properties: {} },
+                },
               ],
             },
           })
@@ -137,6 +142,24 @@ async function main() {
                 ),
               )
             }, 10)
+            continue
+          }
+          if (toolName === "request_elicitation") {
+            const requestId = nextRequestId++
+            pendingRequests.set(requestId, message.id as number)
+            Bun.stdout.write(
+              encoder.encode(
+                `${JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: requestId,
+                  method: "elicitation/create",
+                  params: {
+                    message: "Approve request?",
+                    requestedSchema: { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
+                  },
+                })}\n`,
+              ),
+            )
             continue
           }
           write({
