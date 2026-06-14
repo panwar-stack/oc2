@@ -12,6 +12,10 @@ export interface SessionTranscript {
   readonly messages: readonly SessionMessage[]
 }
 
+export interface SessionTranscriptCollection {
+  readonly sessions: readonly SessionTranscript[]
+}
+
 /** Converts structured message parts into text markers suitable for transcript output. */
 export const buildTranscriptEntries = (messages: readonly SessionMessage[]): readonly TranscriptEntry[] =>
   messages.map((message) => ({
@@ -38,3 +42,11 @@ export const exportTranscriptMarkdown = (transcript: SessionTranscript): string 
 
 /** Renders a session transcript as stable, pretty-printed JSON. */
 export const exportTranscriptJson = (transcript: SessionTranscript): string => JSON.stringify(transcript, null, 2)
+
+/** Renders multiple transcripts as Markdown in their collection order. */
+export const exportTranscriptCollectionMarkdown = (collection: SessionTranscriptCollection): string =>
+  collection.sessions.map((transcript) => exportTranscriptMarkdown(transcript).trimEnd()).join("\n\n") + "\n"
+
+/** Renders multiple transcripts as stable, pretty-printed JSON. */
+export const exportTranscriptCollectionJson = (collection: SessionTranscriptCollection): string =>
+  JSON.stringify(collection, null, 2)

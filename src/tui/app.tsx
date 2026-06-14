@@ -26,6 +26,7 @@ export interface TuiLaunchOptions {
   readonly dataDir?: string
   readonly sessionId?: string
   readonly model?: string
+  readonly roots?: readonly string[]
   readonly providers?: readonly ModelProvider[]
   readonly stdin?: Readable
   readonly stdout?: { readonly columns?: number; write(chunk: string): unknown }
@@ -109,6 +110,7 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
         prompt,
         sessionId: state.sessionId,
         model: options.model,
+        roots: options.roots,
         signal: runController.signal,
       })
       state = completeTuiRun(state, result, runController.signal.aborted)

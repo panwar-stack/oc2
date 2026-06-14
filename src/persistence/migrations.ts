@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { RuntimeError } from "../events/events"
-import { CURRENT_SCHEMA_VERSION, createSchemaSql, createTeamSchemaSql } from "./schema"
+import { CURRENT_SCHEMA_VERSION, createRepositoryMemorySchemaSql, createSchemaSql, createTeamSchemaSql } from "./schema"
 
 /** Ordered database migration definition applied once by id. */
 export interface Migration {
@@ -28,6 +28,10 @@ ALTER TABLE team_members ADD COLUMN plan_feedback TEXT;
 ALTER TABLE team_members ADD COLUMN plan_submitted_at TEXT;
 ALTER TABLE team_members ADD COLUMN plan_decided_at TEXT;
 `,
+  },
+  {
+    id: "0004_repository_memory",
+    sql: createRepositoryMemorySchemaSql,
   },
 ]
 

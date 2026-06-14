@@ -1,4 +1,4 @@
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 
 import { MainAgent, type MainAgentRunResult } from "../agent/agent"
 import { resolveMainAgentProfile } from "../agent/profiles"
@@ -9,6 +9,7 @@ import { createMcpService, createMcpToolConfigEntries } from "../mcp/mcp-service
 import type { McpClientFactory } from "../mcp/client"
 import { createModelService, type ModelService, type ModelServiceOptions } from "../model/model-service"
 import { openOc2Database, type Oc2Database } from "../persistence/db"
+import { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import { createTaskScheduler, type TaskScheduler } from "../scheduler/scheduler"
 import { createSessionService, type SessionService } from "./session-service"
 import { createBuiltInToolRegistry } from "../tools/builtins/index"
@@ -43,6 +44,7 @@ export interface RunPromptInput {
   readonly disabledTools?: readonly string[]
   readonly enabledMcp?: readonly string[]
   readonly disabledMcp?: readonly string[]
+  readonly roots?: readonly string[]
   readonly signal?: AbortSignal
 }
 
@@ -52,6 +54,7 @@ export class SessionRunService {
   readonly database?: Oc2Database
   private readonly models: ModelService
   private readonly registry: ToolRegistry
+  private readonly memory: RepositoryMemoryRepository
   private readonly scheduler: TaskScheduler
   private readonly events: RuntimeEventBus<unknown>
   private readonly config: Oc2Config
@@ -77,6 +80,7 @@ export class SessionRunService {
       })
     this.database = options.database ?? openOc2Database({ path: join(options.dataDir ?? options.cwd, "oc2.sqlite") })
     this.sessions = options.sessions ?? createSessionService({ database: this.database, events: this.events })
+    this.memory = new RepositoryMemoryRepository(this.database.sqlite)
     this.registry = options.registry ?? createBuiltInToolRegistry()
     this.models =
       options.models ??
@@ -94,7 +98,7 @@ export class SessionRunService {
       ? this.sessions.resumeSession(input.sessionId)
       : this.sessions.createSession({
           title: input.prompt.slice(0, 80),
-          workspaceRoots: [{ path: this.cwd, readonly: false }],
+          workspaceRoots: resolveSessionRoots(input.roots, this.cwd),
           providerId: model.providerId,
           modelId: model.modelId,
           agentId: profile.id,
@@ -153,6 +157,7 @@ export class SessionRunService {
       registry: this.registry,
       scheduler: this.scheduler,
       events: this.events,
+      memory: this.memory,
     })
     const teams = createTeamService({
       config: agentConfig,
@@ -161,12 +166,19 @@ export class SessionRunService {
       registry: this.registry,
       scheduler: this.scheduler,
       events: this.events,
+      memory: this.memory,
     })
     this.registry.register(createSubAgentTool({ service: subagents }))
     for (const teamTool of createTeamTools({ service: teams })) {
       this.registry.register(teamTool)
     }
-    const agent = new MainAgent({ sessions: this.sessions, models: this.models, registry: this.registry, tools })
+    const agent = new MainAgent({
+      sessions: this.sessions,
+      models: this.models,
+      registry: this.registry,
+      tools,
+      memory: this.memory,
+    })
     try {
       const result = await agent.run({
         session: started,
@@ -210,6 +222,12 @@ function parseModel(value: string | undefined, config: Oc2Config): { providerId:
   if (!value) return { providerId: config.model.provider, modelId: config.model.model }
   const [providerId, ...modelParts] = value.split("/")
   return { providerId: providerId || config.model.provider, modelId: modelParts.join("/") || config.model.model }
+}
+
+/** Converts CLI/API root paths into ordered absolute workspace roots for new sessions. */
+function resolveSessionRoots(roots: readonly string[] | undefined, cwd: string) {
+  const rootPaths = roots && roots.length > 0 ? roots : [cwd]
+  return rootPaths.map((path) => ({ path: resolve(cwd, path), readonly: false }))
 }
 
 function applyRunSelections(config: Oc2Config, input: RunPromptInput): Oc2Config {

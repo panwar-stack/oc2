@@ -2,6 +2,7 @@ import type { z } from "zod"
 
 import type { RuntimeErrorShape } from "../events/events"
 import type { ModelToolDefinition } from "../model/provider"
+import type { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import type { WorkspaceRoot } from "../persistence/repositories/sessions"
 
 export type ToolPermissionDecision = "allow" | "deny" | "ask"
@@ -28,6 +29,7 @@ export interface ToolContext {
   readonly workspaceRoots: readonly WorkspaceRoot[]
   readonly cwd?: string
   readonly fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+  readonly memory?: RepositoryMemoryRepository
   readonly resolveQuestion?: (input: unknown, signal: AbortSignal) => Promise<unknown>
   readonly updateTodos?: (input: unknown, signal: AbortSignal) => Promise<unknown>
 }

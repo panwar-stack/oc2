@@ -6,9 +6,15 @@ import {
   type UpdateMessageInput,
 } from "../persistence/repositories/messages"
 import { RuntimeEventRepository } from "../persistence/repositories/runtime-events"
-import { SessionRepository, type CreateSessionInput, type SessionRecord } from "../persistence/repositories/sessions"
+import {
+  SessionRepository,
+  type CreateSessionInput,
+  type SessionRecord,
+  type WorkspaceRoot,
+} from "../persistence/repositories/sessions"
 import { ToolCallRepository } from "../persistence/repositories/tool-calls"
 import type { SessionMessage } from "./message"
+import type { SessionTranscript } from "./transcript"
 
 export interface SessionServiceOptions {
   readonly database: Oc2Database
@@ -45,6 +51,38 @@ export class SessionService {
 
   listSessions(): readonly SessionRecord[] {
     return this.sessions.list()
+  }
+
+  listWorkspaceRoots(sessionId: string): readonly WorkspaceRoot[] {
+    return this.sessions.get(sessionId)?.workspaceRoots ?? []
+  }
+
+  getTranscript(sessionId: string): SessionTranscript | undefined {
+    const session = this.sessions.get(sessionId)
+    if (!session) return undefined
+    return { session, messages: this.messages.listBySession(sessionId) }
+  }
+
+  collectTranscripts(sessionId: string, options: { recursive?: boolean } = {}): readonly SessionTranscript[] {
+    const root = this.getTranscript(sessionId)
+    if (!root) return []
+    const transcripts: SessionTranscript[] = [root]
+    if (!options.recursive) return transcripts
+
+    const collectChildren = (parentId: string) => {
+      for (const child of this.sessions.listChildren(parentId)) {
+        transcripts.push({ session: child, messages: this.messages.listBySession(child.id) })
+        collectChildren(child.id)
+      }
+    }
+    collectChildren(sessionId)
+    return transcripts
+  }
+
+  addWorkspaceRoot(sessionId: string, root: Omit<WorkspaceRoot, "id">): WorkspaceRoot {
+    const workspaceRoot = this.sessions.addWorkspaceRoot(sessionId, root)
+    this.events?.publish({ type: "session.updated", payload: { sessionId } })
+    return workspaceRoot
   }
 
   appendMessage(input: CreateMessageInput): SessionMessage {

@@ -5,6 +5,7 @@ import { createBashTool } from "./bash"
 import { createEditTool } from "./edit"
 import { createGlobTool } from "./glob"
 import { createGrepTool } from "./grep"
+import { createMemoryTool } from "./memory"
 import { createOpenGrepTool } from "./opengrep"
 import { createQuestionTool } from "./question"
 import { createReadTool } from "./read"
@@ -25,6 +26,7 @@ export const createBuiltInTools = (): readonly ToolDefinition[] => [
   createQuestionTool(),
   createWebfetchTool(),
   createOpenGrepTool(),
+  createMemoryTool(),
 ]
 
 /** Creates a registry preloaded with all built-in tools. */
@@ -41,3 +43,4 @@ export { createTodoWriteTool } from "./todowrite"
 export { createQuestionTool } from "./question"
 export { createWebfetchTool } from "./webfetch"
 export { createOpenGrepTool } from "./opengrep"
+export { createMemoryTool } from "./memory"

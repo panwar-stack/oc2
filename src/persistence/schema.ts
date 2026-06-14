@@ -1,5 +1,5 @@
 /** Current SQLite schema version mirrored into PRAGMA user_version. */
-export const CURRENT_SCHEMA_VERSION = 3
+export const CURRENT_SCHEMA_VERSION = 4
 
 /** Runtime statuses valid for persisted sessions and execution records. */
 export const SESSION_STATUSES = [
@@ -197,4 +197,45 @@ CREATE TABLE IF NOT EXISTS team_message_recipients (
 
 CREATE INDEX IF NOT EXISTS idx_team_message_recipients_recipient
 ON team_message_recipients(team_id, recipient, delivery_status, created_at);
+`
+
+/** Local-only repository memory schema for user-curated entries and retrieval logs. */
+export const createRepositoryMemorySchemaSql = `
+CREATE TABLE IF NOT EXISTS repository_memory_repositories (
+  id TEXT PRIMARY KEY,
+  identity TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS repository_memory_entries (
+  id TEXT PRIMARY KEY,
+  repository_id TEXT NOT NULL REFERENCES repository_memory_repositories(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  entry_key TEXT NOT NULL,
+  content TEXT NOT NULL,
+  token_text TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(repository_id, kind, entry_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repository_memory_entries_repo_kind
+ON repository_memory_entries(repository_id, kind, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS repository_memory_retrieval_logs (
+  id TEXT PRIMARY KEY,
+  repository_id TEXT NOT NULL REFERENCES repository_memory_repositories(id) ON DELETE CASCADE,
+  session_id TEXT,
+  tool TEXT NOT NULL,
+  query TEXT NOT NULL,
+  returned_entry_ids_json TEXT NOT NULL,
+  selected_entry_ids_json TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_repository_memory_retrieval_logs_repo_session
+ON repository_memory_retrieval_logs(repository_id, session_id, created_at DESC);
 `

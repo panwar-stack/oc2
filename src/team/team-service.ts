@@ -5,6 +5,7 @@ import type { RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
 import type { ModelService } from "../model/model-service"
 import { redactText } from "../logging/redaction"
+import type { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import {
   TeamMailboxRepository,
   type DeliveredTeamMessage,
@@ -34,6 +35,7 @@ export interface TeamServiceOptions {
   readonly registry: ToolRegistry
   readonly scheduler: TaskScheduler
   readonly events?: RuntimeEventBus<unknown>
+  readonly memory?: RepositoryMemoryRepository
   readonly permissions?: ToolPermissionService
 }
 
@@ -585,6 +587,7 @@ export class TeamService {
       models: this.options.models,
       registry: this.options.registry,
       tools,
+      memory: this.options.memory,
     })
   }
 

@@ -26,6 +26,7 @@ test("database migrations create PR4 tables and are idempotent", () => {
     "0001_persistence_session_storage",
     "0002_agent_team_core",
     "0003_team_plan_approval",
+    "0004_repository_memory",
   ])
   first.close()
 
@@ -34,6 +35,7 @@ test("database migrations create PR4 tables and are idempotent", () => {
     "0001_persistence_session_storage",
     "0002_agent_team_core",
     "0003_team_plan_approval",
+    "0004_repository_memory",
   ])
   const table = second.sqlite
     .query<{ readonly name: string }, [string]>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")

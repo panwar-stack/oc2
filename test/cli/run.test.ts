@@ -19,6 +19,7 @@ test("parses run prompt and resume run flags", () => {
       disabledTools: [],
       mcp: [],
       disabledMcp: [],
+      roots: [],
     },
   })
   expect(parseCommand(["resume", "session-1", "--run", "next", "--json"])).toEqual({
@@ -145,17 +146,17 @@ test("oc2 tui dispatches to the TUI launcher", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "oc2-cli-"))
   const launches: unknown[] = []
   const result = await runCli({
-    argv: ["tui", "--session", "session-1", "--model", "fake/test"],
+    argv: ["tui", "--session", "session-1", "--model", "fake/test", "--root", "../other"],
     cwd: "/repo",
     homeDir: dataDir,
     env: { OC2_DATA_DIR: dataDir },
     fileExists: async () => false,
     tuiLauncher: async (options) => {
-      launches.push({ sessionId: options.sessionId, model: options.model, cwd: options.cwd })
+      launches.push({ sessionId: options.sessionId, model: options.model, cwd: options.cwd, roots: options.roots })
     },
   })
 
   expect(result.exitCode).toBe(0)
-  expect(launches).toEqual([{ sessionId: "session-1", model: "fake/test", cwd: "/repo" }])
+  expect(launches).toEqual([{ sessionId: "session-1", model: "fake/test", cwd: "/repo", roots: ["../other"] }])
   await rm(dataDir, { recursive: true, force: true })
 })

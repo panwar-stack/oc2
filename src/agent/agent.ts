@@ -1,5 +1,6 @@
 import { RuntimeError, type RuntimeErrorShape } from "../events/events"
 import type { ModelService } from "../model/model-service"
+import type { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import type { ModelTokenUsage, ModelToolCall } from "../model/provider"
 import type { SessionRecord } from "../persistence/repositories/sessions"
 import type { SessionService } from "../session/session-service"
@@ -41,6 +42,7 @@ export interface MainAgentOptions {
   readonly models: ModelService
   readonly registry: ToolRegistry
   readonly tools: ToolExecutor
+  readonly memory?: RepositoryMemoryRepository
 }
 
 /** Runs the main model/tool loop while persisting assistant and tool messages. */
@@ -117,6 +119,7 @@ export class MainAgent {
               cwd: input.session.workspaceRoots[0]?.path,
               signal: input.signal,
               sessionId: input.session.id,
+              memory: this.options.memory,
               resolveQuestion: input.resolveQuestion,
             },
           )

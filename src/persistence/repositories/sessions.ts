@@ -121,6 +121,13 @@ export class SessionRepository {
       .map((row) => this.toRecord(row))
   }
 
+  listChildren(parentSessionId: string): readonly SessionRecord[] {
+    return this.db
+      .query<SessionRow, [string]>("SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at, id")
+      .all(parentSessionId)
+      .map((row) => this.toRecord(row))
+  }
+
   updateStatus(id: string, status: RuntimeStatus, now = new Date().toISOString()): SessionRecord {
     this.db.query("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id)
     const session = this.get(id)

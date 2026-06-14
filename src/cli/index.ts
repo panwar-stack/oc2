@@ -1,4 +1,5 @@
 import { applyEdits, modify, parse } from "jsonc-parser"
+import { join } from "node:path"
 
 import { loadConfig, type LoadConfigOptions } from "../config/load"
 import { getConfigPaths } from "../config/paths"
@@ -7,7 +8,15 @@ import { runDependencyChecks } from "../diagnostics/dependency-checks"
 import { createDiagnosticReport } from "../diagnostics/diagnostics"
 import { createMcpService } from "../mcp/mcp-service"
 import type { ModelProvider } from "../model/provider"
+import { openOc2Database } from "../persistence/db"
 import { createSessionRunService } from "../session/run"
+import { createSessionService } from "../session/session-service"
+import {
+  exportTranscriptCollectionJson,
+  exportTranscriptCollectionMarkdown,
+  exportTranscriptJson,
+  exportTranscriptMarkdown,
+} from "../session/transcript"
 import { createBuiltInToolRegistry } from "../tools/builtins/index"
 import { launchTui, type TuiLaunchOptions } from "../tui/app"
 import { VERSION } from "../version"
@@ -86,6 +95,44 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
       return runPrompt(command, command.sessionId, options)
     case "tui":
       return tui(command, options)
+    case "export":
+      return exportSession(command, options)
+  }
+}
+
+async function exportSession(
+  command: Extract<ParsedCommand, { name: "export" }>,
+  options: CliOptions,
+): Promise<CliResult> {
+  const paths = getConfigPaths(options)
+  const databasePath = join(paths.dataDir, "oc2.sqlite")
+  const fileExists = options.fileExists ?? ((filePath: string) => Bun.file(filePath).exists())
+  if (!(await fileExists(databasePath))) {
+    await writeStderr(options.streams?.stderr, `Session not found: ${command.sessionId}\n`)
+    return { exitCode: 1 }
+  }
+  const database = openOc2Database({ path: databasePath, readonly: true, migrate: false })
+  try {
+    const sessions = createSessionService({ database })
+    const transcripts = sessions.collectTranscripts(command.sessionId, { recursive: command.recursive })
+    if (transcripts.length === 0) {
+      await writeStderr(options.streams?.stderr, `Session not found: ${command.sessionId}\n`)
+      return { exitCode: 1 }
+    }
+    const root = transcripts[0]
+    if (!root) return { exitCode: 1 }
+
+    const output = command.recursive
+      ? command.format === "json"
+        ? exportTranscriptCollectionJson({ sessions: transcripts })
+        : exportTranscriptCollectionMarkdown({ sessions: transcripts })
+      : command.format === "json"
+        ? exportTranscriptJson(root)
+        : exportTranscriptMarkdown(root)
+    await writeStdout(options.streams?.stdout, output)
+    return { exitCode: 0 }
+  } finally {
+    database.close()
   }
 }
 
@@ -150,6 +197,7 @@ async function tui(command: Extract<ParsedCommand, { name: "tui" }>, options: Cl
     dataDir: paths.dataDir,
     sessionId: command.sessionId,
     model: command.model,
+    roots: command.roots,
     providers: options.modelProviders,
   })
   return { exitCode: 0 }
@@ -240,6 +288,7 @@ async function runPrompt(
       disabledTools: command.name === "run" ? command.disabledTools : undefined,
       enabledMcp: command.name === "run" ? command.mcp : undefined,
       disabledMcp: command.name === "run" ? command.disabledMcp : undefined,
+      roots: command.name === "run" ? command.roots : undefined,
     })
     await writeStdout(options.streams?.stdout, command.json ? formatJson(formatRunJson(result)) : `${result.text}\n`)
     return { exitCode: result.status === "completed" ? 0 : 1 }

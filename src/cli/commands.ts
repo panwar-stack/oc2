@@ -1,4 +1,14 @@
-export type CommandName = "version" | "diagnostics" | "config" | "tools" | "mcp" | "run" | "resume" | "tui" | "help"
+export type CommandName =
+  | "version"
+  | "diagnostics"
+  | "config"
+  | "tools"
+  | "mcp"
+  | "run"
+  | "resume"
+  | "tui"
+  | "export"
+  | "help"
 
 export type ParsedCommand =
   | { name: "version"; json: boolean }
@@ -20,9 +30,11 @@ export type ParsedCommand =
       disabledTools: readonly string[]
       mcp: readonly string[]
       disabledMcp: readonly string[]
+      roots: readonly string[]
     }
   | { name: "resume"; sessionId: string; run: string; json: boolean; model?: string }
-  | { name: "tui"; sessionId?: string; model?: string }
+  | { name: "tui"; sessionId?: string; model?: string; roots: readonly string[] }
+  | { name: "export"; sessionId: string; format: "markdown" | "json"; recursive: boolean }
   | { name: "help" }
 
 export interface ParseSuccess {
@@ -46,6 +58,7 @@ export const commandDescriptions = {
   run: "Run a one-shot prompt",
   resume: "Resume a previous session",
   tui: "Open the interactive terminal UI",
+  export: "Export a session transcript",
 } satisfies Record<Exclude<CommandName, "help">, string>
 
 /** Parses top-level CLI arguments into command objects without performing side effects. */
@@ -73,12 +86,25 @@ export function parseCommand(argv: string[]): ParseResult {
       return parseResume(rest)
     case "tui":
       return parseTui(rest)
+    case "export":
+      return parseExport(rest)
     default:
       if (!command.startsWith("-")) {
         return { ok: false, message: `Unknown command: ${command}` }
       }
       return { ok: false, message: `Unknown option: ${command}` }
   }
+}
+
+function parseExport(argv: string[]): ParseResult {
+  const parsed = parseFlagValues(argv, new Set(["--recursive"]), new Set(["--format"]))
+  if (!parsed.ok) return parsed
+  const [sessionId, ...extra] = parsed.positionals
+  if (!sessionId || extra.length > 0) return { ok: false, message: "export requires <session-id>" }
+  const format = parsed.values.get("--format")?.[0]
+  if (format !== "markdown" && format !== "json")
+    return { ok: false, message: "export requires --format markdown|json" }
+  return { ok: true, command: { name: "export", sessionId, format, recursive: parsed.booleans.has("--recursive") } }
 }
 
 function parseMcp(argv: string[]): ParseResult {
@@ -100,12 +126,17 @@ function parseMcp(argv: string[]): ParseResult {
 }
 
 function parseTui(argv: string[]): ParseResult {
-  const parsed = parseFlagValues(argv, new Set(), new Set(["--session", "--model"]))
+  const parsed = parseFlagValues(argv, new Set(), new Set(["--session", "--model", "--root"]))
   if (!parsed.ok) return parsed
   if (parsed.positionals.length > 0) return { ok: false, message: "tui does not accept positional arguments" }
   return {
     ok: true,
-    command: { name: "tui", sessionId: parsed.values.get("--session")?.[0], model: parsed.values.get("--model")?.[0] },
+    command: {
+      name: "tui",
+      sessionId: parsed.values.get("--session")?.[0],
+      model: parsed.values.get("--model")?.[0],
+      roots: parsed.values.get("--root") ?? [],
+    },
   }
 }
 
@@ -155,7 +186,7 @@ function parseRun(argv: string[]): ParseResult {
   const parsed = parseFlagValues(
     argv,
     new Set(["--json"]),
-    new Set(["--model", "--tool", "--no-tool", "--mcp", "--no-mcp"]),
+    new Set(["--model", "--tool", "--no-tool", "--mcp", "--no-mcp", "--root"]),
   )
   if (!parsed.ok) return parsed
   if (parsed.positionals.length === 0) return { ok: false, message: "run requires <prompt>" }
@@ -170,6 +201,7 @@ function parseRun(argv: string[]): ParseResult {
       disabledTools: parsed.values.get("--no-tool") ?? [],
       mcp: parsed.values.get("--mcp") ?? [],
       disabledMcp: parsed.values.get("--no-mcp") ?? [],
+      roots: parsed.values.get("--root") ?? [],
     },
   }
 }

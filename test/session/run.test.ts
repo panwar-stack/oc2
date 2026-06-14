@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { resolve } from "node:path"
 import { z } from "zod"
 
 import {
@@ -46,6 +47,41 @@ test("run resumes an existing session and appends new prompt", async () => {
   expect(
     service.sessions.messages.listBySession(first.sessionId).filter((message) => message.role === "user"),
   ).toHaveLength(2)
+  db.close()
+})
+
+test("run persists ordered absolute workspace roots for new sessions", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo/project",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+  })
+
+  const result = await service.run({ prompt: "hello", model: "fake/test", roots: [".", "../reference"] })
+
+  expect(service.sessions.resumeSession(result.sessionId)?.workspaceRoots.map((root) => root.path)).toEqual([
+    resolve("/repo/project", "."),
+    resolve("/repo/project", "../reference"),
+  ])
+  db.close()
+})
+
+test("run defaults new session workspace roots to cwd when omitted", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo/project",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+  })
+
+  const result = await service.run({ prompt: "hello", model: "fake/test" })
+
+  expect(service.sessions.resumeSession(result.sessionId)?.workspaceRoots.map((root) => root.path)).toEqual([
+    resolve("/repo/project"),
+  ])
   db.close()
 })
 
@@ -148,6 +184,38 @@ test("run exposes subagent tool through the default runtime registry", async () 
   ])
   expect(provider.requests[0]?.tools.map((tool) => tool.name)).toContain("subagent")
   expect(service.sessions.listSessions().some((session) => session.parentSessionId === result.sessionId)).toBe(true)
+  db.close()
+})
+
+test("run wires local repository memory into default tool execution", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([
+    [
+      {
+        type: "tool-call",
+        call: {
+          id: "memory-1",
+          name: "memory",
+          arguments: { action: "store", key: "runtime", content: "Runtime injects local memory." },
+        },
+      },
+      { type: "done" },
+    ],
+    simpleAssistantEvents,
+  ])
+  const service = createSessionRunService({ config: defaultConfig, cwd: "/repo", database: db, providers: [provider] })
+
+  const result = await service.run({ prompt: "remember", model: "fake/test" })
+
+  expect(result.toolCalls).toEqual([
+    {
+      id: "memory-1",
+      name: "memory",
+      input: { action: "store", key: "runtime", content: "Runtime injects local memory." },
+      ok: true,
+    },
+  ])
+  expect(service.sessions.toolCalls.get("memory-1")?.status).toBe("completed")
   db.close()
 })
 

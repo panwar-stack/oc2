@@ -4,6 +4,7 @@ import type { Oc2Config } from "../config/schema"
 import type { RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError, type RuntimeErrorShape } from "../events/events"
 import type { ModelService } from "../model/model-service"
+import type { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import type { SessionRecord } from "../persistence/repositories/sessions"
 import type { TaskScheduler } from "../scheduler/scheduler"
 import { createToolExecutor, type ToolExecutor } from "../tools/execution"
@@ -45,6 +46,7 @@ export interface SubAgentServiceOptions {
   readonly registry: ToolRegistry
   readonly scheduler: TaskScheduler
   readonly events?: RuntimeEventBus<unknown>
+  readonly memory?: RepositoryMemoryRepository
   readonly permissions?: ToolPermissionService
   readonly allowBackground?: boolean
 }
@@ -191,6 +193,7 @@ export class SubAgentService {
       models: this.options.models,
       registry: this.options.registry,
       tools,
+      memory: this.options.memory,
     })
   }
 }

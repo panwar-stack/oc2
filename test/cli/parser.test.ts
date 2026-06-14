@@ -58,14 +58,43 @@ test("parses run help and execution", () => {
       disabledTools: [],
       mcp: [],
       disabledMcp: [],
+      roots: [],
+    },
+  })
+})
+
+test("parses repeated run root flags in order", () => {
+  expect(parseCommand(["run", "hello", "--root", ".", "--root", "../reference"])).toEqual({
+    ok: true,
+    command: {
+      name: "run",
+      prompt: "hello",
+      json: false,
+      model: undefined,
+      tools: [],
+      disabledTools: [],
+      mcp: [],
+      disabledMcp: [],
+      roots: [".", "../reference"],
     },
   })
 })
 
 test("parses tui resume and model flags", () => {
-  expect(parseCommand(["tui", "--session", "session-1", "--model", "fake/test"])).toEqual({
+  expect(parseCommand(["tui", "--session", "session-1", "--model", "fake/test", "--root", "/repo"])).toEqual({
     ok: true,
-    command: { name: "tui", sessionId: "session-1", model: "fake/test" },
+    command: { name: "tui", sessionId: "session-1", model: "fake/test", roots: ["/repo"] },
+  })
+})
+
+test("parses export format and recursive flags", () => {
+  expect(parseCommand(["export", "session-1", "--format", "markdown"])).toEqual({
+    ok: true,
+    command: { name: "export", sessionId: "session-1", format: "markdown", recursive: false },
+  })
+  expect(parseCommand(["export", "session-1", "--format", "json", "--recursive"])).toEqual({
+    ok: true,
+    command: { name: "export", sessionId: "session-1", format: "json", recursive: true },
   })
 })
 

@@ -69,13 +69,14 @@ export function formatMcpStatusText(server: McpServerStatus): string {
 
 export function formatRunHelp(): string {
   return [
-    "Usage: oc2 run <prompt> [--json] [--model <provider/model>] [--tool <name>] [--no-tool <name>] [--mcp <id>] [--no-mcp <id>]",
+    "Usage: oc2 run <prompt> [--json] [--model <provider/model>] [--root <path>...] [--tool <name>] [--no-tool <name>] [--mcp <id>] [--no-mcp <id>]",
     "",
     "Run a one-shot prompt through the main agent.",
     "",
     "Options:",
     "  --json                 Emit JSON output",
     "  --model <provider/model>",
+    "  --root <path>          Add a workspace root for the new session",
     "  --tool <name>          Enable a tool for this run",
     "  --no-tool <name>       Disable a tool for this run",
     "  --mcp <id>             Enable an MCP server for this run",
