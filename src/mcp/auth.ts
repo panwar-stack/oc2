@@ -6,6 +6,10 @@ export interface OAuthTokens {
   readonly expiresAt?: number
   readonly tokenType: string
   readonly scopes: readonly string[]
+  readonly tokenEndpoint?: string
+  readonly clientId?: string
+  readonly resource?: string
+  readonly authorizationServer?: string
 }
 
 export interface OAuthClientState {
@@ -40,7 +44,7 @@ function generateState(): string {
 }
 
 export function requiresDeferredOAuth(server: ResolvedMcpServerConfig): boolean {
-  return server.oauth?.enabled === true
+  return server.oauth?.enabled === true && server.transport === "stdio"
 }
 
 export async function discoverOAuthMetadata(serverUrl: string): Promise<{
@@ -48,14 +52,21 @@ export async function discoverOAuthMetadata(serverUrl: string): Promise<{
   scopesSupported: string[]
   resource: string
 } | null> {
-  const prmUrl = `${serverUrl.replace(/\/$/, "")}/.well-known/oauth-protected-resource`
+  return discoverOAuthMetadataAt(`${serverUrl.replace(/\/$/, "")}/.well-known/oauth-protected-resource`)
+}
+
+export async function discoverOAuthMetadataAt(metadataUrl: string): Promise<{
+  authorizationServers: string[]
+  scopesSupported: string[]
+  resource: string
+} | null> {
   try {
-    const response = await fetch(prmUrl, { signal: AbortSignal.timeout(10_000) })
+    const response = await fetch(metadataUrl, { signal: AbortSignal.timeout(10_000) })
     if (!response.ok) return null
     const metadata = (await response.json()) as Record<string, unknown>
-    if (!metadata.resource) return null
+    if (typeof metadata.resource !== "string") return null
     return {
-      resource: String(metadata.resource),
+      resource: metadata.resource,
       authorizationServers: Array.isArray(metadata.authorization_servers)
         ? (metadata.authorization_servers as string[]).map(String)
         : [],
@@ -78,10 +89,10 @@ export async function discoverAuthServerMetadata(issuerUrl: string): Promise<{
     const response = await fetch(metadataUrl, { signal: AbortSignal.timeout(10_000) })
     if (!response.ok) return null
     const metadata = (await response.json()) as Record<string, unknown>
-    if (!metadata.token_endpoint) return null
+    if (typeof metadata.authorization_endpoint !== "string" || typeof metadata.token_endpoint !== "string") return null
     return {
-      authorizationEndpoint: String(metadata.authorization_endpoint),
-      tokenEndpoint: String(metadata.token_endpoint),
+      authorizationEndpoint: metadata.authorization_endpoint,
+      tokenEndpoint: metadata.token_endpoint,
       registrationEndpoint:
         typeof metadata.registration_endpoint === "string" ? metadata.registration_endpoint : undefined,
     }
@@ -104,6 +115,7 @@ export async function dynamicClientRegistration(
         redirect_uris: [redirectUri],
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
+        token_endpoint_auth_method: "none",
       }),
       signal: AbortSignal.timeout(10_000),
     })
@@ -123,6 +135,7 @@ export async function buildAuthorizationUrl(
   clientId: string,
   redirectUri: string,
   scopes: string[],
+  resource?: string,
 ): Promise<{ url: string; verifier: string; state: string }> {
   const verifier = generateCodeVerifier()
   const challenge = await generateCodeChallenge(verifier)
@@ -138,6 +151,7 @@ export async function buildAuthorizationUrl(
   if (scopes.length > 0) {
     params.set("scope", scopes.join(" "))
   }
+  if (resource) params.set("resource", resource)
   const url = `${authorizationEndpoint}?${params.toString()}`
   return { url, verifier, state }
 }
@@ -148,18 +162,21 @@ export async function exchangeCodeForTokens(
   redirectUri: string,
   code: string,
   verifier: string,
+  resource?: string,
 ): Promise<OAuthTokens | null> {
   try {
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: clientId,
+      code_verifier: verifier,
+    })
+    if (resource) body.set("resource", resource)
     const response = await fetch(tokenEndpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri,
-        client_id: clientId,
-        code_verifier: verifier,
-      }).toString(),
+      body: body.toString(),
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) return null
@@ -180,16 +197,19 @@ export async function refreshToken(
   tokenEndpoint: string,
   clientId: string,
   token: string,
+  resource?: string,
 ): Promise<OAuthTokens | null> {
   try {
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: token,
+      client_id: clientId,
+    })
+    if (resource) body.set("resource", resource)
     const response = await fetch(tokenEndpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: token,
-        client_id: clientId,
-      }).toString(),
+      body: body.toString(),
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) return null

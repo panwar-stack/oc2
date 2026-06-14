@@ -150,6 +150,43 @@ test("OAuth manager initializes flow without clientId (uses DCR)", async () => {
 
   expect(status.state).toBe("callback_pending")
   expect(status.state === "callback_pending" ? status.authUrl : "").toContain("client_id=dcr-client-id")
+  const registration = mock.calls.find((call) => call.url === "https://auth.test/register")
+  expect(JSON.parse(String(registration?.init?.body ?? "{}"))).toMatchObject({ token_endpoint_auth_method: "none" })
+
+  await manager.close()
+  rmSync(dataDir, { recursive: true, force: true })
+}, 15_000)
+
+test("OAuth manager uses actual callback port for generated redirect URIs", async () => {
+  const dataDir = tmpDataDir()
+  const mock = mockFetch()
+
+  mock.on("https://mcp.test/mcp/.well-known/oauth-protected-resource", {
+    resource: "https://mcp.test/mcp",
+    authorization_servers: ["https://auth.test"],
+    scopes_supported: ["read"],
+  })
+  mock.on("https://auth.test/.well-known/oauth-authorization-server", {
+    issuer: "https://auth.test",
+    authorization_endpoint: "https://auth.test/authorize",
+    token_endpoint: "https://auth.test/token",
+    registration_endpoint: "https://auth.test/register",
+  })
+  mock.onPost("https://auth.test/register", { client_id: "dcr-client-id" })
+
+  const server = makeServer({
+    oauth: { enabled: true, scopes: ["read"], callbackPort: 0 },
+  })
+
+  const manager = createOAuthManager(server, dataDir)
+  const status = await manager.initFlow(new AbortController().signal)
+
+  expect(status.state).toBe("callback_pending")
+  const authUrl = status.state === "callback_pending" ? status.authUrl : ""
+  expect(authUrl).not.toContain("127.0.0.1%3A0")
+  expect(new URL(authUrl).searchParams.get("redirect_uri")).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/)
+  const registration = mock.calls.find((call) => call.url === "https://auth.test/register")
+  expect(String(registration?.init?.body ?? "")).not.toContain("127.0.0.1:0")
 
   await manager.close()
   rmSync(dataDir, { recursive: true, force: true })
@@ -296,6 +333,7 @@ test("OAuth manager handles callback with valid state", async () => {
   // with the state extracted from the auth URL
   const authUrl = status.state === "callback_pending" ? status.authUrl : ""
   const urlObj = new URL(authUrl)
+  expect(urlObj.searchParams.get("resource")).toBe("https://mcp.test/mcp")
   const flowState = urlObj.searchParams.get("state")!
 
   await manager.handleCallback("auth-code-123", flowState)
@@ -311,6 +349,10 @@ test("OAuth manager handles callback with valid state", async () => {
   expect(existsSync(tokenPath)).toBe(true)
   const savedTokens = JSON.parse(readFileSync(tokenPath, "utf-8"))
   expect(savedTokens.accessToken).toBe("callback-access-token")
+  expect(savedTokens.resource).toBe("https://mcp.test/mcp")
+  const tokenCall = mock.calls.find((call) => call.url === "https://auth.test/token")
+  const tokenBody = new URLSearchParams(String(tokenCall?.init?.body ?? ""))
+  expect(tokenBody.get("resource")).toBe("https://mcp.test/mcp")
 
   await manager.close()
   rmSync(dataDir, { recursive: true, force: true })
@@ -634,6 +676,52 @@ test("Bearer token retry: refreshIfNeeded returns refresh_failed when no tokens"
   await manager.close()
   rmSync(dataDir, { recursive: true, force: true })
 })
+
+test("OAuth manager refreshes expired persisted tokens after restart", async () => {
+  const dataDir = tmpDataDir()
+  const tokenDir = join(dataDir, "mcp-tokens")
+  mkdirSync(tokenDir, { recursive: true })
+  const { writeFileSync } = await import("node:fs")
+  writeFileSync(
+    join(tokenDir, "test-server.json"),
+    JSON.stringify({
+      accessToken: "expired-token",
+      refreshToken: "restart-refresh-token",
+      expiresAt: Date.now() - 1_000,
+      tokenType: "Bearer",
+      scopes: ["read"],
+      tokenEndpoint: "https://auth.test/token",
+      clientId: "persisted-client",
+      resource: "https://mcp.test/mcp",
+      authorizationServer: "https://auth.test",
+    }),
+    { mode: 0o600 },
+  )
+
+  const mock = mockFetch()
+  mock.onPost("https://auth.test/token", {
+    access_token: "refreshed-after-restart",
+    refresh_token: "rotated-refresh-token",
+    expires_in: 3600,
+    token_type: "Bearer",
+    scope: "read",
+  })
+
+  const manager = createOAuthManager(makeServer(), dataDir)
+  expect(manager.status().state).toBe("authenticated")
+  await expect(manager.getAuthHeaders()).resolves.toEqual({ Authorization: "Bearer refreshed-after-restart" })
+
+  const savedTokens = JSON.parse(readFileSync(join(tokenDir, "test-server.json"), "utf-8"))
+  expect(savedTokens.accessToken).toBe("refreshed-after-restart")
+  expect(savedTokens.tokenEndpoint).toBe("https://auth.test/token")
+  expect(savedTokens.clientId).toBe("persisted-client")
+  const refreshCall = mock.calls.find((call) => call.url === "https://auth.test/token")
+  const refreshBody = new URLSearchParams(String(refreshCall?.init?.body ?? ""))
+  expect(refreshBody.get("resource")).toBe("https://mcp.test/mcp")
+
+  await manager.close()
+  rmSync(dataDir, { recursive: true, force: true })
+}, 15_000)
 
 test("OAuth manager close cleans up callback server", async () => {
   const dataDir = tmpDataDir()

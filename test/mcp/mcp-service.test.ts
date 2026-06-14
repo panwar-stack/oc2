@@ -35,7 +35,7 @@ test("disabled MCP servers are not started", async () => {
   expect(statuses).toEqual([{ serverId: "disabled", status: "disabled", toolCount: 0, tools: [] }])
 })
 
-test("OAuth-required MCP servers report auth_required without connecting", async () => {
+test("OAuth-enabled remote MCP servers connect before auth challenge", async () => {
   let starts = 0
   const config = withMcp({
     remote: server({ transport: "http", url: "https://example.test/mcp", oauth: { enabled: true, scopes: [] } }),
@@ -51,11 +51,11 @@ test("OAuth-required MCP servers report auth_required without connecting", async
 
   const status = await service.test("remote")
 
-  expect(starts).toBe(0)
-  expect(status.status).toBe("auth_required")
+  expect(starts).toBe(1)
+  expect(status.status).toBe("connected")
 })
 
-test("OAuth-required MCP servers with dataDir initiate OAuth flow", async () => {
+test("OAuth-enabled MCP servers with dataDir initiate OAuth flow after auth challenge", async () => {
   const { mkdirSync } = await import("node:fs")
   const { join } = await import("node:path")
   const { tmpdir } = await import("node:os")
@@ -63,9 +63,10 @@ test("OAuth-required MCP servers with dataDir initiate OAuth flow", async () => 
   mkdirSync(dataDir, { recursive: true })
   const original = globalThis.fetch
 
+  const metadataUrl = "https://example.test/.well-known/oauth-protected-resource"
   globalThis.fetch = (async (url: string | URL | Request) => {
     const urlStr = String(url)
-    if (urlStr.includes("oauth-protected-resource")) {
+    if (urlStr === metadataUrl) {
       return new Response(
         JSON.stringify({
           resource: "https://example.test/mcp",
@@ -113,13 +114,13 @@ test("OAuth-required MCP servers with dataDir initiate OAuth flow", async () => 
       dataDir,
       clientFactory: () => {
         starts += 1
-        return fakeClient([])
+        throw new McpAuthRequiredError("auth required", metadataUrl)
       },
     })
 
     const status = await service.test("remote")
 
-    expect(starts).toBe(0)
+    expect(starts).toBe(1)
     expect(status.status).toBe("auth_required")
     expect(status.authUrl).toBeDefined()
     expect(status.authUrl).toContain("https://auth.test/authorize")

@@ -139,8 +139,9 @@ async function exportSession(
 async function mcp(command: Extract<ParsedCommand, { name: "mcp" }>, options: CliOptions): Promise<CliResult> {
   if (command.action === "list") {
     const loaded = await loadConfig(options)
+    const paths = getConfigPaths(options)
     const registry = createBuiltInToolRegistry()
-    const service = createMcpService({ config: loaded.config, registry })
+    const service = createMcpService({ config: loaded.config, registry, dataDir: paths.dataDir })
     await writeStdout(
       options.streams?.stdout,
       command.json ? formatJson({ servers: service.list() }) : formatMcpListText(service.list()),
@@ -150,8 +151,9 @@ async function mcp(command: Extract<ParsedCommand, { name: "mcp" }>, options: Cl
 
   if (command.action === "test") {
     const loaded = await loadConfig(options)
+    const paths = getConfigPaths(options)
     const registry = createBuiltInToolRegistry()
-    const service = createMcpService({ config: loaded.config, registry })
+    const service = createMcpService({ config: loaded.config, registry, dataDir: paths.dataDir })
     try {
       const status = await service.test(command.serverId)
       await writeStdout(

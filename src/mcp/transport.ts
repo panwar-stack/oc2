@@ -96,7 +96,7 @@ export interface HttpTransportOptions {
   readonly url: string
   readonly headers?: Record<string, string>
   readonly transport?: "http" | "sse"
-  readonly tokenProvider?: () => Promise<Record<string, string>>
+  readonly tokenProvider?: (forceRefresh?: boolean) => Promise<Record<string, string>>
 }
 
 export class McpHttpAuthRequiredError extends Error {
@@ -152,7 +152,12 @@ export class HttpTransport implements McpTransport {
     await response.body?.cancel().catch(() => undefined)
   }
 
-  private async post(message: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
+  private async post(
+    message: Record<string, unknown>,
+    signal?: AbortSignal,
+    retriedAuth = false,
+    authHeaders?: Record<string, string>,
+  ): Promise<Response> {
     if (this.closed) throw new Error("HttpTransport: closed")
     if (signal?.aborted) throw new Error("MCP request cancelled")
     const controller = new AbortController()
@@ -162,7 +167,7 @@ export class HttpTransport implements McpTransport {
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
-      ...(await this.options.tokenProvider?.()),
+      ...(authHeaders ?? (await this.options.tokenProvider?.())),
       ...this.options.headers,
     }
     if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId
@@ -178,6 +183,11 @@ export class HttpTransport implements McpTransport {
       if (response.status === 401 || response.status === 403) {
         const authHeader = response.headers.get("www-authenticate")
         const metadataUrl = extractResourceMetadata(authHeader)
+        if (!retriedAuth && this.options.tokenProvider) {
+          await response.body?.cancel().catch(() => undefined)
+          const refreshed = await this.options.tokenProvider(true).catch(() => ({}))
+          if (Object.keys(refreshed).length > 0) return this.post(message, signal, true, refreshed)
+        }
         throw new McpHttpAuthRequiredError("MCP server requires authentication", metadataUrl)
       }
       if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
@@ -228,10 +238,7 @@ export class HttpTransport implements McpTransport {
   }
 
   private async readSse(controller: AbortController): Promise<void> {
-    const response = await fetch(this.sseUrl(), {
-      headers: { ...(await this.options.tokenProvider?.()), ...(this.options.headers ?? {}) },
-      signal: controller.signal,
-    })
+    const response = await this.getSse(controller)
     this.captureSession(response)
     if (!response.ok) throw new Error(`MCP SSE ${response.status}`)
     const reader = response.body?.getReader()
@@ -261,6 +268,24 @@ export class HttpTransport implements McpTransport {
     } finally {
       this.readers.delete(reader)
     }
+  }
+
+  private async getSse(controller: AbortController, retriedAuth = false, authHeaders?: Record<string, string>): Promise<Response> {
+    const response = await fetch(this.sseUrl(), {
+      headers: { ...(authHeaders ?? (await this.options.tokenProvider?.())), ...(this.options.headers ?? {}) },
+      signal: controller.signal,
+    })
+    if (response.status === 401 || response.status === 403) {
+      const authHeader = response.headers.get("www-authenticate")
+      const metadataUrl = extractResourceMetadata(authHeader)
+      if (!retriedAuth && this.options.tokenProvider) {
+        await response.body?.cancel().catch(() => undefined)
+        const refreshed = await this.options.tokenProvider(true).catch(() => ({}))
+        if (Object.keys(refreshed).length > 0) return this.getSse(controller, true, refreshed)
+      }
+      throw new McpHttpAuthRequiredError("MCP server requires authentication", metadataUrl)
+    }
+    return response
   }
 
   private async readSseResponse(

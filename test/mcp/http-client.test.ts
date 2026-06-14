@@ -5,6 +5,7 @@ import {
   McpAuthRequiredError,
   McpJsonRpcError,
   MCP_PROTOCOL_VERSION,
+  HttpTransport,
   ToolExecutionError,
   type McpClient,
   type ResolvedMcpServerConfig,
@@ -901,6 +902,117 @@ describe("McpAuthRequiredError for 401/403", () => {
       }
     } finally {
       authServer.stop()
+    }
+  }, 10_000)
+
+  test("refreshes bearer token and retries one 401 request", async () => {
+    let requests = 0
+    const authHeaders: string[] = []
+    const retryServer = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        requests += 1
+        authHeaders.push(req.headers.get("authorization") ?? "")
+        if (requests === 1) {
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "Unauthorized" } }), {
+            status: 401,
+            headers: {
+              "content-type": "application/json",
+              "www-authenticate": 'Bearer resource_metadata="https://meta.example.com/oauth"',
+            },
+          })
+        }
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, serverInfo: { name: "retry" } },
+          }),
+          { headers: { "content-type": "application/json" } },
+        )
+      },
+    })
+    let forceRefreshes = 0
+    try {
+      const config: ResolvedMcpServerConfig = {
+        id: "retry-server",
+        enabled: true,
+        transport: "http",
+        url: retryServer.url.toString(),
+        args: [],
+        env: {},
+        headers: {},
+        toolPermissions: [],
+        startupTimeoutMs: 10_000,
+        tokenProvider: async (forceRefresh = false) => {
+          if (forceRefresh) forceRefreshes += 1
+          return { Authorization: forceRefresh ? "Bearer fresh-token" : "Bearer stale-token" }
+        },
+      }
+      const client = await createMcpClient(config)
+      try {
+        await expect(
+          client.initialize(
+            { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "retry-test" } },
+            new AbortController().signal,
+          ),
+        ).resolves.toMatchObject({ serverInfo: { name: "retry" } })
+      } finally {
+        await client.close()
+      }
+      expect(requests).toBeGreaterThanOrEqual(2)
+      expect(forceRefreshes).toBe(1)
+      expect(authHeaders.slice(0, 2)).toEqual(["Bearer stale-token", "Bearer fresh-token"])
+    } finally {
+      retryServer.stop()
+    }
+  }, 10_000)
+
+  test("refreshes bearer token and retries one SSE 401 connection", async () => {
+    let requests = 0
+    const authHeaders: string[] = []
+    const retryServer = Bun.serve({
+      port: 0,
+      fetch(req) {
+        requests += 1
+        authHeaders.push(req.headers.get("authorization") ?? "")
+        if (requests === 1) {
+          return new Response("Unauthorized", {
+            status: 401,
+            headers: { "www-authenticate": 'Bearer resource_metadata="https://meta.example.com/oauth"' },
+          })
+        }
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n\n`))
+          },
+        })
+        return new Response(stream, { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    let forceRefreshes = 0
+    const messages: Record<string, unknown>[] = []
+    const errors: Error[] = []
+    const transport = new HttpTransport({
+      url: retryServer.url.toString(),
+      transport: "sse",
+      tokenProvider: async (forceRefresh = false) => {
+        if (forceRefresh) forceRefreshes += 1
+        return { Authorization: forceRefresh ? "Bearer fresh-sse-token" : "Bearer stale-sse-token" }
+      },
+    })
+    transport.onMessage((message) => messages.push(message))
+    transport.onError((error) => errors.push(error))
+    try {
+      await transport.start()
+      await waitFor(async () => messages.length > 0)
+      expect(requests).toBe(2)
+      expect(forceRefreshes).toBe(1)
+      expect(authHeaders).toEqual(["Bearer stale-sse-token", "Bearer fresh-sse-token"])
+      expect(errors).toEqual([])
+    } finally {
+      await transport.close()
+      retryServer.stop()
     }
   }, 10_000)
 })

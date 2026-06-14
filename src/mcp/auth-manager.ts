@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { type ResolvedMcpServerConfig } from "./config"
 import {
   discoverOAuthMetadata,
+  discoverOAuthMetadataAt,
   discoverAuthServerMetadata,
   dynamicClientRegistration,
   buildAuthorizationUrl,
@@ -20,7 +21,7 @@ export type McpAuthStatus =
 
 export interface OAuthManager {
   status(): McpAuthStatus
-  initFlow(signal: AbortSignal): Promise<McpAuthStatus>
+  initFlow(signal: AbortSignal, metadataUrl?: string): Promise<McpAuthStatus>
   handleCallback(code: string, state: string): Promise<void>
   getAuthHeaders(): Promise<Record<string, string>>
   refreshIfNeeded(): Promise<void>
@@ -42,9 +43,13 @@ function authFailureHtml(reason: string): string {
 <head><title>Authorization Failed</title></head>
 <body>
 <h1>Authorization failed</h1>
-<p>${reason}</p>
+<p>${escapeHtml(reason)}</p>
 </body>
 </html>`
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 }
 
 function tokenFilePath(dataDir: string, serverId: string): string {
@@ -73,6 +78,7 @@ function saveTokens(dataDir: string, serverId: string, tokens: OAuthTokens): voi
     mkdirSync(dir, { recursive: true })
   }
   writeFileSync(path, JSON.stringify(tokens), { mode: 0o600 })
+  chmodSync(path, 0o600)
 }
 
 export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: string): OAuthManager {
@@ -82,8 +88,20 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
   let flowState: string | null = null
   let tokenEndpoint: string | null = null
   let clientId: string | null = null
+  let resource: string | null = null
+  let authorizationServer: string | null = null
   let redirectUri: string | null = null
   let callbackServer: ReturnType<typeof Bun.serve> | null = null
+
+  const existing = loadTokens(dataDir, server.id)
+  if (existing?.accessToken) {
+    tokens = existing
+    tokenEndpoint = existing.tokenEndpoint ?? null
+    clientId = existing.clientId ?? server.oauth?.clientId ?? null
+    resource = existing.resource ?? null
+    authorizationServer = existing.authorizationServer ?? null
+    currentStatus = { state: "authenticated" }
+  }
 
   const isTokenValid = (t: OAuthTokens): boolean => {
     if (!t.accessToken) return false
@@ -96,18 +114,8 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
 
   const status = (): McpAuthStatus => currentStatus
 
-  const tryLoadExistingTokens = (): boolean => {
-    const existing = loadTokens(dataDir, server.id)
-    if (existing && isTokenValid(existing)) {
-      tokens = existing
-      currentStatus = { state: "authenticated" }
-      return true
-    }
-    return false
-  }
-
-  const initFlow = async (signal: AbortSignal): Promise<McpAuthStatus> => {
-    if (tryLoadExistingTokens()) return currentStatus
+  const initFlow = async (signal: AbortSignal, metadataUrl?: string): Promise<McpAuthStatus> => {
+    if (tokens && isTokenValid(tokens)) return currentStatus
 
     const oauth = server.oauth
     if (!oauth?.enabled) {
@@ -127,17 +135,19 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
       return currentStatus
     }
 
-    const prm = await discoverOAuthMetadata(serverUrl)
+    const prm = metadataUrl ? await discoverOAuthMetadataAt(metadataUrl) : await discoverOAuthMetadata(serverUrl)
     if (!prm) {
       currentStatus = { state: "auth_required", error: "Failed to discover OAuth protected resource metadata" }
       return currentStatus
     }
+    resource = prm.resource
 
     const authServerUrl = prm.authorizationServers[0]
     if (!authServerUrl) {
       currentStatus = { state: "auth_required", error: "No authorization server in protected resource metadata" }
       return currentStatus
     }
+    authorizationServer = authServerUrl
 
     const asm = await discoverAuthServerMetadata(authServerUrl)
     if (!asm) {
@@ -147,8 +157,60 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
     tokenEndpoint = asm.tokenEndpoint
 
     const callbackPort = oauth.callbackPort ?? 0
-    const host = `127.0.0.1:${callbackPort}`
-    redirectUri = oauth.redirectUri ?? `http://${host}/callback`
+
+    const onAbort = () => {
+      if (callbackServer) {
+        callbackServer.stop(true)
+        callbackServer = null
+      }
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+
+    try {
+      callbackServer = Bun.serve({
+        port: callbackPort === 0 ? 0 : callbackPort,
+        hostname: "127.0.0.1",
+        async fetch(request: Request) {
+          const url = new URL(request.url)
+          if (url.pathname === "/callback" || url.pathname === "/") {
+            const code = url.searchParams.get("code")
+            const stateParam = url.searchParams.get("state")
+
+            if (code && stateParam) {
+              try {
+                await handleCallback(code, stateParam)
+                signal.removeEventListener("abort", onAbort)
+                if (callbackServer) {
+                  callbackServer.stop(true)
+                  callbackServer = null
+                }
+                return new Response(AUTH_SUCCESS_HTML, {
+                  headers: { "content-type": "text/html" },
+                })
+              } catch (err) {
+                const reason = err instanceof Error ? err.message : "Unknown error"
+                return new Response(authFailureHtml(redactText(reason)), {
+                  headers: { "content-type": "text/html" },
+                  status: 400,
+                })
+              }
+            }
+
+            return new Response(authFailureHtml("Missing authorization code or state"), {
+              headers: { "content-type": "text/html" },
+              status: 400,
+            })
+          }
+          return new Response("Not Found", { status: 404 })
+        },
+      })
+    } catch (err) {
+      signal.removeEventListener("abort", onAbort)
+      throw err instanceof Error ? err : new Error(String(err))
+    }
+
+    const actualPort = callbackServer.port
+    redirectUri = oauth.redirectUri ?? `http://127.0.0.1:${actualPort}/callback`
 
     if (!clientId) {
       if (!asm.registrationEndpoint) {
@@ -156,79 +218,28 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
           state: "auth_required",
           error: "No client ID configured and no registration endpoint available",
         }
+        await closeCallbackServer()
+        signal.removeEventListener("abort", onAbort)
         return currentStatus
       }
       const dcr = await dynamicClientRegistration(asm.registrationEndpoint, "oc2", redirectUri)
       if (!dcr) {
         currentStatus = { state: "auth_required", error: "Dynamic client registration failed" }
+        await closeCallbackServer()
+        signal.removeEventListener("abort", onAbort)
         return currentStatus
       }
       clientId = dcr.clientId
     }
 
-    const authResult = await buildAuthorizationUrl(asm.authorizationEndpoint, clientId, redirectUri, scopes)
+    const authResult = await buildAuthorizationUrl(asm.authorizationEndpoint, clientId, redirectUri, scopes, resource ?? undefined)
     verifier = authResult.verifier
     flowState = authResult.state
 
     const authUrl = authResult.url
 
-    return new Promise<McpAuthStatus>((resolve, reject) => {
-      const onAbort = () => {
-        if (callbackServer) {
-          callbackServer.stop(true)
-          callbackServer = null
-        }
-        reject(new Error("OAuth flow cancelled"))
-      }
-      signal.addEventListener("abort", onAbort, { once: true })
-
-      try {
-        callbackServer = Bun.serve({
-          port: callbackPort === 0 ? 0 : callbackPort,
-          hostname: "127.0.0.1",
-          async fetch(request: Request) {
-            const url = new URL(request.url)
-            if (url.pathname === "/callback" || url.pathname === "/") {
-              const code = url.searchParams.get("code")
-              const stateParam = url.searchParams.get("state")
-
-              if (code && stateParam) {
-                try {
-                  await handleCallback(code, stateParam)
-                  signal.removeEventListener("abort", onAbort)
-                  if (callbackServer) {
-                    callbackServer.stop(true)
-                    callbackServer = null
-                  }
-                  return new Response(AUTH_SUCCESS_HTML, {
-                    headers: { "content-type": "text/html" },
-                  })
-                } catch (err) {
-                  const reason = err instanceof Error ? err.message : "Unknown error"
-                  return new Response(authFailureHtml(redactText(reason)), {
-                    headers: { "content-type": "text/html" },
-                    status: 400,
-                  })
-                }
-              }
-
-              return new Response(authFailureHtml("Missing authorization code or state"), {
-                headers: { "content-type": "text/html" },
-                status: 400,
-              })
-            }
-            return new Response("Not Found", { status: 404 })
-          },
-        })
-      } catch (err) {
-        signal.removeEventListener("abort", onAbort)
-        reject(err instanceof Error ? err : new Error(String(err)))
-        return
-      }
-
-      currentStatus = { state: "callback_pending", authUrl }
-      resolve(currentStatus)
-    })
+    currentStatus = { state: "callback_pending", authUrl }
+    return currentStatus
   }
 
   const handleCallback = async (code: string, state: string): Promise<void> => {
@@ -242,15 +253,15 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
       throw new Error("OAuth flow not properly initialized")
     }
 
-    const result = await exchangeCodeForTokens(tokenEndpoint, clientId, redirectUri, code, verifier)
+    const result = await exchangeCodeForTokens(tokenEndpoint, clientId, redirectUri, code, verifier, resource ?? undefined)
     if (!result) {
       throw new Error("Failed to exchange authorization code for tokens")
     }
 
     verifier = null
     flowState = null
-    tokens = result
-    saveTokens(dataDir, server.id, result)
+    tokens = { ...result, tokenEndpoint, clientId, resource: resource ?? undefined, authorizationServer: authorizationServer ?? undefined }
+    saveTokens(dataDir, server.id, tokens)
     currentStatus = { state: "authenticated" }
   }
 
@@ -275,22 +286,26 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
       return
     }
 
-    const newTokens = await refreshToken(tokenEndpoint, clientId, tokens.refreshToken)
+    const newTokens = await refreshToken(tokenEndpoint, clientId, tokens.refreshToken, resource ?? undefined)
     if (!newTokens) {
       currentStatus = { state: "refresh_failed" }
       return
     }
 
-    tokens = newTokens
-    saveTokens(dataDir, server.id, newTokens)
+    tokens = { ...newTokens, tokenEndpoint, clientId, resource: resource ?? undefined, authorizationServer: authorizationServer ?? undefined }
+    saveTokens(dataDir, server.id, tokens)
     currentStatus = { state: "authenticated" }
   }
 
-  const close = async (): Promise<void> => {
+  const closeCallbackServer = async (): Promise<void> => {
     if (callbackServer) {
       callbackServer.stop(true)
       callbackServer = null
     }
+  }
+
+  const close = async (): Promise<void> => {
+    await closeCallbackServer()
     verifier = null
     flowState = null
   }

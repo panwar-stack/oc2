@@ -14,7 +14,7 @@ import {
 } from "./client"
 import { listMcpServers, type ResolvedMcpServerConfig } from "./config"
 import { requiresDeferredOAuth } from "./auth"
-import { createOAuthManager } from "./auth-manager"
+import { createOAuthManager, type OAuthManager } from "./auth-manager"
 import { MCP_PROTOCOL_VERSION, type McpPromptInfo } from "./protocol"
 import { materializeMcpTool } from "./tools"
 import { createResourceListTool, createResourceReadTool, createPromptListTool, createPromptGetTool } from "./meta-tools"
@@ -41,6 +41,7 @@ export interface McpService {
 interface ServerState {
   readonly server: ResolvedMcpServerConfig
   client?: McpClient
+  oauth?: OAuthManager
   toolNames: string[]
   status: McpServerStatus
 }
@@ -146,37 +147,11 @@ export function createMcpService(options: McpServiceOptions): McpService {
     }
     if (requiresDeferredOAuth(state.server)) {
       if (options.dataDir) {
-        const oauth = createOAuthManager(state.server, options.dataDir)
+        const oauth = getOAuthManager(state)
         const oauthStatus = await oauth.initFlow(signal)
         if (oauthStatus.state === "authenticated") {
           // OAuth is already authenticated - create client with token provider
-          const serverWithToken: ResolvedMcpServerConfig = {
-            ...state.server,
-            tokenProvider: async () => {
-              try {
-                return await oauth.getAuthHeaders()
-              } catch {
-                return {}
-              }
-            },
-          }
-          const client = await (options.clientFactory ?? createMcpClient)(serverWithToken)
-          state.client = client
-          if (options.hostHandlers) {
-            client.setHostHandlers(options.hostHandlers)
-          }
-          wireListChanged(state, client)
-          await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
-            const capabilities: Record<string, unknown> = {}
-            if (options.hostHandlers?.rootsList) capabilities.roots = { listChanged: true }
-            if (options.hostHandlers?.samplingCreateMessage) capabilities.sampling = {}
-            if (options.hostHandlers?.elicitationCreate) capabilities.elicitation = {}
-            await client.initialize(
-              { protocolVersion: MCP_PROTOCOL_VERSION, capabilities, clientInfo: { name: "oc2" } },
-              timeoutSignal,
-            )
-            await refreshTools(state, client, timeoutSignal)
-          })
+          await connect(state, signal, oauth)
           return state.status
         }
         if (oauthStatus.state === "callback_pending") {
@@ -199,26 +174,22 @@ export function createMcpService(options: McpServiceOptions): McpService {
 
     setStatus(state, createMcpStatus(serverId, "starting"))
     try {
-      const client = await (options.clientFactory ?? createMcpClient)(state.server)
-      state.client = client
-      if (options.hostHandlers) {
-        client.setHostHandlers(options.hostHandlers)
-      }
-      wireListChanged(state, client)
-      await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
-        const capabilities: Record<string, unknown> = {}
-        if (options.hostHandlers?.rootsList) capabilities.roots = { listChanged: true }
-        if (options.hostHandlers?.samplingCreateMessage) capabilities.sampling = {}
-        if (options.hostHandlers?.elicitationCreate) capabilities.elicitation = {}
-        await client.initialize(
-          { protocolVersion: MCP_PROTOCOL_VERSION, capabilities, clientInfo: { name: "oc2" } },
-          timeoutSignal,
-        )
-        await refreshTools(state, client, timeoutSignal)
-      })
+      const oauth = state.server.oauth?.enabled && options.dataDir ? getOAuthManager(state) : undefined
+      await connect(state, signal, oauth)
       return state.status
     } catch (error) {
       if (error instanceof McpAuthRequiredError) {
+        if (state.server.oauth?.enabled && options.dataDir) {
+          const oauth = getOAuthManager(state)
+          const oauthStatus = await oauth.initFlow(signal, error.metadataUrl)
+          if (oauthStatus.state === "callback_pending") {
+            setStatus(state, {
+              ...createMcpStatus(serverId, "auth_required"),
+              authUrl: oauthStatus.authUrl,
+            })
+            return state.status
+          }
+        }
         setStatus(state, {
           ...createMcpStatus(serverId, "auth_required"),
           authUrl: error.metadataUrl,
@@ -254,8 +225,48 @@ export function createMcpService(options: McpServiceOptions): McpService {
         for (const name of state.toolNames) options.registry.unregister(name)
         state.toolNames = []
         await state.client?.close()
+        await state.oauth?.close()
       }
     },
+  }
+
+  function getOAuthManager(state: ServerState): OAuthManager {
+    if (!options.dataDir) throw new Error("OAuth requires dataDir")
+    state.oauth ??= createOAuthManager(state.server, options.dataDir)
+    return state.oauth
+  }
+
+  async function connect(state: ServerState, signal: AbortSignal, oauth?: OAuthManager): Promise<void> {
+    const serverWithToken: ResolvedMcpServerConfig | undefined = oauth
+      ? {
+          ...state.server,
+          tokenProvider: async (forceRefresh = false) => {
+            try {
+              if (forceRefresh) await oauth.refreshIfNeeded()
+              return await oauth.getAuthHeaders()
+            } catch {
+              return {}
+            }
+          },
+        }
+      : undefined
+    const client = await (options.clientFactory ?? createMcpClient)(serverWithToken ?? state.server)
+    state.client = client
+    if (options.hostHandlers) {
+      client.setHostHandlers(options.hostHandlers)
+    }
+    wireListChanged(state, client)
+    await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
+      const capabilities: Record<string, unknown> = {}
+      if (options.hostHandlers?.rootsList) capabilities.roots = { listChanged: true }
+      if (options.hostHandlers?.samplingCreateMessage) capabilities.sampling = {}
+      if (options.hostHandlers?.elicitationCreate) capabilities.elicitation = {}
+      await client.initialize(
+        { protocolVersion: MCP_PROTOCOL_VERSION, capabilities, clientInfo: { name: "oc2" } },
+        timeoutSignal,
+      )
+      await refreshTools(state, client, timeoutSignal)
+    })
   }
 }
 

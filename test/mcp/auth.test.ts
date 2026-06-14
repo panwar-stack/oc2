@@ -23,12 +23,28 @@ test("requiresDeferredOAuth returns false when OAuth is not enabled", () => {
   expect(requiresDeferredOAuth(srv)).toBe(false)
 })
 
-test("requiresDeferredOAuth returns true when OAuth is enabled", () => {
+test("requiresDeferredOAuth returns false for remote OAuth servers", () => {
   const srv = {
     id: "test",
     enabled: true,
     transport: "http" as const,
     url: "https://example.test/mcp",
+    args: [] as string[],
+    env: {} as Record<string, string>,
+    headers: {} as Record<string, string>,
+    toolPermissions: [] as { match?: string; decision?: "allow" | "deny" | "ask" }[],
+    startupTimeoutMs: 10_000,
+    oauth: { enabled: true, scopes: [] as string[] },
+  }
+  expect(requiresDeferredOAuth(srv)).toBe(false)
+})
+
+test("requiresDeferredOAuth returns true for stdio OAuth servers", () => {
+  const srv = {
+    id: "test",
+    enabled: true,
+    transport: "stdio" as const,
+    command: "oauth-stdio-server",
     args: [] as string[],
     env: {} as Record<string, string>,
     headers: {} as Record<string, string>,
