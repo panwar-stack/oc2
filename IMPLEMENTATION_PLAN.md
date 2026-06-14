@@ -549,3 +549,5 @@ For every PR slice:
 - Should `oc2` initialize as its own git repository in PR 1? Default: yes, if this is intended to be developed independently; otherwise leave git initialization to the user.
 - Should real provider packages be installed in PR 6 or deferred behind fake provider only? Default: install minimal OpenAI, Anthropic, OpenAI-compatible support when the model service is introduced.
 - Should repository memory CLI commands ship in PR 15? Default: include storage and tool first, defer CLI memory if it expands the review size.
+
+Use Conventional Commits
