@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import { type ToolDefinition } from "../tools/tool"
 import type { McpClient } from "./client"
+import type { McpPromptInfo } from "./protocol"
 
 export function createResourceListTool(input: {
   readonly serverId: string
@@ -74,19 +75,13 @@ export function createPromptGetTool(input: {
   readonly serverId: string
   readonly client: McpClient
   readonly timeoutMs?: number
+  readonly prompts?: readonly McpPromptInfo[]
 }): ToolDefinition<{ name: string; arguments?: Record<string, unknown> }, unknown> {
   return {
     name: `mcp_${input.serverId}_prompt_get`,
     description: `Get a prompt from MCP server ${input.serverId}`,
     inputSchema: z.object({ name: z.string().min(1), arguments: z.record(z.string(), z.unknown()).optional() }),
-    modelInputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        arguments: { type: "object" },
-      },
-      required: ["name"],
-    },
+    modelInputSchema: createPromptGetModelSchema(input.prompts),
     permission: {
       action: "mcp.prompt",
       resource: (args) => `${input.serverId}/${args.name}`,
@@ -97,5 +92,35 @@ export function createPromptGetTool(input: {
       const result = await input.client.getPrompt(args.name, args.arguments ?? {}, context.signal)
       return { serverId: input.serverId, name: args.name, ...result }
     },
+  }
+}
+
+function createPromptGetModelSchema(prompts: readonly McpPromptInfo[] | undefined): Record<string, unknown> {
+  const names = prompts?.map((prompt) => prompt.name).filter((name) => name.length > 0) ?? []
+  const argProperties: Record<string, unknown> = {}
+  const requiredArgs = new Set<string>()
+  for (const prompt of prompts ?? []) {
+    for (const arg of prompt.arguments ?? []) {
+      if (!arg.name) continue
+      argProperties[arg.name] = {
+        type: "string",
+        ...(arg.description ? { description: arg.description } : {}),
+      }
+      if (arg.required) requiredArgs.add(arg.name)
+    }
+  }
+  return {
+    type: "object",
+    properties: {
+      name: names.length > 0 ? { type: "string", enum: names } : { type: "string" },
+      arguments: {
+        type: "object",
+        properties: argProperties,
+        additionalProperties: false,
+        ...(requiredArgs.size > 0 ? { required: [...requiredArgs] } : {}),
+      },
+    },
+    required: ["name"],
+    additionalProperties: false,
   }
 }

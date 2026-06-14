@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import {
   createMcpService,
   createMcpToolConfigEntries,
+  createRuntimeEventBus,
   createToolExecutor,
   createToolRegistry,
   defaultConfig,
@@ -471,7 +472,9 @@ function fullFakeClient(
   input: {
     tools?: readonly McpToolInfo[]
     resources?: readonly { name: string; uri: string }[]
-    prompts?: readonly { name: string; description?: string }[]
+    prompts?: readonly { name: string; description?: string; arguments?: readonly { name: string; description?: string; required?: boolean }[] }[]
+    readResource?: (uri: string) => { contents: readonly { uri: string; text?: string; mimeType?: string }[] }
+    getPrompt?: (name: string, args: Record<string, unknown>) => { messages: readonly [] }
     failListResources?: boolean
     failListPrompts?: boolean
   } = {},
@@ -501,13 +504,13 @@ function fullFakeClient(
       return listResourcesImpl()
     },
     async readResource(_uri: string, _signal: AbortSignal) {
-      return { contents: [] }
+      return input.readResource?.(_uri) ?? { contents: [] }
     },
     async listPrompts(_signal: AbortSignal) {
       return listPromptsImpl()
     },
     async getPrompt(_name: string, _args: Record<string, unknown>, _signal: AbortSignal) {
-      return { messages: [] }
+      return input.getPrompt?.(_name, _args) ?? { messages: [] }
     },
     onListChanged(kind: string, callback: () => void) {
       const cbs = changed.get(kind) ?? []
@@ -530,10 +533,20 @@ function fullFakeClient(
 test("resource read is denied when no explicit permission rule exists", async () => {
   const registry = createToolRegistry()
   const config = withMcp({ denyRead: server({ transport: "stdio", command: "fake" }) })
+  let readCalls = 0
   const service = createMcpService({
     config,
     registry,
-    clientFactory: () => fullFakeClient({ tools: [], resources: [{ name: "res1", uri: "test://one" }], prompts: [] }),
+    clientFactory: () =>
+      fullFakeClient({
+        tools: [],
+        resources: [{ name: "res1", uri: "test://one" }],
+        prompts: [],
+        readResource: () => {
+          readCalls++
+          return { contents: [] }
+        },
+      }),
   })
   const statuses = await service.startEnabled()
   const executor = createToolExecutor({
@@ -548,16 +561,26 @@ test("resource read is denied when no explicit permission rule exists", async ()
 
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.error.code).toBe("permission_denied")
+  expect(readCalls).toBe(0)
 })
 
 test("prompt get is denied when no explicit permission rule exists", async () => {
   const registry = createToolRegistry()
   const config = withMcp({ denyGet: server({ transport: "stdio", command: "fake" }) })
+  let getCalls = 0
   const service = createMcpService({
     config,
     registry,
     clientFactory: () =>
-      fullFakeClient({ tools: [], resources: [], prompts: [{ name: "p1", description: "A prompt" }] }),
+      fullFakeClient({
+        tools: [],
+        resources: [],
+        prompts: [{ name: "p1", description: "A prompt" }],
+        getPrompt: () => {
+          getCalls++
+          return { messages: [] }
+        },
+      }),
   })
   const statuses = await service.startEnabled()
   const executor = createToolExecutor({
@@ -572,6 +595,7 @@ test("prompt get is denied when no explicit permission rule exists", async () =>
 
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.error.code).toBe("permission_denied")
+  expect(getCalls).toBe(0)
 })
 
 test("resource list is allowed by default", async () => {
@@ -643,6 +667,182 @@ test("prompt meta-tools are registered even when resource discovery fails", asyn
   expect(registry.get("mcp_partialFail_resource_read")).toBeDefined()
   expect(registry.get("mcp_partialFail_prompt_list")).toBeDefined()
   expect(registry.get("mcp_partialFail_prompt_get")).toBeDefined()
+})
+
+test("resource meta-tools are registered even when prompt discovery fails", async () => {
+  const registry = createToolRegistry()
+  const config = withMcp({ promptFail: server({ transport: "stdio", command: "fake" }) })
+  const client = fullFakeClient({
+    tools: [],
+    resources: [{ name: "r1", uri: "test://r1" }],
+    prompts: [],
+    failListPrompts: true,
+  })
+  const service = createMcpService({
+    config,
+    registry,
+    clientFactory: () => client,
+  })
+
+  const statuses = await service.startEnabled()
+  expect(statuses[0]!.status).toBe("connected")
+  expect(statuses[0]!.resourceCount).toBe(1)
+  expect(statuses[0]!.promptCount).toBeUndefined()
+
+  expect(registry.get("mcp_promptFail_resource_list")).toBeDefined()
+  expect(registry.get("mcp_promptFail_resource_read")).toBeDefined()
+  expect(registry.get("mcp_promptFail_prompt_list")).toBeDefined()
+  expect(registry.get("mcp_promptFail_prompt_get")).toBeDefined()
+})
+
+test("allowed resource read and prompt get use explicit MCP permission resources", async () => {
+  const registry = createToolRegistry()
+  let readUri = ""
+  let promptInput: { name: string; args: Record<string, unknown> } | undefined
+  const config = withMcp({
+    allowMeta: server({
+      transport: "stdio",
+      command: "fake",
+      toolPermissions: [
+        { match: "mcp.resource:allowMeta/test://one", decision: "allow" },
+        { match: "mcp.prompt:allowMeta/p1", decision: "allow" },
+      ],
+    }),
+  })
+  const service = createMcpService({
+    config,
+    registry,
+    clientFactory: () =>
+      fullFakeClient({
+        tools: [],
+        resources: [{ name: "res1", uri: "test://one" }],
+        prompts: [{ name: "p1", arguments: [{ name: "topic", required: true }] }],
+        readResource: (uri) => {
+          readUri = uri
+          return { contents: [{ uri, text: "allowed" }] }
+        },
+        getPrompt: (name, args) => {
+          promptInput = { name, args }
+          return { messages: [] }
+        },
+      }),
+  })
+  const statuses = await service.startEnabled()
+  const executor = createToolExecutor({
+    registry,
+    config: { ...config, tools: { ...config.tools, ...createMcpToolConfigEntries(config, statuses) } },
+  })
+
+  const read = await executor.execute(
+    { id: "call-read", name: "mcp_allowMeta_resource_read", arguments: { uri: "test://one" } },
+    { workspaceRoots: [{ id: "root-1", path: "/repo", readonly: false }] },
+  )
+  const prompt = await executor.execute(
+    { id: "call-prompt", name: "mcp_allowMeta_prompt_get", arguments: { name: "p1", arguments: { topic: "x" } } },
+    { workspaceRoots: [{ id: "root-1", path: "/repo", readonly: false }] },
+  )
+
+  expect(read.ok).toBe(true)
+  expect(prompt.ok).toBe(true)
+  expect(readUri).toBe("test://one")
+  expect(promptInput).toEqual({ name: "p1", args: { topic: "x" } })
+})
+
+test("prompt get model schema is bounded by discovered prompt metadata", async () => {
+  const registry = createToolRegistry()
+  const config = withMcp({ promptSchema: server({ transport: "stdio", command: "fake" }) })
+  const service = createMcpService({
+    config,
+    registry,
+    clientFactory: () =>
+      fullFakeClient({
+        tools: [],
+        resources: [],
+        prompts: [
+          {
+            name: "summarize",
+            arguments: [
+              { name: "topic", description: "Topic to summarize", required: true },
+              { name: "tone" },
+            ],
+          },
+        ],
+      }),
+  })
+
+  await service.startEnabled()
+  const schema = registry.get("mcp_promptSchema_prompt_get")!.modelInputSchema as Record<string, any>
+
+  expect(schema.additionalProperties).toBe(false)
+  expect(schema.properties.name.enum).toEqual(["summarize"])
+  expect(schema.properties.arguments.additionalProperties).toBe(false)
+  expect(schema.properties.arguments.required).toEqual(["topic"])
+  expect(Object.keys(schema.properties.arguments.properties)).toEqual(["topic", "tone"])
+})
+
+test("resource read output is bounded by the normal tool executor", async () => {
+  const registry = createToolRegistry()
+  const config = withMcp({
+    bigResource: server({
+      transport: "stdio",
+      command: "fake",
+      toolPermissions: [{ match: "mcp.resource:bigResource/test://big", decision: "allow" }],
+    }),
+  })
+  const service = createMcpService({
+    config,
+    registry,
+    clientFactory: () =>
+      fullFakeClient({
+        tools: [],
+        resources: [{ name: "big", uri: "test://big" }],
+        prompts: [],
+        readResource: (uri) => ({ contents: [{ uri, text: "x".repeat(500) }] }),
+      }),
+  })
+  const statuses = await service.startEnabled()
+  const executor = createToolExecutor({
+    registry,
+    config: { ...config, tools: { ...config.tools, ...createMcpToolConfigEntries(config, statuses) } },
+    outputBounds: { maxChars: 80, maxLines: 5 },
+  })
+
+  const result = await executor.execute(
+    { id: "call-big", name: "mcp_bigResource_resource_read", arguments: { uri: "test://big" } },
+    { workspaceRoots: [{ id: "root-1", path: "/repo", readonly: false }] },
+  )
+
+  expect(result.ok).toBe(true)
+  if (result.ok) {
+    expect(result.truncated).toBe(true)
+    expect(result.outputText).not.toContain("x".repeat(500))
+    expect(result.outputText.length).toBeLessThan(500)
+  }
+})
+
+test("mcp.status events include resource and prompt counts", async () => {
+  const registry = createToolRegistry()
+  const events = createRuntimeEventBus()
+  const payloads: any[] = []
+  events.subscribe("mcp.status", (event) => payloads.push(event.payload))
+  const config = withMcp({ eventsServer: server({ transport: "stdio", command: "fake" }) })
+  const service = createMcpService({
+    config,
+    registry,
+    events,
+    clientFactory: () =>
+      fullFakeClient({
+        tools: [],
+        resources: [{ name: "r1", uri: "test://r1" }],
+        prompts: [{ name: "p1" }],
+      }),
+  })
+
+  await service.startEnabled()
+  const connected = payloads.find((payload) => payload.status === "connected")
+
+  expect(connected?.resourceCount).toBe(1)
+  expect(connected?.promptCount).toBe(1)
 })
 
 test("list_changed for resources marks resourceCount as undefined", async () => {

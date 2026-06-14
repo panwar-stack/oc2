@@ -15,7 +15,7 @@ import {
 import { listMcpServers, type ResolvedMcpServerConfig } from "./config"
 import { requiresDeferredOAuth } from "./auth"
 import { createOAuthManager } from "./auth-manager"
-import { MCP_PROTOCOL_VERSION } from "./protocol"
+import { MCP_PROTOCOL_VERSION, type McpPromptInfo } from "./protocol"
 import { materializeMcpTool } from "./tools"
 import { createResourceListTool, createResourceReadTool, createPromptListTool, createPromptGetTool } from "./meta-tools"
 import { createMcpStatus, type McpServerStatus, type McpToolInfo } from "./status"
@@ -85,6 +85,8 @@ export function createMcpService(options: McpServiceOptions): McpService {
         error: redacted.error,
         toolCount: redacted.toolCount,
         tools: redacted.tools,
+        resourceCount: redacted.resourceCount,
+        promptCount: redacted.promptCount,
         authRequired: redacted.status === "auth_required",
       },
     })
@@ -95,7 +97,7 @@ export function createMcpService(options: McpServiceOptions): McpService {
     registerTools(options.registry, state, client, tools)
     let resourceCount: number | undefined
     let promptCount: number | undefined
-    registerMetaTools(options.registry, state, client)
+    let prompts: readonly McpPromptInfo[] | undefined
     try {
       const resources = await client.listResources(signal)
       resourceCount = resources.length
@@ -103,11 +105,12 @@ export function createMcpService(options: McpServiceOptions): McpService {
       resourceCount = undefined
     }
     try {
-      const prompts = await client.listPrompts(signal)
+      prompts = await client.listPrompts(signal)
       promptCount = prompts.length
     } catch {
       promptCount = undefined
     }
+    registerMetaTools(options.registry, state, client, prompts)
     setStatus(state, {
       serverId: state.server.id,
       status: "connected",
@@ -271,12 +274,17 @@ function registerTools(registry: ToolRegistry, state: ServerState, client: McpCl
   }
 }
 
-function registerMetaTools(registry: ToolRegistry, state: ServerState, client: McpClient) {
+function registerMetaTools(
+  registry: ToolRegistry,
+  state: ServerState,
+  client: McpClient,
+  prompts?: readonly McpPromptInfo[],
+) {
   const definitions = [
     createResourceListTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
     createResourceReadTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
     createPromptListTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
-    createPromptGetTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
+    createPromptGetTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs, prompts }),
   ]
   for (const def of definitions) {
     registry.register(def)
