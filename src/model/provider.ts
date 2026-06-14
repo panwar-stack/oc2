@@ -135,9 +135,7 @@ export interface ModelProvider {
 
 /** Returns whether the classified provider failure is likely to succeed on retry. */
 export const isRetryableClassification = (classification: ModelErrorClassification): boolean =>
-  classification === "rate_limit" ||
-  classification === "provider_unavailable" ||
-  classification === "transient_network"
+  classification === "rate_limit" || classification === "provider_unavailable" || classification === "transient_network"
 
 /** Best-effort classifier for heterogeneous provider, HTTP, DOM, and thrown errors. */
 export const classifyModelError = (error: unknown): ModelErrorClassification => {

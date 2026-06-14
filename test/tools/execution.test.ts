@@ -32,10 +32,21 @@ test("executor validates schema, schedules execution, bounds output, and emits e
         execute: (input) => `${input.value}\n`.repeat(10),
       } satisfies ToolDefinition<{ value: string }>,
     ])
-    const executor = createToolExecutor({ registry, scheduler: createScheduler(1_000, bus), events: bus, outputBounds: { maxChars: 8, maxLines: 3 } })
+    const executor = createToolExecutor({
+      registry,
+      scheduler: createScheduler(1_000, bus),
+      events: bus,
+      outputBounds: { maxChars: 8, maxLines: 3 },
+    })
 
-    const invalid = await executor.execute({ id: "invalid", name: "big", arguments: {} }, { workspaceRoots: [workspace.root] })
-    const result = await executor.execute({ id: "call-1", name: "big", arguments: { value: "x" } }, { workspaceRoots: [workspace.root] })
+    const invalid = await executor.execute(
+      { id: "invalid", name: "big", arguments: {} },
+      { workspaceRoots: [workspace.root] },
+    )
+    const result = await executor.execute(
+      { id: "call-1", name: "big", arguments: { value: "x" } },
+      { workspaceRoots: [workspace.root] },
+    )
 
     expect(invalid).toMatchObject({ ok: false, error: { code: "validation_failed" } })
     expect(result).toMatchObject({ ok: true, truncated: true })
@@ -59,7 +70,9 @@ test("executor returns denied and timed out tools as structured tool errors", as
         modelInputSchema: { type: "object" },
         permission: { action: "execute", resource: () => "slow" },
         async execute(_input, context) {
-          await new Promise((_, reject) => context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true }))
+          await new Promise((_, reject) =>
+            context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true }),
+          )
         },
       } satisfies ToolDefinition<Record<string, never>>,
     ])
@@ -68,7 +81,10 @@ test("executor returns denied and timed out tools as structured tool errors", as
       registry,
       permissions: createToolPermissionService({ rules: [{ match: "execute:*", decision: "deny" }] }),
     }).execute({ id: "denied", name: "slow", arguments: {} }, { workspaceRoots: [workspace.root] })
-    const timedOut = await createToolExecutor({ registry, scheduler: createScheduler(5) }).execute({ id: "timeout", name: "slow", arguments: {} }, { workspaceRoots: [workspace.root] })
+    const timedOut = await createToolExecutor({ registry, scheduler: createScheduler(5) }).execute(
+      { id: "timeout", name: "slow", arguments: {} },
+      { workspaceRoots: [workspace.root] },
+    )
 
     expect(denied).toMatchObject({ ok: false, error: { code: "permission_denied" } })
     expect(timedOut).toMatchObject({ ok: false, error: { code: "timed_out" } })
@@ -94,11 +110,22 @@ test("executor applies config-backed permission rules", async () => {
       registry,
       config: {
         tools: { write: { enabled: true, permissions: [{ match: "write:*", decision: "deny" }] } },
-        runtime: { defaultTimeoutMs: 1_000, maxConcurrentSubAgents: 1, maxConcurrentTeamMembers: 1, maxConcurrentTools: 1, logLevel: "info" },
+        runtime: {
+          defaultTimeoutMs: 1_000,
+          maxConcurrentSubAgents: 1,
+          maxConcurrentTeamMembers: 1,
+          maxConcurrentTools: 1,
+          logLevel: "info",
+        },
       },
     })
 
-    await expect(executor.execute({ id: "config-denied", name: "write", arguments: { filePath: "a.txt" } }, { workspaceRoots: [workspace.root] })).resolves.toMatchObject({ ok: false, error: { code: "permission_denied" } })
+    await expect(
+      executor.execute(
+        { id: "config-denied", name: "write", arguments: { filePath: "a.txt" } },
+        { workspaceRoots: [workspace.root] },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: { code: "permission_denied" } })
   } finally {
     await workspace.cleanup()
   }
@@ -122,11 +149,22 @@ test("executor enforces config permissions even with an injected permission serv
       permissions: createToolPermissionService(),
       config: {
         tools: { write: { enabled: true, permissions: [{ match: "write:*", decision: "deny" }] } },
-        runtime: { defaultTimeoutMs: 1_000, maxConcurrentSubAgents: 1, maxConcurrentTeamMembers: 1, maxConcurrentTools: 1, logLevel: "info" },
+        runtime: {
+          defaultTimeoutMs: 1_000,
+          maxConcurrentSubAgents: 1,
+          maxConcurrentTeamMembers: 1,
+          maxConcurrentTools: 1,
+          logLevel: "info",
+        },
       },
     })
 
-    await expect(executor.execute({ id: "config-denied-injected", name: "write", arguments: { filePath: "a.txt" } }, { workspaceRoots: [workspace.root] })).resolves.toMatchObject({ ok: false, error: { code: "permission_denied" } })
+    await expect(
+      executor.execute(
+        { id: "config-denied-injected", name: "write", arguments: { filePath: "a.txt" } },
+        { workspaceRoots: [workspace.root] },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: { code: "permission_denied" } })
   } finally {
     await workspace.cleanup()
   }
@@ -148,17 +186,30 @@ test("executor does not duplicate injected permission prompts for config ask rul
     ])
     const executor = createToolExecutor({
       registry,
-      permissions: { decide: async () => {
-        promptCount += 1
-        return "allow"
-      } },
+      permissions: {
+        decide: async () => {
+          promptCount += 1
+          return "allow"
+        },
+      },
       config: {
         tools: { write: { enabled: true, permissions: [{ match: "write:*", decision: "ask" }] } },
-        runtime: { defaultTimeoutMs: 1_000, maxConcurrentSubAgents: 1, maxConcurrentTeamMembers: 1, maxConcurrentTools: 1, logLevel: "info" },
+        runtime: {
+          defaultTimeoutMs: 1_000,
+          maxConcurrentSubAgents: 1,
+          maxConcurrentTeamMembers: 1,
+          maxConcurrentTools: 1,
+          logLevel: "info",
+        },
       },
     })
 
-    await expect(executor.execute({ id: "config-ask", name: "write", arguments: { filePath: "a.txt" } }, { workspaceRoots: [workspace.root] })).resolves.toMatchObject({ ok: true })
+    await expect(
+      executor.execute(
+        { id: "config-ask", name: "write", arguments: { filePath: "a.txt" } },
+        { workspaceRoots: [workspace.root] },
+      ),
+    ).resolves.toMatchObject({ ok: true })
     expect(promptCount).toBe(1)
   } finally {
     await workspace.cleanup()

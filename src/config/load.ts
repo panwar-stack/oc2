@@ -156,16 +156,13 @@ function warnUnknownKeys(value: Oc2ConfigInput, sourcePath: string, diagnostics:
   }
 }
 
-function warnSet(
-  value: unknown,
-  known: Set<string>,
-  path: string,
-  diagnostics: Diagnostic[],
-) {
+function warnSet(value: unknown, known: Set<string>, path: string, diagnostics: Diagnostic[]) {
   if (!isRecord(value)) return
   for (const key of Object.keys(value)) {
     if (!known.has(key)) {
-      diagnostics.push(createDiagnostic("warning", "config.unknown_key", `Unknown config key ${key}`, { path: `${path}.${key}` }))
+      diagnostics.push(
+        createDiagnostic("warning", "config.unknown_key", `Unknown config key ${key}`, { path: `${path}.${key}` }),
+      )
     }
   }
 }
@@ -174,7 +171,9 @@ function warnConfigState(config: Oc2Config, diagnostics: Diagnostic[]) {
   for (const [serverId, server] of Object.entries(config.mcp)) {
     if (!server.enabled) {
       diagnostics.push(
-        createDiagnostic("warning", "config.mcp.disabled", `MCP server ${serverId} is disabled`, { path: `mcp.${serverId}` }),
+        createDiagnostic("warning", "config.mcp.disabled", `MCP server ${serverId} is disabled`, {
+          path: `mcp.${serverId}`,
+        }),
       )
     }
   }
@@ -206,7 +205,11 @@ function repairConfig(value: unknown): Oc2Config {
         "maxConcurrentTeamMembers",
         defaultConfig.runtime.maxConcurrentTeamMembers,
       ),
-      defaultTimeoutMs: parsePositiveIntegerField(candidate.runtime, "defaultTimeoutMs", defaultConfig.runtime.defaultTimeoutMs),
+      defaultTimeoutMs: parsePositiveIntegerField(
+        candidate.runtime,
+        "defaultTimeoutMs",
+        defaultConfig.runtime.defaultTimeoutMs,
+      ),
       logLevel: parseLogLevelField(candidate.runtime, "logLevel", defaultConfig.runtime.logLevel),
     },
     tui: {

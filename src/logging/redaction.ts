@@ -1,4 +1,5 @@
-const secretKeyPattern = /(api[_-]?key|token|secret|password|authorization|cookie|set-cookie|clientsecret|client_secret)/i
+const secretKeyPattern =
+  /(api[_-]?key|token|secret|password|authorization|cookie|set-cookie|clientsecret|client_secret)/i
 const bearerPattern = /Bearer\s+[A-Za-z0-9._~+/=-]+/g
 const apiKeyPattern = /\b(sk|oc2|anthropic|openai)-[A-Za-z0-9_-]{8,}\b/g
 

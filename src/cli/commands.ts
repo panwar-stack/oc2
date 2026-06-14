@@ -8,7 +8,17 @@ export type ParsedCommand =
   | { name: "config"; action: "set"; key: string; value: string; json: boolean }
   | { name: "tools"; action: "list"; json: boolean }
   | { name: "run"; help: true }
-  | { name: "run"; help?: false; prompt: string; json: boolean; model?: string; tools: readonly string[]; disabledTools: readonly string[]; mcp: readonly string[]; disabledMcp: readonly string[] }
+  | {
+      name: "run"
+      help?: false
+      prompt: string
+      json: boolean
+      model?: string
+      tools: readonly string[]
+      disabledTools: readonly string[]
+      mcp: readonly string[]
+      disabledMcp: readonly string[]
+    }
   | { name: "resume"; sessionId: string; run: string; json: boolean; model?: string }
   | { name: "tui"; sessionId?: string; model?: string }
   | { name: "help" }
@@ -70,7 +80,10 @@ function parseTui(argv: string[]): ParseResult {
   const parsed = parseFlagValues(argv, new Set(), new Set(["--session", "--model"]))
   if (!parsed.ok) return parsed
   if (parsed.positionals.length > 0) return { ok: false, message: "tui does not accept positional arguments" }
-  return { ok: true, command: { name: "tui", sessionId: parsed.values.get("--session")?.[0], model: parsed.values.get("--model")?.[0] } }
+  return {
+    ok: true,
+    command: { name: "tui", sessionId: parsed.values.get("--session")?.[0], model: parsed.values.get("--model")?.[0] },
+  }
 }
 
 /** Formats the root help text shared by help output and parse errors. */
@@ -99,7 +112,10 @@ function parseConfig(argv: string[]): ParseResult {
       return { ok: true, command: { name: "config", action: "get", key: positionals[0], json } }
     case "set":
       if (positionals.length !== 2) return { ok: false, message: "config set requires <key> <value>" }
-      return { ok: true, command: { name: "config", action: "set", key: positionals[0] ?? "", value: positionals[1] ?? "", json } }
+      return {
+        ok: true,
+        command: { name: "config", action: "set", key: positionals[0] ?? "", value: positionals[1] ?? "", json },
+      }
     default:
       return { ok: false, message: "Expected config path, config get, or config set" }
   }
@@ -113,7 +129,11 @@ function parseTools(argv: string[]): ParseResult {
 
 function parseRun(argv: string[]): ParseResult {
   if (hasFlag(argv, "--help") || hasFlag(argv, "-h")) return { ok: true, command: { name: "run", help: true } }
-  const parsed = parseFlagValues(argv, new Set(["--json"]), new Set(["--model", "--tool", "--no-tool", "--mcp", "--no-mcp"]))
+  const parsed = parseFlagValues(
+    argv,
+    new Set(["--json"]),
+    new Set(["--model", "--tool", "--no-tool", "--mcp", "--no-mcp"]),
+  )
   if (!parsed.ok) return parsed
   if (parsed.positionals.length === 0) return { ok: false, message: "run requires <prompt>" }
   return {
@@ -138,13 +158,23 @@ function parseResume(argv: string[]): ParseResult {
   if (!sessionId || extra.length > 0) return { ok: false, message: "resume requires <session-id>" }
   const run = parsed.values.get("--run")?.[0]
   if (!run) return { ok: false, message: "resume requires --run <prompt> for non-interactive execution" }
-  return { ok: true, command: { name: "resume", sessionId, run, json: parsed.booleans.has("--json"), model: parsed.values.get("--model")?.[0] } }
+  return {
+    ok: true,
+    command: {
+      name: "resume",
+      sessionId,
+      run,
+      json: parsed.booleans.has("--json"),
+      model: parsed.values.get("--model")?.[0],
+    },
+  }
 }
 
 function parseNoPositionals(commandName: string, argv: string[], command: ParsedCommand): ParseResult {
   const unknownFlag = argv.find((arg) => arg.startsWith("-") && arg !== "--json")
   if (unknownFlag) return { ok: false, message: `Unknown option for ${commandName}: ${unknownFlag}` }
-  if (withoutKnownFlags(argv).length > 0) return { ok: false, message: `${commandName} does not accept positional arguments` }
+  if (withoutKnownFlags(argv).length > 0)
+    return { ok: false, message: `${commandName} does not accept positional arguments` }
   return { ok: true, command }
 }
 
@@ -163,7 +193,11 @@ interface ParsedFlags {
   readonly values: ReadonlyMap<string, readonly string[]>
 }
 
-function parseFlagValues(argv: string[], booleanFlags: ReadonlySet<string>, valueFlags: ReadonlySet<string>): ParsedFlags | ParseFailure {
+function parseFlagValues(
+  argv: string[],
+  booleanFlags: ReadonlySet<string>,
+  valueFlags: ReadonlySet<string>,
+): ParsedFlags | ParseFailure {
   const positionals: string[] = []
   const booleans = new Set<string>()
   const values = new Map<string, string[]>()

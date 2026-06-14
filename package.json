@@ -10,9 +10,10 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint -c oxlint.json src test",
+    "lint": "oxlint -c oxlint.json --import-plugin --report-unused-disable-directives src test",
     "format": "prettier --write .",
-    "diagnostics": "bun run typecheck && bun run lint && bun test",
+    "format:check": "prettier --check .",
+    "diagnostics": "bun run typecheck && bun run lint && bun run format:check && bun test",
     "smoke:tui": "bun src/index.ts tui --model fake/test"
   },
   "devDependencies": {
@@ -24,7 +25,13 @@
   },
   "prettier": {
     "semi": false,
-    "printWidth": 120
+    "printWidth": 120,
+    "tabWidth": 2,
+    "useTabs": false,
+    "singleQuote": false,
+    "trailingComma": "all",
+    "arrowParens": "always",
+    "endOfLine": "lf"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1",

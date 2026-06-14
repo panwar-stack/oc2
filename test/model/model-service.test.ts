@@ -4,7 +4,12 @@ import { createTaskScheduler } from "../../src/scheduler/scheduler"
 import { checkProviderGate, createConfiguredProvider, type ModelFetch } from "../../src/model/ai-sdk-provider"
 import { createFakeModelProvider } from "../../src/model/fake-provider"
 import { createModelService } from "../../src/model/model-service"
-import { ModelProviderError, classifyModelError, isRetryableClassification, type ModelRequest } from "../../src/model/provider"
+import {
+  ModelProviderError,
+  classifyModelError,
+  isRetryableClassification,
+  type ModelRequest,
+} from "../../src/model/provider"
 import { collectModelStream } from "../../src/model/stream"
 
 const createRequest = (signal = new AbortController().signal): ModelRequest => ({
@@ -27,7 +32,9 @@ test("fake provider streams deterministic text, reasoning, tool calls, usage, an
     ],
   })
 
-  const result = await collectModelStream(provider.stream(createRequest(), { providerId: "fake", requestId: "r1", startedAt: new Date() }))
+  const result = await collectModelStream(
+    provider.stream(createRequest(), { providerId: "fake", requestId: "r1", startedAt: new Date() }),
+  )
 
   expect(result.text).toBe("hello world")
   expect(result.reasoning).toBe("think ")
@@ -57,7 +64,11 @@ test("fake provider observes cancellation before completing stream", async () =>
     delayMs: 10,
     events: [{ type: "text-delta", text: "first" }, { type: "text-delta", text: "second" }, { type: "done" }],
   })
-  const stream = provider.stream(createRequest(controller.signal), { providerId: "fake", requestId: "r1", startedAt: new Date() })
+  const stream = provider.stream(createRequest(controller.signal), {
+    providerId: "fake",
+    requestId: "r1",
+    startedAt: new Date(),
+  })
   const iterator = stream[Symbol.asyncIterator]()
 
   const first = await iterator.next()
@@ -83,14 +94,23 @@ test("model service can collect through the scheduler model queue", async () => 
 })
 
 test("provider gates require API keys or explicit unauthenticated local config", () => {
-  expect(checkProviderGate({ type: "openai" }, {})).toMatchObject({ ok: false, missingApiKey: true, apiKeyEnv: "OPENAI_API_KEY" })
+  expect(checkProviderGate({ type: "openai" }, {})).toMatchObject({
+    ok: false,
+    missingApiKey: true,
+    apiKeyEnv: "OPENAI_API_KEY",
+  })
   expect(checkProviderGate({ type: "anthropic" }, { ANTHROPIC_API_KEY: "secret" })).toMatchObject({ ok: true })
-  expect(checkProviderGate({ type: "openai-compatible", id: "compat", baseURL: "http://localhost:1234" }, {})).toMatchObject({
+  expect(
+    checkProviderGate({ type: "openai-compatible", id: "compat", baseURL: "http://localhost:1234" }, {}),
+  ).toMatchObject({
     ok: false,
     reason: "Provider requires apiKeyEnv or allowUnauthenticated",
   })
   expect(
-    checkProviderGate({ type: "local", id: "local", baseURL: "http://localhost:11434", allowUnauthenticated: true }, {}),
+    checkProviderGate(
+      { type: "local", id: "local", baseURL: "http://localhost:11434", allowUnauthenticated: true },
+      {},
+    ),
   ).toMatchObject({ ok: true, providerId: "local" })
 })
 
@@ -100,7 +120,11 @@ test("configured real provider fails before any real call when API key is missin
     called = true
     throw new Error("should not call fetch")
   })
-  const provider = createConfiguredProvider({ type: "openai", apiKeyEnv: "OC2_TEST_OPENAI_KEY" }, {}, fetchImplementation)
+  const provider = createConfiguredProvider(
+    { type: "openai", apiKeyEnv: "OC2_TEST_OPENAI_KEY" },
+    {},
+    fetchImplementation,
+  )
 
   await expect(provider.listModels()).rejects.toMatchObject({ classification: "auth", retryable: false })
   expect(called).toBe(false)
@@ -118,7 +142,9 @@ test("configured OpenAI-compatible provider streams through gated HTTP SSE", asy
             'data: {"choices":[{"delta":{"content":"hi ","reasoning_content":"why ","tool_calls":[{"index":0,"id":"call-1","function":{"name":"read","arguments":"{\\"filePath\\":\\"README.md\\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}\n\n',
           ),
         )
-        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"there"},"finish_reason":"stop"}]}\n\n'))
+        controller.enqueue(
+          encoder.encode('data: {"choices":[{"delta":{"content":"there"},"finish_reason":"stop"}]}\n\n'),
+        )
         controller.close()
       },
     })
@@ -130,7 +156,9 @@ test("configured OpenAI-compatible provider streams through gated HTTP SSE", asy
     fetchImplementation,
   )
 
-  const result = await collectModelStream(provider.stream(createRequest(), { providerId: "local", requestId: "r1", startedAt: new Date() }))
+  const result = await collectModelStream(
+    provider.stream(createRequest(), { providerId: "local", requestId: "r1", startedAt: new Date() }),
+  )
 
   expect(result.text).toBe("hi there")
   expect(result.reasoning).toBe("why ")
@@ -187,7 +215,10 @@ test("model service publishes failed event with provider classification details"
     ],
   })
 
-  await expect(service.collect("fake", createRequest())).rejects.toMatchObject({ classification: "rate_limit", retryable: true })
+  await expect(service.collect("fake", createRequest())).rejects.toMatchObject({
+    classification: "rate_limit",
+    retryable: true,
+  })
   expect(failedEvents).toEqual([
     expect.objectContaining({
       cause: undefined,

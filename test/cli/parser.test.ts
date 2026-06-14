@@ -5,7 +5,10 @@ import { parseCommand } from "../../src/cli/commands"
 test("parses basic commands and JSON flags", () => {
   expect(parseCommand(["version", "--json"])).toEqual({ ok: true, command: { name: "version", json: true } })
   expect(parseCommand(["diagnostics"])).toEqual({ ok: true, command: { name: "diagnostics", json: false } })
-  expect(parseCommand(["config", "path"])).toEqual({ ok: true, command: { name: "config", action: "path", json: false } })
+  expect(parseCommand(["config", "path"])).toEqual({
+    ok: true,
+    command: { name: "config", action: "path", json: false },
+  })
   expect(parseCommand(["tools", "list", "--json"])).toEqual({
     ok: true,
     command: { name: "tools", action: "list", json: true },
@@ -25,7 +28,19 @@ test("parses config get and set", () => {
 
 test("parses run help and execution", () => {
   expect(parseCommand(["run", "--help"])).toEqual({ ok: true, command: { name: "run", help: true } })
-  expect(parseCommand(["run", "hello"])).toEqual({ ok: true, command: { name: "run", prompt: "hello", json: false, model: undefined, tools: [], disabledTools: [], mcp: [], disabledMcp: [] } })
+  expect(parseCommand(["run", "hello"])).toEqual({
+    ok: true,
+    command: {
+      name: "run",
+      prompt: "hello",
+      json: false,
+      model: undefined,
+      tools: [],
+      disabledTools: [],
+      mcp: [],
+      disabledMcp: [],
+    },
+  })
 })
 
 test("parses tui resume and model flags", () => {

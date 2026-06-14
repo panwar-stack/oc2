@@ -50,31 +50,72 @@ export const projectTuiEvent: RuntimeEventProjector<TuiState> = (state, event) =
     }
     case "model.started": {
       const payload = event.payload as RuntimeEventMap["model.started"]
-      return { ...state, sessionId: payload.sessionId ?? state.sessionId, streamingText: "", running: true, status: "running" }
+      return {
+        ...state,
+        sessionId: payload.sessionId ?? state.sessionId,
+        streamingText: "",
+        running: true,
+        status: "running",
+      }
     }
     case "model.delta": {
       const payload = event.payload as RuntimeEventMap["model.delta"]
-      return { ...state, sessionId: payload.sessionId ?? state.sessionId, streamingText: state.streamingText + payload.delta, running: true }
+      return {
+        ...state,
+        sessionId: payload.sessionId ?? state.sessionId,
+        streamingText: state.streamingText + payload.delta,
+        running: true,
+      }
     }
     case "model.completed": {
       const payload = event.payload as RuntimeEventMap["model.completed"]
-      return appendStreamingMessage({ ...state, sessionId: payload.sessionId ?? state.sessionId, running: false, status: "completed" })
+      return appendStreamingMessage({
+        ...state,
+        sessionId: payload.sessionId ?? state.sessionId,
+        running: false,
+        status: "completed",
+      })
     }
     case "model.failed": {
       const payload = event.payload as RuntimeEventMap["model.failed"]
-      return appendError({ ...state, sessionId: payload.sessionId ?? state.sessionId, running: false, status: "failed" }, payload.error.message)
+      return appendError(
+        { ...state, sessionId: payload.sessionId ?? state.sessionId, running: false, status: "failed" },
+        payload.error.message,
+      )
     }
     case "tool.started": {
       const payload = event.payload as RuntimeEventMap["tool.started"]
-      return { ...state, toolCalls: upsertToolCall(state.toolCalls, { id: payload.taskId ?? payload.toolName, name: payload.toolName, status: "running" }) }
+      return {
+        ...state,
+        toolCalls: upsertToolCall(state.toolCalls, {
+          id: payload.taskId ?? payload.toolName,
+          name: payload.toolName,
+          status: "running",
+        }),
+      }
     }
     case "tool.completed": {
       const payload = event.payload as RuntimeEventMap["tool.completed"]
-      return { ...state, toolCalls: upsertToolCall(state.toolCalls, { id: payload.taskId ?? payload.toolName, name: payload.toolName, status: "completed" }) }
+      return {
+        ...state,
+        toolCalls: upsertToolCall(state.toolCalls, {
+          id: payload.taskId ?? payload.toolName,
+          name: payload.toolName,
+          status: "completed",
+        }),
+      }
     }
     case "tool.failed": {
       const payload = event.payload as RuntimeEventMap["tool.failed"]
-      return { ...state, toolCalls: upsertToolCall(state.toolCalls, { id: payload.taskId ?? payload.toolName, name: payload.toolName, status: "failed", error: payload.error.message }) }
+      return {
+        ...state,
+        toolCalls: upsertToolCall(state.toolCalls, {
+          id: payload.taskId ?? payload.toolName,
+          name: payload.toolName,
+          status: "failed",
+          error: payload.error.message,
+        }),
+      }
     }
     case "error": {
       const payload = event.payload as RuntimeEventMap["error"]
@@ -92,22 +133,43 @@ export const appendLocalMessage = (state: TuiState, role: MessageRole, text: str
   messages: [...state.messages, { id: crypto.randomUUID(), role, text, status: "completed" }],
 })
 
-export function completeTuiRun(state: TuiState, result: { readonly sessionId: string; readonly status: "completed" | "failed" }, aborted: boolean): TuiState {
+export function completeTuiRun(
+  state: TuiState,
+  result: { readonly sessionId: string; readonly status: "completed" | "failed" },
+  aborted: boolean,
+): TuiState {
   if (aborted) return { ...state, running: false, status: "cancelled" }
   return { ...state, sessionId: result.sessionId, running: false, status: result.status }
 }
 
 export function failTuiRun(state: TuiState, error: unknown, aborted: boolean): TuiState {
   if (aborted) return { ...state, running: false, status: "cancelled" }
-  return appendError({ ...state, running: false, status: "failed" }, error instanceof Error ? error.message : String(error))
+  return appendError(
+    { ...state, running: false, status: "failed" },
+    error instanceof Error ? error.message : String(error),
+  )
 }
 
-export function hydrateTuiState(state: TuiState, messages: readonly SessionMessage[], toolCalls: readonly PersistedToolCall[]): TuiState {
+export function hydrateTuiState(
+  state: TuiState,
+  messages: readonly SessionMessage[],
+  toolCalls: readonly PersistedToolCall[],
+): TuiState {
   return {
     ...state,
     sessionId: messages[0]?.sessionId ?? state.sessionId,
-    messages: messages.map((message) => ({ id: message.id, role: message.role, text: partsToText(message.parts), status: message.status })),
-    toolCalls: toolCalls.map((call) => ({ id: call.id, name: call.name, status: call.status, error: call.error?.message })),
+    messages: messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: partsToText(message.parts),
+      status: message.status,
+    })),
+    toolCalls: toolCalls.map((call) => ({
+      id: call.id,
+      name: call.name,
+      status: call.status,
+      error: call.error?.message,
+    })),
   }
 }
 
@@ -119,7 +181,10 @@ function appendStreamingMessage(state: TuiState): TuiState {
   if (!state.streamingText) return state
   return {
     ...state,
-    messages: [...state.messages, { id: crypto.randomUUID(), role: "assistant", text: state.streamingText, status: "completed" }],
+    messages: [
+      ...state.messages,
+      { id: crypto.randomUUID(), role: "assistant", text: state.streamingText, status: "completed" },
+    ],
     streamingText: "",
   }
 }
@@ -148,6 +213,15 @@ function partsToText(parts: readonly MessagePart[]): string {
 }
 
 function toRuntimeStatus(value: string | undefined, fallback: RuntimeStatus): RuntimeStatus {
-  const statuses = new Set<RuntimeStatus>(["idle", "queued", "running", "waiting", "completed", "failed", "cancelled", "timed_out"])
+  const statuses = new Set<RuntimeStatus>([
+    "idle",
+    "queued",
+    "running",
+    "waiting",
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+  ])
   return statuses.has(value as RuntimeStatus) ? (value as RuntimeStatus) : fallback
 }

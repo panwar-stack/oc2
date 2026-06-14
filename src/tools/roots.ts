@@ -16,7 +16,10 @@ export interface ResolveWorkspacePathOptions {
 }
 
 /** Returns absolute workspace roots, defaulting to the current working directory when none are configured. */
-export const normalizeWorkspaceRoots = (roots: readonly WorkspaceRoot[], cwd = process.cwd()): readonly WorkspaceRoot[] => {
+export const normalizeWorkspaceRoots = (
+  roots: readonly WorkspaceRoot[],
+  cwd = process.cwd(),
+): readonly WorkspaceRoot[] => {
   if (roots.length === 0) {
     return [{ id: "cwd", path: resolve(cwd), readonly: false }]
   }
@@ -40,7 +43,7 @@ export const resolveWorkspacePath = async (
   }
 
   const normalizedRoots = normalizeWorkspaceRoots(roots, options.cwd)
-  const base = options.cwd ? resolve(options.cwd) : normalizedRoots[0]?.path ?? process.cwd()
+  const base = options.cwd ? resolve(options.cwd) : (normalizedRoots[0]?.path ?? process.cwd())
   const target = resolve(isAbsolute(inputPath) ? inputPath : resolve(base, inputPath))
   // New files are checked at their nearest existing ancestor so symlink escapes are still caught.
   const checkPath = options.mustExist ? target : await nearestExistingAncestor(target)
@@ -51,20 +54,36 @@ export const resolveWorkspacePath = async (
   })
 
   if (!root) {
-    throw new ToolExecutionError({ code: "path_outside_workspace", message: `Path is outside workspace roots: ${inputPath}`, details: { path: inputPath } })
+    throw new ToolExecutionError({
+      code: "path_outside_workspace",
+      message: `Path is outside workspace roots: ${inputPath}`,
+      details: { path: inputPath },
+    })
   }
 
   if (!isInsidePath(realRoot, realCheckPath)) {
-    throw new ToolExecutionError({ code: "path_outside_workspace", message: `Path resolves outside workspace roots: ${inputPath}`, details: { path: inputPath, root: root.path } })
+    throw new ToolExecutionError({
+      code: "path_outside_workspace",
+      message: `Path resolves outside workspace roots: ${inputPath}`,
+      details: { path: inputPath, root: root.path },
+    })
   }
   if (options.writable && root.readonly) {
-    throw new ToolExecutionError({ code: "readonly_root", message: `Workspace root is read-only: ${root.path}`, details: { path: inputPath, root: root.path } })
+    throw new ToolExecutionError({
+      code: "readonly_root",
+      message: `Workspace root is read-only: ${root.path}`,
+      details: { path: inputPath, root: root.path },
+    })
   }
   if (options.mustExist) {
     try {
       await lstat(target)
     } catch {
-      throw new ToolExecutionError({ code: "not_found", message: `Path does not exist: ${inputPath}`, details: { path: inputPath } })
+      throw new ToolExecutionError({
+        code: "not_found",
+        message: `Path does not exist: ${inputPath}`,
+        details: { path: inputPath },
+      })
     }
   }
 

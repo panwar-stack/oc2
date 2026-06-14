@@ -51,15 +51,25 @@ export class SessionRunService {
 
   constructor(options: SessionRunServiceOptions) {
     this.events = options.events ?? createRuntimeEventBus()
-    this.scheduler = options.scheduler ?? createTaskScheduler({
-      limits: { model: 1, tool: options.config.runtime.maxConcurrentTools, mcp: 1, subagent: options.config.runtime.maxConcurrentSubAgents, "team-member": options.config.runtime.maxConcurrentTeamMembers },
-      defaultTimeoutMs: options.config.runtime.defaultTimeoutMs,
-      events: this.events,
-    })
+    this.scheduler =
+      options.scheduler ??
+      createTaskScheduler({
+        limits: {
+          model: 1,
+          tool: options.config.runtime.maxConcurrentTools,
+          mcp: 1,
+          subagent: options.config.runtime.maxConcurrentSubAgents,
+          "team-member": options.config.runtime.maxConcurrentTeamMembers,
+        },
+        defaultTimeoutMs: options.config.runtime.defaultTimeoutMs,
+        events: this.events,
+      })
     this.database = options.database ?? openOc2Database({ path: join(options.dataDir ?? options.cwd, "oc2.sqlite") })
     this.sessions = options.sessions ?? createSessionService({ database: this.database, events: this.events })
     this.registry = options.registry ?? createBuiltInToolRegistry()
-    this.models = options.models ?? createModelService({ providers: options.providers, scheduler: this.scheduler, events: this.events })
+    this.models =
+      options.models ??
+      createModelService({ providers: options.providers, scheduler: this.scheduler, events: this.events })
     this.config = options.config
     this.cwd = options.cwd
   }
@@ -77,22 +87,48 @@ export class SessionRunService {
           agentId: profile.id,
           status: "idle",
         })
-    if (!session) throw new RuntimeError({ code: "invalid_task", message: `Session not found: ${input.sessionId}`, recoverable: true })
+    if (!session)
+      throw new RuntimeError({
+        code: "invalid_task",
+        message: `Session not found: ${input.sessionId}`,
+        recoverable: true,
+      })
     if (this.active.has(session.id)) {
-      throw new RuntimeError({ code: "invalid_task", message: `A model run is already active for session ${session.id}`, recoverable: true, details: { reason: "run_already_active" } })
+      throw new RuntimeError({
+        code: "invalid_task",
+        message: `A model run is already active for session ${session.id}`,
+        recoverable: true,
+        details: { reason: "run_already_active" },
+      })
     }
 
     this.active.add(session.id)
     const started = this.sessions.sessions.tryStartRun(session.id)
     if (!started) {
       this.active.delete(session.id)
-      throw new RuntimeError({ code: "invalid_task", message: `A model run is already active for session ${session.id}`, recoverable: true, details: { reason: "run_already_active" } })
+      throw new RuntimeError({
+        code: "invalid_task",
+        message: `A model run is already active for session ${session.id}`,
+        recoverable: true,
+        details: { reason: "run_already_active" },
+      })
     }
     const runConfig = applyRunSelections(this.config, input)
-    const tools = createToolExecutor({ registry: this.registry, scheduler: this.scheduler, events: this.events, config: runConfig })
+    const tools = createToolExecutor({
+      registry: this.registry,
+      scheduler: this.scheduler,
+      events: this.events,
+      config: runConfig,
+    })
     const agent = new MainAgent({ sessions: this.sessions, models: this.models, registry: this.registry, tools })
     try {
-      const result = await agent.run({ session: started, profile, prompt: input.prompt, config: runConfig, signal: input.signal ?? new AbortController().signal })
+      const result = await agent.run({
+        session: started,
+        profile,
+        prompt: input.prompt,
+        config: runConfig,
+        signal: input.signal ?? new AbortController().signal,
+      })
       this.sessions.sessions.updateStatus(session.id, result.status)
       return result
     } catch (error) {
@@ -104,7 +140,8 @@ export class SessionRunService {
   }
 }
 
-export const createSessionRunService = (options: SessionRunServiceOptions): SessionRunService => new SessionRunService(options)
+export const createSessionRunService = (options: SessionRunServiceOptions): SessionRunService =>
+  new SessionRunService(options)
 
 function parseModel(value: string | undefined, config: Oc2Config): { providerId: string; modelId: string } {
   if (!value) return { providerId: config.model.provider, modelId: config.model.model }

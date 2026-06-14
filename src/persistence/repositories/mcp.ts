@@ -20,7 +20,9 @@ interface McpSnapshotRow {
 export class McpSnapshotRepository {
   constructor(private readonly db: Database) {}
 
-  append(input: Omit<McpSnapshot, "id" | "createdAt"> & { readonly id?: string; readonly createdAt?: string }): McpSnapshot {
+  append(
+    input: Omit<McpSnapshot, "id" | "createdAt"> & { readonly id?: string; readonly createdAt?: string },
+  ): McpSnapshot {
     const snapshot: McpSnapshot = {
       id: input.id ?? crypto.randomUUID(),
       serverId: input.serverId,
@@ -35,7 +37,10 @@ export class McpSnapshotRepository {
 
   latest(serverId: string): McpSnapshot | undefined {
     const row = this.db
-      .query<McpSnapshotRow, [string]>("SELECT * FROM mcp_snapshots WHERE server_id = ? ORDER BY created_at DESC, id DESC LIMIT 1")
+      .query<
+        McpSnapshotRow,
+        [string]
+      >("SELECT * FROM mcp_snapshots WHERE server_id = ? ORDER BY created_at DESC, id DESC LIMIT 1")
       .get(serverId)
     return row
       ? {

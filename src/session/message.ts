@@ -1,7 +1,15 @@
 import type { RuntimeErrorShape } from "../events/events"
 
 /** Shared lifecycle states for sessions, messages, tool calls, and scheduled work. */
-export type RuntimeStatus = "idle" | "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "timed_out"
+export type RuntimeStatus =
+  | "idle"
+  | "queued"
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
 
 export type MessageRole = "system" | "user" | "assistant" | "tool" | "synthetic"
 

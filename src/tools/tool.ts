@@ -81,7 +81,12 @@ export class ToolExecutionError extends Error implements ToolErrorShape {
   readonly recoverable: boolean
   readonly details?: Record<string, unknown>
 
-  constructor(input: { readonly code: string; readonly message: string; readonly recoverable?: boolean; readonly details?: Record<string, unknown> }) {
+  constructor(input: {
+    readonly code: string
+    readonly message: string
+    readonly recoverable?: boolean
+    readonly details?: Record<string, unknown>
+  }) {
     super(input.message)
     this.code = input.code
     this.recoverable = input.recoverable ?? true

@@ -12,7 +12,10 @@ export interface PermissionResolverResult {
 export interface ToolPermissionServiceOptions {
   readonly events?: RuntimeEventBus<unknown>
   readonly rules?: readonly ToolPermissionRule[]
-  readonly resolver?: (request: ToolPermissionRequest, signal: AbortSignal) => Promise<PermissionResolverResult | ToolPermissionDecision>
+  readonly resolver?: (
+    request: ToolPermissionRequest,
+    signal: AbortSignal,
+  ) => Promise<PermissionResolverResult | ToolPermissionDecision>
 }
 
 export interface ToolPermissionService {
@@ -25,7 +28,7 @@ export const createToolPermissionService = (options: ToolPermissionServiceOption
 
   return {
     async decide(request, signal) {
-      const configured = findDecision([...options.rules ?? [], ...savedRules], request)
+      const configured = findDecision([...(options.rules ?? []), ...savedRules], request)
       const decision = configured ?? "allow"
       if (decision !== "ask") return decision
 
@@ -33,7 +36,10 @@ export const createToolPermissionService = (options: ToolPermissionServiceOption
       options.events?.publish({ type: "permission.requested", payload: { permissionId, toolName: request.toolName } })
       const resolved = options.resolver ? await options.resolver(request, signal) : "deny"
       const normalized = typeof resolved === "string" ? { decision: resolved } : resolved
-      options.events?.publish({ type: "permission.resolved", payload: { permissionId, decision: normalized.decision === "allow" ? "allow" : "deny" } })
+      options.events?.publish({
+        type: "permission.resolved",
+        payload: { permissionId, decision: normalized.decision === "allow" ? "allow" : "deny" },
+      })
 
       if (normalized.remember) {
         savedRules.push({ match: request.resource, decision: normalized.decision })
@@ -51,7 +57,11 @@ export const assertToolPermission = async (
 ): Promise<void> => {
   const decision = await service.decide(request, signal)
   if (decision !== "allow") {
-    throw new ToolExecutionError({ code: "permission_denied", message: `Permission denied for ${request.toolName}`, details: { request, decision } })
+    throw new ToolExecutionError({
+      code: "permission_denied",
+      message: `Permission denied for ${request.toolName}`,
+      details: { request, decision },
+    })
   }
 }
 
@@ -61,7 +71,13 @@ export const findDecision = (
   request: ToolPermissionRequest,
 ): ToolPermissionDecision | undefined => {
   let decision: ToolPermissionDecision | undefined
-  const candidates = [request.toolName, request.action, request.resource, `${request.toolName}:${request.resource}`, `${request.action}:${request.resource}`]
+  const candidates = [
+    request.toolName,
+    request.action,
+    request.resource,
+    `${request.toolName}:${request.resource}`,
+    `${request.action}:${request.resource}`,
+  ]
 
   for (const rule of rules) {
     if (!rule.decision) continue

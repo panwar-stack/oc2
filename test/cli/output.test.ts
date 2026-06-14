@@ -4,7 +4,14 @@ import { runCli } from "../../src/cli/index"
 
 test("prints version JSON shape", async () => {
   const output: string[] = []
-  const result = await runCli({ argv: ["version", "--json"], streams: { stdout: (text) => { output.push(text) } } })
+  const result = await runCli({
+    argv: ["version", "--json"],
+    streams: {
+      stdout: (text) => {
+        output.push(text)
+      },
+    },
+  })
 
   expect(result.exitCode).toBe(0)
   expect(JSON.parse(output.join(""))).toEqual({ name: "oc2", version: "0.0.0" })
@@ -18,7 +25,11 @@ test("prints diagnostics JSON shape", async () => {
     homeDir: "/home/test",
     env: {},
     fileExists: async () => false,
-    streams: { stdout: (text) => { output.push(text) } },
+    streams: {
+      stdout: (text) => {
+        output.push(text)
+      },
+    },
   })
 
   const parsed = JSON.parse(output.join(""))
@@ -35,7 +46,11 @@ test("prints config paths and config values", async () => {
     cwd: "/repo",
     homeDir: "/home/test",
     env: {},
-    streams: { stdout: (text) => { pathOutput.push(text) } },
+    streams: {
+      stdout: (text) => {
+        pathOutput.push(text)
+      },
+    },
   })
   expect(pathOutput.join("")).toContain("user: /home/test/.config/oc2/config.jsonc")
 
@@ -46,7 +61,11 @@ test("prints config paths and config values", async () => {
     homeDir: "/home/test",
     env: {},
     fileExists: async () => false,
-    streams: { stdout: (text) => { getOutput.push(text) } },
+    streams: {
+      stdout: (text) => {
+        getOutput.push(text)
+      },
+    },
   })
   expect(result.exitCode).toBe(0)
   expect(getOutput.join("")).toBe("fake\n")
@@ -60,7 +79,11 @@ test("prints valid JSON for missing config values", async () => {
     homeDir: "/home/test",
     env: {},
     fileExists: async () => false,
-    streams: { stdout: (text) => { output.push(text) } },
+    streams: {
+      stdout: (text) => {
+        output.push(text)
+      },
+    },
   })
 
   expect(result.exitCode).toBe(1)
@@ -80,7 +103,11 @@ test("updates project config through config set", async () => {
     writeFile: async (_path, contents) => {
       file = contents
     },
-    streams: { stdout: (text) => { output.push(text) } },
+    streams: {
+      stdout: (text) => {
+        output.push(text)
+      },
+    },
   })
 
   expect(result.exitCode).toBe(0)
@@ -97,7 +124,11 @@ test("lists config-backed tools", async () => {
     env: {},
     fileExists: async (path) => path === "/repo/oc2.jsonc",
     readFile: async () => JSON.stringify({ tools: { read: { enabled: true }, bash: { enabled: false } } }),
-    streams: { stdout: (text) => { output.push(text) } },
+    streams: {
+      stdout: (text) => {
+        output.push(text)
+      },
+    },
   })
 
   expect(output.join("")).toBe("bash\tdisabled\nread\tenabled\n")

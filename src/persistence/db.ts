@@ -22,7 +22,10 @@ export const openOc2Database = (options: OpenDatabaseOptions): Oc2Database => {
   if (shouldCreateParent) mkdirSync(dirname(options.path), { recursive: true })
 
   try {
-    const sqlite = new Database(options.path, { readonly: options.readonly ?? false, create: options.readonly !== true })
+    const sqlite = new Database(options.path, {
+      readonly: options.readonly ?? false,
+      create: options.readonly !== true,
+    })
     sqlite.exec("PRAGMA foreign_keys = ON")
     sqlite.exec("PRAGMA busy_timeout = 5000")
     if (!options.readonly && options.path !== ":memory:") {

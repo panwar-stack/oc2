@@ -57,7 +57,10 @@ const defaultQueueLimit = 100
  */
 export const createTaskScheduler = (options: TaskSchedulerOptions): TaskScheduler => {
   const queues = new Map(
-    taskKinds.map((kind) => [kind, createTaskQueue<InternalTask<unknown>>(options.queueLimits?.[kind] ?? defaultQueueLimit)]),
+    taskKinds.map((kind) => [
+      kind,
+      createTaskQueue<InternalTask<unknown>>(options.queueLimits?.[kind] ?? defaultQueueLimit),
+    ]),
   )
   const running = new Map<SchedulerTaskKind, Set<string>>(taskKinds.map((kind) => [kind, new Set<string>()]))
   const tasks = new Map<string, InternalTask<unknown>>()
@@ -76,7 +79,11 @@ export const createTaskScheduler = (options: TaskSchedulerOptions): TaskSchedule
     })
   }
 
-  const update = (task: InternalTask<unknown>, status: SchedulerTaskStatus, patch: Partial<SchedulerTaskSnapshot> = {}) => {
+  const update = (
+    task: InternalTask<unknown>,
+    status: SchedulerTaskStatus,
+    patch: Partial<SchedulerTaskSnapshot> = {},
+  ) => {
     task.snapshot = {
       ...task.snapshot,
       ...patch,
@@ -95,7 +102,11 @@ export const createTaskScheduler = (options: TaskSchedulerOptions): TaskSchedule
     drain(task.snapshot.kind)
   }
 
-  const failQueued = (task: InternalTask<unknown>, error: RuntimeError, status: "cancelled" | "timed_out" | "failed") => {
+  const failQueued = (
+    task: InternalTask<unknown>,
+    error: RuntimeError,
+    status: "cancelled" | "timed_out" | "failed",
+  ) => {
     queues.get(task.snapshot.kind)?.remove((candidate) => candidate.snapshot.id === task.snapshot.id)
     update(task, status, { completedAt: new Date(), error: error.toJSON() })
     finish(task, { task: task.snapshot, error })
@@ -186,13 +197,16 @@ export const createTaskScheduler = (options: TaskSchedulerOptions): TaskSchedule
             : new RuntimeError({
                 code: "cancelled",
                 message:
-                  typeof task.controller.signal.reason === "string" ? task.controller.signal.reason : "Task was cancelled",
+                  typeof task.controller.signal.reason === "string"
+                    ? task.controller.signal.reason
+                    : "Task was cancelled",
                 cause: error,
                 taskId: task.snapshot.id,
                 kind: task.snapshot.kind,
               })
           : toRuntimeError(error, { taskId: task.snapshot.id, kind: task.snapshot.kind })
-        const status = runtimeError.code === "timed_out" ? "timed_out" : runtimeError.code === "cancelled" ? "cancelled" : "failed"
+        const status =
+          runtimeError.code === "timed_out" ? "timed_out" : runtimeError.code === "cancelled" ? "cancelled" : "failed"
         if (!task.snapshot.completedAt) {
           update(task, status, { completedAt: new Date(), error: runtimeError.toJSON() })
         }

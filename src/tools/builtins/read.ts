@@ -26,7 +26,10 @@ export const createReadTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
   ),
   permission: { action: "read", resource: (input) => input.filePath },
   async execute(input, context) {
-    const target = await resolveWorkspacePath(input.filePath, context.workspaceRoots, { cwd: context.cwd, mustExist: true })
+    const target = await resolveWorkspacePath(input.filePath, context.workspaceRoots, {
+      cwd: context.cwd,
+      mustExist: true,
+    })
     const stat = await lstat(target.path)
     if (stat.isFile()) {
       const file = Bun.file(target.path)
@@ -34,10 +37,18 @@ export const createReadTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
       const lines = text.split("\n")
       const start = Math.max((input.offset ?? 1) - 1, 0)
       const selected = lines.slice(start, start + (input.limit ?? 2_000))
-      return { path: target.path, type: "file", content: selected.map((line, index) => `${start + index + 1}: ${line}`).join("\n") }
+      return {
+        path: target.path,
+        type: "file",
+        content: selected.map((line, index) => `${start + index + 1}: ${line}`).join("\n"),
+      }
     }
 
     const entries = await readdir(target.path, { withFileTypes: true })
-    return { path: target.path, type: "directory", entries: entries.map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).toSorted() }
+    return {
+      path: target.path,
+      type: "directory",
+      entries: entries.map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).toSorted(),
+    }
   },
 })

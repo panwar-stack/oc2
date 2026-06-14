@@ -59,7 +59,10 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
       await writeStdout(options.streams?.stdout, formatRootHelp())
       return { exitCode: 0 }
     case "version":
-      await writeStdout(options.streams?.stdout, command.json ? formatJson(formatVersionJson(VERSION)) : formatVersionText(VERSION))
+      await writeStdout(
+        options.streams?.stdout,
+        command.json ? formatJson(formatVersionJson(VERSION)) : formatVersionText(VERSION),
+      )
       return { exitCode: 0 }
     case "diagnostics":
       return diagnostics(command.json, options)
@@ -98,7 +101,10 @@ async function tui(command: Extract<ParsedCommand, { name: "tui" }>, options: Cl
 async function diagnostics(json: boolean, options: CliOptions): Promise<CliResult> {
   const loaded = await loadConfig(options)
   const dependencyDiagnostics = await runDependencyChecks(loaded.config)
-  const report = createDiagnosticReport(collectEnvironmentInfo(options), [...loaded.diagnostics, ...dependencyDiagnostics])
+  const report = createDiagnosticReport(collectEnvironmentInfo(options), [
+    ...loaded.diagnostics,
+    ...dependencyDiagnostics,
+  ])
   await writeStdout(options.streams?.stdout, json ? formatJson(report) : formatDiagnosticsText(report))
   return { exitCode: report.diagnostics.some((diagnostic) => diagnostic.level === "error") ? 1 : 0 }
 }
@@ -127,11 +133,15 @@ async function config(command: Extract<ParsedCommand, { name: "config" }>, optio
   const path = paths.projectConfigPaths[0] ?? `${paths.cwd}/oc2.jsonc`
   const readFile = options.readFile ?? ((filePath: string) => Bun.file(filePath).text())
   const fileExists = options.fileExists ?? ((filePath: string) => Bun.file(filePath).exists())
-  const writeFile = options.writeFile ?? ((filePath: string, contents: string) => Bun.write(filePath, contents).then(() => undefined))
+  const writeFile =
+    options.writeFile ?? ((filePath: string, contents: string) => Bun.write(filePath, contents).then(() => undefined))
   const existing = (await fileExists(path)) ? await readFile(path) : "{}\n"
   const updated = setJsoncPath(existing, command.key, parseConfigSetValue(command.value))
   await writeFile(path, updated)
-  await writeStdout(options.streams?.stdout, command.json ? formatJson({ path, key: command.key }) : `Updated ${command.key} in ${path}\n`)
+  await writeStdout(
+    options.streams?.stdout,
+    command.json ? formatJson({ path, key: command.key }) : `Updated ${command.key} in ${path}\n`,
+  )
   return { exitCode: 0 }
 }
 
@@ -140,13 +150,22 @@ async function tools(json: boolean, options: CliOptions): Promise<CliResult> {
   const configuredTools = Object.entries(loaded.config.tools)
     .map(([name, tool]) => ({ name, enabled: tool.enabled }))
     .toSorted((left, right) => left.name.localeCompare(right.name))
-  await writeStdout(options.streams?.stdout, json ? formatJson({ tools: configuredTools }) : formatToolsListText(configuredTools))
+  await writeStdout(
+    options.streams?.stdout,
+    json ? formatJson({ tools: configuredTools }) : formatToolsListText(configuredTools),
+  )
   return { exitCode: 0 }
 }
 
-type RunExecutionCommand = Extract<ParsedCommand, { name: "run"; prompt: string }> | Extract<ParsedCommand, { name: "resume" }>
+type RunExecutionCommand =
+  | Extract<ParsedCommand, { name: "run"; prompt: string }>
+  | Extract<ParsedCommand, { name: "resume" }>
 
-async function runPrompt(command: RunExecutionCommand, sessionId: string | undefined, options: CliOptions): Promise<CliResult> {
+async function runPrompt(
+  command: RunExecutionCommand,
+  sessionId: string | undefined,
+  options: CliOptions,
+): Promise<CliResult> {
   const loaded = await loadConfig(options)
   const paths = getConfigPaths(options)
   const service = createSessionRunService({
@@ -169,7 +188,14 @@ async function runPrompt(command: RunExecutionCommand, sessionId: string | undef
     return { exitCode: result.status === "completed" ? 0 : 1 }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const failed = { sessionId: sessionId ?? "", finalAssistantText: "", toolCalls: [], errors: [{ message }], usage: undefined, exitStatus: "failed" }
+    const failed = {
+      sessionId: sessionId ?? "",
+      finalAssistantText: "",
+      toolCalls: [],
+      errors: [{ message }],
+      usage: undefined,
+      exitStatus: "failed",
+    }
     if (command.json) {
       await writeStdout(options.streams?.stdout, formatJson(failed))
     } else {

@@ -13,7 +13,10 @@ export const createWebfetchTool = (): ToolDefinition<z.infer<typeof inputSchema>
   name: "webfetch",
   description: "Fetch HTTP or HTTPS content with a bounded response size.",
   inputSchema,
-  modelInputSchema: objectSchema({ url: stringProperty("URL to fetch"), format: stringProperty("text, markdown, or html") }, ["url"]),
+  modelInputSchema: objectSchema(
+    { url: stringProperty("URL to fetch"), format: stringProperty("text, markdown, or html") },
+    ["url"],
+  ),
   permission: { action: "network", resource: (input) => input.url },
   async execute(input, context) {
     const url = new URL(input.url)
@@ -29,6 +32,12 @@ export const createWebfetchTool = (): ToolDefinition<z.infer<typeof inputSchema>
     if (!contentType.includes("text") && !contentType.includes("json") && !contentType.includes("html")) {
       throw new ToolExecutionError({ code: "unsupported_content", message: `Unsupported content type: ${contentType}` })
     }
-    return { url: url.toString(), status: response.status, contentType, content: new TextDecoder().decode(bytes), format: input.format ?? "markdown" }
+    return {
+      url: url.toString(),
+      status: response.status,
+      contentType,
+      content: new TextDecoder().decode(bytes),
+      format: input.format ?? "markdown",
+    }
   },
 })

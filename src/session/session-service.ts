@@ -1,6 +1,10 @@
 import type { RuntimeEventBus } from "../events/event-bus"
 import type { Oc2Database } from "../persistence/db"
-import { MessageRepository, type CreateMessageInput, type UpdateMessageInput } from "../persistence/repositories/messages"
+import {
+  MessageRepository,
+  type CreateMessageInput,
+  type UpdateMessageInput,
+} from "../persistence/repositories/messages"
 import { RuntimeEventRepository } from "../persistence/repositories/runtime-events"
 import { SessionRepository, type CreateSessionInput, type SessionRecord } from "../persistence/repositories/sessions"
 import { ToolCallRepository } from "../persistence/repositories/tool-calls"

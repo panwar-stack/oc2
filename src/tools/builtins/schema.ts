@@ -1,5 +1,8 @@
 /** Builds the JSON-schema object wrapper used in model-facing tool definitions. */
-export const objectSchema = (properties: Record<string, unknown>, required: readonly string[] = []): Record<string, unknown> => ({
+export const objectSchema = (
+  properties: Record<string, unknown>,
+  required: readonly string[] = [],
+): Record<string, unknown> => ({
   type: "object",
   properties,
   required,

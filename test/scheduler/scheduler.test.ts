@@ -23,16 +23,18 @@ test("scheduler enforces per-kind concurrency limits", async () => {
   let running = 0
   let maxRunning = 0
 
-  const tasks = Array.from({ length: 5 }, () =>
-    scheduler.schedule({
-      kind: "tool",
-      run: async () => {
-        running += 1
-        maxRunning = Math.max(maxRunning, running)
-        await wait(5)
-        running -= 1
-      },
-    }).result,
+  const tasks = Array.from(
+    { length: 5 },
+    () =>
+      scheduler.schedule({
+        kind: "tool",
+        run: async () => {
+          running += 1
+          maxRunning = Math.max(maxRunning, running)
+          await wait(5)
+          running -= 1
+        },
+      }).result,
   )
 
   await Promise.all(tasks)

@@ -19,7 +19,12 @@ export const createGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
   description: "Search text files with a regular expression inside workspace roots.",
   inputSchema,
   modelInputSchema: objectSchema(
-    { pattern: stringProperty("Regular expression"), path: stringProperty("File or directory to search"), include: stringProperty("Substring files must include"), maxMatches: numberProperty("Maximum matches") },
+    {
+      pattern: stringProperty("Regular expression"),
+      path: stringProperty("File or directory to search"),
+      include: stringProperty("Substring files must include"),
+      maxMatches: numberProperty("Maximum matches"),
+    },
     ["pattern"],
   ),
   permission: { action: "read", resource: (input) => input.path ?? input.pattern },
@@ -28,10 +33,16 @@ export const createGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
     try {
       regex = new RegExp(input.pattern)
     } catch (error) {
-      throw new ToolExecutionError({ code: "invalid_regex", message: error instanceof Error ? error.message : String(error) })
+      throw new ToolExecutionError({
+        code: "invalid_regex",
+        message: error instanceof Error ? error.message : String(error),
+      })
     }
 
-    const base = await resolveWorkspacePath(input.path ?? ".", context.workspaceRoots, { cwd: context.cwd, mustExist: true })
+    const base = await resolveWorkspacePath(input.path ?? ".", context.workspaceRoots, {
+      cwd: context.cwd,
+      mustExist: true,
+    })
     const roots = normalizeWorkspaceRoots(context.workspaceRoots, context.cwd)
     const realRoots = await Promise.all(roots.map((root) => realpath(root.path).catch(() => root.path)))
     const files = await collectFiles(base.path, input.include, context.signal, realRoots)
@@ -56,7 +67,12 @@ export const createGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
 })
 
 /** Recursively collects readable files while skipping common large/generated directories. */
-const collectFiles = async (path: string, include: string | undefined, signal: AbortSignal, roots: readonly string[]): Promise<string[]> => {
+const collectFiles = async (
+  path: string,
+  include: string | undefined,
+  signal: AbortSignal,
+  roots: readonly string[],
+): Promise<string[]> => {
   const stat = await lstat(path)
   if (stat.isFile() || stat.isSymbolicLink()) {
     const real = await realpath(path).catch(() => path)
@@ -69,8 +85,8 @@ const collectFiles = async (path: string, include: string | undefined, signal: A
     if (signal.aborted) break
     if (entry.name === "node_modules" || entry.name === ".git") continue
     const child = join(path, entry.name)
-    if (entry.isDirectory()) files.push(...await collectFiles(child, include, signal, roots))
-    else files.push(...await collectFiles(child, include, signal, roots))
+    if (entry.isDirectory()) files.push(...(await collectFiles(child, include, signal, roots)))
+    else files.push(...(await collectFiles(child, include, signal, roots)))
   }
   return files
 }

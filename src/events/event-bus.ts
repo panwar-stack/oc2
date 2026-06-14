@@ -1,4 +1,12 @@
-import { createRuntimeEvent, type RuntimeEvent, type RuntimeEventInput, type RuntimeEventListener, type RuntimeEventMap, type RuntimeEventProjector, type RuntimeEventType } from "./events"
+import {
+  createRuntimeEvent,
+  type RuntimeEvent,
+  type RuntimeEventInput,
+  type RuntimeEventListener,
+  type RuntimeEventMap,
+  type RuntimeEventProjector,
+  type RuntimeEventType,
+} from "./events"
 
 export interface RuntimeEventBusOptions<TState = unknown> {
   readonly initialState?: TState
@@ -35,7 +43,9 @@ export const createRuntimeEventBus = <TState = undefined>(
   }
 
   return {
-    publish<TType extends RuntimeEventType>(input: RuntimeEventInput<TType> | RuntimeEvent<TType>): RuntimeEvent<TType> {
+    publish<TType extends RuntimeEventType>(
+      input: RuntimeEventInput<TType> | RuntimeEvent<TType>,
+    ): RuntimeEvent<TType> {
       const event = "id" in input ? input : createRuntimeEvent(input)
 
       if (options.projector) {

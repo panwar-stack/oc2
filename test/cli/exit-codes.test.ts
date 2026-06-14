@@ -12,7 +12,14 @@ test("successful commands exit zero", async () => {
 
 test("invalid commands exit non-zero", async () => {
   const stderr: string[] = []
-  const result = await runCli({ argv: ["wat"], streams: { stderr: (text) => { stderr.push(text) } } })
+  const result = await runCli({
+    argv: ["wat"],
+    streams: {
+      stderr: (text) => {
+        stderr.push(text)
+      },
+    },
+  })
 
   expect(result.exitCode).toBe(1)
   expect(stderr.join("")).toContain("Unknown command: wat")

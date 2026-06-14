@@ -110,10 +110,23 @@ export class MainAgent {
           })
           const result = await this.options.tools.execute(
             { id: call.id, name: call.name, arguments: call.arguments, sessionId: input.session.id },
-            { workspaceRoots: input.session.workspaceRoots, cwd: input.session.workspaceRoots[0]?.path, signal: input.signal, sessionId: input.session.id },
+            {
+              workspaceRoots: input.session.workspaceRoots,
+              cwd: input.session.workspaceRoots[0]?.path,
+              signal: input.signal,
+              sessionId: input.session.id,
+            },
           )
           toolCalls.push({ id: call.id, name: call.name, input: call.arguments, ok: result.ok })
-          const error = result.ok ? undefined : result.error.runtimeError ?? new RuntimeError({ code: "task_failed", message: result.error.message, recoverable: result.error.recoverable, kind: "tool" }).toJSON()
+          const error = result.ok
+            ? undefined
+            : (result.error.runtimeError ??
+              new RuntimeError({
+                code: "task_failed",
+                message: result.error.message,
+                recoverable: result.error.recoverable,
+                kind: "tool",
+              }).toJSON())
           if (error) errors.push(error)
           this.options.sessions.toolCalls.upsert({
             id: call.id,
@@ -130,7 +143,12 @@ export class MainAgent {
             sessionId: input.session.id,
             role: "tool",
             parentMessageId: assistant.id,
-            parts: [{ type: "tool-result", result: { toolCallId: call.id, output: result.ok ? result.output : undefined, error } }],
+            parts: [
+              {
+                type: "tool-result",
+                result: { toolCallId: call.id, output: result.ok ? result.output : undefined, error },
+              },
+            ],
             status: result.ok ? "completed" : "failed",
             now: now(),
           })
@@ -153,7 +171,12 @@ export class MainAgent {
       }
     }
 
-    const error = new RuntimeError({ code: "task_failed", message: "Agent reached the maximum model/tool iterations", recoverable: true, kind: "model" }).toJSON()
+    const error = new RuntimeError({
+      code: "task_failed",
+      message: "Agent reached the maximum model/tool iterations",
+      recoverable: true,
+      kind: "model",
+    }).toJSON()
     errors.push(error)
     return { sessionId: input.session.id, text: finalText, toolCalls, errors, usage, status: "failed" }
   }
@@ -170,7 +193,10 @@ function collectedToParts(text: string, reasoning: string, calls: readonly Model
   if (reasoning) parts.push({ type: "reasoning", text: reasoning })
   if (text) parts.push(createTextPart(text))
   for (const call of calls) {
-    parts.push({ type: "tool-call", toolCall: { id: call.id, name: call.name, input: call.arguments, status: "completed" } })
+    parts.push({
+      type: "tool-call",
+      toolCall: { id: call.id, name: call.name, input: call.arguments, status: "completed" },
+    })
   }
   return parts.length > 0 ? parts : [createTextPart("")]
 }
@@ -194,5 +220,10 @@ function toRuntimeErrorShape(error: unknown): RuntimeErrorShape {
       kind: "model",
     }).toJSON()
   }
-  return new RuntimeError({ code: "task_failed", message: error instanceof Error ? error.message : String(error), recoverable: false, kind: "model" }).toJSON()
+  return new RuntimeError({
+    code: "task_failed",
+    message: error instanceof Error ? error.message : String(error),
+    recoverable: false,
+    kind: "model",
+  }).toJSON()
 }

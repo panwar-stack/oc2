@@ -25,7 +25,10 @@ export const applyMigrations = (db: Database): void => {
   try {
     db.exec("CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
     const applied = new Set(
-      db.query<MigrationRow, []>("SELECT id FROM migrations").all().map((row) => row.id),
+      db
+        .query<MigrationRow, []>("SELECT id FROM migrations")
+        .all()
+        .map((row) => row.id),
     )
     const insertMigration = db.query("INSERT INTO migrations (id, applied_at) VALUES (?, ?)")
 
@@ -50,4 +53,7 @@ export const applyMigrations = (db: Database): void => {
 
 /** Reads applied migration ids in deterministic order for diagnostics/tests. */
 export const getAppliedMigrationIds = (db: Database): readonly string[] =>
-  db.query<MigrationRow, []>("SELECT id FROM migrations ORDER BY id").all().map((row) => row.id)
+  db
+    .query<MigrationRow, []>("SELECT id FROM migrations ORDER BY id")
+    .all()
+    .map((row) => row.id)

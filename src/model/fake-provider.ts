@@ -1,5 +1,12 @@
 import { abortableModelStream } from "./stream"
-import { ModelProviderError, type ModelContext, type ModelEvent, type ModelInfo, type ModelProvider, type ModelRequest } from "./provider"
+import {
+  ModelProviderError,
+  type ModelContext,
+  type ModelEvent,
+  type ModelInfo,
+  type ModelProvider,
+  type ModelRequest,
+} from "./provider"
 
 /** Options for deterministic model responses in tests and local development. */
 export interface FakeModelProviderOptions {
@@ -51,4 +58,5 @@ export class FakeModelProvider implements ModelProvider {
 }
 
 /** Creates the default fake provider used when no real providers are registered. */
-export const createFakeModelProvider = (options?: FakeModelProviderOptions): FakeModelProvider => new FakeModelProvider(options)
+export const createFakeModelProvider = (options?: FakeModelProviderOptions): FakeModelProvider =>
+  new FakeModelProvider(options)

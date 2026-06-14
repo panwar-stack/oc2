@@ -18,15 +18,29 @@ export const createOpenGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>
   description: "Run OpenGrep/Semgrep structural search when a local binary is available.",
   inputSchema,
   modelInputSchema: objectSchema(
-    { pattern: stringProperty("Structural pattern"), language: stringProperty("Language"), path: stringProperty("Directory or file to search"), include: stringProperty("Include filter"), exclude: stringProperty("Exclude filter") },
+    {
+      pattern: stringProperty("Structural pattern"),
+      language: stringProperty("Language"),
+      path: stringProperty("Directory or file to search"),
+      include: stringProperty("Include filter"),
+      exclude: stringProperty("Exclude filter"),
+    },
     ["pattern"],
   ),
   permission: { action: "opengrep", resource: (input) => input.path ?? input.pattern },
   async execute(input, context) {
-    const target = await resolveWorkspacePath(input.path ?? ".", context.workspaceRoots, { cwd: context.cwd, mustExist: true })
+    const target = await resolveWorkspacePath(input.path ?? ".", context.workspaceRoots, {
+      cwd: context.cwd,
+      mustExist: true,
+    })
     const binary = await findOpenGrepBinary()
     if (!binary) {
-      return { available: false, matches: [], message: "OpenGrep is not installed; use grep as a fallback.", path: target.path }
+      return {
+        available: false,
+        matches: [],
+        message: "OpenGrep is not installed; use grep as a fallback.",
+        path: target.path,
+      }
     }
     const args = ["--json", "-e", input.pattern, target.path]
     if (input.language) args.splice(1, 0, "--lang", input.language)
@@ -36,9 +50,14 @@ export const createOpenGrepTool = (): ToolDefinition<z.infer<typeof inputSchema>
     const onAbort = () => proc.kill()
     context.signal.addEventListener("abort", onAbort, { once: true })
     try {
-      const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
       if (context.signal.aborted) throw new ToolExecutionError({ code: "cancelled", message: "Tool was cancelled" })
-      if (exitCode > 1) throw new ToolExecutionError({ code: "opengrep_failed", message: stderr || `OpenGrep exited ${exitCode}` })
+      if (exitCode > 1)
+        throw new ToolExecutionError({ code: "opengrep_failed", message: stderr || `OpenGrep exited ${exitCode}` })
       return { available: true, path: target.path, raw: stdout ? JSON.parse(stdout) : { results: [] } }
     } finally {
       context.signal.removeEventListener("abort", onAbort)

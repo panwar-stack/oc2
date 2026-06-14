@@ -1,6 +1,13 @@
 import type { Oc2Config } from "../config/schema"
 import type { ModelToolDefinition } from "../model/provider"
-import { toModelToolDefinition, ToolExecutionError, toolError, type ToolCall, type ToolDefinition, type ToolExecutionResult } from "./tool"
+import {
+  toModelToolDefinition,
+  ToolExecutionError,
+  toolError,
+  type ToolCall,
+  type ToolDefinition,
+  type ToolExecutionResult,
+} from "./tool"
 
 const toolNamePattern = /^[a-zA-Z][a-zA-Z0-9_-]*$/
 
@@ -36,7 +43,14 @@ export const createToolRegistry = (tools: readonly ToolDefinition[] = []): ToolR
       return api.list(config).map(toModelToolDefinition)
     },
     unknown(call) {
-      return toolError(call, new ToolExecutionError({ code: "unknown_tool", message: `Unknown tool: ${call.name}`, details: { toolName: call.name } }))
+      return toolError(
+        call,
+        new ToolExecutionError({
+          code: "unknown_tool",
+          message: `Unknown tool: ${call.name}`,
+          details: { toolName: call.name },
+        }),
+      )
     },
   }
 

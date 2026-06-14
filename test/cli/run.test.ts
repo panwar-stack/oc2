@@ -10,7 +10,16 @@ import { ModelProviderError, type ModelRequest } from "../../src"
 test("parses run prompt and resume run flags", () => {
   expect(parseCommand(["run", "hello", "--json", "--model", "fake/test"])).toEqual({
     ok: true,
-    command: { name: "run", prompt: "hello", json: true, model: "fake/test", tools: [], disabledTools: [], mcp: [], disabledMcp: [] },
+    command: {
+      name: "run",
+      prompt: "hello",
+      json: true,
+      model: "fake/test",
+      tools: [],
+      disabledTools: [],
+      mcp: [],
+      disabledMcp: [],
+    },
   })
   expect(parseCommand(["resume", "session-1", "--run", "next", "--json"])).toEqual({
     ok: true,
@@ -21,7 +30,18 @@ test("parses run prompt and resume run flags", () => {
 test("oc2 run --json emits stable final output", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "oc2-cli-"))
   const stdout: string[] = []
-  const result = await runCli({ argv: ["run", "hello", "--json", "--model", "fake/test"], cwd: "/repo", homeDir: dataDir, env: { OC2_DATA_DIR: dataDir }, fileExists: async () => false, streams: { stdout: (text) => { stdout.push(text) } } })
+  const result = await runCli({
+    argv: ["run", "hello", "--json", "--model", "fake/test"],
+    cwd: "/repo",
+    homeDir: dataDir,
+    env: { OC2_DATA_DIR: dataDir },
+    fileExists: async () => false,
+    streams: {
+      stdout: (text) => {
+        stdout.push(text)
+      },
+    },
+  })
 
   expect(result.exitCode).toBe(0)
   const output = JSON.parse(stdout.join(""))
@@ -35,7 +55,18 @@ test("oc2 run --json emits stable final output", async () => {
 test("oc2 run text mode prints final assistant text", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "oc2-cli-"))
   const stdout: string[] = []
-  const result = await runCli({ argv: ["run", "hello", "--model", "fake/test"], cwd: "/repo", homeDir: dataDir, env: { OC2_DATA_DIR: dataDir }, fileExists: async () => false, streams: { stdout: (text) => { stdout.push(text) } } })
+  const result = await runCli({
+    argv: ["run", "hello", "--model", "fake/test"],
+    cwd: "/repo",
+    homeDir: dataDir,
+    env: { OC2_DATA_DIR: dataDir },
+    fileExists: async () => false,
+    streams: {
+      stdout: (text) => {
+        stdout.push(text)
+      },
+    },
+  })
 
   expect(result.exitCode).toBe(0)
   expect(stdout.join("")).toBe("fake response\n")
@@ -48,7 +79,9 @@ test("oc2 run applies per-run disabled tool flags to model context", async () =>
   const provider = {
     id: "fake",
     name: "Capturing",
-    async listModels() { return [{ id: "test", supportsTools: true }] },
+    async listModels() {
+      return [{ id: "test", supportsTools: true }]
+    },
     async *stream(request: ModelRequest) {
       requests.push(request)
       yield { type: "text-delta" as const, text: "ok" }
@@ -56,7 +89,15 @@ test("oc2 run applies per-run disabled tool flags to model context", async () =>
     },
   }
 
-  const result = await runCli({ argv: ["run", "hello", "--json", "--model", "fake/test", "--no-tool", "bash"], cwd: "/repo", homeDir: dataDir, env: { OC2_DATA_DIR: dataDir }, fileExists: async () => false, modelProviders: [provider], streams: { stdout: () => undefined } })
+  const result = await runCli({
+    argv: ["run", "hello", "--json", "--model", "fake/test", "--no-tool", "bash"],
+    cwd: "/repo",
+    homeDir: dataDir,
+    env: { OC2_DATA_DIR: dataDir },
+    fileExists: async () => false,
+    modelProviders: [provider],
+    streams: { stdout: () => undefined },
+  })
 
   expect(result.exitCode).toBe(0)
   expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("bash")
@@ -69,11 +110,28 @@ test("failed non-interactive run exits non-zero with JSON", async () => {
   const failing = {
     id: "fake",
     name: "Failing",
-    async listModels() { return [{ id: "test" }] },
-    async *stream() { throw new ModelProviderError({ message: "bad key", classification: "auth", retryable: false }); yield { type: "done" as const } },
+    async listModels() {
+      return [{ id: "test" }]
+    },
+    async *stream() {
+      throw new ModelProviderError({ message: "bad key", classification: "auth", retryable: false })
+      yield { type: "done" as const }
+    },
   }
 
-  const result = await runCli({ argv: ["run", "hello", "--json", "--model", "fake/test"], cwd: "/repo", homeDir: dataDir, env: { OC2_DATA_DIR: dataDir }, fileExists: async () => false, modelProviders: [failing], streams: { stdout: (text) => { stdout.push(text) } } })
+  const result = await runCli({
+    argv: ["run", "hello", "--json", "--model", "fake/test"],
+    cwd: "/repo",
+    homeDir: dataDir,
+    env: { OC2_DATA_DIR: dataDir },
+    fileExists: async () => false,
+    modelProviders: [failing],
+    streams: {
+      stdout: (text) => {
+        stdout.push(text)
+      },
+    },
+  })
 
   expect(result.exitCode).toBe(1)
   const output = JSON.parse(stdout.join(""))
@@ -92,7 +150,9 @@ test("oc2 tui dispatches to the TUI launcher", async () => {
     homeDir: dataDir,
     env: { OC2_DATA_DIR: dataDir },
     fileExists: async () => false,
-    tuiLauncher: async (options) => { launches.push({ sessionId: options.sessionId, model: options.model, cwd: options.cwd }) },
+    tuiLauncher: async (options) => {
+      launches.push({ sessionId: options.sessionId, model: options.model, cwd: options.cwd })
+    },
   })
 
   expect(result.exitCode).toBe(0)

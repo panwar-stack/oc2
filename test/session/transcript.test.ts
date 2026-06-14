@@ -32,7 +32,10 @@ const messages: readonly SessionMessage[] = [
     role: "assistant",
     createdAt: "2026-01-01T00:00:01.000Z",
     updatedAt: "2026-01-01T00:00:01.000Z",
-    parts: [createTextPart("hi"), { type: "tool-call", toolCall: { id: "tool-1", name: "read", input: {}, status: "completed" } }],
+    parts: [
+      createTextPart("hi"),
+      { type: "tool-call", toolCall: { id: "tool-1", name: "read", input: {}, status: "completed" } },
+    ],
     status: "completed",
   },
 ]

@@ -83,12 +83,22 @@ export interface RuntimeEventMap {
   "session.updated": { readonly sessionId: string; readonly status?: string }
   "message.updated": { readonly sessionId: string; readonly messageId: string }
   "model.started": { readonly sessionId?: string; readonly taskId?: string; readonly model?: string }
-  "model.delta": { readonly sessionId?: string; readonly taskId?: string; readonly delta: string; readonly modelEvent?: unknown }
+  "model.delta": {
+    readonly sessionId?: string
+    readonly taskId?: string
+    readonly delta: string
+    readonly modelEvent?: unknown
+  }
   "model.completed": { readonly sessionId?: string; readonly taskId?: string }
   "model.failed": { readonly sessionId?: string; readonly taskId?: string; readonly error: RuntimeErrorShape }
   "tool.started": { readonly sessionId?: string; readonly taskId?: string; readonly toolName: string }
   "tool.completed": { readonly sessionId?: string; readonly taskId?: string; readonly toolName: string }
-  "tool.failed": { readonly sessionId?: string; readonly taskId?: string; readonly toolName: string; readonly error: RuntimeErrorShape }
+  "tool.failed": {
+    readonly sessionId?: string
+    readonly taskId?: string
+    readonly toolName: string
+    readonly error: RuntimeErrorShape
+  }
   "permission.requested": { readonly permissionId: string; readonly toolName?: string }
   "permission.resolved": { readonly permissionId: string; readonly decision: "allow" | "deny" }
   "subagent.updated": { readonly subagentId: string; readonly status: string; readonly taskId?: string }
@@ -129,7 +139,9 @@ export type RuntimeEventProjector<TState> = (state: TState, event: RuntimeEvent)
 export const createRuntimeEventId = (): string => crypto.randomUUID()
 
 /** Adds id and timestamp metadata to a typed runtime event payload. */
-export const createRuntimeEvent = <TType extends RuntimeEventType>(input: RuntimeEventInput<TType>): RuntimeEvent<TType> => ({
+export const createRuntimeEvent = <TType extends RuntimeEventType>(
+  input: RuntimeEventInput<TType>,
+): RuntimeEvent<TType> => ({
   id: createRuntimeEventId(),
   type: input.type,
   timestamp: new Date(),

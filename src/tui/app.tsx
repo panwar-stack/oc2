@@ -6,7 +6,16 @@ import type { ModelProvider } from "../model/provider"
 import { createSessionRunService } from "../session/run"
 import { parseTuiKey } from "./keymap"
 import { SessionView } from "./components/SessionView"
-import { appendLocalMessage, completeTuiRun, createInitialTuiState, failTuiRun, hydrateTuiState, projectTuiEvent, toggleSidePanel, type TuiState } from "./state"
+import {
+  appendLocalMessage,
+  completeTuiRun,
+  createInitialTuiState,
+  failTuiRun,
+  hydrateTuiState,
+  projectTuiEvent,
+  toggleSidePanel,
+  type TuiState,
+} from "./state"
 
 export interface TuiLaunchOptions {
   readonly config: Oc2Config
@@ -26,8 +35,17 @@ export function renderTui(state: TuiState, input = ""): string {
 
 /** Launches the dependency-free terminal UI adapter over the session run service. */
 export async function launchTui(options: TuiLaunchOptions): Promise<void> {
-  const eventBus = createRuntimeEventBus<TuiState>({ initialState: createInitialTuiState(options.config.tui.sidePanel), projector: projectTuiEvent })
-  const service = createSessionRunService({ config: options.config, cwd: options.cwd, dataDir: options.dataDir, events: eventBus, providers: options.providers })
+  const eventBus = createRuntimeEventBus<TuiState>({
+    initialState: createInitialTuiState(options.config.tui.sidePanel),
+    projector: projectTuiEvent,
+  })
+  const service = createSessionRunService({
+    config: options.config,
+    cwd: options.cwd,
+    dataDir: options.dataDir,
+    events: eventBus,
+    providers: options.providers,
+  })
   const stdin = options.stdin ?? process.stdin
   const stdout = options.stdout ?? process.stdout
   let state = eventBus.getState()
@@ -57,7 +75,12 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     activeRun = runController
     render()
     try {
-      const result = await service.run({ prompt, sessionId: state.sessionId, model: options.model, signal: runController.signal })
+      const result = await service.run({
+        prompt,
+        sessionId: state.sessionId,
+        model: options.model,
+        signal: runController.signal,
+      })
       state = completeTuiRun(state, result, runController.signal.aborted)
     } catch (error) {
       state = failTuiRun(state, error, runController.signal.aborted)

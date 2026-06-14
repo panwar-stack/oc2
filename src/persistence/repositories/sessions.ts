@@ -130,7 +130,9 @@ export class SessionRepository {
 
   /** Moves a session into running state only when no persisted run is already active. */
   tryStartRun(id: string, now = new Date().toISOString()): SessionRecord | undefined {
-    const result = this.db.query("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND status != ?").run("running", now, id, "running")
+    const result = this.db
+      .query("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND status != ?")
+      .run("running", now, id, "running")
     if (result.changes === 0) return undefined
     return this.get(id)
   }
@@ -138,10 +140,16 @@ export class SessionRepository {
   addWorkspaceRoot(sessionId: string, root: Omit<WorkspaceRoot, "id">, now = new Date().toISOString()): WorkspaceRoot {
     const id = createId()
     const nextIndex =
-      this.db.query<{ readonly next_index: number }, [string]>("SELECT COUNT(*) AS next_index FROM workspace_roots WHERE session_id = ?").get(sessionId)
-        ?.next_index ?? 0
+      this.db
+        .query<
+          { readonly next_index: number },
+          [string]
+        >("SELECT COUNT(*) AS next_index FROM workspace_roots WHERE session_id = ?")
+        .get(sessionId)?.next_index ?? 0
     this.db
-      .query(`INSERT INTO workspace_roots (id, session_id, path, label, readonly, root_index, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .query(
+        `INSERT INTO workspace_roots (id, session_id, path, label, readonly, root_index, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
       .run(id, sessionId, root.path, root.label ?? null, root.readonly ? 1 : 0, nextIndex, now)
     this.db.query("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now, sessionId)
     return { id, ...root }
@@ -149,7 +157,10 @@ export class SessionRepository {
 
   private toRecord(row: SessionRow): SessionRecord {
     const roots = this.db
-      .query<RootRow, [string]>("SELECT id, path, label, readonly, root_index FROM workspace_roots WHERE session_id = ? ORDER BY root_index, created_at, id")
+      .query<
+        RootRow,
+        [string]
+      >("SELECT id, path, label, readonly, root_index FROM workspace_roots WHERE session_id = ? ORDER BY root_index, created_at, id")
       .all(row.id)
     return {
       id: row.id,

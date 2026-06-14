@@ -18,22 +18,32 @@ export function buildAgentModelContext(input: {
   readonly registry: ToolRegistry
   readonly config: Pick<Oc2Config, "tools">
 }): AgentModelContext {
-  const roots = input.session.workspaceRoots.map((root) => `- ${root.path}${root.readonly ? " (read-only)" : ""}`).join("\n")
-  const system = roots.length > 0 ? `${input.profile.systemPrompt}\n\nWorkspace roots:\n${roots}` : input.profile.systemPrompt
+  const roots = input.session.workspaceRoots
+    .map((root) => `- ${root.path}${root.readonly ? " (read-only)" : ""}`)
+    .join("\n")
+  const system =
+    roots.length > 0 ? `${input.profile.systemPrompt}\n\nWorkspace roots:\n${roots}` : input.profile.systemPrompt
   return {
-    messages: [{ role: "system", content: system }, ...input.messages.map(toModelMessage).filter((message) => message.content.length > 0)],
+    messages: [
+      { role: "system", content: system },
+      ...input.messages.map(toModelMessage).filter((message) => message.content.length > 0),
+    ],
     tools: input.registry.materialize(input.config),
   }
 }
 
 function toModelMessage(message: SessionMessage): ModelMessage {
-  const toolResult = message.parts.find((part): part is Extract<MessagePart, { type: "tool-result" }> => part.type === "tool-result")
+  const toolResult = message.parts.find(
+    (part): part is Extract<MessagePart, { type: "tool-result" }> => part.type === "tool-result",
+  )
   if (message.role === "tool" && toolResult) {
     return {
       id: message.id,
       role: "tool",
       toolCallId: toolResult.result.toolCallId,
-      content: toolResult.result.error ? JSON.stringify({ error: toolResult.result.error }) : stringifyToolOutput(toolResult.result.output),
+      content: toolResult.result.error
+        ? JSON.stringify({ error: toolResult.result.error })
+        : stringifyToolOutput(toolResult.result.output),
     }
   }
 

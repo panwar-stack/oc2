@@ -39,9 +39,14 @@ export function loadEnvOverrides(env: Record<string, string | undefined> = proce
       overrides.runtime = { logLevel: parsedLogLevel.data }
     } else {
       diagnostics.push(
-        createDiagnostic("warning", "config.env.invalid_log_level", "OC2_LOG_LEVEL must be debug, info, warn, or error", {
-          path: "env.OC2_LOG_LEVEL",
-        }),
+        createDiagnostic(
+          "warning",
+          "config.env.invalid_log_level",
+          "OC2_LOG_LEVEL must be debug, info, warn, or error",
+          {
+            path: "env.OC2_LOG_LEVEL",
+          },
+        ),
       )
     }
   }

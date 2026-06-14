@@ -60,7 +60,17 @@ test("tool calls, runtime events, and MCP snapshots persist explicit records", (
       (id, title, created_at, updated_at, provider_id, model_id, agent_id, status, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run("session-1", null, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", "fake", "test", "main", "idle", "{}")
+    .run(
+      "session-1",
+      null,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+      "fake",
+      "test",
+      "main",
+      "idle",
+      "{}",
+    )
 
   const toolCalls = new ToolCallRepository(db.sqlite)
   const runtimeEvents = new RuntimeEventRepository(db.sqlite)
@@ -94,7 +104,17 @@ test("tool calls, runtime events, and MCP snapshots redact error causes and secr
       (id, title, created_at, updated_at, provider_id, model_id, agent_id, status, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run("session-1", null, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", "fake", "test", "main", "idle", "{}")
+    .run(
+      "session-1",
+      null,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+      "fake",
+      "test",
+      "main",
+      "idle",
+      "{}",
+    )
 
   const toolCalls = new ToolCallRepository(db.sqlite)
   const runtimeEvents = new RuntimeEventRepository(db.sqlite)
@@ -119,7 +139,10 @@ test("tool calls, runtime events, and MCP snapshots redact error causes and secr
   runtimeEvents.append(createRuntimeEvent({ type: "error", payload: { error } }), "session-1")
   mcp.append({
     serverId: "remote",
-    status: { error, headers: { authorization: "Bearer secret", cookie: "session=secret", "set-cookie": "session=secret" } },
+    status: {
+      error,
+      headers: { authorization: "Bearer secret", cookie: "session=secret", "set-cookie": "session=secret" },
+    },
   })
 
   expect(toolCalls.get("tool-1")?.input).toEqual({

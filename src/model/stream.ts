@@ -13,7 +13,11 @@ export interface CollectedModelStream {
 /** Throws the normalized cancellation error when a stream should stop. */
 export const assertNotAborted = (signal: AbortSignal): void => {
   if (signal.aborted) {
-    throw new ModelProviderError({ message: "Model request was cancelled", classification: "cancelled", retryable: false })
+    throw new ModelProviderError({
+      message: "Model request was cancelled",
+      classification: "cancelled",
+      retryable: false,
+    })
   }
 }
 
@@ -39,7 +43,13 @@ export const sleep = (ms: number, signal?: AbortSignal): Promise<void> => {
     }
     const onAbort = () => {
       cleanup()
-      reject(new ModelProviderError({ message: "Model request was cancelled", classification: "cancelled", retryable: false }))
+      reject(
+        new ModelProviderError({
+          message: "Model request was cancelled",
+          classification: "cancelled",
+          retryable: false,
+        }),
+      )
     }
     if (signal?.aborted) {
       onAbort()

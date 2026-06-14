@@ -75,7 +75,10 @@ export const createModelService = (options: ModelServiceOptions = {}): ModelServ
         }
         yield event
       }
-      options.events?.publish({ type: "model.completed", payload: { sessionId: request.sessionId, taskId: context.requestId } })
+      options.events?.publish({
+        type: "model.completed",
+        payload: { sessionId: request.sessionId, taskId: context.requestId },
+      })
     } catch (error) {
       const providerError = toModelProviderError(error, providerId)
       const safeError = providerError.toJSON()

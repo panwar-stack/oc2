@@ -16,7 +16,14 @@ export const createQuestionTool = (): ToolDefinition<z.infer<typeof inputSchema>
   name: "question",
   description: "Ask the user a structured question through an injected resolver.",
   inputSchema,
-  modelInputSchema: objectSchema({ question: stringProperty("Question to ask"), header: stringProperty("Short heading"), options: { type: "array", items: { type: "object" } } }, ["question"]),
+  modelInputSchema: objectSchema(
+    {
+      question: stringProperty("Question to ask"),
+      header: stringProperty("Short heading"),
+      options: { type: "array", items: { type: "object" } },
+    },
+    ["question"],
+  ),
   permission: { action: "question", resource: () => "user" },
   async execute(input, context) {
     const answer = context.resolveQuestion ? await context.resolveQuestion(input, context.signal) : undefined

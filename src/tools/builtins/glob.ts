@@ -16,10 +16,16 @@ export const createGlobTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
   name: "glob",
   description: "Find files by glob pattern inside workspace roots.",
   inputSchema,
-  modelInputSchema: objectSchema({ pattern: stringProperty("Glob pattern"), path: stringProperty("Directory to search") }, ["pattern"]),
+  modelInputSchema: objectSchema(
+    { pattern: stringProperty("Glob pattern"), path: stringProperty("Directory to search") },
+    ["pattern"],
+  ),
   permission: { action: "read", resource: (input) => input.path ?? input.pattern },
   async execute(input, context) {
-    const base = await resolveWorkspacePath(input.path ?? ".", context.workspaceRoots, { cwd: context.cwd, mustExist: true })
+    const base = await resolveWorkspacePath(input.path ?? ".", context.workspaceRoots, {
+      cwd: context.cwd,
+      mustExist: true,
+    })
     const glob = new Glob(input.pattern)
     const matches: string[] = []
     const roots = normalizeWorkspaceRoots(context.workspaceRoots, context.cwd)
@@ -27,7 +33,11 @@ export const createGlobTool = (): ToolDefinition<z.infer<typeof inputSchema>> =>
     for await (const match of glob.scan({ cwd: base.path, absolute: true, onlyFiles: false })) {
       const realMatch = await realpath(match).catch(() => match)
       // Check both lexical and real paths so symlinked entries cannot escape workspace roots.
-      if (!roots.some((root) => isInsidePath(root.path, match)) && !realRoots.some((root) => isInsidePath(root, realMatch))) continue
+      if (
+        !roots.some((root) => isInsidePath(root.path, match)) &&
+        !realRoots.some((root) => isInsidePath(root, realMatch))
+      )
+        continue
       matches.push(match)
       if (matches.length >= 1_000) break
     }

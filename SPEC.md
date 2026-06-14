@@ -1424,7 +1424,7 @@ Use one canonical config shape. Do not preserve v1/v2 naming drift.
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
       "cwd": ".",
       "env": {},
-      "startupTimeoutMs": 10000
+      "startupTimeoutMs": 10000,
     },
     "remote-example": {
       "enabled": false,
@@ -1435,10 +1435,10 @@ Use one canonical config shape. Do not preserve v1/v2 naming drift.
         "clientId": "...",
         "clientSecretEnv": "REMOTE_MCP_CLIENT_SECRET",
         "redirectUri": "http://127.0.0.1:17777/callback",
-        "callbackPort": 17777
-      }
-    }
-  }
+        "callbackPort": 17777,
+      },
+    },
+  },
 }
 ```
 
@@ -1528,16 +1528,16 @@ Do not add `p-limit`, `p-queue`, Bottleneck, Piscina, BullMQ, or worker threads 
 
 ### Option Comparison
 
-| Option | Fit | Cancellation | Timeout | Priority | Progress | Overhead | TS Quality | Complexity | oc2 Decision |
-|---|---|---|---|---|---|---|---|---|---|
-| Effect | Excellent for local structured runtime | Strong interruption model | Strong | Build via queues | Strong via events | Medium | Strong | Medium | Primary |
-| Native Promise pool | Good for small boundaries | Manual AbortController | Manual | Manual | Manual | Low | Good if typed | Low-medium | Fallback |
-| p-limit | Good for simple concurrency caps | Manual | Manual | No | External | Low | Good | Low | Avoid unless tiny edge case |
-| p-queue | Good queue utility | Manual | Some support | Yes | External | Low | Good | Medium | Not needed if using Effect |
-| Bottleneck | Rate limiting, not runtime orchestration | Weak/manual | Manual | Some | External | Medium | OK | Medium | Avoid |
-| Piscina | CPU-bound worker pool | Worker cancellation complexity | Yes | Queue options | External | High | Good | High | Avoid until CPU-bound need |
-| BullMQ | Distributed durable queue | Job-level, Redis-dependent | Yes | Yes | Events | High | Good | High | Exclude |
-| worker_threads | CPU isolation | Manual | Manual | Manual | Manual | High | Native | High | Exclude first pass |
+| Option              | Fit                                      | Cancellation                   | Timeout      | Priority         | Progress          | Overhead | TS Quality    | Complexity | oc2 Decision                |
+| ------------------- | ---------------------------------------- | ------------------------------ | ------------ | ---------------- | ----------------- | -------- | ------------- | ---------- | --------------------------- |
+| Effect              | Excellent for local structured runtime   | Strong interruption model      | Strong       | Build via queues | Strong via events | Medium   | Strong        | Medium     | Primary                     |
+| Native Promise pool | Good for small boundaries                | Manual AbortController         | Manual       | Manual           | Manual            | Low      | Good if typed | Low-medium | Fallback                    |
+| p-limit             | Good for simple concurrency caps         | Manual                         | Manual       | No               | External          | Low      | Good          | Low        | Avoid unless tiny edge case |
+| p-queue             | Good queue utility                       | Manual                         | Some support | Yes              | External          | Low      | Good          | Medium     | Not needed if using Effect  |
+| Bottleneck          | Rate limiting, not runtime orchestration | Weak/manual                    | Manual       | Some             | External          | Medium   | OK            | Medium     | Avoid                       |
+| Piscina             | CPU-bound worker pool                    | Worker cancellation complexity | Yes          | Queue options    | External          | High     | Good          | High       | Avoid until CPU-bound need  |
+| BullMQ              | Distributed durable queue                | Job-level, Redis-dependent     | Yes          | Yes              | Events            | High     | Good          | High       | Exclude                     |
+| worker_threads      | CPU isolation                            | Manual                         | Manual       | Manual           | Manual            | High     | Native        | High       | Exclude first pass          |
 
 ### How Concurrency Is Limited
 
@@ -1879,27 +1879,27 @@ Implementation is not complete until these pass:
 
 ## 20. Custom Feature Decisions
 
-| Feature | Where In opencode | Belongs In oc2 | Decision | Dependencies | Risks | Test Coverage Needed |
-|---|---|---:|---|---|---|---|
-| Agent team orchestration | `packages/opencode/src/team/team.ts`, `src/tool/team_*.ts` | Yes | Adapt/rewrite into `src/team` with bounded scheduler | Effect, SQLite, Drizzle | Current implementation is prompt/tool-driven and partly unbounded | Team service/tool/scheduler/TUI tests |
-| Team reporting/evaluation | `packages/opencode/src/team/eval.ts`, `src/tool/team_report.ts` | Yes | Adapt | SQLite | Reports can become noisy or non-deterministic | Deterministic report fixture tests |
-| Daemon teammates | `specs/daemon-teammates.md`, `team_spawn.ts` | Yes | Adapt | Team runtime | Spam, lifecycle leaks | Daemon idle/run/error/shutdown tests |
-| Teammate model variants | `variant-aware-agent-team-orchestration.md`, `team_spawn.ts` | Yes | Adapt | Model service | Invalid variant selection | Validation and persistence tests |
-| Structured handoffs/plans | `structured-team-handoffs.md`, branch `feature/teams-v2` | Partial | Use as design input, not direct copy | Team runtime | Divergent branch design | Plan approval tests |
-| Repository memory | `packages/opencode/src/memory/*`, `src/tool/memory.ts` | Yes, small | Adapt as explicit local memory tool | SQLite or files | Stale memory influencing edits | Memory retrieval/update tests |
-| Removed GitHub review memory | `remove-github-review-memory.md` | No | Exclude | None | Reintroduces stale product behavior | None |
-| Multi-root sessions | `specs/multi-root-sessions.md`, core migration, TUI dialog | Yes | Adapt | Persistence, permissions | Root confusion and unsafe writes | Root permission/session tests |
-| TUI team UI | `packages/tui/src/component/dialog-team.tsx`, sidebar team plugin | Yes | Adapt UI patterns | OpenTUI, Solid | Coupled to old API state | TUI projector/panel tests |
-| Transcript export | `packages/tui/src/util/session-export.ts`, `transcript.ts` | Yes | Adapt | Persistence | Sensitive data in export | Export redaction/format tests |
-| Prompt footer elapsed time | `tui-prompt-footer-elapsed-time.md`, footer | Yes | Reimplement | TUI events | Timing drift | TUI state tests |
-| OpenGrep tool | `packages/core/src/filesystem/opengrep.ts`, `src/tool/opengrep.ts` | Yes | Adapt | OpenGrep binary optional | Binary missing, path issues | Availability/fallback tests |
-| Docker shell sandbox | shell config/specs/tests | Optional guarded | Adapt only behind opt-in | Docker | Security, mounts, network | Sandbox security tests |
-| Built-in skills | command templates and core skills | Yes | Adapt text to oc2 | Files | Prompt drift | Skill loading tests |
-| Browser-use MCP default | branch `feature/browser-use` | No first pass | Exclude unless requested | MCP/browser tooling | Scope creep | None |
-| Runtime SDK extraction | branch `oc2`, `packages/runtime/*` | Yes as direction | Use as architectural input | None specific | Branch may be incomplete | Architecture review |
-| Session token optimization | branch `feature/session-optimizer` | Not first pass | Defer | Model/session | Premature complexity | Future tests |
-| Supervisor features | historical | No | Exclude | None | Duplicates teams | None |
-| Generated SDK/OpenAPI | `packages/sdk/*` | No first pass | Exclude/regenerate only | SDK tooling | Stale generated code | Regeneration only if added |
+| Feature                      | Where In opencode                                                  |   Belongs In oc2 | Decision                                             | Dependencies             | Risks                                                             | Test Coverage Needed                  |
+| ---------------------------- | ------------------------------------------------------------------ | ---------------: | ---------------------------------------------------- | ------------------------ | ----------------------------------------------------------------- | ------------------------------------- |
+| Agent team orchestration     | `packages/opencode/src/team/team.ts`, `src/tool/team_*.ts`         |              Yes | Adapt/rewrite into `src/team` with bounded scheduler | Effect, SQLite, Drizzle  | Current implementation is prompt/tool-driven and partly unbounded | Team service/tool/scheduler/TUI tests |
+| Team reporting/evaluation    | `packages/opencode/src/team/eval.ts`, `src/tool/team_report.ts`    |              Yes | Adapt                                                | SQLite                   | Reports can become noisy or non-deterministic                     | Deterministic report fixture tests    |
+| Daemon teammates             | `specs/daemon-teammates.md`, `team_spawn.ts`                       |              Yes | Adapt                                                | Team runtime             | Spam, lifecycle leaks                                             | Daemon idle/run/error/shutdown tests  |
+| Teammate model variants      | `variant-aware-agent-team-orchestration.md`, `team_spawn.ts`       |              Yes | Adapt                                                | Model service            | Invalid variant selection                                         | Validation and persistence tests      |
+| Structured handoffs/plans    | `structured-team-handoffs.md`, branch `feature/teams-v2`           |          Partial | Use as design input, not direct copy                 | Team runtime             | Divergent branch design                                           | Plan approval tests                   |
+| Repository memory            | `packages/opencode/src/memory/*`, `src/tool/memory.ts`             |       Yes, small | Adapt as explicit local memory tool                  | SQLite or files          | Stale memory influencing edits                                    | Memory retrieval/update tests         |
+| Removed GitHub review memory | `remove-github-review-memory.md`                                   |               No | Exclude                                              | None                     | Reintroduces stale product behavior                               | None                                  |
+| Multi-root sessions          | `specs/multi-root-sessions.md`, core migration, TUI dialog         |              Yes | Adapt                                                | Persistence, permissions | Root confusion and unsafe writes                                  | Root permission/session tests         |
+| TUI team UI                  | `packages/tui/src/component/dialog-team.tsx`, sidebar team plugin  |              Yes | Adapt UI patterns                                    | OpenTUI, Solid           | Coupled to old API state                                          | TUI projector/panel tests             |
+| Transcript export            | `packages/tui/src/util/session-export.ts`, `transcript.ts`         |              Yes | Adapt                                                | Persistence              | Sensitive data in export                                          | Export redaction/format tests         |
+| Prompt footer elapsed time   | `tui-prompt-footer-elapsed-time.md`, footer                        |              Yes | Reimplement                                          | TUI events               | Timing drift                                                      | TUI state tests                       |
+| OpenGrep tool                | `packages/core/src/filesystem/opengrep.ts`, `src/tool/opengrep.ts` |              Yes | Adapt                                                | OpenGrep binary optional | Binary missing, path issues                                       | Availability/fallback tests           |
+| Docker shell sandbox         | shell config/specs/tests                                           | Optional guarded | Adapt only behind opt-in                             | Docker                   | Security, mounts, network                                         | Sandbox security tests                |
+| Built-in skills              | command templates and core skills                                  |              Yes | Adapt text to oc2                                    | Files                    | Prompt drift                                                      | Skill loading tests                   |
+| Browser-use MCP default      | branch `feature/browser-use`                                       |    No first pass | Exclude unless requested                             | MCP/browser tooling      | Scope creep                                                       | None                                  |
+| Runtime SDK extraction       | branch `oc2`, `packages/runtime/*`                                 | Yes as direction | Use as architectural input                           | None specific            | Branch may be incomplete                                          | Architecture review                   |
+| Session token optimization   | branch `feature/session-optimizer`                                 |   Not first pass | Defer                                                | Model/session            | Premature complexity                                              | Future tests                          |
+| Supervisor features          | historical                                                         |               No | Exclude                                              | None                     | Duplicates teams                                                  | None                                  |
+| Generated SDK/OpenAPI        | `packages/sdk/*`                                                   |    No first pass | Exclude/regenerate only                              | SDK tooling              | Stale generated code                                              | Regeneration only if added            |
 
 ## 21. Quality Bar Rules
 

@@ -5,7 +5,10 @@ export interface ScriptedProvider extends ModelProvider {
 }
 
 /** Creates a deterministic provider that consumes one event batch per model request. */
-export function createScriptedModelProvider(batches: readonly (readonly ModelEvent[])[], options: { readonly delayMs?: number } = {}): ScriptedProvider {
+export function createScriptedModelProvider(
+  batches: readonly (readonly ModelEvent[])[],
+  options: { readonly delayMs?: number } = {},
+): ScriptedProvider {
   const requests: ModelRequest[] = []
   return {
     id: "fake",

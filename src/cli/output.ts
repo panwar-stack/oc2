@@ -96,10 +96,11 @@ export function formatRunJson(result: MainAgentRunResult): JsonRunOutput {
 }
 
 function countDiagnostics(diagnostics: Diagnostic[]) {
-  return diagnostics.reduce(
-    (counts, diagnostic) => ({ ...counts, [diagnostic.level]: counts[diagnostic.level] + 1 }),
-    { error: 0, warning: 0, info: 0 },
-  )
+  return diagnostics.reduce((counts, diagnostic) => ({ ...counts, [diagnostic.level]: counts[diagnostic.level] + 1 }), {
+    error: 0,
+    warning: 0,
+    info: 0,
+  })
 }
 
 function formatDiagnosticLine(diagnostic: Diagnostic): string {

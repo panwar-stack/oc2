@@ -5,9 +5,24 @@ import { createToolRegistry } from "../../src/tools/registry"
 
 test("built-in registry exposes PR 7 tools as model definitions", () => {
   const registry = createBuiltInToolRegistry()
-  const names = registry.materialize().map((tool) => tool.name).toSorted()
+  const names = registry
+    .materialize()
+    .map((tool) => tool.name)
+    .toSorted()
 
-  expect(names).toEqual(["apply_patch", "bash", "edit", "glob", "grep", "opengrep", "question", "read", "todowrite", "webfetch", "write"])
+  expect(names).toEqual([
+    "apply_patch",
+    "bash",
+    "edit",
+    "glob",
+    "grep",
+    "opengrep",
+    "question",
+    "read",
+    "todowrite",
+    "webfetch",
+    "write",
+  ])
   expect(registry.materialize().every((tool) => typeof tool.inputSchema === "object")).toBe(true)
 })
 

@@ -70,7 +70,11 @@ export const checkProviderGate = (
 ): ProviderGateResult => {
   const providerId = providerIdFromConfig(config)
   if (config.type === "fake") {
-    return { ok: config.enabled ?? true, providerId, reason: config.enabled === false ? "Provider is disabled" : undefined }
+    return {
+      ok: config.enabled ?? true,
+      providerId,
+      reason: config.enabled === false ? "Provider is disabled" : undefined,
+    }
   }
 
   const apiKeyEnv = defaultApiKeyEnv(config)
@@ -239,7 +243,9 @@ export class AiSdkModelProvider implements ModelProvider {
       headers: this.headers(gate, { "content-type": "application/json" }),
       body: JSON.stringify({
         model: request.modelId,
-        messages: request.messages.filter((message) => message.role !== "system").map((message) => ({ role: message.role, content: message.content })),
+        messages: request.messages
+          .filter((message) => message.role !== "system")
+          .map((message) => ({ role: message.role, content: message.content })),
         system: request.messages.find((message) => message.role === "system")?.content,
         tools: request.tools.length ? request.tools.map(toAnthropicTool) : undefined,
         temperature: request.temperature,
@@ -263,7 +269,11 @@ export class AiSdkModelProvider implements ModelProvider {
           yield { type: "reasoning-delta", text: chunk.delta.thinking }
         }
       }
-      if (chunk.type === "content_block_start" && isRecord(chunk.content_block) && chunk.content_block.type === "tool_use") {
+      if (
+        chunk.type === "content_block_start" &&
+        isRecord(chunk.content_block) &&
+        chunk.content_block.type === "tool_use"
+      ) {
         const input = isRecord(chunk.content_block.input) ? chunk.content_block.input : {}
         yield {
           type: "tool-call",
@@ -296,7 +306,8 @@ export const createConfiguredProvider = (
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null
 
-const readString = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined)
+const readString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined
 
 const parseJsonRecord = (text: string): Record<string, unknown> | undefined => {
   try {
@@ -341,7 +352,11 @@ async function* readSseData(response: Response, signal: AbortSignal): AsyncItera
   try {
     while (true) {
       if (signal.aborted) {
-        throw new ModelProviderError({ message: "Model request was cancelled", classification: "cancelled", retryable: false })
+        throw new ModelProviderError({
+          message: "Model request was cancelled",
+          classification: "cancelled",
+          retryable: false,
+        })
       }
       const { value, done } = await reader.read()
       if (done) {
