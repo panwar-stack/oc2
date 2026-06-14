@@ -39,5 +39,10 @@ export function materializeMcpTool(input: {
 }
 
 function ensureObjectSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  return { ...schema, type: "object", properties: schema.properties ?? {}, additionalProperties: schema.additionalProperties ?? true }
+  return {
+    ...schema,
+    type: "object",
+    properties: schema.properties ?? {},
+    additionalProperties: schema.additionalProperties ?? true,
+  }
 }

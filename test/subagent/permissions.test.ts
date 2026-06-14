@@ -52,6 +52,6 @@ test("primary-only profiles are not resolved as subagents", () => {
   expect(resolveSubAgentProfile(config, "helper")).toBeUndefined()
 })
 
-function subagentProfile(allowedTools: typeof defaultConfig.agents[string]["allowedTools"] = []) {
+function subagentProfile(allowedTools: (typeof defaultConfig.agents)[string]["allowedTools"] = []) {
   return { mode: "subagent" as const, allowedTools, maxIterations: 20 }
 }

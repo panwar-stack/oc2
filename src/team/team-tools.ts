@@ -43,7 +43,8 @@ export function createTeamTools(options: TeamToolOptions): readonly ToolDefiniti
       schema: objectSchema({ name: stringProperty("Team name"), goal: stringProperty("Team goal") }, ["name", "goal"]),
       action: "team.create",
       resource: () => "team",
-      execute: (input, context) => options.service.create({ ...input, leadSessionId: requireSession(context, "team_create") }),
+      execute: (input, context) =>
+        options.service.create({ ...input, leadSessionId: requireSession(context, "team_create") }),
     }),
     tool("team_spawn", "Spawn a bounded teammate child session for a team assignment.", spawnInput, {
       schema: objectSchema(
@@ -71,7 +72,11 @@ export function createTeamTools(options: TeamToolOptions): readonly ToolDefiniti
     }),
     tool("team_send_message", "Send a mailbox message to a teammate or lead.", sendInput, {
       schema: objectSchema(
-        { teamId: stringProperty("Optional team id"), recipient: stringProperty("Recipient name, session id, or lead"), body: stringProperty("Message body") },
+        {
+          teamId: stringProperty("Optional team id"),
+          recipient: stringProperty("Recipient name, session id, or lead"),
+          body: stringProperty("Message body"),
+        },
         ["recipient", "body"],
       ),
       action: "team.message.send",
@@ -86,7 +91,9 @@ export function createTeamTools(options: TeamToolOptions): readonly ToolDefiniti
         }),
     }),
     tool("team_broadcast", "Broadcast a mailbox message to all team participants except the sender.", broadcastInput, {
-      schema: objectSchema({ teamId: stringProperty("Optional team id"), body: stringProperty("Message body") }, ["body"]),
+      schema: objectSchema({ teamId: stringProperty("Optional team id"), body: stringProperty("Message body") }, [
+        "body",
+      ]),
       action: "team.message.broadcast",
       resource: (input) => input.teamId ?? "team",
       execute: (input, context) =>
@@ -119,13 +126,18 @@ export function createTeamTools(options: TeamToolOptions): readonly ToolDefiniti
       ),
       action: "team.task.create",
       resource: (input) => input.teamId ?? "team",
-      execute: (input, context) => options.service.createTask({ ...input, sessionId: requireSession(context, "team_task_create") }),
+      execute: (input, context) =>
+        options.service.createTask({ ...input, sessionId: requireSession(context, "team_task_create") }),
     }),
     tool("team_task_claim", "Transactionally claim a pending shared team task.", taskClaimInput, {
-      schema: objectSchema({ taskId: stringProperty("Task id"), assignee: stringProperty("Claiming member") }, ["taskId", "assignee"]),
+      schema: objectSchema({ taskId: stringProperty("Task id"), assignee: stringProperty("Claiming member") }, [
+        "taskId",
+        "assignee",
+      ]),
       action: "team.task.claim",
       resource: (input) => input.taskId,
-      execute: (input, context) => options.service.claimTask({ ...input, sessionId: requireSession(context, "team_task_claim") }),
+      execute: (input, context) =>
+        options.service.claimTask({ ...input, sessionId: requireSession(context, "team_task_claim") }),
     }),
     tool("team_task_update", "Update a shared team task status or assignee.", taskUpdateInput, {
       schema: objectSchema(
@@ -138,19 +150,22 @@ export function createTeamTools(options: TeamToolOptions): readonly ToolDefiniti
       ),
       action: "team.task.update",
       resource: (input) => input.taskId,
-      execute: (input, context) => options.service.updateTask({ ...input, sessionId: requireSession(context, "team_task_update") }),
+      execute: (input, context) =>
+        options.service.updateTask({ ...input, sessionId: requireSession(context, "team_task_update") }),
     }),
     tool("team_task_list", "List shared team tasks for the active team.", taskListInput, {
       schema: objectSchema({ teamId: stringProperty("Optional team id") }),
       action: "team.task.list",
       resource: (input) => input.teamId ?? "team",
-      execute: (input, context) => options.service.listTasks({ ...input, sessionId: requireSession(context, "team_task_list") }),
+      execute: (input, context) =>
+        options.service.listTasks({ ...input, sessionId: requireSession(context, "team_task_list") }),
     }),
     tool("team_shutdown", "Shutdown the active team and cancel active or daemon members.", shutdownInput, {
       schema: objectSchema({ teamId: stringProperty("Optional team id") }),
       action: "team.shutdown",
       resource: (input) => input.teamId ?? "team",
-      execute: (input, context) => options.service.shutdown({ ...input, leadSessionId: requireSession(context, "team_shutdown") }),
+      execute: (input, context) =>
+        options.service.shutdown({ ...input, leadSessionId: requireSession(context, "team_shutdown") }),
     }),
   ]
 }
@@ -186,6 +201,7 @@ function tool<TInput, TOutput>(
 }
 
 function requireSession(context: ToolContext, toolName: string): string {
-  if (!context.sessionId) throw new ToolExecutionError({ code: "missing_session", message: `${toolName} requires a session` })
+  if (!context.sessionId)
+    throw new ToolExecutionError({ code: "missing_session", message: `${toolName} requires a session` })
   return context.sessionId
 }

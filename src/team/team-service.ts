@@ -4,7 +4,11 @@ import type { Oc2Config } from "../config/schema"
 import type { RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
 import type { ModelService } from "../model/model-service"
-import { TeamMailboxRepository, type DeliveredTeamMessage, type TeamMailboxMessage } from "../persistence/repositories/mailbox"
+import {
+  TeamMailboxRepository,
+  type DeliveredTeamMessage,
+  type TeamMailboxMessage,
+} from "../persistence/repositories/mailbox"
 import { TeamTaskRepository, type TeamTaskRecord, type TeamTaskStatus } from "../persistence/repositories/team-tasks"
 import {
   TeamRepository,
@@ -79,10 +83,12 @@ export class TeamService {
     const dependencyIds = dependencies.map((dependency) => {
       const member = this.teams.getMemberByNameOrSession(team.id, dependency)
       if (!member) throw invalidTeam(`Team member dependency not found: ${dependency}`)
-      if (member.lifecycle === "daemon") throw invalidTeam(`Daemon member cannot be a completion dependency: ${dependency}`)
+      if (member.lifecycle === "daemon")
+        throw invalidTeam(`Daemon member cannot be a completion dependency: ${dependency}`)
       return member.id
     })
-    const blocked = dependencyIds.length > 0 && !dependencyIds.every((id) => this.teams.getMember(id)?.status === "completed")
+    const blocked =
+      dependencyIds.length > 0 && !dependencyIds.every((id) => this.teams.getMember(id)?.status === "completed")
     if (!blocked && this.teams.activeMemberCount(team.id) >= this.options.config.runtime.maxConcurrentTeamMembers) {
       throw invalidTeam(`Team member limit reached for team ${team.id}`)
     }
@@ -109,7 +115,10 @@ export class TeamService {
       daemonReportingCriteria: input.daemonReportingCriteria,
       dependencyIds,
     })
-    this.options.events?.publish({ type: "team.member.updated", payload: { teamId: team.id, memberId: member.id, status: member.status } })
+    this.options.events?.publish({
+      type: "team.member.updated",
+      payload: { teamId: team.id, memberId: member.id, status: member.status },
+    })
     if (!blocked) this.startMember(team, member, profile, input.timeoutMs, input.signal)
     return member
   }
@@ -137,15 +146,27 @@ export class TeamService {
     const members = this.teams.listMembers(team.id)
     const sender = this.senderName(team, input.senderSessionId, members)
     this.assertCanSendMessage(sender, members, false)
-    const recipients = resolveTeamRecipients({ requested: input.recipients, leadSessionId: team.leadSessionId, members })
+    const recipients = resolveTeamRecipients({
+      requested: input.recipients,
+      leadSessionId: team.leadSessionId,
+      members,
+    })
     const message = this.mailbox.send({ teamId: team.id, sender, recipients, body: input.body })
     for (const recipient of recipients) {
-      this.options.events?.publish({ type: "team.message.delivered", payload: { teamId: team.id, messageId: message.id, recipientId: recipient } })
+      this.options.events?.publish({
+        type: "team.message.delivered",
+        payload: { teamId: team.id, messageId: message.id, recipientId: recipient },
+      })
     }
     return message
   }
 
-  broadcast(input: { readonly sessionId: string; readonly teamId?: string; readonly senderSessionId: string; readonly body: string }): TeamMailboxMessage {
+  broadcast(input: {
+    readonly sessionId: string
+    readonly teamId?: string
+    readonly senderSessionId: string
+    readonly body: string
+  }): TeamMailboxMessage {
     const team = this.resolveTeam(input.sessionId, input.teamId)
     const members = this.teams.listMembers(team.id)
     const sender = this.senderName(team, input.senderSessionId, members)
@@ -153,14 +174,21 @@ export class TeamService {
     const recipients = ["lead", ...members.map((member) => member.name)].filter((recipient) => recipient !== sender)
     const message = this.mailbox.send({ teamId: team.id, sender, recipients, body: input.body })
     for (const recipient of recipients) {
-      this.options.events?.publish({ type: "team.message.delivered", payload: { teamId: team.id, messageId: message.id, recipientId: recipient } })
+      this.options.events?.publish({
+        type: "team.message.delivered",
+        payload: { teamId: team.id, messageId: message.id, recipientId: recipient },
+      })
     }
     return message
   }
 
   getMessages(input: { readonly teamId?: string; readonly sessionId: string }): readonly DeliveredTeamMessage[] {
     const team = this.resolveTeam(input.sessionId, input.teamId)
-    const keys = recipientKeysForSession({ sessionId: input.sessionId, leadSessionId: team.leadSessionId, members: this.teams.listMembers(team.id) })
+    const keys = recipientKeysForSession({
+      sessionId: input.sessionId,
+      leadSessionId: team.leadSessionId,
+      members: this.teams.listMembers(team.id),
+    })
     return this.mailbox.deliver(team.id, keys)
   }
 
@@ -178,7 +206,10 @@ export class TeamService {
       assignee: input.assignee,
       dependencyIds: input.dependencyIds,
     })
-    this.options.events?.publish({ type: "team.task.updated", payload: { teamId: team.id, taskId: task.id, status: task.status } })
+    this.options.events?.publish({
+      type: "team.task.updated",
+      payload: { teamId: team.id, taskId: task.id, status: task.status },
+    })
     return task
   }
 
@@ -189,25 +220,48 @@ export class TeamService {
   claimTask(input: { readonly sessionId: string; readonly taskId: string; readonly assignee: string }): TeamTaskRecord {
     this.assertTaskMutation(input.sessionId, input.taskId, input.assignee)
     const task = this.tasks.claim(input.taskId, input.assignee)
-    this.options.events?.publish({ type: "team.task.updated", payload: { teamId: task.teamId, taskId: task.id, status: task.status } })
+    this.options.events?.publish({
+      type: "team.task.updated",
+      payload: { teamId: task.teamId, taskId: task.id, status: task.status },
+    })
     return task
   }
 
-  updateTask(input: { readonly sessionId: string; readonly taskId: string; readonly status?: TeamTaskStatus; readonly assignee?: string }): TeamTaskRecord {
+  updateTask(input: {
+    readonly sessionId: string
+    readonly taskId: string
+    readonly status?: TeamTaskStatus
+    readonly assignee?: string
+  }): TeamTaskRecord {
     this.assertTaskMutation(input.sessionId, input.taskId, input.assignee)
     const task = this.tasks.update(input.taskId, { status: input.status, assignee: input.assignee })
-    this.options.events?.publish({ type: "team.task.updated", payload: { teamId: task.teamId, taskId: task.id, status: task.status } })
+    this.options.events?.publish({
+      type: "team.task.updated",
+      payload: { teamId: task.teamId, taskId: task.id, status: task.status },
+    })
     return task
   }
 
-  private startMember(team: TeamRecord, member: TeamMemberRecord, profile: AgentProfile, timeoutMs: number | undefined, signal: AbortSignal | undefined): void {
+  private startMember(
+    team: TeamRecord,
+    member: TeamMemberRecord,
+    profile: AgentProfile,
+    timeoutMs: number | undefined,
+    signal: AbortSignal | undefined,
+  ): void {
     const handle = this.options.scheduler.schedule<MainAgentRunResult>({
       kind: "team-member",
       parent: signal,
       timeoutMs: timeoutMs ?? profile.timeoutMs ?? this.options.config.runtime.defaultTimeoutMs,
       run: async ({ signal: childSignal }) => {
-        this.teams.updateMember(member.id, { status: "active", daemonState: member.lifecycle === "daemon" ? "running" : undefined })
-        this.options.events?.publish({ type: "team.member.updated", payload: { teamId: team.id, memberId: member.id, status: "active" } })
+        this.teams.updateMember(member.id, {
+          status: "active",
+          daemonState: member.lifecycle === "daemon" ? "running" : undefined,
+        })
+        this.options.events?.publish({
+          type: "team.member.updated",
+          payload: { teamId: team.id, memberId: member.id, status: "active" },
+        })
         const session = this.options.sessions.sessions.tryStartRun(member.sessionId)
         if (!session) throw invalidTeam(`Team member session is already running: ${member.sessionId}`)
         const result = await this.createAgent().run({
@@ -235,13 +289,31 @@ export class TeamService {
       const currentTeam = this.teams.get(team.id)
       if (!current || current.status === "cancelled" || currentTeam?.status === "shutdown") return
       const error = scheduled.error?.toJSON()
-      const status = member.lifecycle === "daemon" && !error ? "idle" : error || scheduled.value?.status === "failed" ? "failed" : "completed"
+      const status =
+        member.lifecycle === "daemon" && !error
+          ? "idle"
+          : error || scheduled.value?.status === "failed"
+            ? "failed"
+            : "completed"
       const daemonState = member.lifecycle === "daemon" ? (error ? "error" : "idle") : undefined
       const resultText = scheduled.value?.text
-      const updated = this.teams.updateMember(member.id, { status, daemonState, daemonError: error, result: resultText })
-      this.options.events?.publish({ type: "team.member.updated", payload: { teamId: team.id, memberId: member.id, status: updated.status } })
+      const updated = this.teams.updateMember(member.id, {
+        status,
+        daemonState,
+        daemonError: error,
+        result: resultText,
+      })
+      this.options.events?.publish({
+        type: "team.member.updated",
+        payload: { teamId: team.id, memberId: member.id, status: updated.status },
+      })
       if (error) {
-        this.mailbox.send({ teamId: team.id, sender: member.name, recipients: ["lead"], body: `Member ${member.name} failed: ${error.message}` })
+        this.mailbox.send({
+          teamId: team.id,
+          sender: member.name,
+          recipients: ["lead"],
+          body: `Member ${member.name} failed: ${error.message}`,
+        })
       }
       for (const blocked of this.teams.listRunnableBlockedMembers(team.id)) {
         if (this.teams.activeMemberCount(team.id) >= this.options.config.runtime.maxConcurrentTeamMembers) break
@@ -262,13 +334,23 @@ export class TeamService {
       config: this.options.config,
       permissions: this.options.permissions,
     })
-    return new MainAgent({ sessions: this.options.sessions, models: this.options.models, registry: this.options.registry, tools })
+    return new MainAgent({
+      sessions: this.options.sessions,
+      models: this.options.models,
+      registry: this.options.registry,
+      tools,
+    })
   }
 
   private resolveTeam(sessionId: string, teamId: string | undefined): TeamRecord {
-    const team = teamId ? this.teams.get(teamId) : (this.teams.getActiveByLeadSession(sessionId) ?? this.teams.getByMemberSession(sessionId))
+    const team = teamId
+      ? this.teams.get(teamId)
+      : (this.teams.getActiveByLeadSession(sessionId) ?? this.teams.getByMemberSession(sessionId))
     if (!team) throw invalidTeam(teamId ? `Team not found: ${teamId}` : `No active team for session ${sessionId}`)
-    if (team.leadSessionId !== sessionId && this.teams.getMemberByNameOrSession(team.id, sessionId)?.sessionId !== sessionId) {
+    if (
+      team.leadSessionId !== sessionId &&
+      this.teams.getMemberByNameOrSession(team.id, sessionId)?.sessionId !== sessionId
+    ) {
       throw invalidTeam(`Session ${sessionId} is not part of team ${team.id}`)
     }
     return team
@@ -312,7 +394,8 @@ export class TeamService {
     const member = members.find((candidate) => candidate.name === sender)
     if (!member || member.lifecycle !== "daemon") return
     if (!member.daemonReportingCriteria) throw invalidTeam(`Daemon member ${member.name} has no reporting criteria`)
-    if (broadcast) throw invalidTeam(`Daemon member ${member.name} cannot broadcast; report to lead when criteria are met`)
+    if (broadcast)
+      throw invalidTeam(`Daemon member ${member.name} cannot broadcast; report to lead when criteria are met`)
     if (member.daemonState !== "running" && member.daemonState !== "idle") {
       throw invalidTeam(`Daemon member ${member.name} is not ready to report`)
     }

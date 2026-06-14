@@ -57,7 +57,10 @@ test("subagent tool returns structured child run output", async () => {
   )
 
   expect(result.ok).toBe(true)
-  expect(result.ok ? result.output : undefined).toMatchObject({ childSessionId: expect.any(String), status: "completed" })
+  expect(result.ok ? result.output : undefined).toMatchObject({
+    childSessionId: expect.any(String),
+    status: "completed",
+  })
   expect(result.ok ? result.output : undefined).not.toHaveProperty("parentSessionId")
   db.close()
 })
@@ -80,7 +83,10 @@ test("subagent tool converts child timeout into a structured tool error", async 
   const service = createSubAgentService({
     config,
     sessions,
-    models: createModelService({ providers: [createScriptedModelProvider([simpleAssistantEvents], { delayMs: 50 })], scheduler }),
+    models: createModelService({
+      providers: [createScriptedModelProvider([simpleAssistantEvents], { delayMs: 50 })],
+      scheduler,
+    }),
     registry,
     scheduler,
   })

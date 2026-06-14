@@ -122,15 +122,15 @@ MCP servers use the canonical `oc2` config shape. Enabled servers start before o
       "cwd": ".",
       "env": {},
       "toolPermissions": [{ "match": "mcp.invoke:localDocs/*", "decision": "ask" }],
-      "startupTimeoutMs": 10000
+      "startupTimeoutMs": 10000,
     },
     "remoteSearch": {
       "enabled": false,
       "transport": "http",
       "url": "https://example.test/mcp",
-      "headers": { "authorization": "Bearer ${TOKEN}" }
-    }
-  }
+      "headers": { "authorization": "Bearer ${TOKEN}" },
+    },
+  },
 }
 ```
 

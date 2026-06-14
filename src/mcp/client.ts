@@ -37,7 +37,9 @@ export const createMcpClient: McpClientFactory = (server) => {
 function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
   let id = 0
   const endpoint = server.url ?? ""
-  let events: { addEventListener(type: string, listener: (event: { data: string }) => void): void; close(): void } | undefined
+  let events:
+    | { addEventListener(type: string, listener: (event: { data: string }) => void): void; close(): void }
+    | undefined
 
   const request = async (method: string, params: Record<string, unknown> | undefined, signal: AbortSignal) => {
     const response = await fetch(endpoint, {
@@ -46,14 +48,19 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
       body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
       signal,
     })
-    if (response.status === 401 || response.status === 403) throw new McpAuthRequiredError("MCP server requires authentication")
+    if (response.status === 401 || response.status === 403)
+      throw new McpAuthRequiredError("MCP server requires authentication")
     if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
     return unwrapResponse((await response.json()) as JsonRpcResponse)
   }
 
   return {
     async initialize(signal) {
-      await request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "oc2" } }, signal)
+      await request(
+        "initialize",
+        { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "oc2" } },
+        signal,
+      )
     },
     async listTools(signal) {
       return normalizeTools(await request("tools/list", undefined, signal))
@@ -133,7 +140,11 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
 
   return {
     async initialize(signal) {
-      await request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "oc2" } }, signal)
+      await request(
+        "initialize",
+        { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "oc2" } },
+        signal,
+      )
       process.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
     },
     async listTools(signal) {

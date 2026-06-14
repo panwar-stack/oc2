@@ -31,9 +31,19 @@ test("team service persists teams, members, mailbox messages, and shutdown lifec
   const { db, service, sessions, lead } = createFixture()
   const team = service.create({ leadSessionId: lead.id, name: "core", goal: "ship PR 12" })
 
-  const member = await service.spawn({ leadSessionId: lead.id, name: "reviewer", agentId: "worker", rolePrompt: "Review" })
+  const member = await service.spawn({
+    leadSessionId: lead.id,
+    name: "reviewer",
+    agentId: "worker",
+    rolePrompt: "Review",
+  })
   await waitForMemberStatus(service, member.id, ["completed"])
-  const message = service.sendMessage({ sessionId: lead.id, senderSessionId: lead.id, recipients: ["reviewer"], body: "hello" })
+  const message = service.sendMessage({
+    sessionId: lead.id,
+    senderSessionId: lead.id,
+    recipients: ["reviewer"],
+    body: "hello",
+  })
   const delivered = service.getMessages({ sessionId: member.sessionId })
   const shutdown = service.shutdown({ leadSessionId: lead.id, teamId: team.id })
 
@@ -52,9 +62,9 @@ test("team spawn enforces bounded active members", async () => {
 
   const first = await service.spawn({ leadSessionId: lead.id, name: "one", agentId: "worker", rolePrompt: "First" })
 
-  await expect(service.spawn({ leadSessionId: lead.id, name: "two", agentId: "worker", rolePrompt: "Second" })).rejects.toThrow(
-    "Team member limit reached",
-  )
+  await expect(
+    service.spawn({ leadSessionId: lead.id, name: "two", agentId: "worker", rolePrompt: "Second" }),
+  ).rejects.toThrow("Team member limit reached")
   await waitForMemberStatus(service, first.id, ["completed", "failed"])
   db.close()
 })
@@ -64,7 +74,13 @@ test("team member dependencies gate blocked teammates until completion", async (
   const team = service.create({ leadSessionId: lead.id, name: "core", goal: "ship PR 12" })
 
   const first = await service.spawn({ leadSessionId: lead.id, name: "first", agentId: "worker", rolePrompt: "First" })
-  const second = await service.spawn({ leadSessionId: lead.id, name: "second", agentId: "worker", rolePrompt: "Second", dependsOn: ["first"] })
+  const second = await service.spawn({
+    leadSessionId: lead.id,
+    name: "second",
+    agentId: "worker",
+    rolePrompt: "Second",
+    dependsOn: ["first"],
+  })
   expect(service.teams.getMember(second.id)?.status).toBe("blocked")
   await waitForMemberStatus(service, first.id, ["completed"])
   await waitForMemberStatus(service, second.id, ["completed"])
@@ -78,8 +94,20 @@ test("dependency unblock path respects active team member capacity", async () =>
   const { db, service, lead } = createFixture({ delayMs: 25, maxConcurrentTeamMembers: 1 })
   service.create({ leadSessionId: lead.id, name: "core", goal: "ship PR 12" })
   const first = await service.spawn({ leadSessionId: lead.id, name: "first", agentId: "worker", rolePrompt: "First" })
-  const second = await service.spawn({ leadSessionId: lead.id, name: "second", agentId: "worker", rolePrompt: "Second", dependsOn: ["first"] })
-  const third = await service.spawn({ leadSessionId: lead.id, name: "third", agentId: "worker", rolePrompt: "Third", dependsOn: ["first"] })
+  const second = await service.spawn({
+    leadSessionId: lead.id,
+    name: "second",
+    agentId: "worker",
+    rolePrompt: "Second",
+    dependsOn: ["first"],
+  })
+  const third = await service.spawn({
+    leadSessionId: lead.id,
+    name: "third",
+    agentId: "worker",
+    rolePrompt: "Third",
+    dependsOn: ["first"],
+  })
 
   await waitForMemberStatus(service, first.id, ["completed"])
   await Bun.sleep(5)
@@ -98,7 +126,9 @@ test("team task claim is dependency-aware and transactional", () => {
   const setup = service.createTask({ sessionId: lead.id, description: "setup" })
   const dependent = service.createTask({ sessionId: lead.id, description: "dependent", dependencyIds: [setup.id] })
 
-  expect(() => service.claimTask({ sessionId: lead.id, taskId: dependent.id, assignee: "worker" })).toThrow("dependency is not completed")
+  expect(() => service.claimTask({ sessionId: lead.id, taskId: dependent.id, assignee: "worker" })).toThrow(
+    "dependency is not completed",
+  )
   expect(service.tasks.get(dependent.id)?.status).toBe("pending")
   service.updateTask({ sessionId: lead.id, taskId: setup.id, status: "completed" })
 
@@ -111,11 +141,17 @@ test("daemon teammates require reporting criteria and nested teams are rejected"
   service.create({ leadSessionId: lead.id, name: "core", goal: "ship PR 12" })
 
   await expect(
-    service.spawn({ leadSessionId: lead.id, name: "daemon", agentId: "worker", rolePrompt: "Watch", lifecycle: "daemon" }),
+    service.spawn({
+      leadSessionId: lead.id,
+      name: "daemon",
+      agentId: "worker",
+      rolePrompt: "Watch",
+      lifecycle: "daemon",
+    }),
   ).rejects.toThrow("Daemon teammates require explicit reporting criteria")
-  await expect(service.spawn({ leadSessionId: lead.id, name: "lead", agentId: "worker", rolePrompt: "Confuse alias" })).rejects.toThrow(
-    "reserved",
-  )
+  await expect(
+    service.spawn({ leadSessionId: lead.id, name: "lead", agentId: "worker", rolePrompt: "Confuse alias" }),
+  ).rejects.toThrow("reserved")
 
   const child = sessions.createSession({
     id: "child-1",
@@ -133,14 +169,28 @@ test("task mutation and shutdown are scoped to authorized team sessions", async 
   const { db, service, sessions, lead } = createFixture()
   const team = service.create({ leadSessionId: lead.id, name: "core", goal: "ship PR 12" })
   const member = await service.spawn({ leadSessionId: lead.id, name: "worker", agentId: "worker", rolePrompt: "Work" })
-  const outsider = sessions.createSession({ id: "outsider", workspaceRoots: [], providerId: "fake", modelId: "test", agentId: "main" })
+  const outsider = sessions.createSession({
+    id: "outsider",
+    workspaceRoots: [],
+    providerId: "fake",
+    modelId: "test",
+    agentId: "main",
+  })
   const task = service.createTask({ sessionId: lead.id, description: "scoped" })
 
-  expect(() => service.claimTask({ sessionId: outsider.id, taskId: task.id, assignee: "outsider" })).toThrow("not part of team")
-  expect(() => service.updateTask({ sessionId: outsider.id, taskId: task.id, status: "completed" })).toThrow("not part of team")
-  expect(() => service.claimTask({ sessionId: member.sessionId, taskId: task.id, assignee: "other" })).toThrow("Only the lead or assignee")
+  expect(() => service.claimTask({ sessionId: outsider.id, taskId: task.id, assignee: "outsider" })).toThrow(
+    "not part of team",
+  )
+  expect(() => service.updateTask({ sessionId: outsider.id, taskId: task.id, status: "completed" })).toThrow(
+    "not part of team",
+  )
+  expect(() => service.claimTask({ sessionId: member.sessionId, taskId: task.id, assignee: "other" })).toThrow(
+    "Only the lead or assignee",
+  )
   service.claimTask({ sessionId: member.sessionId, taskId: task.id, assignee: "worker" })
-  expect(() => service.updateTask({ sessionId: member.sessionId, taskId: task.id, assignee: "other" })).toThrow("cannot claim or reassign")
+  expect(() => service.updateTask({ sessionId: member.sessionId, taskId: task.id, assignee: "other" })).toThrow(
+    "cannot claim or reassign",
+  )
   expect(() => service.shutdown({ leadSessionId: member.sessionId, teamId: team.id })).toThrow("Only the lead session")
 
   await waitForMemberStatus(service, member.id, ["completed", "failed"])
@@ -150,7 +200,12 @@ test("task mutation and shutdown are scoped to authorized team sessions", async 
 test("shutdown cancels active teammate work and preserves cancelled member state", async () => {
   const { db, service, lead } = createFixture({ delayMs: 100 })
   const team = service.create({ leadSessionId: lead.id, name: "core", goal: "ship PR 12" })
-  const member = await service.spawn({ leadSessionId: lead.id, name: "slow", agentId: "worker", rolePrompt: "Slow work" })
+  const member = await service.spawn({
+    leadSessionId: lead.id,
+    name: "slow",
+    agentId: "worker",
+    rolePrompt: "Slow work",
+  })
 
   service.shutdown({ leadSessionId: lead.id, teamId: team.id })
   await Bun.sleep(20)
@@ -162,7 +217,12 @@ test("shutdown cancels active teammate work and preserves cancelled member state
 test("shutdown cancels active teammate work from another team service instance", async () => {
   const { db, service, lead, sessions, models, registry, scheduler } = createFixture({ delayMs: 100 })
   const team = service.create({ leadSessionId: lead.id, name: "core", goal: "ship PR 12" })
-  const member = await service.spawn({ leadSessionId: lead.id, name: "slow", agentId: "worker", rolePrompt: "Slow work" })
+  const member = await service.spawn({
+    leadSessionId: lead.id,
+    name: "slow",
+    agentId: "worker",
+    rolePrompt: "Slow work",
+  })
   const secondService = createTeamService({ config: teamConfig, sessions, models, registry, scheduler })
 
   secondService.shutdown({ leadSessionId: lead.id, teamId: team.id })
@@ -187,9 +247,9 @@ test("daemon teammates cannot broadcast mailbox spam", async () => {
 
   await waitForMemberStatus(service, daemon.id, ["idle", "failed"])
 
-  expect(() => service.broadcast({ sessionId: daemon.sessionId, senderSessionId: daemon.sessionId, body: "noise" })).toThrow(
-    "cannot broadcast",
-  )
+  expect(() =>
+    service.broadcast({ sessionId: daemon.sessionId, senderSessionId: daemon.sessionId, body: "noise" }),
+  ).toThrow("cannot broadcast")
   db.close()
 })
 
@@ -210,7 +270,13 @@ test("broadcast emits delivery events for each recipient", async () => {
   db.close()
 })
 
-function createFixture(input: { readonly delayMs?: number; readonly maxConcurrentTeamMembers?: number; readonly events?: ReturnType<typeof createRuntimeEventBus> } = {}) {
+function createFixture(
+  input: {
+    readonly delayMs?: number
+    readonly maxConcurrentTeamMembers?: number
+    readonly events?: ReturnType<typeof createRuntimeEventBus>
+  } = {},
+) {
   const db = openOc2Database({ path: ":memory:" })
   const sessions = createSessionService({ database: db })
   const lead = sessions.createSession({
@@ -228,12 +294,12 @@ function createFixture(input: { readonly delayMs?: number; readonly maxConcurren
     delayMs: input.delayMs,
   })
   const config = {
-      ...teamConfig,
-      runtime: {
-        ...teamConfig.runtime,
-        maxConcurrentTeamMembers: input.maxConcurrentTeamMembers ?? teamConfig.runtime.maxConcurrentTeamMembers,
-      },
-    }
+    ...teamConfig,
+    runtime: {
+      ...teamConfig.runtime,
+      maxConcurrentTeamMembers: input.maxConcurrentTeamMembers ?? teamConfig.runtime.maxConcurrentTeamMembers,
+    },
+  }
   const models = createModelService({ providers: [provider], scheduler })
   const registry = createToolRegistry([])
   const service = createTeamService({

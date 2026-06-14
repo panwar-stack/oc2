@@ -85,7 +85,10 @@ export class SubAgentService {
             signal,
           })
           this.options.sessions.sessions.updateStatus(child.id, result.status)
-          this.options.events?.publish({ type: "subagent.updated", payload: { subagentId, status: result.status, taskId } })
+          this.options.events?.publish({
+            type: "subagent.updated",
+            payload: { subagentId, status: result.status, taskId },
+          })
           return toSubAgentResult(input, subagentId, child.id, false, result, taskId)
         } catch (error) {
           this.options.sessions.sessions.updateStatus(child.id, "failed")
@@ -183,7 +186,12 @@ export class SubAgentService {
       config,
       permissions: this.options.permissions,
     })
-    return new MainAgent({ sessions: this.options.sessions, models: this.options.models, registry: this.options.registry, tools })
+    return new MainAgent({
+      sessions: this.options.sessions,
+      models: this.options.models,
+      registry: this.options.registry,
+      tools,
+    })
   }
 }
 

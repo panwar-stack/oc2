@@ -48,7 +48,10 @@ test("subagent creates a child session without copying hidden parent transcript"
     parent.workspaceRoots.map(({ path, readonly }) => ({ path, readonly })),
   )
   expect(child?.agentId).toBe("worker")
-  expect(sessions.messages.listBySession(result.sessionId).map((message) => message.role)).toEqual(["user", "assistant"])
+  expect(sessions.messages.listBySession(result.sessionId).map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+  ])
   expect(provider.requests[0]?.messages.some((message) => message.content.includes("parent secret"))).toBe(false)
   db.close()
 })
@@ -88,7 +91,12 @@ test("subagent returns a running background result when configured", async () =>
     allowBackground: true,
   })
 
-  const result = await service.run({ parentSessionId: parent.id, agentId: "worker", prompt: "child task", background: true })
+  const result = await service.run({
+    parentSessionId: parent.id,
+    agentId: "worker",
+    prompt: "child task",
+    background: true,
+  })
 
   expect(result.status).toBe("running")
   expect(result.background).toBe(true)
@@ -111,7 +119,12 @@ test("subagent parent cancellation cancels the child task", async () => {
   const service = createService({ db, sessions, provider })
   const controller = new AbortController()
 
-  const result = service.run({ parentSessionId: parent.id, agentId: "worker", prompt: "child task", signal: controller.signal })
+  const result = service.run({
+    parentSessionId: parent.id,
+    agentId: "worker",
+    prompt: "child task",
+    signal: controller.signal,
+  })
   controller.abort("stop parent")
 
   await expect(result).resolves.toMatchObject({ status: "failed", errors: [{ code: "cancelled" }] })
@@ -131,7 +144,12 @@ test("subagent timeout returns a structured failed result", async () => {
   const provider = createScriptedModelProvider([simpleAssistantEvents], { delayMs: 50 })
   const service = createService({ db, sessions, provider })
 
-  const result = await service.run({ parentSessionId: parent.id, agentId: "worker", prompt: "child task", timeoutMs: 1 })
+  const result = await service.run({
+    parentSessionId: parent.id,
+    agentId: "worker",
+    prompt: "child task",
+    timeoutMs: 1,
+  })
 
   expect(result.status).toBe("failed")
   expect(result.errors[0]?.code).toBe("timed_out")

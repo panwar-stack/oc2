@@ -1,4 +1,8 @@
-import type { TeamMailboxRepository, DeliveredTeamMessage, TeamMailboxMessage } from "../persistence/repositories/mailbox"
+import type {
+  TeamMailboxRepository,
+  DeliveredTeamMessage,
+  TeamMailboxMessage,
+} from "../persistence/repositories/mailbox"
 import type { TeamMemberRecord } from "../persistence/repositories/teams"
 
 /** Resolves logical team recipients to persisted mailbox recipient keys. */

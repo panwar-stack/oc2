@@ -29,7 +29,12 @@ const config = {
 test("team tools register only PR 12 team tool names", () => {
   const { registry, db } = createFixture()
 
-  expect(registry.list().map((tool) => tool.name).toSorted()).toEqual([
+  expect(
+    registry
+      .list()
+      .map((tool) => tool.name)
+      .toSorted(),
+  ).toEqual([
     "team_broadcast",
     "team_create",
     "team_get_messages",
@@ -106,7 +111,13 @@ test("team tools require a session context", async () => {
 function createFixture() {
   const db = openOc2Database({ path: ":memory:" })
   const sessions = createSessionService({ database: db })
-  const lead = sessions.createSession({ id: "lead-1", workspaceRoots: [], providerId: "fake", modelId: "test", agentId: "main" })
+  const lead = sessions.createSession({
+    id: "lead-1",
+    workspaceRoots: [],
+    providerId: "fake",
+    modelId: "test",
+    agentId: "main",
+  })
   const scheduler = createTaskScheduler({
     limits: { model: 1, tool: 1, mcp: 1, subagent: 1, "team-member": 1 },
     defaultTimeoutMs: 1_000,

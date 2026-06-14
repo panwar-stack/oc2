@@ -110,10 +110,11 @@ test("discovers MCP tools and routes invocation through normal tool executor per
   const service = createMcpService({
     config,
     registry,
-    clientFactory: () => fakeClient([tool], () => {
-      calls += 1
-      return { content: "called" }
-    }),
+    clientFactory: () =>
+      fakeClient([tool], () => {
+        calls += 1
+        return { content: "called" }
+      }),
   })
 
   const statuses = await service.startEnabled()

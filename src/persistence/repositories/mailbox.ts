@@ -59,7 +59,8 @@ export class TeamMailboxRepository {
         `INSERT INTO team_message_recipients (id, message_id, team_id, recipient, delivery_status, delivered_at, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      for (const recipient of recipients) insertRecipient.run(createId(), id, input.teamId, recipient, "pending", null, now)
+      for (const recipient of recipients)
+        insertRecipient.run(createId(), id, input.teamId, recipient, "pending", null, now)
       this.db.exec("COMMIT")
       return this.get(id) as TeamMailboxMessage
     } catch (error) {
@@ -73,7 +74,11 @@ export class TeamMailboxRepository {
     return row ? toMessage(row) : undefined
   }
 
-  deliver(teamId: string, recipients: readonly string[], now = new Date().toISOString()): readonly DeliveredTeamMessage[] {
+  deliver(
+    teamId: string,
+    recipients: readonly string[],
+    now = new Date().toISOString(),
+  ): readonly DeliveredTeamMessage[] {
     const uniqueRecipients = [...new Set(recipients)].filter(Boolean)
     if (uniqueRecipients.length === 0) return []
     this.db.exec("BEGIN IMMEDIATE")
@@ -104,9 +109,10 @@ export class TeamMailboxRepository {
       for (const messageId of messageIds) {
         const pending =
           this.db
-            .query<{ readonly count: number }, [string]>(
-              "SELECT COUNT(*) AS count FROM team_message_recipients WHERE message_id = ? AND delivery_status = 'pending'",
-            )
+            .query<
+              { readonly count: number },
+              [string]
+            >("SELECT COUNT(*) AS count FROM team_message_recipients WHERE message_id = ? AND delivery_status = 'pending'")
             .get(messageId)?.count ?? 0
         if (pending === 0) {
           this.db

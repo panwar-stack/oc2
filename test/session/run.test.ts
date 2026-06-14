@@ -143,7 +143,9 @@ test("run exposes subagent tool through the default runtime registry", async () 
 
   const result = await service.run({ prompt: "delegate", model: "fake/test" })
 
-  expect(result.toolCalls).toEqual([{ id: "subagent-1", name: "subagent", input: { agentId: "worker", prompt: "child task" }, ok: true }])
+  expect(result.toolCalls).toEqual([
+    { id: "subagent-1", name: "subagent", input: { agentId: "worker", prompt: "child task" }, ok: true },
+  ])
   expect(provider.requests[0]?.tools.map((tool) => tool.name)).toContain("subagent")
   expect(service.sessions.listSessions().some((session) => session.parentSessionId === result.sessionId)).toBe(true)
   db.close()

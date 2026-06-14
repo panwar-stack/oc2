@@ -33,9 +33,11 @@ export function deriveSubAgentConfig(config: Oc2Config, profile: AgentProfile): 
 }
 
 /** Collects parent deny rules so child profile allow rules cannot override them. */
-export function collectParentDenyRules(config: Pick<Oc2Config, "tools">, toolName: string): readonly ToolPermissionRule[] {
-  return (config.tools[toolName]?.permissions ?? [])
-    .filter((rule) => rule.decision === "deny")
+export function collectParentDenyRules(
+  config: Pick<Oc2Config, "tools">,
+  toolName: string,
+): readonly ToolPermissionRule[] {
+  return (config.tools[toolName]?.permissions ?? []).filter((rule) => rule.decision === "deny")
 }
 
 /** Lists tools that are disabled by default inside subagent child sessions. */

@@ -5,7 +5,7 @@
       "transport": "stdio",
       "command": "bun",
       "args": ["test/mcp/fake-server.ts"],
-      "startupTimeoutMs": 2000
-    }
-  }
+      "startupTimeoutMs": 2000,
+    },
+  },
 }

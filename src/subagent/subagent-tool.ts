@@ -28,7 +28,9 @@ export interface SubAgentToolOutput {
 }
 
 /** Materializes the subagent runtime as a normal tool for model-driven delegation. */
-export function createSubAgentTool(options: SubAgentToolOptions): ToolDefinition<CreateSubAgentToolInput, SubAgentToolOutput> {
+export function createSubAgentTool(
+  options: SubAgentToolOptions,
+): ToolDefinition<CreateSubAgentToolInput, SubAgentToolOutput> {
   return {
     name: "subagent",
     description: "Create a child subagent session for an isolated task and return its structured result.",

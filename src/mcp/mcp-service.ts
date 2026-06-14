@@ -55,14 +55,21 @@ export function createMcpToolConfigEntries(
 export function createMcpService(options: McpServiceOptions): McpService {
   const states = new Map<string, ServerState>()
   for (const server of listMcpServers(options.config)) {
-    states.set(server.id, { server, toolNames: [], status: createMcpStatus(server.id, server.enabled ? "disabled" : "disabled") })
+    states.set(server.id, {
+      server,
+      toolNames: [],
+      status: createMcpStatus(server.id, server.enabled ? "disabled" : "disabled"),
+    })
   }
 
   const setStatus = (state: ServerState, status: McpServerStatus) => {
     const redacted = redactValue(status) as McpServerStatus
     state.status = redacted
     options.snapshots?.append({ serverId: state.server.id, status: redacted })
-    options.events?.publish({ type: "mcp.status", payload: { serverId: state.server.id, status: redacted.status, error: redacted.error } })
+    options.events?.publish({
+      type: "mcp.status",
+      payload: { serverId: state.server.id, status: redacted.status, error: redacted.error },
+    })
   }
 
   const refreshTools = async (state: ServerState, client: McpClient, signal: AbortSignal) => {
@@ -78,7 +85,8 @@ export function createMcpService(options: McpServiceOptions): McpService {
 
   const start = async (serverId: string, signal: AbortSignal): Promise<McpServerStatus> => {
     const state = states.get(serverId)
-    if (!state) throw new RuntimeError({ code: "invalid_task", message: `MCP server not found: ${serverId}`, recoverable: true })
+    if (!state)
+      throw new RuntimeError({ code: "invalid_task", message: `MCP server not found: ${serverId}`, recoverable: true })
     if (!state.server.enabled) {
       setStatus(state, createMcpStatus(serverId, "disabled"))
       return state.status
@@ -94,7 +102,9 @@ export function createMcpService(options: McpServiceOptions): McpService {
       state.client = client
       client.onToolsChanged(() => {
         const refreshController = new AbortController()
-        void refreshTools(state, client, refreshController.signal).catch((error) => setStatus(state, failedStatus(serverId, error)))
+        void refreshTools(state, client, refreshController.signal).catch((error) =>
+          setStatus(state, failedStatus(serverId, error)),
+        )
       })
       await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
         await client.initialize(timeoutSignal)
@@ -140,12 +150,7 @@ export function createMcpService(options: McpServiceOptions): McpService {
   }
 }
 
-function registerTools(
-  registry: ToolRegistry,
-  state: ServerState,
-  client: McpClient,
-  tools: readonly McpToolInfo[],
-) {
+function registerTools(registry: ToolRegistry, state: ServerState, client: McpClient, tools: readonly McpToolInfo[]) {
   for (const name of state.toolNames) registry.unregister(name)
   state.toolNames = []
   for (const tool of tools) {
@@ -167,10 +172,20 @@ function failedStatus(serverId: string, error: unknown): McpServerStatus {
     recoverable: true,
     kind: "mcp",
   }).toJSON()
-  return { serverId, status: "failed", toolCount: 0, tools: [], error: { ...runtime, message: redactText(runtime.message) } }
+  return {
+    serverId,
+    status: "failed",
+    toolCount: 0,
+    tools: [],
+    error: { ...runtime, message: redactText(runtime.message) },
+  }
 }
 
-async function withTimeout<T>(timeoutMs: number, parent: AbortSignal, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+async function withTimeout<T>(
+  timeoutMs: number,
+  parent: AbortSignal,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController()
   const onAbort = () => controller.abort(parent.reason)
   parent.addEventListener("abort", onAbort, { once: true })

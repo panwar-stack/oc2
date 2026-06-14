@@ -97,7 +97,10 @@ export class TeamTaskRepository {
     }
   }
 
-  update(taskId: string, input: { readonly status?: TeamTaskStatus; readonly assignee?: string; readonly now?: string }): TeamTaskRecord {
+  update(
+    taskId: string,
+    input: { readonly status?: TeamTaskStatus; readonly assignee?: string; readonly now?: string },
+  ): TeamTaskRecord {
     const existing = this.get(taskId)
     if (!existing) throw new Error(`Team task not found: ${taskId}`)
     const now = input.now ?? new Date().toISOString()

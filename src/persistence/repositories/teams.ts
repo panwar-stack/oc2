@@ -107,7 +107,9 @@ export class TeamRepository {
     const now = input.now ?? new Date().toISOString()
     const id = createId()
     this.db
-      .query("INSERT INTO teams (id, name, goal, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .query(
+        "INSERT INTO teams (id, name, goal, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
       .run(id, input.name, input.goal, input.leadSessionId, "active", now, now)
     return this.get(id) as TeamRecord
   }
@@ -119,7 +121,10 @@ export class TeamRepository {
 
   getActiveByLeadSession(leadSessionId: string): TeamRecord | undefined {
     const row = this.db
-      .query<TeamRow, [string]>("SELECT * FROM teams WHERE lead_session_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1")
+      .query<
+        TeamRow,
+        [string]
+      >("SELECT * FROM teams WHERE lead_session_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1")
       .get(leadSessionId)
     return row ? toTeamRecord(row) : undefined
   }
@@ -187,7 +192,10 @@ export class TeamRepository {
 
   getMemberByNameOrSession(teamId: string, value: string): TeamMemberRecord | undefined {
     const row = this.db
-      .query<TeamMemberRow, [string, string, string]>("SELECT * FROM team_members WHERE team_id = ? AND (name = ? OR session_id = ?)")
+      .query<
+        TeamMemberRow,
+        [string, string, string]
+      >("SELECT * FROM team_members WHERE team_id = ? AND (name = ? OR session_id = ?)")
       .get(teamId, value, value)
     return row ? toMemberRecord(row) : undefined
   }
@@ -201,7 +209,9 @@ export class TeamRepository {
 
   listRunnableBlockedMembers(teamId: string): readonly TeamMemberRecord[] {
     return this.db
-      .query<TeamMemberRow, [string]>("SELECT * FROM team_members WHERE team_id = ? AND status = 'blocked' ORDER BY created_at, id")
+      .query<TeamMemberRow, [string]>(
+        "SELECT * FROM team_members WHERE team_id = ? AND status = 'blocked' ORDER BY created_at, id",
+      )
       .all(teamId)
       .map(toMemberRecord)
       .filter((member) => this.memberDependenciesCompleted(teamId, member.dependencyIds))
@@ -210,9 +220,10 @@ export class TeamRepository {
   activeMemberCount(teamId: string): number {
     return (
       this.db
-        .query<{ readonly count: number }, [string]>(
-          "SELECT COUNT(*) AS count FROM team_members WHERE team_id = ? AND status IN ('starting', 'active', 'idle')",
-        )
+        .query<
+          { readonly count: number },
+          [string]
+        >("SELECT COUNT(*) AS count FROM team_members WHERE team_id = ? AND status IN ('starting', 'active', 'idle')")
         .get(teamId)?.count ?? 0
     )
   }
@@ -226,7 +237,9 @@ export class TeamRepository {
     const existing = this.getMember(id)
     if (!existing) throw new Error(`Team member not found: ${id}`)
     const now = input.now ?? new Date().toISOString()
-    const daemonState = input.daemonState ?? (input.status === "active" && existing.lifecycle === "daemon" ? "running" : existing.daemonState)
+    const daemonState =
+      input.daemonState ??
+      (input.status === "active" && existing.lifecycle === "daemon" ? "running" : existing.daemonState)
     this.db
       .query(
         `UPDATE team_members
@@ -247,7 +260,9 @@ export class TeamRepository {
   }
 
   private memberDependenciesCompleted(teamId: string, dependencyIds: readonly string[]): boolean {
-    return dependencyIds.every((id) => this.getMember(id)?.teamId === teamId && this.getMember(id)?.status === "completed")
+    return dependencyIds.every(
+      (id) => this.getMember(id)?.teamId === teamId && this.getMember(id)?.status === "completed",
+    )
   }
 }
 
