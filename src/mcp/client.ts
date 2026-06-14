@@ -1,5 +1,16 @@
 import type { ResolvedMcpServerConfig } from "./config"
 import type { McpToolInfo } from "./status"
+import {
+  normalizeInitializeResult,
+  type ListChangedKind,
+  type McpInitializeInput,
+  type McpInitializeResult,
+  type McpPromptInfo,
+  type McpPromptResult,
+  type McpResourceInfo,
+  type McpResourceReadResult,
+  LIST_CHANGED_METHODS,
+} from "./protocol"
 
 export interface McpCallResult {
   readonly content?: unknown
@@ -8,9 +19,14 @@ export interface McpCallResult {
 }
 
 export interface McpClient {
-  initialize(signal: AbortSignal): Promise<void>
+  initialize(input: McpInitializeInput, signal: AbortSignal): Promise<McpInitializeResult>
   listTools(signal: AbortSignal): Promise<readonly McpToolInfo[]>
   callTool(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<McpCallResult>
+  listResources(signal: AbortSignal): Promise<readonly McpResourceInfo[]>
+  readResource(uri: string, signal: AbortSignal): Promise<McpResourceReadResult>
+  listPrompts(signal: AbortSignal): Promise<readonly McpPromptInfo[]>
+  getPrompt(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<McpPromptResult>
+  onListChanged(kind: ListChangedKind, callback: () => void): void
   onToolsChanged(callback: () => void): void
   close(): Promise<void>
 }
@@ -28,7 +44,6 @@ interface JsonRpcResponse {
   readonly method?: string
 }
 
-/** Creates the default JSON-RPC MCP client for stdio and HTTP-style transports. */
 export const createMcpClient: McpClientFactory = (server) => {
   if (server.transport === "stdio") return createStdioClient(server)
   return createHttpClient(server)
@@ -37,6 +52,7 @@ export const createMcpClient: McpClientFactory = (server) => {
 function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
   let id = 0
   const endpoint = server.url ?? ""
+  const changed = new Map<ListChangedKind, () => void>()
   let events:
     | { addEventListener(type: string, listener: (event: { data: string }) => void): void; close(): void }
     | undefined
@@ -54,12 +70,32 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     return unwrapResponse((await response.json()) as JsonRpcResponse)
   }
 
+  const setupSse = () => {
+    events?.close()
+    if (server.transport !== "sse") return
+    const EventSourceCtor = (
+      globalThis as unknown as {
+        EventSource?: new (url: string) => {
+          addEventListener(type: string, listener: (event: { data: string }) => void): void
+          close(): void
+        }
+      }
+    ).EventSource
+    if (!EventSourceCtor) return
+    events = new EventSourceCtor(endpoint)
+    events.addEventListener("message", (event) => {
+      if (isToolListChangedNotification(event.data)) changed.get("tools")?.()
+    })
+  }
+
   return {
-    async initialize(signal) {
-      await request(
-        "initialize",
-        { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "oc2" } },
-        signal,
+    async initialize(input, signal) {
+      return normalizeInitializeResult(
+        await request(
+          "initialize",
+          { protocolVersion: input.protocolVersion, capabilities: input.capabilities, clientInfo: input.clientInfo },
+          signal,
+        ),
       )
     },
     async listTools(signal) {
@@ -68,22 +104,25 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     async callTool(name, input, signal) {
       return normalizeCallResult(await request("tools/call", { name, arguments: input }, signal))
     },
+    async listResources() {
+      throw new Error("not implemented")
+    },
+    async readResource() {
+      throw new Error("not implemented")
+    },
+    async listPrompts() {
+      throw new Error("not implemented")
+    },
+    async getPrompt() {
+      throw new Error("not implemented")
+    },
+    onListChanged(kind, callback) {
+      changed.set(kind, callback)
+      if (kind === "tools") setupSse()
+    },
     onToolsChanged(callback) {
-      if (server.transport !== "sse") return
-      events?.close()
-      const EventSourceCtor = (
-        globalThis as unknown as {
-          EventSource?: new (url: string) => {
-            addEventListener(type: string, listener: (event: { data: string }) => void): void
-            close(): void
-          }
-        }
-      ).EventSource
-      if (!EventSourceCtor) return
-      events = new EventSourceCtor(endpoint)
-      events.addEventListener("message", (event) => {
-        if (isToolListChangedNotification(event.data)) callback()
-      })
+      changed.set("tools", callback)
+      setupSse()
     },
     async close() {
       events?.close()
@@ -101,12 +140,24 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
     stderr: "pipe",
   })
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+  const changed = new Map<ListChangedKind, () => void>()
   let id = 0
-  let changed: (() => void) | undefined
 
   void readJsonLines(process.stdout, (message) => {
-    if (message.method === "notifications/tools/list_changed") {
-      changed?.()
+    if (message.method === LIST_CHANGED_METHODS.tools) {
+      changed.get("tools")?.()
+      return
+    }
+    if (message.method === LIST_CHANGED_METHODS.resources) {
+      changed.get("resources")?.()
+      return
+    }
+    if (message.method === LIST_CHANGED_METHODS.prompts) {
+      changed.get("prompts")?.()
+      return
+    }
+    if (message.method === LIST_CHANGED_METHODS.roots) {
+      changed.get("roots")?.()
       return
     }
     if (message.id === undefined) return
@@ -122,6 +173,7 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
   }).catch((error) => rejectPending(pending, error instanceof Error ? error : new Error(String(error))))
 
   const request = async (method: string, params: Record<string, unknown> | undefined, signal: AbortSignal) => {
+    if (signal.aborted) throw new Error("MCP request cancelled")
     const requestId = ++id
     const result = new Promise<unknown>((resolve, reject) => {
       pending.set(requestId, { resolve, reject })
@@ -139,13 +191,14 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
   }
 
   return {
-    async initialize(signal) {
-      await request(
+    async initialize(input, signal) {
+      const result = await request(
         "initialize",
-        { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "oc2" } },
+        { protocolVersion: input.protocolVersion, capabilities: input.capabilities, clientInfo: input.clientInfo },
         signal,
       )
       process.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
+      return normalizeInitializeResult(result)
     },
     async listTools(signal) {
       return normalizeTools(await request("tools/list", undefined, signal))
@@ -153,8 +206,23 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
     async callTool(name, input, signal) {
       return normalizeCallResult(await request("tools/call", { name, arguments: input }, signal))
     },
+    async listResources() {
+      throw new Error("not implemented")
+    },
+    async readResource() {
+      throw new Error("not implemented")
+    },
+    async listPrompts() {
+      throw new Error("not implemented")
+    },
+    async getPrompt() {
+      throw new Error("not implemented")
+    },
+    onListChanged(kind, callback) {
+      changed.set(kind, callback)
+    },
     onToolsChanged(callback) {
-      changed = callback
+      changed.set("tools", callback)
     },
     async close() {
       process.stdin.end()

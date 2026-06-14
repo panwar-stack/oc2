@@ -9,6 +9,8 @@ import {
   McpAuthRequiredError,
   type McpCallResult,
   type McpClient,
+  type McpInitializeInput,
+  type McpInitializeResult,
   type McpToolInfo,
   type Oc2Config,
 } from "../../src"
@@ -175,34 +177,66 @@ function fakeClient(
   call: (name: string, input: Record<string, unknown>) => McpCallResult = () => ({ content: "ok" }),
 ): McpClient {
   return {
-    async initialize() {},
-    async listTools() {
+    async initialize(_input: McpInitializeInput, _signal: AbortSignal) {
+      return {} as McpInitializeResult
+    },
+    async listTools(_signal: AbortSignal) {
       return tools
     },
-    async callTool(name, input) {
+    async callTool(name, input, _signal: AbortSignal) {
       return call(name, input)
     },
-    onToolsChanged() {},
+    async listResources(_signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    async readResource(_uri: string, _signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    async listPrompts(_signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    async getPrompt(_name: string, _args: Record<string, unknown>, _signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    onListChanged(_kind: string, _callback: () => void) {},
+    onToolsChanged(_callback: () => void) {},
     async close() {},
   }
 }
 
 function mutableFakeClient(tools: McpToolInfo[]) {
-  let changed: (() => void) | undefined
+  const changed = new Map<string, () => void>()
   return {
     tools,
     triggerChanged() {
-      changed?.()
+      changed.get("tools")?.()
     },
-    async initialize() {},
-    async listTools() {
+    async initialize(_input: McpInitializeInput, _signal: AbortSignal) {
+      return {} as McpInitializeResult
+    },
+    async listTools(_signal: AbortSignal) {
       return this.tools
     },
-    async callTool() {
+    async callTool(_name: string, _input: Record<string, unknown>, _signal: AbortSignal) {
       return { content: "ok" }
     },
-    onToolsChanged(callback: () => void) {
-      changed = callback
+    async listResources(_signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    async readResource(_uri: string, _signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    async listPrompts(_signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    async getPrompt(_name: string, _args: Record<string, unknown>, _signal: AbortSignal) {
+      throw new Error("not implemented")
+    },
+    onListChanged(kind, callback) {
+      changed.set(kind, callback)
+    },
+    onToolsChanged(callback) {
+      changed.set("tools", callback)
     },
     async close() {},
   } satisfies McpClient & { tools: McpToolInfo[]; triggerChanged(): void }

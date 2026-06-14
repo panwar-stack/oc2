@@ -8,6 +8,7 @@ import type { ToolRegistry } from "../tools/registry"
 import { createMcpClient, McpAuthRequiredError, type McpClient, type McpClientFactory } from "./client"
 import { listMcpServers, type ResolvedMcpServerConfig } from "./config"
 import { requiresDeferredOAuth } from "./auth"
+import { MCP_PROTOCOL_VERSION } from "./protocol"
 import { materializeMcpTool } from "./tools"
 import { createMcpStatus, type McpServerStatus, type McpToolInfo } from "./status"
 
@@ -114,7 +115,10 @@ export function createMcpService(options: McpServiceOptions): McpService {
         )
       })
       await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
-        await client.initialize(timeoutSignal)
+        await client.initialize(
+          { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "oc2" } },
+          timeoutSignal,
+        )
         await refreshTools(state, client, timeoutSignal)
       })
       return state.status
