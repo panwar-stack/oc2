@@ -1,3 +1,5 @@
+> Reference note: this is upstream MCP background material kept for local reference. It does not describe additional shipped `oc2` product features beyond the MCP support documented in `docs/mcp.md`.
+
 > ## Documentation Index
 >
 > Fetch the complete documentation index at: https://modelcontextprotocol.io/llms.txt

@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { createBuiltInToolRegistry } from "../../src/tools/builtins/index"
 import { createToolRegistry } from "../../src/tools/registry"
 
-test("built-in registry exposes PR 7 tools as model definitions", () => {
+test("built-in registry exposes shipped tools as model definitions", () => {
   const registry = createBuiltInToolRegistry()
   const names = registry
     .materialize()
@@ -16,6 +16,7 @@ test("built-in registry exposes PR 7 tools as model definitions", () => {
     "edit",
     "glob",
     "grep",
+    "memory",
     "opengrep",
     "question",
     "read",

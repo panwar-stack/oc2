@@ -1,3 +1,5 @@
+> Reference note: this is upstream MCP background material kept for local reference. `oc2` does not ship the full browser OAuth callback flow in this release slice; OAuth-required MCP servers are surfaced as `auth_required` as documented in `docs/mcp.md`.
+
 > ## Documentation Index
 >
 > Fetch the complete documentation index at: https://modelcontextprotocol.io/llms.txt
