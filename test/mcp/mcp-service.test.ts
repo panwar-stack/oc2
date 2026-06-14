@@ -342,6 +342,26 @@ test("host handlers are passed to client and setHostHandlers is called", async (
   expect(handlersSet).toBe(true)
 })
 
+test("roots capability is not advertised without a roots host handler", async () => {
+  let capabilities: Record<string, unknown> | undefined
+  const service = createMcpService({
+    config: withMcp({ server: server({ transport: "stdio", command: "fake" }) }),
+    registry: createToolRegistry(),
+    clientFactory: () =>
+      fakeCapabilityClient(
+        [],
+        (caps) => {
+          capabilities = caps
+        },
+        () => {},
+      ),
+  })
+
+  await service.startEnabled()
+
+  expect(capabilities?.roots).toBeUndefined()
+})
+
 function withMcp(mcp: Oc2Config["mcp"]): Oc2Config {
   return { ...defaultConfig, mcp }
 }

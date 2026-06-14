@@ -1,4 +1,5 @@
 import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 
 import { MainAgent, type MainAgentRunResult } from "../agent/agent"
 import { resolveMainAgentProfile } from "../agent/profiles"
@@ -138,7 +139,7 @@ export class SessionRunService {
     const hostHandlers: McpHostHandlers = {
       rootsList: async (_signal: AbortSignal) => {
         return session.workspaceRoots.map((root) => ({
-          uri: root.path.startsWith("/") ? `file://${root.path}` : `file:///${root.path}`,
+          uri: pathToFileURL(root.path).href,
           name: root.label,
         }))
       },

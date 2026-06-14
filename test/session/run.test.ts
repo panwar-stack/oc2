@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { z } from "zod"
 
 import {
@@ -8,6 +9,10 @@ import {
   defaultConfig,
   ModelProviderError,
   openOc2Database,
+  type McpClient,
+  type McpHostHandlers,
+  type McpInitializeInput,
+  type McpInitializeResult,
   type ToolDefinition,
 } from "../../src"
 import { createScriptedModelProvider, simpleAssistantEvents } from "../agent/helpers"
@@ -82,6 +87,60 @@ test("run defaults new session workspace roots to cwd when omitted", async () =>
   expect(service.sessions.resumeSession(result.sessionId)?.workspaceRoots.map((root) => root.path)).toEqual([
     resolve("/repo/project"),
   ])
+  db.close()
+})
+
+test("run wires MCP roots handler from normal session workspace roots", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  let capturedHandlers: McpHostHandlers | undefined
+  let capturedCapabilities: McpInitializeInput["capabilities"] | undefined
+  const cwd = "/repo/project space"
+  const config = {
+    ...defaultConfig,
+    mcp: {
+      roots: {
+        enabled: true,
+        transport: "stdio" as const,
+        command: "fake",
+        args: [],
+        env: {},
+        headers: {},
+        toolPermissions: [],
+        startupTimeoutMs: 10_000,
+      },
+    },
+  }
+  const service = createSessionRunService({
+    config,
+    cwd,
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+    mcpClientFactory: () => fakeMcpClient({
+      onHandlers: (handlers) => {
+        capturedHandlers = handlers
+      },
+      onInitialize: (input) => {
+        capturedCapabilities = input.capabilities
+      },
+    }),
+  })
+
+  const result = await service.run({ prompt: "hello", model: "fake/test", roots: [".", "../reference space"] })
+  const session = service.sessions.resumeSession(result.sessionId)!
+  const roots = await capturedHandlers!.rootsList!(new AbortController().signal)
+
+  expect(capturedCapabilities?.roots).toEqual({ listChanged: true })
+  expect(roots).toEqual(
+    session.workspaceRoots.map((root) => ({
+      uri: pathToFileURL(root.path).href,
+      name: root.label,
+    })),
+  )
+  expect(roots.map((root) => root.uri)).toEqual([
+    pathToFileURL(resolve(cwd, ".")).href,
+    pathToFileURL(resolve(cwd, "../reference space")).href,
+  ])
+  expect(roots[0]!.uri).toContain("project%20space")
   db.close()
 })
 
@@ -252,5 +311,41 @@ function countingTool(onExecute: () => void): ToolDefinition<Record<string, neve
       onExecute()
       return "counted"
     },
+  }
+}
+
+function fakeMcpClient(input: {
+  readonly onHandlers?: (handlers: McpHostHandlers) => void
+  readonly onInitialize?: (input: McpInitializeInput) => void
+}): McpClient {
+  return {
+    async initialize(init) {
+      input.onInitialize?.(init)
+      return {} as McpInitializeResult
+    },
+    async listTools() {
+      return []
+    },
+    async callTool() {
+      return { content: "ok" }
+    },
+    async listResources() {
+      return []
+    },
+    async readResource() {
+      return { contents: [] }
+    },
+    async listPrompts() {
+      return []
+    },
+    async getPrompt() {
+      return { messages: [] }
+    },
+    onListChanged() {},
+    onToolsChanged() {},
+    setHostHandlers(handlers) {
+      input.onHandlers?.(handlers)
+    },
+    async close() {},
   }
 }
