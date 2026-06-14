@@ -1,4 +1,4 @@
-export type CommandName = "version" | "diagnostics" | "config" | "tools" | "run" | "help"
+export type CommandName = "version" | "diagnostics" | "config" | "tools" | "run" | "resume" | "help"
 
 export type ParsedCommand =
   | { name: "version"; json: boolean }
@@ -8,6 +8,8 @@ export type ParsedCommand =
   | { name: "config"; action: "set"; key: string; value: string; json: boolean }
   | { name: "tools"; action: "list"; json: boolean }
   | { name: "run"; help: true }
+  | { name: "run"; help?: false; prompt: string; json: boolean; model?: string; tools: readonly string[]; disabledTools: readonly string[]; mcp: readonly string[]; disabledMcp: readonly string[] }
+  | { name: "resume"; sessionId: string; run: string; json: boolean; model?: string }
   | { name: "help" }
 
 export interface ParseSuccess {
@@ -28,6 +30,7 @@ export const commandDescriptions = {
   config: "Read or update oc2 configuration",
   tools: "List configured tools",
   run: "Run a one-shot prompt",
+  resume: "Resume a previous session",
 } satisfies Record<Exclude<CommandName, "help">, string>
 
 /** Parses top-level CLI arguments into command objects without performing side effects. */
@@ -49,6 +52,8 @@ export function parseCommand(argv: string[]): ParseResult {
       return parseTools(rest)
     case "run":
       return parseRun(rest)
+    case "resume":
+      return parseResume(rest)
     default:
       if (!command.startsWith("-")) {
         return { ok: false, message: `Unknown command: ${command}` }
@@ -97,7 +102,32 @@ function parseTools(argv: string[]): ParseResult {
 
 function parseRun(argv: string[]): ParseResult {
   if (hasFlag(argv, "--help") || hasFlag(argv, "-h")) return { ok: true, command: { name: "run", help: true } }
-  return { ok: false, message: "oc2 run execution is implemented in PR 8. Use run --help for available options." }
+  const parsed = parseFlagValues(argv, new Set(["--json"]), new Set(["--model", "--tool", "--no-tool", "--mcp", "--no-mcp"]))
+  if (!parsed.ok) return parsed
+  if (parsed.positionals.length === 0) return { ok: false, message: "run requires <prompt>" }
+  return {
+    ok: true,
+    command: {
+      name: "run",
+      prompt: parsed.positionals.join(" "),
+      json: parsed.booleans.has("--json"),
+      model: parsed.values.get("--model")?.[0],
+      tools: parsed.values.get("--tool") ?? [],
+      disabledTools: parsed.values.get("--no-tool") ?? [],
+      mcp: parsed.values.get("--mcp") ?? [],
+      disabledMcp: parsed.values.get("--no-mcp") ?? [],
+    },
+  }
+}
+
+function parseResume(argv: string[]): ParseResult {
+  const parsed = parseFlagValues(argv, new Set(["--json"]), new Set(["--run", "--model"]))
+  if (!parsed.ok) return parsed
+  const [sessionId, ...extra] = parsed.positionals
+  if (!sessionId || extra.length > 0) return { ok: false, message: "resume requires <session-id>" }
+  const run = parsed.values.get("--run")?.[0]
+  if (!run) return { ok: false, message: "resume requires --run <prompt> for non-interactive execution" }
+  return { ok: true, command: { name: "resume", sessionId, run, json: parsed.booleans.has("--json"), model: parsed.values.get("--model")?.[0] } }
 }
 
 function parseNoPositionals(commandName: string, argv: string[], command: ParsedCommand): ParseResult {
@@ -113,4 +143,34 @@ function hasFlag(argv: string[], flag: string): boolean {
 
 function withoutKnownFlags(argv: string[]): string[] {
   return argv.filter((arg) => arg !== "--json" && arg !== "--help" && arg !== "-h")
+}
+
+interface ParsedFlags {
+  readonly ok: true
+  readonly positionals: readonly string[]
+  readonly booleans: ReadonlySet<string>
+  readonly values: ReadonlyMap<string, readonly string[]>
+}
+
+function parseFlagValues(argv: string[], booleanFlags: ReadonlySet<string>, valueFlags: ReadonlySet<string>): ParsedFlags | ParseFailure {
+  const positionals: string[] = []
+  const booleans = new Set<string>()
+  const values = new Map<string, string[]>()
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? ""
+    if (booleanFlags.has(arg)) {
+      booleans.add(arg)
+      continue
+    }
+    if (valueFlags.has(arg)) {
+      const value = argv[index + 1]
+      if (!value || value.startsWith("--")) return { ok: false, message: `${arg} requires a value` }
+      values.set(arg, [...(values.get(arg) ?? []), value])
+      index += 1
+      continue
+    }
+    if (arg.startsWith("-")) return { ok: false, message: `Unknown option: ${arg}` }
+    positionals.push(arg)
+  }
+  return { ok: true, positionals, booleans, values }
 }

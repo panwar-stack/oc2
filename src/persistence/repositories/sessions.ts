@@ -128,6 +128,13 @@ export class SessionRepository {
     return session
   }
 
+  /** Moves a session into running state only when no persisted run is already active. */
+  tryStartRun(id: string, now = new Date().toISOString()): SessionRecord | undefined {
+    const result = this.db.query("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND status != ?").run("running", now, id, "running")
+    if (result.changes === 0) return undefined
+    return this.get(id)
+  }
+
   addWorkspaceRoot(sessionId: string, root: Omit<WorkspaceRoot, "id">, now = new Date().toISOString()): WorkspaceRoot {
     const id = createId()
     const nextIndex =

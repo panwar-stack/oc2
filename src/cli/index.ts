@@ -5,6 +5,8 @@ import { getConfigPaths } from "../config/paths"
 import { collectEnvironmentInfo } from "../diagnostics/environment"
 import { runDependencyChecks } from "../diagnostics/dependency-checks"
 import { createDiagnosticReport } from "../diagnostics/diagnostics"
+import type { ModelProvider } from "../model/provider"
+import { createSessionRunService } from "../session/run"
 import { VERSION } from "../version"
 import { formatRootHelp, parseCommand, type ParsedCommand } from "./commands"
 import {
@@ -12,6 +14,7 @@ import {
   formatConfigValue,
   formatDiagnosticsText,
   formatJson,
+  formatRunJson,
   formatRunHelp,
   formatToolsListText,
   formatVersionJson,
@@ -27,6 +30,7 @@ export interface CliOptions extends LoadConfigOptions {
   argv?: string[]
   streams?: CliStreams
   writeFile?: (path: string, contents: string) => Promise<void>
+  modelProviders?: readonly ModelProvider[]
 }
 
 export interface CliResult {
@@ -62,8 +66,13 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
     case "tools":
       return tools(command.json, options)
     case "run":
-      await writeStdout(options.streams?.stdout, formatRunHelp())
-      return { exitCode: 0 }
+      if (command.help) {
+        await writeStdout(options.streams?.stdout, formatRunHelp())
+        return { exitCode: 0 }
+      }
+      return runPrompt(command, undefined, options)
+    case "resume":
+      return runPrompt(command, command.sessionId, options)
   }
 }
 
@@ -114,6 +123,43 @@ async function tools(json: boolean, options: CliOptions): Promise<CliResult> {
     .toSorted((left, right) => left.name.localeCompare(right.name))
   await writeStdout(options.streams?.stdout, json ? formatJson({ tools: configuredTools }) : formatToolsListText(configuredTools))
   return { exitCode: 0 }
+}
+
+type RunExecutionCommand = Extract<ParsedCommand, { name: "run"; prompt: string }> | Extract<ParsedCommand, { name: "resume" }>
+
+async function runPrompt(command: RunExecutionCommand, sessionId: string | undefined, options: CliOptions): Promise<CliResult> {
+  const loaded = await loadConfig(options)
+  const paths = getConfigPaths(options)
+  const service = createSessionRunService({
+    config: loaded.config,
+    cwd: paths.cwd,
+    dataDir: paths.dataDir,
+    providers: options.modelProviders,
+  })
+  try {
+    const result = await service.run({
+      prompt: command.name === "resume" ? command.run : command.prompt,
+      sessionId,
+      model: command.model,
+      enabledTools: command.name === "run" ? command.tools : undefined,
+      disabledTools: command.name === "run" ? command.disabledTools : undefined,
+      enabledMcp: command.name === "run" ? command.mcp : undefined,
+      disabledMcp: command.name === "run" ? command.disabledMcp : undefined,
+    })
+    await writeStdout(options.streams?.stdout, command.json ? formatJson(formatRunJson(result)) : `${result.text}\n`)
+    return { exitCode: result.status === "completed" ? 0 : 1 }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const failed = { sessionId: sessionId ?? "", finalAssistantText: "", toolCalls: [], errors: [{ message }], usage: undefined, exitStatus: "failed" }
+    if (command.json) {
+      await writeStdout(options.streams?.stdout, formatJson(failed))
+    } else {
+      await writeStderr(options.streams?.stderr, `${message}\n`)
+    }
+    return { exitCode: 1 }
+  } finally {
+    service.database?.close()
+  }
 }
 
 function getPath(value: unknown, path: string): unknown {

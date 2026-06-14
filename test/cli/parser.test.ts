@@ -23,12 +23,9 @@ test("parses config get and set", () => {
   })
 })
 
-test("parses run help without accepting execution", () => {
+test("parses run help and execution", () => {
   expect(parseCommand(["run", "--help"])).toEqual({ ok: true, command: { name: "run", help: true } })
-  expect(parseCommand(["run", "hello"])).toEqual({
-    ok: false,
-    message: "oc2 run execution is implemented in PR 8. Use run --help for available options.",
-  })
+  expect(parseCommand(["run", "hello"])).toEqual({ ok: true, command: { name: "run", prompt: "hello", json: false, model: undefined, tools: [], disabledTools: [], mcp: [], disabledMcp: [] } })
 })
 
 test("rejects unknown commands and invalid arguments", () => {

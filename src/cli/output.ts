@@ -1,4 +1,5 @@
 import type { Diagnostic, DiagnosticReport } from "../diagnostics/diagnostics"
+import type { MainAgentRunResult } from "../agent/agent"
 
 export interface JsonVersionOutput {
   name: "oc2"
@@ -59,7 +60,7 @@ export function formatRunHelp(): string {
   return [
     "Usage: oc2 run <prompt> [--json] [--model <provider/model>] [--tool <name>] [--no-tool <name>] [--mcp <id>] [--no-mcp <id>]",
     "",
-    "Run a one-shot prompt. Model execution is implemented in PR 8.",
+    "Run a one-shot prompt through the main agent.",
     "",
     "Options:",
     "  --json                 Emit JSON output",
@@ -71,6 +72,27 @@ export function formatRunHelp(): string {
     "  --help                 Show this help",
     "",
   ].join("\n")
+}
+
+export interface JsonRunOutput {
+  readonly sessionId: string
+  readonly finalAssistantText: string
+  readonly toolCalls: MainAgentRunResult["toolCalls"]
+  readonly errors: MainAgentRunResult["errors"]
+  readonly usage: MainAgentRunResult["usage"]
+  readonly exitStatus: MainAgentRunResult["status"]
+}
+
+/** Projects an agent run result into the stable non-interactive JSON shape. */
+export function formatRunJson(result: MainAgentRunResult): JsonRunOutput {
+  return {
+    sessionId: result.sessionId,
+    finalAssistantText: result.text,
+    toolCalls: result.toolCalls,
+    errors: result.errors,
+    usage: result.usage,
+    exitStatus: result.status,
+  }
 }
 
 function countDiagnostics(diagnostics: Diagnostic[]) {
