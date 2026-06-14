@@ -193,10 +193,10 @@ function fakeClient(
       throw new Error("not implemented")
     },
     async listPrompts(_signal: AbortSignal) {
-      throw new Error("not implemented")
+      return []
     },
     async getPrompt(_name: string, _args: Record<string, unknown>, _signal: AbortSignal) {
-      throw new Error("not implemented")
+      return { messages: [] }
     },
     onListChanged(_kind: string, _callback: () => void) {},
     onToolsChanged(_callback: () => void) {},
@@ -227,10 +227,10 @@ function mutableFakeClient(tools: McpToolInfo[]) {
       throw new Error("not implemented")
     },
     async listPrompts(_signal: AbortSignal) {
-      throw new Error("not implemented")
+      return []
     },
     async getPrompt(_name: string, _args: Record<string, unknown>, _signal: AbortSignal) {
-      throw new Error("not implemented")
+      return { messages: [] }
     },
     onListChanged(kind, callback) {
       changed.set(kind, callback)

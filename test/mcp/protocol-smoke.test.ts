@@ -163,7 +163,7 @@ test("request cancellation via AbortSignal", async () => {
   }
 }, 15_000)
 
-test("new methods throw not implemented until PR 2", async () => {
+test("resources/list returns normalized McpResourceInfo array", async () => {
   const client = (await createMcpClient(stdioServer())) as McpClient
   const controller = new AbortController()
   try {
@@ -171,10 +171,61 @@ test("new methods throw not implemented until PR 2", async () => {
       { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "oc2-smoke" } },
       controller.signal,
     )
-    await expect(client.listResources(controller.signal)).rejects.toThrow("not implemented")
-    await expect(client.readResource("fake", controller.signal)).rejects.toThrow("not implemented")
-    await expect(client.listPrompts(controller.signal)).rejects.toThrow("not implemented")
-    await expect(client.getPrompt("fake", {}, controller.signal)).rejects.toThrow("not implemented")
+    const resources = await client.listResources(controller.signal)
+    expect(Array.isArray(resources)).toBe(true)
+    expect(resources.length).toBeGreaterThanOrEqual(1)
+    expect(resources[0]?.name).toBeDefined()
+    expect(resources[0]?.uri).toBeDefined()
+  } finally {
+    await client.close()
+  }
+}, 15_000)
+
+test("resources/read returns structured result", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  try {
+    await client.initialize(
+      { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "oc2-smoke" } },
+      controller.signal,
+    )
+    const result = await client.readResource("file:///tmp/fixture-readme.md", controller.signal)
+    expect(result).toBeDefined()
+    expect(Array.isArray(result.contents)).toBe(true)
+    expect(result.contents.length).toBeGreaterThanOrEqual(1)
+  } finally {
+    await client.close()
+  }
+}, 15_000)
+
+test("prompts/list returns normalized McpPromptInfo array", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  try {
+    await client.initialize(
+      { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "oc2-smoke" } },
+      controller.signal,
+    )
+    const prompts = await client.listPrompts(controller.signal)
+    expect(Array.isArray(prompts)).toBe(true)
+    expect(prompts.length).toBeGreaterThanOrEqual(1)
+    expect(prompts[0]?.name).toBeDefined()
+  } finally {
+    await client.close()
+  }
+}, 15_000)
+
+test("prompts/get returns structured result", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  try {
+    await client.initialize(
+      { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "oc2-smoke" } },
+      controller.signal,
+    )
+    const result = await client.getPrompt("fixture-greeting", { name: "test" }, controller.signal)
+    expect(result).toBeDefined()
+    expect(Array.isArray(result.messages)).toBe(true)
   } finally {
     await client.close()
   }

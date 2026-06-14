@@ -104,17 +104,17 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     async callTool(name, input, signal) {
       return normalizeCallResult(await request("tools/call", { name, arguments: input }, signal))
     },
-    async listResources() {
-      throw new Error("not implemented")
+    async listResources(signal) {
+      return normalizeResources(await request("resources/list", undefined, signal))
     },
-    async readResource() {
-      throw new Error("not implemented")
+    async readResource(uri, signal) {
+      return normalizeResourceReadResult(await request("resources/read", { uri }, signal))
     },
-    async listPrompts() {
-      throw new Error("not implemented")
+    async listPrompts(signal) {
+      return normalizePrompts(await request("prompts/list", undefined, signal))
     },
-    async getPrompt() {
-      throw new Error("not implemented")
+    async getPrompt(name, args, signal) {
+      return normalizePromptResult(await request("prompts/get", { name, arguments: args }, signal))
     },
     onListChanged(kind, callback) {
       changed.set(kind, callback)
@@ -206,17 +206,17 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
     async callTool(name, input, signal) {
       return normalizeCallResult(await request("tools/call", { name, arguments: input }, signal))
     },
-    async listResources() {
-      throw new Error("not implemented")
+    async listResources(signal) {
+      return normalizeResources(await request("resources/list", undefined, signal))
     },
-    async readResource() {
-      throw new Error("not implemented")
+    async readResource(uri, signal) {
+      return normalizeResourceReadResult(await request("resources/read", { uri }, signal))
     },
-    async listPrompts() {
-      throw new Error("not implemented")
+    async listPrompts(signal) {
+      return normalizePrompts(await request("prompts/list", undefined, signal))
     },
-    async getPrompt() {
-      throw new Error("not implemented")
+    async getPrompt(name, args, signal) {
+      return normalizePromptResult(await request("prompts/get", { name, arguments: args }, signal))
     },
     onListChanged(kind, callback) {
       changed.set(kind, callback)
@@ -292,6 +292,59 @@ function normalizeTools(value: unknown): readonly McpToolInfo[] {
 function normalizeCallResult(value: unknown): McpCallResult {
   if (!isRecord(value)) return { content: value }
   return { content: value.content, structuredContent: value.structuredContent, isError: value.isError === true }
+}
+
+function normalizeResources(value: unknown): readonly McpResourceInfo[] {
+  const resources = isRecord(value) && Array.isArray(value.resources) ? value.resources : []
+  return resources.filter(isRecord).map((resource) => ({
+    name: String(resource.name ?? ""),
+    uri: String(resource.uri ?? ""),
+    description: typeof resource.description === "string" ? resource.description : undefined,
+    mimeType: typeof resource.mimeType === "string" ? resource.mimeType : undefined,
+  }))
+}
+
+function normalizeResourceReadResult(value: unknown): McpResourceReadResult {
+  if (!isRecord(value)) return { contents: [] }
+  const contents = Array.isArray(value.contents) ? value.contents : []
+  return {
+    contents: contents.filter(isRecord).map((c) => ({
+      uri: String(c.uri ?? ""),
+      mimeType: typeof c.mimeType === "string" ? c.mimeType : undefined,
+      text: typeof c.text === "string" ? c.text : undefined,
+      blob: typeof c.blob === "string" ? c.blob : undefined,
+    })),
+  }
+}
+
+function normalizePrompts(value: unknown): readonly McpPromptInfo[] {
+  const prompts = isRecord(value) && Array.isArray(value.prompts) ? value.prompts : []
+  return prompts.filter(isRecord).map((prompt) => ({
+    name: String(prompt.name ?? ""),
+    description: typeof prompt.description === "string" ? prompt.description : undefined,
+    arguments: Array.isArray(prompt.arguments)
+      ? (prompt.arguments as Record<string, unknown>[]).filter(isRecord).map((arg) => ({
+          name: String(arg.name ?? ""),
+          description: typeof arg.description === "string" ? arg.description : undefined,
+          required: arg.required === true ? true : undefined,
+        }))
+      : undefined,
+  }))
+}
+
+function normalizePromptResult(value: unknown): McpPromptResult {
+  if (!isRecord(value)) return { messages: [] }
+  return {
+    description: typeof value.description === "string" ? value.description : undefined,
+    messages: Array.isArray(value.messages)
+      ? (value.messages as Record<string, unknown>[]).filter(isRecord).map((m) => ({
+          role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+          content: isRecord(m.content)
+            ? (m.content as unknown as McpPromptResult["messages"][number]["content"])
+            : { type: "text", text: String(m.content ?? "") },
+        }))
+      : [],
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

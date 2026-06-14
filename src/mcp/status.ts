@@ -13,10 +13,11 @@ export interface McpServerStatus {
   readonly status: McpServerStatusName
   readonly toolCount: number
   readonly tools: readonly string[]
+  readonly resourceCount?: number
+  readonly promptCount?: number
   readonly error?: RuntimeErrorShape
 }
 
-/** Returns an initial status record for an MCP server before any network or process IO occurs. */
 export function createMcpStatus(serverId: string, status: McpServerStatusName): McpServerStatus {
   return { serverId, status, toolCount: 0, tools: [] }
 }

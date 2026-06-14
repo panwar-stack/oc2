@@ -10,6 +10,7 @@ import { listMcpServers, type ResolvedMcpServerConfig } from "./config"
 import { requiresDeferredOAuth } from "./auth"
 import { MCP_PROTOCOL_VERSION } from "./protocol"
 import { materializeMcpTool } from "./tools"
+import { createResourceListTool, createResourceReadTool, createPromptListTool, createPromptGetTool } from "./meta-tools"
 import { createMcpStatus, type McpServerStatus, type McpToolInfo } from "./status"
 
 export interface McpServiceOptions {
@@ -83,11 +84,28 @@ export function createMcpService(options: McpServiceOptions): McpService {
   const refreshTools = async (state: ServerState, client: McpClient, signal: AbortSignal) => {
     const tools = await client.listTools(signal)
     registerTools(options.registry, state, client, tools)
+    let resourceCount: number | undefined
+    let promptCount: number | undefined
+    try {
+      const resources = await client.listResources(signal)
+      resourceCount = resources.length
+      registerMetaTools(options.registry, state, client)
+    } catch {
+      resourceCount = undefined
+    }
+    try {
+      const prompts = await client.listPrompts(signal)
+      promptCount = prompts.length
+    } catch {
+      promptCount = undefined
+    }
     setStatus(state, {
       serverId: state.server.id,
       status: "connected",
       toolCount: tools.length,
       tools: state.toolNames,
+      resourceCount,
+      promptCount,
     })
   }
 
@@ -173,6 +191,19 @@ function registerTools(registry: ToolRegistry, state: ServerState, client: McpCl
     })
     registry.register(definition)
     state.toolNames.push(definition.name)
+  }
+}
+
+function registerMetaTools(registry: ToolRegistry, state: ServerState, client: McpClient) {
+  const definitions = [
+    createResourceListTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
+    createResourceReadTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
+    createPromptListTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
+    createPromptGetTool({ serverId: state.server.id, client, timeoutMs: state.server.startupTimeoutMs }),
+  ]
+  for (const def of definitions) {
+    registry.register(def)
+    state.toolNames.push(def.name)
   }
 }
 
