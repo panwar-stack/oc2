@@ -71,6 +71,9 @@ export interface TuiMcpServerView {
   readonly tools: readonly string[]
   readonly authRequired: boolean
   readonly error?: string
+  readonly resourceCount?: number
+  readonly promptCount?: number
+  readonly authUrl?: string
 }
 
 export interface TuiPermissionView {
@@ -379,6 +382,9 @@ export const projectTuiEvent: RuntimeEventProjector<TuiState> = (state, event) =
           tools: payload.tools ?? [],
           authRequired: payload.authRequired ?? payload.status === "auth_required",
           error: payload.error?.message,
+          resourceCount: payload.resourceCount,
+          promptCount: payload.promptCount,
+          authUrl: payload.authUrl,
         }),
       }
     }

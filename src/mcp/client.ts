@@ -11,6 +11,7 @@ import {
   type McpResourceReadResult,
   LIST_CHANGED_METHODS,
 } from "./protocol"
+import { StdioTransport, HttpTransport, type McpTransport } from "./transport"
 
 export interface McpCallResult {
   readonly content?: unknown
@@ -20,8 +21,16 @@ export interface McpCallResult {
 
 export interface McpHostHandlers {
   rootsList?(signal: AbortSignal): Promise<readonly { uri: string; name?: string }[]>
-  samplingCreateMessage?(params: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>>
-  elicitationCreate?(params: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>>
+  samplingCreateMessage?(
+    serverId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>>
+  elicitationCreate?(
+    serverId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>>
 }
 
 export interface McpClient {
@@ -40,6 +49,19 @@ export interface McpClient {
 
 export type McpClientFactory = (server: ResolvedMcpServerConfig) => Promise<McpClient> | McpClient
 
+export class McpJsonRpcError extends Error {
+  readonly code: number
+  readonly data?: unknown
+  readonly isMcpError = true
+
+  constructor(code: number, message: string, data?: unknown) {
+    super(message)
+    this.name = "McpJsonRpcError"
+    this.code = code
+    this.data = data
+  }
+}
+
 export class McpAuthRequiredError extends Error {
   override readonly name = "McpAuthRequiredError"
   readonly metadataUrl?: string
@@ -48,6 +70,10 @@ export class McpAuthRequiredError extends Error {
     super(message)
     this.metadataUrl = metadataUrl
   }
+}
+
+export function redactMcpError(error: McpJsonRpcError): string {
+  return `MCP error ${error.code}: ${error.message}`
 }
 
 interface JsonRpcResponse {
@@ -66,46 +92,63 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
   let id = 0
   const endpoint = server.url ?? ""
   const changed = new Map<ListChangedKind, () => void>()
-  let events:
-    | { addEventListener(type: string, listener: (event: { data: string }) => void): void; close(): void }
-    | undefined
+
+  const transport: McpTransport = new HttpTransport({
+    url: endpoint,
+    headers: server.headers,
+    transport: server.transport as "http" | "sse",
+  })
+
+  void transport.start()
+
+  transport.onMessage((message) => {
+    const method = message.method as string | undefined
+    if (method === "notifications/tools/list_changed") {
+      changed.get("tools")?.()
+    }
+  })
 
   const request = async (method: string, params: Record<string, unknown> | undefined, signal: AbortSignal) => {
-    const headers: Record<string, string> = { "content-type": "application/json", ...server.headers }
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
-      signal,
-    })
-    if (response.status === 401 || response.status === 403) {
-      const authHeader = response.headers.get("www-authenticate")
-      const metadataUrl = extractResourceMetadata(authHeader)
-      if (metadataUrl) {
-        throw new McpAuthRequiredError(`MCP server requires authentication`, metadataUrl)
-      }
-      throw new McpAuthRequiredError("MCP server requires authentication")
-    }
-    if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
-    return unwrapResponse((await response.json()) as JsonRpcResponse)
-  }
+    if (signal.aborted) throw new Error("MCP request cancelled")
+    const requestId = ++id
+    let sent = true
 
-  const setupSse = () => {
-    events?.close()
-    if (server.transport !== "sse") return
-    const EventSourceCtor = (
-      globalThis as unknown as {
-        EventSource?: new (url: string) => {
-          addEventListener(type: string, listener: (event: { data: string }) => void): void
-          close(): void
-        }
+    const onAbort = () => {
+      if (sent) {
+        transport
+          .send({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId, reason: "Cancelled" },
+          })
+          .catch(() => undefined)
       }
-    ).EventSource
-    if (!EventSourceCtor) return
-    events = new EventSourceCtor(endpoint)
-    events.addEventListener("message", (event) => {
-      if (isToolListChangedNotification(event.data)) changed.get("tools")?.()
-    })
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+
+    try {
+      const authHeaders = server.tokenProvider ? await server.tokenProvider() : {}
+      const headers: Record<string, string> = { "content-type": "application/json", ...authHeaders, ...server.headers }
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }),
+        signal,
+      })
+      sent = false
+      if (response.status === 401 || response.status === 403) {
+        const authHeader = response.headers.get("www-authenticate")
+        const metadataUrl = extractResourceMetadata(authHeader)
+        if (metadataUrl) {
+          throw new McpAuthRequiredError(`MCP server requires authentication`, metadataUrl)
+        }
+        throw new McpAuthRequiredError("MCP server requires authentication")
+      }
+      if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
+      return unwrapResponse((await response.json()) as JsonRpcResponse)
+    } finally {
+      signal.removeEventListener("abort", onAbort)
+    }
   }
 
   return {
@@ -138,44 +181,45 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     },
     onListChanged(kind, callback) {
       changed.set(kind, callback)
-      if (kind === "tools") setupSse()
     },
     onToolsChanged(callback) {
       changed.set("tools", callback)
-      setupSse()
     },
     async close() {
-      events?.close()
+      await transport.close()
+      changed.clear()
     },
     setHostHandlers(_handlers: McpHostHandlers) {},
   }
 }
 
 function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
-  const process = Bun.spawn({
-    cmd: [server.command ?? "", ...server.args],
+  const transport = new StdioTransport({
+    command: server.command ?? "",
+    args: server.args,
     cwd: server.cwd,
-    env: { ...Bun.env, ...server.env },
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
+    env: server.env,
   })
+
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
   const changed = new Map<ListChangedKind, () => void>()
   let hostHandlers: McpHostHandlers = {}
   let id = 0
 
-  const handleServerRequest = (message: JsonRpcResponse, stdin: { write(input: string): void }) => {
-    const requestId = message.id
+  const handleServerRequest = (message: Record<string, unknown>) => {
+    const requestId = message.id as string | number | undefined
     if (requestId === undefined) return
-    const method = message.method
-    const params = (message as { params?: Record<string, unknown> }).params ?? {}
+    const method = message.method as string | undefined
+    const params = (message.params as Record<string, unknown>) ?? {}
+
     if (method === "roots/list") {
       const handler = hostHandlers.rootsList
       if (!handler) {
-        stdin.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "roots/list not supported" } })}\n`,
-        )
+        transport.send({
+          jsonrpc: "2.0",
+          id: requestId,
+          error: { code: -32601, message: "roots/list not supported" },
+        })
         return
       }
       void handler(new AbortController().signal).then(
@@ -184,75 +228,100 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
             const uri = r.uri.includes("://") ? r.uri : `file://${r.uri}`
             return { uri, name: r.name }
           })
-          stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result: { roots: resultRoots } })}\n`)
+          transport.send({ jsonrpc: "2.0", id: requestId, result: { roots: resultRoots } })
         },
         (err) => {
-          stdin.write(
-            `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } })}\n`,
-          )
+          transport.send({
+            jsonrpc: "2.0",
+            id: requestId,
+            error: {
+              code: -32603,
+              message: err instanceof Error ? err.message : String(err),
+            },
+          })
         },
       )
       return
     }
+
     if (method === "sampling/createMessage") {
       const handler = hostHandlers.samplingCreateMessage
       if (!handler) {
-        stdin.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "sampling/createMessage not supported" } })}\n`,
-        )
+        transport.send({
+          jsonrpc: "2.0",
+          id: requestId,
+          error: { code: -32601, message: "sampling/createMessage not supported" },
+        })
         return
       }
-      void handler(params, new AbortController().signal).then(
+      void handler("", params, new AbortController().signal).then(
         (result) => {
-          stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result })}\n`)
+          transport.send({ jsonrpc: "2.0", id: requestId, result })
         },
         (err) => {
-          stdin.write(
-            `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } })}\n`,
-          )
+          transport.send({
+            jsonrpc: "2.0",
+            id: requestId,
+            error: {
+              code: -32603,
+              message: err instanceof Error ? err.message : String(err),
+            },
+          })
         },
       )
       return
     }
+
     if (method === "elicitation/create") {
       const handler = hostHandlers.elicitationCreate
       if (!handler) {
-        stdin.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "elicitation/create not supported" } })}\n`,
-        )
+        transport.send({
+          jsonrpc: "2.0",
+          id: requestId,
+          error: { code: -32601, message: "elicitation/create not supported" },
+        })
         return
       }
-      void handler(params, new AbortController().signal).then(
+      void handler("", params, new AbortController().signal).then(
         (result) => {
-          stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result })}\n`)
+          transport.send({ jsonrpc: "2.0", id: requestId, result })
         },
         (err) => {
-          stdin.write(
-            `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } })}\n`,
-          )
+          transport.send({
+            jsonrpc: "2.0",
+            id: requestId,
+            error: {
+              code: -32603,
+              message: err instanceof Error ? err.message : String(err),
+            },
+          })
         },
       )
       return
     }
-    stdin.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: requestId, error: { code: -32601, message: "Method not found" } })}\n`,
-    )
+
+    transport.send({
+      jsonrpc: "2.0",
+      id: requestId,
+      error: { code: -32601, message: "Method not found" },
+    })
   }
 
-  void readJsonLines(process.stdout, (message) => {
-    if (message.method === LIST_CHANGED_METHODS.tools) {
+  transport.onMessage((message) => {
+    const method = message.method as string | undefined
+    if (method === LIST_CHANGED_METHODS.tools) {
       changed.get("tools")?.()
       return
     }
-    if (message.method === LIST_CHANGED_METHODS.resources) {
+    if (method === LIST_CHANGED_METHODS.resources) {
       changed.get("resources")?.()
       return
     }
-    if (message.method === LIST_CHANGED_METHODS.prompts) {
+    if (method === LIST_CHANGED_METHODS.prompts) {
       changed.get("prompts")?.()
       return
     }
-    if (message.method === LIST_CHANGED_METHODS.roots) {
+    if (method === LIST_CHANGED_METHODS.roots) {
       changed.get("roots")?.()
       return
     }
@@ -260,16 +329,22 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
     const key = Number(message.id)
     const waiter = pending.get(key)
     if (!waiter) {
-      handleServerRequest(message, process.stdin)
+      handleServerRequest(message)
       return
     }
     pending.delete(key)
     try {
-      waiter.resolve(unwrapResponse(message))
+      waiter.resolve(unwrapResponse(message as unknown as JsonRpcResponse))
     } catch (error) {
       waiter.reject(error instanceof Error ? error : new Error(String(error)))
     }
-  }).catch((error) => rejectPending(pending, error instanceof Error ? error : new Error(String(error))))
+  })
+
+  transport.onError((error) => {
+    rejectPending(pending, error)
+  })
+
+  void transport.start()
 
   const request = async (method: string, params: Record<string, unknown> | undefined, signal: AbortSignal) => {
     if (signal.aborted) throw new Error("MCP request cancelled")
@@ -279,13 +354,21 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
       signal.addEventListener(
         "abort",
         () => {
-          pending.delete(requestId)
+          if (pending.delete(requestId)) {
+            transport
+              .send({
+                jsonrpc: "2.0",
+                method: "notifications/cancelled",
+                params: { requestId, reason: "Cancelled" },
+              })
+              .catch(() => undefined)
+          }
           reject(new Error("MCP request cancelled"))
         },
         { once: true },
       )
     })
-    process.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`)
+    transport.send({ jsonrpc: "2.0", id: requestId, method, params })
     return result
   }
 
@@ -296,7 +379,7 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
         { protocolVersion: input.protocolVersion, capabilities: input.capabilities, clientInfo: input.clientInfo },
         signal,
       )
-      process.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
+      transport.send({ jsonrpc: "2.0", method: "notifications/initialized" })
       return normalizeInitializeResult(result)
     },
     async listTools(signal) {
@@ -324,9 +407,19 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
       changed.set("tools", callback)
     },
     async close() {
-      process.stdin.end()
-      process.kill()
-      await process.exited.catch(() => undefined)
+      for (const [requestId, waiter] of pending) {
+        pending.delete(requestId)
+        transport
+          .send({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId, reason: "Client closed" },
+          })
+          .catch(() => undefined)
+        waiter.reject(new Error("MCP client closed"))
+      }
+      await transport.close()
+      changed.clear()
     },
     setHostHandlers(handlers: McpHostHandlers) {
       hostHandlers = handlers
@@ -334,7 +427,10 @@ function createStdioClient(server: ResolvedMcpServerConfig): McpClient {
   }
 }
 
-async function readJsonLines(stream: ReadableStream<Uint8Array>, onMessage: (message: JsonRpcResponse) => void) {
+export async function readJsonLines(
+  stream: ReadableStream<Uint8Array>,
+  onMessage: (message: JsonRpcResponse) => void,
+): Promise<void> {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
@@ -378,7 +474,9 @@ function isToolListChangedNotification(value: string): boolean {
 }
 
 function unwrapResponse(response: JsonRpcResponse): unknown {
-  if (response.error) throw new Error(response.error.message ?? `MCP error ${response.error.code ?? "unknown"}`)
+  if (response.error) {
+    throw new McpJsonRpcError(response.error.code ?? -32603, response.error.message ?? "MCP error", response.error.data)
+  }
   return response.result
 }
 

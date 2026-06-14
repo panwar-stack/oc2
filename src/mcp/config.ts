@@ -4,6 +4,7 @@ export type McpServerConfig = Oc2Config["mcp"][string]
 
 export interface ResolvedMcpServerConfig extends McpServerConfig {
   readonly id: string
+  readonly tokenProvider?: () => Promise<Record<string, string>>
 }
 
 /** Projects the configured MCP record into stable server entries with canonical ids. */

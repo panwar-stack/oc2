@@ -1,4 +1,4 @@
-> Reference note: this is upstream MCP background material kept for local reference. `oc2` does not ship the full browser OAuth callback flow in this release slice; OAuth-required MCP servers are surfaced as `auth_required` as documented in `docs/mcp.md`.
+> Reference note: this is upstream MCP background material kept for local reference. `oc2` ships full OAuth 2.1 PKCE authorization flow for remote HTTP servers as documented in `docs/mcp.md`.
 
 > ## Documentation Index
 >

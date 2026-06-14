@@ -61,7 +61,7 @@ Discovered tools are registered as `mcp_<server>_<tool>`. Invocation uses the no
 
 ## Auth-Required Servers
 
-OAuth config is recognized so a server can be marked auth-aware, but the full browser OAuth callback flow is deferred. OAuth-required servers report `auth_required` instead of completing an interactive login flow.
+Remote `http` and `sse` servers with OAuth enabled use OAuth 2.1 authorization-code-with-PKCE. The client discovers protected resource metadata and authorization server metadata, registers dynamically when needed, generates PKCE challenge/state, opens a local callback listener, exchanges the authorization code for tokens, refreshes expired tokens, and retries bearer requests once. Tokens are stored under the local data directory and are redacted from logs, events, and snapshots.
 
 ```jsonc
 {
@@ -78,6 +78,55 @@ OAuth config is recognized so a server can be marked auth-aware, but the full br
         "callbackPort": 7331,
         "scopes": ["tools"],
       },
+    },
+  },
+}
+```
+
+## Config Examples
+
+### Stdio server
+
+```jsonc
+{
+  "mcp": {
+    "my-server": {
+      "enabled": true,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+    },
+  },
+}
+```
+
+### Remote HTTP server with OAuth
+
+```jsonc
+{
+  "mcp": {
+    "remote-server": {
+      "enabled": true,
+      "transport": "http",
+      "url": "https://mcp-server.example.com",
+      "oauth": {
+        "enabled": true,
+        "clientId": "your-client-id",
+        "scopes": ["read", "write"],
+        "callbackPort": 9876,
+      },
+    },
+  },
+}
+```
+
+### Permission rules
+
+```jsonc
+{
+  "tools": {
+    "mcp_my-server_search": {
+      "permissions": [{ "match": "mcp.invoke:my-server/search", "decision": "allow" }],
     },
   },
 }

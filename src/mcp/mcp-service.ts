@@ -14,6 +14,7 @@ import {
 } from "./client"
 import { listMcpServers, type ResolvedMcpServerConfig } from "./config"
 import { requiresDeferredOAuth } from "./auth"
+import { createOAuthManager } from "./auth-manager"
 import { MCP_PROTOCOL_VERSION } from "./protocol"
 import { materializeMcpTool } from "./tools"
 import { createResourceListTool, createResourceReadTool, createPromptListTool, createPromptGetTool } from "./meta-tools"
@@ -22,6 +23,7 @@ import { createMcpStatus, type McpServerStatus, type McpToolInfo } from "./statu
 export interface McpServiceOptions {
   readonly config: Pick<Oc2Config, "mcp" | "runtime">
   readonly registry: ToolRegistry
+  readonly dataDir?: string
   readonly events?: RuntimeEventBus<unknown>
   readonly scheduler?: TaskScheduler
   readonly snapshots?: McpSnapshotRepository
@@ -93,10 +95,10 @@ export function createMcpService(options: McpServiceOptions): McpService {
     registerTools(options.registry, state, client, tools)
     let resourceCount: number | undefined
     let promptCount: number | undefined
+    registerMetaTools(options.registry, state, client)
     try {
       const resources = await client.listResources(signal)
       resourceCount = resources.length
-      registerMetaTools(options.registry, state, client)
     } catch {
       resourceCount = undefined
     }
@@ -116,6 +118,21 @@ export function createMcpService(options: McpServiceOptions): McpService {
     })
   }
 
+  const wireListChanged = (state: ServerState, client: McpClient) => {
+    client.onToolsChanged(() => {
+      const refreshController = new AbortController()
+      void refreshTools(state, client, refreshController.signal).catch((error) =>
+        setStatus(state, failedStatus(state.server.id, error)),
+      )
+    })
+    client.onListChanged("resources", () => {
+      setStatus(state, { ...state.status, resourceCount: undefined })
+    })
+    client.onListChanged("prompts", () => {
+      setStatus(state, { ...state.status, promptCount: undefined })
+    })
+  }
+
   const start = async (serverId: string, signal: AbortSignal): Promise<McpServerStatus> => {
     const state = states.get(serverId)
     if (!state)
@@ -125,6 +142,54 @@ export function createMcpService(options: McpServiceOptions): McpService {
       return state.status
     }
     if (requiresDeferredOAuth(state.server)) {
+      if (options.dataDir) {
+        const oauth = createOAuthManager(state.server, options.dataDir)
+        const oauthStatus = await oauth.initFlow(signal)
+        if (oauthStatus.state === "authenticated") {
+          // OAuth is already authenticated - create client with token provider
+          const serverWithToken: ResolvedMcpServerConfig = {
+            ...state.server,
+            tokenProvider: async () => {
+              try {
+                return await oauth.getAuthHeaders()
+              } catch {
+                return {}
+              }
+            },
+          }
+          const client = await (options.clientFactory ?? createMcpClient)(serverWithToken)
+          state.client = client
+          if (options.hostHandlers) {
+            client.setHostHandlers(options.hostHandlers)
+          }
+          wireListChanged(state, client)
+          await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
+            const capabilities: Record<string, unknown> = {}
+            if (options.hostHandlers?.rootsList) capabilities.roots = { listChanged: true }
+            if (options.hostHandlers?.samplingCreateMessage) capabilities.sampling = {}
+            if (options.hostHandlers?.elicitationCreate) capabilities.elicitation = {}
+            await client.initialize(
+              { protocolVersion: MCP_PROTOCOL_VERSION, capabilities, clientInfo: { name: "oc2" } },
+              timeoutSignal,
+            )
+            await refreshTools(state, client, timeoutSignal)
+          })
+          return state.status
+        }
+        if (oauthStatus.state === "callback_pending") {
+          setStatus(state, {
+            ...createMcpStatus(serverId, "auth_required"),
+            authUrl: oauthStatus.authUrl,
+          })
+          return state.status
+        }
+        if (oauthStatus.state === "refresh_failed") {
+          setStatus(state, createMcpStatus(serverId, "auth_required"))
+          return state.status
+        }
+        setStatus(state, createMcpStatus(serverId, "auth_required"))
+        return state.status
+      }
       setStatus(state, createMcpStatus(serverId, "auth_required"))
       return state.status
     }
@@ -136,12 +201,7 @@ export function createMcpService(options: McpServiceOptions): McpService {
       if (options.hostHandlers) {
         client.setHostHandlers(options.hostHandlers)
       }
-      client.onToolsChanged(() => {
-        const refreshController = new AbortController()
-        void refreshTools(state, client, refreshController.signal).catch((error) =>
-          setStatus(state, failedStatus(serverId, error)),
-        )
-      })
+      wireListChanged(state, client)
       await withTimeout(state.server.startupTimeoutMs, signal, async (timeoutSignal) => {
         const capabilities: Record<string, unknown> = {}
         if (options.hostHandlers?.rootsList) capabilities.roots = { listChanged: true }

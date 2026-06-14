@@ -167,6 +167,9 @@ export interface RuntimeEventMap {
     readonly toolCount?: number
     readonly tools?: readonly string[]
     readonly authRequired?: boolean
+    readonly resourceCount?: number
+    readonly promptCount?: number
+    readonly authUrl?: string
   }
   "scheduler.task.updated": {
     readonly taskId: string

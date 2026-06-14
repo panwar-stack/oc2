@@ -253,3 +253,19 @@ test("roots/list handler returns workspace roots when server requests", async ()
     await client.close()
   }
 }, 15_000)
+
+test("close() resolves cleanly after initialize", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  const controller = new AbortController()
+  await client.initialize(
+    { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "oc2-smoke" } },
+    controller.signal,
+  )
+  await expect(client.close()).resolves.toBeUndefined()
+}, 15_000)
+
+test("double close does not throw", async () => {
+  const client = (await createMcpClient(stdioServer())) as McpClient
+  await client.close()
+  await expect(client.close()).resolves.toBeUndefined()
+}, 15_000)

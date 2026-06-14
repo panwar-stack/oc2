@@ -121,6 +121,10 @@ function formatDiagnosticLine(diagnostic: Diagnostic): string {
 }
 
 function formatMcpStatusLine(server: McpServerStatus): string {
+  const parts = [server.serverId, server.status, `${server.toolCount} tools`]
+  if (server.resourceCount !== undefined) parts.push(`${server.resourceCount} resources`)
+  if (server.promptCount !== undefined) parts.push(`${server.promptCount} prompts`)
+  if (server.authUrl) parts.push(`auth: ${server.authUrl}`)
   const error = server.error ? `\t${redactText(server.error.message)}` : ""
-  return `${server.serverId}\t${server.status}\t${server.toolCount} tools${error}`
+  return parts.join("\t") + error
 }

@@ -6,7 +6,7 @@ import type { Oc2Config } from "../config/schema"
 import { createRuntimeEventBus, type RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
 import { createMcpService, createMcpToolConfigEntries } from "../mcp/mcp-service"
-import type { McpClientFactory } from "../mcp/client"
+import type { McpClientFactory, McpHostHandlers } from "../mcp/client"
 import { createModelService, type ModelService, type ModelServiceOptions } from "../model/model-service"
 import { openOc2Database, type Oc2Database } from "../persistence/db"
 import { RepositoryMemoryRepository } from "../persistence/repositories/memory"
@@ -59,6 +59,7 @@ export class SessionRunService {
   private readonly events: RuntimeEventBus<unknown>
   private readonly config: Oc2Config
   private readonly cwd: string
+  private readonly dataDir: string
   private readonly mcpClientFactory?: McpClientFactory
   private readonly resolveQuestion?: (input: unknown, signal: AbortSignal) => Promise<unknown>
   private readonly active = new Set<string>()
@@ -87,6 +88,7 @@ export class SessionRunService {
       createModelService({ providers: options.providers, scheduler: this.scheduler, events: this.events })
     this.config = options.config
     this.cwd = options.cwd
+    this.dataDir = options.dataDir ?? options.cwd
     this.mcpClientFactory = options.mcpClientFactory
     this.resolveQuestion = options.resolveQuestion
   }
@@ -132,12 +134,113 @@ export class SessionRunService {
       })
     }
     const runConfig = applyRunSelections(this.config, input)
+    let samplingActive = false
+    const hostHandlers: McpHostHandlers = {
+      rootsList: async (_signal: AbortSignal) => {
+        return session.workspaceRoots.map((root) => ({
+          uri: root.path.startsWith("/") ? `file://${root.path}` : `file:///${root.path}`,
+          name: root.label,
+        }))
+      },
+      samplingCreateMessage: async (serverId: string, params: Record<string, unknown>, signal: AbortSignal) => {
+        if (samplingActive) {
+          return {
+            model: "",
+            stopReason: "refusal",
+            role: "assistant",
+            content: { type: "text", text: "Recursive MCP sampling rejected" },
+          }
+        }
+
+        const samplingAction = `mcp.sampling:${serverId}`
+        const samplingPermission = runConfig.mcp?.[serverId]?.toolPermissions?.find(
+          (rule) => rule.match === samplingAction,
+        )
+        if (!samplingPermission || samplingPermission.decision !== "allow") {
+          return {
+            model: "",
+            stopReason: "refusal",
+            role: "assistant",
+            content: { type: "text", text: "Sampling permission not granted" },
+          }
+        }
+
+        samplingActive = true
+        try {
+          const messages = (params.messages as Array<{ role: string; content: unknown }>) ?? []
+          const modelMessages = messages.map((m) => ({
+            role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+            content:
+              typeof m.content === "object" && m.content !== null
+                ? (((m.content as Record<string, unknown>).text as string) ?? JSON.stringify(m.content))
+                : String(m.content),
+          }))
+
+          const maxTokens = typeof params.maxTokens === "number" ? params.maxTokens : undefined
+
+          const result = await this.models.collect(model.providerId, {
+            sessionId: session.id,
+            modelId: model.modelId,
+            messages: modelMessages,
+            tools: [],
+            maxTokens,
+            signal,
+          })
+
+          return {
+            model: model.modelId,
+            stopReason: "endTurn",
+            role: "assistant",
+            content: { type: "text", text: result.text },
+          }
+        } finally {
+          samplingActive = false
+        }
+      },
+      elicitationCreate: async (_serverId: string, params: Record<string, unknown>, signal: AbortSignal) => {
+        const message = typeof params.message === "string" ? params.message : String(params.message ?? "")
+        const header = "MCP Server Request"
+        const secretPatterns = ["password", "secret", "token", "api key", "credential", "private key", "passphrase"]
+        const isSecretRequest = secretPatterns.some((p) => message.toLowerCase().includes(p))
+        const fullHeader = isSecretRequest ? `${header} - SECURITY: This request may involve secrets` : header
+
+        const answer = this.resolveQuestion
+          ? await this.resolveQuestion(
+              {
+                question: message,
+                header: fullHeader,
+                options: [],
+              },
+              signal,
+            )
+          : undefined
+
+        if (answer === undefined || signal.aborted) {
+          return { action: "decline" }
+        }
+
+        const schema = params.requestedSchema as Record<string, unknown> | undefined
+        if (schema && typeof schema === "object") {
+          const validationError = validateAgainstSchema(answer, schema)
+          if (validationError) {
+            return {
+              action: "decline",
+              reason: `Schema validation failed: ${validationError}`,
+            }
+          }
+        }
+
+        return { action: "accept", content: answer }
+      },
+    }
     const mcp = createMcpService({
       config: runConfig,
       registry: this.registry,
       events: this.events,
       scheduler: this.scheduler,
       clientFactory: this.mcpClientFactory,
+      hostHandlers,
+      dataDir: this.dataDir,
     })
     const mcpStatuses = await mcp.startEnabled(input.signal)
     const agentConfig = {
@@ -244,4 +347,36 @@ function applyRunSelections(config: Oc2Config, input: RunPromptInput): Oc2Config
   }
 
   return { ...config, tools, mcp }
+}
+
+function validateAgainstSchema(value: unknown, schema: Record<string, unknown>): string | undefined {
+  if (schema.type === "object" && typeof value === "object" && value !== null) {
+    const required = Array.isArray(schema.required) ? (schema.required as string[]) : []
+    const properties = schema.properties as Record<string, unknown> | undefined
+    for (const key of required) {
+      if (!(key in (value as Record<string, unknown>))) return `missing required field: ${key}`
+    }
+    if (properties) {
+      for (const [key, propSchema] of Object.entries(properties)) {
+        if (key in (value as Record<string, unknown>)) {
+          const propResult = validateField(
+            (value as Record<string, unknown>)[key],
+            propSchema as Record<string, unknown>,
+          )
+          if (propResult) return `field "${key}": ${propResult}`
+        }
+      }
+    }
+    return undefined
+  }
+  return validateField(value, schema)
+}
+
+function validateField(value: unknown, schema: Record<string, unknown>): string | undefined {
+  const type = schema.type as string | undefined
+  if (type === "string" && typeof value !== "string") return "expected string"
+  if (type === "number" && typeof value !== "number") return "expected number"
+  if (type === "boolean" && typeof value !== "boolean") return "expected boolean"
+  if (type === "integer" && (typeof value !== "number" || !Number.isInteger(value))) return "expected integer"
+  return undefined
 }

@@ -42,6 +42,7 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   readonly permission?: {
     readonly action: string
     resource(input: TInput, context: ToolContext): string
+    readonly defaultDecision?: ToolPermissionDecision
   }
   readonly timeoutMs?: number
   execute(input: TInput, context: ToolContext): Promise<TOutput> | TOutput

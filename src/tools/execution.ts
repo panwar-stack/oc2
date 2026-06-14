@@ -81,6 +81,7 @@ export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor =
           createToolPermissionService({
             events: options.events,
             rules: configRules,
+            defaultDecision: tool.permission.defaultDecision,
             resolver: options.permissions
               ? async (permissionRequest, signal) => options.permissions?.decide(permissionRequest, signal) ?? "deny"
               : undefined,

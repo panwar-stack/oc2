@@ -38,6 +38,7 @@ export function createResourceReadTool(input: {
     permission: {
       action: "mcp.resource",
       resource: (args) => `${input.serverId}/${args.uri}`,
+      defaultDecision: "deny",
     },
     timeoutMs: input.timeoutMs,
     async execute(args, context) {
@@ -89,6 +90,7 @@ export function createPromptGetTool(input: {
     permission: {
       action: "mcp.prompt",
       resource: (args) => `${input.serverId}/${args.name}`,
+      defaultDecision: "deny",
     },
     timeoutMs: input.timeoutMs,
     async execute(args, context) {

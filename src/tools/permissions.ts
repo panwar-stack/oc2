@@ -24,13 +24,15 @@ export interface ToolPermissionService {
 }
 
 /** Builds a permission service that combines configured rules with optionally remembered decisions. */
-export const createToolPermissionService = (options: ToolPermissionServiceOptions = {}): ToolPermissionService => {
+export const createToolPermissionService = (
+  options: ToolPermissionServiceOptions & { defaultDecision?: ToolPermissionDecision } = {},
+): ToolPermissionService => {
   const savedRules: ToolPermissionRule[] = []
 
   return {
     async decide(request, signal) {
       const configured = findDecision([...(options.rules ?? []), ...savedRules], request)
-      const decision = configured ?? "allow"
+      const decision = configured ?? options.defaultDecision ?? "allow"
       if (decision !== "ask") return decision
 
       const permissionId = crypto.randomUUID()

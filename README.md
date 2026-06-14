@@ -157,26 +157,26 @@ MCP servers use the canonical `oc2` config shape. Enabled servers start before o
 
 ### MCP Protocol Support Matrix
 
-| Feature                                 | Stdio | HTTP    | SSE     | Tested  |
-| --------------------------------------- | ----- | ------- | ------- | ------- |
-| `initialize` with capabilities          | yes   | yes     | yes     | yes     |
-| `tools/list` + `tools/call`             | yes   | yes     | yes     | yes     |
-| `resources/list` + `resources/read`     | yes   | yes     | yes     | yes     |
-| `prompts/list` + `prompts/get`          | yes   | yes     | yes     | yes     |
-| `notifications/tools/list_changed`      | yes   | yes     | yes     | yes     |
-| `notifications/resources/list_changed`  | yes   | —       | —       | yes     |
-| `notifications/prompts/list_changed`    | yes   | —       | —       | yes     |
-| `roots/list` (host handler)             | yes   | —       | —       | yes     |
-| `sampling/createMessage` (host handler) | yes   | —       | —       | stubbed |
-| `elicitation/create` (host handler)     | yes   | —       | —       | stubbed |
-| JSON-RPC error normalization            | yes   | yes     | yes     | yes     |
-| Request cancellation (AbortSignal)      | yes   | yes     | yes     | yes     |
-| Malformed output resilience             | yes   | yes     | —       | yes     |
-| OAuth 2.1 PRM discovery                 | —     | yes     | yes     | yes     |
-| OAuth 2.1 PKCE + token exchange         | —     | yes     | —       | stubbed |
-| Bearer token request retry              | —     | stubbed | stubbed | stubbed |
+| Feature                                 | Stdio | HTTP | SSE | Tested |
+| --------------------------------------- | ----- | ---- | --- | ------ |
+| `initialize` with capabilities          | yes   | yes  | yes | yes    |
+| `tools/list` + `tools/call`             | yes   | yes  | yes | yes    |
+| `resources/list` + `resources/read`     | yes   | yes  | yes | yes    |
+| `prompts/list` + `prompts/get`          | yes   | yes  | yes | yes    |
+| `notifications/tools/list_changed`      | yes   | yes  | yes | yes    |
+| `notifications/resources/list_changed`  | yes   | yes  | yes | yes    |
+| `notifications/prompts/list_changed`    | yes   | yes  | yes | yes    |
+| `roots/list` (host handler)             | yes   | —    | —   | yes    |
+| `sampling/createMessage` (host handler) | yes   | —    | —   | yes    |
+| `elicitation/create` (host handler)     | yes   | —    | —   | yes    |
+| JSON-RPC error normalization            | yes   | yes  | yes | yes    |
+| Request cancellation (AbortSignal)      | yes   | yes  | yes | yes    |
+| Malformed output resilience             | yes   | yes  | —   | yes    |
+| OAuth 2.1 PRM discovery                 | —     | yes  | yes | yes    |
+| OAuth 2.1 PKCE + token exchange         | —     | yes  | —   | yes    |
+| Bearer token request retry              | —     | yes  | —   | yes    |
 
-Stdio servers communicate over subprocess pipes with line-delimited JSON-RPC. HTTP and SSE servers use POST-based JSON-RPC 2.0, with SSE offering an optional event stream for server-to-client notifications. Server-to-client request handling (roots, sampling, elicitation) is implemented for stdio transports; HTTP/SSE server-to-client requests require a callback URL and are deferred.
+Stdio servers communicate over subprocess pipes with line-delimited JSON-RPC. HTTP and SSE servers use POST-based JSON-RPC 2.0, with SSE offering an optional event stream for server-to-client notifications. Server-to-client request handling (roots, sampling, elicitation) is supported for stdio transports. OAuth 2.1 PKCE flow with token exchange, refresh, and bearer retry is supported for HTTP transports.
 
 ### Config Examples
 
