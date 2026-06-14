@@ -28,6 +28,48 @@ Not implemented yet:
 
 See `SPEC.md` and `IMPLEMENTATION_PLAN.md` for the target architecture and remaining slices.
 
+## Project Design
+
+`oc2` follows the architecture described in `SPEC.md`: a local-first runtime core with thin adapters around it. The current package keeps the runtime explicit and in-process instead of copying the larger `opencode` monolith or introducing a monorepo before it is needed.
+
+The intended dependency direction is:
+
+```text
+CLI/TUI adapters
+  -> runtime services
+  -> model, scheduler, tools, MCP, subagents, teams
+  -> events and persistence
+```
+
+Only part of that stack exists today. The code already establishes the shared contracts that future slices will use: typed events, bounded scheduling, JSONC config, SQLite repositories, session/message shapes, and model streaming abstractions.
+
+Design principles from the spec that are already reflected in the code:
+
+- Local-first operation: state is stored locally and runtime services run in-process.
+- Thin adapters: `src/cli` parses commands and delegates to config, diagnostics, and output helpers instead of owning domain logic.
+- Typed events: user-visible runtime changes are modeled as events so CLI, TUI, persistence, and tests can observe the same contract.
+- Explicit persistence: SQLite schema and repositories are kept separate from service orchestration.
+- Bounded concurrency: the scheduler centralizes queueing, priorities, cancellation, and timeouts for model/tool/MCP/subagent/team-member work.
+- Provider boundaries: model calls go through a streaming provider interface, with a fake provider for tests and local development.
+- Secret hygiene: logging and model errors redact sensitive values before output or persistence.
+
+## `src/` Guide
+
+- `src/index.ts` is the Bun executable entry point and public barrel export for implemented runtime modules. It runs the CLI only when invoked directly.
+- `src/version.ts` contains the package version constant used by the CLI and public exports.
+- `src/cli` contains command parsing, command dispatch, and text/JSON output formatting. Current commands cover help, version, diagnostics, config, tools listing, and `run --help`; actual prompt execution is deferred.
+- `src/config` owns JSONC configuration discovery, loading, merging, validation, defaults, path handling, and environment overrides. Its schema already includes future-facing sections for models, tools, MCP, agents, runtime limits, and TUI settings.
+- `src/diagnostics` collects environment and dependency health information and turns it into structured reports for `oc2 diagnostics`.
+- `src/events` defines the runtime event contract, in-process event bus, and projector helpers. Event categories include implemented session/model/scheduler events plus planned tool, permission, MCP, subagent, and team events.
+- `src/logging` provides a small structured logger with log-level filtering and redaction utilities for sensitive values.
+- `src/model` defines model provider interfaces, streaming event types, stream collection helpers, provider error handling, a fake provider, an AI SDK compatible adapter, and the model service that publishes model lifecycle events.
+- `src/persistence` owns local SQLite setup, migrations, schema SQL, and repository classes. It currently persists sessions, workspace roots, messages and parts, tool calls, runtime events, and MCP snapshots.
+- `src/session` provides the session service façade over persistence repositories, publishes session/message events, defines session message shapes, and exports transcripts as Markdown or JSON.
+- `src/scheduler` implements bounded async task scheduling with priorities, per-kind limits, cancellation propagation, timeouts, snapshots, and scheduler events. It is the planned coordination primitive for model, tool, MCP, subagent, and team-member work.
+- `src/testing` contains shared fixtures used by tests.
+
+The spec also calls for future top-level areas such as `runtime`, `tools`, `mcp`, `agent`, `subagent`, `team`, `tui`, and `skills`. Those folders are not present yet; their contracts are being prepared through config, events, persistence, and scheduler primitives.
+
 ## CLI
 
 Run the CLI through Bun:
