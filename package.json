@@ -10,7 +10,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint -c oxlint.json --import-plugin --report-unused-disable-directives src test",
+    "lint": "bun run format && oxlint -c oxlint.json --import-plugin --report-unused-disable-directives src test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "diagnostics": "bun run typecheck && bun run lint && bun run format:check && bun test",
