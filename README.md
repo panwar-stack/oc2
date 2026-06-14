@@ -155,11 +155,79 @@ MCP servers use the canonical `oc2` config shape. Enabled servers start before o
 }
 ```
 
+### MCP Protocol Support Matrix
+
+| Feature                                 | Stdio | HTTP    | SSE     | Tested  |
+| --------------------------------------- | ----- | ------- | ------- | ------- |
+| `initialize` with capabilities          | yes   | yes     | yes     | yes     |
+| `tools/list` + `tools/call`             | yes   | yes     | yes     | yes     |
+| `resources/list` + `resources/read`     | yes   | yes     | yes     | yes     |
+| `prompts/list` + `prompts/get`          | yes   | yes     | yes     | yes     |
+| `notifications/tools/list_changed`      | yes   | yes     | yes     | yes     |
+| `notifications/resources/list_changed`  | yes   | —       | —       | yes     |
+| `notifications/prompts/list_changed`    | yes   | —       | —       | yes     |
+| `roots/list` (host handler)             | yes   | —       | —       | yes     |
+| `sampling/createMessage` (host handler) | yes   | —       | —       | stubbed |
+| `elicitation/create` (host handler)     | yes   | —       | —       | stubbed |
+| JSON-RPC error normalization            | yes   | yes     | yes     | yes     |
+| Request cancellation (AbortSignal)      | yes   | yes     | yes     | yes     |
+| Malformed output resilience             | yes   | yes     | —       | yes     |
+| OAuth 2.1 PRM discovery                 | —     | yes     | yes     | yes     |
+| OAuth 2.1 PKCE + token exchange         | —     | yes     | —       | stubbed |
+| Bearer token request retry              | —     | stubbed | stubbed | stubbed |
+
+Stdio servers communicate over subprocess pipes with line-delimited JSON-RPC. HTTP and SSE servers use POST-based JSON-RPC 2.0, with SSE offering an optional event stream for server-to-client notifications. Server-to-client request handling (roots, sampling, elicitation) is implemented for stdio transports; HTTP/SSE server-to-client requests require a callback URL and are deferred.
+
+### Config Examples
+
+**Stdio server with local credentials:**
+
+```jsonc
+// oc2.jsonc
+{
+  "mcp": {
+    "local-tools": {
+      "enabled": true,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@my-org/mcp-server"],
+      "env": { "API_KEY": "${MY_API_KEY}" },
+      "toolPermissions": [{ "match": "mcp.invoke:local-tools/*", "decision": "ask" }],
+      "startupTimeoutMs": 15000,
+    },
+  },
+}
+```
+
+**Remote server with OAuth:**
+
+```jsonc
+// oc2.jsonc
+{
+  "mcp": {
+    "remote-api": {
+      "enabled": true,
+      "transport": "http",
+      "url": "https://mcp.example.com/api",
+      "oauth": {
+        "enabled": true,
+        "clientId": "oc2-${USER}",
+        "scopes": ["mcp:tools", "mcp:resources"],
+      },
+      "toolPermissions": [{ "match": "mcp.invoke:remote-api/*", "decision": "allow" }],
+      "startupTimeoutMs": 20000,
+    },
+  },
+}
+```
+
+````
+
 Open the minimal TUI shell with the same fake model:
 
 ```sh
 bun run start tui --model fake/test
-```
+````
 
 The TUI supports prompt submission, streamed assistant text, visible tool status, pending team plan approval projection, team report availability projection, MCP server status, permission requests and denials, question prompt display, agent task status, `Ctrl+C` cancellation/exit, `Ctrl+S` side-panel toggle, `Ctrl+T` team panel toggle, `Ctrl+M` MCP panel toggle when distinguishable, empty-prompt Enter as the raw-terminal fallback for `Ctrl+M`, `Esc` panel/dialog close, and basic resume with `--session <id>`. Narrow terminals hide side panels during rendering so prompt input remains available.
 
