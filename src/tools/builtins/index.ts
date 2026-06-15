@@ -9,6 +9,7 @@ import { createMemoryTool } from "./memory"
 import { createOpenGrepTool } from "./opengrep"
 import { createQuestionTool } from "./question"
 import { createReadTool } from "./read"
+import { createSkillTool } from "./skill"
 import { createTodoWriteTool } from "./todowrite"
 import { createWebfetchTool } from "./webfetch"
 import { createWriteTool } from "./write"
@@ -24,6 +25,7 @@ export const createBuiltInTools = (): readonly ToolDefinition[] => [
   createBashTool(),
   createTodoWriteTool(),
   createQuestionTool(),
+  createSkillTool(),
   createWebfetchTool(),
   createOpenGrepTool(),
   createMemoryTool(),
@@ -41,6 +43,7 @@ export { createApplyPatchTool } from "./apply-patch"
 export { createBashTool } from "./bash"
 export { createTodoWriteTool } from "./todowrite"
 export { createQuestionTool } from "./question"
+export { createSkillTool } from "./skill"
 export { createWebfetchTool } from "./webfetch"
 export { createOpenGrepTool } from "./opengrep"
 export { createMemoryTool } from "./memory"

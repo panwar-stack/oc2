@@ -20,6 +20,7 @@ test("built-in registry exposes shipped tools as model definitions", () => {
     "opengrep",
     "question",
     "read",
+    "skill",
     "todowrite",
     "webfetch",
     "write",
