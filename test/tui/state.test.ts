@@ -2,13 +2,22 @@ import { expect, test } from "bun:test"
 
 import {
   appendLocalMessage,
+  applyModelPickerSelection,
   applyTuiEvent,
+  buildVariantOptions,
   clearMessages,
+  closeModelPicker,
   completeTuiRun,
   createInitialTuiState,
+  cycleModelVariant,
   failTuiRun,
+  filterModelOptions,
   hydrateTuiState,
   closeActivePanel,
+  moveModelPickerSelection,
+  openModelPicker,
+  setModelOptions,
+  setModelPickerQuery,
   setSlashState,
   toggleAgentPanel,
   toggleMcpPanel,
@@ -16,6 +25,7 @@ import {
   toggleSessionList,
   toggleTeamPanel,
 } from "../../src/tui/state"
+import { defaultConfig } from "../../src/config/schema"
 import { RuntimeError } from "../../src/events/events"
 import { parseTuiKey } from "../../src/tui/keymap"
 
@@ -397,4 +407,163 @@ test("manages slash state, session list, agent panel, and clear messages", () =>
   expect(state.messages).toEqual([])
   expect(state.streamingText).toBe("")
   expect(state.errors).toEqual([])
+})
+
+test("initializes model selection from launch model then agent default then config default", () => {
+  const config = {
+    ...defaultConfig,
+    model: { provider: "config-provider", model: "config-model" },
+    agents: {
+      main: { defaultModel: "agent-provider/agent-model", mode: "all" as const, allowedTools: [], maxIterations: 20 },
+    },
+  }
+
+  expect(
+    createInitialTuiState(true, { config, launchModel: "launch-provider/launch-model" }).modelSelection,
+  ).toMatchObject({
+    providerId: "launch-provider",
+    modelId: "launch-model",
+  })
+  expect(createInitialTuiState(true, { config }).modelSelection).toMatchObject({
+    providerId: "agent-provider",
+    modelId: "agent-model",
+  })
+  expect(createInitialTuiState(true, { config: { ...config, agents: {} } }).modelSelection).toMatchObject({
+    providerId: "config-provider",
+    modelId: "config-model",
+  })
+})
+
+test("opens model picker and clears slash state", () => {
+  const state = openModelPicker(
+    setSlashState(createInitialTuiState(true), {
+      slashActive: true,
+      slashQuery: "help",
+      slashMatches: [{ name: "help", display: "/help", description: "help", source: "tui" }],
+    }),
+  )
+
+  expect(state).toMatchObject({
+    modelPickerOpen: true,
+    modelPickerMode: "model",
+    modelPickerQuery: "",
+    modelPickerSelectedIndex: 0,
+    slashActive: false,
+    slashQuery: "",
+    slashMatches: [],
+  })
+})
+
+test("filters model options and clamps selected index after query and movement", () => {
+  const options = [
+    { providerId: "fake", providerName: "Fake", model: { id: "test", name: "Test Model" } },
+    { providerId: "anthropic", providerName: "Anthropic", model: { id: "claude-sonnet", name: "Claude Sonnet" } },
+  ]
+  let state = setModelOptions(openModelPicker(createInitialTuiState(true)), options)
+  state = moveModelPickerSelection(state, 10)
+  expect(state.modelPickerSelectedIndex).toBe(1)
+
+  state = setModelPickerQuery(state, "fake")
+  expect(filterModelOptions(state.modelOptions, state.modelPickerQuery).map((option) => option.model.id)).toEqual([
+    "test",
+  ])
+  expect(state.modelPickerSelectedIndex).toBe(0)
+
+  state = setModelPickerQuery(state, "missing")
+  expect(filterModelOptions(state.modelOptions, state.modelPickerQuery)).toEqual([])
+  expect(state.modelPickerSelectedIndex).toBe(0)
+})
+
+test("applies model selection and opens variant mode when variants exist", () => {
+  const state = applyModelPickerSelection(
+    setModelOptions(openModelPicker(createInitialTuiState(true)), [
+      {
+        providerId: "fake",
+        providerName: "Fake",
+        model: {
+          id: "test",
+          name: "Test Model",
+          variants: [{ id: "fast", name: "Fast", description: "low latency", runtimeOptions: { effort: "low" } }],
+        },
+      },
+    ]),
+  )
+
+  expect(state.modelSelection).toMatchObject({
+    providerId: "fake",
+    providerName: "Fake",
+    modelId: "test",
+    modelName: "Test Model",
+  })
+  expect(state.modelPickerOpen).toBe(true)
+  expect(state.modelPickerMode).toBe("variant")
+  expect(state.variantOptions).toEqual([
+    { id: undefined, label: "Default" },
+    { id: "fast", label: "Fast", description: "low latency", runtimeOptions: { effort: "low" } },
+  ])
+})
+
+test("preserves compatible variant when selecting a different model", () => {
+  const state = applyModelPickerSelection({
+    ...setModelOptions(openModelPicker(createInitialTuiState(true)), [
+      {
+        providerId: "fake",
+        providerName: "Fake",
+        model: {
+          id: "next",
+          variants: [{ id: "fast", name: "Fast", runtimeOptions: { effort: "low" } }],
+        },
+      },
+    ]),
+    modelSelection: { providerId: "fake", modelId: "test", variantId: "fast", variantName: "Fast" },
+  })
+
+  expect(state.modelSelection).toMatchObject({
+    providerId: "fake",
+    modelId: "next",
+    variantId: "fast",
+    variantName: "Fast",
+    modelVariantOptions: { effort: "low" },
+  })
+  expect(state.modelPickerSelectedIndex).toBe(1)
+})
+
+test("builds variant options and cycles variants in default-first order", () => {
+  let state = setModelOptions(createInitialTuiState(true), [
+    {
+      providerId: "fake",
+      providerName: "Fake",
+      model: {
+        id: "test",
+        variants: [
+          { id: "fast", name: "Fast", runtimeOptions: { effort: "low" } },
+          { id: "deep", name: "Deep" },
+        ],
+      },
+    },
+  ])
+  expect(buildVariantOptions(state.modelOptions[0]?.model)).toEqual([
+    { id: undefined, label: "Default" },
+    { id: "fast", label: "Fast", description: undefined, runtimeOptions: { effort: "low" } },
+    { id: "deep", label: "Deep", description: undefined, runtimeOptions: undefined },
+  ])
+
+  state = cycleModelVariant(state)
+  expect(state.modelSelection).toMatchObject({
+    variantId: "fast",
+    variantName: "Fast",
+    modelVariantOptions: { effort: "low" },
+  })
+  state = cycleModelVariant(state)
+  expect(state.modelSelection).toMatchObject({ variantId: "deep", variantName: "Deep" })
+  state = cycleModelVariant(state)
+  expect(state.modelSelection.variantId).toBeUndefined()
+  expect(state.modelSelection.variantName).toBeUndefined()
+  expect(state.modelSelection.modelVariantOptions).toBeUndefined()
+})
+
+test("closes model picker without mutating query helpers", () => {
+  const state = closeModelPicker(setModelPickerQuery(openModelPicker(createInitialTuiState(true)), "sonnet"))
+  expect(state.modelPickerOpen).toBe(false)
+  expect(state.modelPickerQuery).toBe("sonnet")
 })

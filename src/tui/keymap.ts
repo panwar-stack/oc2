@@ -12,6 +12,10 @@ export type TuiKeyAction =
   | "tab"
   | "clear-messages"
   | "session-switcher"
+  | "model-picker-toggle"
+  | "variant-cycle"
+  | "picker-up"
+  | "picker-down"
   | "noop"
 
 export interface TuiKeyBinding {
@@ -27,6 +31,8 @@ export const TUI_KEYMAP = {
   toggleAgentPanel: "Ctrl+A",
   clearMessages: "Ctrl+L",
   sessionSwitcher: "Ctrl+R",
+  modelPickerToggle: "Ctrl+P",
+  variantCycle: "Ctrl+V",
   newline: "Alt+Enter",
   completeSlash: "Tab",
   escape: "Esc",
@@ -41,7 +47,11 @@ export function parseTuiKey(input: string): TuiKeyBinding {
   if (input === "\u0001") return { action: "toggle-agent-panel" }
   if (input === "\u000c") return { action: "clear-messages" }
   if (input === "\u0012") return { action: "session-switcher" }
+  if (input === "\u0010") return { action: "model-picker-toggle" }
+  if (input === "\u0016") return { action: "variant-cycle" }
   if (input === "\u001b") return { action: "escape" }
+  if (input === "\u001b[A") return { action: "picker-up" }
+  if (input === "\u001b[B") return { action: "picker-down" }
   if (input === "\u001b\r" || input === "\u001b\n") return { action: "newline" }
   if (input === "\u001b[77~") return { action: "toggle-mcp-panel" }
   if (input === "\t") return { action: "tab" }

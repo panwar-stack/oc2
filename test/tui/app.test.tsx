@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
+import { setTimeout as delay } from "node:timers/promises"
 
 import { expect, test } from "bun:test"
 
@@ -239,5 +240,183 @@ test("launchTui completes slash command with Tab and Enter", async () => {
   expect(output.join("")).toContain("assistant> fake response")
   const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
   expect(userMessage?.content).toContain("[SUBTASK] Review the following code changes")
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui does not mutate prompt input while model picker is open", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const output: string[] = []
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const completed = new Promise<void>((resolve) => {
+    stdout.write = (chunk: string) => {
+      output.push(chunk)
+      if (output.join("").includes("assistant> fake response")) {
+        stdin.write("\u0003")
+        resolve()
+      }
+    }
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("hello\u0010search\u0010\r")
+  await completed
+  await launched
+
+  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toBe("hello")
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui handles split arrow escape sequences while model picker is open", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const completed = new Promise<void>((resolve) => {
+    stdout.write = (chunk: string) => {
+      if (chunk.includes("assistant> fake response")) {
+        stdin.write("\u0003")
+        resolve()
+      }
+    }
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("hello\u0010")
+  stdin.write("\u001b")
+  stdin.write("[A")
+  stdin.write("\u0010\r")
+  await completed
+  await launched
+
+  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toBe("hello")
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui handles fully split arrow escape sequences while model picker is open", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const completed = new Promise<void>((resolve) => {
+    stdout.write = (chunk: string) => {
+      if (chunk.includes("assistant> fake response")) {
+        stdin.write("\u0003")
+        resolve()
+      }
+    }
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("hello\u0010")
+  stdin.write("\u001b")
+  stdin.write("[")
+  stdin.write("A")
+  stdin.write("\u0010\r")
+  await completed
+  await launched
+
+  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toBe("hello")
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui buffers async split arrow escape sequences while model picker is open", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const completed = new Promise<void>((resolve) => {
+    stdout.write = (chunk: string) => {
+      if (chunk.includes("assistant> fake response")) {
+        stdin.write("\u0003")
+        resolve()
+      }
+    }
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("hello\u0010")
+  stdin.write("\u001b")
+  await delay(5)
+  stdin.write("[")
+  await delay(5)
+  stdin.write("A")
+  stdin.write("\u0010\r")
+  await completed
+  await launched
+
+  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toBe("hello")
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui preserves split Alt+Enter newline input", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const completed = new Promise<void>((resolve) => {
+    stdout.write = (chunk: string) => {
+      if (chunk.includes("assistant> fake response")) {
+        stdin.write("\u0003")
+        resolve()
+      }
+    }
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("hello")
+  stdin.write("\u001b")
+  stdin.write("\r")
+  stdin.write("world\r")
+  await completed
+  await launched
+
+  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toBe("hello\nworld")
   await rm(dataDir, { recursive: true, force: true })
 })

@@ -1,5 +1,8 @@
+import { resolveMainAgentProfile } from "../agent/profiles"
+import type { Oc2Config } from "../config/schema"
 import type { RuntimeEvent, RuntimeEventMap, RuntimeEventProjector } from "../events/events"
 import { redactText } from "../logging/redaction"
+import type { ModelInfo, ShallowJsonObject } from "../model/provider"
 import type { PersistedToolCall } from "../persistence/repositories/tool-calls"
 import type { MessagePart, MessageRole, RuntimeStatus, SessionMessage } from "../session/message"
 
@@ -31,6 +34,29 @@ export interface SlashMatch {
   readonly display: string
   readonly description: string
   readonly source: "tui" | "builtin" | "user" | "skill" | "mcp"
+}
+
+export interface TuiModelSelection {
+  readonly providerId: string
+  readonly providerName?: string
+  readonly modelId: string
+  readonly modelName?: string
+  readonly variantId?: string
+  readonly variantName?: string
+  readonly modelVariantOptions?: ShallowJsonObject
+}
+
+export interface TuiModelOption {
+  readonly providerId: string
+  readonly providerName: string
+  readonly model: ModelInfo
+}
+
+export interface TuiVariantOption {
+  readonly id?: string
+  readonly label: string
+  readonly description?: string
+  readonly runtimeOptions?: ShallowJsonObject
 }
 
 export interface TuiTeamMemberView {
@@ -138,9 +164,26 @@ export interface TuiState {
   readonly slashQuery: string
   readonly slashMatches: readonly SlashMatch[]
   readonly showSessionList: boolean
+  readonly modelSelection: TuiModelSelection
+  readonly modelPickerOpen: boolean
+  readonly modelPickerMode: "model" | "variant"
+  readonly modelPickerQuery: string
+  readonly modelPickerSelectedIndex: number
+  readonly modelPickerLoading: boolean
+  readonly modelPickerError?: string
+  readonly modelOptions: readonly TuiModelOption[]
+  readonly variantOptions: readonly TuiVariantOption[]
 }
 
-export const createInitialTuiState = (sidePanel = true): TuiState => ({
+export interface InitialTuiModelSelectionInput {
+  readonly config?: Pick<Oc2Config, "agents" | "model">
+  readonly launchModel?: string
+}
+
+export const createInitialTuiState = (
+  sidePanel = true,
+  selectionInput: InitialTuiModelSelectionInput = {},
+): TuiState => ({
   status: "idle",
   messages: [],
   streamingText: "",
@@ -160,6 +203,15 @@ export const createInitialTuiState = (sidePanel = true): TuiState => ({
   slashQuery: "",
   slashMatches: [],
   showSessionList: false,
+  modelSelection: createInitialModelSelection(selectionInput),
+  modelPickerOpen: false,
+  modelPickerMode: "model",
+  modelPickerQuery: "",
+  modelPickerSelectedIndex: 0,
+  modelPickerLoading: false,
+  modelPickerError: undefined,
+  modelOptions: [],
+  variantOptions: [],
 })
 
 /** Projects runtime events into the narrow state needed by the minimal terminal UI. */
@@ -428,6 +480,164 @@ export const setSlashState = (
   partial: Partial<Pick<TuiState, "slashActive" | "slashQuery" | "slashMatches">>,
 ): TuiState => ({ ...state, ...partial })
 
+export function createInitialModelSelection(input: InitialTuiModelSelectionInput = {}): TuiModelSelection {
+  const config = input.config
+  const fallback = config ? `${config.model.provider}/${config.model.model}` : "fake/test"
+  const profileDefault = config ? resolveMainAgentProfile(config).defaultModel : undefined
+  const parsed = parseModelSelection(input.launchModel ?? profileDefault ?? fallback, fallback)
+  return { providerId: parsed.providerId, modelId: parsed.modelId }
+}
+
+export const openModelPicker = (state: TuiState): TuiState => ({
+  ...state,
+  modelPickerOpen: true,
+  modelPickerMode: "model",
+  modelPickerQuery: "",
+  modelPickerSelectedIndex: 0,
+  modelPickerError: undefined,
+  slashActive: false,
+  slashQuery: "",
+  slashMatches: [],
+})
+
+export const closeModelPicker = (state: TuiState): TuiState => ({ ...state, modelPickerOpen: false })
+
+export const setModelOptions = (state: TuiState, modelOptions: readonly TuiModelOption[]): TuiState => ({
+  ...state,
+  modelOptions,
+  modelPickerSelectedIndex: clampPickerIndex(
+    state.modelPickerSelectedIndex,
+    filterModelOptions(modelOptions, state.modelPickerQuery).length,
+  ),
+})
+
+export const filterModelOptions = (options: readonly TuiModelOption[], query: string): readonly TuiModelOption[] => {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return options
+  return options.filter((option) =>
+    [option.providerId, option.providerName, option.model.id, option.model.name]
+      .filter((value): value is string => typeof value === "string")
+      .some((value) => value.toLowerCase().includes(normalized)),
+  )
+}
+
+export function setModelPickerQuery(state: TuiState, query: string): TuiState {
+  const count =
+    state.modelPickerMode === "model"
+      ? filterModelOptions(state.modelOptions, query).length
+      : state.variantOptions.length
+  return {
+    ...state,
+    modelPickerQuery: query,
+    modelPickerSelectedIndex: clampPickerIndex(state.modelPickerSelectedIndex, count),
+  }
+}
+
+export function moveModelPickerSelection(state: TuiState, delta: number): TuiState {
+  const count =
+    state.modelPickerMode === "model"
+      ? filterModelOptions(state.modelOptions, state.modelPickerQuery).length
+      : state.variantOptions.length
+  return { ...state, modelPickerSelectedIndex: clampPickerIndex(state.modelPickerSelectedIndex + delta, count) }
+}
+
+export function applyModelPickerSelection(state: TuiState): TuiState {
+  if (state.modelPickerMode === "variant") return applyVariantSelection(state)
+  const options = filterModelOptions(state.modelOptions, state.modelPickerQuery)
+  const option = options[clampPickerIndex(state.modelPickerSelectedIndex, options.length)]
+  if (!option) return { ...state, modelPickerError: "No matching models" }
+  const variantOptions = buildVariantOptions(option.model)
+  const compatibleVariant = variantOptions.find(
+    (variant) => variant.id !== undefined && variant.id === state.modelSelection.variantId,
+  )
+  const selection: TuiModelSelection = {
+    providerId: option.providerId,
+    providerName: option.providerName,
+    modelId: option.model.id,
+    modelName: option.model.name,
+    variantId: compatibleVariant?.id,
+    variantName: compatibleVariant?.label,
+    modelVariantOptions: compatibleVariant?.runtimeOptions,
+  }
+  if (variantOptions.length > 1) {
+    return {
+      ...state,
+      modelSelection: selection,
+      modelPickerMode: "variant",
+      modelPickerQuery: "",
+      modelPickerSelectedIndex: compatibleVariant ? variantOptions.indexOf(compatibleVariant) : 0,
+      modelPickerError: undefined,
+      variantOptions,
+    }
+  }
+  return {
+    ...state,
+    modelSelection: selection,
+    modelPickerOpen: false,
+    modelPickerError: undefined,
+    variantOptions: [],
+  }
+}
+
+export function buildVariantOptions(model: ModelInfo | undefined): readonly TuiVariantOption[] {
+  const variants = model?.variants ?? []
+  return [
+    { id: undefined, label: "Default" },
+    ...variants.map((variant) => ({
+      id: variant.id,
+      label: variant.name ?? variant.id,
+      description: variant.description,
+      runtimeOptions: variant.runtimeOptions,
+    })),
+  ]
+}
+
+export function applyVariantSelection(state: TuiState): TuiState {
+  const option = state.variantOptions[clampPickerIndex(state.modelPickerSelectedIndex, state.variantOptions.length)]
+  if (!option) return { ...state, modelPickerError: "No variants for current model" }
+  return {
+    ...state,
+    modelSelection: {
+      ...state.modelSelection,
+      variantId: option.id,
+      variantName: option.id ? option.label : undefined,
+      modelVariantOptions: option.id ? option.runtimeOptions : undefined,
+    },
+    modelPickerOpen: false,
+    modelPickerError: undefined,
+  }
+}
+
+export function cycleModelVariant(state: TuiState): TuiState {
+  const model = state.modelOptions.find(
+    (option) =>
+      option.providerId === state.modelSelection.providerId && option.model.id === state.modelSelection.modelId,
+  )?.model
+  const options = buildVariantOptions(model)
+  if (options.length <= 1) return { ...state, modelPickerError: "No variants for current model" }
+  const current = options.findIndex((option) => option.id === state.modelSelection.variantId)
+  const next = options[(current + 1) % options.length]
+  if (!next) return { ...state, modelPickerError: "No variants for current model" }
+  return {
+    ...state,
+    modelSelection: {
+      ...state.modelSelection,
+      variantId: next.id,
+      variantName: next.id ? next.label : undefined,
+      modelVariantOptions: next.id ? next.runtimeOptions : undefined,
+    },
+    modelPickerError: undefined,
+  }
+}
+
+export const clampModelPickerSelectedIndex = (state: TuiState): TuiState => {
+  const count =
+    state.modelPickerMode === "model"
+      ? filterModelOptions(state.modelOptions, state.modelPickerQuery).length
+      : state.variantOptions.length
+  return { ...state, modelPickerSelectedIndex: clampPickerIndex(state.modelPickerSelectedIndex, count) }
+}
+
 export const toggleSessionList = (state: TuiState): TuiState => ({
   ...state,
   showSessionList: !state.showSessionList,
@@ -509,6 +719,23 @@ function appendStreamingMessage(state: TuiState): TuiState {
 
 function appendError(state: TuiState, message: string): TuiState {
   return { ...state, errors: [...state.errors, message] }
+}
+
+function parseModelSelection(
+  value: string,
+  fallback: string,
+): { readonly providerId: string; readonly modelId: string } {
+  const [fallbackProvider = "fake", ...fallbackModelParts] = fallback.split("/")
+  const [providerId, ...modelParts] = value.split("/")
+  return {
+    providerId: providerId || fallbackProvider,
+    modelId: modelParts.join("/") || fallbackModelParts.join("/") || "test",
+  }
+}
+
+function clampPickerIndex(index: number, count: number): number {
+  if (count <= 0) return 0
+  return Math.min(Math.max(index, 0), count - 1)
 }
 
 function upsertToolCall(calls: readonly TuiToolCallView[], next: TuiToolCallView): readonly TuiToolCallView[] {

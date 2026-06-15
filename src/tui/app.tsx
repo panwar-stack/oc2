@@ -11,13 +11,19 @@ import { parseTuiKey } from "./keymap"
 import { SessionView } from "./components/SessionView"
 import {
   appendLocalMessage,
+  applyModelPickerSelection,
   clearMessages,
+  closeModelPicker,
   closeActivePanel,
   completeTuiRun,
   createInitialTuiState,
+  cycleModelVariant,
   failTuiRun,
   hydrateTuiState,
+  moveModelPickerSelection,
+  openModelPicker,
   projectTuiEvent,
+  setModelPickerQuery,
   setSlashState,
   toggleAgentPanel,
   toggleMcpPanel,
@@ -52,8 +58,12 @@ export function renderTui(state: TuiState, input = "", options: TuiRenderOptions
 
 /** Launches the dependency-free terminal UI adapter over the session run service. */
 export async function launchTui(options: TuiLaunchOptions): Promise<void> {
+  const initialState = createInitialTuiState(options.config.tui.sidePanel, {
+    config: options.config,
+    launchModel: options.model,
+  })
   const eventBus = createRuntimeEventBus<TuiState>({
-    initialState: createInitialTuiState(options.config.tui.sidePanel),
+    initialState,
     projector: projectTuiEvent,
   })
   let questionAnswer: ((value: unknown) => void) | undefined
@@ -85,7 +95,6 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   let input = ""
   let activeRun: AbortController | undefined
   let exitTui: (() => void) | undefined
-  let escapePrefix = false
 
   if (options.sessionId) {
     const messages = service.sessions.messages.listBySession(options.sessionId)
@@ -109,6 +118,10 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     clearSlash()
   }
   const updateSlashState = () => {
+    if (state.modelPickerOpen) {
+      clearSlash()
+      return
+    }
     if (!input.startsWith("/") || /\s/.test(input.slice(1))) {
       clearSlash()
       return
@@ -242,20 +255,36 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
         resolve()
         return true
       }
+      if (state.modelPickerOpen) {
+        if (key.action === "model-picker-toggle" || key.action === "escape") state = closeModelPicker(state)
+        else if (key.action === "picker-up") state = moveModelPickerSelection(state, -1)
+        else if (key.action === "picker-down") state = moveModelPickerSelection(state, 1)
+        else if (key.action === "backspace") state = setModelPickerQuery(state, state.modelPickerQuery.slice(0, -1))
+        else if (key.action === "input") state = setModelPickerQuery(state, state.modelPickerQuery + (key.value ?? ""))
+        else if (key.action === "submit") state = applyModelPickerSelection(state)
+        else if (key.action === "variant-cycle") state = cycleModelVariant(state)
+        render()
+        return false
+      }
+
       if (raw === "\r" && !input.trim() && !state.questionPrompt) {
         state = toggleMcpPanel(state)
         render()
         return false
       }
 
-      if (key.action === "toggle-side-panel") state = toggleSidePanel(state)
+      if (key.action === "model-picker-toggle") state = openModelPicker(state)
+      else if (key.action === "variant-cycle") state = cycleModelVariant(state)
+      else if (key.action === "toggle-side-panel") state = toggleSidePanel(state)
       else if (key.action === "toggle-team-panel") state = toggleTeamPanel(state)
       else if (key.action === "toggle-mcp-panel") state = toggleMcpPanel(state)
       else if (key.action === "toggle-agent-panel") state = toggleAgentPanel(state)
       else if (key.action === "clear-messages") state = clearMessages(state)
       else if (key.action === "session-switcher") state = toggleSessionList(state)
       else if (key.action === "escape") {
-        if (state.slashActive) {
+        if (state.modelPickerOpen) {
+          state = closeModelPicker(state)
+        } else if (state.slashActive) {
           clearSlash()
         } else if (questionAnswer) {
           const answerQuestion = questionAnswer
@@ -286,10 +315,50 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
       return false
     }
 
+    let escapeBuffer = ""
+    let escapeTimer: ReturnType<typeof setTimeout> | undefined
+    const flushEscapeBuffer = () => {
+      if (!escapeBuffer) return false
+      escapeBuffer = ""
+      escapeTimer = undefined
+      return handleKey(parseTuiKey("\u001b"), "\u001b")
+    }
+    const scheduleEscapeFlush = () => {
+      if (escapeTimer) clearTimeout(escapeTimer)
+      escapeTimer = setTimeout(() => {
+        if (flushEscapeBuffer()) return
+        render()
+      }, 25)
+    }
+
     stdin.on("data", (chunk: string) => {
       if (chunk === "\u001b") {
-        escapePrefix = true
+        escapeBuffer = "\u001b"
+        scheduleEscapeFlush()
         return
+      }
+
+      if (escapeBuffer) {
+        if (escapeTimer) clearTimeout(escapeTimer)
+        escapeTimer = undefined
+        const buffered = `${escapeBuffer}${chunk}`
+        if (buffered === "\u001b[A" || buffered === "\u001b[B" || buffered === "\u001b\r" || buffered === "\u001b\n") {
+          escapeBuffer = ""
+          handleKey(parseTuiKey(buffered), buffered)
+          return
+        }
+        if (buffered === "\u001b[") {
+          escapeBuffer = buffered
+          scheduleEscapeFlush()
+          return
+        }
+        if (escapeBuffer === "\u001b[" && (chunk === "A" || chunk === "B")) {
+          escapeBuffer = ""
+          handleKey(parseTuiKey(`\u001b[${chunk}`), `\u001b[${chunk}`)
+          return
+        }
+        const shouldExit = flushEscapeBuffer()
+        if (shouldExit) return
       }
 
       const chunkKey = parseTuiKey(chunk)
@@ -299,18 +368,9 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
       }
 
       for (const char of chunk) {
-        if (escapePrefix) {
-          escapePrefix = false
-          const escaped = parseTuiKey(`\u001b${char}`)
-          if (escaped.action !== "noop") {
-            if (handleKey(escaped, `\u001b${char}`)) return
-            continue
-          }
-          if (handleKey(parseTuiKey("\u001b"), "\u001b")) return
-        }
-
         if (char === "\u001b") {
-          escapePrefix = true
+          escapeBuffer = "\u001b"
+          scheduleEscapeFlush()
           continue
         }
 
