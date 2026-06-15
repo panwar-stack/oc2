@@ -32,6 +32,20 @@ test("command substitutes empty arguments and loads skill templates", async () =
   db.close()
 })
 
+test("command resolves team-report skill workflow", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({ config: defaultConfig, cwd: "/repo", database: db, providers: [provider] })
+
+  await service.command({ name: "team-report", arguments: "ses_previous", model: "fake/test" })
+
+  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toContain("# Team Report")
+  expect(userMessage?.content).toContain("team_report")
+  expect(userMessage?.content).toContain("ses_previous")
+  db.close()
+})
+
 test("command resumes an existing session when sessionId is provided", async () => {
   const db = openOc2Database({ path: ":memory:" })
   const provider = createScriptedModelProvider([simpleAssistantEvents, simpleAssistantEvents])

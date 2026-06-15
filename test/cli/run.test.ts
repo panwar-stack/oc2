@@ -56,6 +56,39 @@ test("oc2 run --json emits stable final output", async () => {
   await rm(dataDir, { recursive: true, force: true })
 })
 
+test("oc2 run dispatches slash command prompts", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-cli-"))
+  const requests: ModelRequest[] = []
+  const provider = {
+    id: "fake",
+    name: "Capturing",
+    async listModels() {
+      return [{ id: "test", supportsTools: true }]
+    },
+    async *stream(request: ModelRequest) {
+      requests.push(request)
+      yield { type: "text-delta" as const, text: "ok" }
+      yield { type: "done" as const }
+    },
+  }
+
+  const result = await runCli({
+    argv: ["run", "/review diff --git a/file b/file\n+  indented context", "--json", "--model", "fake/test"],
+    cwd: "/repo",
+    homeDir: dataDir,
+    env: { OC2_DATA_DIR: dataDir },
+    fileExists: async () => false,
+    modelProviders: [provider],
+    streams: { stdout: () => undefined },
+  })
+
+  expect(result.exitCode).toBe(0)
+  const userMessage = requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toContain("[SUBTASK] Review the following code changes")
+  expect(userMessage?.content).toContain("diff --git a/file b/file\n+  indented context")
+  await rm(dataDir, { recursive: true, force: true })
+})
+
 test("oc2 run text mode prints final assistant text", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "oc2-cli-"))
   const stdout: string[] = []

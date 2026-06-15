@@ -1,7 +1,14 @@
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { PassThrough } from "node:stream"
+
 import { expect, test } from "bun:test"
 
-import { renderTui } from "../../src/tui/app"
+import { defaultConfig } from "../../src"
+import { launchTui, renderTui } from "../../src/tui/app"
 import { createInitialTuiState } from "../../src/tui/state"
+import { createScriptedModelProvider, simpleAssistantEvents } from "../agent/helpers"
 
 test("renders messages, streaming text, tool status, and side panel", () => {
   const output = renderTui(
@@ -193,4 +200,44 @@ test("caps slash suggestions and reports hidden matches", () => {
   expect(output).toContain("/cmd-4")
   expect(output).not.toContain("/cmd-5")
   expect(output).toContain("... and 1 more")
+})
+
+test("launchTui completes slash command with Tab and Enter", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const output: string[] = []
+  let sawAutocomplete = false
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const completed = new Promise<void>((resolve) => {
+    stdout.write = (chunk: string) => {
+      output.push(chunk)
+      const rendered = output.join("")
+      if (rendered.includes("Prompt> /review ")) sawAutocomplete = true
+      if (rendered.includes("assistant> fake response")) {
+        stdin.write("\u0003")
+        resolve()
+      }
+    }
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("/rev\t\r")
+  await completed
+  await launched
+
+  expect(sawAutocomplete).toBe(true)
+  expect(output.join("")).toContain("/review")
+  expect(output.join("")).toContain("assistant> fake response")
+  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
+  expect(userMessage?.content).toContain("[SUBTASK] Review the following code changes")
+  await rm(dataDir, { recursive: true, force: true })
 })

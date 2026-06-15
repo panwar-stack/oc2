@@ -397,19 +397,36 @@ async function runPrompt(
     commands: await createDefaultCommandRegistry({ config: effectiveConfig, paths, readFile: options.readFile }),
   })
   try {
-    const result = await service.run({
-      prompt: command.name === "resume" ? command.run : command.prompt,
-      sessionId,
-      model: command.model,
-      enabledTools: command.name === "run" ? command.tools : undefined,
-      disabledTools: command.name === "run" ? command.disabledTools : undefined,
-      enabledMcp: command.name === "run" ? command.mcp : undefined,
-      disabledMcp: command.name === "run" ? command.disabledMcp : undefined,
-      roots: command.name === "run" ? command.roots : undefined,
-      team: command.name === "run" ? command.team : undefined,
-      timeoutMs: command.name === "run" ? command.timeoutMs : undefined,
-      maxConcurrency: command.name === "run" ? command.maxConcurrency : undefined,
-    })
+    const slashCommand = command.name === "run" ? parseSlashCommand(command.prompt.trim()) : undefined
+    const result =
+      command.name === "run" && slashCommand
+        ? await service.command({
+            name: slashCommand.name,
+            arguments: slashCommand.arguments,
+            sessionId,
+            model: command.model,
+            enabledTools: command.tools,
+            disabledTools: command.disabledTools,
+            enabledMcp: command.mcp,
+            disabledMcp: command.disabledMcp,
+            roots: command.roots,
+            team: command.team,
+            timeoutMs: command.timeoutMs,
+            maxConcurrency: command.maxConcurrency,
+          })
+        : await service.run({
+            prompt: command.name === "resume" ? command.run : command.prompt,
+            sessionId,
+            model: command.model,
+            enabledTools: command.name === "run" ? command.tools : undefined,
+            disabledTools: command.name === "run" ? command.disabledTools : undefined,
+            enabledMcp: command.name === "run" ? command.mcp : undefined,
+            disabledMcp: command.name === "run" ? command.disabledMcp : undefined,
+            roots: command.name === "run" ? command.roots : undefined,
+            team: command.name === "run" ? command.team : undefined,
+            timeoutMs: command.name === "run" ? command.timeoutMs : undefined,
+            maxConcurrency: command.name === "run" ? command.maxConcurrency : undefined,
+          })
     await writeStdout(options.streams?.stdout, command.json ? formatJson(formatRunJson(result)) : `${result.text}\n`)
     return { exitCode: result.status === "completed" ? 0 : 1 }
   } catch (error) {
@@ -431,6 +448,15 @@ async function runPrompt(
   } finally {
     service.database?.close()
   }
+}
+
+const parseSlashCommand = (prompt: string): { readonly name: string; readonly arguments: string } | undefined => {
+  if (!prompt.startsWith("/")) return undefined
+  const body = prompt.slice(1)
+  const match = /^(\S+)(?:\s([\s\S]*))?$/.exec(body)
+  const name = match?.[1] ?? ""
+  if (!name) return undefined
+  return { name, arguments: match?.[2] ?? "" }
 }
 
 function getPath(value: unknown, path: string): unknown {

@@ -146,7 +146,9 @@ test("lists slash commands in text and JSON modes", async () => {
     },
   })
   expect(textResult.exitCode).toBe(0)
-  expect(textOutput.join("")).toContain("/review\tbuiltin subtask")
+  for (const name of ["review", "clarify", "spec-planner", "spec-implement", "team-report", "init"]) {
+    expect(textOutput.join("")).toContain(`/${name}\tbuiltin`)
+  }
 
   const jsonOutput: string[] = []
   const jsonResult = await runCli({
@@ -158,9 +160,16 @@ test("lists slash commands in text and JSON modes", async () => {
     },
   })
   expect(jsonResult.exitCode).toBe(0)
-  expect(JSON.parse(jsonOutput.join("")).commands).toContainEqual(
-    expect.objectContaining({ name: "review", source: "builtin", subtask: true }),
-  )
+  const commands = JSON.parse(jsonOutput.join("")).commands
+  expect(commands.map((command: { name: string }) => command.name)).toEqual([
+    "review",
+    "clarify",
+    "spec-planner",
+    "spec-implement",
+    "team-report",
+    "init",
+  ])
+  expect(commands).toContainEqual(expect.objectContaining({ name: "review", source: "builtin", subtask: true }))
 })
 
 test("formats MCP auth state, auth URL, and counts", () => {

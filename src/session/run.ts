@@ -67,6 +67,14 @@ export interface CommandInput {
   readonly sessionId?: string
   readonly model?: string
   readonly agent?: string
+  readonly enabledTools?: readonly string[]
+  readonly disabledTools?: readonly string[]
+  readonly enabledMcp?: readonly string[]
+  readonly disabledMcp?: readonly string[]
+  readonly roots?: readonly string[]
+  readonly team?: boolean
+  readonly timeoutMs?: number
+  readonly maxConcurrency?: number
   readonly signal?: AbortSignal
 }
 
@@ -135,6 +143,14 @@ export class SessionRunService {
       sessionId: input.sessionId,
       model: input.model ?? command.model,
       agent: input.agent ?? command.agent,
+      enabledTools: input.enabledTools,
+      disabledTools: input.disabledTools,
+      enabledMcp: input.enabledMcp,
+      disabledMcp: input.disabledMcp,
+      roots: input.roots,
+      team: input.team,
+      timeoutMs: input.timeoutMs,
+      maxConcurrency: input.maxConcurrency,
       signal: input.signal,
     })
   }
