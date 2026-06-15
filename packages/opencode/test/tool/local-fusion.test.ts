@@ -1,0 +1,189 @@
+import { afterEach, describe, expect, test } from "bun:test"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Database } from "@opencode-ai/core/database/database"
+import { Opengrep } from "@opencode-ai/core/filesystem/opengrep"
+import { Cause, Effect, Exit, Layer } from "effect"
+import { Agent } from "@/agent/agent"
+import { BackgroundJob } from "@/background/job"
+import { Config } from "@/config/config"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Session } from "@/session/session"
+import { MessageID, PartID, SessionID } from "@/session/schema"
+import { Truncate } from "@/tool/truncate"
+import { ToolRegistry } from "@/tool/registry"
+import { LocalFusionTool } from "../../src/tool/local_fusion"
+import * as Tool from "../../src/tool/tool"
+import type { SessionPrompt } from "../../src/session/prompt"
+import type { TaskPromptOps } from "../../src/tool/task"
+import { disposeAllInstances } from "../fixture/fixture"
+import { testEffect } from "../lib/effect"
+
+afterEach(async () => {
+  await disposeAllInstances()
+})
+
+const it = testEffect(
+  Layer.mergeAll(
+    Agent.defaultLayer,
+    BackgroundJob.defaultLayer,
+    Config.defaultLayer,
+    EventV2Bridge.defaultLayer,
+    Session.defaultLayer,
+    Truncate.defaultLayer,
+    Database.defaultLayer,
+    RuntimeFlags.layer({}),
+  ),
+)
+
+const registryIt = testEffect(
+  Layer.mergeAll(ToolRegistry.defaultLayer, Layer.mock(Opengrep.Service, { available: () => Effect.succeed(false) })),
+)
+
+type AssistantWithParts = Omit<SessionV1.WithParts, "info"> & { info: SessionV1.Assistant }
+
+function reply(input: SessionPrompt.PromptInput, text: string): AssistantWithParts {
+  const id = MessageID.ascending()
+  return {
+    info: {
+      id,
+      role: "assistant",
+      parentID: input.messageID ?? MessageID.ascending(),
+      sessionID: input.sessionID,
+      mode: input.agent ?? "general",
+      agent: input.agent ?? "general",
+      cost: 0,
+      path: { cwd: "/tmp", root: "/tmp" },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: input.model?.modelID ?? ("model" as SessionV1.Assistant["modelID"]),
+      providerID: input.model?.providerID ?? ("test" as SessionV1.Assistant["providerID"]),
+      time: { created: Date.now() },
+      finish: "stop",
+    },
+    parts: [{ id: PartID.ascending(), messageID: id, sessionID: input.sessionID, type: "text", text }],
+  }
+}
+
+function promptOps(): TaskPromptOps {
+  return {
+    cancel: () => Effect.void,
+    resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+    prompt: (input) =>
+      Effect.succeed(
+        String(input.model?.modelID) === "judge"
+          ? reply(
+              input,
+              JSON.stringify({
+                consensus: ["ok"],
+                contradictions: [],
+                uniqueInsights: [],
+                blindSpots: [],
+                failures: [],
+                confidence: "high",
+              }),
+            )
+          : String(input.model?.modelID) === "synth"
+            ? reply(input, "final fused answer")
+            : reply(input, "branch output"),
+      ),
+    wake: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
+  }
+}
+
+function context(sessionID: SessionID, extra?: Record<string, unknown>): Tool.Context {
+  return {
+    sessionID,
+    messageID: MessageID.ascending(),
+    agent: "build",
+    abort: new AbortController().signal,
+    extra,
+    messages: [],
+    metadata: () => Effect.void,
+    ask: () => Effect.void,
+  }
+}
+
+function params(input?: Record<string, unknown>) {
+  return {
+    prompt: "Compare answers",
+    branches: [{ model: "test/branch" }],
+    judge: { model: "test/judge" },
+    synthesizer: { model: "test/synth" },
+    ...input,
+  }
+}
+
+describe("local_fusion tool", () => {
+  it.instance("executes inline config and returns final output plus metadata", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const result = yield* tool.execute(params(), context(parent.id, { promptOps: promptOps() }))
+
+      expect(result.title).toBe("Local fusion")
+      expect(result.output).toBe("final fused answer")
+      expect(result.metadata).toMatchObject({
+        branchCount: 1,
+        successfulBranchCount: 1,
+        failedBranchCount: 0,
+        judgeModel: "test/judge",
+        synthesizerModel: "test/synth",
+      })
+    }),
+  )
+
+  it.instance("rejects named config lookup with a safe message", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const exit = yield* tool.execute(params({ config: "research-panel" }), context(parent.id, { promptOps: promptOps() })).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("Named local_fusion configs")
+    }),
+  )
+
+  it.instance("rejects missing inline config fields", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const exit = yield* tool.execute({ prompt: "go" }, context(parent.id, { promptOps: promptOps() })).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("requires inline branches")
+    }),
+  )
+
+  it.instance("requires prompt ops", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const exit = yield* tool.execute(params(), context(parent.id)).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("promptOps")
+    }),
+  )
+
+  registryIt.instance("registry exposes local_fusion", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("local_fusion")
+    }),
+  )
+})
+
+function errorMessage(cause: Cause.Cause<unknown>) {
+  const error = Cause.squash(cause)
+  return error instanceof Error ? error.message : String(error)
+}
