@@ -2,7 +2,8 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { MainAgent, type MainAgentRunResult } from "../agent/agent"
-import { resolveMainAgentProfile } from "../agent/profiles"
+import { resolveMainAgentProfile, type AgentProfile } from "../agent/profiles"
+import { mainAgentSystemPrompt } from "../agent/prompts"
 import { createBuiltinCommands } from "../commands/builtins"
 import { createCommandRegistry } from "../commands/registry"
 import { resolveCommandTemplate } from "../commands/resolver"
@@ -48,6 +49,7 @@ export interface RunPromptInput {
   readonly prompt: string
   readonly sessionId?: string
   readonly model?: string
+  readonly agent?: string
   readonly enabledTools?: readonly string[]
   readonly disabledTools?: readonly string[]
   readonly enabledMcp?: readonly string[]
@@ -132,6 +134,7 @@ export class SessionRunService {
       prompt: await resolveCommandTemplate(command, input.arguments ?? ""),
       sessionId: input.sessionId,
       model: input.model ?? command.model,
+      agent: input.agent ?? command.agent,
       signal: input.signal,
     })
   }
@@ -156,7 +159,7 @@ export class SessionRunService {
   }
 
   async run(input: RunPromptInput): Promise<MainAgentRunResult> {
-    const baseProfile = resolveMainAgentProfile(this.config)
+    const baseProfile = resolveRunAgentProfile(this.config, input.agent)
     const profile = input.timeoutMs ? { ...baseProfile, timeoutMs: input.timeoutMs } : baseProfile
     const model = parseModel(input.model ?? profile.defaultModel, this.config)
     const session = input.sessionId
@@ -421,6 +424,23 @@ export class SessionRunService {
 
 export const createSessionRunService = (options: SessionRunServiceOptions): SessionRunService =>
   new SessionRunService(options)
+
+function resolveRunAgentProfile(config: Pick<Oc2Config, "agents">, agentId?: string): AgentProfile {
+  if (!agentId) return resolveMainAgentProfile(config)
+  const configured = config.agents[agentId]
+  if (!configured) return resolveMainAgentProfile(config)
+  return {
+    id: configured.id ?? agentId,
+    name: configured.name ?? agentId,
+    description: configured.description ?? "Command agent profile",
+    mode: configured.mode ?? "all",
+    systemPrompt: configured.systemPrompt ?? mainAgentSystemPrompt,
+    defaultModel: configured.defaultModel,
+    allowedTools: configured.allowedTools ?? [],
+    maxIterations: configured.maxIterations ?? 20,
+    timeoutMs: configured.timeoutMs,
+  }
+}
 
 function parseModel(value: string | undefined, config: Oc2Config): { providerId: string; modelId: string } {
   if (!value) return { providerId: config.model.provider, modelId: config.model.model }

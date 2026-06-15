@@ -2,7 +2,7 @@ import type { Readable } from "node:stream"
 
 import { createBuiltinCommands } from "../commands/builtins"
 import { createCommandRegistry } from "../commands/registry"
-import type { SlashCommand } from "../commands/types"
+import type { CommandRegistry, SlashCommand } from "../commands/types"
 import type { Oc2Config } from "../config/schema"
 import { createRuntimeEventBus } from "../events/event-bus"
 import type { ModelProvider } from "../model/provider"
@@ -36,6 +36,7 @@ export interface TuiLaunchOptions {
   readonly model?: string
   readonly roots?: readonly string[]
   readonly providers?: readonly ModelProvider[]
+  readonly commands?: CommandRegistry
   readonly stdin?: Readable
   readonly stdout?: { readonly columns?: number; write(chunk: string): unknown }
 }
@@ -56,12 +57,14 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     projector: projectTuiEvent,
   })
   let questionAnswer: ((value: unknown) => void) | undefined
+  const registry = options.commands ?? createCommandRegistry(createBuiltinCommands())
   const service = createSessionRunService({
     config: options.config,
     cwd: options.cwd,
     dataDir: options.dataDir,
     events: eventBus,
     providers: options.providers,
+    commands: registry,
     resolveQuestion: async (_question, signal) => {
       return await new Promise<unknown>((resolve) => {
         questionAnswer = resolve
@@ -98,7 +101,6 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     render()
   })
 
-  const registry = createCommandRegistry(createBuiltinCommands())
   const clearSlash = () => {
     state = setSlashState(state, { slashActive: false, slashQuery: "", slashMatches: [] })
   }

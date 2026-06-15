@@ -24,6 +24,15 @@ export const agentProfileSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
 })
 
+export const commandConfigSchema = z.object({
+  description: z.string().optional(),
+  aliases: z.array(z.string()).optional(),
+  template: z.string().optional(),
+  subtask: z.boolean().optional(),
+  agent: z.string().optional(),
+  model: z.string().optional(),
+})
+
 export const mcpServerConfigSchema = z
   .object({
     id: z.string().optional(),
@@ -67,6 +76,7 @@ export const oc2ConfigSchema = z.object({
   tools: z.record(z.string(), toolConfigSchema),
   mcp: z.record(z.string(), mcpServerConfigSchema),
   agents: z.record(z.string(), agentProfileSchema),
+  commands: z.record(z.string(), commandConfigSchema).default({}),
   runtime: z.object({
     maxConcurrentTools: z.number().int().positive(),
     maxConcurrentSubAgents: z.number().int().positive(),
@@ -87,6 +97,7 @@ export type Oc2ConfigInput = Partial<{
   tools: Record<string, Partial<Oc2Config["tools"][string]>>
   mcp: Record<string, Partial<Oc2Config["mcp"][string]>>
   agents: Record<string, Partial<Oc2Config["agents"][string]>>
+  commands: Record<string, Partial<Oc2Config["commands"][string]>>
   runtime: Partial<Oc2Config["runtime"]>
   tui: Partial<Oc2Config["tui"]>
 }>
@@ -99,6 +110,7 @@ export const defaultConfig: Oc2Config = {
   tools: {},
   mcp: {},
   agents: {},
+  commands: {},
   runtime: {
     maxConcurrentTools: 4,
     maxConcurrentSubAgents: 2,
@@ -113,7 +125,7 @@ export const defaultConfig: Oc2Config = {
 
 /** Known top-level and nested config keys used to warn about misspellings. */
 export const knownConfigKeys = {
-  top: new Set(["model", "tools", "mcp", "agents", "runtime", "tui"]),
+  top: new Set(["model", "tools", "mcp", "agents", "commands", "runtime", "tui"]),
   model: new Set(["provider", "model"]),
   tool: new Set(["enabled", "permissions"]),
   mcp: new Set([
@@ -143,6 +155,7 @@ export const knownConfigKeys = {
     "maxIterations",
     "timeoutMs",
   ]),
+  command: new Set(["description", "aliases", "template", "subtask", "agent", "model"]),
   runtime: new Set([
     "maxConcurrentTools",
     "maxConcurrentSubAgents",

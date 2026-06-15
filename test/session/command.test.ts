@@ -98,3 +98,33 @@ test("command model failures return failed run results", async () => {
   expect(result.errors[0]?.message).toBe("bad key")
   db.close()
 })
+
+test("command uses configured agent override", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: {
+      ...defaultConfig,
+      agents: {
+        reviewer: {
+          systemPrompt: "Reviewer system prompt",
+          defaultModel: "fake/test",
+          allowedTools: [],
+          maxIterations: 3,
+          mode: "all",
+        },
+      },
+    },
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+    commands: createCommandRegistry([
+      { name: "custom", description: "custom", source: "user", template: "Run $ARGUMENTS", agent: "reviewer" },
+    ]),
+  })
+
+  await service.command({ name: "custom", arguments: "checks" })
+
+  expect(provider.requests[0]?.messages[0]?.content).toContain("Reviewer system prompt")
+  db.close()
+})

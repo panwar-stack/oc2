@@ -1,8 +1,7 @@
 import { applyEdits, modify, parse } from "jsonc-parser"
 import { join, resolve } from "node:path"
 
-import { createBuiltinCommands } from "../commands/builtins"
-import { createCommandRegistry } from "../commands/registry"
+import { createDefaultCommandRegistry } from "../commands/user-commands"
 import { loadConfig, type LoadConfigOptions } from "../config/load"
 import { getConfigPaths } from "../config/paths"
 import { collectEnvironmentInfo } from "../diagnostics/environment"
@@ -116,7 +115,9 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
 }
 
 async function commands(json: boolean, options: CliOptions): Promise<CliResult> {
-  const registry = createCommandRegistry(createBuiltinCommands())
+  const loaded = await loadConfig(options)
+  const paths = getConfigPaths(options)
+  const registry = await createDefaultCommandRegistry({ config: loaded.config, paths, readFile: options.readFile })
   const listed = registry.list().map(({ name, description, aliases, source, subtask, agent, model }) => ({
     name,
     description,
@@ -277,6 +278,7 @@ async function tui(command: Extract<ParsedCommand, { name: "tui" }>, options: Cl
     model: command.model,
     roots: command.roots,
     providers: options.modelProviders,
+    commands: await createDefaultCommandRegistry({ config: loaded.config, paths, readFile: options.readFile }),
   })
   return { exitCode: 0 }
 }
@@ -392,6 +394,7 @@ async function runPrompt(
     cwd: paths.cwd,
     dataDir: paths.dataDir,
     providers: options.modelProviders,
+    commands: await createDefaultCommandRegistry({ config: effectiveConfig, paths, readFile: options.readFile }),
   })
   try {
     const result = await service.run({

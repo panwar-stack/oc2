@@ -7,6 +7,7 @@ import { loadEnvOverrides } from "./env"
 import { getConfigPaths, resolvePath } from "./paths"
 import {
   agentProfileSchema,
+  commandConfigSchema,
   defaultConfig,
   knownConfigKeys,
   mcpServerConfigSchema,
@@ -154,6 +155,10 @@ function warnUnknownKeys(value: Oc2ConfigInput, sourcePath: string, diagnostics:
   for (const [name, agent] of Object.entries(value.agents ?? {})) {
     warnSet(agent, knownConfigKeys.agent, `${sourcePath}:agents.${name}`, diagnostics)
   }
+
+  for (const [name, command] of Object.entries(value.commands ?? {})) {
+    warnSet(command, knownConfigKeys.command, `${sourcePath}:commands.${name}`, diagnostics)
+  }
 }
 
 function warnSet(value: unknown, known: Set<string>, path: string, diagnostics: Diagnostic[]) {
@@ -189,6 +194,7 @@ function repairConfig(value: unknown): Oc2Config {
     tools: parseRecordEntries(candidate.tools, toolConfigSchema),
     mcp: parseRecordEntries(candidate.mcp, mcpServerConfigSchema),
     agents: parseRecordEntries(candidate.agents, agentProfileSchema),
+    commands: parseRecordEntries(candidate.commands, commandConfigSchema),
     runtime: {
       maxConcurrentTools: parsePositiveIntegerField(
         candidate.runtime,

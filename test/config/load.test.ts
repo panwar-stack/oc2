@@ -106,6 +106,41 @@ test("preserves valid nested record entries when another entry is invalid", asyn
   expect(loaded.config.mcp.invalid).toBeUndefined()
 })
 
+test("accepts command config fields and preserves them during repair", async () => {
+  const loaded = await loadConfig({
+    cwd: "/repo",
+    homeDir: "/home/test",
+    env: {},
+    fileExists: async (path) => path === "/repo/oc2.jsonc",
+    readFile: async () =>
+      JSON.stringify({
+        runtime: { logLevel: "verbose" },
+        commands: {
+          review: {
+            description: "Custom review",
+            aliases: ["rev"],
+            template: "Review this: $ARGUMENTS",
+            subtask: true,
+            agent: "reviewer",
+            model: "fake/test",
+          },
+          invalid: { aliases: "bad" },
+        },
+      }),
+  })
+
+  expect(loaded.config.commands.review).toMatchObject({
+    description: "Custom review",
+    aliases: ["rev"],
+    template: "Review this: $ARGUMENTS",
+    subtask: true,
+    agent: "reviewer",
+    model: "fake/test",
+  })
+  expect(loaded.config.commands.invalid).toBeUndefined()
+  expect(loaded.diagnostics.some((diagnostic) => diagnostic.code === "config.unknown_key")).toBe(false)
+})
+
 test("accepts canonical SPEC MCP metadata and OAuth fields", async () => {
   const loaded = await loadConfig({
     cwd: "/repo",

@@ -155,11 +155,25 @@ test("oc2 tui dispatches to the TUI launcher", async () => {
     env: { OC2_DATA_DIR: dataDir },
     fileExists: async () => false,
     tuiLauncher: async (options) => {
-      launches.push({ sessionId: options.sessionId, model: options.model, cwd: options.cwd, roots: options.roots })
+      launches.push({
+        sessionId: options.sessionId,
+        model: options.model,
+        cwd: options.cwd,
+        roots: options.roots,
+        commands: options.commands?.list().map((command) => command.name),
+      })
     },
   })
 
   expect(result.exitCode).toBe(0)
-  expect(launches).toEqual([{ sessionId: "session-1", model: "fake/test", cwd: "/repo", roots: ["../other"] }])
+  expect(launches).toEqual([
+    {
+      sessionId: "session-1",
+      model: "fake/test",
+      cwd: "/repo",
+      roots: ["../other"],
+      commands: ["review", "clarify", "spec-planner", "spec-implement", "team-report", "init"],
+    },
+  ])
   await rm(dataDir, { recursive: true, force: true })
 })
