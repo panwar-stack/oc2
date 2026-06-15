@@ -2112,6 +2112,7 @@ it.instance(
       const messages = JSON.stringify(inputs.at(-1)?.messages)
       expect(messages).toContain("`config`: `research-panel`")
       expect(messages).toContain("`prompt`: `Review key=value behavior`")
+      expect(messages).toContain("Do not include `branches`, `judge`, or `synthesizer` when `config` is set.")
       expect(messages).not.toContain("```json")
     }),
   { git: true },

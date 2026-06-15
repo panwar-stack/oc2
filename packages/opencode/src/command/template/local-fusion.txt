@@ -5,4 +5,6 @@ Tool input:
 - `config`: `$1`
 - `prompt`: `$2`
 
+Pass exactly those two fields. Do not include `branches`, `judge`, or `synthesizer` when `config` is set.
+
 Return the synthesized final answer from the tool result. Do not run branch, judge, or synthesizer models yourself outside the tool.
