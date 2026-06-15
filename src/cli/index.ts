@@ -1,6 +1,8 @@
 import { applyEdits, modify, parse } from "jsonc-parser"
 import { join } from "node:path"
 
+import { createBuiltinCommands } from "../commands/builtins"
+import { createCommandRegistry } from "../commands/registry"
 import { loadConfig, type LoadConfigOptions } from "../config/load"
 import { getConfigPaths } from "../config/paths"
 import { collectEnvironmentInfo } from "../diagnostics/environment"
@@ -30,6 +32,7 @@ import {
   formatMcpStatusText,
   formatRunJson,
   formatRunHelp,
+  formatSlashCommandsText,
   formatToolsListText,
   formatVersionJson,
   formatVersionText,
@@ -85,6 +88,8 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
       return tools(command.json, options)
     case "mcp":
       return mcp(command, options)
+    case "commands":
+      return commands(command.json, options)
     case "run":
       if (command.help) {
         await writeStdout(options.streams?.stdout, formatRunHelp())
@@ -98,6 +103,21 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
     case "export":
       return exportSession(command, options)
   }
+}
+
+async function commands(json: boolean, options: CliOptions): Promise<CliResult> {
+  const registry = createCommandRegistry(createBuiltinCommands())
+  const listed = registry.list().map(({ name, description, aliases, source, subtask, agent, model }) => ({
+    name,
+    description,
+    aliases: aliases ?? [],
+    source,
+    subtask: subtask ?? false,
+    agent,
+    model,
+  }))
+  await writeStdout(options.streams?.stdout, json ? formatJson({ commands: listed }) : formatSlashCommandsText(listed))
+  return { exitCode: 0 }
 }
 
 async function exportSession(

@@ -3,6 +3,10 @@ import { pathToFileURL } from "node:url"
 
 import { MainAgent, type MainAgentRunResult } from "../agent/agent"
 import { resolveMainAgentProfile } from "../agent/profiles"
+import { createBuiltinCommands } from "../commands/builtins"
+import { createCommandRegistry } from "../commands/registry"
+import { resolveCommandTemplate } from "../commands/resolver"
+import type { CommandRegistry } from "../commands/types"
 import type { Oc2Config } from "../config/schema"
 import { createRuntimeEventBus, type RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
@@ -32,6 +36,7 @@ export interface SessionRunServiceOptions {
   readonly sessions?: SessionService
   readonly models?: ModelService
   readonly registry?: ToolRegistry
+  readonly commands?: CommandRegistry
   readonly scheduler?: TaskScheduler
   readonly providers?: ModelServiceOptions["providers"]
   readonly mcpClientFactory?: McpClientFactory
@@ -50,12 +55,22 @@ export interface RunPromptInput {
   readonly signal?: AbortSignal
 }
 
+export interface CommandInput {
+  readonly name: string
+  readonly arguments?: string
+  readonly sessionId?: string
+  readonly model?: string
+  readonly agent?: string
+  readonly signal?: AbortSignal
+}
+
 /** Owns one-shot session runs and enforces a single active model loop per session. */
 export class SessionRunService {
   readonly sessions: SessionService
   readonly database?: Oc2Database
   private readonly models: ModelService
   private readonly registry: ToolRegistry
+  private readonly commands: CommandRegistry
   private readonly memory: RepositoryMemoryRepository
   private readonly scheduler: TaskScheduler
   private readonly events: RuntimeEventBus<unknown>
@@ -85,6 +100,7 @@ export class SessionRunService {
     this.sessions = options.sessions ?? createSessionService({ database: this.database, events: this.events })
     this.memory = new RepositoryMemoryRepository(this.database.sqlite)
     this.registry = options.registry ?? createBuiltInToolRegistry()
+    this.commands = options.commands ?? createCommandRegistry(createBuiltinCommands())
     this.models =
       options.models ??
       createModelService({ providers: options.providers, scheduler: this.scheduler, events: this.events })
@@ -93,6 +109,46 @@ export class SessionRunService {
     this.dataDir = options.dataDir ?? options.cwd
     this.mcpClientFactory = options.mcpClientFactory
     this.resolveQuestion = options.resolveQuestion
+  }
+
+  async command(input: CommandInput): Promise<MainAgentRunResult> {
+    const command = this.commands.get(input.name)
+    if (!command || command.source === "tui" || !command.template) {
+      return this.commandFailure(
+        input,
+        new RuntimeError({
+          code: "invalid_task",
+          message: `Slash command not found: ${input.name}`,
+          recoverable: true,
+        }),
+      )
+    }
+
+    return this.run({
+      prompt: await resolveCommandTemplate(command, input.arguments ?? ""),
+      sessionId: input.sessionId,
+      model: input.model ?? command.model,
+      signal: input.signal,
+    })
+  }
+
+  private commandFailure(input: CommandInput, error: RuntimeError): MainAgentRunResult {
+    const sessionId = input.sessionId ?? this.createFailedCommandSession(input).id
+    if (this.sessions.resumeSession(sessionId)) this.sessions.sessions.updateStatus(sessionId, "failed")
+    return { sessionId, text: "", toolCalls: [], errors: [error.toJSON()], status: "failed" }
+  }
+
+  private createFailedCommandSession(input: CommandInput) {
+    const profile = resolveMainAgentProfile(this.config)
+    const model = parseModel(input.model ?? profile.defaultModel, this.config)
+    return this.sessions.createSession({
+      title: `/${input.name}`,
+      workspaceRoots: resolveSessionRoots(undefined, this.cwd),
+      providerId: model.providerId,
+      modelId: model.modelId,
+      agentId: profile.id,
+      status: "failed",
+    })
   }
 
   async run(input: RunPromptInput): Promise<MainAgentRunResult> {

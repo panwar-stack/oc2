@@ -135,6 +135,34 @@ test("lists config-backed tools", async () => {
   expect(output.join("")).toBe("bash\tdisabled\nread\tenabled\n")
 })
 
+test("lists slash commands in text and JSON modes", async () => {
+  const textOutput: string[] = []
+  const textResult = await runCli({
+    argv: ["commands"],
+    streams: {
+      stdout: (text) => {
+        textOutput.push(text)
+      },
+    },
+  })
+  expect(textResult.exitCode).toBe(0)
+  expect(textOutput.join("")).toContain("/review\tbuiltin subtask")
+
+  const jsonOutput: string[] = []
+  const jsonResult = await runCli({
+    argv: ["commands", "--json"],
+    streams: {
+      stdout: (text) => {
+        jsonOutput.push(text)
+      },
+    },
+  })
+  expect(jsonResult.exitCode).toBe(0)
+  expect(JSON.parse(jsonOutput.join("")).commands).toContainEqual(
+    expect.objectContaining({ name: "review", source: "builtin", subtask: true }),
+  )
+})
+
 test("formats MCP auth state, auth URL, and counts", () => {
   const status = {
     serverId: "remote",

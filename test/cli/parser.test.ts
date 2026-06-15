@@ -17,6 +17,7 @@ test("parses basic commands and JSON flags", () => {
     ok: true,
     command: { name: "mcp", action: "list", json: true },
   })
+  expect(parseCommand(["commands", "--json"])).toEqual({ ok: true, command: { name: "commands", json: true } })
 })
 
 test("parses MCP management commands", () => {

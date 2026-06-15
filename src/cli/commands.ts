@@ -4,6 +4,7 @@ export type CommandName =
   | "config"
   | "tools"
   | "mcp"
+  | "commands"
   | "run"
   | "resume"
   | "tui"
@@ -19,6 +20,7 @@ export type ParsedCommand =
   | { name: "tools"; action: "list"; json: boolean }
   | { name: "mcp"; action: "list"; json: boolean }
   | { name: "mcp"; action: "enable" | "disable" | "test"; serverId: string; json: boolean }
+  | { name: "commands"; json: boolean }
   | { name: "run"; help: true }
   | {
       name: "run"
@@ -55,6 +57,7 @@ export const commandDescriptions = {
   config: "Read or update oc2 configuration",
   tools: "List configured tools",
   mcp: "Manage MCP servers",
+  commands: "List available slash commands",
   run: "Run a one-shot prompt",
   resume: "Resume a previous session",
   tui: "Open the interactive terminal UI",
@@ -80,6 +83,8 @@ export function parseCommand(argv: string[]): ParseResult {
       return parseTools(rest)
     case "mcp":
       return parseMcp(rest)
+    case "commands":
+      return parseNoPositionals("commands", rest, { name: "commands", json: hasFlag(rest, "--json") })
     case "run":
       return parseRun(rest)
     case "resume":

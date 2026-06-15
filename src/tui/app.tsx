@@ -160,11 +160,25 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
       }
       if (command) {
         resetInput()
-        state = appendLocalMessage(
-          state,
-          "assistant",
-          `Backend slash command /${command.name} is not wired yet. Session command execution is implemented in PR 3.`,
-        )
+        state = appendLocalMessage(state, "user", prompt)
+        const runController = new AbortController()
+        activeRun = runController
+        render()
+        try {
+          const result = await service.command({
+            name: slashCommand.name,
+            arguments: slashCommand.arguments,
+            sessionId: state.sessionId,
+            model: options.model,
+            agent: command.agent,
+            signal: runController.signal,
+          })
+          state = completeTuiRun(state, result, runController.signal.aborted)
+        } catch (error) {
+          state = failTuiRun(state, error, runController.signal.aborted)
+        } finally {
+          if (activeRun === runController) activeRun = undefined
+        }
         render()
         return
       }

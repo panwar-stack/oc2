@@ -1,5 +1,6 @@
 import type { Diagnostic, DiagnosticReport } from "../diagnostics/diagnostics"
 import type { MainAgentRunResult } from "../agent/agent"
+import type { SlashCommand } from "../commands/types"
 import { redactText } from "../logging/redaction"
 import type { McpServerStatus } from "../mcp/status"
 
@@ -12,6 +13,11 @@ export interface TextTableRow {
   name: string
   value: string
 }
+
+export type SlashCommandListItem = Pick<
+  SlashCommand,
+  "name" | "description" | "aliases" | "source" | "subtask" | "agent" | "model"
+>
 
 /** Formats values as stable, newline-terminated JSON for CLI output. */
 export function formatJson(value: unknown): string {
@@ -56,6 +62,17 @@ export function formatConfigValue(value: unknown, json: boolean): string {
 export function formatToolsListText(tools: { name: string; enabled: boolean }[]): string {
   if (tools.length === 0) return "No tools configured.\n"
   return `${tools.map((tool) => `${tool.name}\t${tool.enabled ? "enabled" : "disabled"}`).join("\n")}\n`
+}
+
+export function formatSlashCommandsText(commands: readonly SlashCommandListItem[]): string {
+  if (commands.length === 0) return "No slash commands registered.\n"
+  return `${commands
+    .map((command) => {
+      const aliases = command.aliases?.length ? ` aliases=${command.aliases.join(",")}` : ""
+      const subtask = command.subtask ? " subtask" : ""
+      return `/${command.name}\t${command.source}${subtask}${aliases}\t${command.description}`
+    })
+    .join("\n")}\n`
 }
 
 export function formatMcpListText(servers: readonly McpServerStatus[]): string {
