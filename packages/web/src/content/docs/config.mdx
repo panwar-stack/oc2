@@ -473,6 +473,10 @@ Provider options can include `timeout`, `chunkTimeout`, and `setCacheKey`:
 
 You can also configure [local models](/docs/models#local). [Learn more](/docs/models).
 
+:::note
+The `local_fusion` tool uses inline branch, judge, and synthesizer settings in the tool input. Named compound config entries are not part of `opencode.json` yet.
+:::
+
 ### Policies
 
 Use the `experimental.policies` option to allow or deny OpenCode actions on configured resources. Currently, policies can control which providers OpenCode may use.

@@ -231,6 +231,100 @@ Load a [skill](/docs/skills) (a `SKILL.md` file) and return its content in the c
 
 ---
 
+### local_fusion
+
+Run local compound model orchestration from inside the current session. The tool fans one prompt out to multiple inline branch models, judges the branch outputs, and synthesizes one final answer.
+
+```json title="opencode.json" {4}
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "local_fusion": "allow"
+  }
+}
+```
+
+Use `local_fusion` when you want a local research panel or model comparison without routing through a remote compound-model provider. The first version is explicit: the tool input must include `branches`, `judge`, and `synthesizer` inline.
+
+:::note
+Named compound configs are not available yet. Passing `config` to `local_fusion` returns an error; pass inline `branches`, `judge`, and `synthesizer` instead.
+:::
+
+Minimal inline input:
+
+```json title="local_fusion input"
+{
+  "prompt": "Compare two implementation approaches for this refactor.",
+  "branches": [
+    { "model": "anthropic/claude-sonnet-4-5" },
+    { "model": "openai/gpt-5" }
+  ],
+  "judge": { "model": "openai/gpt-5-mini" },
+  "synthesizer": { "model": "anthropic/claude-sonnet-4-5" }
+}
+```
+
+Research panel example:
+
+```json title="local_fusion input"
+{
+  "prompt": "Research the API migration plan and recommend the safest rollout.",
+  "branches": [
+    {
+      "model": "anthropic/claude-sonnet-4-5",
+      "prompt": "Focus on implementation risk and codebase constraints."
+    },
+    {
+      "model": "openai/gpt-5",
+      "prompt": "Focus on product behavior, migration sequencing, and edge cases."
+    },
+    {
+      "model": "google/gemini-3-pro",
+      "toolPolicy": "none",
+      "prompt": "Reason from the prompt only and challenge hidden assumptions."
+    }
+  ],
+  "judge": {
+    "model": "openai/gpt-5-mini",
+    "prompt": "Identify consensus, contradictions, unique insights, blind spots, and branch failures."
+  },
+  "synthesizer": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "prompt": "Write one concise final recommendation grounded in the branch outputs and judge analysis."
+  }
+}
+```
+
+Branch options:
+
+- `model` - Required model string in `provider/model` form.
+- `agent` - Optional agent name for the branch session.
+- `prompt` - Optional branch-specific guidance appended to the user request.
+- `toolPolicy` - Optional branch tool policy. Defaults to `"readonly"`; use `"none"` to disable tools for that branch.
+- `timeout` - Optional branch timeout in milliseconds.
+
+Safety defaults:
+
+- Branches default to `"readonly"`, which allows read/search tools and denies all other tools.
+- Branches with `"none"` receive no tools.
+- Judge and synthesizer receive no tools.
+- Branch internals are not streamed into the parent response; the tool returns one synthesized final answer plus compact metadata.
+
+Failure behavior:
+
+- Invalid inline config fails before branches start.
+- If every branch fails, the tool fails with branch failure summaries.
+- If at least one branch succeeds, judge and synthesizer still run with the successful outputs and explicit failure summaries.
+- Judge failure fails the tool; OpenCode does not silently synthesize from raw branch outputs.
+- Synthesizer failure fails the tool.
+- Branch timeouts are recorded as branch failures, and the run continues if another branch succeeds.
+
+:::caution
+`local_fusion` does not provide `model: "compound/..."` routing, branch trace UI, crash recovery records, or mutating branch tools in this first version.
+:::
+
+---
+
 ### memory_search_commit
 
 Search repository commit memory for past changes related to one or more natural-language, error-text, code-symbol, or file-path queries.
