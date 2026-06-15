@@ -7,6 +7,8 @@ import { EffectBridge } from "@/effect/bridge"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { SessionCompoundConfig } from "./config"
+import { SessionCompoundJudge } from "./judge"
+import { SessionCompoundSynthesizer } from "./synthesizer"
 import type { TaskPromptOps } from "@/tool/task"
 
 const readonlyTools = {
@@ -38,12 +40,62 @@ export type BranchFailure = {
   timedOut?: boolean
 }
 
-export type Result = {
+export type BranchResult = {
   successes: BranchSuccess[]
   failures: BranchFailure[]
 }
 
+export type RunResult = {
+  output: string
+  branches: BranchResult
+  judge: SessionCompoundJudge.Result
+  metadata: {
+    branchCount: number
+    successfulBranchCount: number
+    failedBranchCount: number
+    judgeModel: string
+    synthesizerModel: string
+  }
+}
+
 export const run = Effect.fn("SessionCompound.run")(function* (input: {
+  sessionID: SessionID
+  prompt: string
+  config: SessionCompoundConfig.Config
+  agent?: string
+  promptOps: TaskPromptOps
+  abort?: AbortSignal
+}) {
+  const branches = yield* runBranches(input)
+  if (branches.successes.length === 0) {
+    return yield* Effect.fail(
+      new Error(`All compound branches failed: ${branches.failures.map((failure) => failure.reason).join("; ")}`),
+    )
+  }
+
+  const judge = yield* SessionCompoundJudge.run({ ...input, branches, judge: input.config.judge })
+  const synthesis = yield* SessionCompoundSynthesizer.run({
+    ...input,
+    branches,
+    judge,
+    synthesizer: input.config.synthesizer,
+  })
+
+  return {
+    output: synthesis.output,
+    branches,
+    judge,
+    metadata: {
+      branchCount: input.config.branches.length,
+      successfulBranchCount: branches.successes.length,
+      failedBranchCount: branches.failures.length,
+      judgeModel: input.config.judge.model,
+      synthesizerModel: input.config.synthesizer.model,
+    },
+  }
+})
+
+export const runBranches = Effect.fn("SessionCompound.runBranches")(function* (input: {
   sessionID: SessionID
   prompt: string
   config: SessionCompoundConfig.Config

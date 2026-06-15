@@ -199,7 +199,13 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
-  return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+  return Record.filter(
+    input.tools,
+    (_, k) =>
+      input.user.tools?.[k] !== false &&
+      (input.user.tools?.["*"] !== false || input.user.tools?.[k] === true) &&
+      !disabled.has(k),
+  )
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {

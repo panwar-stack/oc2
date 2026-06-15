@@ -97,7 +97,7 @@ describe("session compound runner", () => {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent", agent: "build" })
       const prompts: SessionPrompt.PromptInput[] = []
-      const result = yield* SessionCompound.run({
+      const result = yield* SessionCompound.runBranches({
         sessionID: parent.id,
         prompt: "Compare options",
         config: config(),
@@ -132,7 +132,7 @@ describe("session compound runner", () => {
             return reply(input, String(input.model?.modelID))
           }),
       }
-      const fiber = yield* SessionCompound.run({ sessionID: parent.id, prompt: "go", config: config(), promptOps }).pipe(
+      const fiber = yield* SessionCompound.runBranches({ sessionID: parent.id, prompt: "go", config: config(), promptOps }).pipe(
         Effect.forkIn(scope),
       )
 
@@ -149,7 +149,7 @@ describe("session compound runner", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      const result = yield* SessionCompound.run({
+      const result = yield* SessionCompound.runBranches({
         sessionID: parent.id,
         prompt: "go",
         config: config(),
@@ -171,7 +171,7 @@ describe("session compound runner", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      const result = yield* SessionCompound.run({
+      const result = yield* SessionCompound.runBranches({
         sessionID: parent.id,
         prompt: "go",
         config: config({ branches: [{ model: "test/error" }], limits: { maxBranches: 1 } }),
@@ -191,7 +191,7 @@ describe("session compound runner", () => {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
       const cancelled: SessionID[] = []
-      const result = yield* SessionCompound.run({
+      const result = yield* SessionCompound.runBranches({
         sessionID: parent.id,
         prompt: "go",
         config: config({ branches: [{ model: "test/slow", timeout: 1 }], limits: { timeout: 50, maxBranches: 1 } }),
@@ -212,7 +212,7 @@ describe("session compound runner", () => {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
       const prompts: SessionPrompt.PromptInput[] = []
-      yield* SessionCompound.run({
+      yield* SessionCompound.runBranches({
         sessionID: parent.id,
         prompt: "go",
         config: config(),
