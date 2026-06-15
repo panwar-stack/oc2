@@ -64,8 +64,8 @@ describe("command", () => {
           expect(localFusion.description).toBe("Run a named local_fusion config with a prompt.")
           expect(localFusion.hints).toEqual(["$1", "$2"])
           expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("local_fusion")
-          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain('"config": "$1"')
-          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain('"prompt": "$2"')
+          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("`config`: `$1`")
+          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("`prompt`: `$2`")
         }),
       { git: true },
     ),

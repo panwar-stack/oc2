@@ -4,7 +4,6 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Cause, Effect, Exit } from "effect"
 import { EffectBridge } from "@/effect/bridge"
-import { MCP } from "@/mcp"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { SessionCompoundConfig } from "./config"
@@ -152,8 +151,6 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
     Effect.sync(() => input.abort?.addEventListener("abort", onAbort)),
     () =>
       Effect.gen(function* () {
-        yield* (yield* MCP.Service).tools()
-
         const result = yield* promptBranch(input, child.id, model, agent).pipe(
           Effect.timeoutOption(input.branch.timeout ?? input.config.limits.timeout),
         )

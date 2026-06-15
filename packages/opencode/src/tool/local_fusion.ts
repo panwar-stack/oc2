@@ -48,14 +48,14 @@ export const LocalFusionTool = Tool.define(
             agent: ctx.agent,
             promptOps,
             abort: ctx.abort,
-          }).pipe(Effect.provideService(Session.Service, sessions))
+          })
 
           return {
             title: "Local fusion",
             output: result.output,
             metadata: result.metadata,
           }
-        }).pipe(Effect.orDie),
+        }).pipe(Effect.provideService(Session.Service, sessions), Effect.orDie),
     }
   }),
 )

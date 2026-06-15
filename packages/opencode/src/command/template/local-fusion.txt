@@ -2,11 +2,7 @@ Use the `local_fusion` tool exactly once.
 
 Tool input:
 
-```json
-{
-  "config": "$1",
-  "prompt": "$2"
-}
-```
+- `config`: `$1`
+- `prompt`: `$2`
 
 Return the synthesized final answer from the tool result. Do not run branch, judge, or synthesizer models yourself outside the tool.

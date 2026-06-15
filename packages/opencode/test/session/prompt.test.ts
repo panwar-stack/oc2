@@ -2093,6 +2093,31 @@ unix(
   30_000,
 )
 
+it.instance(
+  "local_fusion command renders prompt outside json input",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const { prompt, chat } = yield* boot()
+      yield* llm.text("done")
+
+      const result = yield* prompt.command({
+        sessionID: chat.id,
+        command: "local_fusion",
+        arguments: "research-panel Review key=value behavior",
+      })
+
+      expect(result.info.role).toBe("assistant")
+      const inputs = yield* llm.inputs
+      const messages = JSON.stringify(inputs.at(-1)?.messages)
+      expect(messages).toContain("`config`: `research-panel`")
+      expect(messages).toContain("`prompt`: `Review key=value behavior`")
+      expect(messages).not.toContain("```json")
+    }),
+  { git: true },
+  30_000,
+)
+
 unixNoLLMServer(
   "cancel interrupts shell and resolves cleanly",
   () =>
