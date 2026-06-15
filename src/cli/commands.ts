@@ -5,6 +5,8 @@ export type CommandName =
   | "tools"
   | "mcp"
   | "commands"
+  | "sessions"
+  | "memory"
   | "run"
   | "resume"
   | "tui"
@@ -18,9 +20,12 @@ export type ParsedCommand =
   | { name: "config"; action: "get"; key?: string; json: boolean }
   | { name: "config"; action: "set"; key: string; value: string; json: boolean }
   | { name: "tools"; action: "list"; json: boolean }
+  | { name: "tools"; action: "enable" | "disable"; toolName: string; json: boolean }
   | { name: "mcp"; action: "list"; json: boolean }
   | { name: "mcp"; action: "enable" | "disable" | "test"; serverId: string; json: boolean }
   | { name: "commands"; json: boolean }
+  | { name: "sessions"; action: "list"; json: boolean }
+  | { name: "memory"; action: "list"; repository?: string; json: boolean }
   | { name: "run"; help: true }
   | {
       name: "run"
@@ -33,8 +38,12 @@ export type ParsedCommand =
       mcp: readonly string[]
       disabledMcp: readonly string[]
       roots: readonly string[]
+      team: boolean
+      timeoutMs?: number
+      maxConcurrency?: number
     }
-  | { name: "resume"; sessionId: string; run: string; json: boolean; model?: string }
+  | { name: "resume"; sessionId: string; run: string; tui?: false; json: boolean; model?: string }
+  | { name: "resume"; sessionId: string; tui: true; json: boolean; model?: string; roots: readonly string[] }
   | { name: "tui"; sessionId?: string; model?: string; roots: readonly string[] }
   | { name: "export"; sessionId: string; format: "markdown" | "json"; recursive: boolean }
   | { name: "help" }
@@ -58,6 +67,8 @@ export const commandDescriptions = {
   tools: "List configured tools",
   mcp: "Manage MCP servers",
   commands: "List available slash commands",
+  sessions: "List sessions from local database",
+  memory: "List repository memory retrieval logs",
   run: "Run a one-shot prompt",
   resume: "Resume a previous session",
   tui: "Open the interactive terminal UI",
@@ -85,6 +96,10 @@ export function parseCommand(argv: string[]): ParseResult {
       return parseMcp(rest)
     case "commands":
       return parseNoPositionals("commands", rest, { name: "commands", json: hasFlag(rest, "--json") })
+    case "sessions":
+      return parseSessions(rest)
+    case "memory":
+      return parseMemory(rest)
     case "run":
       return parseRun(rest)
     case "resume":
@@ -127,6 +142,29 @@ function parseMcp(argv: string[]): ParseResult {
       return { ok: true, command: { name: "mcp", action, serverId: positionals[0] ?? "", json } }
     default:
       return { ok: false, message: "Expected mcp list, mcp enable, mcp disable, or mcp test" }
+  }
+}
+
+function parseSessions(argv: string[]): ParseResult {
+  const [action, ...rest] = argv
+  if (action !== "list") return { ok: false, message: "Expected sessions list" }
+  return parseNoPositionals("sessions list", rest, { name: "sessions", action: "list", json: hasFlag(rest, "--json") })
+}
+
+function parseMemory(argv: string[]): ParseResult {
+  const [action, ...rest] = argv
+  if (action !== "list") return { ok: false, message: "Expected memory list" }
+  const parsed = parseFlagValues(rest, new Set(["--json"]), new Set(["--repository"]))
+  if (!parsed.ok) return parsed
+  if (parsed.positionals.length > 0) return { ok: false, message: "memory list does not accept positional arguments" }
+  return {
+    ok: true,
+    command: {
+      name: "memory",
+      action: "list",
+      repository: parsed.values.get("--repository")?.[0],
+      json: parsed.booleans.has("--json"),
+    },
   }
 }
 
@@ -182,18 +220,29 @@ function parseConfig(argv: string[]): ParseResult {
 
 function parseTools(argv: string[]): ParseResult {
   const [action, ...rest] = argv
-  if (action !== "list") return { ok: false, message: "Expected tools list" }
-  return parseNoPositionals("tools list", rest, { name: "tools", action: "list", json: hasFlag(rest, "--json") })
+  if (action === "list")
+    return parseNoPositionals("tools list", rest, { name: "tools", action: "list", json: hasFlag(rest, "--json") })
+  if (action === "enable" || action === "disable") {
+    const json = hasFlag(rest, "--json")
+    const positionals = withoutKnownFlags(rest)
+    if (positionals.length !== 1) return { ok: false, message: `tools ${action} requires <name>` }
+    return { ok: true, command: { name: "tools", action, toolName: positionals[0] ?? "", json } }
+  }
+  return { ok: false, message: "Expected tools list, tools enable, or tools disable" }
 }
 
 function parseRun(argv: string[]): ParseResult {
   if (hasFlag(argv, "--help") || hasFlag(argv, "-h")) return { ok: true, command: { name: "run", help: true } }
   const parsed = parseFlagValues(
     argv,
-    new Set(["--json"]),
-    new Set(["--model", "--tool", "--no-tool", "--mcp", "--no-mcp", "--root"]),
+    new Set(["--json", "--team"]),
+    new Set(["--model", "--tool", "--no-tool", "--mcp", "--no-mcp", "--root", "--timeout", "--max-concurrency"]),
   )
   if (!parsed.ok) return parsed
+  const timeoutMs = parsePositiveIntFlag(parsed, "--timeout")
+  if (!timeoutMs.ok) return timeoutMs
+  const maxConcurrency = parsePositiveIntFlag(parsed, "--max-concurrency")
+  if (!maxConcurrency.ok) return maxConcurrency
   if (parsed.positionals.length === 0) return { ok: false, message: "run requires <prompt>" }
   return {
     ok: true,
@@ -207,17 +256,35 @@ function parseRun(argv: string[]): ParseResult {
       mcp: parsed.values.get("--mcp") ?? [],
       disabledMcp: parsed.values.get("--no-mcp") ?? [],
       roots: parsed.values.get("--root") ?? [],
+      team: parsed.booleans.has("--team"),
+      timeoutMs: timeoutMs.value,
+      maxConcurrency: maxConcurrency.value,
     },
   }
 }
 
 function parseResume(argv: string[]): ParseResult {
-  const parsed = parseFlagValues(argv, new Set(["--json"]), new Set(["--run", "--model"]))
+  const parsed = parseFlagValues(argv, new Set(["--json", "--tui"]), new Set(["--run", "--model", "--root"]))
   if (!parsed.ok) return parsed
   const [sessionId, ...extra] = parsed.positionals
   if (!sessionId || extra.length > 0) return { ok: false, message: "resume requires <session-id>" }
   const run = parsed.values.get("--run")?.[0]
-  if (!run) return { ok: false, message: "resume requires --run <prompt> for non-interactive execution" }
+  const useTui = parsed.booleans.has("--tui")
+  if (run && useTui) return { ok: false, message: "resume accepts either --run or --tui, not both" }
+  if (useTui) {
+    return {
+      ok: true,
+      command: {
+        name: "resume",
+        sessionId,
+        tui: true,
+        json: parsed.booleans.has("--json"),
+        model: parsed.values.get("--model")?.[0],
+        roots: parsed.values.get("--root") ?? [],
+      },
+    }
+  }
+  if (!run) return { ok: false, message: "resume requires --run <prompt> or --tui" }
   return {
     ok: true,
     command: {
@@ -228,6 +295,14 @@ function parseResume(argv: string[]): ParseResult {
       model: parsed.values.get("--model")?.[0],
     },
   }
+}
+
+function parsePositiveIntFlag(parsed: ParsedFlags, flag: string): { ok: true; value?: number } | ParseFailure {
+  const value = parsed.values.get(flag)?.[0]
+  if (value === undefined) return { ok: true }
+  const number = Number(value)
+  if (!Number.isInteger(number) || number <= 0) return { ok: false, message: `${flag} must be a positive integer` }
+  return { ok: true, value: number }
 }
 
 function parseNoPositionals(commandName: string, argv: string[], command: ParsedCommand): ParseResult {

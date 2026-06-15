@@ -1,5 +1,5 @@
 import { applyEdits, modify, parse } from "jsonc-parser"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 
 import { createBuiltinCommands } from "../commands/builtins"
 import { createCommandRegistry } from "../commands/registry"
@@ -11,6 +11,7 @@ import { createDiagnosticReport } from "../diagnostics/diagnostics"
 import { createMcpService } from "../mcp/mcp-service"
 import type { ModelProvider } from "../model/provider"
 import { openOc2Database } from "../persistence/db"
+import { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import { createSessionRunService } from "../session/run"
 import { createSessionService } from "../session/session-service"
 import {
@@ -32,6 +33,9 @@ import {
   formatMcpStatusText,
   formatRunJson,
   formatRunHelp,
+  formatMemoryListText,
+  formatSessionsListJson,
+  formatSessionsListText,
   formatSlashCommandsText,
   formatToolsListText,
   formatVersionJson,
@@ -85,11 +89,15 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
     case "config":
       return config(command, options)
     case "tools":
-      return tools(command.json, options)
+      return tools(command, options)
     case "mcp":
       return mcp(command, options)
     case "commands":
       return commands(command.json, options)
+    case "sessions":
+      return listSessions(command.json, options)
+    case "memory":
+      return memory(command, options)
     case "run":
       if (command.help) {
         await writeStdout(options.streams?.stdout, formatRunHelp())
@@ -97,6 +105,8 @@ async function executeCommand(command: ParsedCommand, options: CliOptions): Prom
       }
       return runPrompt(command, undefined, options)
     case "resume":
+      if (command.tui)
+        return tui({ name: "tui", sessionId: command.sessionId, model: command.model, roots: command.roots }, options)
       return runPrompt(command, command.sessionId, options)
     case "tui":
       return tui(command, options)
@@ -209,6 +219,52 @@ async function mcp(command: Extract<ParsedCommand, { name: "mcp" }>, options: Cl
   return { exitCode: 0 }
 }
 
+async function listSessions(json: boolean, options: CliOptions): Promise<CliResult> {
+  const paths = getConfigPaths(options)
+  const databasePath = join(paths.dataDir, "oc2.sqlite")
+  const fileExists = options.fileExists ?? ((filePath: string) => Bun.file(filePath).exists())
+  if (!(await fileExists(databasePath))) {
+    await writeStdout(options.streams?.stdout, json ? formatJson({ sessions: [] }) : formatSessionsListText([]))
+    return { exitCode: 0 }
+  }
+  const database = openOc2Database({ path: databasePath, readonly: true, migrate: false })
+  try {
+    const listed = createSessionService({ database }).listSessions()
+    await writeStdout(
+      options.streams?.stdout,
+      json ? formatJson(formatSessionsListJson(listed)) : formatSessionsListText(listed),
+    )
+    return { exitCode: 0 }
+  } finally {
+    database.close()
+  }
+}
+
+async function memory(command: Extract<ParsedCommand, { name: "memory" }>, options: CliOptions): Promise<CliResult> {
+  const paths = getConfigPaths(options)
+  const repository = resolve(paths.cwd, command.repository ?? paths.cwd)
+  const databasePath = join(paths.dataDir, "oc2.sqlite")
+  const fileExists = options.fileExists ?? ((filePath: string) => Bun.file(filePath).exists())
+  if (!(await fileExists(databasePath))) {
+    await writeStdout(
+      options.streams?.stdout,
+      command.json ? formatJson({ repository, logs: [] }) : formatMemoryListText([]),
+    )
+    return { exitCode: 0 }
+  }
+  const database = openOc2Database({ path: databasePath, readonly: true, migrate: false })
+  try {
+    const logs = new RepositoryMemoryRepository(database.sqlite).listRetrievalLogs(repository)
+    await writeStdout(
+      options.streams?.stdout,
+      command.json ? formatJson({ repository, logs }) : formatMemoryListText(logs),
+    )
+    return { exitCode: 0 }
+  } finally {
+    database.close()
+  }
+}
+
 async function tui(command: Extract<ParsedCommand, { name: "tui" }>, options: CliOptions): Promise<CliResult> {
   const loaded = await loadConfig(options)
   const paths = getConfigPaths(options)
@@ -272,21 +328,44 @@ async function config(command: Extract<ParsedCommand, { name: "config" }>, optio
   return { exitCode: 0 }
 }
 
-async function tools(json: boolean, options: CliOptions): Promise<CliResult> {
+async function tools(command: Extract<ParsedCommand, { name: "tools" }>, options: CliOptions): Promise<CliResult> {
+  if (command.action === "enable" || command.action === "disable") return setToolEnabled(command, options)
   const loaded = await loadConfig(options)
   const configuredTools = Object.entries(loaded.config.tools)
     .map(([name, tool]) => ({ name, enabled: tool.enabled }))
     .toSorted((left, right) => left.name.localeCompare(right.name))
   await writeStdout(
     options.streams?.stdout,
-    json ? formatJson({ tools: configuredTools }) : formatToolsListText(configuredTools),
+    command.json ? formatJson({ tools: configuredTools }) : formatToolsListText(configuredTools),
+  )
+  return { exitCode: 0 }
+}
+
+async function setToolEnabled(
+  command: Extract<ParsedCommand, { name: "tools"; action: "enable" | "disable" }>,
+  options: CliOptions,
+): Promise<CliResult> {
+  const paths = getConfigPaths(options)
+  const path = paths.projectConfigPaths[0] ?? `${paths.cwd}/oc2.jsonc`
+  const readFile = options.readFile ?? ((filePath: string) => Bun.file(filePath).text())
+  const fileExists = options.fileExists ?? ((filePath: string) => Bun.file(filePath).exists())
+  const writeFile =
+    options.writeFile ?? ((filePath: string, contents: string) => Bun.write(filePath, contents).then(() => undefined))
+  const existing = (await fileExists(path)) ? await readFile(path) : "{}\n"
+  const enabled = command.action === "enable"
+  await writeFile(path, setJsoncPath(existing, `tools.${command.toolName}.enabled`, enabled))
+  await writeStdout(
+    options.streams?.stdout,
+    command.json
+      ? formatJson({ path, toolName: command.toolName, enabled })
+      : `${enabled ? "Enabled" : "Disabled"} tool ${command.toolName} in ${path}\n`,
   )
   return { exitCode: 0 }
 }
 
 type RunExecutionCommand =
   | Extract<ParsedCommand, { name: "run"; prompt: string }>
-  | Extract<ParsedCommand, { name: "resume" }>
+  | Extract<ParsedCommand, { name: "resume"; run: string }>
 
 async function runPrompt(
   command: RunExecutionCommand,
@@ -295,8 +374,21 @@ async function runPrompt(
 ): Promise<CliResult> {
   const loaded = await loadConfig(options)
   const paths = getConfigPaths(options)
+  const effectiveConfig =
+    command.name === "run" && (command.timeoutMs || command.maxConcurrency)
+      ? {
+          ...loaded.config,
+          runtime: {
+            ...loaded.config.runtime,
+            defaultTimeoutMs: command.timeoutMs ?? loaded.config.runtime.defaultTimeoutMs,
+            maxConcurrentTools: command.maxConcurrency ?? loaded.config.runtime.maxConcurrentTools,
+            maxConcurrentSubAgents: command.maxConcurrency ?? loaded.config.runtime.maxConcurrentSubAgents,
+            maxConcurrentTeamMembers: command.maxConcurrency ?? loaded.config.runtime.maxConcurrentTeamMembers,
+          },
+        }
+      : loaded.config
   const service = createSessionRunService({
-    config: loaded.config,
+    config: effectiveConfig,
     cwd: paths.cwd,
     dataDir: paths.dataDir,
     providers: options.modelProviders,
@@ -311,6 +403,9 @@ async function runPrompt(
       enabledMcp: command.name === "run" ? command.mcp : undefined,
       disabledMcp: command.name === "run" ? command.disabledMcp : undefined,
       roots: command.name === "run" ? command.roots : undefined,
+      team: command.name === "run" ? command.team : undefined,
+      timeoutMs: command.name === "run" ? command.timeoutMs : undefined,
+      maxConcurrency: command.name === "run" ? command.maxConcurrency : undefined,
     })
     await writeStdout(options.streams?.stdout, command.json ? formatJson(formatRunJson(result)) : `${result.text}\n`)
     return { exitCode: result.status === "completed" ? 0 : 1 }

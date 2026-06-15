@@ -13,11 +13,23 @@ test("parses basic commands and JSON flags", () => {
     ok: true,
     command: { name: "tools", action: "list", json: true },
   })
+  expect(parseCommand(["tools", "enable", "read"])).toEqual({
+    ok: true,
+    command: { name: "tools", action: "enable", toolName: "read", json: false },
+  })
   expect(parseCommand(["mcp", "list", "--json"])).toEqual({
     ok: true,
     command: { name: "mcp", action: "list", json: true },
   })
   expect(parseCommand(["commands", "--json"])).toEqual({ ok: true, command: { name: "commands", json: true } })
+  expect(parseCommand(["sessions", "list"])).toEqual({
+    ok: true,
+    command: { name: "sessions", action: "list", json: false },
+  })
+  expect(parseCommand(["memory", "list", "--repository", "../repo", "--json"])).toEqual({
+    ok: true,
+    command: { name: "memory", action: "list", repository: "../repo", json: true },
+  })
 })
 
 test("parses MCP management commands", () => {
@@ -60,7 +72,18 @@ test("parses run help and execution", () => {
       mcp: [],
       disabledMcp: [],
       roots: [],
+      team: false,
+      timeoutMs: undefined,
+      maxConcurrency: undefined,
     },
+  })
+  expect(parseCommand(["run", "hello", "--team", "--timeout", "5000", "--max-concurrency", "2"])).toMatchObject({
+    ok: true,
+    command: { name: "run", team: true, timeoutMs: 5000, maxConcurrency: 2 },
+  })
+  expect(parseCommand(["run", "hello", "--timeout", "0"])).toEqual({
+    ok: false,
+    message: "--timeout must be a positive integer",
   })
 })
 
@@ -77,6 +100,9 @@ test("parses repeated run root flags in order", () => {
       mcp: [],
       disabledMcp: [],
       roots: [".", "../reference"],
+      team: false,
+      timeoutMs: undefined,
+      maxConcurrency: undefined,
     },
   })
 })
@@ -85,6 +111,10 @@ test("parses tui resume and model flags", () => {
   expect(parseCommand(["tui", "--session", "session-1", "--model", "fake/test", "--root", "/repo"])).toEqual({
     ok: true,
     command: { name: "tui", sessionId: "session-1", model: "fake/test", roots: ["/repo"] },
+  })
+  expect(parseCommand(["resume", "session-1", "--tui", "--model", "fake/test", "--root", "/repo"])).toEqual({
+    ok: true,
+    command: { name: "resume", sessionId: "session-1", tui: true, json: false, model: "fake/test", roots: ["/repo"] },
   })
 })
 

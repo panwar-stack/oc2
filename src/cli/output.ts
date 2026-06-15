@@ -3,6 +3,8 @@ import type { MainAgentRunResult } from "../agent/agent"
 import type { SlashCommand } from "../commands/types"
 import { redactText } from "../logging/redaction"
 import type { McpServerStatus } from "../mcp/status"
+import type { RepositoryMemoryRetrievalLogRecord } from "../persistence/repositories/memory"
+import type { SessionRecord } from "../persistence/repositories/sessions"
 
 export interface JsonVersionOutput {
   name: "oc2"
@@ -17,6 +19,20 @@ export interface TextTableRow {
 export type SlashCommandListItem = Pick<
   SlashCommand,
   "name" | "description" | "aliases" | "source" | "subtask" | "agent" | "model"
+>
+
+export type SessionListItem = Pick<
+  SessionRecord,
+  | "id"
+  | "title"
+  | "status"
+  | "createdAt"
+  | "updatedAt"
+  | "providerId"
+  | "modelId"
+  | "agentId"
+  | "parentSessionId"
+  | "teamId"
 >
 
 /** Formats values as stable, newline-terminated JSON for CLI output. */
@@ -72,6 +88,42 @@ export function formatSlashCommandsText(commands: readonly SlashCommandListItem[
       const subtask = command.subtask ? " subtask" : ""
       return `/${command.name}\t${command.source}${subtask}${aliases}\t${command.description}`
     })
+    .join("\n")}\n`
+}
+
+export function formatSessionsListJson(sessions: readonly SessionRecord[]): {
+  readonly sessions: readonly SessionListItem[]
+} {
+  return {
+    sessions: sessions.map(
+      ({ id, title, status, createdAt, updatedAt, providerId, modelId, agentId, parentSessionId, teamId }) => ({
+        id,
+        title,
+        status,
+        createdAt,
+        updatedAt,
+        providerId,
+        modelId,
+        agentId,
+        parentSessionId,
+        teamId,
+      }),
+    ),
+  }
+}
+
+export function formatSessionsListText(sessions: readonly SessionListItem[]): string {
+  if (sessions.length === 0) return "No sessions found.\n"
+  return `${sessions.map((session) => `${session.id}\t${session.status}\t${session.createdAt}\t${session.title ?? ""}`).join("\n")}\n`
+}
+
+export function formatMemoryListText(logs: readonly RepositoryMemoryRetrievalLogRecord[]): string {
+  if (logs.length === 0) return "No memory retrieval logs found.\n"
+  return `${logs
+    .map(
+      (log) =>
+        `${log.createdAt}\t${log.tool}\t${log.sessionId ?? "-"}\t${log.query}\t${log.returnedEntryIds.length} returned\t${log.selectedEntryIds.length} selected`,
+    )
     .join("\n")}\n`
 }
 

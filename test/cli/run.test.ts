@@ -20,6 +20,9 @@ test("parses run prompt and resume run flags", () => {
       mcp: [],
       disabledMcp: [],
       roots: [],
+      team: false,
+      timeoutMs: undefined,
+      maxConcurrency: undefined,
     },
   })
   expect(parseCommand(["resume", "session-1", "--run", "next", "--json"])).toEqual({

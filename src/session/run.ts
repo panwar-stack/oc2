@@ -21,6 +21,7 @@ import { createSessionService, type SessionService } from "./session-service"
 import { createBuiltInToolRegistry } from "../tools/builtins/index"
 import { createToolExecutor } from "../tools/execution"
 import type { ToolRegistry } from "../tools/registry"
+import type { ToolDefinition } from "../tools/tool"
 import { createSubAgentService } from "../subagent/subagent-service"
 import { createSubAgentTool } from "../subagent/subagent-tool"
 import { createTeamService } from "../team/team-service"
@@ -52,6 +53,9 @@ export interface RunPromptInput {
   readonly enabledMcp?: readonly string[]
   readonly disabledMcp?: readonly string[]
   readonly roots?: readonly string[]
+  readonly team?: boolean
+  readonly timeoutMs?: number
+  readonly maxConcurrency?: number
   readonly signal?: AbortSignal
 }
 
@@ -152,7 +156,8 @@ export class SessionRunService {
   }
 
   async run(input: RunPromptInput): Promise<MainAgentRunResult> {
-    const profile = resolveMainAgentProfile(this.config)
+    const baseProfile = resolveMainAgentProfile(this.config)
+    const profile = input.timeoutMs ? { ...baseProfile, timeoutMs: input.timeoutMs } : baseProfile
     const model = parseModel(input.model ?? profile.defaultModel, this.config)
     const session = input.sessionId
       ? this.sessions.resumeSession(input.sessionId)
@@ -350,18 +355,22 @@ export class SessionRunService {
       events: this.events,
       memory: this.memory,
     })
-    const teams = createTeamService({
-      config: agentConfig,
-      sessions: this.sessions,
-      models: this.models,
-      registry: this.registry,
-      scheduler: this.scheduler,
-      events: this.events,
-      memory: this.memory,
-    })
     this.registry.register(createSubAgentTool({ service: subagents }))
-    for (const teamTool of createTeamTools({ service: teams })) {
-      this.registry.register(teamTool)
+    const registeredTeamTools: { readonly name: string; readonly previous?: ToolDefinition }[] = []
+    if (input.team) {
+      const teams = createTeamService({
+        config: agentConfig,
+        sessions: this.sessions,
+        models: this.models,
+        registry: this.registry,
+        scheduler: this.scheduler,
+        events: this.events,
+        memory: this.memory,
+      })
+      for (const teamTool of createTeamTools({ service: teams })) {
+        registeredTeamTools.push({ name: teamTool.name, previous: this.registry.get(teamTool.name) })
+        this.registry.register(teamTool)
+      }
     }
     const agent = new MainAgent({
       sessions: this.sessions,
@@ -386,6 +395,10 @@ export class SessionRunService {
       throw error
     } finally {
       await mcp.close()
+      for (const tool of registeredTeamTools) {
+        if (tool.previous) this.registry.register(tool.previous)
+        else this.registry.unregister(tool.name)
+      }
       this.active.delete(session.id)
     }
   }
