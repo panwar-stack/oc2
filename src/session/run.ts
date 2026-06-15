@@ -15,7 +15,7 @@ import { redactText, redactValue } from "../logging/redaction"
 import { createMcpService, createMcpToolConfigEntries } from "../mcp/mcp-service"
 import type { McpClientFactory, McpHostHandlers } from "../mcp/client"
 import { createModelService, type ModelService, type ModelServiceOptions } from "../model/model-service"
-import { getShallowJsonObjectValidationError, type ShallowJsonObject } from "../model/provider"
+import { getShallowJsonObjectValidationError, type ModelInfo, type ShallowJsonObject } from "../model/provider"
 import { openOc2Database, type Oc2Database } from "../persistence/db"
 import { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import type { SessionRecord } from "../persistence/repositories/sessions"
@@ -80,6 +80,19 @@ export interface CommandInput {
   readonly timeoutMs?: number
   readonly maxConcurrency?: number
   readonly signal?: AbortSignal
+}
+
+export interface ListedModelOption {
+  readonly providerId: string
+  readonly providerName: string
+  readonly model: ModelInfo
+}
+
+export interface ListedModelOptionsResult {
+  readonly options: readonly ListedModelOption[]
+  readonly providerCount: number
+  readonly failedProviderCount: number
+  readonly errors: readonly string[]
 }
 
 /** Owns one-shot session runs and enforces a single active model loop per session. */
@@ -157,6 +170,30 @@ export class SessionRunService {
       maxConcurrency: input.maxConcurrency,
       signal: input.signal,
     })
+  }
+
+  async listModelOptions(): Promise<ListedModelOptionsResult> {
+    const providers = this.models.listProviders().toSorted(compareProviders)
+    const settled = await Promise.allSettled(
+      providers.map(async (provider) => {
+        const models = await this.models.listModels(provider.id)
+        return { provider, models: models.toSorted(compareModels) }
+      }),
+    )
+
+    const options: ListedModelOption[] = []
+    const errors: string[] = []
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        for (const model of result.value.models) {
+          options.push({ providerId: result.value.provider.id, providerName: result.value.provider.name, model })
+        }
+      } else {
+        errors.push(redactText(result.reason instanceof Error ? result.reason.message : String(result.reason)))
+      }
+    }
+
+    return { options, providerCount: providers.length, failedProviderCount: errors.length, errors }
   }
 
   private commandFailure(input: CommandInput, error: RuntimeError): MainAgentRunResult {
@@ -591,6 +628,17 @@ function validateField(value: unknown, schema: Record<string, unknown>): string 
     if (typeof schema.maximum === "number" && value > schema.maximum) return `expected <= ${schema.maximum}`
   }
   return undefined
+}
+
+function compareProviders(
+  a: { readonly id: string; readonly name: string },
+  b: { readonly id: string; readonly name: string },
+) {
+  return a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
+}
+
+function compareModels(a: ModelInfo, b: ModelInfo) {
+  return (a.name ?? a.id).localeCompare(b.name ?? b.id) || a.id.localeCompare(b.id)
 }
 
 function hasSecretLikeText(value: string): boolean {

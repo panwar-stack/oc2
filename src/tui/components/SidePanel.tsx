@@ -19,6 +19,9 @@ export function SidePanel({ state }: { readonly state: TuiState }): string {
   return [
     `Session: ${state.sessionId ?? "new"}`,
     `Status: ${state.status}`,
+    `Provider: ${state.modelSelection.providerName ?? state.modelSelection.providerId}`,
+    `Model: ${state.modelSelection.modelName ?? state.modelSelection.modelId}`,
+    `Variant: ${state.modelSelection.variantName ?? state.modelSelection.variantId ?? "Default"}`,
     AgentStatus({ state }),
     activePanel,
     PermissionDialog({ state }),

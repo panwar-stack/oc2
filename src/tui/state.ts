@@ -171,6 +171,7 @@ export interface TuiState {
   readonly modelPickerSelectedIndex: number
   readonly modelPickerLoading: boolean
   readonly modelPickerError?: string
+  readonly modelProviderCount: number
   readonly modelOptions: readonly TuiModelOption[]
   readonly variantOptions: readonly TuiVariantOption[]
 }
@@ -210,6 +211,7 @@ export const createInitialTuiState = (
   modelPickerSelectedIndex: 0,
   modelPickerLoading: false,
   modelPickerError: undefined,
+  modelProviderCount: 0,
   modelOptions: [],
   variantOptions: [],
 })
@@ -502,13 +504,33 @@ export const openModelPicker = (state: TuiState): TuiState => ({
 
 export const closeModelPicker = (state: TuiState): TuiState => ({ ...state, modelPickerOpen: false })
 
-export const setModelOptions = (state: TuiState, modelOptions: readonly TuiModelOption[]): TuiState => ({
+export const setModelOptions = (
+  state: TuiState,
+  modelOptions: readonly TuiModelOption[],
+  modelProviderCount = Math.max(
+    state.modelProviderCount,
+    new Set(modelOptions.map((option) => option.providerId)).size,
+  ),
+): TuiState => ({
   ...state,
+  modelProviderCount,
   modelOptions,
+  modelPickerLoading: false,
   modelPickerSelectedIndex: clampPickerIndex(
     state.modelPickerSelectedIndex,
     filterModelOptions(modelOptions, state.modelPickerQuery).length,
   ),
+})
+
+export const setModelPickerLoading = (state: TuiState, modelPickerLoading: boolean): TuiState => ({
+  ...state,
+  modelPickerLoading,
+})
+
+export const setModelPickerError = (state: TuiState, modelPickerError: string | undefined): TuiState => ({
+  ...state,
+  modelPickerError,
+  modelPickerLoading: false,
 })
 
 export const filterModelOptions = (options: readonly TuiModelOption[], query: string): readonly TuiModelOption[] => {

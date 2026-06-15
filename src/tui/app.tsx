@@ -5,6 +5,7 @@ import { createCommandRegistry } from "../commands/registry"
 import type { CommandRegistry, SlashCommand } from "../commands/types"
 import type { Oc2Config } from "../config/schema"
 import { createRuntimeEventBus } from "../events/event-bus"
+import { redactText } from "../logging/redaction"
 import type { ModelProvider } from "../model/provider"
 import { createSessionRunService } from "../session/run"
 import { parseTuiKey } from "./keymap"
@@ -23,6 +24,9 @@ import {
   moveModelPickerSelection,
   openModelPicker,
   projectTuiEvent,
+  setModelOptions,
+  setModelPickerError,
+  setModelPickerLoading,
   setModelPickerQuery,
   setSlashState,
   toggleAgentPanel,
@@ -133,6 +137,25 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
       slashQuery,
       slashMatches: registry.search(slashQuery).map(toSlashMatch),
     })
+  }
+  const loadModelOptions = async () => {
+    state = setModelPickerLoading(state, true)
+    render()
+    try {
+      const result = await service.listModelOptions()
+      state = setModelOptions(state, result.options, result.providerCount)
+      if (result.failedProviderCount > 0) {
+        state = setModelPickerError(
+          state,
+          `${result.failedProviderCount} provider${result.failedProviderCount === 1 ? "" : "s"} failed to list`,
+        )
+      } else {
+        state = setModelPickerError(state, undefined)
+      }
+    } catch (error) {
+      state = setModelPickerError(state, redactText(error instanceof Error ? error.message : String(error)))
+    }
+    render()
   }
   const registerTuiCommands = () => {
     for (const command of createTuiCommands({
@@ -273,8 +296,10 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
         return false
       }
 
-      if (key.action === "model-picker-toggle") state = openModelPicker(state)
-      else if (key.action === "variant-cycle") state = cycleModelVariant(state)
+      if (key.action === "model-picker-toggle") {
+        state = openModelPicker(state)
+        if (state.modelOptions.length === 0) void loadModelOptions()
+      } else if (key.action === "variant-cycle") state = cycleModelVariant(state)
       else if (key.action === "toggle-side-panel") state = toggleSidePanel(state)
       else if (key.action === "toggle-team-panel") state = toggleTeamPanel(state)
       else if (key.action === "toggle-mcp-panel") state = toggleMcpPanel(state)
