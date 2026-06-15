@@ -26,6 +26,13 @@ export interface TuiPlanApprovalView {
 
 export type TuiPanel = "session" | "team" | "mcp" | "agent"
 
+export interface SlashMatch {
+  readonly name: string
+  readonly display: string
+  readonly description: string
+  readonly source: "tui" | "builtin" | "user" | "skill" | "mcp"
+}
+
 export interface TuiTeamMemberView {
   readonly id: string
   readonly name: string
@@ -127,6 +134,10 @@ export interface TuiState {
   readonly questionPrompt?: TuiQuestionPromptView
   readonly diagnostics: readonly TuiDiagnosticView[]
   readonly agentTasks: readonly TuiAgentTaskView[]
+  readonly slashActive: boolean
+  readonly slashQuery: string
+  readonly slashMatches: readonly SlashMatch[]
+  readonly showSessionList: boolean
 }
 
 export const createInitialTuiState = (sidePanel = true): TuiState => ({
@@ -145,6 +156,10 @@ export const createInitialTuiState = (sidePanel = true): TuiState => ({
   permissions: [],
   diagnostics: [],
   agentTasks: [],
+  slashActive: false,
+  slashQuery: "",
+  slashMatches: [],
+  showSessionList: false,
 })
 
 /** Projects runtime events into the narrow state needed by the minimal terminal UI. */
@@ -407,6 +422,23 @@ export const toggleTeamPanel = (state: TuiState): TuiState => toggleActivePanel(
 export const toggleMcpPanel = (state: TuiState): TuiState => toggleActivePanel(state, "mcp")
 
 export const toggleAgentPanel = (state: TuiState): TuiState => toggleActivePanel(state, "agent")
+
+export const setSlashState = (
+  state: TuiState,
+  partial: Partial<Pick<TuiState, "slashActive" | "slashQuery" | "slashMatches">>,
+): TuiState => ({ ...state, ...partial })
+
+export const toggleSessionList = (state: TuiState): TuiState => ({
+  ...state,
+  showSessionList: !state.showSessionList,
+})
+
+export const clearMessages = (state: TuiState): TuiState => ({
+  ...state,
+  messages: [],
+  streamingText: "",
+  errors: [],
+})
 
 export const closeActivePanel = (state: TuiState): TuiState => ({
   ...state,

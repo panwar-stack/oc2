@@ -4,6 +4,7 @@ import { MessageList } from "./MessageList"
 import { PromptInput } from "./PromptInput"
 import { QuestionPrompt } from "./QuestionPrompt"
 import { SidePanel } from "./SidePanel"
+import { SlashSuggestions } from "./SlashSuggestions"
 import type { TuiState } from "../state"
 
 export interface SessionViewOptions {
@@ -19,7 +20,7 @@ export function SessionView({
   readonly input: string
   readonly options?: SessionViewOptions
 }): string {
-  const showSidePanel = state.sidePanel && (options?.width === undefined || options.width >= 80)
+  const showSidePanel = !state.slashActive && state.sidePanel && (options?.width === undefined || options.width >= 80)
   return [
     "oc2 tui",
     ErrorBanner({ state }),
@@ -28,6 +29,7 @@ export function SessionView({
     showSidePanel ? "\n--- side panel ---\n" + SidePanel({ state }) : "",
     "",
     PromptInput({ value: input, running: state.running }),
+    SlashSuggestions({ matches: state.slashMatches, width: options?.width, active: state.slashActive }),
     Footer(),
   ]
     .filter((line) => line.length > 0)

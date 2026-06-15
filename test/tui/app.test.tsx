@@ -152,3 +152,45 @@ test("narrow terminal keeps question prompt visible", () => {
   expect(output).toContain("Run tests?")
   expect(output).toContain("Prompt> ")
 })
+
+test("renders slash suggestions below prompt and hides side panel", () => {
+  const output = renderTui(
+    {
+      ...createInitialTuiState(true),
+      activePanel: "team",
+      teams: [{ id: "team-1", status: "active", reportAvailable: false, members: [], tasks: [], mailbox: [] }],
+      slashActive: true,
+      slashQuery: "rev",
+      slashMatches: [
+        { name: "review", display: "/review", description: "review changes", source: "builtin" },
+        { name: "clear", display: "/clear", description: "clear visible messages", source: "tui" },
+      ],
+    },
+    "/rev",
+  )
+
+  expect(output).toContain("Prompt> /rev")
+  expect(output).toContain("/review")
+  expect(output).toContain("review changes [builtin]")
+  expect(output).toContain("[ESC to cancel]")
+  expect(output).not.toContain("--- side panel ---")
+  expect(output).not.toContain("Team: team-1")
+})
+
+test("caps slash suggestions and reports hidden matches", () => {
+  const output = renderTui({
+    ...createInitialTuiState(false),
+    slashActive: true,
+    slashMatches: Array.from({ length: 6 }, (_, index) => ({
+      name: `cmd-${index}`,
+      display: `/cmd-${index}`,
+      description: "long description for command",
+      source: "builtin" as const,
+    })),
+  })
+
+  expect(output).toContain("/cmd-0")
+  expect(output).toContain("/cmd-4")
+  expect(output).not.toContain("/cmd-5")
+  expect(output).toContain("... and 1 more")
+})

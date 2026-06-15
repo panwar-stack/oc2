@@ -3,13 +3,17 @@ import { expect, test } from "bun:test"
 import {
   appendLocalMessage,
   applyTuiEvent,
+  clearMessages,
   completeTuiRun,
   createInitialTuiState,
   failTuiRun,
   hydrateTuiState,
   closeActivePanel,
+  setSlashState,
+  toggleAgentPanel,
   toggleMcpPanel,
   toggleSidePanel,
+  toggleSessionList,
   toggleTeamPanel,
 } from "../../src/tui/state"
 import { RuntimeError } from "../../src/events/events"
@@ -356,6 +360,41 @@ test("toggles PR14 panels and parses shortcuts", () => {
 
   expect(parseTuiKey("\u0014")).toEqual({ action: "toggle-team-panel" })
   expect(parseTuiKey("\u001b[77~")).toEqual({ action: "toggle-mcp-panel" })
+  expect(parseTuiKey("\u0001")).toEqual({ action: "toggle-agent-panel" })
+  expect(parseTuiKey("\u000c")).toEqual({ action: "clear-messages" })
+  expect(parseTuiKey("\u0012")).toEqual({ action: "session-switcher" })
+  expect(parseTuiKey("\t")).toEqual({ action: "tab" })
+  expect(parseTuiKey("\u001b\r")).toEqual({ action: "newline" })
   expect(parseTuiKey("\u001b")).toEqual({ action: "escape" })
   expect(parseTuiKey("\r")).toEqual({ action: "submit" })
+})
+
+test("manages slash state, session list, agent panel, and clear messages", () => {
+  let state = createInitialTuiState(true)
+  expect(state).toMatchObject({ slashActive: false, slashQuery: "", slashMatches: [], showSessionList: false })
+
+  state = setSlashState(state, {
+    slashActive: true,
+    slashQuery: "rev",
+    slashMatches: [{ name: "review", display: "/review", description: "review changes", source: "builtin" }],
+  })
+  expect(state.slashActive).toBe(true)
+  expect(state.slashMatches[0]?.display).toBe("/review")
+
+  state = toggleSessionList(state)
+  expect(state.showSessionList).toBe(true)
+  state = toggleAgentPanel(state)
+  expect(state.activePanel).toBe("agent")
+
+  state = clearMessages({
+    ...state,
+    sessionId: "s1",
+    messages: [{ id: "m1", role: "user", text: "hello", status: "completed" }],
+    streamingText: "partial",
+    errors: ["bad"],
+  })
+  expect(state.sessionId).toBe("s1")
+  expect(state.messages).toEqual([])
+  expect(state.streamingText).toBe("")
+  expect(state.errors).toEqual([])
 })
