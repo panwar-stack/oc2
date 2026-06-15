@@ -100,7 +100,12 @@ describe("session compound runner", () => {
       const result = yield* SessionCompound.runBranches({
         sessionID: parent.id,
         prompt: "Compare options",
-        config: config(),
+        config: config({
+          branches: [
+            { model: "test/branch-a", variant: "branch-fast" },
+            { model: "test/branch-b", variant: "branch-careful", toolPolicy: "none" },
+          ],
+        }),
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
       })
       const children = yield* sessions.children(parent.id)
@@ -110,6 +115,8 @@ describe("session compound runner", () => {
       expect(children).toHaveLength(2)
       expect(children.every((child) => child.parentID === parent.id)).toBe(true)
       expect(prompts.map((prompt) => String(prompt.model?.modelID))).toEqual(["branch-a", "branch-b"])
+      expect(prompts.map((prompt) => prompt.variant)).toEqual(["branch-fast", "branch-careful"])
+      expect(children.map((child) => child.model?.variant)).toEqual(["branch-fast", "branch-careful"])
       expect(prompts.map((prompt) => prompt.agent)).toEqual(["build", "build"])
     }),
   )

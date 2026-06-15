@@ -386,16 +386,19 @@ it.instance(
   Effect.gen(function* () {
     const config = yield* Config.use.get()
     expect(config.local_fusion?.["research-panel"]?.branches[0]?.model).toBe("test/branch")
+    expect(config.local_fusion?.["research-panel"]?.branches[0]?.variant).toBe("branch-fast")
     expect(config.local_fusion?.["research-panel"]?.judge.model).toBe("test/judge")
+    expect(config.local_fusion?.["research-panel"]?.judge.variant).toBe("judge-high")
     expect(config.local_fusion?.["research-panel"]?.synthesizer.model).toBe("test/synth")
+    expect(config.local_fusion?.["research-panel"]?.synthesizer.variant).toBe("synth-low")
   }),
   {
     config: {
       local_fusion: {
         "research-panel": {
-          branches: [{ model: "test/branch" }],
-          judge: { model: "test/judge" },
-          synthesizer: { model: "test/synth" },
+          branches: [{ model: "test/branch", variant: "branch-fast" }],
+          judge: { model: "test/judge", variant: "judge-high" },
+          synthesizer: { model: "test/synth", variant: "synth-low" },
         },
       },
     },

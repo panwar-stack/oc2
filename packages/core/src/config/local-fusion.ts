@@ -10,6 +10,7 @@ export type ToolPolicy = typeof ToolPolicy.Type
 
 export const Branch = Schema.Struct({
   model: Model,
+  variant: Schema.optional(Schema.String),
   agent: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
   toolPolicy: Schema.optional(ToolPolicy),
@@ -19,12 +20,14 @@ export type Branch = typeof Branch.Type
 
 export const Judge = Schema.Struct({
   model: Model,
+  variant: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
 })
 export type Judge = typeof Judge.Type
 
 export const Synthesizer = Schema.Struct({
   model: Model,
+  variant: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
 })
 export type Synthesizer = typeof Synthesizer.Type

@@ -30,7 +30,11 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
   const child = yield* sessions.create({
     parentID: input.sessionID,
     title: "Compound synthesizer",
-    model: { id: model.modelID, providerID: model.providerID },
+    model: {
+      id: model.modelID,
+      providerID: model.providerID,
+      ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
+    },
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -48,6 +52,7 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
           messageID: MessageID.ascending(),
           sessionID: child.id,
           model: { providerID: model.providerID, modelID: model.modelID },
+          ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
           tools: toolsDisabled,
           parts,
         })

@@ -133,7 +133,11 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
     parentID: input.sessionID,
     title: `Compound branch #${input.index + 1}`,
     agent,
-    model: { id: model.modelID, providerID: model.providerID },
+    model: {
+      id: model.modelID,
+      providerID: model.providerID,
+      ...(input.branch.variant ? { variant: input.branch.variant } : {}),
+    },
     permission: branchPermission(parent.permission ?? []),
   })
   const runCancel = yield* EffectBridge.make()
@@ -233,6 +237,7 @@ function promptBranch(
         providerID: model.providerID,
         modelID: model.modelID,
       },
+      ...(input.branch.variant ? { variant: input.branch.variant } : {}),
       agent,
       tools: input.branch.toolPolicy === "none" ? noTools : readonlyTools,
       parts,

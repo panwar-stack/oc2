@@ -178,8 +178,10 @@ Guided setup for creating or updating `AGENTS.md` with required engineering prin
 Run a named [`local_fusion` config](/docs/config#local-fusion) against a prompt.
 
 ```bash frame="none"
-/local_fusion research-panel Compare the safest rollout plan for this API migration.
+/local_fusion research-panel Review the current local_fusion implementation for any correctness gaps. Focus on whether named config, inline config, model variants, limits, tool permissions, branch failures, judge behavior, and synthesizer output are wired correctly. Return concrete findings with file references and recommended fixes.
 ```
+
+The first argument is the config name; the rest of the line is the prompt.
 
 ---
 

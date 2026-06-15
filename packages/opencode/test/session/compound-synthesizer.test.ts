@@ -116,7 +116,7 @@ describe("compound synthesizer", () => {
       const result = yield* SessionCompoundSynthesizer.run({
         sessionID: parent.id,
         prompt: "Original request",
-        synthesizer: { model: "test/synth" },
+        synthesizer: { model: "test/synth", variant: "synth-low" },
         branches,
         judge,
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input), output: (input) => reply(input, "final answer") }),
@@ -124,6 +124,7 @@ describe("compound synthesizer", () => {
 
       expect(result.output).toBe("final answer")
       expect(String(prompts[0]?.model?.modelID)).toBe("synth")
+      expect(prompts[0]?.variant).toBe("synth-low")
       expect(prompts[0]?.tools).toEqual({ "*": false })
       expect(prompts[0]?.format).toBeUndefined()
     }),

@@ -45,7 +45,11 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
   const child = yield* sessions.create({
     parentID: input.sessionID,
     title: "Compound judge",
-    model: { id: model.modelID, providerID: model.providerID },
+    model: {
+      id: model.modelID,
+      providerID: model.providerID,
+      ...(input.judge.variant ? { variant: input.judge.variant } : {}),
+    },
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -63,6 +67,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
           messageID: MessageID.ascending(),
           sessionID: child.id,
           model: { providerID: model.providerID, modelID: model.modelID },
+          ...(input.judge.variant ? { variant: input.judge.variant } : {}),
           tools: toolsDisabled,
           parts,
         })

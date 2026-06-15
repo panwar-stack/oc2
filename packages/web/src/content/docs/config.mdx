@@ -485,15 +485,17 @@ You can define named configs for the [`local_fusion` tool](/docs/tools#local_fus
       "branches": [
         {
           "model": "anthropic/claude-sonnet-4-5",
-          "prompt": "Focus on implementation risks."
+          "variant": "default",
+          "prompt": "Focus on implementation correctness, data flow, and code-level edge cases."
         },
         {
           "model": "openai/gpt-5",
-          "prompt": "Focus on product behavior and edge cases."
+          "variant": "high",
+          "prompt": "Focus on product behavior, user-facing gaps, and missing tests."
         }
       ],
       "judge": { "model": "openai/gpt-5-mini" },
-      "synthesizer": { "model": "anthropic/claude-sonnet-4-5" }
+      "synthesizer": { "model": "anthropic/claude-sonnet-4-5", "variant": "default" }
     }
   }
 }
@@ -502,8 +504,10 @@ You can define named configs for the [`local_fusion` tool](/docs/tools#local_fus
 Run it in the TUI with:
 
 ```bash frame="none"
-/local_fusion research-panel Compare the safest rollout plan for this API migration.
+/local_fusion research-panel Review the current local_fusion implementation for any correctness gaps. Focus on whether named config, inline config, model variants, limits, tool permissions, branch failures, judge behavior, and synthesizer output are wired correctly. Return concrete findings with file references and recommended fixes.
 ```
+
+The first argument, `research-panel`, selects the named config. Everything after it is sent as the prompt.
 
 ---
 

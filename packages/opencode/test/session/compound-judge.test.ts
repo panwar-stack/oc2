@@ -112,13 +112,14 @@ describe("compound judge", () => {
       const prompts: SessionPrompt.PromptInput[] = []
       const result = yield* SessionCompoundJudge.run({
         sessionID: parent.id,
-        judge: { model: "test/judge" },
+        judge: { model: "test/judge", variant: "judge-high" },
         branches,
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input), text: JSON.stringify(judgeResult) }),
       })
 
       expect(result).toEqual(judgeResult)
       expect(String(prompts[0]?.model?.modelID)).toBe("judge")
+      expect(prompts[0]?.variant).toBe("judge-high")
       expect(prompts[0]?.tools).toEqual({ "*": false })
       expect(prompts[0]?.format).toBeUndefined()
     }),
