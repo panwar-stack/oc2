@@ -43,6 +43,40 @@ test("fake provider streams deterministic text, reasoning, tool calls, usage, an
   expect(result.done).toBe(true)
 })
 
+test("fake provider exposes variant metadata from model fixtures", async () => {
+  const provider = createFakeModelProvider({
+    models: [
+      {
+        id: "test",
+        name: "Fake Test",
+        variants: [
+          {
+            id: "fast",
+            name: "Fast",
+            description: "Lower latency",
+            runtimeOptions: { effort: "low", tags: ["preview"] },
+          },
+        ],
+      },
+    ],
+  })
+
+  await expect(provider.listModels()).resolves.toEqual([
+    {
+      id: "test",
+      name: "Fake Test",
+      variants: [
+        {
+          id: "fast",
+          name: "Fast",
+          description: "Lower latency",
+          runtimeOptions: { effort: "low", tags: ["preview"] },
+        },
+      ],
+    },
+  ])
+})
+
 test("model service emits runtime events while collecting fake stream", async () => {
   const published: string[] = []
   const events = createRuntimeEventBus()

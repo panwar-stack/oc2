@@ -42,6 +42,82 @@ test("run creates session, persists user prompt and assistant response", async (
   db.close()
 })
 
+test("run passes selected model variant to provider options", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test", modelVariant: "fast" })
+
+  expect(provider.requests[0]?.providerOptions).toMatchObject({ variant: "fast" })
+  db.close()
+})
+
+test("run omits provider option variant for the default model variant", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+
+  await service.run({ prompt: "hello", model: "fake/test" })
+
+  expect(provider.requests[0]?.providerOptions).not.toHaveProperty("variant")
+  db.close()
+})
+
+test("run merges variant runtime options without overriding timeout", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+
+  await service.run({
+    prompt: "hello",
+    model: "fake/test",
+    modelVariant: "fast",
+    modelVariantOptions: { effort: "low", timeoutMs: 1 },
+    timeoutMs: 1234,
+  })
+
+  expect(provider.requests[0]?.providerOptions).toEqual({ effort: "low", timeoutMs: 1234, variant: "fast" })
+  db.close()
+})
+
+test("run rejects invalid variant runtime options before calling provider", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+
+  await expect(
+    service.run({
+      prompt: "hello",
+      model: "fake/test",
+      modelVariant: "fast",
+      modelVariantOptions: { invalid: new Date() } as any,
+    }),
+  ).rejects.toMatchObject({ code: "invalid_task", recoverable: true })
+  expect(provider.requests).toHaveLength(0)
+  db.close()
+})
+
 test("run resumes an existing session and appends new prompt", async () => {
   const db = openOc2Database({ path: ":memory:" })
   const service = createSessionRunService({

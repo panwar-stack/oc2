@@ -1,7 +1,7 @@
 import { RuntimeError, type RuntimeErrorShape } from "../events/events"
 import type { ModelService } from "../model/model-service"
 import type { RepositoryMemoryRepository } from "../persistence/repositories/memory"
-import type { ModelTokenUsage, ModelToolCall } from "../model/provider"
+import type { ModelTokenUsage, ModelToolCall, ShallowJsonObject } from "../model/provider"
 import type { SessionRecord } from "../persistence/repositories/sessions"
 import type { SessionService } from "../session/session-service"
 import { buildAgentModelContext } from "../session/context"
@@ -18,6 +18,8 @@ export interface MainAgentRunInput {
   readonly prompt: string
   readonly config: Oc2Config
   readonly signal: AbortSignal
+  readonly modelVariant?: string
+  readonly modelVariantOptions?: ShallowJsonObject
   readonly resolveQuestion?: ToolContext["resolveQuestion"]
 }
 
@@ -81,7 +83,11 @@ export class MainAgent {
           messages: context.messages,
           tools: context.tools,
           signal: input.signal,
-          providerOptions: { timeoutMs: input.profile.timeoutMs ?? input.config.runtime.defaultTimeoutMs },
+          providerOptions: {
+            ...input.modelVariantOptions,
+            ...(input.modelVariant ? { variant: input.modelVariant } : {}),
+            timeoutMs: input.profile.timeoutMs ?? input.config.runtime.defaultTimeoutMs,
+          },
         })
         const parts = collectedToParts(collected.text, collected.reasoning, collected.toolCalls)
         usage = mergeUsage(usage, collected.usage)

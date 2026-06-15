@@ -30,6 +30,16 @@ export interface ModelTokenUsage {
   readonly cacheWriteTokens?: number
 }
 
+export type ShallowJsonValue = string | number | boolean | null | readonly ShallowJsonValue[]
+export type ShallowJsonObject = Readonly<Record<string, ShallowJsonValue>>
+
+export interface ModelVariantInfo {
+  readonly id: string
+  readonly name?: string
+  readonly description?: string
+  readonly runtimeOptions?: ShallowJsonObject
+}
+
 export interface ModelInfo {
   readonly id: string
   readonly name?: string
@@ -37,6 +47,7 @@ export interface ModelInfo {
   readonly maxOutputTokens?: number
   readonly supportsTools?: boolean
   readonly supportsReasoning?: boolean
+  readonly variants?: readonly ModelVariantInfo[]
 }
 
 /** Provider-agnostic request shape consumed by every model backend. */
@@ -207,4 +218,39 @@ export const toModelProviderError = (error: unknown, providerId?: string): Model
     providerId,
     cause: error,
   })
+}
+
+export const validateShallowJsonObject = (value: unknown): value is ShallowJsonObject =>
+  getShallowJsonObjectValidationError(value) === undefined
+
+export function getShallowJsonObjectValidationError(value: unknown): string | undefined {
+  if (!isPlainObject(value)) return "expected a plain object"
+  const seen = new WeakSet<object>()
+  for (const [key, option] of Object.entries(value)) {
+    const error = validateShallowJsonValue(option, seen)
+    if (error) return `field "${key}": ${error}`
+  }
+  return undefined
+}
+
+function validateShallowJsonValue(value: unknown, seen: WeakSet<object>): string | undefined {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return undefined
+  if (typeof value === "number") return Number.isFinite(value) ? undefined : "expected a finite number"
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return "cyclic arrays are not supported"
+    seen.add(value)
+    for (let index = 0; index < value.length; index += 1) {
+      const error = validateShallowJsonValue(value[index], seen)
+      if (error) return `array item ${index}: ${error}`
+    }
+    seen.delete(value)
+    return undefined
+  }
+  return "expected shallow JSON value"
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }

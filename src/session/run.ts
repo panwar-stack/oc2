@@ -15,6 +15,7 @@ import { redactText, redactValue } from "../logging/redaction"
 import { createMcpService, createMcpToolConfigEntries } from "../mcp/mcp-service"
 import type { McpClientFactory, McpHostHandlers } from "../mcp/client"
 import { createModelService, type ModelService, type ModelServiceOptions } from "../model/model-service"
+import { getShallowJsonObjectValidationError, type ShallowJsonObject } from "../model/provider"
 import { openOc2Database, type Oc2Database } from "../persistence/db"
 import { RepositoryMemoryRepository } from "../persistence/repositories/memory"
 import { createTaskScheduler, type TaskScheduler } from "../scheduler/scheduler"
@@ -49,6 +50,8 @@ export interface RunPromptInput {
   readonly prompt: string
   readonly sessionId?: string
   readonly model?: string
+  readonly modelVariant?: string
+  readonly modelVariantOptions?: ShallowJsonObject
   readonly agent?: string
   readonly enabledTools?: readonly string[]
   readonly disabledTools?: readonly string[]
@@ -178,6 +181,7 @@ export class SessionRunService {
     const baseProfile = resolveRunAgentProfile(this.config, input.agent)
     const profile = input.timeoutMs ? { ...baseProfile, timeoutMs: input.timeoutMs } : baseProfile
     const model = parseModel(input.model ?? profile.defaultModel, this.config)
+    validateModelVariantOptions(input.modelVariantOptions)
     const session = input.sessionId
       ? this.sessions.resumeSession(input.sessionId)
       : this.sessions.createSession({
@@ -405,6 +409,8 @@ export class SessionRunService {
         prompt: input.prompt,
         config: agentConfig,
         signal: input.signal ?? new AbortController().signal,
+        modelVariant: input.modelVariant,
+        modelVariantOptions: input.modelVariantOptions,
         resolveQuestion: this.resolveQuestion,
       })
       this.sessions.sessions.updateStatus(session.id, result.status)
@@ -462,6 +468,17 @@ function parseModel(value: string | undefined, config: Oc2Config): { providerId:
   if (!value) return { providerId: config.model.provider, modelId: config.model.model }
   const [providerId, ...modelParts] = value.split("/")
   return { providerId: providerId || config.model.provider, modelId: modelParts.join("/") || config.model.model }
+}
+
+function validateModelVariantOptions(value: ShallowJsonObject | undefined): void {
+  if (value === undefined) return
+  const error = getShallowJsonObjectValidationError(value)
+  if (!error) return
+  throw new RuntimeError({
+    code: "invalid_task",
+    message: `Invalid model variant runtime options: ${error}`,
+    recoverable: true,
+  })
 }
 
 /** Converts CLI/API root paths into ordered absolute workspace roots for new sessions. */
