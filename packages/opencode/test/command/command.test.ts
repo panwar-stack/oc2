@@ -56,6 +56,16 @@ describe("command", () => {
           expect(teamReport.description).toBe("Run the team_report tool for the active lead session.")
           expect(yield* Effect.promise(() => Promise.resolve(teamReport.template))).toContain("team_report")
           expect(yield* Effect.promise(() => Promise.resolve(teamReport.template))).toContain("compare_session_ids")
+
+          const localFusion = yield* command.get("local_fusion")
+          if (!localFusion) throw new Error("local_fusion command not found")
+
+          expect(localFusion.source).toBe("command")
+          expect(localFusion.description).toBe("Run a named local_fusion config with a prompt.")
+          expect(localFusion.hints).toEqual(["$1", "$2"])
+          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("local_fusion")
+          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain('"config": "$1"')
+          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain('"prompt": "$2"')
         }),
       { git: true },
     ),

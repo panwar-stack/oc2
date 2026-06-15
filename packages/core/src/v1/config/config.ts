@@ -9,6 +9,7 @@ import { ConfigCommandV1 } from "./command"
 import { ConfigFormatterV1 } from "./formatter"
 import { ConfigLayoutV1 } from "./layout"
 import { ConfigLSPV1 } from "./lsp"
+import { ConfigLocalFusion } from "../../config/local-fusion"
 import { ConfigMCPV1 } from "./mcp"
 import { ConfigPermissionV1 } from "./permission"
 import { ConfigPluginV1 } from "./plugin"
@@ -108,6 +109,9 @@ export const Info = Schema.Struct({
   }),
   small_model: Schema.optional(Schema.String).annotate({
     description: "Small model to use for tasks like title generation in the format of provider/model",
+  }),
+  local_fusion: Schema.optional(Schema.Record(Schema.String, ConfigLocalFusion.Info)).annotate({
+    description: "Named local_fusion compound model configurations",
   }),
   default_agent: Schema.optional(Schema.String).annotate({
     description:

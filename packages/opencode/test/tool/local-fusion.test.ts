@@ -134,16 +134,66 @@ describe("local_fusion tool", () => {
     }),
   )
 
-  it.instance("rejects named config lookup with a safe message", () =>
+  it.instance(
+    "executes named config from opencode config",
+    () =>
+      Effect.gen(function* () {
+        const info = yield* LocalFusionTool
+        const tool = yield* Tool.init(info)
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "parent" })
+        const result = yield* tool.execute(
+          { prompt: "Compare answers", config: "research-panel" },
+          context(parent.id, { promptOps: promptOps() }),
+        )
+
+        expect(result.output).toBe("final fused answer")
+        expect(result.metadata).toMatchObject({
+          branchCount: 1,
+          judgeModel: "test/judge",
+          synthesizerModel: "test/synth",
+        })
+      }),
+    {
+      config: {
+        local_fusion: {
+          "research-panel": {
+            branches: [{ model: "test/branch" }],
+            judge: { model: "test/judge" },
+            synthesizer: { model: "test/synth" },
+          },
+        },
+      },
+    },
+  )
+
+  it.instance("rejects missing named config with a safe message", () =>
     Effect.gen(function* () {
       const info = yield* LocalFusionTool
       const tool = yield* Tool.init(info)
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      const exit = yield* tool.execute(params({ config: "research-panel" }), context(parent.id, { promptOps: promptOps() })).pipe(Effect.exit)
+      const exit = yield* tool
+        .execute({ prompt: "Compare answers", config: "missing" }, context(parent.id, { promptOps: promptOps() }))
+        .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
-      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("Named local_fusion configs")
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("local_fusion config not found")
+    }),
+  )
+
+  it.instance("rejects mixing named and inline config", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const exit = yield* tool
+        .execute(params({ config: "research-panel" }), context(parent.id, { promptOps: promptOps() }))
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("cannot be combined")
     }),
   )
 
@@ -156,7 +206,7 @@ describe("local_fusion tool", () => {
       const exit = yield* tool.execute({ prompt: "go" }, context(parent.id, { promptOps: promptOps() })).pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
-      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("requires inline branches")
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("requires config or inline branches")
     }),
   )
 

@@ -11,6 +11,7 @@ import PROMPT_CLARIFY from "./template/clarify.txt"
 import PROMPT_IMPLEMENT_SPEC_PR from "./template/spec-implement.txt"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_LEARN from "./template/learn.txt"
+import PROMPT_LOCAL_FUSION from "./template/local-fusion.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_SPEC_PLANNER from "./template/spec-planner.txt"
 import PROMPT_TEAM_REPORT from "./template/team-report.txt"
@@ -60,6 +61,7 @@ export const Default = {
   IMPLEMENT_SPEC_PR: "spec-implement",
   INIT: "init",
   LEARN: "learn",
+  LOCAL_FUSION: "local_fusion",
   REVIEW: "review",
   SPEC_PLANNER: "spec-planner",
   TEAM_REPORT: "team-report",
@@ -111,6 +113,15 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.LOCAL_FUSION] = {
+        name: Default.LOCAL_FUSION,
+        description: "Run a named local_fusion config with a prompt.",
+        source: "command",
+        get template() {
+          return PROMPT_LOCAL_FUSION
+        },
+        hints: hints(PROMPT_LOCAL_FUSION),
       }
       commands[Default.CLARIFY] = {
         name: Default.CLARIFY,

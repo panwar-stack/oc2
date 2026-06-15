@@ -16,6 +16,7 @@ import { ConfigCommand } from "./config/command"
 import { ConfigExperimental } from "./config/experimental"
 import { ConfigFormatter } from "./config/formatter"
 import { ConfigLSP } from "./config/lsp"
+import { ConfigLocalFusion } from "./config/local-fusion"
 import { ConfigMCP } from "./config/mcp"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
@@ -103,6 +104,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   experimental: ConfigExperimental.Experimental.pipe(Schema.optional),
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),
+  local_fusion: Schema.Record(Schema.String, ConfigLocalFusion.Info).pipe(Schema.optional).annotate({
+    description: "Named local_fusion compound model configurations",
+  }),
 }) {}
 
 export class Document extends Schema.Class<Document>("Config.Document")({

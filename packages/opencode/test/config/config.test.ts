@@ -382,6 +382,27 @@ it.instance(
 )
 
 it.instance(
+  "loads named local_fusion config",
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.local_fusion?.["research-panel"]?.branches[0]?.model).toBe("test/branch")
+    expect(config.local_fusion?.["research-panel"]?.judge.model).toBe("test/judge")
+    expect(config.local_fusion?.["research-panel"]?.synthesizer.model).toBe("test/synth")
+  }),
+  {
+    config: {
+      local_fusion: {
+        "research-panel": {
+          branches: [{ model: "test/branch" }],
+          judge: { model: "test/judge" },
+          synthesizer: { model: "test/synth" },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
   "loads shell config field",
   Effect.gen(function* () {
     const config = yield* Config.use.get()

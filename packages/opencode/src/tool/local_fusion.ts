@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { SessionCompoundConfig } from "@/session/compound/config"
 import { SessionCompound } from "@/session/compound/runner"
+import { Config } from "@/config/config"
 import { Session } from "@/session/session"
 import type { TaskPromptOps } from "./task"
 
@@ -17,19 +18,24 @@ export const LocalFusionTool = Tool.define(
   "local_fusion",
   Effect.gen(function* () {
     const sessions = yield* Session.Service
+    const config = yield* Config.Service
     return {
       description:
-        "Run a local compound model orchestration: fan out one prompt to inline configured branches, judge their outputs, and synthesize one final answer.",
+        "Run a local compound model orchestration: fan out one prompt to configured branches, judge their outputs, and synthesize one final answer.",
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx) =>
         Effect.gen(function* () {
-          if (params.config) {
-            throw new Error(
-              "Named local_fusion configs are not supported yet; pass inline branches, judge, and synthesizer.",
-            )
+          if (params.config && (params.branches || params.judge || params.synthesizer)) {
+            throw new Error("local_fusion config cannot be combined with inline branches, judge, or synthesizer.")
           }
-          if (!params.branches || !params.judge || !params.synthesizer) {
-            throw new Error("local_fusion requires inline branches, judge, and synthesizer when config is not provided.")
+          const compound = params.config
+            ? (yield* config.get()).local_fusion?.[params.config]
+            : params.branches && params.judge && params.synthesizer
+              ? { branches: params.branches, judge: params.judge, synthesizer: params.synthesizer }
+              : undefined
+          if (!compound) {
+            if (params.config) throw new Error(`local_fusion config not found: ${params.config}`)
+            throw new Error("local_fusion requires config or inline branches, judge, and synthesizer.")
           }
 
           const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
@@ -38,11 +44,7 @@ export const LocalFusionTool = Tool.define(
           const result = yield* SessionCompound.run({
             sessionID: ctx.sessionID,
             prompt: params.prompt,
-            config: SessionCompoundConfig.parse({
-              branches: params.branches,
-              judge: params.judge,
-              synthesizer: params.synthesizer,
-            }),
+            config: SessionCompoundConfig.parse(compound),
             agent: ctx.agent,
             promptOps,
             abort: ctx.abort,
