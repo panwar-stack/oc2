@@ -121,14 +121,15 @@ test("run wires MCP roots handler from normal session workspace roots", async ()
     cwd,
     database: db,
     providers: [createScriptedModelProvider([simpleAssistantEvents])],
-    mcpClientFactory: () => fakeMcpClient({
-      onHandlers: (handlers) => {
-        capturedHandlers = handlers
-      },
-      onInitialize: (input) => {
-        capturedCapabilities = input.capabilities
-      },
-    }),
+    mcpClientFactory: () =>
+      fakeMcpClient({
+        onHandlers: (handlers) => {
+          capturedHandlers = handlers
+        },
+        onInitialize: (input) => {
+          capturedCapabilities = input.capabilities
+        },
+      }),
   })
 
   const result = await service.run({ prompt: "hello", model: "fake/test", roots: [".", "../reference space"] })
@@ -249,10 +250,10 @@ test("MCP sampling uses explicit permission and isolated redacted model request"
 
 test("MCP sampling rejects recursive in-flight sampling for the same server", async () => {
   const db = openOc2Database({ path: ":memory:" })
-  const provider = createScriptedModelProvider([
-    simpleAssistantEvents,
-    [{ type: "text-delta", text: "slow sample" }, { type: "done" }],
-  ], { delayMs: 50 })
+  const provider = createScriptedModelProvider(
+    [simpleAssistantEvents, [{ type: "text-delta", text: "slow sample" }, { type: "done" }]],
+    { delayMs: 50 },
+  )
   let capturedHandlers: McpHostHandlers | undefined
   const service = createSessionRunService({
     config: withSamplingMcpConfig([{ match: "mcp.sampling:sampler", decision: "allow" }]),

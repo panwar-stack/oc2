@@ -100,7 +100,12 @@ export function createMcpService(options: McpServiceOptions): McpService {
     })
   }
 
-  const refreshTools = async (state: ServerState, client: McpClient, signal: AbortSignal, authState?: McpAuthStateName) => {
+  const refreshTools = async (
+    state: ServerState,
+    client: McpClient,
+    signal: AbortSignal,
+    authState?: McpAuthStateName,
+  ) => {
     const tools = await client.listTools(signal)
     registerTools(options.registry, state, client, tools)
     let resourceCount: number | undefined

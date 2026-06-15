@@ -81,6 +81,15 @@ function saveTokens(dataDir: string, serverId: string, tokens: OAuthTokens): voi
   chmodSync(path, 0o600)
 }
 
+function isTokenValid(t: OAuthTokens): boolean {
+  if (!t.accessToken) return false
+  if (t.expiresAt !== undefined) {
+    const buffer = 60_000
+    return Date.now() < t.expiresAt - buffer
+  }
+  return true
+}
+
 export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: string): OAuthManager {
   let currentStatus: McpAuthStatus = { state: "auth_required" }
   let tokens: OAuthTokens | null = null
@@ -101,15 +110,6 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
     resource = existing.resource ?? null
     authorizationServer = existing.authorizationServer ?? null
     currentStatus = { state: "authenticated" }
-  }
-
-  const isTokenValid = (t: OAuthTokens): boolean => {
-    if (!t.accessToken) return false
-    if (t.expiresAt !== undefined) {
-      const buffer = 60_000
-      return Date.now() < t.expiresAt - buffer
-    }
-    return true
   }
 
   const status = (): McpAuthStatus => currentStatus
@@ -232,7 +232,13 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
       clientId = dcr.clientId
     }
 
-    const authResult = await buildAuthorizationUrl(asm.authorizationEndpoint, clientId, redirectUri, scopes, resource ?? undefined)
+    const authResult = await buildAuthorizationUrl(
+      asm.authorizationEndpoint,
+      clientId,
+      redirectUri,
+      scopes,
+      resource ?? undefined,
+    )
     verifier = authResult.verifier
     flowState = authResult.state
 
@@ -253,14 +259,27 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
       throw new Error("OAuth flow not properly initialized")
     }
 
-    const result = await exchangeCodeForTokens(tokenEndpoint, clientId, redirectUri, code, verifier, resource ?? undefined)
+    const result = await exchangeCodeForTokens(
+      tokenEndpoint,
+      clientId,
+      redirectUri,
+      code,
+      verifier,
+      resource ?? undefined,
+    )
     if (!result) {
       throw new Error("Failed to exchange authorization code for tokens")
     }
 
     verifier = null
     flowState = null
-    tokens = { ...result, tokenEndpoint, clientId, resource: resource ?? undefined, authorizationServer: authorizationServer ?? undefined }
+    tokens = {
+      ...result,
+      tokenEndpoint,
+      clientId,
+      resource: resource ?? undefined,
+      authorizationServer: authorizationServer ?? undefined,
+    }
     saveTokens(dataDir, server.id, tokens)
     currentStatus = { state: "authenticated" }
   }
@@ -292,7 +311,13 @@ export function createOAuthManager(server: ResolvedMcpServerConfig, dataDir: str
       return
     }
 
-    tokens = { ...newTokens, tokenEndpoint, clientId, resource: resource ?? undefined, authorizationServer: authorizationServer ?? undefined }
+    tokens = {
+      ...newTokens,
+      tokenEndpoint,
+      clientId,
+      resource: resource ?? undefined,
+      authorizationServer: authorizationServer ?? undefined,
+    }
     saveTokens(dataDir, server.id, tokens)
     currentStatus = { state: "authenticated" }
   }

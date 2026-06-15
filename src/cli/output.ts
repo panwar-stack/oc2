@@ -121,7 +121,11 @@ function formatDiagnosticLine(diagnostic: Diagnostic): string {
 }
 
 function formatMcpStatusLine(server: McpServerStatus): string {
-  const parts = [server.serverId, server.authState ? `${server.status}/${server.authState}` : server.status, `${server.toolCount} tools`]
+  const parts = [
+    server.serverId,
+    server.authState ? `${server.status}/${server.authState}` : server.status,
+    `${server.toolCount} tools`,
+  ]
   if (server.resourceCount !== undefined) parts.push(`${server.resourceCount} resources`)
   if (server.promptCount !== undefined) parts.push(`${server.promptCount} prompts`)
   if (server.authUrl) parts.push(`auth: ${server.authUrl}`)

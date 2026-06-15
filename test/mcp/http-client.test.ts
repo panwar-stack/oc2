@@ -364,18 +364,20 @@ describe("HTTP McpClient", () => {
     }
   }, 10_000)
 
-  test("dispatches POST SSE notifications and aborts open response bodies", async () => {
+  test("dispatches POST SSE list-changed notifications and aborts open response bodies", async () => {
     const sseResponseServer = Bun.serve({
       port: 0,
       fetch(req) {
         if (req.method.toUpperCase() === "DELETE") return new Response(null, { status: 204 })
         const stream = new ReadableStream({
           start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n\n`,
-              ),
-            )
+            for (const method of [
+              "notifications/tools/list_changed",
+              "notifications/resources/list_changed",
+              "notifications/prompts/list_changed",
+            ]) {
+              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ jsonrpc: "2.0", method })}\n\n`))
+            }
           },
         })
         return new Response(stream, {
@@ -390,8 +392,14 @@ describe("HTTP McpClient", () => {
         changed = true
       })
       const abort = new AbortController()
+      const received: string[] = []
+      sseClient.onListChanged("resources", () => received.push("resources"))
+      sseClient.onListChanged("prompts", () => received.push("prompts"))
       const request = sseClient.listTools(abort.signal)
       await waitFor(async () => changed)
+      await waitFor(async () => received.length >= 2)
+      expect(received).toContain("resources")
+      expect(received).toContain("prompts")
       abort.abort(new Error("stop open stream"))
       await expect(request).rejects.toThrow("MCP request cancelled")
     } finally {
@@ -436,8 +444,7 @@ describe("HTTP McpClient", () => {
     })
     const error = await Promise.resolve(
       tool.execute({}, { callId: "call", signal: new AbortController().signal, workspaceRoots: [] }),
-    )
-      .catch((err: unknown) => err)
+    ).catch((err: unknown) => err)
     expect(error).toBeInstanceOf(ToolExecutionError)
     expect((error as ToolExecutionError).message).toContain("Bearer [REDACTED]")
     expect((error as ToolExecutionError).message).not.toContain("secret-token")
@@ -445,10 +452,144 @@ describe("HTTP McpClient", () => {
 })
 
 // ---------------------------------------------------------------------------
-// SSE list-changed notifications
+// SSE transport matrix coverage
 // ---------------------------------------------------------------------------
 
-describe("SSE list-changed notifications", () => {
+describe("SSE McpClient", () => {
+  test("initialize over SSE returns proper capabilities", async () => {
+    const fixture = await startFixture()
+    const client = await createMcpClient(sseConfig(fixture.url))
+    try {
+      const result = await client.initialize(
+        { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "sse-cap-test" } },
+        new AbortController().signal,
+      )
+      expect(result.protocolVersion).toBe(MCP_PROTOCOL_VERSION)
+      expect(result.capabilities.tools?.listChanged).toBe(true)
+      expect(result.capabilities.resources?.listChanged).toBe(true)
+      expect(result.capabilities.prompts?.listChanged).toBe(true)
+      expect(result.serverInfo?.name).toBe("http-fixture")
+    } finally {
+      await client.close().catch(() => undefined)
+      fixture.process.kill()
+    }
+  }, 10_000)
+
+  test("tools/list and tools/call work over SSE transport", async () => {
+    const fixture = await startFixture()
+    const client = await createMcpClient(sseConfig(fixture.url))
+    try {
+      await client.initialize(
+        { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "sse-tools-test" } },
+        new AbortController().signal,
+      )
+      const tools = await client.listTools(new AbortController().signal)
+      expect(tools.some((tool) => tool.name === "echo")).toBe(true)
+      await expect(client.callTool("echo", { message: "hello" }, new AbortController().signal)).resolves.toMatchObject({
+        isError: false,
+      })
+    } finally {
+      await client.close().catch(() => undefined)
+      fixture.process.kill()
+    }
+  }, 10_000)
+
+  test("resources/list and resources/read work over SSE transport", async () => {
+    const fixture = await startFixture()
+    const client = await createMcpClient(sseConfig(fixture.url))
+    try {
+      await client.initialize(
+        { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "sse-resources-test" } },
+        new AbortController().signal,
+      )
+      const resources = await client.listResources(new AbortController().signal)
+      expect(resources.find((resource) => resource.name === "fixture-readme")?.uri).toBe(
+        "file:///tmp/fixture-readme.md",
+      )
+      const result = await client.readResource("file:///tmp/fixture-readme.md", new AbortController().signal)
+      expect(result.contents[0]?.text).toContain("Fixture Resource")
+    } finally {
+      await client.close().catch(() => undefined)
+      fixture.process.kill()
+    }
+  }, 10_000)
+
+  test("prompts/list and prompts/get work over SSE transport", async () => {
+    const fixture = await startFixture()
+    const client = await createMcpClient(sseConfig(fixture.url))
+    try {
+      await client.initialize(
+        { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "sse-prompts-test" } },
+        new AbortController().signal,
+      )
+      const prompts = await client.listPrompts(new AbortController().signal)
+      expect(prompts.find((prompt) => prompt.name === "fixture-greeting")).toBeDefined()
+      const result = await client.getPrompt("fixture-greeting", { name: "test" }, new AbortController().signal)
+      expect(result.messages[0]?.role).toBe("user")
+    } finally {
+      await client.close().catch(() => undefined)
+      fixture.process.kill()
+    }
+  }, 10_000)
+
+  test("post-send cancellation emits notifications/cancelled over SSE transport", async () => {
+    const fixture = await startFixture()
+    const client = await createMcpClient(sseConfig(fixture.url))
+    try {
+      await client.initialize(
+        { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "sse-cancel-test" } },
+        new AbortController().signal,
+      )
+      const abort = new AbortController()
+      const call = client.callTool("slow_echo", { message: "hello" }, abort.signal)
+      await waitFor(async () => (await fixtureState(fixture.url)).slowCallStarted > 0)
+      abort.abort(new Error("test cancellation"))
+      await expect(call).rejects.toThrow("MCP request cancelled")
+      await waitFor(async () =>
+        (await fixtureState(fixture.url)).notifications.some((n) => n.method === "notifications/cancelled"),
+      )
+    } finally {
+      await client.close().catch(() => undefined)
+      fixture.process.kill()
+    }
+  }, 10_000)
+
+  test("auth-required metadata is surfaced over SSE transport POST requests", async () => {
+    const metadataUrl = "https://meta.example.com/oauth/sse"
+    const authServer = Bun.serve({
+      port: 0,
+      fetch(req) {
+        if (req.method.toUpperCase() === "GET") {
+          return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } })
+        }
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "Unauthorized" } }),
+          {
+            status: 401,
+            headers: {
+              "content-type": "application/json",
+              "www-authenticate": `Bearer resource_metadata="${metadataUrl}"`,
+            },
+          },
+        )
+      },
+    })
+    const client = await createMcpClient(sseConfig(authServer.url.toString()))
+    try {
+      await client.initialize(
+        { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "sse-auth-test" } },
+        new AbortController().signal,
+      )
+      throw new Error("expected auth failure")
+    } catch (err) {
+      expect(err).toBeInstanceOf(McpAuthRequiredError)
+      expect((err as McpAuthRequiredError).metadataUrl).toBe(metadataUrl)
+    } finally {
+      await client.close().catch(() => undefined)
+      authServer.stop()
+    }
+  }, 10_000)
+
   test("trigger_change emits list-changed callbacks through McpClient SSE", async () => {
     const fixture = await startFixture()
     const client = await createMcpClient(sseConfig(fixture.url))
@@ -914,13 +1055,16 @@ describe("McpAuthRequiredError for 401/403", () => {
         requests += 1
         authHeaders.push(req.headers.get("authorization") ?? "")
         if (requests === 1) {
-          return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "Unauthorized" } }), {
-            status: 401,
-            headers: {
-              "content-type": "application/json",
-              "www-authenticate": 'Bearer resource_metadata="https://meta.example.com/oauth"',
+          return new Response(
+            JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "Unauthorized" } }),
+            {
+              status: 401,
+              headers: {
+                "content-type": "application/json",
+                "www-authenticate": 'Bearer resource_metadata="https://meta.example.com/oauth"',
+              },
             },
-          })
+          )
         }
         return new Response(
           JSON.stringify({
@@ -984,7 +1128,11 @@ describe("McpAuthRequiredError for 401/403", () => {
         }
         const stream = new ReadableStream({
           start(controller) {
-            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n\n`))
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n\n`,
+              ),
+            )
           },
         })
         return new Response(stream, { headers: { "content-type": "text/event-stream" } })

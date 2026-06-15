@@ -493,7 +493,11 @@ function fullFakeClient(
   input: {
     tools?: readonly McpToolInfo[]
     resources?: readonly { name: string; uri: string }[]
-    prompts?: readonly { name: string; description?: string; arguments?: readonly { name: string; description?: string; required?: boolean }[] }[]
+    prompts?: readonly {
+      name: string
+      description?: string
+      arguments?: readonly { name: string; description?: string; required?: boolean }[]
+    }[]
     readResource?: (uri: string) => { contents: readonly { uri: string; text?: string; mimeType?: string }[] }
     getPrompt?: (name: string, args: Record<string, unknown>) => { messages: readonly [] }
     failListResources?: boolean
@@ -782,10 +786,7 @@ test("prompt get model schema is bounded by discovered prompt metadata", async (
         prompts: [
           {
             name: "summarize",
-            arguments: [
-              { name: "topic", description: "Topic to summarize", required: true },
-              { name: "tone" },
-            ],
+            arguments: [{ name: "topic", description: "Topic to summarize", required: true }, { name: "tone" }],
           },
         ],
       }),
@@ -894,7 +895,9 @@ test("mcp.status events include OAuth auth state and actionable URL", async () =
       )
     }
     if (urlStr === "https://auth.test/register") {
-      return new Response(JSON.stringify({ client_id: "pr7-client" }), { headers: { "content-type": "application/json" } })
+      return new Response(JSON.stringify({ client_id: "pr7-client" }), {
+        headers: { "content-type": "application/json" },
+      })
     }
     return new Response("Not Found", { status: 404 })
   }) as unknown as typeof globalThis.fetch
@@ -1128,7 +1131,7 @@ test("sampling capability is advertised when handler is present", async () => {
 test("elicitation handler accepts valid answer", async () => {
   let capturedHandlers: McpHostHandlers | undefined
   const handlers: McpHostHandlers = {
-    elicitationCreate: async (_serverId: string, params: Record<string, unknown>, _signal: AbortSignal) => {
+    elicitationCreate: async (_serverId: string, _params: Record<string, unknown>, _signal: AbortSignal) => {
       return { action: "accept", content: { approved: true } }
     },
   }

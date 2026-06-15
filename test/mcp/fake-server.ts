@@ -155,7 +155,11 @@ async function main() {
                   method: "elicitation/create",
                   params: {
                     message: "Approve request?",
-                    requestedSchema: { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
+                    requestedSchema: {
+                      type: "object",
+                      properties: { approved: { type: "boolean" } },
+                      required: ["approved"],
+                    },
                   },
                 })}\n`,
               ),

@@ -223,7 +223,7 @@ export class HttpTransport implements McpTransport {
     if (this.sessionId) {
       const headers: Record<string, string> = {
         ...(await this.options.tokenProvider?.().catch(() => ({}))),
-        ...(this.options.headers ?? {}),
+        ...this.options.headers,
         "Mcp-Session-Id": this.sessionId,
       }
       await fetch(this.postUrl(), {
@@ -270,9 +270,13 @@ export class HttpTransport implements McpTransport {
     }
   }
 
-  private async getSse(controller: AbortController, retriedAuth = false, authHeaders?: Record<string, string>): Promise<Response> {
+  private async getSse(
+    controller: AbortController,
+    retriedAuth = false,
+    authHeaders?: Record<string, string>,
+  ): Promise<Response> {
     const response = await fetch(this.sseUrl(), {
-      headers: { ...(authHeaders ?? (await this.options.tokenProvider?.())), ...(this.options.headers ?? {}) },
+      headers: { ...(authHeaders ?? (await this.options.tokenProvider?.())), ...this.options.headers },
       signal: controller.signal,
     })
     if (response.status === 401 || response.status === 403) {

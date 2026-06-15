@@ -131,10 +131,7 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
     inFlight.add(requestId)
 
     try {
-      const response = await httpTransport.request(
-        { jsonrpc: "2.0", id: requestId, method, params },
-        signal,
-      )
+      const response = await httpTransport.request({ jsonrpc: "2.0", id: requestId, method, params }, signal)
       if (!response) throw new Error("MCP HTTP response did not include a JSON-RPC body")
       return unwrapResponse(response as JsonRpcResponse)
     } catch (error) {
@@ -152,11 +149,15 @@ function createHttpClient(server: ResolvedMcpServerConfig): McpClient {
   return {
     async initialize(input, signal) {
       const result = normalizeInitializeResult(
-        await request("initialize", {
-          protocolVersion: input.protocolVersion,
-          capabilities: input.capabilities,
-          clientInfo: input.clientInfo,
-        }, signal),
+        await request(
+          "initialize",
+          {
+            protocolVersion: input.protocolVersion,
+            capabilities: input.capabilities,
+            clientInfo: input.clientInfo,
+          },
+          signal,
+        ),
       )
       await transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }).catch(() => undefined)
       return result
@@ -496,15 +497,6 @@ function rejectPending(
   for (const [id, waiter] of pending) {
     pending.delete(id)
     waiter.reject(error)
-  }
-}
-
-function isToolListChangedNotification(value: string): boolean {
-  try {
-    const parsed = JSON.parse(value) as { method?: string }
-    return parsed.method === "notifications/tools/list_changed"
-  } catch {
-    return value.includes("notifications/tools/list_changed")
   }
 }
 

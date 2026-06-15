@@ -253,7 +253,7 @@ test("OAuth manager stores and loads tokens", async () => {
   const tokenDir = join(dataDir, "mcp-tokens")
   mkdirSync(tokenDir, { recursive: true })
   const tokenPath = join(tokenDir, "test-server.json")
-  const { writeFileSync, chmodSync } = await import("node:fs")
+  const { writeFileSync } = await import("node:fs")
   writeFileSync(tokenPath, JSON.stringify(tokens), { mode: 0o600 })
 
   // Second run: initFlow → should find tokens and be authenticated
@@ -507,14 +507,6 @@ test("Bearer token added to HTTP requests", async () => {
   mkdirSync(tokenDir, { recursive: true })
   const { writeFileSync } = await import("node:fs")
   writeFileSync(join(tokenDir, "test-server.json"), JSON.stringify(tokens), { mode: 0o600 })
-
-  // Set up mock fetch that captures the Authorization header
-  let capturedAuthHeader = ""
-  const fetchMock = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const reqInit = (url instanceof Request ? url : init) as RequestInit | undefined
-    capturedAuthHeader = (reqInit?.headers as Record<string, string> | undefined)?.["Authorization"] ?? ""
-    return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } })
-  }
 
   // This test validates the integration: tokenProvider returns headers
   const server = {

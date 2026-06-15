@@ -209,7 +209,8 @@ export class SessionRunService {
         const secretHints = collectSecretLikeSchemaHints(schema)
         const isSecretRequest = hasSecretLikeText(message) || secretHints.length > 0
         const fullHeader = isSecretRequest ? `${header} - SECURITY: This request may involve secrets` : header
-        const question = secretHints.length > 0 ? `${message}\n\nSecret-looking fields: ${secretHints.join(", ")}` : message
+        const question =
+          secretHints.length > 0 ? `${message}\n\nSecret-looking fields: ${secretHints.join(", ")}` : message
 
         let answer: unknown
         const permissionId = crypto.randomUUID()
@@ -427,8 +428,10 @@ function validateField(value: unknown, schema: Record<string, unknown>): string 
   const type = schema.type as string | undefined
   if (type === "string" && typeof value !== "string") return "expected string"
   if (type === "string" && typeof value === "string") {
-    if (typeof schema.minLength === "number" && value.length < schema.minLength) return `expected at least ${schema.minLength} characters`
-    if (typeof schema.maxLength === "number" && value.length > schema.maxLength) return `expected at most ${schema.maxLength} characters`
+    if (typeof schema.minLength === "number" && value.length < schema.minLength)
+      return `expected at least ${schema.minLength} characters`
+    if (typeof schema.maxLength === "number" && value.length > schema.maxLength)
+      return `expected at most ${schema.maxLength} characters`
   }
   if (type === "number" && typeof value !== "number") return "expected number"
   if (type === "number" && typeof value === "number") {
@@ -452,7 +455,8 @@ function hasSecretLikeText(value: string): boolean {
 
 function collectSecretLikeSchemaHints(schema: unknown, path = ""): string[] {
   if (!schema || typeof schema !== "object") return []
-  if (Array.isArray(schema)) return schema.flatMap((value, index) => collectSecretLikeSchemaHints(value, `${path}[${index}]`))
+  if (Array.isArray(schema))
+    return schema.flatMap((value, index) => collectSecretLikeSchemaHints(value, `${path}[${index}]`))
   const hints: string[] = []
   for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
     const nextPath = path ? `${path}.${key}` : key
