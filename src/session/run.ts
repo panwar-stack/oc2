@@ -18,6 +18,7 @@ import { createModelService, type ModelService, type ModelServiceOptions } from 
 import { getShallowJsonObjectValidationError, type ShallowJsonObject } from "../model/provider"
 import { openOc2Database, type Oc2Database } from "../persistence/db"
 import { RepositoryMemoryRepository } from "../persistence/repositories/memory"
+import type { SessionRecord } from "../persistence/repositories/sessions"
 import { createTaskScheduler, type TaskScheduler } from "../scheduler/scheduler"
 import { createSessionService, type SessionService } from "./session-service"
 import { createBuiltInToolRegistry } from "../tools/builtins/index"
@@ -182,7 +183,7 @@ export class SessionRunService {
     const profile = input.timeoutMs ? { ...baseProfile, timeoutMs: input.timeoutMs } : baseProfile
     const model = parseModel(input.model ?? profile.defaultModel, this.config)
     validateModelVariantOptions(input.modelVariantOptions)
-    const session = input.sessionId
+    let session = input.sessionId
       ? this.sessions.resumeSession(input.sessionId)
       : this.sessions.createSession({
           title: input.prompt.slice(0, 80),
@@ -191,6 +192,7 @@ export class SessionRunService {
           modelId: model.modelId,
           agentId: profile.id,
           status: "idle",
+          metadata: input.modelVariant ? { modelVariant: input.modelVariant } : undefined,
         })
     if (!session)
       throw new RuntimeError({
@@ -207,6 +209,23 @@ export class SessionRunService {
         details: { reason: "run_already_active" },
       })
     }
+    if (session.status === "running") {
+      throw new RuntimeError({
+        code: "invalid_task",
+        message: `A model run is already active for session ${session.id}`,
+        recoverable: true,
+        details: { reason: "run_already_active" },
+      })
+    }
+
+    if (input.sessionId && input.model) {
+      session = this.sessions.updateModelSelection({
+        sessionId: session.id,
+        providerId: model.providerId,
+        modelId: model.modelId,
+        variantId: input.modelVariant,
+      })
+    }
 
     this.active.add(session.id)
     const started = this.sessions.sessions.tryStartRun(session.id)
@@ -219,6 +238,7 @@ export class SessionRunService {
         details: { reason: "run_already_active" },
       })
     }
+    const modelVariant = getPersistedModelVariant(started)
     const runConfig = applyRunSelections(this.config, input)
     const activeSamplingServers = new Set<string>()
     const hostHandlers: McpHostHandlers = {
@@ -409,7 +429,7 @@ export class SessionRunService {
         prompt: input.prompt,
         config: agentConfig,
         signal: input.signal ?? new AbortController().signal,
-        modelVariant: input.modelVariant,
+        modelVariant,
         modelVariantOptions: input.modelVariantOptions,
         resolveQuestion: this.resolveQuestion,
       })
@@ -479,6 +499,10 @@ function validateModelVariantOptions(value: ShallowJsonObject | undefined): void
     message: `Invalid model variant runtime options: ${error}`,
     recoverable: true,
   })
+}
+
+function getPersistedModelVariant(session: SessionRecord): string | undefined {
+  return typeof session.metadata.modelVariant === "string" ? session.metadata.modelVariant : undefined
 }
 
 /** Converts CLI/API root paths into ordered absolute workspace roots for new sessions. */

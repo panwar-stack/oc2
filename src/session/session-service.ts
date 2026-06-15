@@ -10,6 +10,7 @@ import {
   SessionRepository,
   type CreateSessionInput,
   type SessionRecord,
+  type UpdateModelSelectionInput,
   type WorkspaceRoot,
 } from "../persistence/repositories/sessions"
 import { ToolCallRepository } from "../persistence/repositories/tool-calls"
@@ -83,6 +84,12 @@ export class SessionService {
     const workspaceRoot = this.sessions.addWorkspaceRoot(sessionId, root)
     this.events?.publish({ type: "session.updated", payload: { sessionId } })
     return workspaceRoot
+  }
+
+  updateModelSelection(input: UpdateModelSelectionInput): SessionRecord {
+    const session = this.sessions.updateModelSelection(input)
+    this.events?.publish({ type: "session.updated", payload: { sessionId: input.sessionId } })
+    return session
   }
 
   appendMessage(input: CreateMessageInput): SessionMessage {

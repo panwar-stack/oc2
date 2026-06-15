@@ -118,6 +118,137 @@ test("run rejects invalid variant runtime options before calling provider", asyn
   db.close()
 })
 
+test("run persists selected model variant metadata for new sessions", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [createScriptedModelProvider([simpleAssistantEvents])],
+  })
+
+  const result = await service.run({ prompt: "hello", model: "fake/test", modelVariant: "fast" })
+
+  expect(service.sessions.resumeSession(result.sessionId)?.metadata).toEqual({ modelVariant: "fast" })
+  db.close()
+})
+
+test("run updates persisted model selection before resuming with a model override", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+  const session = service.sessions.createSession({
+    id: "session-override",
+    workspaceRoots: [{ path: "/repo", readonly: false }],
+    providerId: "fake",
+    modelId: "test",
+    agentId: "main",
+    metadata: { purpose: "keep", modelVariant: "slow" },
+  })
+
+  await service.run({ sessionId: session.id, prompt: "second", model: "fake/next", modelVariant: "fast" })
+
+  expect(provider.requests[0]?.modelId).toBe("next")
+  expect(provider.requests[0]?.providerOptions).toMatchObject({ variant: "fast" })
+  expect(service.sessions.resumeSession(session.id)).toMatchObject({
+    providerId: "fake",
+    modelId: "next",
+    metadata: { purpose: "keep", modelVariant: "fast" },
+  })
+  db.close()
+})
+
+test("run keeps persisted model selection when resuming without a model override", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+  const session = service.sessions.createSession({
+    id: "session-no-override",
+    workspaceRoots: [{ path: "/repo", readonly: false }],
+    providerId: "fake",
+    modelId: "persisted",
+    agentId: "main",
+    metadata: { modelVariant: "saved" },
+  })
+
+  await service.run({ sessionId: session.id, prompt: "second" })
+
+  expect(provider.requests[0]?.modelId).toBe("persisted")
+  expect(provider.requests[0]?.providerOptions).toMatchObject({ variant: "saved" })
+  expect(service.sessions.resumeSession(session.id)).toMatchObject({
+    providerId: "fake",
+    modelId: "persisted",
+    metadata: { modelVariant: "saved" },
+  })
+  db.close()
+})
+
+test("run rejects resumed model updates while running without mutating selection", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents], { delayMs: 25 })
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+  const session = service.sessions.createSession({
+    id: "session-running",
+    workspaceRoots: [{ path: "/repo", readonly: false }],
+    providerId: "fake",
+    modelId: "test",
+    agentId: "main",
+    metadata: { purpose: "keep", modelVariant: "slow" },
+  })
+  const firstRun = service.run({ sessionId: session.id, prompt: "first" })
+
+  await expect(
+    service.run({ sessionId: session.id, prompt: "second", model: "fake/next", modelVariant: "fast" }),
+  ).rejects.toMatchObject({ code: "invalid_task", details: { reason: "run_already_active" } })
+  expect(service.sessions.resumeSession(session.id)).toMatchObject({
+    providerId: "fake",
+    modelId: "test",
+    metadata: { purpose: "keep", modelVariant: "slow" },
+  })
+  await firstRun
+  db.close()
+})
+
+test("run clears persisted model variant metadata for default variant overrides", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const provider = createScriptedModelProvider([simpleAssistantEvents])
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [provider],
+  })
+  const session = service.sessions.createSession({
+    id: "session-clear-variant",
+    workspaceRoots: [{ path: "/repo", readonly: false }],
+    providerId: "fake",
+    modelId: "test",
+    agentId: "main",
+    metadata: { purpose: "keep", modelVariant: "fast" },
+  })
+
+  await service.run({ sessionId: session.id, prompt: "second", model: "fake/test" })
+
+  expect(provider.requests[0]?.providerOptions).not.toHaveProperty("variant")
+  expect(service.sessions.resumeSession(session.id)?.metadata).toEqual({ purpose: "keep" })
+  db.close()
+})
+
 test("run resumes an existing session and appends new prompt", async () => {
   const db = openOc2Database({ path: ":memory:" })
   const service = createSessionRunService({

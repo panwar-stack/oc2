@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { fromJson, toJson } from "./json"
+import { RuntimeError } from "../../events/events"
 import type { RuntimeStatus } from "../../session/message"
 
 /** Workspace root captured with a session, including read-only access intent. */
@@ -37,6 +38,14 @@ export interface CreateSessionInput {
   readonly parentSessionId?: string
   readonly teamId?: string
   readonly metadata?: Record<string, unknown>
+  readonly now?: string
+}
+
+export interface UpdateModelSelectionInput {
+  readonly sessionId: string
+  readonly providerId: string
+  readonly modelId: string
+  readonly variantId?: string
   readonly now?: string
 }
 
@@ -133,6 +142,36 @@ export class SessionRepository {
     const session = this.get(id)
     if (!session) throw new Error(`Session not found: ${id}`)
     return session
+  }
+
+  updateModelSelection(input: UpdateModelSelectionInput): SessionRecord {
+    const now = input.now ?? new Date().toISOString()
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      const session = this.get(input.sessionId)
+      if (!session) throw new Error(`Session not found: ${input.sessionId}`)
+      if (session.status === "running") {
+        throw new RuntimeError({
+          code: "invalid_task",
+          message: `A model run is already active for session ${input.sessionId}`,
+          recoverable: true,
+          details: { reason: "run_already_active" },
+        })
+      }
+
+      const metadata = { ...session.metadata }
+      if (input.variantId) metadata.modelVariant = input.variantId
+      else delete metadata.modelVariant
+
+      this.db
+        .query("UPDATE sessions SET provider_id = ?, model_id = ?, metadata_json = ?, updated_at = ? WHERE id = ?")
+        .run(input.providerId, input.modelId, toJson(metadata), now, input.sessionId)
+      this.db.exec("COMMIT")
+      return this.get(input.sessionId) as SessionRecord
+    } catch (error) {
+      this.db.exec("ROLLBACK")
+      throw error
+    }
   }
 
   /** Moves a session into running state only when no persisted run is already active. */
