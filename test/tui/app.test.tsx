@@ -1,15 +1,34 @@
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { PassThrough } from "node:stream"
-import { setTimeout as delay } from "node:timers/promises"
+import { expect, mock, test } from "bun:test"
 
-import { expect, test } from "bun:test"
-
-import { createSessionService, defaultConfig, openOc2Database, SessionRepository } from "../../src"
-import { launchTui, renderTui } from "../../src/tui/app"
+import { defaultConfig } from "../../src"
 import { createInitialTuiState } from "../../src/tui/state"
-import { createScriptedModelProvider, simpleAssistantEvents } from "../agent/helpers"
+
+let rendererConfig: Record<string, unknown> | undefined
+let renderedShell: (() => unknown) | undefined
+let renderedWith: MockRenderer | undefined
+let renderer: MockRenderer | undefined
+
+mock.module("@opentui/core", () => ({
+  createCliRenderer: async (config: Record<string, unknown>) => {
+    rendererConfig = config
+    renderer = createMockRenderer()
+    return renderer
+  },
+}))
+
+mock.module("@opentui/solid", () => ({
+  createElement: (tag: string): MockNode => ({ tag, props: {}, children: [] }),
+  render: async (shell: () => unknown, target: MockRenderer) => {
+    renderedShell = shell
+    renderedWith = target
+  },
+  spread: (element: { props: Record<string, unknown>; children?: unknown[] }, props: Record<string, unknown>) => {
+    element.props = props
+    element.children = props.children as unknown[] | undefined
+  },
+}))
+
+const { launchTui, renderTui, STATIC_TUI_SHELL_LABELS } = await import("../../src/tui/app")
 
 test("renders messages, streaming text, tool status, and side panel", () => {
   const output = renderTui(
@@ -203,404 +222,151 @@ test("caps slash suggestions and reports hidden matches", () => {
   expect(output).toContain("... and 1 more")
 })
 
-test("launchTui completes slash command with Tab and Enter", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const output: string[] = []
-  let sawAutocomplete = false
-  const provider = createScriptedModelProvider([simpleAssistantEvents])
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const completed = new Promise<void>((resolve) => {
-    stdout.write = (chunk: string) => {
-      output.push(chunk)
-      const rendered = output.join("")
-      if (rendered.includes("Prompt> /review ")) sawAutocomplete = true
-      if (rendered.includes("assistant> fake response")) {
-        stdin.write("\u0003")
-        resolve()
-      }
-    }
-  })
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
+test("launchTui starts an OpenTUI renderer shell with required options", async () => {
+  resetRendererMock()
+  const stdout = createMockStdout()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout })
 
-  stdin.write("/rev\t\r")
-  await completed
+  await waitForRenderer()
+
+  expect(rendererConfig).toMatchObject({
+    externalOutputMode: "passthrough",
+    targetFps: 60,
+    gatherStats: false,
+    exitOnCtrlC: false,
+    useKittyKeyboard: {},
+    autoFocus: false,
+    openConsoleOnError: false,
+  })
+  expect(renderedShell).toBeFunction()
+  expect(renderedWith).toBe(renderer)
+  renderer?.destroy()
   await launched
-
-  expect(sawAutocomplete).toBe(true)
-  expect(output.join("")).toContain("/review")
-  expect(output.join("")).toContain("assistant> fake response")
-  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
-  expect(userMessage?.content).toContain("[SUBTASK] Review the following code changes")
-  await rm(dataDir, { recursive: true, force: true })
+  expect(stdout.output).toContain("\x1b[0m\x1b[?25h")
 })
 
-test("launchTui does not mutate prompt input while model picker is open", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const output: string[] = []
-  const provider = createScriptedModelProvider([simpleAssistantEvents])
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const completed = new Promise<void>((resolve) => {
-    stdout.write = (chunk: string) => {
-      output.push(chunk)
-      if (output.join("").includes("assistant> fake response")) {
-        stdin.write("\u0003")
-        resolve()
-      }
-    }
-  })
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
+test("static renderer shell exposes PR2 placeholder regions", async () => {
+  resetRendererMock()
+  const stdout = createMockStdout()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout })
 
-  stdin.write("hello\u0010search\u0010\r")
-  await completed
+  await waitForRenderer()
+  const shell = renderedShell?.() as MockNode
+  const text = collectText(shell)
+
+  expect(Object.values(STATIC_TUI_SHELL_LABELS)).toEqual([
+    "oc2 transcript viewport",
+    "sidebar placeholder",
+    "footer placeholder",
+    "prompt container - prompt submission disabled in renderer shell PR",
+  ])
+  expect(text).toContain(STATIC_TUI_SHELL_LABELS.transcript)
+  expect(text).toContain(STATIC_TUI_SHELL_LABELS.sidebar)
+  expect(text).toContain(STATIC_TUI_SHELL_LABELS.footer)
+  expect(text).toContain(STATIC_TUI_SHELL_LABELS.prompt)
+  renderer?.destroy()
   await launched
-
-  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
-  expect(userMessage?.content).toBe("hello")
-  await rm(dataDir, { recursive: true, force: true })
 })
 
-test("launchTui handles split arrow escape sequences while model picker is open", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents])
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const completed = new Promise<void>((resolve) => {
-    stdout.write = (chunk: string) => {
-      if (chunk.includes("assistant> fake response")) {
-        stdin.write("\u0003")
-        resolve()
-      }
-    }
-  })
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
+test("launchTui destroys the renderer and resolves on Ctrl+C", async () => {
+  resetRendererMock()
+  const stdout = createMockStdout()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout })
 
-  stdin.write("hello\u0010")
-  stdin.write("\u001b")
-  stdin.write("[A")
-  stdin.write("\u0010\r")
-  await completed
+  await waitForRenderer()
+  expect(inputHandler()("\u0003")).toBe(true)
   await launched
 
-  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
-  expect(userMessage?.content).toBe("hello")
-  await rm(dataDir, { recursive: true, force: true })
+  expect(renderer?.isDestroyed).toBe(true)
+  expect(renderer?.setTerminalTitleCalls).toEqual([""])
+  expect(stdout.output).toContain("\x1b[0m\x1b[?25h")
 })
 
-test("launchTui handles fully split arrow escape sequences while model picker is open", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents])
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const completed = new Promise<void>((resolve) => {
-    stdout.write = (chunk: string) => {
-      if (chunk.includes("assistant> fake response")) {
-        stdin.write("\u0003")
-        resolve()
-      }
-    }
-  })
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
+test("launchTui destroys the renderer and resolves on Ctrl+D", async () => {
+  resetRendererMock()
+  const stdout = createMockStdout()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout })
 
-  stdin.write("hello\u0010")
-  stdin.write("\u001b")
-  stdin.write("[")
-  stdin.write("A")
-  stdin.write("\u0010\r")
-  await completed
+  await waitForRenderer()
+  expect(inputHandler()("\u0004")).toBe(true)
   await launched
 
-  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
-  expect(userMessage?.content).toBe("hello")
-  await rm(dataDir, { recursive: true, force: true })
+  expect(renderer?.isDestroyed).toBe(true)
+  expect(stdout.output).toContain("\x1b[0m\x1b[?25h")
 })
 
-test("launchTui buffers async split arrow escape sequences while model picker is open", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents])
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const completed = new Promise<void>((resolve) => {
-    stdout.write = (chunk: string) => {
-      if (chunk.includes("assistant> fake response")) {
-        stdin.write("\u0003")
-        resolve()
-      }
-    }
-  })
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
+interface MockNode {
+  readonly tag: string
+  props: Record<string, unknown>
+  children?: unknown[]
+}
 
-  stdin.write("hello\u0010")
-  stdin.write("\u001b")
-  await delay(5)
-  stdin.write("[")
-  await delay(5)
-  stdin.write("A")
-  stdin.write("\u0010\r")
-  await completed
-  await launched
+interface MockStdout {
+  readonly columns: number
+  output: string
+  write(chunk: string): void
+}
 
-  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
-  expect(userMessage?.content).toBe("hello")
-  await rm(dataDir, { recursive: true, force: true })
-})
+interface MockRenderer {
+  isDestroyed: boolean
+  readonly setTerminalTitleCalls: string[]
+  destroy(): void
+  once(event: "destroy", listener: () => void): void
+  setTerminalTitle(title: string): void
+}
 
-test("launchTui preserves split Alt+Enter newline input", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents])
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const completed = new Promise<void>((resolve) => {
-    stdout.write = (chunk: string) => {
-      if (chunk.includes("assistant> fake response")) {
-        stdin.write("\u0003")
-        resolve()
-      }
-    }
-  })
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
-
-  stdin.write("hello")
-  stdin.write("\u001b")
-  stdin.write("\r")
-  stdin.write("world\r")
-  await completed
-  await launched
-
-  const userMessage = provider.requests[0]?.messages.find((message) => message.role === "user")
-  expect(userMessage?.content).toBe("hello\nworld")
-  await rm(dataDir, { recursive: true, force: true })
-})
-
-test("launchTui applies selected picker model variant to prompt submission and persistence", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents], {
-    models: [
-      { id: "test", name: "Fake Test" },
-      {
-        id: "variant",
-        name: "Variant Model",
-        variants: [{ id: "fast", name: "Fast", runtimeOptions: { effort: "low" } }],
-      },
-    ],
-  })
-  const output: string[] = []
-  const stdout = { columns: 120, write: (_chunk: string) => undefined }
-  const sawModel = waitForOutput(output, "Variant Model")
-  const sawVariant = waitForOutput(output, "Select variant for fake/variant")
-  const completed = waitForOutput(output, "assistant> fake response").then(() => stdin.write("\u0003"))
-  stdout.write = (chunk: string) => {
-    output.push(chunk)
+function createMockRenderer(): MockRenderer {
+  const destroyListeners: Array<() => void> = []
+  return {
+    isDestroyed: false,
+    setTerminalTitleCalls: [],
+    destroy() {
+      if (this.isDestroyed) return
+      this.isDestroyed = true
+      for (const listener of destroyListeners) listener()
+    },
+    once(_event, listener) {
+      destroyListeners.push(listener)
+    },
+    setTerminalTitle(title) {
+      this.setTerminalTitleCalls.push(title)
+    },
   }
-  const launched = launchTui({ config: defaultConfig, cwd: "/repo", dataDir, providers: [provider], stdin, stdout })
+}
 
-  stdin.write("\u0010variant")
-  await sawModel
-  stdin.write("\r")
-  await sawVariant
-  stdin.write("\u001b[B")
-  await delay(1)
-  stdin.write("\rhello\r")
-  await completed
-  await launched
+function resetRendererMock(): void {
+  rendererConfig = undefined
+  renderedShell = undefined
+  renderedWith = undefined
+  renderer = undefined
+}
 
-  expect(provider.requests[0]?.modelId).toBe("variant")
-  expect(provider.requests[0]?.providerOptions).toMatchObject({ effort: "low", variant: "fast" })
-  const db = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
-  const [session] = new SessionRepository(db.sqlite).list()
-  expect(session).toMatchObject({ providerId: "fake", modelId: "variant", metadata: { modelVariant: "fast" } })
-  db.close()
-  await rm(dataDir, { recursive: true, force: true })
-})
-
-test("launchTui Ctrl+V cycles resumed variant to default and clears persistence", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const setupDb = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
-  const setupSessions = createSessionService({ database: setupDb })
-  const session = setupSessions.createSession({
-    id: "cycle-session",
-    workspaceRoots: [{ path: "/repo", readonly: false }],
-    providerId: "fake",
-    modelId: "variant",
-    agentId: "main",
-    metadata: { modelVariant: "fast" },
-  })
-  setupDb.close()
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents], {
-    models: [
-      {
-        id: "variant",
-        name: "Variant Model",
-        variants: [{ id: "fast", name: "Fast", runtimeOptions: { effort: "low" } }],
-      },
-    ],
-  })
-  const output: string[] = []
-  const stdout = { columns: 120, write: (_chunk: string) => undefined }
-  const sawModel = waitForOutput(output, "Variant Model")
-  const completed = waitForOutput(output, "assistant> fake response").then(() => stdin.write("\u0003"))
-  stdout.write = (chunk: string) => {
-    output.push(chunk)
+function createMockStdout(): MockStdout {
+  return {
+    columns: 100,
+    output: "",
+    write(chunk) {
+      this.output += chunk
+    },
   }
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    sessionId: session.id,
-    providers: [provider],
-    stdin,
-    stdout,
-  })
+}
 
-  stdin.write("\u0010")
-  await sawModel
-  stdin.write("\u0010")
-  await delay(1)
-  stdin.write("\u0016hello\r")
-  await completed
-  await launched
+function collectText(node: MockNode | unknown): string {
+  if (!node || typeof node !== "object") return ""
+  const current = node as MockNode
+  const content = typeof current.props.content === "string" ? current.props.content : ""
+  return [content, ...(current.children ?? []).map(collectText)].filter(Boolean).join("\n")
+}
 
-  expect(provider.requests[0]?.modelId).toBe("variant")
-  expect(provider.requests[0]?.providerOptions).not.toHaveProperty("variant")
-  const db = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
-  expect(new SessionRepository(db.sqlite).get(session.id)?.metadata).toEqual({})
-  db.close()
-  await rm(dataDir, { recursive: true, force: true })
-})
+async function waitForRenderer(): Promise<void> {
+  await Bun.sleep(0)
+  expect(renderer).toBeDefined()
+}
 
-test("launchTui --model remains canonical before picker interaction", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents], {
-    models: [{ id: "test" }, { id: "other" }],
-  })
-  const output: string[] = []
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const completed = waitForOutput(output, "assistant> fake response").then(() => stdin.write("\u0003"))
-  stdout.write = (chunk: string) => {
-    output.push(chunk)
-  }
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
-
-  stdin.write("hello\r")
-  await completed
-  await launched
-
-  expect(provider.requests[0]?.modelId).toBe("test")
-  const db = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
-  expect(new SessionRepository(db.sqlite).list()[0]).toMatchObject({ providerId: "fake", modelId: "test" })
-  db.close()
-  await rm(dataDir, { recursive: true, force: true })
-})
-
-test("launchTui blocks picker selection while a run is active", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
-  const stdin = new PassThrough()
-  const provider = createScriptedModelProvider([simpleAssistantEvents], {
-    delayMs: 1000,
-    models: [{ id: "test" }, { id: "other", name: "Other Model" }],
-  })
-  const output: string[] = []
-  const stdout = { columns: 100, write: (_chunk: string) => undefined }
-  const running = waitForOutput(output, "Running> ")
-  stdout.write = (chunk: string) => {
-    output.push(chunk)
-  }
-  const launched = launchTui({
-    config: defaultConfig,
-    cwd: "/repo",
-    dataDir,
-    model: "fake/test",
-    providers: [provider],
-    stdin,
-    stdout,
-  })
-
-  stdin.write("first\r")
-  await running
-  stdin.write("\u0016")
-  await delay(25)
-  expect(output.join("")).toContain("Cannot change model while a run is active")
-  stdin.write("\u0010")
-  await delay(5)
-  stdin.write("\r")
-  await delay(25)
-  expect(output.join("")).toContain("Cannot change model while a run is active")
-  stdin.write("\u0003")
-  await delay(1)
-  stdin.write("\u0003")
-  await launched
-
-  expect(provider.requests[0]?.modelId).toBe("test")
-  await rm(dataDir, { recursive: true, force: true })
-})
-
-function waitForOutput(output: readonly string[], text: string): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setInterval(() => {
-      if (output.join("").includes(text)) {
-        clearInterval(timer)
-        resolve()
-      }
-    }, 1)
-  })
+function inputHandler(): (sequence: string) => boolean {
+  const handlers = rendererConfig?.prependInputHandlers
+  expect(Array.isArray(handlers)).toBe(true)
+  const [handler] = handlers as Array<(sequence: string) => boolean>
+  expect(handler).toBeDefined()
+  return handler!
 }

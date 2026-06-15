@@ -1,42 +1,13 @@
 import type { Readable } from "node:stream"
 
-import { createBuiltinCommands } from "../commands/builtins"
-import { createCommandRegistry } from "../commands/registry"
-import type { CommandRegistry, SlashCommand } from "../commands/types"
+import { createCliRenderer, type CliRenderer, type KeyEvent } from "@opentui/core"
+import { createElement, render, spread } from "@opentui/solid"
+
+import type { CommandRegistry } from "../commands/types"
 import type { Oc2Config } from "../config/schema"
-import { createRuntimeEventBus } from "../events/event-bus"
-import { redactText } from "../logging/redaction"
 import type { ModelProvider } from "../model/provider"
-import { createSessionRunService } from "../session/run"
-import { createLocalTuiClient } from "./client.local"
-import { parseTuiKey } from "./keymap"
 import { SessionView } from "./components/SessionView"
-import {
-  appendLocalMessage,
-  applyModelPickerSelection,
-  clearMessages,
-  closeModelPicker,
-  closeActivePanel,
-  completeTuiRun,
-  createInitialTuiState,
-  cycleModelVariant,
-  failTuiRun,
-  moveModelPickerSelection,
-  openModelPicker,
-  projectTuiEvent,
-  setModelOptions,
-  setModelPickerError,
-  setModelPickerLoading,
-  setModelPickerQuery,
-  setSlashState,
-  toggleAgentPanel,
-  toggleMcpPanel,
-  toggleSidePanel,
-  toggleSessionList,
-  toggleTeamPanel,
-  type SlashMatch,
-  type TuiState,
-} from "./state"
+import type { TuiState } from "./state"
 
 export interface TuiLaunchOptions {
   readonly config: Oc2Config
@@ -55,445 +26,115 @@ export interface TuiRenderOptions {
   readonly width?: number
 }
 
-/** Renders the minimal TUI snapshot as plain terminal text for both runtime and tests. */
+export const STATIC_TUI_SHELL_LABELS = {
+  transcript: "oc2 transcript viewport",
+  sidebar: "sidebar placeholder",
+  footer: "footer placeholder",
+  prompt: "prompt container - prompt submission disabled in renderer shell PR",
+} as const
+
+/** Renders the legacy minimal TUI snapshot as plain terminal text for tests. */
 export function renderTui(state: TuiState, input = "", options: TuiRenderOptions = {}): string {
   return SessionView({ state, input, options })
 }
 
-/** Launches the dependency-free terminal UI adapter over the session run service. */
+/** Launches the static OpenTUI/Solid renderer shell for the PR 2 foundation slice. */
 export async function launchTui(options: TuiLaunchOptions): Promise<void> {
-  const initialState = createInitialTuiState(options.config.tui.sidePanel, {
-    config: options.config,
-    launchModel: options.model,
-  })
-  const eventBus = createRuntimeEventBus<TuiState>({
-    initialState,
-    projector: projectTuiEvent,
-  })
-  let questionAnswer: ((value: unknown) => void) | undefined
-  const registry = options.commands ?? createCommandRegistry(createBuiltinCommands())
-  const service = createSessionRunService({
-    config: options.config,
-    cwd: options.cwd,
-    dataDir: options.dataDir,
-    events: eventBus,
-    providers: options.providers,
-    commands: registry,
-    resolveQuestion: async (_question, signal) => {
-      return await new Promise<unknown>((resolve) => {
-        questionAnswer = resolve
-        signal.addEventListener(
-          "abort",
-          () => {
-            questionAnswer = undefined
-            resolve(undefined)
-          },
-          { once: true },
-        )
-      })
-    },
-  })
-  const stdin = options.stdin ?? process.stdin
-  const stdout = options.stdout ?? process.stdout
-  const client = createLocalTuiClient({
-    service,
-    events: eventBus,
-    commands: registry,
-    initialState,
-    roots: options.roots,
-    model: options.model,
-  })
-  let state = eventBus.getState()
-  let input = ""
-  let activeRun: AbortController | undefined
-  let exitTui: (() => void) | undefined
-  let explicitModelSelection = Boolean(options.model)
+  let renderer: CliRenderer | undefined
+  let removeSighup: (() => void) | undefined
 
-  if (options.sessionId) {
-    const hydrated = await client.sessions.hydrate(options.sessionId)
-    state = options.model ? { ...hydrated.state, modelSelection: state.modelSelection } : hydrated.state
-  }
-
-  const render = () => {
-    stdout.write(`\x1b[2J\x1b[H${renderTui(state, input, { width: stdout.columns })}\n`)
-  }
-  const unsubscribe = client.events.subscribe((event) => {
-    state = projectTuiEvent(state, event)
-    render()
-  })
-
-  const clearSlash = () => {
-    state = setSlashState(state, { slashActive: false, slashQuery: "", slashMatches: [] })
-  }
-  const resetInput = () => {
-    input = ""
-    clearSlash()
-  }
-  const activeModelInput = (selectionInput: { readonly includeDefaultForNewSession?: boolean } = {}) =>
-    explicitModelSelection || ((selectionInput.includeDefaultForNewSession ?? true) && !state.sessionId)
-      ? {
-          model: `${state.modelSelection.providerId}/${state.modelSelection.modelId}`,
-          modelVariant: state.modelSelection.variantId,
-          modelVariantOptions: state.modelSelection.modelVariantOptions,
-        }
-      : {}
-  const modelChangeBlocked = () => Boolean(activeRun || state.running)
-  const rejectModelChangeWhileRunning = () => {
-    state = setModelPickerError(state, "Cannot change model while a run is active")
-    state = appendLocalMessage(state, "system", "Cannot change model while a run is active")
-  }
-  const updateSlashState = () => {
-    if (state.modelPickerOpen) {
-      clearSlash()
-      return
-    }
-    if (!input.startsWith("/") || /\s/.test(input.slice(1))) {
-      clearSlash()
-      return
-    }
-
-    const slashQuery = input.slice(1)
-    state = setSlashState(state, {
-      slashActive: true,
-      slashQuery,
-      slashMatches: registry.search(slashQuery).map(toSlashMatch),
+  try {
+    const inputHandlers = [createExitInputHandler(() => destroyRenderer(renderer))]
+    renderer = await createCliRenderer({
+      stdin: options.stdin as NodeJS.ReadStream | undefined,
+      stdout: options.stdout as NodeJS.WriteStream | undefined,
+      externalOutputMode: "passthrough",
+      targetFps: 60,
+      gatherStats: false,
+      exitOnCtrlC: false,
+      useKittyKeyboard: {},
+      autoFocus: false,
+      openConsoleOnError: false,
+      prependInputHandlers: inputHandlers,
     })
+
+    const done = new Promise<void>((resolve) => renderer?.once("destroy", () => resolve()))
+    const onSighup = () => destroyRenderer(renderer)
+    process.on("SIGHUP", onSighup)
+    removeSighup = () => process.off("SIGHUP", onSighup)
+
+    await render(() => StaticTuiShell({ options }), renderer)
+    await done
+  } catch (error) {
+    destroyRenderer(renderer)
+    writeTerminalRestore(options.stdout)
+    writeTerminalSafeError(`oc2 tui renderer failed: ${errorMessage(error)}`)
+  } finally {
+    removeSighup?.()
+    destroyRenderer(renderer)
+    writeTerminalRestore(options.stdout)
   }
-  const loadModelOptions = async () => {
-    state = setModelPickerLoading(state, true)
-    render()
-    try {
-      const result = await service.listModelOptions()
-      state = setModelOptions(state, result.options, result.providerCount)
-      if (result.failedProviderCount > 0) {
-        state = setModelPickerError(
-          state,
-          `${result.failedProviderCount} provider${result.failedProviderCount === 1 ? "" : "s"} failed to list`,
-        )
-      } else {
-        state = setModelPickerError(state, undefined)
-      }
-    } catch (error) {
-      state = setModelPickerError(state, redactText(error instanceof Error ? error.message : String(error)))
-    }
-    render()
-  }
-  const registerTuiCommands = () => {
-    for (const command of createTuiCommands({
-      help: () => {
-        state = appendLocalMessage(state, "assistant", HELP_TEXT)
-      },
-      clear: () => {
-        state = clearMessages(state)
-      },
-      skills: () => {
-        state = appendLocalMessage(state, "assistant", SKILLS_TEXT)
-      },
-      exit: () => exitTui?.(),
-    })) {
-      registry.register(command)
-    }
-  }
-  registerTuiCommands()
-
-  const submit = async () => {
-    const prompt = input.trim()
-    if (state.questionPrompt && questionAnswer) {
-      resetInput()
-      const answer = prompt || undefined
-      const resolve = questionAnswer
-      questionAnswer = undefined
-      resolve(answer)
-      render()
-      return
-    }
-    if (!prompt || state.running) return
-    const slashCommand = parseSlashCommand(prompt)
-    if (slashCommand) {
-      const command = registry.get(slashCommand.name)
-      if (command?.source === "tui" && command.onExecute) {
-        resetInput()
-        command.onExecute()
-        render()
-        return
-      }
-      if (command) {
-        resetInput()
-        state = appendLocalMessage(state, "user", prompt)
-        const runController = new AbortController()
-        activeRun = runController
-        render()
-        try {
-          const result = await client.commands.execute({
-            name: slashCommand.name,
-            args: slashCommand.arguments ? slashCommand.arguments.split(/\s+/).filter(Boolean) : [],
-            raw: prompt,
-            sessionId: state.sessionId,
-            ...(command.model ? {} : activeModelInput({ includeDefaultForNewSession: false })),
-            roots: options.roots ?? [],
-            signal: runController.signal,
-          })
-          if (!result.ok) throw new Error(result.message ?? `Slash command failed: ${slashCommand.name}`)
-          state = completeTuiRun(
-            state,
-            { sessionId: result.sessionId ?? state.sessionId ?? "", status: "completed" },
-            runController.signal.aborted,
-          )
-        } catch (error) {
-          state = failTuiRun(state, error, runController.signal.aborted)
-        } finally {
-          if (activeRun === runController) activeRun = undefined
-        }
-        render()
-        return
-      }
-    }
-
-    resetInput()
-    state = appendLocalMessage(state, "user", prompt)
-    const runController = new AbortController()
-    activeRun = runController
-    render()
-    try {
-      const result = await client.sessions.prompt({
-        prompt,
-        sessionId: state.sessionId,
-        ...activeModelInput(),
-        roots: options.roots ?? [],
-        signal: runController.signal,
-      })
-      state = completeTuiRun(state, { sessionId: result.sessionId, status: "completed" }, runController.signal.aborted)
-    } catch (error) {
-      state = failTuiRun(state, error, runController.signal.aborted)
-    } finally {
-      if (activeRun === runController) activeRun = undefined
-    }
-    render()
-  }
-
-  let cleanedUp = false
-  const cleanup = () => {
-    if (cleanedUp) return
-    cleanedUp = true
-    unsubscribe()
-    if ("setRawMode" in stdin && typeof stdin.setRawMode === "function") stdin.setRawMode(false)
-    stdin.pause()
-    service.database?.close()
-  }
-
-  render()
-  if ("setRawMode" in stdin && typeof stdin.setRawMode === "function") stdin.setRawMode(true)
-  stdin.setEncoding("utf8")
-  stdin.resume()
-
-  await new Promise<void>((resolve) => {
-    exitTui = () => {
-      cleanup()
-      resolve()
-    }
-
-    const handleKey = (key: ReturnType<typeof parseTuiKey>, raw: string): boolean => {
-      if (key.action === "cancel") {
-        if (activeRun) {
-          activeRun.abort(new Error("Cancelled from TUI"))
-          activeRun = undefined
-          state = { ...state, running: false, status: "cancelled" }
-          render()
-          return false
-        }
-        cleanup()
-        resolve()
-        return true
-      }
-      if (state.modelPickerOpen) {
-        if (key.action === "model-picker-toggle" || key.action === "escape") state = closeModelPicker(state)
-        else if (key.action === "picker-up") state = moveModelPickerSelection(state, -1)
-        else if (key.action === "picker-down") state = moveModelPickerSelection(state, 1)
-        else if (key.action === "backspace") state = setModelPickerQuery(state, state.modelPickerQuery.slice(0, -1))
-        else if (key.action === "input") state = setModelPickerQuery(state, state.modelPickerQuery + (key.value ?? ""))
-        else if (key.action === "submit") {
-          if (modelChangeBlocked()) rejectModelChangeWhileRunning()
-          else {
-            const next = applyModelPickerSelection(state)
-            if (next.modelSelection !== state.modelSelection) explicitModelSelection = true
-            state = next
-          }
-        } else if (key.action === "variant-cycle") {
-          if (modelChangeBlocked()) rejectModelChangeWhileRunning()
-          else {
-            const next = cycleModelVariant(state)
-            if (next.modelSelection !== state.modelSelection) explicitModelSelection = true
-            state = next
-          }
-        }
-        render()
-        return false
-      }
-
-      if (raw === "\r" && !input.trim() && !state.questionPrompt) {
-        state = toggleMcpPanel(state)
-        render()
-        return false
-      }
-
-      if (key.action === "model-picker-toggle") {
-        state = openModelPicker(state)
-        if (state.modelOptions.length === 0) void loadModelOptions()
-      } else if (key.action === "variant-cycle") {
-        if (modelChangeBlocked()) rejectModelChangeWhileRunning()
-        else {
-          const next = cycleModelVariant(state)
-          if (next.modelSelection !== state.modelSelection) explicitModelSelection = true
-          state = next
-        }
-      } else if (key.action === "toggle-side-panel") state = toggleSidePanel(state)
-      else if (key.action === "toggle-team-panel") state = toggleTeamPanel(state)
-      else if (key.action === "toggle-mcp-panel") state = toggleMcpPanel(state)
-      else if (key.action === "toggle-agent-panel") state = toggleAgentPanel(state)
-      else if (key.action === "clear-messages") state = clearMessages(state)
-      else if (key.action === "session-switcher") state = toggleSessionList(state)
-      else if (key.action === "escape") {
-        if (state.modelPickerOpen) {
-          state = closeModelPicker(state)
-        } else if (state.slashActive) {
-          clearSlash()
-        } else if (questionAnswer) {
-          const answerQuestion = questionAnswer
-          questionAnswer = undefined
-          answerQuestion(undefined)
-          state = closeActivePanel(state)
-        } else {
-          state = closeActivePanel(state)
-        }
-      } else if (key.action === "backspace") {
-        input = input.slice(0, -1)
-        updateSlashState()
-      } else if (key.action === "input") {
-        input += key.value ?? ""
-        updateSlashState()
-      } else if (key.action === "newline") {
-        input += "\n"
-        updateSlashState()
-      } else if (key.action === "tab") {
-        if (state.slashActive && state.slashMatches.length > 0) {
-          input = `${state.slashMatches[0]?.display} `
-          clearSlash()
-        }
-      } else if (key.action === "submit") {
-        void submit()
-      }
-      render()
-      return false
-    }
-
-    let escapeBuffer = ""
-    let escapeTimer: ReturnType<typeof setTimeout> | undefined
-    const flushEscapeBuffer = () => {
-      if (!escapeBuffer) return false
-      escapeBuffer = ""
-      escapeTimer = undefined
-      return handleKey(parseTuiKey("\u001b"), "\u001b")
-    }
-    const scheduleEscapeFlush = () => {
-      if (escapeTimer) clearTimeout(escapeTimer)
-      escapeTimer = setTimeout(() => {
-        if (flushEscapeBuffer()) return
-        render()
-      }, 25)
-    }
-
-    stdin.on("data", (chunk: string) => {
-      if (chunk === "\u001b") {
-        escapeBuffer = "\u001b"
-        scheduleEscapeFlush()
-        return
-      }
-
-      if (escapeBuffer) {
-        if (escapeTimer) clearTimeout(escapeTimer)
-        escapeTimer = undefined
-        const buffered = `${escapeBuffer}${chunk}`
-        if (buffered === "\u001b[A" || buffered === "\u001b[B" || buffered === "\u001b\r" || buffered === "\u001b\n") {
-          escapeBuffer = ""
-          handleKey(parseTuiKey(buffered), buffered)
-          return
-        }
-        if (buffered === "\u001b[") {
-          escapeBuffer = buffered
-          scheduleEscapeFlush()
-          return
-        }
-        if (escapeBuffer === "\u001b[" && (chunk === "A" || chunk === "B")) {
-          escapeBuffer = ""
-          handleKey(parseTuiKey(`\u001b[${chunk}`), `\u001b[${chunk}`)
-          return
-        }
-        const shouldExit = flushEscapeBuffer()
-        if (shouldExit) return
-      }
-
-      const chunkKey = parseTuiKey(chunk)
-      if (chunkKey.action !== "input" && chunkKey.action !== "noop") {
-        handleKey(chunkKey, chunk)
-        return
-      }
-
-      for (const char of chunk) {
-        if (char === "\u001b") {
-          escapeBuffer = "\u001b"
-          scheduleEscapeFlush()
-          continue
-        }
-
-        if (handleKey(parseTuiKey(char), char)) return
-      }
-    })
-  })
 }
 
-const HELP_TEXT = [
-  "Slash commands:",
-  "  /help show keybindings",
-  "  /clear clear visible messages",
-  "  /skills list bundled skills",
-  "  /exit exit the TUI",
-  "Keybindings:",
-  "  Ctrl+S side panel | Ctrl+T team | Ctrl+M mcp | Ctrl+A agent",
-  "  Ctrl+L clear | Ctrl+R sessions | Alt+Enter newline | Tab complete slash",
-].join("\n")
+function StaticTuiShell(props: { readonly options: TuiLaunchOptions }) {
+  const width = Math.max(40, props.options.stdout?.columns ?? process.stdout.columns ?? 100)
+  const showSidebar = props.options.config.tui.sidePanel && width >= 80
+  const sidebarWidth = showSidebar ? Math.min(42, Math.max(24, width - 60)) : 0
+  const labels = STATIC_TUI_SHELL_LABELS
 
-const SKILLS_TEXT = [
-  "Bundled skills:",
-  "  clarify",
-  "  initialize",
-  "  spec-implement",
-  "  spec-planner",
-  "  team-report",
-].join("\n")
+  return tuiElement("box", { width, height: process.stdout.rows ?? 24, flexDirection: "column" }, [
+    tuiElement("box", { flexGrow: 1, minHeight: 0, flexDirection: "row" }, [
+      tuiElement("scrollbox", { flexGrow: 1, minWidth: 0 }, [tuiElement("text", { content: labels.transcript })]),
+      ...(showSidebar
+        ? [
+            tuiElement("box", { width: sidebarWidth, flexShrink: 0, border: true }, [
+              tuiElement("text", { content: labels.sidebar }),
+            ]),
+          ]
+        : []),
+    ]),
+    tuiElement("box", { flexShrink: 0, border: true }, [tuiElement("text", { content: labels.footer })]),
+    tuiElement("box", { flexShrink: 0, border: true }, [tuiElement("text", { content: labels.prompt })]),
+  ])
+}
 
-const createTuiCommands = (handlers: {
-  readonly help: () => void
-  readonly clear: () => void
-  readonly skills: () => void
-  readonly exit: () => void
-}): readonly SlashCommand[] => [
-  { name: "help", description: "show keybindings", source: "tui", onExecute: handlers.help },
-  { name: "exit", description: "exit the TUI", aliases: ["quit", "q"], source: "tui", onExecute: handlers.exit },
-  { name: "clear", description: "clear visible messages", source: "tui", onExecute: handlers.clear },
-  { name: "skills", description: "list available skills", source: "tui", onExecute: handlers.skills },
-]
+function tuiElement(tag: string, props: Record<string, unknown>, children: unknown[] = []) {
+  const element = createElement(tag)
+  spread(element, { ...props, children })
+  return element
+}
 
-const toSlashMatch = (command: SlashCommand): SlashMatch => ({
-  name: command.name,
-  display: `/${command.name}`,
-  description: command.description,
-  source: command.source,
-})
+function createExitInputHandler(exit: () => void): (sequence: string, event?: KeyEvent) => boolean {
+  return (sequence, event) => {
+    if (sequence === "\u0003" || sequence === "\u0004" || (event?.ctrl && (event.name === "c" || event.name === "d"))) {
+      exit()
+      return true
+    }
+    return false
+  }
+}
 
-const parseSlashCommand = (prompt: string): { readonly name: string; readonly arguments: string } | undefined => {
-  if (!prompt.startsWith("/")) return undefined
-  const body = prompt.slice(1)
-  const [name = "", ...rest] = body.split(/\s+/)
-  if (!name) return undefined
-  return { name, arguments: rest.join(" ") }
+function destroyRenderer(renderer: CliRenderer | undefined): void {
+  if (!renderer || renderer.isDestroyed) return
+  try {
+    renderer.setTerminalTitle("")
+  } finally {
+    renderer.destroy()
+  }
+}
+
+function writeTerminalRestore(stdout: TuiLaunchOptions["stdout"]): void {
+  try {
+    ;(stdout ?? process.stdout).write("\x1b[0m\x1b[?25h")
+  } catch {
+    // Best-effort restoration only. The renderer error path prints a safe line separately.
+  }
+}
+
+function writeTerminalSafeError(message: string): void {
+  process.stderr.write(`${message.replace(/[\r\n]+/g, " ")}\n`)
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
