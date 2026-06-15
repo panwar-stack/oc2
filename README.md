@@ -131,6 +131,19 @@ Subagents cannot create nested agent teams, and team tools stay scoped to lead a
 
 Learn more in the [agent teams docs](https://opencode.ai/docs/agent-teams).
 
+#### Local Fusion
+
+`local_fusion` runs local compound model orchestration from a normal OpenCode session. It fans one prompt out to inline configured branch models, judges the branch outputs, and synthesizes one final answer without using a remote compound-model provider.
+
+- Configure branches, judge, and synthesizer inline in the tool input
+- Branches default to read/search-only tools, with `toolPolicy: "none"` available per branch
+- Judge and synthesizer run with tools disabled
+- Partial branch failures continue when at least one branch succeeds; all-branch, judge, and synthesizer failures fail loudly
+
+Named compound configs and `model: "compound/..."` routing are not included in this first version.
+
+Learn more in the [tools docs](https://opencode.ai/docs/tools#local_fusion).
+
 #### Session Export
 
 `opencode export` now includes child sessions recursively, so exported JSON captures subagent and teammate work along with the lead session.
