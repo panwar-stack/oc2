@@ -1,7 +1,7 @@
 import type { Oc2Config } from "../config/schema"
 import type { RuntimeEventBus } from "../events/event-bus"
 import { RuntimeError } from "../events/events"
-import { redactText, redactValue } from "../logging/redaction"
+import { REDACTED, redactText, redactValue } from "../logging/redaction"
 import type { McpSnapshotRepository } from "../persistence/repositories/mcp"
 import type { TaskScheduler } from "../scheduler/scheduler"
 import type { ToolRegistry } from "../tools/registry"
@@ -18,7 +18,7 @@ import { createOAuthManager, type OAuthManager } from "./auth-manager"
 import { MCP_PROTOCOL_VERSION, type McpPromptInfo } from "./protocol"
 import { materializeMcpTool } from "./tools"
 import { createResourceListTool, createResourceReadTool, createPromptListTool, createPromptGetTool } from "./meta-tools"
-import { createMcpStatus, type McpServerStatus, type McpToolInfo } from "./status"
+import { createMcpStatus, type McpAuthStateName, type McpServerStatus, type McpToolInfo } from "./status"
 
 export interface McpServiceOptions {
   readonly config: Pick<Oc2Config, "mcp" | "runtime">
@@ -77,23 +77,30 @@ export function createMcpService(options: McpServiceOptions): McpService {
   const setStatus = (state: ServerState, status: McpServerStatus) => {
     const redacted = redactValue(status) as McpServerStatus
     state.status = redacted
-    options.snapshots?.append({ serverId: state.server.id, status: redacted })
+    const eventSafe = redactMcpStatusForEvents(redacted)
+    options.snapshots?.append({ serverId: state.server.id, status: eventSafe })
     options.events?.publish({
       type: "mcp.status",
       payload: {
         serverId: state.server.id,
-        status: redacted.status,
-        error: redacted.error,
-        toolCount: redacted.toolCount,
-        tools: redacted.tools,
-        resourceCount: redacted.resourceCount,
-        promptCount: redacted.promptCount,
-        authRequired: redacted.status === "auth_required",
+        status: eventSafe.status,
+        error: eventSafe.error,
+        toolCount: eventSafe.toolCount,
+        tools: eventSafe.tools,
+        resourceCount: eventSafe.resourceCount,
+        promptCount: eventSafe.promptCount,
+        authUrl: eventSafe.authUrl,
+        authState: eventSafe.authState,
+        authRequired:
+          eventSafe.status === "auth_required" ||
+          eventSafe.authState === "auth_required" ||
+          eventSafe.authState === "callback_pending" ||
+          eventSafe.authState === "refresh_failed",
       },
     })
   }
 
-  const refreshTools = async (state: ServerState, client: McpClient, signal: AbortSignal) => {
+  const refreshTools = async (state: ServerState, client: McpClient, signal: AbortSignal, authState?: McpAuthStateName) => {
     const tools = await client.listTools(signal)
     registerTools(options.registry, state, client, tools)
     let resourceCount: number | undefined
@@ -119,13 +126,14 @@ export function createMcpService(options: McpServiceOptions): McpService {
       tools: state.toolNames,
       resourceCount,
       promptCount,
+      authState,
     })
   }
 
   const wireListChanged = (state: ServerState, client: McpClient) => {
     client.onToolsChanged(() => {
       const refreshController = new AbortController()
-      void refreshTools(state, client, refreshController.signal).catch((error) =>
+      void refreshTools(state, client, refreshController.signal, state.status.authState).catch((error) =>
         setStatus(state, failedStatus(state.server.id, error)),
       )
     })
@@ -151,31 +159,32 @@ export function createMcpService(options: McpServiceOptions): McpService {
         const oauthStatus = await oauth.initFlow(signal)
         if (oauthStatus.state === "authenticated") {
           // OAuth is already authenticated - create client with token provider
-          await connect(state, signal, oauth)
+          await connect(state, signal, oauth, "authenticated")
           return state.status
         }
         if (oauthStatus.state === "callback_pending") {
           setStatus(state, {
             ...createMcpStatus(serverId, "auth_required"),
             authUrl: oauthStatus.authUrl,
+            authState: "callback_pending",
           })
           return state.status
         }
         if (oauthStatus.state === "refresh_failed") {
-          setStatus(state, createMcpStatus(serverId, "auth_required"))
+          setStatus(state, { ...createMcpStatus(serverId, "auth_required"), authState: "refresh_failed" })
           return state.status
         }
-        setStatus(state, createMcpStatus(serverId, "auth_required"))
+        setStatus(state, { ...createMcpStatus(serverId, "auth_required"), authState: "auth_required" })
         return state.status
       }
-      setStatus(state, createMcpStatus(serverId, "auth_required"))
+      setStatus(state, { ...createMcpStatus(serverId, "auth_required"), authState: "auth_required" })
       return state.status
     }
 
     setStatus(state, createMcpStatus(serverId, "starting"))
     try {
       const oauth = state.server.oauth?.enabled && options.dataDir ? getOAuthManager(state) : undefined
-      await connect(state, signal, oauth)
+      await connect(state, signal, oauth, oauth ? "authenticated" : undefined)
       return state.status
     } catch (error) {
       if (error instanceof McpAuthRequiredError) {
@@ -186,6 +195,7 @@ export function createMcpService(options: McpServiceOptions): McpService {
             setStatus(state, {
               ...createMcpStatus(serverId, "auth_required"),
               authUrl: oauthStatus.authUrl,
+              authState: "callback_pending",
             })
             return state.status
           }
@@ -193,6 +203,7 @@ export function createMcpService(options: McpServiceOptions): McpService {
         setStatus(state, {
           ...createMcpStatus(serverId, "auth_required"),
           authUrl: error.metadataUrl,
+          authState: "auth_required",
         })
         return state.status
       }
@@ -236,7 +247,12 @@ export function createMcpService(options: McpServiceOptions): McpService {
     return state.oauth
   }
 
-  async function connect(state: ServerState, signal: AbortSignal, oauth?: OAuthManager): Promise<void> {
+  async function connect(
+    state: ServerState,
+    signal: AbortSignal,
+    oauth?: OAuthManager,
+    authState?: McpAuthStateName,
+  ): Promise<void> {
     const serverWithToken: ResolvedMcpServerConfig | undefined = oauth
       ? {
           ...state.server,
@@ -265,7 +281,7 @@ export function createMcpService(options: McpServiceOptions): McpService {
         { protocolVersion: MCP_PROTOCOL_VERSION, capabilities, clientInfo: { name: "oc2" } },
         timeoutSignal,
       )
-      await refreshTools(state, client, timeoutSignal)
+      await refreshTools(state, client, timeoutSignal, authState)
     })
   }
 }
@@ -316,6 +332,22 @@ function failedStatus(serverId: string, error: unknown): McpServerStatus {
     toolCount: 0,
     tools: [],
     error: { ...runtime, message: redactText(runtime.message) },
+  }
+}
+
+function redactMcpStatusForEvents(status: McpServerStatus): McpServerStatus {
+  return status.authUrl ? { ...status, authUrl: redactOAuthUrl(status.authUrl) } : status
+}
+
+function redactOAuthUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    for (const key of ["state", "code", "code_challenge", "code_verifier"]) {
+      if (url.searchParams.has(key)) url.searchParams.set(key, REDACTED)
+    }
+    return url.toString()
+  } catch {
+    return redactText(value).replace(/([?&](?:state|code|code_challenge|code_verifier)=)[^&\s]+/gi, `$1${REDACTED}`)
   }
 }
 

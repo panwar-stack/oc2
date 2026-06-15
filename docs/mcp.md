@@ -3,6 +3,7 @@
 MCP servers use the canonical `oc2` config shape under `mcp`. Enabled servers can be tested with `oc2 mcp test <id>` and are started for one-shot runs when selected by config or command flags.
 
 Discovered tools are registered as `mcp_<server>_<tool>`. Invocation uses the normal tool scheduler, permission service, timeout, cancellation, root checks where applicable, and output bounding path.
+Resource reads and prompt gets use explicit MCP permission resources: `mcp.resource:<server>/<uri>` and `mcp.prompt:<server>/<name>`.
 
 ## Stdio Server
 
@@ -23,7 +24,7 @@ Discovered tools are registered as `mcp_<server>_<tool>`. Invocation uses the no
 }
 ```
 
-`stdio` servers require `command`. `args`, `cwd`, and `env` are optional.
+`stdio` servers require `command`. `args`, `cwd`, and `env` are optional. Stdio servers do not use the browser OAuth flow by default; provide credentials through environment variables or server-specific config. Secret-shaped values are redacted from logs and diagnostics.
 
 ## HTTP Server
 
@@ -63,6 +64,8 @@ Discovered tools are registered as `mcp_<server>_<tool>`. Invocation uses the no
 
 Remote `http` and `sse` servers with OAuth enabled use OAuth 2.1 authorization-code-with-PKCE. The client discovers protected resource metadata and authorization server metadata, registers dynamically when needed, generates PKCE challenge/state, opens a local callback listener, exchanges the authorization code for tokens, refreshes expired tokens, and retries bearer requests once. Tokens are stored under the local data directory and are redacted from logs, events, and snapshots.
 
+`oc2 mcp test <id>` exits successfully when the server connects or reports `auth_required`. Text output includes discovered tool/resource/prompt counts and `auth: <url>` when user action is needed. JSON output includes the same counts plus `authState`, such as `callback_pending`, `authenticated`, or `refresh_failed`.
+
 ```jsonc
 {
   "mcp": {
@@ -73,11 +76,11 @@ Remote `http` and `sse` servers with OAuth enabled use OAuth 2.1 authorization-c
       "oauth": {
         "enabled": true,
         "clientId": "local-client",
-        "clientSecretEnv": "PROTECTED_MCP_CLIENT_SECRET",
-        "redirectUri": "http://localhost:7331/callback",
         "callbackPort": 7331,
         "scopes": ["tools"],
       },
+      "toolPermissions": [{ "match": "mcp.invoke:protected/*", "decision": "ask" }],
+      "startupTimeoutMs": 20000,
     },
   },
 }
@@ -95,6 +98,8 @@ Remote `http` and `sse` servers with OAuth enabled use OAuth 2.1 authorization-c
       "transport": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+      "env": { "API_KEY": "${MY_API_KEY}" },
+      "toolPermissions": [{ "match": "mcp.invoke:my-server/*", "decision": "ask" }],
     },
   },
 }
@@ -115,6 +120,7 @@ Remote `http` and `sse` servers with OAuth enabled use OAuth 2.1 authorization-c
         "scopes": ["read", "write"],
         "callbackPort": 9876,
       },
+      "toolPermissions": [{ "match": "mcp.invoke:remote-server/*", "decision": "ask" }],
     },
   },
 }
@@ -124,13 +130,15 @@ Remote `http` and `sse` servers with OAuth enabled use OAuth 2.1 authorization-c
 
 ```jsonc
 {
-  "tools": {
-    "mcp_my-server_search": {
-      "permissions": [{ "match": "mcp.invoke:my-server/search", "decision": "allow" }],
+  "mcp": {
+    "my-server": {
+      "toolPermissions": [{ "match": "mcp.invoke:my-server/search", "decision": "allow" }],
     },
   },
 }
 ```
+
+Generated MCP permission resources use these shapes: tool invocation `mcp.invoke:<server>/<tool>`, resource read `mcp.resource:<server>/<uri>`, and prompt get `mcp.prompt:<server>/<name>`.
 
 ## Commands
 

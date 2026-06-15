@@ -864,7 +864,74 @@ test("mcp.status events include resource and prompt counts", async () => {
 
   expect(connected?.resourceCount).toBe(1)
   expect(connected?.promptCount).toBe(1)
+  expect(connected?.authState).toBeUndefined()
 })
+
+test("mcp.status events include OAuth auth state and actionable URL", async () => {
+  const { mkdirSync, rmSync } = await import("node:fs")
+  const { join } = await import("node:path")
+  const { tmpdir } = await import("node:os")
+  const dataDir = join(tmpdir(), `oc2-mcp-pr7-oauth-${crypto.randomUUID()}`)
+  mkdirSync(dataDir, { recursive: true })
+  const metadataUrl = "https://example.test/.well-known/oauth-protected-resource"
+  const original = globalThis.fetch
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const urlStr = String(url)
+    if (urlStr === metadataUrl) {
+      return new Response(
+        JSON.stringify({ resource: "https://example.test/mcp", authorization_servers: ["https://auth.test"] }),
+        { headers: { "content-type": "application/json" } },
+      )
+    }
+    if (urlStr.includes("oauth-authorization-server")) {
+      return new Response(
+        JSON.stringify({
+          authorization_endpoint: "https://auth.test/authorize",
+          token_endpoint: "https://auth.test/token",
+          registration_endpoint: "https://auth.test/register",
+        }),
+        { headers: { "content-type": "application/json" } },
+      )
+    }
+    if (urlStr === "https://auth.test/register") {
+      return new Response(JSON.stringify({ client_id: "pr7-client" }), { headers: { "content-type": "application/json" } })
+    }
+    return new Response("Not Found", { status: 404 })
+  }) as unknown as typeof globalThis.fetch
+
+  try {
+    const events = createRuntimeEventBus()
+    const payloads: any[] = []
+    events.subscribe("mcp.status", (event) => payloads.push(event.payload))
+    const service = createMcpService({
+      config: withMcp({
+        remote: server({ transport: "http", url: "https://example.test/mcp", oauth: { enabled: true, scopes: [] } }),
+      }),
+      registry: createToolRegistry(),
+      dataDir,
+      events,
+      clientFactory: () => {
+        throw new McpAuthRequiredError("auth required", metadataUrl)
+      },
+    })
+
+    const status = await service.test("remote")
+    const authPayload = payloads.find((payload) => payload.serverId === "remote" && payload.authState)
+
+    expect(status.authState).toBe("callback_pending")
+    expect(status.authUrl).toContain("https://auth.test/authorize")
+    const stateParam = new URL(status.authUrl!).searchParams.get("state")
+    expect(stateParam).toBeTruthy()
+    expect(authPayload?.authState).toBe("callback_pending")
+    expect(authPayload?.authUrl).toContain("https://auth.test/authorize")
+    expect(authPayload?.authUrl).not.toContain(stateParam)
+    expect(authPayload?.authUrl).not.toContain(new URL(status.authUrl!).searchParams.get("code_challenge")!)
+    expect(authPayload?.authRequired).toBe(true)
+  } finally {
+    globalThis.fetch = original
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+}, 15_000)
 
 test("list_changed for resources marks resourceCount as undefined", async () => {
   const registry = createToolRegistry()

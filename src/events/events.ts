@@ -170,6 +170,7 @@ export interface RuntimeEventMap {
     readonly resourceCount?: number
     readonly promptCount?: number
     readonly authUrl?: string
+    readonly authState?: "auth_required" | "callback_pending" | "authenticated" | "refresh_failed"
   }
   "scheduler.task.updated": {
     readonly taskId: string

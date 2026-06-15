@@ -4,9 +4,12 @@ import type { TuiState } from "../state"
 export function McpPanel({ state }: { readonly state: TuiState }): string {
   const servers = state.mcpServers.length
     ? state.mcpServers.map((server) => {
-        const auth = server.authRequired ? " auth_required" : ""
+        const status = server.authState ?? server.status
+        const resources = server.resourceCount === undefined ? "" : ` resources=${server.resourceCount}`
+        const prompts = server.promptCount === undefined ? "" : ` prompts=${server.promptCount}`
+        const auth = server.authUrl ? ` auth=${server.authUrl}` : ""
         const error = server.error ? ` error=${server.error}` : ""
-        return `- ${server.serverId}: ${server.status}${auth} tools=${server.toolCount ?? server.tools.length}${error}`
+        return `- ${server.serverId}: ${status} tools=${server.toolCount ?? server.tools.length}${resources}${prompts}${auth}${error}`
       })
     : ["- No MCP servers reported."]
   const mcpCalls = state.toolCalls.filter((call) => call.name.startsWith("mcp_"))

@@ -125,7 +125,7 @@ bun run start export <session-id> --format markdown
 bun run start export <session-id> --format json --recursive
 ```
 
-MCP servers use the canonical `oc2` config shape. Enabled servers start before one-shot agent runs; `oc2 mcp test <id>` starts one configured server and reports discovered tools. Discovered tools are exposed as `mcp_<server>_<tool>` and are invoked through the normal tool scheduler, permission service, and output bounding path. Remote HTTP/SSE servers with OAuth metadata respond with `auth_required` and an actionable PRM URL for browser authorization flow. Stdio servers use environment/config credentials by default.
+MCP servers use the canonical `oc2` config shape. Enabled servers start before one-shot agent runs; `oc2 mcp test <id>` starts one configured server and reports discovered tools, resource/prompt counts when discovered, and OAuth status when authorization is required. Discovered tools are exposed as `mcp_<server>_<tool>` and are invoked through the normal tool scheduler, permission service, and output bounding path. Remote HTTP/SSE servers with OAuth metadata use the browser PKCE flow and report an actionable auth URL when user authorization is needed. Stdio servers use environment/config credentials by default.
 
 ```jsonc
 {
@@ -148,6 +148,7 @@ MCP servers use the canonical `oc2` config shape. Enabled servers start before o
       "oauth": {
         "enabled": true,
         "clientId": "my-mcp-client",
+        "callbackPort": 7331,
         "scopes": ["mcp:tools"],
       },
     },
@@ -173,10 +174,12 @@ MCP servers use the canonical `oc2` config shape. Enabled servers start before o
 | Request cancellation (AbortSignal)      | yes   | yes  | yes | yes    |
 | Malformed output resilience             | yes   | yes  | —   | yes    |
 | OAuth 2.1 PRM discovery                 | —     | yes  | yes | yes    |
-| OAuth 2.1 PKCE + token exchange         | —     | yes  | —   | yes    |
-| Bearer token request retry              | —     | yes  | —   | yes    |
+| OAuth 2.1 PKCE + token exchange         | —     | yes  | yes | yes    |
+| Bearer token request retry              | —     | yes  | yes | yes    |
 
-Stdio servers communicate over subprocess pipes with line-delimited JSON-RPC. HTTP and SSE servers use POST-based JSON-RPC 2.0, with SSE offering an optional event stream for server-to-client notifications. Server-to-client request handling (roots, sampling, elicitation) is supported for stdio transports. OAuth 2.1 PKCE flow with token exchange, refresh, and bearer retry is supported for HTTP transports.
+`Tested` means covered by deterministic repo tests for at least one applicable transport; full per-transport compatibility matrix coverage is tracked in the next remediation slice.
+
+Stdio servers communicate over subprocess pipes with line-delimited JSON-RPC. HTTP and SSE servers use POST-based JSON-RPC 2.0, with SSE offering an optional event stream for server-to-client notifications. Server-to-client request handling (roots, sampling, elicitation) is supported for stdio transports. OAuth 2.1 PKCE flow with token exchange, refresh, and bearer retry is supported for remote HTTP/SSE transports. OAuth tokens are stored under the local data directory and are redacted from status events, snapshots, logs, and errors.
 
 ### Config Examples
 
@@ -212,6 +215,7 @@ Stdio servers communicate over subprocess pipes with line-delimited JSON-RPC. HT
       "oauth": {
         "enabled": true,
         "clientId": "oc2-${USER}",
+        "callbackPort": 7331,
         "scopes": ["mcp:tools", "mcp:resources"],
       },
       "toolPermissions": [{ "match": "mcp.invoke:remote-api/*", "decision": "allow" }],
@@ -221,13 +225,11 @@ Stdio servers communicate over subprocess pipes with line-delimited JSON-RPC. HT
 }
 ```
 
-````
-
 Open the minimal TUI shell with the same fake model:
 
 ```sh
 bun run start tui --model fake/test
-````
+```
 
 The TUI supports prompt submission, streamed assistant text, visible tool status, pending team plan approval projection, team report availability projection, MCP server status, permission requests and denials, question prompt display, agent task status, `Ctrl+C` cancellation/exit, `Ctrl+S` side-panel toggle, `Ctrl+T` team panel toggle, `Ctrl+M` MCP panel toggle when distinguishable, empty-prompt Enter as the raw-terminal fallback for `Ctrl+M`, `Esc` panel/dialog close, and basic resume with `--session <id>`. Narrow terminals hide side panels during rendering so prompt input remains available.
 

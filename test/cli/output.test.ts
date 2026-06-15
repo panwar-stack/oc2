@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 
 import { runCli } from "../../src/cli/index"
+import { formatMcpListText, formatMcpStatusText } from "../../src/cli/output"
 
 test("prints version JSON shape", async () => {
   const output: string[] = []
@@ -132,4 +133,22 @@ test("lists config-backed tools", async () => {
   })
 
   expect(output.join("")).toBe("bash\tdisabled\nread\tenabled\n")
+})
+
+test("formats MCP auth state, auth URL, and counts", () => {
+  const status = {
+    serverId: "remote",
+    status: "auth_required" as const,
+    authState: "callback_pending" as const,
+    toolCount: 2,
+    tools: ["mcp_remote_search", "mcp_remote_fetch"],
+    resourceCount: 3,
+    promptCount: 4,
+    authUrl: "http://127.0.0.1:7331/callback",
+  }
+
+  expect(formatMcpStatusText(status)).toBe(
+    "remote\tauth_required/callback_pending\t2 tools\t3 resources\t4 prompts\tauth: http://127.0.0.1:7331/callback\n",
+  )
+  expect(formatMcpListText([status])).toContain("auth_required/callback_pending")
 })

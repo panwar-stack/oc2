@@ -70,6 +70,7 @@ export interface TuiMcpServerView {
   readonly toolCount?: number
   readonly tools: readonly string[]
   readonly authRequired: boolean
+  readonly authState?: "auth_required" | "callback_pending" | "authenticated" | "refresh_failed"
   readonly error?: string
   readonly resourceCount?: number
   readonly promptCount?: number
@@ -380,7 +381,13 @@ export const projectTuiEvent: RuntimeEventProjector<TuiState> = (state, event) =
           status: payload.status,
           toolCount: payload.toolCount,
           tools: payload.tools ?? [],
-          authRequired: payload.authRequired ?? payload.status === "auth_required",
+          authRequired:
+            payload.authRequired ??
+            (payload.status === "auth_required" ||
+              payload.authState === "auth_required" ||
+              payload.authState === "callback_pending" ||
+              payload.authState === "refresh_failed"),
+          authState: payload.authState,
           error: payload.error?.message,
           resourceCount: payload.resourceCount,
           promptCount: payload.promptCount,

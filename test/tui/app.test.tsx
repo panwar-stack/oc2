@@ -90,13 +90,25 @@ test("renders MCP panel and active MCP tool calls", () => {
     ...createInitialTuiState(true),
     activePanel: "mcp",
     mcpServers: [
-      { serverId: "browser", status: "auth_required", toolCount: 1, tools: ["mcp_browser_open"], authRequired: true },
+      {
+        serverId: "browser",
+        status: "auth_required",
+        authState: "callback_pending",
+        toolCount: 1,
+        tools: ["mcp_browser_open"],
+        authRequired: true,
+        resourceCount: 2,
+        promptCount: 3,
+        authUrl: "http://127.0.0.1:7331/callback",
+      },
       { serverId: "bad", status: "failed", tools: [], authRequired: false, error: "boom" },
     ],
     toolCalls: [{ id: "m1", name: "mcp_browser_open", status: "running" }],
   })
 
-  expect(output).toContain("browser: auth_required auth_required tools=1")
+  expect(output).toContain(
+    "browser: callback_pending tools=1 resources=2 prompts=3 auth=http://127.0.0.1:7331/callback",
+  )
   expect(output).toContain("bad: failed tools=0 error=boom")
   expect(output).toContain("mcp_browser_open [running]")
 })

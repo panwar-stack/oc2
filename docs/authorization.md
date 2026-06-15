@@ -1,4 +1,4 @@
-> Reference note: this is upstream MCP background material kept for local reference. `oc2` ships full OAuth 2.1 PKCE authorization flow for remote HTTP servers as documented in `docs/mcp.md`.
+> Reference note: this is upstream MCP background material kept for local reference. `oc2` ships OAuth 2.1 PKCE authorization flow for remote HTTP/SSE MCP servers; use `docs/mcp.md` as the source of truth for oc2 client config, token storage, and status output.
 
 > ## Documentation Index
 >

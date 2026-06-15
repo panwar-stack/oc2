@@ -283,7 +283,17 @@ test("projects MCP, permission, question, diagnostics, and agent status", () => 
     id: "1",
     timestamp: new Date(),
     type: "mcp.status",
-    payload: { serverId: "browser", status: "auth_required", toolCount: 2, tools: ["mcp_browser_open"], error },
+    payload: {
+      serverId: "browser",
+      status: "auth_required",
+      authState: "callback_pending",
+      toolCount: 2,
+      tools: ["mcp_browser_open"],
+      resourceCount: 3,
+      promptCount: 4,
+      authUrl: "http://127.0.0.1:7331/callback",
+      error,
+    },
   })
   state = applyTuiEvent(state, {
     id: "2",
@@ -316,7 +326,15 @@ test("projects MCP, permission, question, diagnostics, and agent status", () => 
     payload: { taskId: "agent-1", kind: "team-member", status: "running" },
   })
 
-  expect(state.mcpServers[0]).toMatchObject({ serverId: "browser", authRequired: true, toolCount: 2 })
+  expect(state.mcpServers[0]).toMatchObject({
+    serverId: "browser",
+    authRequired: true,
+    authState: "callback_pending",
+    toolCount: 2,
+    resourceCount: 3,
+    promptCount: 4,
+    authUrl: "http://127.0.0.1:7331/callback",
+  })
   expect(state.permissions[0]).toMatchObject({ permissionId: "perm-1", status: "deny", reason: "user rejected" })
   expect(state.questionPrompt).toBeUndefined()
   expect(state.diagnostics).toEqual([{ message: "narrow terminal", code: "tui.narrow" }])
