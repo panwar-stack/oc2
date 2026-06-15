@@ -77,6 +77,8 @@ export * from "./tools/execution"
 export * from "./tools/builtins/index"
 export * from "./tui/state"
 export * from "./tui/keymap"
+export * from "./tui/client"
+export * from "./tui/client.local"
 export { renderTui, launchTui, type TuiLaunchOptions } from "./tui/app"
 
 // Keep library exports available while still allowing this module to act as the bun CLI entrypoint.

@@ -8,6 +8,7 @@ import { createRuntimeEventBus } from "../events/event-bus"
 import { redactText } from "../logging/redaction"
 import type { ModelProvider } from "../model/provider"
 import { createSessionRunService } from "../session/run"
+import { createLocalTuiClient } from "./client.local"
 import { parseTuiKey } from "./keymap"
 import { SessionView } from "./components/SessionView"
 import {
@@ -20,7 +21,6 @@ import {
   createInitialTuiState,
   cycleModelVariant,
   failTuiRun,
-  hydrateTuiState,
   moveModelPickerSelection,
   openModelPicker,
   projectTuiEvent,
@@ -95,6 +95,14 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   })
   const stdin = options.stdin ?? process.stdin
   const stdout = options.stdout ?? process.stdout
+  const client = createLocalTuiClient({
+    service,
+    events: eventBus,
+    commands: registry,
+    initialState,
+    roots: options.roots,
+    model: options.model,
+  })
   let state = eventBus.getState()
   let input = ""
   let activeRun: AbortController | undefined
@@ -102,26 +110,14 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   let explicitModelSelection = Boolean(options.model)
 
   if (options.sessionId) {
-    const session = service.sessions.resumeSession(options.sessionId)
-    const messages = service.sessions.messages.listBySession(options.sessionId)
-    const tools = service.sessions.toolCalls.listBySession(options.sessionId)
-    state = hydrateTuiState({ ...state, sessionId: options.sessionId }, messages, tools)
-    if (session && !options.model) {
-      state = {
-        ...state,
-        modelSelection: {
-          providerId: session.providerId,
-          modelId: session.modelId,
-          variantId: typeof session.metadata.modelVariant === "string" ? session.metadata.modelVariant : undefined,
-        },
-      }
-    }
+    const hydrated = await client.sessions.hydrate(options.sessionId)
+    state = options.model ? { ...hydrated.state, modelSelection: state.modelSelection } : hydrated.state
   }
 
   const render = () => {
     stdout.write(`\x1b[2J\x1b[H${renderTui(state, input, { width: stdout.columns })}\n`)
   }
-  const unsubscribe = eventBus.all((event) => {
+  const unsubscribe = client.events.subscribe((event) => {
     state = projectTuiEvent(state, event)
     render()
   })
@@ -228,15 +224,21 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
         activeRun = runController
         render()
         try {
-          const result = await service.command({
+          const result = await client.commands.execute({
             name: slashCommand.name,
-            arguments: slashCommand.arguments,
+            args: slashCommand.arguments ? slashCommand.arguments.split(/\s+/).filter(Boolean) : [],
+            raw: prompt,
             sessionId: state.sessionId,
             ...(command.model ? {} : activeModelInput({ includeDefaultForNewSession: false })),
-            agent: command.agent,
+            roots: options.roots ?? [],
             signal: runController.signal,
           })
-          state = completeTuiRun(state, result, runController.signal.aborted)
+          if (!result.ok) throw new Error(result.message ?? `Slash command failed: ${slashCommand.name}`)
+          state = completeTuiRun(
+            state,
+            { sessionId: result.sessionId ?? state.sessionId ?? "", status: "completed" },
+            runController.signal.aborted,
+          )
         } catch (error) {
           state = failTuiRun(state, error, runController.signal.aborted)
         } finally {
@@ -253,14 +255,14 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     activeRun = runController
     render()
     try {
-      const result = await service.run({
+      const result = await client.sessions.prompt({
         prompt,
         sessionId: state.sessionId,
         ...activeModelInput(),
-        roots: options.roots,
+        roots: options.roots ?? [],
         signal: runController.signal,
       })
-      state = completeTuiRun(state, result, runController.signal.aborted)
+      state = completeTuiRun(state, { sessionId: result.sessionId, status: "completed" }, runController.signal.aborted)
     } catch (error) {
       state = failTuiRun(state, error, runController.signal.aborted)
     } finally {
