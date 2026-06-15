@@ -142,3 +142,31 @@ test("command uses configured agent override", async () => {
   expect(provider.requests[0]?.messages[0]?.content).toContain("Reviewer system prompt")
   db.close()
 })
+
+test("command model metadata takes precedence over caller model overrides", async () => {
+  const db = openOc2Database({ path: ":memory:" })
+  const metadataProvider = createScriptedModelProvider([simpleAssistantEvents], {
+    id: "metadata",
+    models: [{ id: "model" }],
+  })
+  const callerProvider = createScriptedModelProvider([simpleAssistantEvents], {
+    id: "caller",
+    models: [{ id: "model" }],
+  })
+  const service = createSessionRunService({
+    config: defaultConfig,
+    cwd: "/repo",
+    database: db,
+    providers: [metadataProvider, callerProvider],
+    commands: createCommandRegistry([
+      { name: "metadata-model", description: "metadata", source: "user", template: "Run", model: "metadata/model" },
+    ]),
+  })
+
+  await service.command({ name: "metadata-model", model: "caller/model", modelVariant: "fast" })
+
+  expect(metadataProvider.requests).toHaveLength(1)
+  expect(callerProvider.requests).toHaveLength(0)
+  expect(metadataProvider.requests[0]?.providerOptions).not.toHaveProperty("variant")
+  db.close()
+})

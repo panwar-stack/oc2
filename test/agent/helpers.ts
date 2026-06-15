@@ -7,15 +7,20 @@ export interface ScriptedProvider extends ModelProvider {
 /** Creates a deterministic provider that consumes one event batch per model request. */
 export function createScriptedModelProvider(
   batches: readonly (readonly ModelEvent[])[],
-  options: { readonly delayMs?: number } = {},
+  options: {
+    readonly delayMs?: number
+    readonly id?: string
+    readonly name?: string
+    readonly models?: readonly ModelInfo[]
+  } = {},
 ): ScriptedProvider {
   const requests: ModelRequest[] = []
   return {
-    id: "fake",
-    name: "Scripted Fake",
+    id: options.id ?? "fake",
+    name: options.name ?? "Scripted Fake",
     requests,
     async listModels(): Promise<readonly ModelInfo[]> {
-      return [{ id: "test", supportsTools: true }]
+      return options.models ?? [{ id: "test", supportsTools: true }]
     },
     async *stream(request: ModelRequest, _context: ModelContext): AsyncIterable<ModelEvent> {
       requests.push(request)

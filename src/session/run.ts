@@ -70,6 +70,8 @@ export interface CommandInput {
   readonly arguments?: string
   readonly sessionId?: string
   readonly model?: string
+  readonly modelVariant?: string
+  readonly modelVariantOptions?: ShallowJsonObject
   readonly agent?: string
   readonly enabledTools?: readonly string[]
   readonly disabledTools?: readonly string[]
@@ -158,7 +160,9 @@ export class SessionRunService {
     return this.run({
       prompt: await resolveCommandTemplate(command, input.arguments ?? ""),
       sessionId: input.sessionId,
-      model: input.model ?? command.model,
+      model: command.model ?? input.model,
+      modelVariant: command.model ? undefined : input.modelVariant,
+      modelVariantOptions: command.model ? undefined : input.modelVariantOptions,
       agent: input.agent ?? command.agent,
       enabledTools: input.enabledTools,
       disabledTools: input.disabledTools,
@@ -323,9 +327,9 @@ export class SessionRunService {
 
           const maxTokens = typeof params.maxTokens === "number" ? params.maxTokens : undefined
 
-          const result = await this.models.collect(model.providerId, {
+          const result = await this.models.collect(started.providerId, {
             sessionId: session.id,
-            modelId: model.modelId,
+            modelId: started.modelId,
             messages: modelMessages,
             tools: [],
             maxTokens,

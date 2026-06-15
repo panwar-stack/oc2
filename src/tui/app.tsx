@@ -99,11 +99,23 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   let input = ""
   let activeRun: AbortController | undefined
   let exitTui: (() => void) | undefined
+  let explicitModelSelection = Boolean(options.model)
 
   if (options.sessionId) {
+    const session = service.sessions.resumeSession(options.sessionId)
     const messages = service.sessions.messages.listBySession(options.sessionId)
     const tools = service.sessions.toolCalls.listBySession(options.sessionId)
     state = hydrateTuiState({ ...state, sessionId: options.sessionId }, messages, tools)
+    if (session && !options.model) {
+      state = {
+        ...state,
+        modelSelection: {
+          providerId: session.providerId,
+          modelId: session.modelId,
+          variantId: typeof session.metadata.modelVariant === "string" ? session.metadata.modelVariant : undefined,
+        },
+      }
+    }
   }
 
   const render = () => {
@@ -120,6 +132,19 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   const resetInput = () => {
     input = ""
     clearSlash()
+  }
+  const activeModelInput = (selectionInput: { readonly includeDefaultForNewSession?: boolean } = {}) =>
+    explicitModelSelection || ((selectionInput.includeDefaultForNewSession ?? true) && !state.sessionId)
+      ? {
+          model: `${state.modelSelection.providerId}/${state.modelSelection.modelId}`,
+          modelVariant: state.modelSelection.variantId,
+          modelVariantOptions: state.modelSelection.modelVariantOptions,
+        }
+      : {}
+  const modelChangeBlocked = () => Boolean(activeRun || state.running)
+  const rejectModelChangeWhileRunning = () => {
+    state = setModelPickerError(state, "Cannot change model while a run is active")
+    state = appendLocalMessage(state, "system", "Cannot change model while a run is active")
   }
   const updateSlashState = () => {
     if (state.modelPickerOpen) {
@@ -207,7 +232,7 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
             name: slashCommand.name,
             arguments: slashCommand.arguments,
             sessionId: state.sessionId,
-            model: options.model,
+            ...(command.model ? {} : activeModelInput({ includeDefaultForNewSession: false })),
             agent: command.agent,
             signal: runController.signal,
           })
@@ -231,7 +256,7 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
       const result = await service.run({
         prompt,
         sessionId: state.sessionId,
-        model: options.model,
+        ...activeModelInput(),
         roots: options.roots,
         signal: runController.signal,
       })
@@ -284,8 +309,21 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
         else if (key.action === "picker-down") state = moveModelPickerSelection(state, 1)
         else if (key.action === "backspace") state = setModelPickerQuery(state, state.modelPickerQuery.slice(0, -1))
         else if (key.action === "input") state = setModelPickerQuery(state, state.modelPickerQuery + (key.value ?? ""))
-        else if (key.action === "submit") state = applyModelPickerSelection(state)
-        else if (key.action === "variant-cycle") state = cycleModelVariant(state)
+        else if (key.action === "submit") {
+          if (modelChangeBlocked()) rejectModelChangeWhileRunning()
+          else {
+            const next = applyModelPickerSelection(state)
+            if (next.modelSelection !== state.modelSelection) explicitModelSelection = true
+            state = next
+          }
+        } else if (key.action === "variant-cycle") {
+          if (modelChangeBlocked()) rejectModelChangeWhileRunning()
+          else {
+            const next = cycleModelVariant(state)
+            if (next.modelSelection !== state.modelSelection) explicitModelSelection = true
+            state = next
+          }
+        }
         render()
         return false
       }
@@ -299,8 +337,14 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
       if (key.action === "model-picker-toggle") {
         state = openModelPicker(state)
         if (state.modelOptions.length === 0) void loadModelOptions()
-      } else if (key.action === "variant-cycle") state = cycleModelVariant(state)
-      else if (key.action === "toggle-side-panel") state = toggleSidePanel(state)
+      } else if (key.action === "variant-cycle") {
+        if (modelChangeBlocked()) rejectModelChangeWhileRunning()
+        else {
+          const next = cycleModelVariant(state)
+          if (next.modelSelection !== state.modelSelection) explicitModelSelection = true
+          state = next
+        }
+      } else if (key.action === "toggle-side-panel") state = toggleSidePanel(state)
       else if (key.action === "toggle-team-panel") state = toggleTeamPanel(state)
       else if (key.action === "toggle-mcp-panel") state = toggleMcpPanel(state)
       else if (key.action === "toggle-agent-panel") state = toggleAgentPanel(state)

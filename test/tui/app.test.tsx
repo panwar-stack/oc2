@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises"
 
 import { expect, test } from "bun:test"
 
-import { defaultConfig } from "../../src"
+import { createSessionService, defaultConfig, openOc2Database, SessionRepository } from "../../src"
 import { launchTui, renderTui } from "../../src/tui/app"
 import { createInitialTuiState } from "../../src/tui/state"
 import { createScriptedModelProvider, simpleAssistantEvents } from "../agent/helpers"
@@ -420,3 +420,187 @@ test("launchTui preserves split Alt+Enter newline input", async () => {
   expect(userMessage?.content).toBe("hello\nworld")
   await rm(dataDir, { recursive: true, force: true })
 })
+
+test("launchTui applies selected picker model variant to prompt submission and persistence", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents], {
+    models: [
+      { id: "test", name: "Fake Test" },
+      {
+        id: "variant",
+        name: "Variant Model",
+        variants: [{ id: "fast", name: "Fast", runtimeOptions: { effort: "low" } }],
+      },
+    ],
+  })
+  const output: string[] = []
+  const stdout = { columns: 120, write: (_chunk: string) => undefined }
+  const sawModel = waitForOutput(output, "Variant Model")
+  const sawVariant = waitForOutput(output, "Select variant for fake/variant")
+  const completed = waitForOutput(output, "assistant> fake response").then(() => stdin.write("\u0003"))
+  stdout.write = (chunk: string) => {
+    output.push(chunk)
+  }
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", dataDir, providers: [provider], stdin, stdout })
+
+  stdin.write("\u0010variant")
+  await sawModel
+  stdin.write("\r")
+  await sawVariant
+  stdin.write("\u001b[B")
+  await delay(1)
+  stdin.write("\rhello\r")
+  await completed
+  await launched
+
+  expect(provider.requests[0]?.modelId).toBe("variant")
+  expect(provider.requests[0]?.providerOptions).toMatchObject({ effort: "low", variant: "fast" })
+  const db = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
+  const [session] = new SessionRepository(db.sqlite).list()
+  expect(session).toMatchObject({ providerId: "fake", modelId: "variant", metadata: { modelVariant: "fast" } })
+  db.close()
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui Ctrl+V cycles resumed variant to default and clears persistence", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const setupDb = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
+  const setupSessions = createSessionService({ database: setupDb })
+  const session = setupSessions.createSession({
+    id: "cycle-session",
+    workspaceRoots: [{ path: "/repo", readonly: false }],
+    providerId: "fake",
+    modelId: "variant",
+    agentId: "main",
+    metadata: { modelVariant: "fast" },
+  })
+  setupDb.close()
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents], {
+    models: [
+      {
+        id: "variant",
+        name: "Variant Model",
+        variants: [{ id: "fast", name: "Fast", runtimeOptions: { effort: "low" } }],
+      },
+    ],
+  })
+  const output: string[] = []
+  const stdout = { columns: 120, write: (_chunk: string) => undefined }
+  const sawModel = waitForOutput(output, "Variant Model")
+  const completed = waitForOutput(output, "assistant> fake response").then(() => stdin.write("\u0003"))
+  stdout.write = (chunk: string) => {
+    output.push(chunk)
+  }
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    sessionId: session.id,
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("\u0010")
+  await sawModel
+  stdin.write("\u0010")
+  await delay(1)
+  stdin.write("\u0016hello\r")
+  await completed
+  await launched
+
+  expect(provider.requests[0]?.modelId).toBe("variant")
+  expect(provider.requests[0]?.providerOptions).not.toHaveProperty("variant")
+  const db = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
+  expect(new SessionRepository(db.sqlite).get(session.id)?.metadata).toEqual({})
+  db.close()
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui --model remains canonical before picker interaction", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents], {
+    models: [{ id: "test" }, { id: "other" }],
+  })
+  const output: string[] = []
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const completed = waitForOutput(output, "assistant> fake response").then(() => stdin.write("\u0003"))
+  stdout.write = (chunk: string) => {
+    output.push(chunk)
+  }
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("hello\r")
+  await completed
+  await launched
+
+  expect(provider.requests[0]?.modelId).toBe("test")
+  const db = openOc2Database({ path: join(dataDir, "oc2.sqlite") })
+  expect(new SessionRepository(db.sqlite).list()[0]).toMatchObject({ providerId: "fake", modelId: "test" })
+  db.close()
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+test("launchTui blocks picker selection while a run is active", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "oc2-tui-"))
+  const stdin = new PassThrough()
+  const provider = createScriptedModelProvider([simpleAssistantEvents], {
+    delayMs: 1000,
+    models: [{ id: "test" }, { id: "other", name: "Other Model" }],
+  })
+  const output: string[] = []
+  const stdout = { columns: 100, write: (_chunk: string) => undefined }
+  const running = waitForOutput(output, "Running> ")
+  stdout.write = (chunk: string) => {
+    output.push(chunk)
+  }
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    dataDir,
+    model: "fake/test",
+    providers: [provider],
+    stdin,
+    stdout,
+  })
+
+  stdin.write("first\r")
+  await running
+  stdin.write("\u0016")
+  await delay(25)
+  expect(output.join("")).toContain("Cannot change model while a run is active")
+  stdin.write("\u0010")
+  await delay(5)
+  stdin.write("\r")
+  await delay(25)
+  expect(output.join("")).toContain("Cannot change model while a run is active")
+  stdin.write("\u0003")
+  await delay(1)
+  stdin.write("\u0003")
+  await launched
+
+  expect(provider.requests[0]?.modelId).toBe("test")
+  await rm(dataDir, { recursive: true, force: true })
+})
+
+function waitForOutput(output: readonly string[], text: string): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (output.join("").includes(text)) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 1)
+  })
+}

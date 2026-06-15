@@ -117,6 +117,8 @@ Available commands:
 - `oc2 export <session-id> --format markdown|json [--recursive]` exports a saved session transcript.
 - `oc2 tui [--session <id>] [--model <provider/model>] [--root <path>...]` opens the minimal interactive terminal UI.
 
+In the TUI, `Ctrl+P` opens the model picker, where typing filters providers/models and `Enter` selects the highlighted row. If the selected model exposes variants, the picker switches to variant selection; `Default` clears any active variant. `Ctrl+V` cycles the active model variant without opening the picker once model metadata has loaded.
+
 The default `fake/test` model returns a deterministic response for local smoke tests:
 
 ```sh
