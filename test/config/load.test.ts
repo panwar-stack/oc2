@@ -33,6 +33,7 @@ test("loads config with defaults, user, project, env, and CLI precedence", async
   expect(loaded.config.runtime.logLevel).toBe("warn")
   expect(loaded.config.runtime.maxConcurrentTools).toBe(7)
   expect(loaded.config.runtime.maxConcurrentTeamMembers).toBe(9)
+  expect(loaded.config.tui.theme).toBe("opencode")
 })
 
 test("reports invalid JSONC without throwing", async () => {

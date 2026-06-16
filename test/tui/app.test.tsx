@@ -270,6 +270,81 @@ test("static renderer shell exposes PR2 placeholder regions", async () => {
   expect(text).toContain(STATIC_TUI_SHELL_LABELS.sidebar)
   expect(text).toContain(STATIC_TUI_SHELL_LABELS.footer)
   expect(text).toContain(STATIC_TUI_SHELL_LABELS.prompt)
+  expect(text).toContain("/repo")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui renders theme fallback diagnostics and toast", async () => {
+  resetRendererMock()
+  const client = createMockClient()
+  const launched = launchTui({
+    config: { ...defaultConfig, tui: { ...defaultConfig.tui, theme: "missing-theme" } },
+    cwd: "/repo",
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  const text = shellText()
+
+  expect(text).toContain('diagnostic> [tui.theme.fallback] Unknown TUI theme "missing-theme"')
+  expect(text).toContain("Theme fallback: Unknown TUI theme")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui deduplicates theme fallback diagnostics after hydrate", async () => {
+  resetRendererMock()
+  const duplicate = {
+    code: "tui.theme.fallback",
+    message: 'Unknown TUI theme "missing-theme"; falling back to "opencode"',
+  }
+  const client = createMockClient({
+    hydrateState: { ...createInitialTuiState(true), sessionId: "s1", diagnostics: [duplicate] },
+  })
+  const launched = launchTui({
+    config: { ...defaultConfig, tui: { ...defaultConfig.tui, theme: "missing-theme" } },
+    cwd: "/repo",
+    sessionId: "s1",
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  const matches = shellText().match(/diagnostic> \[tui\.theme\.fallback\]/g) ?? []
+
+  expect(matches).toHaveLength(1)
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui preserves sidePanel initial visibility from config", async () => {
+  resetRendererMock()
+  const launched = launchTui({
+    config: { ...defaultConfig, tui: { ...defaultConfig.tui, sidePanel: false } },
+    cwd: "/repo",
+    stdout: createMockStdout(),
+    client: createMockClient(),
+  })
+
+  await waitForRenderer()
+  expect(shellText()).not.toContain(STATIC_TUI_SHELL_LABELS.sidebar)
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui hides sidebar in narrow terminals", async () => {
+  resetRendererMock()
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    stdout: createMockStdout({ columns: 60 }),
+    client: createMockClient(),
+  })
+
+  await waitForRenderer()
+  expect(shellText()).not.toContain(STATIC_TUI_SHELL_LABELS.sidebar)
   renderer?.destroy()
   await launched
 })
@@ -478,9 +553,9 @@ function resetRendererMock(): void {
   renderer = undefined
 }
 
-function createMockStdout(): MockStdout {
+function createMockStdout(input: { readonly columns?: number } = {}): MockStdout {
   return {
-    columns: 100,
+    columns: input.columns ?? 100,
     output: "",
     write(chunk) {
       this.output += chunk

@@ -69,7 +69,7 @@ CLI flags are command-scoped overrides where supported.
   },
   "tui": {
     "sidePanel": true,
-    "theme": "default",
+    "theme": "opencode",
   },
 }
 ```

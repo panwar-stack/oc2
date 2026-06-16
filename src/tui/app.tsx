@@ -1,7 +1,7 @@
 import type { Readable } from "node:stream"
 
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
-import { createElement, render, spread } from "@opentui/solid"
+import { render } from "@opentui/solid"
 import { createSignal, onCleanup } from "solid-js"
 
 import { createBuiltinCommands } from "../commands/builtins"
@@ -14,6 +14,10 @@ import { createSessionRunService } from "../session/run"
 import type { TuiClient } from "./client"
 import { createLocalTuiClient } from "./client.local"
 import { SessionView } from "./components/SessionView"
+import { TuiFooter, formatRootLabel } from "./primitives/Footer"
+import { TuiSidebarFrame, getSidebarWidth } from "./primitives/SidebarFrame"
+import { TuiToastOverlay } from "./primitives/Toast"
+import { tuiElement } from "./primitives/elements"
 import {
   appendLocalMessage,
   completeTuiRun,
@@ -22,6 +26,7 @@ import {
   projectTuiEvent,
   type TuiState,
 } from "./state"
+import { resolveTuiTheme, type TuiTheme, type TuiThemeToast } from "./theme"
 
 export interface TuiLaunchOptions {
   readonly config: Oc2Config
@@ -63,6 +68,11 @@ interface ShellController {
   readonly subscribe: (listener: () => void) => () => void
 }
 
+interface ShellThemeInput {
+  readonly theme: TuiTheme
+  readonly toasts: readonly TuiThemeToast[]
+}
+
 /** Launches the OpenTUI/Solid renderer shell over the local TUI adapter. */
 export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   let renderer: CliRenderer | undefined
@@ -71,12 +81,17 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   let unsubscribeShell: (() => void) | undefined
   let service: ReturnType<typeof createSessionRunService> | undefined
   const roots = options.roots ?? [options.cwd]
+  const themeResolution = resolveTuiTheme({ theme: options.config.tui.theme })
   const initialState = createInitialTuiState(options.config.tui.sidePanel, {
     config: options.config,
     launchModel: options.model,
   })
+  const themedInitialState: TuiState = {
+    ...initialState,
+    diagnostics: [...initialState.diagnostics, ...themeResolution.diagnostics],
+  }
   const registry = options.commands ?? createCommandRegistry(createBuiltinCommands())
-  const eventBus = createRuntimeEventBus<TuiState>({ initialState, projector: projectTuiEvent })
+  const eventBus = createRuntimeEventBus<TuiState>({ initialState: themedInitialState, projector: projectTuiEvent })
   if (!options.client) {
     service = createSessionRunService({
       config: options.config,
@@ -93,15 +108,23 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
       service: service!,
       events: eventBus,
       commands: registry,
-      initialState,
+      initialState: themedInitialState,
       roots,
       model: options.model,
     })
-  const shell = createShellController({ client, initialState, roots, model: options.model })
+  const shell = createShellController({ client, initialState: themedInitialState, roots, model: options.model })
 
   if (options.sessionId) {
     const hydrated = await client.sessions.hydrate(options.sessionId)
-    shell.setState(options.model ? { ...hydrated.state, modelSelection: initialState.modelSelection } : hydrated.state)
+    shell.setState(
+      options.model
+        ? {
+            ...hydrated.state,
+            diagnostics: mergeDiagnostics(themeResolution.diagnostics, hydrated.state.diagnostics),
+            modelSelection: themedInitialState.modelSelection,
+          }
+        : { ...hydrated.state, diagnostics: mergeDiagnostics(themeResolution.diagnostics, hydrated.state.diagnostics) },
+    )
   }
 
   unsubscribeEvents = client.events.subscribe((event) => {
@@ -129,7 +152,7 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     process.on("SIGHUP", onSighup)
     removeSighup = () => process.off("SIGHUP", onSighup)
 
-    await render(() => TuiShell({ controller: shell, options }), renderer)
+    await render(() => TuiShell({ controller: shell, options, roots, theme: themeResolution }), renderer)
     await done
   } catch (error) {
     destroyRenderer(renderer)
@@ -145,52 +168,60 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
   }
 }
 
-function TuiShell(props: { readonly controller: ShellController; readonly options: TuiLaunchOptions }) {
+function TuiShell(props: {
+  readonly controller: ShellController
+  readonly options: TuiLaunchOptions
+  readonly roots: readonly string[]
+  readonly theme: ShellThemeInput
+}) {
   const [snapshot, setSnapshot] = createSignal(props.controller.snapshot())
   onCleanup(props.controller.subscribe(() => setSnapshot(props.controller.snapshot())))
   const width = Math.max(40, props.options.stdout?.columns ?? process.stdout.columns ?? 100)
-  const showSidebar = props.options.config.tui.sidePanel && width >= 80
-  const sidebarWidth = showSidebar ? Math.min(42, Math.max(24, width - 60)) : 0
+  const showSidebar = props.options.config.tui.sidePanel
+  const sidebarWidth = getSidebarWidth({ terminalWidth: width, visible: showSidebar })
   const labels = STATIC_TUI_SHELL_LABELS
+  const rootLabel = formatRootLabel({ roots: props.roots, cwd: props.options.cwd })
 
-  return tuiElement("box", { width, height: process.stdout.rows ?? 24, flexDirection: "column" }, [
-    tuiElement("box", { flexGrow: 1, minHeight: 0, flexDirection: "row" }, [
-      tuiElement("scrollbox", { flexGrow: 1, minWidth: 0 }, [
-        tuiElement(() => ({ content: `${labels.transcript}\n${formatTranscript(snapshot().state)}` })),
+  return tuiElement(
+    "box",
+    {
+      width,
+      height: process.stdout.rows ?? 24,
+      flexDirection: "column",
+      backgroundColor: props.theme.theme.background,
+    },
+    [
+      tuiElement("box", { flexGrow: 1, minHeight: 0, flexDirection: "row" }, [
+        tuiElement("scrollbox", { flexGrow: 1, minWidth: 0, backgroundColor: props.theme.theme.background }, [
+          tuiElement(() => ({ content: `${labels.transcript}\n${formatTranscript(snapshot().state)}` })),
+        ]),
+        ...(sidebarWidth > 0
+          ? [
+              TuiSidebarFrame({
+                theme: props.theme.theme,
+                width: sidebarWidth,
+                visible: true,
+                children: [
+                  tuiElement(() => ({ content: `${labels.sidebar}\nsession: ${snapshot().state.sessionId ?? "new"}` })),
+                ],
+              }),
+            ]
+          : []),
       ]),
-      ...(showSidebar
-        ? [
-            tuiElement("box", { width: sidebarWidth, flexShrink: 0, border: true }, [
-              tuiElement(() => ({ content: `${labels.sidebar}\nsession: ${snapshot().state.sessionId ?? "new"}` })),
-            ]),
-          ]
-        : []),
-    ]),
-    tuiElement("box", { flexShrink: 0, border: true }, [
-      tuiElement(() => ({ content: `${labels.footer} status=${snapshot().state.status}` })),
-    ]),
-    tuiElement("box", { flexShrink: 0, border: true }, [
-      tuiElement(() => ({ content: `${labels.prompt} ${snapshot().input}` })),
-    ]),
-  ])
-}
-
-function tuiElement(props: () => Record<string, unknown>): unknown
-function tuiElement(tag: string, props: Record<string, unknown>, children?: unknown[]): unknown
-function tuiElement(
-  tagOrProps: string | (() => Record<string, unknown>),
-  props: Record<string, unknown> = {},
-  children: unknown[] = [],
-) {
-  if (typeof tagOrProps === "function") {
-    const element = createElement("text")
-    spread(element, () => ({ ...tagOrProps(), children: [] }))
-    return element
-  }
-  const tag = tagOrProps
-  const element = createElement(tag)
-  spread(element, { ...props, children })
-  return element
+      TuiFooter({ theme: props.theme.theme, rootLabel, status: snapshot().state.status }),
+      tuiElement(
+        "box",
+        {
+          flexShrink: 0,
+          border: true,
+          borderColor: props.theme.theme.borderActive,
+          backgroundColor: props.theme.theme.backgroundElement,
+        },
+        [tuiElement(() => ({ content: `${labels.prompt} ${snapshot().input}` }))],
+      ),
+      TuiToastOverlay({ theme: props.theme.theme, toasts: props.theme.toasts, width }),
+    ],
+  )
 }
 
 function createShellController(input: {
@@ -320,6 +351,19 @@ function formatTranscript(state: TuiState): string {
   ].filter((row): row is string => Boolean(row))
 
   return rows.join("\n") || "No messages yet."
+}
+
+function mergeDiagnostics(
+  first: readonly { readonly code?: string; readonly message: string }[],
+  second: readonly { readonly code?: string; readonly message: string }[],
+): TuiState["diagnostics"] {
+  const seen = new Set<string>()
+  return [...first, ...second].filter((diagnostic) => {
+    const key = `${diagnostic.code ?? ""}:${diagnostic.message}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function destroyRenderer(renderer: CliRenderer | undefined): void {

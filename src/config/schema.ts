@@ -120,6 +120,7 @@ export const defaultConfig: Oc2Config = {
   },
   tui: {
     sidePanel: true,
+    theme: "opencode",
   },
 }
 
