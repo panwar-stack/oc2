@@ -167,6 +167,36 @@ describe("local_fusion tool", () => {
     },
   )
 
+  it.instance("exposes separate JSON schema modes for named and inline config", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+
+      expect(tool.jsonSchema).toMatchObject({
+        anyOf: [
+          {
+            required: ["prompt", "config"],
+            properties: {
+              config: { type: "string" },
+              branches: { not: {} },
+              judge: { not: {} },
+              synthesizer: { not: {} },
+            },
+          },
+          {
+            required: ["prompt", "branches", "judge", "synthesizer"],
+            properties: {
+              config: { not: {} },
+              branches: { type: "array" },
+              judge: { type: "object" },
+              synthesizer: { type: "object" },
+            },
+          },
+        ],
+      })
+    }),
+  )
+
   it.instance("rejects missing named config with a safe message", () =>
     Effect.gen(function* () {
       const info = yield* LocalFusionTool
