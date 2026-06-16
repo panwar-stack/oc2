@@ -254,6 +254,7 @@ export default defineConfig({
             "rules",
             "agents",
             "agent-teams",
+            "local-fusion",
             "models",
             "themes",
             "keybinds",

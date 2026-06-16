@@ -1,0 +1,75 @@
+---
+title: Local Fusion
+description: Fan out one prompt to multiple local model branches, judge the results, and synthesize a final answer.
+---
+
+Local Fusion is a compound model workflow for moments when one model answer is not enough. It sends the same prompt to several configured branches, asks a judge model to compare the branch outputs, then has a synthesizer model produce one final response.
+
+That makes it useful for code reviews, architecture tradeoffs, migration planning, or any task where you want independent perspectives before committing to an answer.
+
+---
+
+## Configure
+
+Add a named `local_fusion` config to `opencode.json`.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "local_fusion": {
+    "review-panel": {
+      "branches": [
+        {
+          "model": "anthropic/claude-sonnet-4-5",
+          "variant": "default",
+          "prompt": "Focus on implementation correctness, edge cases, and maintainability.",
+          "toolPolicy": "readonly",
+          "timeout": 120000
+        },
+        {
+          "model": "openai/gpt-5",
+          "variant": "high",
+          "prompt": "Focus on product behavior, user impact, and missing tests.",
+          "toolPolicy": "readonly",
+          "timeout": 120000
+        }
+      ],
+      "judge": {
+        "model": "openai/gpt-5-mini",
+        "prompt": "Rank the branch outputs by correctness, specificity, and risk coverage."
+      },
+      "synthesizer": {
+        "model": "anthropic/claude-sonnet-4-5",
+        "variant": "default",
+        "prompt": "Combine the strongest findings into one concise answer with concrete next steps."
+      },
+      "limits": {
+        "timeout": 180000,
+        "maxBranches": 4
+      }
+    }
+  }
+}
+```
+
+Each branch can use a different model, variant, agent, prompt, tool policy, and timeout. Use `toolPolicy: "readonly"` when the branches should inspect code without changing files, or `toolPolicy: "none"` when they should answer without tools.
+
+---
+
+## Run
+
+Use the `/local_fusion` command with the config name followed by the prompt.
+
+```bash frame="none"
+/local_fusion review-panel Review the authentication refactor in this branch. Identify correctness risks, security regressions, missing tests, and any simpler implementation path. Return prioritized findings with file references and a short recommendation.
+```
+
+The first argument, `review-panel`, selects the named config. Everything after it becomes the prompt that is sent to each branch.
+
+---
+
+## When To Use It
+
+Use Local Fusion when the cost of a shallow answer is higher than the cost of extra model calls. It is strongest when branches have different instructions, because each branch can pressure-test the problem from a different angle before the judge and synthesizer collapse the results into one answer.
+
+For routine edits or small questions, a single model response is usually faster. For high-risk changes, Local Fusion gives you a lightweight review panel inside the same OpenCode workflow.
