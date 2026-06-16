@@ -5,7 +5,6 @@ import { Schema } from "effect"
 import { Provider } from "@/provider/provider"
 
 export const DEFAULT_MAX_BRANCHES = 3
-export const DEFAULT_TIMEOUT = 30_000
 
 export const ToolPolicy = ConfigLocalFusion.ToolPolicy
 export type ToolPolicy = Schema.Schema.Type<typeof ToolPolicy>
@@ -20,7 +19,7 @@ export const Synthesizer = ConfigLocalFusion.Synthesizer
 export type Synthesizer = Schema.Schema.Type<typeof Synthesizer>
 
 export const Limits = ConfigLocalFusion.Limits
-export type Limits = Required<Schema.Schema.Type<typeof Limits>>
+export type Limits = Schema.Schema.Type<typeof Limits> & { maxBranches: number }
 
 export const Config = ConfigLocalFusion.Info
 export type Config = Omit<Schema.Schema.Type<typeof Config>, "branches" | "limits"> & {
@@ -31,7 +30,7 @@ export type Config = Omit<Schema.Schema.Type<typeof Config>, "branches" | "limit
 export function parse(input: unknown): Config {
   const config = Schema.decodeUnknownSync(Config)(input)
   const limits = {
-    timeout: config.limits?.timeout ?? DEFAULT_TIMEOUT,
+    ...(config.limits?.timeout ? { timeout: config.limits.timeout } : {}),
     maxBranches: config.limits?.maxBranches ?? DEFAULT_MAX_BRANCHES,
   }
 

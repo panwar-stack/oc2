@@ -2,7 +2,7 @@ export * as SessionCompound from "./runner"
 
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Option } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
@@ -151,9 +151,10 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
     Effect.sync(() => input.abort?.addEventListener("abort", onAbort)),
     () =>
       Effect.gen(function* () {
-        const result = yield* promptBranch(input, child.id, model, agent).pipe(
-          Effect.timeoutOption(input.branch.timeout ?? input.config.limits.timeout),
-        )
+        const timeout = input.branch.timeout ?? input.config.limits.timeout
+        const result = yield* (timeout
+          ? promptBranch(input, child.id, model, agent).pipe(Effect.timeoutOption(timeout))
+          : promptBranch(input, child.id, model, agent).pipe(Effect.map(Option.some)))
         if (result._tag === "Some") {
           if (result.value.info.role === "assistant" && result.value.info.error) {
             return {
@@ -188,7 +189,7 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
             sessionID: child.id,
             model: input.branch.model,
             agent,
-            reason: `Branch timed out after ${input.branch.timeout ?? input.config.limits.timeout}ms`,
+            reason: `Branch timed out after ${timeout}ms`,
             timedOut: true,
           },
         }

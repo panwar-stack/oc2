@@ -20,9 +20,15 @@ describe("compound config", () => {
       judge: { model: "openai/gpt-5-mini" },
       synthesizer: { model: "anthropic/claude-sonnet-4" },
       limits: {
-        timeout: SessionCompoundConfig.DEFAULT_TIMEOUT,
         maxBranches: SessionCompoundConfig.DEFAULT_MAX_BRANCHES,
       },
+    })
+  })
+
+  test("preserves explicitly configured timeout", () => {
+    expect(SessionCompoundConfig.parse({ ...validConfig, limits: { timeout: 120_000 } }).limits).toEqual({
+      timeout: 120_000,
+      maxBranches: SessionCompoundConfig.DEFAULT_MAX_BRANCHES,
     })
   })
 

@@ -214,6 +214,27 @@ describe("session compound runner", () => {
     }),
   )
 
+  it.instance("applies explicit global branch timeout", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const cancelled: SessionID[] = []
+      const result = yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/slow" }], limits: { timeout: 1, maxBranches: 1 } }),
+        promptOps: {
+          ...stubOps({ onCancel: (sessionID) => cancelled.push(sessionID) }),
+          prompt: () => Effect.never,
+        },
+      })
+
+      expect(result.successes).toEqual([])
+      expect(result.failures).toMatchObject([{ index: 0, model: "test/slow", timedOut: true }])
+      expect(cancelled).toHaveLength(1)
+    }),
+  )
+
   it.instance("applies safe branch tool policies", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
