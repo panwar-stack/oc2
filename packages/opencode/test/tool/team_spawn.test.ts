@@ -751,7 +751,7 @@ describe("tool.team_spawn", () => {
           const architectPrompt = calls[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
           expect(architectPrompt).toContain("Proactive communication requirements:")
           expect(architectPrompt).toContain('team_send_message recipient "lead"')
-          expect(calls[0]?.tools).toEqual({ team_create: false, team_spawn: false })
+          expect(calls[0]?.tools).toEqual({ team_create: false, team_spawn: false, local_fusion: false })
           const pendingLeadAfterStart = yield* team.getPendingMessages(lead.id, info.id)
           expect(pendingLeadAfterStart.some((message) => message.body.includes("architect (general) started"))).toBe(
             true,
@@ -788,7 +788,7 @@ describe("tool.team_spawn", () => {
           expect(calls).toHaveLength(2)
           expect(calls[1]?.model).toEqual(ref)
           expect(calls[1]?.variant).toBe("lead-variant")
-          expect(calls[1]?.tools).toEqual({ team_create: false, team_spawn: false })
+          expect(calls[1]?.tools).toEqual({ team_create: false, team_spawn: false, local_fusion: false })
           const architectResult = yield* Fiber.join(architectFiber)
           expect(architectDone).toBe(true)
           expect(architectResult.title).toBe("Teammate Completed")

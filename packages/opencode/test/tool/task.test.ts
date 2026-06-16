@@ -447,6 +447,7 @@ describe("tool.task", () => {
           todowrite: false,
           team_create: false,
           team_spawn: false,
+          local_fusion: false,
           bash: false,
           read: false,
         })

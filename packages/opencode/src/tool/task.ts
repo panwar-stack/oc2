@@ -188,6 +188,7 @@ export const TaskTool = Tool.define(
             ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false }),
             team_create: false,
             team_spawn: false,
+            local_fusion: false,
             ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
           },
           parts,

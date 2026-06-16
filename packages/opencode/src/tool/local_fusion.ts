@@ -1,9 +1,10 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import * as Tool from "./tool"
 import { SessionCompoundConfig } from "@/session/compound/config"
 import { SessionCompound } from "@/session/compound/runner"
 import { Config } from "@/config/config"
 import { Session } from "@/session/session"
+import { Team } from "@/team/team"
 import type { TaskPromptOps } from "./task"
 import { ToolJsonSchema } from "./json-schema"
 
@@ -38,6 +39,7 @@ export const LocalFusionTool = Tool.define(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const config = yield* Config.Service
+    const team = yield* Team.Service
     return {
       description:
         "Run a local compound model orchestration: fan out one prompt to configured branches, judge their outputs, and synthesize one final answer.",
@@ -60,6 +62,9 @@ export const LocalFusionTool = Tool.define(
 
           const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
           if (!promptOps) throw new Error("local_fusion requires promptOps in ctx.extra")
+
+          const activeTeam = yield* team.getContext(ctx.sessionID)
+          if (Option.isSome(activeTeam)) throw new Error("local_fusion cannot run from an active agent team session.")
 
           const result = yield* SessionCompound.run({
             sessionID: ctx.sessionID,

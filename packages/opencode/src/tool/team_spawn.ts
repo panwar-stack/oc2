@@ -81,6 +81,7 @@ const MemberToolsPlan = [
 const NestedTeamTools = {
   team_create: false,
   team_spawn: false,
+  local_fusion: false,
 }
 
 export const TeamSpawnTool = Tool.define(

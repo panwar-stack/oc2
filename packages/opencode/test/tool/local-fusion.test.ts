@@ -10,6 +10,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID } from "@/session/schema"
+import { Team } from "@/team/team"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { LocalFusionTool } from "../../src/tool/local_fusion"
@@ -30,6 +31,7 @@ const it = testEffect(
     Config.defaultLayer,
     EventV2Bridge.defaultLayer,
     Session.defaultLayer,
+    Team.defaultLayer,
     Truncate.defaultLayer,
     Database.defaultLayer,
     RuntimeFlags.layer({}),
@@ -250,6 +252,21 @@ describe("local_fusion tool", () => {
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("promptOps")
+    }),
+  )
+
+  it.instance("rejects active team sessions", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+      const sessions = yield* Session.Service
+      const team = yield* Team.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      yield* team.create({ name: "fusion", goal: "deep research", leadSessionID: parent.id })
+      const exit = yield* tool.execute(params(), context(parent.id, { promptOps: promptOps() })).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("active agent team session")
     }),
   )
 
