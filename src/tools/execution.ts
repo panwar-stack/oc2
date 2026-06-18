@@ -110,6 +110,7 @@ export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor =
               resolveQuestion: async (input: unknown, signal: AbortSignal) => {
                 const permissionId = call.id
                 const prompt = toQuestionPrompt(input)
+                let answer: unknown
                 if (prompt) {
                   options.events?.publish({
                     type: "permission.requested",
@@ -123,11 +124,12 @@ export const createToolExecutor = (options: ToolExecutorOptions): ToolExecutor =
                   })
                 }
                 try {
-                  return await context.resolveQuestion?.(input, signal)
+                  answer = await context.resolveQuestion?.(input, signal)
+                  return answer
                 } finally {
                   options.events?.publish({
                     type: "permission.resolved",
-                    payload: { permissionId, decision: "allow", toolName: tool.name },
+                    payload: { permissionId, decision: answer === undefined ? "deny" : "allow", toolName: tool.name },
                   })
                 }
               },

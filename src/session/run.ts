@@ -25,6 +25,7 @@ import { createBuiltInToolRegistry } from "../tools/builtins/index"
 import { createToolExecutor } from "../tools/execution"
 import type { ToolRegistry } from "../tools/registry"
 import type { ToolDefinition } from "../tools/tool"
+import type { ToolPermissionServiceOptions } from "../tools/permissions"
 import { createSubAgentService } from "../subagent/subagent-service"
 import { createSubAgentTool } from "../subagent/subagent-tool"
 import { createTeamService } from "../team/team-service"
@@ -45,6 +46,7 @@ export interface SessionRunServiceOptions {
   readonly providers?: ModelServiceOptions["providers"]
   readonly mcpClientFactory?: McpClientFactory
   readonly resolveQuestion?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+  readonly resolvePermission?: ToolPermissionServiceOptions["resolver"]
 }
 
 export interface RunPromptInput {
@@ -112,6 +114,7 @@ export class SessionRunService {
   private readonly dataDir: string
   private readonly mcpClientFactory?: McpClientFactory
   private readonly resolveQuestion?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+  private readonly resolvePermission?: ToolPermissionServiceOptions["resolver"]
   private readonly active = new Set<string>()
 
   constructor(options: SessionRunServiceOptions) {
@@ -142,6 +145,7 @@ export class SessionRunService {
     this.dataDir = options.dataDir ?? options.cwd
     this.mcpClientFactory = options.mcpClientFactory
     this.resolveQuestion = options.resolveQuestion
+    this.resolvePermission = options.resolvePermission
   }
 
   async command(input: CommandInput): Promise<MainAgentRunResult> {
@@ -386,7 +390,7 @@ export class SessionRunService {
         } finally {
           this.events.publish({
             type: "permission.resolved",
-            payload: { permissionId, decision: "allow", toolName: "mcp.elicitation" },
+            payload: { permissionId, decision: answer === undefined ? "deny" : "allow", toolName: "mcp.elicitation" },
           })
         }
 
@@ -429,6 +433,15 @@ export class SessionRunService {
       scheduler: this.scheduler,
       events: this.events,
       config: agentConfig,
+      permissions: this.resolvePermission
+        ? {
+            decide: async (request, signal) => {
+              const resolved = await this.resolvePermission?.(request, signal)
+              const normalized = typeof resolved === "string" ? { decision: resolved } : resolved
+              return normalized?.decision ?? "deny"
+            },
+          }
+        : undefined,
     })
     const subagents = createSubAgentService({
       config: agentConfig,

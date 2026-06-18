@@ -5,9 +5,9 @@ import { tuiElement } from "./elements"
 
 export interface TuiFooterProps {
   readonly theme: TuiTheme
-  readonly rootLabel: string
-  readonly status?: string
-  readonly hints?: readonly string[]
+  readonly rootLabel: string | (() => string)
+  readonly status?: string | (() => string | undefined)
+  readonly hints?: readonly string[] | (() => readonly string[])
 }
 
 export function formatRootLabel(input: {
@@ -23,14 +23,6 @@ export function formatRootLabel(input: {
 }
 
 export function TuiFooter(props: TuiFooterProps): unknown {
-  const text = [
-    "footer placeholder",
-    props.rootLabel,
-    props.status ? `status=${props.status}` : undefined,
-    ...(props.hints ?? []),
-  ]
-    .filter(Boolean)
-    .join("  ")
   return tuiElement(
     "box",
     {
@@ -39,8 +31,15 @@ export function TuiFooter(props: TuiFooterProps): unknown {
       borderColor: props.theme.borderSubtle,
       backgroundColor: props.theme.backgroundPanel,
     },
-    [tuiElement("text", { content: text, fg: props.theme.textMuted })],
+    [tuiElement(() => ({ content: formatFooterContent(props), fg: props.theme.textMuted }))],
   )
+}
+
+function formatFooterContent(props: TuiFooterProps): string {
+  const rootLabel = typeof props.rootLabel === "function" ? props.rootLabel() : props.rootLabel
+  const status = typeof props.status === "function" ? props.status() : props.status
+  const hints = typeof props.hints === "function" ? props.hints() : (props.hints ?? [])
+  return ["oc2", rootLabel, status ? `status=${status}` : undefined, ...hints].filter(Boolean).join("  ")
 }
 
 function abbreviateHome(path: string, home: string): string {

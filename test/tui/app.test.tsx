@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test"
+import { homedir } from "node:os"
 
 import { defaultConfig } from "../../src"
 import type { RuntimeEvent } from "../../src/events/events"
@@ -28,7 +29,7 @@ mock.module("@opentui/solid", () => ({
     element: { props: Record<string, unknown>; children?: unknown[] },
     props: Record<string, unknown> | (() => Record<string, unknown>),
   ) => {
-    const next = typeof props === "function" ? props() : props
+    const next = typeof props === "function" ? { ...props(), __dynamicProps: props } : props
     element.props = next
     element.children = next.children as unknown[] | undefined
   },
@@ -251,7 +252,7 @@ test("launchTui starts an OpenTUI renderer shell with required options", async (
   expect(stdout.output).toContain("\x1b[0m\x1b[?25h")
 })
 
-test("static renderer shell exposes PR2 placeholder regions", async () => {
+test("static renderer shell exposes shell regions", async () => {
   resetRendererMock()
   const stdout = createMockStdout()
   const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout, client: createMockClient() })
@@ -262,15 +263,172 @@ test("static renderer shell exposes PR2 placeholder regions", async () => {
 
   expect(Object.values(STATIC_TUI_SHELL_LABELS)).toEqual([
     "oc2 transcript viewport",
-    "sidebar placeholder",
-    "footer placeholder",
+    "session sidebar",
+    "oc2",
     "Prompt>",
   ])
   expect(text).toContain(STATIC_TUI_SHELL_LABELS.transcript)
-  expect(text).toContain(STATIC_TUI_SHELL_LABELS.sidebar)
   expect(text).toContain(STATIC_TUI_SHELL_LABELS.footer)
   expect(text).toContain(STATIC_TUI_SHELL_LABELS.prompt)
   expect(text).toContain("/repo")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui maps PR5 footer indicators from TuiState", async () => {
+  resetRendererMock()
+  const home = homedir()
+  const client = createMockClient({
+    hydrateTitle: "Demo session",
+    hydrateState: {
+      ...createInitialTuiState(true),
+      sessionId: "s1",
+      permissions: [{ permissionId: "p1", toolName: "bash", status: "pending" }],
+      mcpServers: [{ serverId: "browser", status: "ready", tools: [], authRequired: false, resourceCount: 3 }],
+      teams: [{ id: "team-1", status: "active", reportAvailable: false, members: [], tasks: [], mailbox: [] }],
+      agentTasks: [{ id: "agent-1", kind: "subagent", status: "running" }],
+    },
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: home,
+    roots: [home, "/other"],
+    sessionId: "s1",
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  const text = shellText()
+
+  expect(text).toContain("~ +1 roots")
+  expect(text).toContain("permissions=1")
+  expect(text).toContain("mcp=1 servers/3 resources")
+  expect(text).toContain("active=2 team/subagent")
+  expect(text).toContain("/status")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui maps PR5 sidebar rows from TuiState", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    hydrateTitle: "Demo session",
+    hydrateState: {
+      ...createInitialTuiState(true),
+      sessionId: "s1",
+      status: "running",
+      toolCalls: [
+        { id: "t1", name: "read", status: "running" },
+        { id: "t2", name: "write", status: "completed" },
+      ],
+      teams: [
+        {
+          id: "team-1",
+          name: "frontend",
+          status: "active",
+          reportAvailable: true,
+          members: [{ id: "m1", name: "worker", status: "active", dependencyIds: [] }],
+          tasks: [],
+          mailbox: [],
+        },
+      ],
+      mcpServers: [{ serverId: "browser", status: "ready", tools: ["open"], authRequired: false, resourceCount: 2 }],
+      diagnostics: [{ code: "demo", message: "check sidebar" }],
+      modelSelection: { providerId: "fake", modelId: "test", variantId: "fast", variantName: "Fast" },
+    },
+  })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", sessionId: "s1", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  const text = shellText()
+
+  expect(text).toContain("session: s1")
+  expect(text).toContain("title: Demo session")
+  expect(text).toContain("roots: /repo")
+  expect(text).toContain("model: fake/test")
+  expect(text).toContain("variant: Fast")
+  expect(text).toContain("- read: running")
+  expect(text).toContain("- write: completed")
+  expect(text).toContain("- frontend: active report")
+  expect(text).toContain("member worker: active")
+  expect(text).toContain("- browser: ready tools=1 resources=2")
+  expect(text).toContain("[demo] check sidebar")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui renders permission and question dialogs through state transitions", async () => {
+  resetRendererMock()
+  const client = createMockClient({ hydrateState: { ...createInitialTuiState(true), sessionId: "s1" } })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", sessionId: "s1", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  const shell = renderedShell?.() as MockNode
+  client.publish({
+    type: "permission.requested",
+    payload: {
+      permissionId: "p1",
+      sessionId: "s1",
+      toolName: "bash",
+      action: "execute",
+      resource: "npm test",
+      question: {
+        header: "Confirm",
+        question: "Run tests?",
+        options: [{ label: "Yes", description: "run them" }],
+        multiple: false,
+      },
+    },
+  })
+
+  expect(collectText(shell)).toContain("Permission request")
+  expect(collectText(shell)).toContain("┌")
+  expect(collectText(shell)).toContain("└")
+  expect(collectText(shell)).toContain("tool: bash")
+  expect(collectText(shell)).toContain("resource: npm test")
+  expect(collectText(shell)).toContain("Confirm")
+  expect(collectText(shell)).toContain("Run tests?")
+  expect(collectText(shell)).toContain("1. Yes - run them")
+
+  expect(inputHandler()("\r")).toBe(true)
+  expect(client.promptCalls).toEqual([])
+
+  const resolvedText = collectText(shell)
+  expect(resolvedText).not.toContain("Permission request")
+  expect(resolvedText).not.toContain("Run tests?")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui toggles sidebar visibility from live TuiState", async () => {
+  resetRendererMock()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client: createMockClient() })
+
+  await waitForRenderer()
+  const shell = renderedShell?.() as MockNode
+  expect(collectText(shell)).toContain("session: new")
+  expect(inputHandler()("\u0002")).toBe(true)
+  expect(collectText(shell)).not.toContain("session: new")
+  expect(inputHandler()("\u0002")).toBe(true)
+  expect(collectText(shell)).toContain("session: new")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui derives sidebar title for newly submitted sessions", async () => {
+  resetRendererMock()
+  const client = createMockClient()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  const shell = renderedShell?.() as MockNode
+  inputHandler()("Summarize the repository structure")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(collectText(shell)).toContain("title: Summarize the repository structure")
+  expect(client.promptCalls[0]).toMatchObject({ prompt: "Summarize the repository structure" })
   renderer?.destroy()
   await launched
 })
@@ -566,9 +724,12 @@ function createMockStdout(input: { readonly columns?: number } = {}): MockStdout
 function collectText(node: MockNode | unknown): string {
   if (!node || typeof node !== "object") return ""
   const current = node as MockNode
-  const rawContent = current.props.content
+  const dynamic = current.props.__dynamicProps
+  const props = typeof dynamic === "function" ? { ...current.props, ...dynamic() } : current.props
+  const rawContent = props.content
   const content = typeof rawContent === "function" ? rawContent() : rawContent
-  return [content, ...(current.children ?? []).map(collectText)].filter(Boolean).join("\n")
+  const title = typeof props.title === "string" ? props.title : undefined
+  return [title, content, ...(current.children ?? []).map(collectText)].filter(Boolean).join("\n")
 }
 
 function shellText(): string {
@@ -591,6 +752,7 @@ function inputHandler(): (sequence: string) => boolean {
 function createMockClient(
   input: {
     readonly hydrateState?: ReturnType<typeof createInitialTuiState>
+    readonly hydrateTitle?: string
     readonly prompt?: (input: Parameters<TuiClient["sessions"]["prompt"]>[0]) => Promise<{ readonly sessionId: string }>
   } = {},
 ): MockClient {
@@ -609,7 +771,7 @@ function createMockClient(
       async hydrate(sessionId) {
         hydrateCalls.push(sessionId)
         const state = input.hydrateState ?? { ...createInitialTuiState(true), sessionId }
-        return { session: { id: state.sessionId ?? "", roots: ["/repo"] }, state }
+        return { session: { id: state.sessionId ?? "", title: input.hydrateTitle, roots: ["/repo"] }, state }
       },
       async prompt(promptInput) {
         if (input.prompt) return await input.prompt(promptInput)

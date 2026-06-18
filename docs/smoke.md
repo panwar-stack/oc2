@@ -30,3 +30,13 @@ bun run smoke:tui
 ```
 
 This opens the TUI with the fake model. Verify prompt entry, streamed assistant text, side panel toggling, `/` suggestions, `/rev` then `Tab` completion, `Enter` command submission, `/help`, and `Ctrl+C` exit manually.
+
+TUI visual smoke checks:
+
+- Footer shows the current root, abbreviates the home directory as `~`, shows `+N roots` when launched with multiple `--root` values, and displays `/status` when status details exist.
+- Footer indicators appear for pending permissions, MCP servers/resources, and active team/subagent work when those runtime states are present.
+- Sidebar shows session id, root summary, active/completed tools, team/member status, MCP server/resource status, diagnostics, current model, and current variant when known.
+- Permission prompts render as dialogs, show pending tool/action/resource details, and disappear after allow or deny resolution.
+- Question prompts render as dialogs with options or a free-form fallback and disappear after the associated permission resolves.
+- Redacted permission, question, team, task, mailbox, and resource fields must remain redacted; raw secrets from runtime events must not display in the footer, sidebar, or dialogs.
+- After sidebar/dialog interaction and `Ctrl+C` exit, the terminal prompt, cursor, and colors are restored.
