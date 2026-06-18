@@ -52,7 +52,67 @@ Add a named `local_fusion` config to `opencode.json`.
 }
 ```
 
-Each branch can use a different model, variant, agent, prompt, tool policy, and timeout. Use `toolPolicy: "readonly"` when the branches should inspect code without changing files, or `toolPolicy: "none"` when they should answer without tools.
+Each branch can use a different model, variant, agent, prompt, tool policy, and timeout.
+
+### Tool Policy
+
+`toolPolicy` is configured per branch. Use `"readonly"` when a branch should inspect files and search the workspace without making changes. Use `"none"` when a branch should answer from the prompt and conversation context only.
+
+Branches default to `"readonly"`, while the judge and synthesizer always run with tools disabled.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "local_fusion": {
+    "mixed-review": {
+      "branches": [
+        {
+          "model": "anthropic/claude-sonnet-4-5",
+          "prompt": "Inspect the code and identify concrete correctness risks.",
+          "toolPolicy": "readonly"
+        },
+        {
+          "model": "openai/gpt-5",
+          "prompt": "Reason from the prompt only. Focus on architecture tradeoffs and missing assumptions.",
+          "toolPolicy": "none"
+        }
+      ],
+      "judge": {
+        "model": "openai/gpt-5-mini"
+      },
+      "synthesizer": {
+        "model": "anthropic/claude-sonnet-4-5"
+      }
+    }
+  }
+}
+```
+
+You can also set `toolPolicy` on inline `local_fusion` tool calls:
+
+```json
+{
+  "prompt": "Review this change for correctness and simpler alternatives.",
+  "branches": [
+    {
+      "model": "anthropic/claude-sonnet-4-5",
+      "prompt": "Use repository context and return file-specific findings.",
+      "toolPolicy": "readonly"
+    },
+    {
+      "model": "openai/gpt-5",
+      "prompt": "Do not use tools. Challenge the approach from first principles.",
+      "toolPolicy": "none"
+    }
+  ],
+  "judge": {
+    "model": "openai/gpt-5-mini"
+  },
+  "synthesizer": {
+    "model": "anthropic/claude-sonnet-4-5"
+  }
+}
+```
 
 ---
 
