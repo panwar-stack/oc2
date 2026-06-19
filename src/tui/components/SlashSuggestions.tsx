@@ -11,7 +11,7 @@ export function SlashSuggestions({
 }): string {
   if (!active) return ""
 
-  const unique = [...new Map(matches.map((match) => [match.name, match])).values()]
+  const unique = [...new Map(matches.map((match) => [match.display, match])).values()]
   const visible = unique.slice(0, 5)
   const lines = visible.map((match) => {
     const prefix = `  ${match.display.padEnd(16)} `

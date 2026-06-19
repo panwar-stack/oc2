@@ -138,7 +138,7 @@ export function resolveTuiTheme(
   const selectedName = requestedTheme ?? DEFAULT_TUI_THEME
   const allThemes: Record<string, unknown> = {
     [DEFAULT_TUI_THEME]: opencodeThemeJson as unknown,
-    ...(input.themes ?? {}),
+    ...input.themes,
   }
   const selected = allThemes[selectedName]
   if (!selected)

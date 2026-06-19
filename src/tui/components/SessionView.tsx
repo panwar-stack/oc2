@@ -34,12 +34,12 @@ export function SessionView({
     !showSidePanel && state.questionPrompt ? QuestionPrompt({ state }) : "",
     showSidePanel ? "\n--- side panel ---\n" + SidePanel({ state }) : "",
     "",
-    PromptInput({ value: input, running: state.running }),
     SlashSuggestions({
       matches: state.slashMatches,
       width: options?.width,
       active: !state.modelPickerOpen && state.slashActive,
     }),
+    PromptInput({ value: input, running: state.running }),
     Footer({ state }),
   ]
     .filter((line) => line.length > 0)

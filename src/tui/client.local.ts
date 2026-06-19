@@ -162,6 +162,13 @@ export function createLocalTuiClient(options: LocalTuiClientOptions): TuiClient 
       },
     },
 
+    models: {
+      async list() {
+        const result = await options.service.listModelOptions()
+        return { options: result.options, providerCount: result.providerCount, errors: result.errors }
+      },
+    },
+
     events: {
       subscribe(listener: (event: RuntimeEvent) => void) {
         return options.events.all(listener)
@@ -187,6 +194,7 @@ function toTuiCommand(command: SlashCommand): TuiCommand {
     description: command.description,
     slashName: command.name,
     slashAliases: command.aliases,
+    source: command.source,
     enabled: true,
   }
 }

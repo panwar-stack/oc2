@@ -134,6 +134,13 @@ export interface TuiDiagnosticView {
   readonly code?: string
 }
 
+export interface TuiToastView {
+  readonly id: string
+  readonly variant: "info" | "success" | "warning" | "error"
+  readonly title?: string
+  readonly message: string
+}
+
 export interface TuiAgentTaskView {
   readonly id: string
   readonly kind: string
@@ -159,6 +166,7 @@ export interface TuiState {
   readonly permissions: readonly TuiPermissionView[]
   readonly questionPrompt?: TuiQuestionPromptView
   readonly diagnostics: readonly TuiDiagnosticView[]
+  readonly toasts: readonly TuiToastView[]
   readonly agentTasks: readonly TuiAgentTaskView[]
   readonly slashActive: boolean
   readonly slashQuery: string
@@ -199,6 +207,7 @@ export const createInitialTuiState = (
   mcpServers: [],
   permissions: [],
   diagnostics: [],
+  toasts: [],
   agentTasks: [],
   slashActive: false,
   slashQuery: "",

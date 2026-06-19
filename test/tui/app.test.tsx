@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 
 import { defaultConfig } from "../../src"
 import type { RuntimeEvent } from "../../src/events/events"
-import type { TuiClient } from "../../src/tui/client"
+import type { TuiClient, TuiCommand } from "../../src/tui/client"
 import { createInitialTuiState } from "../../src/tui/state"
 
 let rendererConfig: Record<string, unknown> | undefined
@@ -338,7 +338,13 @@ test("launchTui maps PR5 sidebar rows from TuiState", async () => {
       modelSelection: { providerId: "fake", modelId: "test", variantId: "fast", variantName: "Fast" },
     },
   })
-  const launched = launchTui({ config: defaultConfig, cwd: "/repo", sessionId: "s1", stdout: createMockStdout(), client })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    sessionId: "s1",
+    stdout: createMockStdout(),
+    client,
+  })
 
   await waitForRenderer()
   const text = shellText()
@@ -361,7 +367,13 @@ test("launchTui maps PR5 sidebar rows from TuiState", async () => {
 test("launchTui renders permission and question dialogs through state transitions", async () => {
   resetRendererMock()
   const client = createMockClient({ hydrateState: { ...createInitialTuiState(true), sessionId: "s1" } })
-  const launched = launchTui({ config: defaultConfig, cwd: "/repo", sessionId: "s1", stdout: createMockStdout(), client })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    sessionId: "s1",
+    stdout: createMockStdout(),
+    client,
+  })
 
   await waitForRenderer()
   const shell = renderedShell?.() as MockNode
@@ -403,7 +415,12 @@ test("launchTui renders permission and question dialogs through state transition
 
 test("launchTui toggles sidebar visibility from live TuiState", async () => {
   resetRendererMock()
-  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client: createMockClient() })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    stdout: createMockStdout(),
+    client: createMockClient(),
+  })
 
   await waitForRenderer()
   const shell = renderedShell?.() as MockNode
@@ -521,6 +538,23 @@ test("launchTui destroys the renderer and resolves on Ctrl+C", async () => {
   expect(stdout.output).toContain("\x1b[0m\x1b[?25h")
 })
 
+test("launchTui clears non-empty prompt on idle Ctrl+C before exiting", async () => {
+  resetRendererMock()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", client: createMockClient() })
+
+  await waitForRenderer()
+  inputHandler()("draft")
+  expect(shellText()).toContain("Prompt> draft")
+  expect(inputHandler()("\u0003")).toBe(true)
+  expect(renderer?.isDestroyed).toBe(false)
+  expect(shellText()).toContain("Prompt> ")
+  expect(shellText()).not.toContain("Prompt> draft")
+  expect(inputHandler()("\u0003")).toBe(true)
+  await launched
+
+  expect(renderer?.isDestroyed).toBe(true)
+})
+
 test("launchTui destroys the renderer and resolves on Ctrl+D", async () => {
   resetRendererMock()
   const stdout = createMockStdout()
@@ -625,6 +659,169 @@ test("launchTui submits prompts through TuiClient with launch model and roots", 
   await launched
 })
 
+test("launchTui submits multiline prompts from newline bindings", async () => {
+  resetRendererMock()
+  const client = createMockClient()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", client })
+
+  await waitForRenderer()
+  inputHandler()("hello")
+  inputHandler()("\u001b\r")
+  inputHandler()("world")
+  expect(shellText()).toContain("Prompt> hello\nworld")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls[0]?.prompt).toBe("hello\nworld")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui edits prompt text at the cursor before submitting", async () => {
+  resetRendererMock()
+  const client = createMockClient()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", client })
+
+  await waitForRenderer()
+  inputHandler()("helo")
+  inputHandler()("\u001b[D")
+  inputHandler()("l")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls[0]?.prompt).toBe("hello")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui handles bracketed paste and Unicode backspace", async () => {
+  resetRendererMock()
+  const client = createMockClient()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", client })
+
+  await waitForRenderer()
+  inputHandler()("a🙂")
+  inputHandler()("\u007f")
+  inputHandler()("\u001b[200~b\r\n世界\u001b[201~")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls[0]?.prompt).toBe("ab\n世界")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui navigates submitted prompt history", async () => {
+  resetRendererMock()
+  const client = createMockClient()
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", client })
+
+  await waitForRenderer()
+  inputHandler()("first")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+  inputHandler()("second")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+  inputHandler()("draft")
+  inputHandler()("\u001b[A")
+  expect(shellText()).toContain("Prompt> second")
+  inputHandler()("\u001b[A")
+  expect(shellText()).toContain("Prompt> first")
+  inputHandler()("\u001b[B")
+  expect(shellText()).toContain("Prompt> second")
+  inputHandler()("\u001b[B")
+  expect(shellText()).toContain("Prompt> draft")
+
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui shows slash autocomplete above the prompt from command names and aliases", async () => {
+  resetRendererMock()
+  const client = createMockClient({ commands: [slashCommand("review", ["rev"])] })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("/rv")
+  await Bun.sleep(0)
+  const text = shellText()
+
+  expect(text).toContain("/review")
+  expect(text).toContain("/rev")
+  expect(text.indexOf("/review")).toBeLessThan(text.indexOf("Prompt> /rv"))
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui dispatches known slash commands through TuiClient without prompt submission", async () => {
+  resetRendererMock()
+  const client = createMockClient({ commands: [slashCommand("review", ["rev"])] })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("/rev diff --stat")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls).toEqual([])
+  expect(client.commandExecuteCalls[0]).toMatchObject({
+    name: "rev",
+    args: ["diff", "--stat"],
+    raw: "/rev diff --stat",
+    roots: ["/repo"],
+  })
+  expect(client.commandExecuteCalls[0]?.signal).toBeInstanceOf(AbortSignal)
+  expect(shellText()).toContain("Prompt> ")
+  expect(shellText()).not.toContain("Prompt> /rev diff --stat")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui rejects unknown slash commands without prompt submission", async () => {
+  resetRendererMock()
+  const client = createMockClient({ commands: [slashCommand("review", ["rev"])] })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("/missing now")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls).toEqual([])
+  expect(client.commandExecuteCalls).toEqual([])
+  expect(shellText()).toContain("Unknown slash command: /missing")
+  expect(shellText()).toContain("Slash command: Unknown slash command: /missing")
+  expect(shellText()).toContain("Prompt> /missing now")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui keeps prompt text and shows diagnostics when slash command execution fails", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    commands: [slashCommand("review", ["rev"])],
+    command: async (commandInput) => {
+      client.commandExecuteCalls.push(commandInput)
+      return { ok: false, message: "review failed" }
+    },
+  })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("/review diff")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls).toEqual([])
+  expect(client.commandExecuteCalls).toHaveLength(1)
+  expect(shellText()).toContain("diagnostic> [tui.slash] review failed")
+  expect(shellText()).toContain("Slash command: review failed")
+  expect(shellText()).toContain("Prompt> /review diff")
+  renderer?.destroy()
+  await launched
+})
+
 test("launchTui aborts active runs on Ctrl+C before exiting when idle", async () => {
   resetRendererMock()
   let resolvePrompt: ((value: { sessionId: string }) => void) | undefined
@@ -656,6 +853,369 @@ test("launchTui aborts active runs on Ctrl+C before exiting when idle", async ()
   expect(renderer?.isDestroyed).toBe(true)
 })
 
+test("launchTui opens command palette on Ctrl+P only for prompt focus", async () => {
+  resetRendererMock()
+  const client = createMockClient({ commands: [slashCommand("review", ["rev"])] })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  expect(inputHandler()("\u0010")).toBe(true)
+  await Bun.sleep(0)
+  expect(shellText()).toContain("Command palette")
+  expect(shellText()).toContain("Toggle Sidebar")
+  expect(shellText()).toContain("review /review")
+  expect(inputHandler()("\u001b")).toBe(true)
+  expect(shellText()).not.toContain("Command palette")
+
+  client.publish({
+    type: "permission.requested",
+    payload: { permissionId: "p1", sessionId: "s1", toolName: "bash" },
+  })
+  expect(inputHandler()("\u0010")).toBe(true)
+  expect(shellText()).toContain("Permission request")
+  expect(shellText()).not.toContain("Command palette")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui executes leader sidebar, status, theme, session, and exit actions", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    hydrateState: { ...createInitialTuiState(true), sessionId: "s1", diagnostics: [{ message: "status exists" }] },
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    sessionId: "s1",
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  expect(shellText()).toContain("session: s1")
+  expect(inputHandler()("\u0018")).toBe(true)
+  expect(inputHandler()("b")).toBe(true)
+  expect(shellText()).not.toContain("session: s1")
+  expect(inputHandler()("\u0018")).toBe(true)
+  expect(inputHandler()("s")).toBe(true)
+  await Bun.sleep(0)
+  expect(shellText()).toContain("Command palette")
+  expect(shellText()).toContain("diagnostics: 1")
+  expect(inputHandler()("\u001b")).toBe(true)
+  expect(inputHandler()("\u0018")).toBe(true)
+  expect(inputHandler()("t")).toBe(true)
+  await Bun.sleep(0)
+  expect(shellText()).toContain("Current theme: opencode")
+  expect(inputHandler()("\u001b")).toBe(true)
+  expect(inputHandler()("\u0018")).toBe(true)
+  expect(inputHandler()("l")).toBe(true)
+  expect(shellText()).toContain("Session list")
+  expect(inputHandler()("\u001b")).toBe(true)
+  expect(inputHandler()("\u0018")).toBe(true)
+  expect(inputHandler()("n")).toBe(true)
+  expect(inputHandler()("\u0018")).toBe(true)
+  expect(inputHandler()("b")).toBe(true)
+  expect(shellText()).toContain("session: new")
+  expect(inputHandler()("\u0018")).toBe(true)
+  expect(inputHandler()("q")).toBe(true)
+  await launched
+  expect(renderer?.isDestroyed).toBe(true)
+})
+
+test("launchTui supports palette selection and backed model command", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    hydrateState: {
+      ...createInitialTuiState(true),
+      sessionId: "s1",
+    },
+    models: {
+      providerCount: 1,
+      errors: [],
+      options: [{ providerId: "fake", providerName: "Fake", model: { id: "test", name: "Fake Test" } }],
+    },
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    sessionId: "s1",
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  inputHandler()("\u0010")
+  await Bun.sleep(0)
+  inputHandler()("model")
+  expect(shellText()).toContain("Model List")
+  expect(inputHandler()("\r")).toBe(true)
+  await Bun.sleep(0)
+  expect(client.modelListCalls).toBe(1)
+  expect(shellText()).toContain("Model list")
+  expect(shellText()).toContain("Fake/Fake Test")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui aborts active runs on Ctrl+C while palette is focused", async () => {
+  resetRendererMock()
+  let resolvePrompt: ((value: { sessionId: string }) => void) | undefined
+  const client = createMockClient({
+    hydrateState: { ...createInitialTuiState(true), sessionId: "s1" },
+    prompt: (input) =>
+      new Promise((resolve) => {
+        resolvePrompt = resolve
+        client.promptCalls.push(input)
+      }),
+  })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    sessionId: "s1",
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  inputHandler()("slow")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+  inputHandler()("\u0010")
+  await Bun.sleep(0)
+  expect(shellText()).toContain("Command palette")
+  expect(inputHandler()("\u0003")).toBe(true)
+  expect(renderer?.isDestroyed).toBe(false)
+  expect(client.promptCalls[0]?.signal?.aborted).toBe(true)
+  resolvePrompt?.({ sessionId: "s1" })
+  await Bun.sleep(0)
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui loads backed sessions for leader session list", async () => {
+  resetRendererMock()
+  const client = createMockClient({ sessions: [{ id: "s2", title: "Existing", roots: ["/repo"] }] })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    roots: ["/repo"],
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  inputHandler()("\u0018")
+  inputHandler()("l")
+  await Bun.sleep(0)
+
+  expect(client.sessionListCalls).toEqual([{ roots: ["/repo"] }])
+  expect(shellText()).toContain("Session list")
+  expect(shellText()).toContain("> s2 Existing roots=/repo")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui switches sessions from the session list", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    sessions: [
+      { id: "s1", title: "Current", roots: ["/repo"] },
+      { id: "s2", title: "Existing", roots: ["/repo"] },
+    ],
+    hydrate: async (sessionId) => ({
+      session: { id: sessionId, title: sessionId === "s2" ? "Existing" : "Current", roots: ["/repo"] },
+      state: {
+        ...createInitialTuiState(true),
+        sessionId,
+        messages: [{ id: "u1", role: "user", text: `loaded ${sessionId}`, status: "completed" }],
+      },
+    }),
+  })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", roots: ["/repo"], stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("\u0018")
+  inputHandler()("l")
+  await Bun.sleep(0)
+  expect(shellText()).toContain("> s1 Current roots=/repo")
+  expect(inputHandler()("\u001b[B")).toBe(true)
+  expect(shellText()).toContain("> s2 Existing roots=/repo")
+  expect(inputHandler()("\r")).toBe(true)
+  await Bun.sleep(0)
+
+  expect(client.hydrateCalls).toEqual(["s2"])
+  expect(shellText()).not.toContain("Session list")
+  expect(shellText()).toContain("session: s2")
+  expect(shellText()).toContain("title: Existing")
+  expect(shellText()).toContain("user> loaded s2")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui starts a new session and omits previous session id on submit", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    hydrateState: {
+      ...createInitialTuiState(true),
+      sessionId: "s1",
+      messages: [{ id: "u1", role: "user", text: "old", status: "completed" }],
+    },
+  })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", sessionId: "s1", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  expect(shellText()).toContain("session: s1")
+  inputHandler()("\u0018")
+  inputHandler()("n")
+  expect(shellText()).toContain("session: new")
+  expect(shellText()).not.toContain("user> old")
+  inputHandler()("fresh")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls[0]).toMatchObject({ prompt: "fresh", sessionId: undefined })
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui submits selected model and variant from the model picker", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    models: {
+      providerCount: 1,
+      errors: [],
+      options: [
+        {
+          providerId: "anthropic",
+          providerName: "Anthropic",
+          model: {
+            id: "claude",
+            name: "Claude",
+            variants: [{ id: "fast", name: "Fast", runtimeOptions: { reasoningEffort: "low" } }],
+          },
+        },
+      ],
+    },
+  })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("\u0018")
+  inputHandler()("m")
+  await Bun.sleep(0)
+  expect(shellText()).toContain("Anthropic/Claude")
+  expect(inputHandler()("\r")).toBe(true)
+  expect(shellText()).toContain("Fast")
+  expect(inputHandler()("\u001b[B")).toBe(true)
+  expect(inputHandler()("\r")).toBe(true)
+  expect(shellText()).toContain("Model: Anthropic/Claude | Variant: Fast")
+  inputHandler()("hello")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls[0]).toMatchObject({
+    prompt: "hello",
+    model: "anthropic/claude",
+    modelVariant: "fast",
+    modelVariantOptions: { reasoningEffort: "low" },
+  })
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui lets model picker selection override launch model", async () => {
+  resetRendererMock()
+  const client = createMockClient({
+    models: {
+      providerCount: 1,
+      errors: [],
+      options: [
+        {
+          providerId: "anthropic",
+          providerName: "Anthropic",
+          model: { id: "claude", name: "Claude" },
+        },
+      ],
+    },
+  })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", model: "fake/test", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("\u0018")
+  inputHandler()("m")
+  await Bun.sleep(0)
+  inputHandler()("\r")
+  inputHandler()("hello")
+  inputHandler()("\r")
+  await Bun.sleep(0)
+
+  expect(client.promptCalls[0]).toMatchObject({ prompt: "hello", model: "anthropic/claude" })
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui clears stale model options after model list failure", async () => {
+  resetRendererMock()
+  let failModelList = false
+  const client = createMockClient({
+    models: {
+      providerCount: 1,
+      errors: [],
+      options: [{ providerId: "fake", providerName: "Fake", model: { id: "test", name: "Fake Test" } }],
+    },
+    listModels: async () => {
+      if (failModelList) throw new Error("provider unavailable")
+      return {
+        providerCount: 1,
+        errors: [],
+        options: [{ providerId: "fake", providerName: "Fake", model: { id: "test", name: "Fake Test" } }],
+      }
+    },
+  })
+  const launched = launchTui({ config: defaultConfig, cwd: "/repo", stdout: createMockStdout(), client })
+
+  await waitForRenderer()
+  inputHandler()("\u0018")
+  inputHandler()("m")
+  await Bun.sleep(0)
+  expect(shellText()).toContain("Fake/Fake Test")
+  inputHandler()("\u001b")
+  failModelList = true
+  inputHandler()("\u0018")
+  inputHandler()("m")
+  await Bun.sleep(0)
+
+  expect(shellText()).toContain("provider unavailable")
+  expect(shellText()).not.toContain("Fake/Fake Test")
+  renderer?.destroy()
+  await launched
+})
+
+test("launchTui keeps Ctrl+P as list navigation while session list is open", async () => {
+  resetRendererMock()
+  const client = createMockClient({ sessions: [{ id: "s2", title: "Existing", roots: ["/repo"] }] })
+  const launched = launchTui({
+    config: defaultConfig,
+    cwd: "/repo",
+    roots: ["/repo"],
+    stdout: createMockStdout(),
+    client,
+  })
+
+  await waitForRenderer()
+  inputHandler()("\u0018")
+  inputHandler()("l")
+  await Bun.sleep(0)
+  expect(shellText()).toContain("Session list")
+  expect(inputHandler()("\u0010")).toBe(true)
+  expect(shellText()).toContain("Session list")
+  expect(shellText()).not.toContain("Command palette")
+  expect(inputHandler()("\u001b")).toBe(true)
+  expect(shellText()).not.toContain("Session list")
+  renderer?.destroy()
+  await launched
+})
+
 interface MockNode {
   readonly tag: string
   props: Record<string, unknown>
@@ -679,7 +1239,10 @@ interface MockRenderer {
 
 interface MockClient extends TuiClient {
   hydrateCalls: string[]
+  sessionListCalls: Array<{ readonly roots?: readonly string[] } | undefined>
+  modelListCalls: number
   promptCalls: Array<Parameters<TuiClient["sessions"]["prompt"]>[0]>
+  commandExecuteCalls: Array<Parameters<TuiClient["commands"]["execute"]>[0]>
   abortCalls: string[]
   publish(input: { readonly type: RuntimeEvent["type"]; readonly payload: RuntimeEvent["payload"] }): void
 }
@@ -753,23 +1316,41 @@ function createMockClient(
   input: {
     readonly hydrateState?: ReturnType<typeof createInitialTuiState>
     readonly hydrateTitle?: string
+    readonly commands?: readonly TuiCommand[]
+    readonly sessions?: Awaited<ReturnType<TuiClient["sessions"]["list"]>>
+    readonly models?: Awaited<ReturnType<TuiClient["models"]["list"]>>
+    readonly listModels?: () => Promise<Awaited<ReturnType<TuiClient["models"]["list"]>>>
+    readonly hydrate?: (sessionId: string) => Promise<Awaited<ReturnType<TuiClient["sessions"]["hydrate"]>>>
     readonly prompt?: (input: Parameters<TuiClient["sessions"]["prompt"]>[0]) => Promise<{ readonly sessionId: string }>
+    readonly command?: (
+      input: Parameters<TuiClient["commands"]["execute"]>[0],
+    ) => Promise<{ readonly ok: boolean; readonly message?: string; readonly sessionId?: string }>
   } = {},
 ): MockClient {
   const hydrateCalls: string[] = []
+  const sessionListCalls: Array<{ readonly roots?: readonly string[] } | undefined> = []
+  let modelListCalls = 0
   const promptCalls: Array<Parameters<TuiClient["sessions"]["prompt"]>[0]> = []
+  const commandExecuteCalls: Array<Parameters<TuiClient["commands"]["execute"]>[0]> = []
   const abortCalls: string[] = []
   const listeners = new Set<(event: RuntimeEvent) => void>()
   const client: MockClient = {
     hydrateCalls,
+    sessionListCalls,
+    get modelListCalls() {
+      return modelListCalls
+    },
     promptCalls,
+    commandExecuteCalls,
     abortCalls,
     sessions: {
-      async list() {
-        return []
+      async list(listInput) {
+        sessionListCalls.push(listInput)
+        return input.sessions ?? []
       },
       async hydrate(sessionId) {
         hydrateCalls.push(sessionId)
+        if (input.hydrate) return await input.hydrate(sessionId)
         const state = input.hydrateState ?? { ...createInitialTuiState(true), sessionId }
         return { session: { id: state.sessionId ?? "", title: input.hydrateTitle, roots: ["/repo"] }, state }
       },
@@ -784,15 +1365,24 @@ function createMockClient(
     },
     commands: {
       async list() {
-        return []
+        return input.commands ?? []
       },
-      async execute() {
-        return { ok: false }
+      async execute(commandInput) {
+        if (input.command) return await input.command(commandInput)
+        commandExecuteCalls.push(commandInput)
+        return { ok: true, sessionId: commandInput.sessionId ?? "created-session" }
       },
     },
     status: {
       async snapshot() {
         return { roots: ["/repo"], diagnostics: [] }
+      },
+    },
+    models: {
+      async list() {
+        modelListCalls += 1
+        if (input.listModels) return await input.listModels()
+        return input.models ?? { options: [], providerCount: 0, errors: [] }
       },
     },
     events: {
@@ -807,4 +1397,16 @@ function createMockClient(
     },
   }
   return client
+}
+
+function slashCommand(name: string, aliases: readonly string[] = []): TuiCommand {
+  return {
+    id: name,
+    title: name,
+    category: "session",
+    description: `${name} command`,
+    slashName: name,
+    slashAliases: aliases,
+    enabled: true,
+  }
 }

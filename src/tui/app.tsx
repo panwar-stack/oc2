@@ -12,19 +12,40 @@ import { createRuntimeEventBus } from "../events/event-bus"
 import type { ModelProvider, ShallowJsonObject } from "../model/provider"
 import { createSessionRunService } from "../session/run"
 import type { ToolPermissionDecision, ToolPermissionRequest } from "../tools/tool"
-import type { TuiClient } from "./client"
+import type { TuiClient, TuiSessionSummary } from "./client"
 import { createLocalTuiClient } from "./client.local"
+import {
+  buildSlashMatches,
+  buildTuiPaletteCommands,
+  filterTuiPaletteCommands,
+  resolveSlashCommand,
+  type TuiPaletteCommand,
+} from "./commands"
+import { ModelPicker } from "./components/ModelPicker"
 import { SessionView } from "./components/SessionView"
+import { SlashSuggestions } from "./components/SlashSuggestions"
+import { createTuiKeymap, type TuiFocus, type TuiKeyBinding } from "./keymap"
 import { TuiFooter, formatRootLabel } from "./primitives/Footer"
 import { getSidebarWidth } from "./primitives/SidebarFrame"
 import { TuiToastOverlay } from "./primitives/Toast"
 import { tuiElement } from "./primitives/elements"
+import { createPromptEditor } from "./prompt-editor"
 import {
   appendLocalMessage,
+  applyModelPickerSelection,
+  closeModelPicker,
   completeTuiRun,
   createInitialTuiState,
   failTuiRun,
+  moveModelPickerSelection,
+  openModelPicker,
   projectTuiEvent,
+  setModelOptions,
+  setModelPickerError,
+  setModelPickerLoading,
+  setModelPickerQuery,
+  setSlashState,
+  toggleSessionList,
   type TuiState,
 } from "./state"
 import { resolveTuiTheme, type TuiTheme, type TuiThemeToast } from "./theme"
@@ -63,6 +84,23 @@ interface ShellSnapshot {
   readonly state: TuiState
   readonly input: string
   readonly sessionTitle?: string
+  readonly commandPalette: CommandPaletteState
+  readonly sessionList: SessionListState
+}
+
+interface CommandPaletteState {
+  readonly open: boolean
+  readonly query: string
+  readonly selectedIndex: number
+  readonly commands: readonly TuiPaletteCommand[]
+  readonly message?: string
+}
+
+export interface SessionListState {
+  readonly loading: boolean
+  readonly sessions: readonly TuiSessionSummary[]
+  readonly error?: string
+  readonly selectedIndex: number
 }
 
 interface ShellController {
@@ -134,6 +172,7 @@ export async function launchTui(options: TuiLaunchOptions): Promise<void> {
     initialState: themedInitialState,
     roots,
     model: options.model,
+    themeName: themeResolution.theme.name,
     dialogResolver,
   })
 
@@ -228,7 +267,10 @@ function TuiShell(props: {
       TuiDynamicDialog({
         theme: props.theme.theme,
         width,
-        title: () => (snapshot().state.permissions.some((permission) => permission.status === "pending") ? "Permission request" : undefined),
+        title: () =>
+          snapshot().state.permissions.some((permission) => permission.status === "pending")
+            ? "Permission request"
+            : undefined,
         content: () => {
           const pendingPermission = snapshot().state.permissions.find((permission) => permission.status === "pending")
           return pendingPermission ? formatPermissionDialog(pendingPermission) : ""
@@ -237,11 +279,30 @@ function TuiShell(props: {
       TuiDynamicDialog({
         theme: props.theme.theme,
         width,
-        title: () => snapshot().state.questionPrompt?.header ?? (snapshot().state.questionPrompt ? "Question" : undefined),
+        title: () =>
+          snapshot().state.questionPrompt?.header ?? (snapshot().state.questionPrompt ? "Question" : undefined),
         content: () => {
           const question = snapshot().state.questionPrompt
           return question ? formatQuestionDialog(question) : ""
         },
+      }),
+      TuiDynamicDialog({
+        theme: props.theme.theme,
+        width,
+        title: () => (snapshot().state.modelPickerOpen ? "Model list" : undefined),
+        content: () => ModelPicker({ state: snapshot().state, width: Math.min(width - 4, 76) }),
+      }),
+      TuiDynamicDialog({
+        theme: props.theme.theme,
+        width,
+        title: () => (snapshot().state.showSessionList ? "Session list" : undefined),
+        content: () => formatSessionListDialog(snapshot().state, snapshot().sessionList),
+      }),
+      TuiDynamicDialog({
+        theme: props.theme.theme,
+        width,
+        title: () => (snapshot().commandPalette.open ? "Command palette" : undefined),
+        content: () => formatCommandPalette(snapshot().commandPalette),
       }),
       TuiFooter({
         theme: props.theme.theme,
@@ -249,6 +310,14 @@ function TuiShell(props: {
         status: () => snapshot().state.status,
         hints: () => formatFooterHints(snapshot().state),
       }),
+      tuiElement(() => ({
+        content: SlashSuggestions({
+          matches: snapshot().state.slashMatches,
+          width,
+          active: !snapshot().state.modelPickerOpen && snapshot().state.slashActive,
+        }),
+        fg: props.theme.theme.text,
+      })),
       tuiElement(
         "box",
         {
@@ -257,9 +326,13 @@ function TuiShell(props: {
           borderColor: props.theme.theme.borderActive,
           backgroundColor: props.theme.theme.backgroundElement,
         },
-        [tuiElement(() => ({ content: `${labels.prompt} ${snapshot().input}` }))],
+        [tuiElement(() => ({ content: `${formatPromptMetadata(snapshot().state)}\n${labels.prompt} ${snapshot().input}` }))],
       ),
-      TuiToastOverlay({ theme: props.theme.theme, toasts: props.theme.toasts, width }),
+      TuiToastOverlay({
+        theme: props.theme.theme,
+        toasts: [...(snapshot().state.toasts ?? []), ...props.theme.toasts],
+        width,
+      }),
     ],
   )
 }
@@ -269,12 +342,15 @@ function createShellController(input: {
   readonly initialState: TuiState
   readonly roots: readonly string[]
   readonly model?: string
+  readonly themeName: string
   readonly dialogResolver: TuiDialogResolver
 }) {
   let state = input.initialState
-  let promptInput = ""
+  const promptEditor = createPromptEditor()
   let sessionTitle: string | undefined
   let activeRun: AbortController | undefined
+  let commandPalette: CommandPaletteState = { open: false, query: "", selectedIndex: 0, commands: [] }
+  let sessionList: SessionListState = { loading: false, sessions: [], selectedIndex: 0 }
   const listeners = new Set<() => void>()
   const notify = () => {
     for (const listener of listeners) listener()
@@ -284,11 +360,46 @@ function createShellController(input: {
     notify()
   }
   const setInput = (next: string) => {
-    promptInput = next
+    promptEditor.replace(next)
     notify()
   }
+  const setCommandPalette = (next: CommandPaletteState) => {
+    commandPalette = next
+    notify()
+  }
+  const setSessionList = (next: SessionListState) => {
+    sessionList = next
+    notify()
+  }
+  const rebuildPalette = async (partial: Partial<CommandPaletteState> = {}) => {
+    const clientCommands = await input.client.commands.list()
+    const next = {
+      ...commandPalette,
+      ...partial,
+      commands: buildTuiPaletteCommands({ clientCommands, state, themeName: input.themeName }),
+    }
+    setCommandPalette({
+      ...next,
+      selectedIndex: clampIndex(next.selectedIndex, filterTuiPaletteCommands(next.commands, next.query).length),
+    })
+  }
+  const resetToNewSession = () => {
+    sessionTitle = undefined
+    setInput("")
+    setState({
+      ...state,
+      sessionId: undefined,
+      status: "idle",
+      running: false,
+      messages: [],
+      streamingText: "",
+      toolCalls: [],
+      errors: [],
+      showSessionList: false,
+    })
+  }
   return {
-    snapshot: () => ({ state, input: promptInput, sessionTitle }),
+    snapshot: () => ({ state, input: promptEditor.text(), sessionTitle, commandPalette, sessionList }),
     subscribe(listener: () => void) {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -298,29 +409,209 @@ function createShellController(input: {
       sessionTitle = title
       notify()
     },
-    appendInput(value: string) {
-      setInput(promptInput + value)
+    insertInput(value: string) {
+      promptEditor.insertText(value)
+      notify()
+      void refreshSlashState(promptEditor.text())
+    },
+    insertNewline() {
+      promptEditor.insertNewline()
+      notify()
+      void refreshSlashState(promptEditor.text())
     },
     backspace() {
-      setInput(promptInput.slice(0, -1))
+      promptEditor.deleteBackward()
+      notify()
+      void refreshSlashState(promptEditor.text())
+    },
+    deleteForward() {
+      promptEditor.deleteForward()
+      notify()
+      void refreshSlashState(promptEditor.text())
+    },
+    moveCursorLeft() {
+      promptEditor.moveLeft()
+      notify()
+    },
+    moveCursorRight() {
+      promptEditor.moveRight()
+      notify()
+    },
+    moveCursorStart() {
+      promptEditor.moveStart()
+      notify()
+    },
+    moveCursorEnd() {
+      promptEditor.moveEnd()
+      notify()
+    },
+    historyPrev() {
+      const changed = promptEditor.historyPrev()
+      if (changed) {
+        notify()
+        void refreshSlashState(promptEditor.text())
+      }
+      return changed
+    },
+    historyNext() {
+      const changed = promptEditor.historyNext()
+      if (changed) {
+        notify()
+        void refreshSlashState(promptEditor.text())
+      }
+      return changed
+    },
+    clearInput() {
+      const changed = promptEditor.clear()
+      if (changed) {
+        notify()
+        void refreshSlashState(promptEditor.text())
+      }
+      return changed
     },
     toggleSidebar() {
       setState({ ...state, sidePanel: !state.sidePanel })
     },
+    openCommandPalette() {
+      setCommandPalette({ ...commandPalette, open: true, query: "", selectedIndex: 0, message: undefined })
+      void rebuildPalette({ open: true, query: "", selectedIndex: 0, message: undefined })
+    },
+    openStatusDialog() {
+      setCommandPalette({
+        ...commandPalette,
+        open: true,
+        query: "",
+        selectedIndex: 0,
+        message: formatStatusSummary(state),
+      })
+      void rebuildPalette({ open: true, query: "", selectedIndex: 0, message: formatStatusSummary(state) })
+    },
+    openThemeList() {
+      const message = `Current theme: ${input.themeName}`
+      setCommandPalette({ ...commandPalette, open: true, query: "", selectedIndex: 0, message })
+      void rebuildPalette({ open: true, query: "", selectedIndex: 0, message })
+    },
+    newSession() {
+      resetToNewSession()
+    },
+    openSessionList() {
+      const opening = !state.showSessionList
+      setState(toggleSessionList(state))
+      if (opening) void loadSessionList()
+    },
+    closeCommandPalette() {
+      setCommandPalette({ ...commandPalette, open: false, query: "", selectedIndex: 0, message: undefined })
+    },
+    appendPaletteQuery(value: string) {
+      const query = commandPalette.query + value
+      setCommandPalette({
+        ...commandPalette,
+        query,
+        selectedIndex: clampIndex(
+          commandPalette.selectedIndex,
+          filterTuiPaletteCommands(commandPalette.commands, query).length,
+        ),
+      })
+    },
+    backspacePaletteQuery() {
+      const query = commandPalette.query.slice(0, -1)
+      setCommandPalette({
+        ...commandPalette,
+        query,
+        selectedIndex: clampIndex(
+          commandPalette.selectedIndex,
+          filterTuiPaletteCommands(commandPalette.commands, query).length,
+        ),
+      })
+    },
+    movePaletteSelection(delta: number) {
+      const count = filterTuiPaletteCommands(commandPalette.commands, commandPalette.query).length
+      setCommandPalette({ ...commandPalette, selectedIndex: clampIndex(commandPalette.selectedIndex + delta, count) })
+    },
+    executePaletteSelection() {
+      const matches = filterTuiPaletteCommands(commandPalette.commands, commandPalette.query)
+      const command = matches[clampIndex(commandPalette.selectedIndex, matches.length)]
+      if (!command) return false
+      executeBackedCommand(command.id)
+      return true
+    },
+    openModelPicker() {
+      setState(setModelPickerLoading(openModelPicker(state), true))
+      void loadModelOptions()
+      return true
+    },
+    closeModelPicker() {
+      if (!state.modelPickerOpen) return false
+      setState(closeModelPicker(state))
+      return true
+    },
+    closeSessionList() {
+      if (!state.showSessionList) return false
+      setState({ ...state, showSessionList: false })
+      return true
+    },
+    moveSessionListSelection(delta: number) {
+      if (!state.showSessionList) return false
+      setSessionList({
+        ...sessionList,
+        selectedIndex: clampIndex(sessionList.selectedIndex + delta, sessionList.sessions.length),
+      })
+      return true
+    },
+    async applySessionListSelection() {
+      if (!state.showSessionList || sessionList.loading) return false
+      const session = sessionList.sessions[clampIndex(sessionList.selectedIndex, sessionList.sessions.length)]
+      if (!session) return false
+      try {
+        const hydrated = await input.client.sessions.hydrate(session.id)
+        sessionTitle = hydrated.session.title
+        setInput("")
+        setState({ ...hydrated.state, showSessionList: false })
+      } catch (error) {
+        setState((current) => appendDiagnosticError(current, `Failed to hydrate session ${session.id}: ${errorMessage(error)}`))
+      }
+      return true
+    },
+    moveModelPickerSelection(delta: number) {
+      if (!state.modelPickerOpen) return false
+      setState(moveModelPickerSelection(state, delta))
+      return true
+    },
+    appendModelPickerQuery(value: string) {
+      if (!state.modelPickerOpen) return false
+      setState(setModelPickerQuery(state, state.modelPickerQuery + value))
+      return true
+    },
+    backspaceModelPickerQuery() {
+      if (!state.modelPickerOpen) return false
+      setState(setModelPickerQuery(state, state.modelPickerQuery.slice(0, -1)))
+      return true
+    },
+    applyModelPickerSelection() {
+      if (!state.modelPickerOpen) return false
+      setState(applyModelPickerSelection(state))
+      return true
+    },
     async submit() {
       if (resolveDialog("allow")) return
-      const prompt = promptInput.trim()
+      const prompt = promptEditor.text().trim()
       if (!prompt || activeRun) return
+      const slash = parseSlashPrompt(prompt)
+      if (slash) {
+        await submitSlashCommand(prompt, slash)
+        return
+      }
       const runController = new AbortController()
       activeRun = runController
       if (!sessionTitle) sessionTitle = formatSessionTitle(prompt)
+      promptEditor.recordHistory(prompt)
       setInput("")
       setState({ ...appendLocalMessage(state, "user", prompt), running: true, status: "running" })
       try {
         const result = await input.client.sessions.prompt({
           prompt,
           sessionId: state.sessionId,
-          ...activeModelInput(state, input.model),
+          ...activeModelInput(state),
           roots: input.roots,
           signal: runController.signal,
         })
@@ -343,11 +634,152 @@ function createShellController(input: {
     resolveDialog,
   }
 
+  async function refreshSlashState(value: string): Promise<void> {
+    const parsed = parseSlashPrompt(value)
+    if (!parsed) {
+      setState((current) =>
+        current.slashActive
+          ? setSlashState(current, { slashActive: false, slashQuery: "", slashMatches: [] })
+          : current,
+      )
+      return
+    }
+    try {
+      const commands = await input.client.commands.list()
+      if (promptEditor.text() !== value) return
+      setState((current) =>
+        setSlashState(current, {
+          slashActive: true,
+          slashQuery: parsed.name,
+          slashMatches: buildSlashMatches(commands, parsed.name),
+        }),
+      )
+    } catch (error) {
+      setState((current) => appendDiagnosticError(current, `Failed to load slash commands: ${errorMessage(error)}`))
+    }
+  }
+
+  async function submitSlashCommand(
+    prompt: string,
+    slash: { readonly name: string; readonly args: readonly string[] },
+  ): Promise<void> {
+    let commands: Awaited<ReturnType<TuiClient["commands"]["list"]>>
+    try {
+      commands = await input.client.commands.list()
+    } catch (error) {
+      setState((current) => appendDiagnosticError(current, `Failed to load slash commands: ${errorMessage(error)}`))
+      return
+    }
+
+    const command = resolveSlashCommand(commands, slash.name)
+    if (!command) {
+      setState((current) => appendDiagnosticError(current, `Unknown slash command: /${slash.name}`))
+      return
+    }
+
+    const runController = new AbortController()
+    activeRun = runController
+    setState((current) => ({ ...current, running: true, status: "running" }))
+    try {
+      const result = await input.client.commands.execute({
+        name: slash.name,
+        args: slash.args,
+        raw: prompt,
+        sessionId: state.sessionId,
+        ...activeModelInput(state),
+        roots: input.roots,
+        signal: runController.signal,
+      })
+      if (!result.ok) {
+        setState((current) =>
+          appendDiagnosticError(current, result.message ?? `Slash command failed: /${command.slashName ?? slash.name}`),
+        )
+        return
+      }
+      promptEditor.recordHistory(prompt)
+      setInput("")
+      setState((current) =>
+        setSlashState(
+          completeTuiRun(
+            current,
+            { sessionId: result.sessionId ?? current.sessionId ?? "", status: "completed" },
+            false,
+          ),
+          { slashActive: false, slashQuery: "", slashMatches: [] },
+        ),
+      )
+    } catch (error) {
+      setState((current) => appendDiagnosticError(current, errorMessage(error)))
+    } finally {
+      if (activeRun === runController) activeRun = undefined
+    }
+  }
+
+  function executeBackedCommand(commandId: string): void {
+    if (commandId.startsWith("slash.")) {
+      setCommandPalette({ ...commandPalette, message: "Slash commands run from the prompt" })
+      return
+    }
+    switch (commandId) {
+      case "app.toggleSidebar":
+        setState({ ...state, sidePanel: !state.sidePanel })
+        setCommandPalette({ ...commandPalette, open: false })
+        return
+      case "status.open":
+        setCommandPalette({ ...commandPalette, message: formatStatusSummary(state) })
+        return
+      case "theme.list":
+        setCommandPalette({ ...commandPalette, message: `Current theme: ${input.themeName}` })
+        return
+      case "model.list":
+        setState(setModelPickerLoading(openModelPicker(state), true))
+        setCommandPalette({ ...commandPalette, open: false })
+        void loadModelOptions()
+        return
+      case "session.new":
+        resetToNewSession()
+        setCommandPalette({ ...commandPalette, open: false })
+        return
+      case "session.list":
+        setState(toggleSessionList(state))
+        setCommandPalette({ ...commandPalette, open: false })
+        void loadSessionList()
+        return
+    }
+  }
+
+  async function loadModelOptions(): Promise<void> {
+    try {
+      const result = await input.client.models.list()
+      setState((current) => {
+        const withOptions = setModelOptions(current, result.options, result.providerCount)
+        return result.errors.length > 0 ? setModelPickerError(withOptions, result.errors.join("; ")) : withOptions
+      })
+    } catch (error) {
+      setState((current) => setModelPickerError(setModelOptions(current, [], 0), errorMessage(error)))
+    }
+  }
+
+  async function loadSessionList(): Promise<void> {
+    setSessionList({ loading: true, sessions: [], selectedIndex: 0 })
+    try {
+      const sessions = await input.client.sessions.list({ roots: input.roots })
+      const currentIndex = sessions.findIndex((session) => session.id === state.sessionId)
+      setSessionList({
+        loading: false,
+        sessions,
+        selectedIndex: currentIndex >= 0 ? currentIndex : 0,
+      })
+    } catch (error) {
+      setSessionList({ loading: false, sessions: [], selectedIndex: 0, error: errorMessage(error) })
+    }
+  }
+
   function resolveDialog(decision: TuiDialogDecision): boolean {
     const permission = state.permissions.find((item) => item.status === "pending")
     const question = state.questionPrompt
     if (!permission && !question) return false
-    input.dialogResolver.resolveCurrent({ decision, question, answer: promptInput.trim() || undefined })
+    input.dialogResolver.resolveCurrent({ decision, question, answer: promptEditor.text().trim() || undefined })
     setInput("")
     if (permission) {
       setState((current) =>
@@ -376,52 +808,239 @@ function createInputHandler(input: {
   readonly roots: readonly string[]
   readonly getRenderer: () => CliRenderer | undefined
 }): (sequence: string) => boolean {
+  const keymap = createTuiKeymap()
   return (sequence) => {
-    if (sequence === "\u0003") {
+    const snapshot = input.shell.snapshot()
+    const focus = resolveFocus(snapshot)
+    const binding = keymap.handle(sequence, focus)
+    const handled = handleKeyBinding(binding, input)
+    if (handled) input.getRenderer()?.requestRender()
+    return handled
+  }
+}
+
+function handleKeyBinding(
+  binding: TuiKeyBinding,
+  input: {
+    readonly shell: ReturnType<typeof createShellController>
+    readonly getRenderer: () => CliRenderer | undefined
+  },
+): boolean {
+  const snapshot = input.shell.snapshot()
+  if (snapshot.commandPalette.open) return handlePaletteKey(binding, input)
+  if (snapshot.state.modelPickerOpen) return handleModelPickerKey(binding, input)
+  if (snapshot.state.showSessionList) return handleSessionListKey(binding, input)
+  if (
+    (snapshot.state.permissions.some((permission) => permission.status === "pending") ||
+      snapshot.state.questionPrompt) &&
+    (binding.action === "picker-up" || binding.action === "picker-down")
+  ) {
+    return true
+  }
+  switch (binding.action) {
+    case "cancel":
+      if (input.shell.cancelActiveRun()) return true
+      if (input.shell.clearInput()) return true
+      destroyRenderer(input.getRenderer())
+      return true
+    case "exit":
+      destroyRenderer(input.getRenderer())
+      return true
+    case "escape":
+      return input.shell.resolveDialog("deny")
+    case "leader":
+      return true
+    case "command-palette":
+      input.shell.openCommandPalette()
+      return true
+    case "toggle-side-panel":
+      input.shell.toggleSidebar()
+      return true
+    case "status-dialog":
+      input.shell.openStatusDialog()
+      return true
+    case "theme-list":
+      input.shell.openThemeList()
+      return true
+    case "model-picker-toggle":
+      return input.shell.openModelPicker()
+    case "new-session":
+      input.shell.newSession()
+      return true
+    case "session-switcher":
+      input.shell.openSessionList()
+      return true
+    case "submit":
+      void input.shell.submit()
+      return true
+    case "backspace":
+      input.shell.backspace()
+      return true
+    case "delete-forward":
+      input.shell.deleteForward()
+      return true
+    case "newline":
+      input.shell.insertNewline()
+      return true
+    case "cursor-left":
+      input.shell.moveCursorLeft()
+      return true
+    case "cursor-right":
+      input.shell.moveCursorRight()
+      return true
+    case "cursor-start":
+      input.shell.moveCursorStart()
+      return true
+    case "cursor-end":
+      input.shell.moveCursorEnd()
+      return true
+    case "history-prev":
+      return input.shell.historyPrev()
+    case "history-next":
+      return input.shell.historyNext()
+    case "input":
+    case "paste":
+      if (binding.value) input.shell.insertInput(binding.value)
+      return true
+    default:
+      return false
+  }
+}
+
+function handleSessionListKey(
+  binding: TuiKeyBinding,
+  input: {
+    readonly shell: ReturnType<typeof createShellController>
+    readonly getRenderer: () => CliRenderer | undefined
+  },
+): boolean {
+  switch (binding.action) {
+    case "escape":
+      return input.shell.closeSessionList()
+    case "picker-up":
+      return input.shell.moveSessionListSelection(-1)
+    case "picker-down":
+      return input.shell.moveSessionListSelection(1)
+    case "submit":
+      void input.shell.applySessionListSelection()
+      return true
+    case "exit":
+      destroyRenderer(input.getRenderer())
+      return true
+    case "cancel":
       if (input.shell.cancelActiveRun()) return true
       destroyRenderer(input.getRenderer())
       return true
-    }
-    if (sequence === "\u001b") {
-      if (input.shell.resolveDialog("deny")) return true
-      return false
-    }
-    if (sequence === "\u0004") {
+    default:
+      return true
+  }
+}
+
+function handlePaletteKey(
+  binding: TuiKeyBinding,
+  input: {
+    readonly shell: ReturnType<typeof createShellController>
+    readonly getRenderer: () => CliRenderer | undefined
+  },
+): boolean {
+  switch (binding.action) {
+    case "escape":
+      input.shell.closeCommandPalette()
+      return true
+    case "picker-up":
+      input.shell.movePaletteSelection(-1)
+      return true
+    case "picker-down":
+      input.shell.movePaletteSelection(1)
+      return true
+    case "submit":
+      return input.shell.executePaletteSelection()
+    case "backspace":
+      input.shell.backspacePaletteQuery()
+      return true
+    case "input":
+      if (binding.value) input.shell.appendPaletteQuery(binding.value)
+      return true
+    case "exit":
       destroyRenderer(input.getRenderer())
       return true
-    }
-    if (sequence === "\u0002") {
-      input.shell.toggleSidebar()
-      input.getRenderer()?.requestRender()
+    case "cancel":
+      if (input.shell.cancelActiveRun()) return true
+      destroyRenderer(input.getRenderer())
       return true
-    }
-    if (sequence === "\r" || sequence === "\n") {
-      void input.shell.submit()
+    default:
       return true
-    }
-    if (sequence === "\u007f" || sequence === "\b") {
-      input.shell.backspace()
-      input.getRenderer()?.requestRender()
-      return true
-    }
-    if (sequence >= " " && sequence !== "\u001b") {
-      input.shell.appendInput(sequence)
-      input.getRenderer()?.requestRender()
-      return true
-    }
-    return false
   }
+}
+
+function handleModelPickerKey(
+  binding: TuiKeyBinding,
+  input: {
+    readonly shell: ReturnType<typeof createShellController>
+    readonly getRenderer: () => CliRenderer | undefined
+  },
+): boolean {
+  switch (binding.action) {
+    case "escape":
+      return input.shell.closeModelPicker()
+    case "picker-up":
+      return input.shell.moveModelPickerSelection(-1)
+    case "picker-down":
+      return input.shell.moveModelPickerSelection(1)
+    case "submit":
+      return input.shell.applyModelPickerSelection()
+    case "backspace":
+      return input.shell.backspaceModelPickerQuery()
+    case "input":
+      return binding.value ? input.shell.appendModelPickerQuery(binding.value) : true
+    case "exit":
+      destroyRenderer(input.getRenderer())
+      return true
+    case "cancel":
+      if (input.shell.cancelActiveRun()) return true
+      destroyRenderer(input.getRenderer())
+      return true
+    default:
+      return true
+  }
+}
+
+function resolveFocus(snapshot: ShellSnapshot): TuiFocus {
+  if (snapshot.commandPalette.open || snapshot.state.modelPickerOpen || snapshot.state.showSessionList) return "list"
+  if (
+    snapshot.state.permissions.some((permission) => permission.status === "pending") ||
+    snapshot.state.questionPrompt
+  ) {
+    return "dialog"
+  }
+  return "prompt"
 }
 
 function activeModelInput(
   state: TuiState,
-  launchModel: string | undefined,
 ): { readonly model?: string; readonly modelVariant?: string; readonly modelVariantOptions?: ShallowJsonObject } {
-  const model = launchModel ?? `${state.modelSelection.providerId}/${state.modelSelection.modelId}`
+  const model = `${state.modelSelection.providerId}/${state.modelSelection.modelId}`
   return {
     model,
     modelVariant: state.modelSelection.variantId,
     modelVariantOptions: state.modelSelection.modelVariantOptions,
+  }
+}
+
+function parseSlashPrompt(prompt: string): { readonly name: string; readonly args: readonly string[] } | undefined {
+  if (!prompt.startsWith("/") || prompt.startsWith("//")) return undefined
+  const [name = "", ...args] = prompt.slice(1).trim().split(/\s+/).filter(Boolean)
+  return name ? { name, args } : { name: "", args: [] }
+}
+
+function appendDiagnosticError(state: TuiState, message: string): TuiState {
+  return {
+    ...state,
+    running: false,
+    status: "failed",
+    errors: [...state.errors, message],
+    diagnostics: [...state.diagnostics, { code: "tui.slash", message }],
+    toasts: [{ id: `tui.slash.${state.diagnostics.length}`, variant: "error", title: "Slash command", message }],
   }
 }
 
@@ -502,7 +1121,11 @@ function formatFooterHints(state: TuiState): readonly string[] {
   const mcpResources = state.mcpServers.reduce((total, server) => total + (server.resourceCount ?? 0), 0)
   const activeTeamAndSubagentCount = countActiveTeamAndSubagentItems(state)
   const hasStatusData =
-    pendingPermissions > 0 || mcpServers > 0 || activeTeamAndSubagentCount > 0 || state.diagnostics.length > 0 || state.errors.length > 0
+    pendingPermissions > 0 ||
+    mcpServers > 0 ||
+    activeTeamAndSubagentCount > 0 ||
+    state.diagnostics.length > 0 ||
+    state.errors.length > 0
 
   return [
     pendingPermissions > 0 ? `permissions=${pendingPermissions}` : undefined,
@@ -630,7 +1253,9 @@ function formatPermissionRows(state: TuiState): readonly string[] {
 
 function formatDiagnosticRows(state: TuiState): readonly string[] {
   const rows = [
-    ...state.diagnostics.map((diagnostic) => `- ${diagnostic.code ? `[${diagnostic.code}] ` : ""}${diagnostic.message}`),
+    ...state.diagnostics.map(
+      (diagnostic) => `- ${diagnostic.code ? `[${diagnostic.code}] ` : ""}${diagnostic.message}`,
+    ),
     ...state.errors.map((error) => `- error: ${error}`),
   ]
   return rows.length > 0 ? ["diagnostics:", ...rows] : ["diagnostics: none"]
@@ -652,8 +1277,76 @@ function formatQuestionDialog(question: NonNullable<TuiState["questionPrompt"]>)
   return [
     question.question,
     question.multiple ? "Select one or more options:" : "Select an option:",
-    ...options.map((option, index) => `${index + 1}. ${option.label}${option.description ? ` - ${option.description}` : ""}`),
+    ...options.map(
+      (option, index) => `${index + 1}. ${option.label}${option.description ? ` - ${option.description}` : ""}`,
+    ),
   ].join("\n")
+}
+
+function formatCommandPalette(palette: CommandPaletteState): string {
+  const matches = filterTuiPaletteCommands(palette.commands, palette.query).slice(0, 10)
+  const rows = matches.length
+    ? matches.map((command, index) => {
+        const marker = index === palette.selectedIndex ? ">" : " "
+        const keys = command.keybindings?.length ? ` [${command.keybindings.join(", ")}]` : ""
+        const slash = command.slashName ? ` /${command.slashName}` : ""
+        return `${marker} ${command.title}${slash} (${command.category})${keys}${command.description ? ` - ${command.description}` : ""}`
+      })
+    : ["No enabled commands"]
+  return [
+    `Search: ${palette.query}`,
+    ...rows,
+    palette.message,
+    "Up/Down or Ctrl+P/Ctrl+N move | Return run | Escape close",
+  ]
+    .filter((row): row is string => Boolean(row))
+    .join("\n")
+}
+
+export function formatSessionListDialog(state: TuiState, sessionList: SessionListState): string {
+  const rows = sessionList.loading
+    ? ["Loading sessions..."]
+    : sessionList.error
+      ? [`error: ${sessionList.error}`]
+      : sessionList.sessions.length > 0
+        ? sessionList.sessions.slice(0, 10).map((session, index) => {
+            const marker = index === clampIndex(sessionList.selectedIndex, sessionList.sessions.length) ? ">" : " "
+            const title = session.title ? ` ${session.title}` : ""
+            const roots = session.roots.length > 0 ? ` roots=${session.roots.join(",")}` : ""
+            return `${marker} ${session.id}${title}${roots}`
+          })
+        : ["No sessions found"]
+  return [
+    state.sessionId ? `current: ${state.sessionId}` : "current: new session",
+    ...rows,
+    "Up/Down or Ctrl+P/Ctrl+N move | Return switch | Escape close",
+  ].join("\n")
+}
+
+function formatPromptMetadata(state: TuiState): string {
+  const rows = [`Model: ${formatModel(state)}`]
+  if (state.modelSelection.variantId || state.modelSelection.variantName) {
+    rows.push(`Variant: ${state.modelSelection.variantName ?? state.modelSelection.variantId}`)
+  }
+  return rows.join(" | ")
+}
+
+function formatStatusSummary(state: TuiState): string {
+  const pendingPermissions = state.permissions.filter((permission) => permission.status === "pending").length
+  return [
+    `status: ${state.status}`,
+    `diagnostics: ${state.diagnostics.length}`,
+    `errors: ${state.errors.length}`,
+    `pending permissions: ${pendingPermissions}`,
+    `mcp servers: ${state.mcpServers.length}`,
+    `teams: ${state.teams.length}`,
+    `agent tasks: ${state.agentTasks.length}`,
+  ].join(" | ")
+}
+
+function clampIndex(index: number, count: number): number {
+  if (count <= 0) return 0
+  return Math.max(0, Math.min(index, count - 1))
 }
 
 function formatModel(state: TuiState): string {

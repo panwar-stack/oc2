@@ -216,6 +216,7 @@ test("command list exposes enabled slash command metadata and unknown commands a
       description: "check args",
       slashName: "check",
       slashAliases: ["c"],
+      source: "user",
       enabled: true,
     },
   ])

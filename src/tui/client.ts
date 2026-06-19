@@ -1,6 +1,6 @@
 import type { RuntimeEvent } from "../events/events"
 import type { ShallowJsonObject } from "../model/provider"
-import type { TuiState } from "./state"
+import type { SlashMatch, TuiState } from "./state"
 
 export interface TuiClient {
   readonly sessions: {
@@ -34,6 +34,9 @@ export interface TuiClient {
   readonly status: {
     snapshot(): Promise<TuiStatusSnapshot>
   }
+  readonly models: {
+    list(): Promise<TuiModelListResult>
+  }
   readonly events: {
     subscribe(listener: (event: RuntimeEvent) => void): () => void
   }
@@ -63,6 +66,12 @@ export interface TuiStatusSnapshot {
   readonly diagnostics: readonly string[]
 }
 
+export interface TuiModelListResult {
+  readonly options: TuiState["modelOptions"]
+  readonly providerCount: number
+  readonly errors: readonly string[]
+}
+
 export interface TuiCommand {
   readonly id: string
   readonly title: string
@@ -71,5 +80,6 @@ export interface TuiCommand {
   readonly keybindings?: readonly string[]
   readonly slashName?: string
   readonly slashAliases?: readonly string[]
+  readonly source?: SlashMatch["source"]
   readonly enabled: boolean
 }
