@@ -76,7 +76,9 @@ export const run = Effect.fn("SessionCompound.run")(function* (input: {
   loguRunID?: string
 }) {
   validateToolPolicies(input)
+  yield* interruptIfAborted(input.abort)
   const branches = yield* runBranches(input)
+  yield* interruptIfAborted(input.abort)
   if (branches.successes.length === 0) {
     return yield* Effect.fail(
       new Error(`All compound branches failed: ${branches.failures.map((failure) => failure.reason).join("; ")}`),
@@ -84,12 +86,14 @@ export const run = Effect.fn("SessionCompound.run")(function* (input: {
   }
 
   const judge = yield* SessionCompoundJudge.run({ ...input, branches, judge: input.config.judge })
+  yield* interruptIfAborted(input.abort)
   const synthesis = yield* SessionCompoundSynthesizer.run({
     ...input,
     branches,
     judge,
     synthesizer: input.config.synthesizer,
   })
+  yield* interruptIfAborted(input.abort)
 
   return {
     output: synthesis.output,
@@ -116,11 +120,13 @@ export const runBranches = Effect.fn("SessionCompound.runBranches")(function* (i
   loguRunID?: string
 }) {
   validateToolPolicies(input)
+  yield* interruptIfAborted(input.abort)
   const results = yield* Effect.forEach(
     input.config.branches,
     (branch, index) => runBranch({ ...input, branch, index }),
     { concurrency: "unbounded" },
   )
+  yield* interruptIfAborted(input.abort)
 
   return {
     successes: results.filter((result) => result.type === "success").map((result) => result.value),
@@ -266,6 +272,7 @@ function promptBranch(
     branch: SessionCompoundConfig.Branch
     index: number
     promptOps: TaskPromptOps
+    abort?: AbortSignal
     mode?: "logu"
   },
   sessionID: SessionID,
@@ -275,7 +282,8 @@ function promptBranch(
 ) {
   return Effect.gen(function* () {
     const parts = yield* input.promptOps.resolvePromptParts(branchPrompt(input.prompt, input.branch.prompt))
-    return yield* input.promptOps.prompt({
+    yield* interruptIfAborted(input.abort)
+    const result = yield* input.promptOps.prompt({
       messageID: MessageID.ascending(),
       sessionID,
       model: {
@@ -287,7 +295,14 @@ function promptBranch(
       tools: branchTools(input.branch.toolPolicy, input.mode, permission),
       parts,
     })
+    yield* interruptIfAborted(input.abort)
+    return result
   })
+}
+
+function interruptIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) return Effect.interrupt
+  return Effect.void
 }
 
 function validateToolPolicies(input: { config: SessionCompoundConfig.Config; mode?: "logu" }) {

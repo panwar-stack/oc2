@@ -47,6 +47,7 @@ export const run = Effect.fn("SessionLogu.run")(function* (input: RunInput) {
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.gen(function* () {
+        if (Cause.hasInterruptsOnly(cause)) return yield* Effect.interrupt
         const error = Cause.squash(cause)
         const message = error instanceof Error ? error.message : String(error)
         if (message.startsWith("All compound branches failed:")) throw new Error(`logu failed: ${message}`)

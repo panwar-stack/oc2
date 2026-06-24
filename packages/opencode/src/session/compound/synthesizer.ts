@@ -27,6 +27,7 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
   mode?: "logu"
   loguRunID?: string
 }) {
+  yield* interruptIfAborted(input.abort)
   const sessions = yield* Session.Service
   const model = SessionCompoundConfig.parseModel(input.synthesizer.model)
   const child = yield* sessions.create({
@@ -63,6 +64,7 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
     () =>
       Effect.gen(function* () {
         const parts = yield* input.promptOps.resolvePromptParts(buildPrompt(input))
+        yield* interruptIfAborted(input.abort)
         const result = yield* input.promptOps.prompt({
           messageID: MessageID.ascending(),
           sessionID: child.id,
@@ -71,6 +73,7 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
           tools: toolsDisabled,
           parts,
         })
+        yield* interruptIfAborted(input.abort)
 
         if (result.info.role === "assistant" && result.info.error) {
           return yield* Effect.fail(new Error(errorMessage(result.info.error)))
@@ -83,6 +86,11 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
       }).pipe(Effect.ensuring(Effect.sync(() => input.abort?.removeEventListener("abort", onAbort)))),
   )
 })
+
+function interruptIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) return Effect.interrupt
+  return Effect.void
+}
 
 export function buildPrompt(input: {
   prompt: string

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
-import { Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Permission } from "@/permission"
 import { Session } from "@/session/session"
@@ -252,6 +252,170 @@ describe("session compound runner", () => {
       expect(result.successes).toEqual([])
       expect(result.failures).toMatchObject([{ index: 0, model: "test/slow", timedOut: true }])
       expect(cancelled).toHaveLength(1)
+    }),
+  )
+
+  it.instance("interrupts before branch fan-out when the signal is already aborted", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const controller = new AbortController()
+      const prompts: SessionPrompt.PromptInput[] = []
+      const cancelled: SessionID[] = []
+      controller.abort()
+
+      const exit = yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config(),
+        promptOps: {
+          ...stubOps({ onCancel: (sessionID) => cancelled.push(sessionID) }),
+          prompt: (input) =>
+            Effect.sync(() => {
+              prompts.push(input)
+              return reply(input, "unexpected")
+            }),
+        },
+        abort: controller.signal,
+        mode: "logu",
+      }).pipe(Effect.exit)
+      const children = yield* sessions.children(parent.id)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+      expect(children).toHaveLength(0)
+      expect(prompts).toHaveLength(0)
+      expect(cancelled).toHaveLength(0)
+    }),
+  )
+
+  it.instance("cancels active branches and skips judge and synthesizer after abort", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const controller = new AbortController()
+      const firstStarted = yield* Deferred.make<void>()
+      const secondStarted = yield* Deferred.make<void>()
+      const cancelledBoth = yield* Deferred.make<void>()
+      const scope = yield* Scope.Scope
+      const prompts: string[] = []
+      const cancelled: SessionID[] = []
+      const promptOps: TaskPromptOps = {
+        ...stubOps(),
+        cancel: (sessionID) =>
+          Effect.gen(function* () {
+            yield* Effect.sync(() => cancelled.push(sessionID))
+            if (cancelled.length === 2) yield* Deferred.succeed(cancelledBoth, undefined)
+          }),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            const model = String(input.model?.modelID)
+            prompts.push(model)
+            if (model === "branch-a") yield* Deferred.succeed(firstStarted, undefined)
+            if (model === "branch-b") yield* Deferred.succeed(secondStarted, undefined)
+            if (model === "branch-a" || model === "branch-b") {
+              yield* Deferred.await(cancelledBoth)
+              return reply(input, model)
+            }
+            return reply(input, model)
+          }),
+      }
+      const fiber = yield* SessionCompound.run({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config(),
+        promptOps,
+        abort: controller.signal,
+        mode: "logu",
+      }).pipe(Effect.exit, Effect.forkIn(scope))
+
+      yield* Deferred.await(firstStarted)
+      yield* Deferred.await(secondStarted)
+      controller.abort()
+      const exit = yield* Fiber.join(fiber)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+      expect(new Set(cancelled).size).toBe(2)
+      expect(prompts).toEqual(["branch-a", "branch-b"])
+    }),
+  )
+
+  it.instance("interrupts direct branch fan-out after abort resolves active branches", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const controller = new AbortController()
+      const started = yield* Deferred.make<void>()
+      const cancelled = yield* Deferred.make<void>()
+      const scope = yield* Scope.Scope
+      const fiber = yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/branch-a" }], limits: { maxBranches: 1 } }),
+        promptOps: {
+          ...stubOps(),
+          cancel: () => Deferred.succeed(cancelled, undefined),
+          prompt: (input) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined)
+              yield* Deferred.await(cancelled)
+              return reply(input, "branch result")
+            }),
+        },
+        abort: controller.signal,
+        mode: "logu",
+      }).pipe(Effect.exit, Effect.forkIn(scope))
+
+      yield* Deferred.await(started)
+      controller.abort()
+      const exit = yield* Fiber.join(fiber)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+    }),
+  )
+
+  it.instance("interrupts after judge abort and skips synthesizer", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const controller = new AbortController()
+      const prompts: string[] = []
+      const exit = yield* SessionCompound.run({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/branch" }], limits: { maxBranches: 1 } }),
+        promptOps: {
+          ...stubOps(),
+          prompt: (input) =>
+            Effect.sync(() => {
+              const model = String(input.model?.modelID)
+              prompts.push(model)
+              if (model === "judge") {
+                controller.abort()
+                return reply(
+                  input,
+                  JSON.stringify({
+                    consensus: [],
+                    contradictions: [],
+                    uniqueInsights: [],
+                    blindSpots: [],
+                    failures: [],
+                    confidence: "high",
+                  }),
+                )
+              }
+              return reply(input, model)
+            }),
+        },
+        abort: controller.signal,
+        mode: "logu",
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+      expect(prompts).toEqual(["branch", "judge"])
     }),
   )
 
