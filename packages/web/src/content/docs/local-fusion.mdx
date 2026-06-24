@@ -54,11 +54,57 @@ Add a named `local_fusion` config to `opencode.json`.
 
 Each branch can use a different model, variant, agent, prompt, tool policy, and timeout.
 
+### Logu Local Model
+
+`logu` is a local compound model exposed through the normal model picker as `logu/logu`. It is always selectable and does not require Logu provider credentials or a provider connect step, but it still needs the underlying branch, judge, and synthesizer providers configured.
+
+Configure Logu with the reserved `local_fusion.logu` config name:
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "local_fusion": {
+    "logu": {
+      "branches": [
+        {
+          "model": "anthropic/claude-sonnet-4-5",
+          "agent": "build",
+          "toolPolicy": "parent_without_teams"
+        },
+        {
+          "model": "openai/gpt-5",
+          "agent": "plan",
+          "toolPolicy": "parent_without_teams"
+        }
+      ],
+      "judge": {
+        "model": "openai/gpt-5-mini"
+      },
+      "synthesizer": {
+        "model": "anthropic/claude-sonnet-4-5"
+      },
+      "limits": {
+        "timeout": 120000,
+        "maxBranches": 3
+      }
+    }
+  }
+}
+```
+
+When you select `logu/logu`, OpenCode renders the current conversation into a transcript, runs `local_fusion.logu`, and returns the synthesizer output as the assistant response in the parent session.
+
+Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
+
 ### Tool Policy
 
 `toolPolicy` is configured per branch. Use `"readonly"` when a branch should inspect files and search the workspace without making changes. Use `"none"` when a branch should answer from the prompt and conversation context only.
 
 Branches default to `"readonly"`, while the judge and synthesizer always run with tools disabled.
+
+`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu branch use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for the branch. Branch-spawned subagents also cannot create agent teams or invoke nested local fusion.
+
+The `/local_fusion` command rejects `"parent_without_teams"`; use `"readonly"` or `"none"` for normal Local Fusion runs.
 
 ```json title="opencode.json"
 {
@@ -113,6 +159,30 @@ You can also set `toolPolicy` on inline `local_fusion` tool calls:
   }
 }
 ```
+
+---
+
+## Failure Modes
+
+If `logu/logu` is selected without `local_fusion.logu`, the assistant turn fails with:
+
+```txt
+logu requires local_fusion.logu config; see packages/web/src/content/docs/local-fusion.mdx
+```
+
+If a Logu config references `logu/logu` as an underlying model, the run fails before branch sessions are created. The error names the offending path:
+
+```txt
+logu config cannot reference logu/logu at branches[0].model
+logu config cannot reference logu/logu at judge.model
+logu config cannot reference logu/logu at synthesizer.model
+```
+
+A timed-out branch is recorded as a branch failure with `Branch timed out after <timeout>ms`. Logu continues when at least one branch succeeds.
+
+If every branch fails, the parent assistant turn fails with `logu failed: All compound branches failed: ...`.
+
+Logu is not available in V2 sessions in this first pass. It is only routed through the current in-process Local Fusion runtime.
 
 ---
 
