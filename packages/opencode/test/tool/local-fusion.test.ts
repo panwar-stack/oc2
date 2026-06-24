@@ -169,33 +169,23 @@ describe("local_fusion tool", () => {
     },
   )
 
-  it.instance("exposes separate JSON schema modes for named and inline config", () =>
+  it.instance("exposes a top-level object JSON schema", () =>
     Effect.gen(function* () {
       const info = yield* LocalFusionTool
       const tool = yield* Tool.init(info)
 
       expect(tool.jsonSchema).toMatchObject({
-        anyOf: [
-          {
-            required: ["prompt", "config"],
-            properties: {
-              config: { type: "string" },
-              branches: { not: {} },
-              judge: { not: {} },
-              synthesizer: { not: {} },
-            },
-          },
-          {
-            required: ["prompt", "branches", "judge", "synthesizer"],
-            properties: {
-              config: { not: {} },
-              branches: { type: "array" },
-              judge: { type: "object" },
-              synthesizer: { type: "object" },
-            },
-          },
-        ],
+        type: "object",
+        required: ["prompt"],
+        properties: {
+          prompt: { type: "string" },
+          config: { type: "string" },
+          branches: { type: "array" },
+          judge: { type: "object" },
+          synthesizer: { type: "object" },
+        },
       })
+      expect(tool.jsonSchema).not.toHaveProperty("anyOf")
     }),
   )
 

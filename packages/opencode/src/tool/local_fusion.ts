@@ -8,24 +8,6 @@ import { Team } from "@/team/team"
 import type { TaskPromptOps } from "./task"
 import { ToolJsonSchema } from "./json-schema"
 
-const ConfigParameters = Schema.Struct({
-  prompt: Schema.String.annotate({ description: "The prompt to fan out to configured local compound branches" }),
-  config: Schema.String.annotate({ description: "Named local compound config to load" }),
-  branches: Schema.optionalKey(Schema.Never),
-  judge: Schema.optionalKey(Schema.Never),
-  synthesizer: Schema.optionalKey(Schema.Never),
-})
-
-const InlineParameters = Schema.Struct({
-  prompt: Schema.String.annotate({ description: "The prompt to fan out to configured local compound branches" }),
-  config: Schema.optionalKey(Schema.Never),
-  branches: Schema.Array(SessionCompoundConfig.Branch),
-  judge: SessionCompoundConfig.Judge,
-  synthesizer: SessionCompoundConfig.Synthesizer,
-})
-
-const InputSchema = Schema.Union([ConfigParameters, InlineParameters])
-
 export const Parameters = Schema.Struct({
   prompt: Schema.String.annotate({ description: "The prompt to fan out to configured local compound branches" }),
   config: Schema.optional(Schema.String).annotate({ description: "Named local compound config to load" }),
@@ -44,7 +26,7 @@ export const LocalFusionTool = Tool.define(
       description:
         "Run a local compound model orchestration: fan out one prompt to configured branches, judge their outputs, and synthesize one final answer.",
       parameters: Parameters,
-      jsonSchema: ToolJsonSchema.fromSchema(InputSchema),
+      jsonSchema: ToolJsonSchema.fromSchema(Parameters),
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx) =>
         Effect.gen(function* () {
           if (params.config && (params.branches || params.judge || params.synthesizer)) {
