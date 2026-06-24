@@ -24,17 +24,32 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
   judge: SessionCompoundJudge.Result
   promptOps: TaskPromptOps
   abort?: AbortSignal
+  mode?: "logu"
+  loguRunID?: string
 }) {
   const sessions = yield* Session.Service
   const model = SessionCompoundConfig.parseModel(input.synthesizer.model)
   const child = yield* sessions.create({
     parentID: input.sessionID,
-    title: "Compound synthesizer",
+    title: input.mode === "logu" ? "Logu synthesizer" : "Compound synthesizer",
     model: {
       id: model.modelID,
       providerID: model.providerID,
       ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
     },
+    ...(input.mode === "logu"
+      ? {
+          metadata: {
+            logu: {
+              stage: "synthesizer",
+              model: input.synthesizer.model,
+              ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
+              parentRunID: input.loguRunID ?? input.sessionID,
+              parentSessionID: input.sessionID,
+            },
+          },
+        }
+      : {}),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)

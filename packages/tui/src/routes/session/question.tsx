@@ -8,6 +8,8 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
+import { useSync } from "../../context/sync"
+import { loguPromptLabel } from "../../util/logu"
 
 const QUESTION_MODE = "question"
 
@@ -17,8 +19,10 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   const renderer = useRenderer()
   const tuiConfig = useTuiConfig()
   const modeStack = useOpencodeModeStack()
+  const sync = useSync()
 
   const questions = createMemo(() => props.request.questions)
+  const loguLabel = createMemo(() => loguPromptLabel(sync.data.session, props.request.sessionID))
   const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
   const tabs = createMemo(() => (single() ? 1 : questions().length + 1)) // questions + confirm tab (no confirm for single select)
   const [tabHover, setTabHover] = createSignal<number | "confirm" | null>(null)
@@ -293,6 +297,14 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
       customBorderChars={SplitBorder.customBorderChars}
     >
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+        <Show when={loguLabel()}>
+          {(label) => (
+            <box flexDirection="row" gap={1} paddingLeft={1}>
+              <text fg={theme.accent}>{"?"}</text>
+              <text fg={theme.textMuted}>{label()}</text>
+            </box>
+          )}
+        </Show>
         <Show when={!single()}>
           <box flexDirection="row" gap={1} paddingLeft={1}>
             <For each={questions()}>

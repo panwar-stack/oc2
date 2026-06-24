@@ -118,6 +118,8 @@ describe("session compound runner", () => {
       expect(prompts.map((prompt) => String(prompt.model?.modelID))).toEqual(["branch-a", "branch-b"])
       expect(prompts.map((prompt) => prompt.variant)).toEqual(["branch-fast", "branch-careful"])
       expect(children.map((child) => child.model?.variant)).toEqual(["branch-fast", "branch-careful"])
+      expect(children.map((child) => child.title)).toEqual(["Compound branch #1", "Compound branch #2"])
+      expect(children.map((child) => child.metadata?.logu)).toEqual([undefined, undefined])
       expect(prompts.map((prompt) => prompt.agent)).toEqual(["build", "build"])
     }),
   )
@@ -302,6 +304,14 @@ describe("session compound runner", () => {
         { permission: "team_spawn", pattern: "*", action: "deny" },
         { permission: "local_fusion", pattern: "*", action: "deny" },
       ])
+      expect(children[0]?.title).toBe("Logu branch #1")
+      expect(children[0]?.metadata?.logu).toMatchObject({
+        stage: "branch",
+        index: 0,
+        model: "test/branch",
+        parentRunID: parent.id,
+        parentSessionID: parent.id,
+      })
       expect(
         Permission.disabled(["task", "team_create", "team_spawn", "local_fusion"], [
           ...childPermission,

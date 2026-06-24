@@ -6,7 +6,7 @@ import type { ModelMessage } from "ai"
 import type { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import type { Provider } from "@/provider/provider"
-import { SessionID } from "@/session/schema"
+import { MessageID, SessionID } from "@/session/schema"
 import { SessionCompoundConfig } from "./compound/config"
 import { SessionCompound } from "./compound/runner"
 import type { TaskPromptOps } from "@/tool/task"
@@ -43,6 +43,7 @@ export const run = Effect.fn("SessionLogu.run")(function* (input: RunInput) {
     promptOps: input.promptOps,
     abort: input.abort,
     mode: "logu",
+    loguRunID: MessageID.ascending(),
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.gen(function* () {

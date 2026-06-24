@@ -193,6 +193,12 @@ describe("session logu", () => {
         expect(branchPrompt).toContain("Assistant:\nI will inspect.\nTool call read (call-1): {\"file\":\"a.ts\"}")
         expect(branchPrompt).toContain("Tool:\nTool result read (call-1): contents")
         expect(branchPrompt).toContain("User (latest request):\nLatest request\n[unsupported attachment: image/png]")
+        const children = yield* sessions.children(parent.id)
+        expect(children.map((child) => child.title)).toEqual(["Logu branch #1", "Logu judge", "Logu synthesizer"])
+        expect(children.map((child) => child.metadata?.logu?.stage)).toEqual(["branch", "judge", "synthesizer"])
+        expect(children.map((child) => child.metadata?.logu?.model)).toEqual(["test/branch", "test/judge", "test/synth"])
+        expect(new Set(children.map((child) => child.metadata?.logu?.parentRunID)).size).toBe(1)
+        expect(children.map((child) => child.metadata?.logu?.parentSessionID)).toEqual([parent.id, parent.id, parent.id])
       }),
     { config: loguConfig },
   )

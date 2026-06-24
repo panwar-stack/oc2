@@ -39,17 +39,32 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
   branches: BranchResult
   promptOps: TaskPromptOps
   abort?: AbortSignal
+  mode?: "logu"
+  loguRunID?: string
 }) {
   const sessions = yield* Session.Service
   const model = SessionCompoundConfig.parseModel(input.judge.model)
   const child = yield* sessions.create({
     parentID: input.sessionID,
-    title: "Compound judge",
+    title: input.mode === "logu" ? "Logu judge" : "Compound judge",
     model: {
       id: model.modelID,
       providerID: model.providerID,
       ...(input.judge.variant ? { variant: input.judge.variant } : {}),
     },
+    ...(input.mode === "logu"
+      ? {
+          metadata: {
+            logu: {
+              stage: "judge",
+              model: input.judge.model,
+              ...(input.judge.variant ? { variant: input.judge.variant } : {}),
+              parentRunID: input.loguRunID ?? input.sessionID,
+              parentSessionID: input.sessionID,
+            },
+          },
+        }
+      : {}),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)

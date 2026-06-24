@@ -16,6 +16,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { loguPromptLabel } from "../../util/logu"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -118,6 +119,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   const pathFormatter = usePathFormatter()
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
+  const loguLabel = createMemo(() => loguPromptLabel(sync.data.session, props.request.sessionID))
 
   const input = createMemo(() => {
     const tool = props.request.tool
@@ -416,6 +418,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 <text fg={theme.warning}>{"△"}</text>
                 <text fg={theme.text}>Permission required</text>
               </box>
+              <Show when={loguLabel()}>
+                {(label) => (
+                  <box paddingLeft={2} flexShrink={0}>
+                    <text fg={theme.textMuted}>{label()}</text>
+                  </box>
+                )}
+              </Show>
               <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
                 <text fg={theme.textMuted} flexShrink={0}>
                   {current.icon}
@@ -427,7 +436,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
           const body = (
             <Prompt
-              title="Permission required"
+              title={loguLabel() ? `Permission required - ${loguLabel()}` : "Permission required"}
               header={header()}
               body={current.body}
               options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
