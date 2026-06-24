@@ -19,6 +19,11 @@ function statusColor(status: { type: string } | undefined, theme: TuiPluginApi["
   return theme.textMuted
 }
 
+function isTimedOut(session: Session) {
+  const metadata = isRecord(session.metadata) ? session.metadata : undefined
+  return isRecord(metadata?.logu) && metadata.logu.timedOut === true
+}
+
 function loguIndex(session: Session) {
   const metadata = isRecord(session.metadata) ? session.metadata : undefined
   if (!isRecord(metadata?.logu) || typeof metadata.logu.index !== "number") return 0
@@ -67,12 +72,15 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
             {(child) => {
               const [hover, setHover] = createSignal(false)
               const status = createMemo(() => props.api.state.session.status(child.id))
+              const timedOut = createMemo(() => isTimedOut(child))
+              const color = createMemo(() => (timedOut() ? theme().warning : statusColor(status(), theme())))
               const childPending = createMemo(
                 () => props.api.state.session.permission(child.id).length + props.api.state.session.question(child.id).length,
               )
 
               return (
                 <box
+                  id={`logu-sidebar-row-${child.id}`}
                   flexDirection="row"
                   gap={1}
                   onMouseOver={() => setHover(true)}
@@ -83,17 +91,17 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   <Show
                     when={status()?.type === "busy"}
                     fallback={
-                      <text flexShrink={0} fg={statusColor(status(), theme())}>
+                      <text flexShrink={0} fg={color()}>
                         •
                       </text>
                     }
                   >
                     <box flexShrink={0}>
-                      <Spinner color={statusColor(status(), theme())} />
+                      <Spinner color={color()} />
                     </box>
                   </Show>
                   <text fg={theme().textMuted}>{loguChildLabel(child) ?? child.title}</text>
-                  <text fg={theme().textMuted}>({statusLabel(status())})</text>
+                  <text fg={timedOut() ? theme().warning : theme().textMuted}>({timedOut() ? "timed out" : statusLabel(status())})</text>
                   <Show when={childPending() > 0}>
                     <text fg={theme().warning}>[{childPending()} pending]</text>
                   </Show>
