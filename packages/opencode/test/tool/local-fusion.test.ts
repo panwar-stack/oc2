@@ -255,6 +255,24 @@ describe("local_fusion tool", () => {
     }),
   )
 
+  it.instance("rejects parent_without_teams for normal tool calls", () =>
+    Effect.gen(function* () {
+      const info = yield* LocalFusionTool
+      const tool = yield* Tool.init(info)
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const exit = yield* tool
+        .execute(
+          params({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
+          context(parent.id, { promptOps: promptOps() }),
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+    }),
+  )
+
   it.instance("rejects active team sessions", () =>
     Effect.gen(function* () {
       const info = yield* LocalFusionTool

@@ -42,6 +42,7 @@ export const run = Effect.fn("SessionLogu.run")(function* (input: RunInput) {
     agent: input.agent.name,
     promptOps: input.promptOps,
     abort: input.abort,
+    mode: "logu",
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.gen(function* () {

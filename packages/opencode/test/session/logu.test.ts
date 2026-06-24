@@ -198,6 +198,44 @@ describe("session logu", () => {
   )
 
   it.instance(
+    "allows task delegation while disabling team and local fusion tools",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "parent", agent: "build" })
+        const prompts: SessionPrompt.PromptInput[] = []
+        const result = yield* SessionLogu.run({
+          sessionID: parent.id,
+          model: loguModel(),
+          agent,
+          system: [],
+          messages: [{ role: "user", content: "Use a subagent if useful" }],
+          abort: new AbortController().signal,
+          promptOps: promptOps({ onPrompt: (input) => prompts.push(input) }),
+        })
+
+        expect(result.output).toBe("final answer")
+        expect(prompts[0]?.tools).toEqual({
+          task: true,
+          team_create: false,
+          team_spawn: false,
+          local_fusion: false,
+        })
+      }),
+    {
+      config: {
+        local_fusion: {
+          logu: {
+            branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }],
+            judge: { model: "test/judge" },
+            synthesizer: { model: "test/synth" },
+          },
+        },
+      },
+    },
+  )
+
+  it.instance(
     "rejects recursive logu model references before creating child sessions",
     () =>
       Effect.gen(function* () {

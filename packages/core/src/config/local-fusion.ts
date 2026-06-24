@@ -5,7 +5,7 @@ import { PositiveInt } from "../schema"
 
 const Model = Schema.String.check(Schema.isPattern(/^[^/]+\/.+$/))
 
-export const ToolPolicy = Schema.Literals(["readonly", "none"])
+export const ToolPolicy = Schema.Literals(["readonly", "none", "parent_without_teams"])
 export type ToolPolicy = typeof ToolPolicy.Type
 
 export const Branch = Schema.Struct({

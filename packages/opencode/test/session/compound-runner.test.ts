@@ -1,8 +1,9 @@
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
-import { Deferred, Effect, Fiber, Layer, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Permission } from "@/permission"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { SessionCompoundConfig } from "../../src/session/compound/config"
@@ -257,6 +258,80 @@ describe("session compound runner", () => {
         lsp: true,
       })
       expect(prompts[1]?.tools).toEqual({ "*": false })
+    }),
+  )
+
+  it.instance("rejects parent_without_teams outside logu mode", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const exit = yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
+        promptOps: stubOps(),
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  )
+
+  it.instance("delegates parent tools without team tools in logu mode", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const prompts: SessionPrompt.PromptInput[] = []
+      yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
+        promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
+        mode: "logu",
+      })
+      const children = yield* sessions.children(parent.id)
+      const childPermission = children[0]?.permission ?? []
+
+      expect(prompts[0]?.tools).toEqual({
+        task: true,
+        team_create: false,
+        team_spawn: false,
+        local_fusion: false,
+      })
+      expect(childPermission).toEqual([
+        { permission: "team_create", pattern: "*", action: "deny" },
+        { permission: "team_spawn", pattern: "*", action: "deny" },
+        { permission: "local_fusion", pattern: "*", action: "deny" },
+      ])
+      expect(
+        Permission.disabled(["task", "team_create", "team_spawn", "local_fusion"], [
+          ...childPermission,
+          { permission: "task", pattern: "*", action: "allow" },
+        ]),
+      ).toEqual(new Set(["team_create", "team_spawn", "local_fusion"]))
+    }),
+  )
+
+  it.instance("does not re-enable denied task for logu delegation", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({
+        title: "parent",
+        permission: [{ permission: "task", action: "deny", pattern: "*" }],
+      })
+      const prompts: SessionPrompt.PromptInput[] = []
+      yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
+        promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
+        mode: "logu",
+      })
+
+      expect(prompts[0]?.tools).toEqual({
+        team_create: false,
+        team_spawn: false,
+        local_fusion: false,
+      })
     }),
   )
 })
