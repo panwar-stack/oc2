@@ -273,6 +273,34 @@ describe("local_fusion tool", () => {
     }),
   )
 
+  it.instance(
+    "rejects parent_without_teams from named configs outside logu mode",
+    () =>
+      Effect.gen(function* () {
+        const info = yield* LocalFusionTool
+        const tool = yield* Tool.init(info)
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "parent" })
+        const exit = yield* tool
+          .execute({ prompt: "Compare answers", config: "delegated-panel" }, context(parent.id, { promptOps: promptOps() }))
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+      }),
+    {
+      config: {
+        local_fusion: {
+          "delegated-panel": {
+            branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }],
+            judge: { model: "test/judge" },
+            synthesizer: { model: "test/synth" },
+          },
+        },
+      },
+    },
+  )
+
   it.instance("rejects active team sessions", () =>
     Effect.gen(function* () {
       const info = yield* LocalFusionTool
