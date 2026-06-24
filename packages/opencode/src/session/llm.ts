@@ -6,7 +6,7 @@ import { Log } from "@opencode-ai/core/util/log"
 import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
-import type { LLMEvent } from "@opencode-ai/llm"
+import { LLMEvent, type LLMEvent as LLMEventType } from "@opencode-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
 import type { LLMClientService } from "@opencode-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
@@ -28,6 +28,9 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { SessionLogu } from "./logu"
+import { Session } from "./session"
+import type { TaskPromptOps } from "@/tool/task"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -43,6 +46,7 @@ export type StreamInput = {
   messages: ModelMessage[]
   small?: boolean
   tools: Record<string, Tool>
+  promptOps?: TaskPromptOps
   retries?: number
   toolChoice?: "auto" | "required" | "none"
 }
@@ -52,7 +56,7 @@ export type StreamRequest = StreamInput & {
 }
 
 export interface Interface {
-  readonly stream: (input: StreamInput) => Stream.Stream<LLMEvent, unknown>
+  readonly stream: (input: StreamInput) => Stream.Stream<LLMEventType, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/LLM") {}
@@ -95,6 +99,26 @@ const live: Layer.Layer<
         modelID: input.model.id,
         providerID: input.model.providerID,
       })
+
+      if (String(input.model.providerID) === "logu" && String(input.model.id) === "logu") {
+        if (!input.promptOps) throw new Error("logu requires promptOps")
+        const sessions = yield* Effect.serviceOption(Session.Service)
+        if (Option.isNone(sessions)) throw new Error("logu requires Session service")
+        const result = yield* SessionLogu.run({
+          sessionID: SessionID.make(input.sessionID),
+          model: input.model,
+          agent: input.agent,
+          system: input.system,
+          messages: input.messages,
+          permission: input.permission,
+          abort: input.abort,
+          promptOps: input.promptOps,
+        }).pipe(Effect.provideService(Config.Service, config), Effect.provideService(Session.Service, sessions.value))
+        return {
+          type: "logu" as const,
+          stream: Stream.fromIterable(loguEvents(result.output)),
+        }
+      }
 
       const [language, cfg, item, info] = yield* Effect.all(
         [
@@ -363,7 +387,7 @@ const live: Layer.Layer<
 
             const result = yield* run({ ...input, abort: ctrl.signal })
 
-            if (result.type === "native") return result.stream
+            if (result.type === "native" || result.type === "logu") return result.stream
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.
@@ -398,5 +422,17 @@ export const defaultLayer = Layer.suspend(() =>
 )
 
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
+
+function loguEvents(output: string) {
+  const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+  return [
+    LLMEvent.stepStart({ index: 0 }),
+    LLMEvent.textStart({ id: "text-0" }),
+    LLMEvent.textDelta({ id: "text-0", text: output }),
+    LLMEvent.textEnd({ id: "text-0" }),
+    LLMEvent.stepFinish({ index: 0, reason: "stop", usage }),
+    LLMEvent.finish({ reason: "stop", usage }),
+  ]
+}
 
 export * as LLM from "./llm"
