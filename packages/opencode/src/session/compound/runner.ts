@@ -211,6 +211,19 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
         }
 
         yield* cancel
+        if (input.mode === "logu") {
+          yield* sessions.setMetadata({
+            sessionID: child.id,
+            metadata: {
+              ...child.metadata,
+              logu: {
+                ...child.metadata?.logu,
+                timedOut: true,
+                timeoutMS: timeout,
+              },
+            },
+          })
+        }
         return {
           type: "failure" as const,
           value: {

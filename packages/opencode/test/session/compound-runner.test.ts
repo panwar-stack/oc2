@@ -170,10 +170,16 @@ describe("session compound runner", () => {
             return Effect.succeed(reply(input, "ok"))
           },
         },
+        mode: "logu",
       })
+      const children = yield* sessions.children(parent.id)
+      const failed = children.find((child) => String(child.model?.id) === "branch-b")
 
       expect(result.successes).toHaveLength(1)
       expect(result.failures).toMatchObject([{ index: 1, model: "test/branch-b", reason: "branch failed" }])
+      expect(Object.hasOwn(result.failures[0] ?? {}, "timedOut")).toBe(false)
+      expect(failed?.metadata?.logu?.timedOut).toBeUndefined()
+      expect(failed?.metadata?.logu?.timeoutMS).toBeUndefined()
     }),
   )
 
@@ -209,10 +215,21 @@ describe("session compound runner", () => {
           ...stubOps({ onCancel: (sessionID) => cancelled.push(sessionID) }),
           prompt: () => Effect.never,
         },
+        mode: "logu",
       })
+      const children = yield* sessions.children(parent.id)
 
       expect(result.successes).toEqual([])
       expect(result.failures).toMatchObject([{ index: 0, model: "test/slow", timedOut: true }])
+      expect(children[0]?.metadata?.logu).toMatchObject({
+        stage: "branch",
+        index: 0,
+        model: "test/slow",
+        parentRunID: parent.id,
+        parentSessionID: parent.id,
+        timedOut: true,
+        timeoutMS: 1,
+      })
       expect(cancelled).toHaveLength(1)
     }),
   )
