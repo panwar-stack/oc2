@@ -8,7 +8,8 @@ import type { Tool } from "@/tool/tool"
 import { assertExternalDirectoryEffect } from "../../src/tool/external-directory"
 import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
-import type { Permission } from "../../src/permission"
+import { Permission } from "../../src/permission"
+import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Session } from "@/session/session"
 import { testEffect } from "../lib/effect"
@@ -40,7 +41,67 @@ function makeCtx() {
   return { requests, ctx }
 }
 
+function scratchRules(root: string, tempDir: string): PermissionV1.Ruleset {
+  return SessionCompoundToolPolicy.resolveChildPermission([], "all", "logu", {
+    role: { type: "judge", tempDir },
+    root,
+  })
+}
+
+function evaluatingCtx(ruleset: PermissionV1.Ruleset): Tool.Context {
+  return {
+    ...baseCtx,
+    ask: (request) => {
+      const denied = request.patterns.find(
+        (pattern) => Permission.evaluate(request.permission, pattern, ruleset).action !== "allow",
+      )
+      if (denied) return Effect.die(new PermissionV1.DeniedError({ ruleset }))
+      return Effect.void
+    },
+  }
+}
+
 describe("tool.assertExternalDirectory", () => {
+  it.live("allows only the local fusion scratch external directory", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const tempDir = yield* tmpdirScoped()
+      const ruleset = scratchRules(primary, tempDir)
+
+      yield* provideInstance(primary)(
+        assertExternalDirectoryEffect(evaluatingCtx(ruleset), path.join(tempDir, "scratch.txt")),
+      )
+
+      const outside = yield* provideInstance(primary)(
+        assertExternalDirectoryEffect(evaluatingCtx(ruleset), path.join(path.dirname(tempDir), "outside", "scratch.txt")).pipe(
+          Effect.exit,
+        ),
+      )
+      expect(outside._tag).toBe("Failure")
+    }),
+  )
+
+  it.live("does not disable edit tools when broad deny has a temp-specific allow", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const tempDir = yield* tmpdirScoped()
+
+      expect(Permission.disabled(["write", "edit", "apply_patch", "team_create"], scratchRules(primary, tempDir))).toEqual(
+        new Set(["team_create"]),
+      )
+
+      expect(
+        Permission.disabled(
+          ["write", "edit", "apply_patch", "local_fusion"],
+          SessionCompoundToolPolicy.resolveChildPermission([], "parent_without_teams", "logu", {
+            role: { type: "branch", index: 0, tempDir },
+            root: primary,
+          }),
+        ),
+      ).toEqual(new Set(["local_fusion"]))
+    }),
+  )
+
   it.live("no-ops for empty target", () =>
     Effect.gen(function* () {
       const { requests, ctx } = makeCtx()

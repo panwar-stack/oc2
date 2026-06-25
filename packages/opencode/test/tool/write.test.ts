@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Effect, Layer } from "effect"
 import path from "path"
 import fs from "fs/promises"
@@ -12,6 +13,8 @@ import { Tool } from "@/tool/tool"
 import { Agent } from "../../src/agent/agent"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Session } from "@/session/session"
+import { Permission } from "@/permission"
+import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -58,8 +61,47 @@ const run = Effect.fn("WriteToolTest.run")(function* (
   return yield* tool.execute(args, next)
 })
 
+function scratchRules(root: string, tempDir: string): PermissionV1.Ruleset {
+  return SessionCompoundToolPolicy.resolveChildPermission([], "all", "logu", {
+    role: { type: "branch", index: 0, tempDir },
+    root,
+  })
+}
+
+function permissionCtx(ruleset: PermissionV1.Ruleset): Tool.Context {
+  return {
+    ...ctx,
+    ask: (request) => {
+      const denied = request.patterns.find(
+        (pattern) => Permission.evaluate(request.permission, pattern, ruleset).action !== "allow",
+      )
+      if (denied) return Effect.die(new PermissionV1.DeniedError({ ruleset }))
+      return Effect.void
+    },
+  }
+}
+
 describe("tool.write", () => {
   describe("new file creation", () => {
+    it.live("allows local fusion scratch writes and denies workspace writes", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const tempDir = yield* tmpdirScoped()
+        const ruleset = scratchRules(primary, tempDir)
+        const workspaceFile = path.join(primary, "workspace.txt")
+        const scratchFile = path.join(tempDir, "scratch.txt")
+
+        const denied = yield* provideInstance(primary)(
+          run({ filePath: workspaceFile, content: "workspace" }, permissionCtx(ruleset)).pipe(Effect.exit),
+        )
+        expect(denied._tag).toBe("Failure")
+        expect((yield* Effect.promise(() => fs.stat(workspaceFile)).pipe(Effect.exit))._tag).toBe("Failure")
+
+        yield* provideInstance(primary)(run({ filePath: scratchFile, content: "scratch" }, permissionCtx(ruleset)))
+        expect(yield* Effect.promise(() => fs.readFile(scratchFile, "utf-8"))).toBe("scratch")
+      }),
+    )
+
     it.live("writes absolute paths inside a registered secondary root", () =>
       Effect.gen(function* () {
         const primary = yield* tmpdirScoped({ git: true })

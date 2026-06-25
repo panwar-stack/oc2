@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Result, Schema } from "effect"
 import { SessionCompoundConfig } from "../../src/session/compound/config"
+import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 
 const validConfig = {
   branches: [{ model: "anthropic/claude-sonnet-4" }, { model: "openai/gpt-5", toolPolicy: "none" }],
@@ -62,6 +63,21 @@ describe("compound config", () => {
       expect(accepts({ ...validConfig, judge: { model: "openai/gpt-5-mini", toolPolicy } })).toBe(true)
       expect(accepts({ ...validConfig, synthesizer: { model: "anthropic/claude-sonnet-4", toolPolicy } })).toBe(true)
     }
+  })
+
+  test("does not expose apply_patch to branch and judge scratch roles", () => {
+    const branchTools = SessionCompoundToolPolicy.resolvePromptTools("all", "logu", [], {
+      type: "branch",
+      index: 0,
+      tempDir: "/tmp/branch",
+    })
+    const judgeTools = SessionCompoundToolPolicy.resolvePromptTools("parent_without_teams", "logu", [], {
+      type: "judge",
+      tempDir: "/tmp/judge",
+    })
+
+    expect(branchTools).toMatchObject({ write: true, edit: true, apply_patch: false })
+    expect(judgeTools).toMatchObject({ write: true, edit: true, apply_patch: false })
   })
 
   test("rejects invalid model strings", () => {

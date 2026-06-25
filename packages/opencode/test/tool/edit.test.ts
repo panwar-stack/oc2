@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import path from "path"
 import fs from "fs/promises"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
@@ -13,6 +14,8 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Session } from "@/session/session"
+import { Permission } from "@/permission"
+import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
@@ -59,6 +62,26 @@ const run = Effect.fn("EditToolTest.run")(function* (
   return yield* tool.execute(args, next)
 })
 
+function scratchRules(root: string, tempDir: string): PermissionV1.Ruleset {
+  return SessionCompoundToolPolicy.resolveChildPermission([], "parent_without_teams", "logu", {
+    role: { type: "judge", tempDir },
+    root,
+  })
+}
+
+function permissionCtx(ruleset: PermissionV1.Ruleset): Tool.Context {
+  return {
+    ...ctx,
+    ask: (request) => {
+      const denied = request.patterns.find(
+        (pattern) => Permission.evaluate(request.permission, pattern, ruleset).action !== "allow",
+      )
+      if (denied) return Effect.die(new PermissionV1.DeniedError({ ruleset }))
+      return Effect.void
+    },
+  }
+}
+
 const fail = Effect.fn("EditToolTest.fail")(function* (args: Tool.InferParameters<typeof EditTool>) {
   const exit = yield* run(args).pipe(Effect.exit)
   if (Exit.isFailure(exit)) {
@@ -99,6 +122,32 @@ const onceBus = Effect.fn("EditToolTest.onceBus")(function* (def: typeof Watcher
 })
 
 describe("tool.edit", () => {
+  it.live("allows local fusion scratch edits and denies workspace edits", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const tempDir = yield* tmpdirScoped()
+      const ruleset = scratchRules(primary, tempDir)
+      const workspaceFile = path.join(primary, "workspace.txt")
+      const scratchFile = path.join(tempDir, "scratch.txt")
+      yield* put(workspaceFile, "old workspace")
+      yield* put(scratchFile, "old scratch")
+
+      const denied = yield* provideInstance(primary)(
+        run(
+          { filePath: workspaceFile, oldString: "old", newString: "new" },
+          permissionCtx(ruleset),
+        ).pipe(Effect.exit),
+      )
+      expect(denied._tag).toBe("Failure")
+      expect(yield* load(workspaceFile)).toBe("old workspace")
+
+      yield* provideInstance(primary)(
+        run({ filePath: scratchFile, oldString: "old", newString: "new" }, permissionCtx(ruleset)),
+      )
+      expect(yield* load(scratchFile)).toBe("new scratch")
+    }),
+  )
+
   it.live("edits absolute paths inside a registered secondary root", () =>
     Effect.gen(function* () {
       const primary = yield* tmpdirScoped({ git: true })

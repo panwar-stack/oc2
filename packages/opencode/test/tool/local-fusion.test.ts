@@ -245,44 +245,55 @@ describe("local_fusion tool", () => {
     }),
   )
 
-  it.instance("rejects parent_without_teams for normal tool calls", () =>
+  it.instance("rejects logu-only tool policies for normal tool calls", () =>
     Effect.gen(function* () {
       const info = yield* LocalFusionTool
       const tool = yield* Tool.init(info)
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      const exit = yield* tool
-        .execute(
-          params({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
-          context(parent.id, { promptOps: promptOps() }),
-        )
-        .pipe(Effect.exit)
 
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+      for (const toolPolicy of ["parent_without_teams", "all"] as const) {
+        const exit = yield* tool
+          .execute(
+            params({ branches: [{ model: "test/branch", toolPolicy }] }),
+            context(parent.id, { promptOps: promptOps() }),
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+      }
     }),
   )
 
   it.instance(
-    "rejects parent_without_teams from named configs outside logu mode",
+    "rejects logu-only tool policies from named configs outside logu mode",
     () =>
       Effect.gen(function* () {
         const info = yield* LocalFusionTool
         const tool = yield* Tool.init(info)
         const sessions = yield* Session.Service
         const parent = yield* sessions.create({ title: "parent" })
-        const exit = yield* tool
-          .execute({ prompt: "Compare answers", config: "delegated-panel" }, context(parent.id, { promptOps: promptOps() }))
-          .pipe(Effect.exit)
 
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+        for (const config of ["delegated-panel", "all-panel"]) {
+          const exit = yield* tool
+            .execute({ prompt: "Compare answers", config }, context(parent.id, { promptOps: promptOps() }))
+            .pipe(Effect.exit)
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+        }
       }),
     {
       config: {
         local_fusion: {
           "delegated-panel": {
             branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }],
+            judge: { model: "test/judge" },
+            synthesizer: { model: "test/synth" },
+          },
+          "all-panel": {
+            branches: [{ model: "test/branch", toolPolicy: "all" }],
             judge: { model: "test/judge" },
             synthesizer: { model: "test/synth" },
           },
