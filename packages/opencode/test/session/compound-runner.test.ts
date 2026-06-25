@@ -448,11 +448,22 @@ describe("session compound runner", () => {
         lsp: true,
       })
       expect(prompts[1]?.tools).toEqual({ "*": false })
-      expect(prompts[2]?.tools).toEqual({})
+      expect(prompts[2]?.tools).toEqual({
+        "*": false,
+        read: true,
+        grep: true,
+        glob: true,
+        webfetch: true,
+        websearch: true,
+        lsp: true,
+        write: true,
+        edit: true,
+        apply_patch: false,
+      })
     }),
   )
 
-  it.instance("passes unrestricted tools for all child stages in logu mode", () =>
+  it.instance("uses scratch tools for branch and judge write-capable policies in logu mode", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
@@ -486,7 +497,33 @@ describe("session compound runner", () => {
       })
 
       expect(prompts.map((prompt) => String(prompt.model?.modelID))).toEqual(["branch", "judge", "synth"])
-      expect(prompts.map((prompt) => prompt.tools)).toEqual([{}, {}, {}])
+      expect(prompts.map((prompt) => prompt.tools)).toEqual([
+        {
+          "*": false,
+          read: true,
+          grep: true,
+          glob: true,
+          webfetch: true,
+          websearch: true,
+          lsp: true,
+          write: true,
+          edit: true,
+          apply_patch: false,
+        },
+        {
+          "*": false,
+          read: true,
+          grep: true,
+          glob: true,
+          webfetch: true,
+          websearch: true,
+          lsp: true,
+          write: true,
+          edit: true,
+          apply_patch: false,
+        },
+        {},
+      ])
     }),
   )
 
@@ -518,7 +555,7 @@ describe("session compound runner", () => {
     }),
   )
 
-  it.instance("delegates parent tools without team tools in logu mode", () =>
+  it.instance("uses scratch permissions for branch parent delegation in logu mode", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
@@ -533,17 +570,20 @@ describe("session compound runner", () => {
       const children = yield* sessions.children(parent.id)
       const childPermission = children[0]?.permission ?? []
 
-      expect(prompts[0]?.tools).toEqual({
-        task: true,
-        team_create: false,
-        team_spawn: false,
-        local_fusion: false,
-      })
-      expect(childPermission).toEqual([
-        { permission: "team_create", pattern: "*", action: "deny" },
-        { permission: "team_spawn", pattern: "*", action: "deny" },
-        { permission: "local_fusion", pattern: "*", action: "deny" },
-      ])
+      expect(prompts[0]?.tools).toMatchObject({ write: true, edit: true, apply_patch: false })
+      expect(childPermission).toContainEqual({ permission: "edit", pattern: "*", action: "deny" })
+      expect(childPermission).toContainEqual({ permission: "team_create", pattern: "*", action: "deny" })
+      expect(childPermission).toContainEqual({ permission: "team_spawn", pattern: "*", action: "deny" })
+      expect(childPermission).toContainEqual({ permission: "local_fusion", pattern: "*", action: "deny" })
+      expect(childPermission).not.toContainEqual({ permission: "edit", pattern: "*", action: "allow" })
+      const tempEditAllow = childPermission.find(
+        (rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow",
+      )
+      expect(tempEditAllow?.pattern).toContain("opencode-local-fusion")
+      expect(Permission.evaluate("edit", "package.json", childPermission).action).toBe("deny")
+      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
+        "allow",
+      )
       expect(children[0]?.title).toBe("Logu branch #1")
       expect(children[0]?.metadata?.logu).toMatchObject({
         stage: "branch",
@@ -553,9 +593,8 @@ describe("session compound runner", () => {
         parentSessionID: parent.id,
       })
       expect(
-        Permission.disabled(["task", "team_create", "team_spawn", "local_fusion"], [
+        Permission.disabled(["write", "edit", "apply_patch", "team_create", "team_spawn", "local_fusion"], [
           ...childPermission,
-          { permission: "task", pattern: "*", action: "allow" },
         ]),
       ).toEqual(new Set(["team_create", "team_spawn", "local_fusion"]))
     }),
@@ -577,11 +616,7 @@ describe("session compound runner", () => {
         mode: "logu",
       })
 
-      expect(prompts[0]?.tools).toEqual({
-        team_create: false,
-        team_spawn: false,
-        local_fusion: false,
-      })
+      expect(prompts[0]?.tools).toMatchObject({ write: true, edit: true, apply_patch: false })
     }),
   )
 })

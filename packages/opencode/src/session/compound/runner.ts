@@ -59,7 +59,8 @@ export const run = Effect.fn("SessionCompound.run")(function* (input: {
 }) {
   SessionCompoundToolPolicy.validate(input)
   yield* interruptIfAborted(input.abort)
-  const branches = yield* runBranches(input)
+  const compoundRunID = input.loguRunID ?? crypto.randomUUID()
+  const branches = yield* runBranches({ ...input, compoundRunID })
   yield* interruptIfAborted(input.abort)
   if (branches.successes.length === 0) {
     return yield* Effect.fail(
@@ -67,7 +68,7 @@ export const run = Effect.fn("SessionCompound.run")(function* (input: {
     )
   }
 
-  const judge = yield* SessionCompoundJudge.run({ ...input, branches, judge: input.config.judge })
+  const judge = yield* SessionCompoundJudge.run({ ...input, branches, judge: input.config.judge, compoundRunID })
   yield* interruptIfAborted(input.abort)
   const synthesis = yield* SessionCompoundSynthesizer.run({
     ...input,
@@ -100,12 +101,14 @@ export const runBranches = Effect.fn("SessionCompound.runBranches")(function* (i
   abort?: AbortSignal
   mode?: "logu"
   loguRunID?: string
+  compoundRunID?: string
 }) {
   SessionCompoundToolPolicy.validate(input)
   yield* interruptIfAborted(input.abort)
+  const compoundRunID = input.compoundRunID ?? input.loguRunID ?? crypto.randomUUID()
   const results = yield* Effect.forEach(
     input.config.branches,
-    (branch, index) => runBranch({ ...input, branch, index }),
+    (branch, index) => runBranch({ ...input, branch, index, compoundRunID }),
     { concurrency: "unbounded" },
   )
   yield* interruptIfAborted(input.abort)
@@ -127,11 +130,21 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
   abort?: AbortSignal
   mode?: "logu"
   loguRunID?: string
+  compoundRunID: string
 }) {
   const sessions = yield* Session.Service
   const parent = yield* sessions.get(input.sessionID)
   const model = SessionCompoundConfig.parseModel(input.branch.model)
   const agent = input.branch.agent ?? parent.agent ?? input.agent
+  const role = {
+    type: "branch" as const,
+    index: input.index,
+    tempDir: SessionCompoundToolPolicy.tempDirectory({
+      parentSessionID: input.sessionID,
+      compoundRunID: input.compoundRunID,
+      role: { type: "branch", index: input.index },
+    }),
+  }
   const child = yield* sessions.create({
     parentID: input.sessionID,
     title: input.mode === "logu" ? `Logu branch #${input.index + 1}` : `Compound branch #${input.index + 1}`,
@@ -155,7 +168,10 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
           },
         }
       : {}),
-    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], input.branch.toolPolicy, input.mode),
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], input.branch.toolPolicy, input.mode, {
+      role,
+      root: parent.directory,
+    }),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -170,8 +186,8 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
       Effect.gen(function* () {
         const timeout = input.branch.timeout ?? input.config.limits.timeout
         const result = yield* (timeout
-          ? promptBranch(input, child.id, child.permission ?? [], model, agent).pipe(Effect.timeoutOption(timeout))
-          : promptBranch(input, child.id, child.permission ?? [], model, agent).pipe(Effect.map(Option.some)))
+          ? promptBranch(input, child.id, child.permission ?? [], model, agent, role).pipe(Effect.timeoutOption(timeout))
+          : promptBranch(input, child.id, child.permission ?? [], model, agent, role).pipe(Effect.map(Option.some)))
         if (result._tag === "Some") {
           if (result.value.info.role === "assistant" && result.value.info.error) {
             return {
@@ -261,6 +277,7 @@ function promptBranch(
   permission: PermissionV1.Ruleset,
   model: ReturnType<typeof SessionCompoundConfig.parseModel>,
   agent: string | undefined,
+  role: SessionCompoundToolPolicy.CompoundRole,
 ) {
   return Effect.gen(function* () {
     const parts = yield* input.promptOps.resolvePromptParts(branchPrompt(input.prompt, input.branch.prompt))
@@ -274,7 +291,7 @@ function promptBranch(
       },
       ...(input.branch.variant ? { variant: input.branch.variant } : {}),
       agent,
-      tools: SessionCompoundToolPolicy.resolvePromptTools(input.branch.toolPolicy, input.mode, permission),
+      tools: SessionCompoundToolPolicy.resolvePromptTools(input.branch.toolPolicy, input.mode, permission, role),
       parts,
     })
     yield* interruptIfAborted(input.abort)

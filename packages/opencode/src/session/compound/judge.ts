@@ -41,12 +41,21 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
   abort?: AbortSignal
   mode?: "logu"
   loguRunID?: string
+  compoundRunID?: string
 }) {
   yield* interruptIfAborted(input.abort)
   const sessions = yield* Session.Service
   const parent = yield* sessions.get(input.sessionID)
   const model = SessionCompoundConfig.parseModel(input.judge.model)
   const toolPolicy = input.judge.toolPolicy ?? "none"
+  const role = {
+    type: "judge" as const,
+    tempDir: SessionCompoundToolPolicy.tempDirectory({
+      parentSessionID: input.sessionID,
+      compoundRunID: input.compoundRunID ?? input.loguRunID ?? crypto.randomUUID(),
+      role: { type: "judge" },
+    }),
+  }
   const child = yield* sessions.create({
     parentID: input.sessionID,
     title: input.mode === "logu" ? "Logu judge" : "Compound judge",
@@ -68,7 +77,10 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
           },
         }
       : {}),
-    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy, input.mode),
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy, input.mode, {
+      role,
+      root: parent.directory,
+    }),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -88,7 +100,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
           sessionID: child.id,
           model: { providerID: model.providerID, modelID: model.modelID },
           ...(input.judge.variant ? { variant: input.judge.variant } : {}),
-          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, input.mode, child.permission ?? []),
+          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, input.mode, child.permission ?? [], role),
           parts,
         })
         yield* interruptIfAborted(input.abort)

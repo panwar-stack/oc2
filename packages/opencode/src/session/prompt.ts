@@ -1210,7 +1210,9 @@ export const layer = Layer.effect(
       yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []
+      const pathScopedEdit = hasPathScopedEditPermission(session.permission ?? [])
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+        if (pathScopedEdit && (t === "*" || (enabled && t === "edit"))) continue
         permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
       }
       if (permissions.length > 0) {
@@ -1224,6 +1226,13 @@ export const layer = Layer.effect(
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
     })
+
+    function hasPathScopedEditPermission(permission: PermissionV1.Ruleset) {
+      return (
+        permission.some((rule) => rule.permission === "edit" && rule.pattern === "*" && rule.action === "deny") &&
+        permission.some((rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow")
+      )
+    }
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
       const match = yield* sessions.findMessage(sessionID, (m) => m.info.role !== "user").pipe(Effect.orDie)
