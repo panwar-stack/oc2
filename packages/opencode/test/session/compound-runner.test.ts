@@ -121,6 +121,11 @@ describe("session compound runner", () => {
       expect(children.map((child) => child.title)).toEqual(["Compound branch #1", "Compound branch #2"])
       expect(children.map((child) => child.metadata?.logu)).toEqual([undefined, undefined])
       expect(prompts.map((prompt) => prompt.agent)).toEqual(["build", "build"])
+      const firstPromptText = prompts[0]?.parts.find((part) => part.type === "text")?.text
+      expect(firstPromptText).toContain("Use tools to research and propose changes")
+      expect(firstPromptText).toContain("Do not edit workspace files")
+      expect(firstPromptText).toContain("If scratch files are needed, write only under")
+      expect(firstPromptText).toContain("Return recommended edits as text, file paths, and rationale")
     }),
   )
 

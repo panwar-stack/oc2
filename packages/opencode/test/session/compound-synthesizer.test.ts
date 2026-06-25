@@ -106,6 +106,8 @@ describe("compound synthesizer", () => {
     expect(prompt).toContain("failed")
     expect(prompt).toContain("shared point")
     expect(prompt).toContain("final answer")
+    expect(prompt).toContain("only stage that may make final workspace edits")
+    expect(prompt).toContain("independently verify before editing")
   })
 
   it.instance("executes with tools disabled and returns final text", () =>

@@ -83,9 +83,16 @@ function stubOps(input: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
 
 describe("compound judge", () => {
   test("builds an analysis-only prompt from branches and failures", () => {
-    const prompt = SessionCompoundJudge.buildPrompt({ judge: { model: "test/judge" }, branches })
+    const prompt = SessionCompoundJudge.buildPrompt({
+      judge: { model: "test/judge" },
+      branches,
+      tempDir: "/tmp/opencode-local-fusion/test/judge",
+    })
 
+    expect(prompt).toContain("structured guidance for the synthesizer")
     expect(prompt).toContain("structured analysis only")
+    expect(prompt).toContain("Do not edit workspace files")
+    expect(prompt).toContain("/tmp/opencode-local-fusion/test/judge")
     expect(prompt).toContain("Branch A output")
     expect(prompt).toContain("timed out")
     expect(prompt).not.toContain("Original request")

@@ -235,6 +235,8 @@ Load a [skill](/docs/skills) (a `SKILL.md` file) and return its content in the c
 
 Run local compound model orchestration from inside the current session. The tool fans one prompt out to multiple configured branch models, judges the branch outputs, and synthesizes one final answer.
 
+Branches and the judge act as research stages; the synthesizer produces the final answer and is the only stage intended to apply final workspace edits.
+
 ```json title="opencode.json" {4}
 {
   "$schema": "https://opencode.ai/config.json",
@@ -337,7 +339,8 @@ Safety defaults:
 
 - Branches default to `"readonly"`, which allows read/search tools and denies all other tools.
 - Branches with `"none"` receive no tools.
-- Judge and synthesizer receive no tools.
+- Judge and synthesizer receive no tools by default.
+- In Logu write-capable branch or judge stages, file writes are restricted to a per-stage temporary scratch directory; workspace edits should be performed only by the synthesizer.
 - Branch internals are not streamed into the parent response; the tool returns one synthesized final answer plus compact metadata.
 
 Failure behavior:
@@ -350,7 +353,7 @@ Failure behavior:
 - Branch timeouts are recorded as branch failures, and the run continues if another branch succeeds.
 
 :::caution
-`local_fusion` does not provide `model: "compound/..."` routing, branch trace UI, crash recovery records, or mutating branch tools in this version.
+`local_fusion` does not provide `model: "compound/..."` routing, branch trace UI, crash recovery records, or branch/judge workspace mutation in this version.
 :::
 
 ---

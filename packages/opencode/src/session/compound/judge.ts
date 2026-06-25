@@ -93,7 +93,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
     Effect.sync(() => input.abort?.addEventListener("abort", onAbort)),
     () =>
       Effect.gen(function* () {
-        const parts = yield* input.promptOps.resolvePromptParts(buildPrompt(input))
+        const parts = yield* input.promptOps.resolvePromptParts(buildPrompt({ ...input, tempDir: role.tempDir }))
         yield* interruptIfAborted(input.abort)
         const result = yield* input.promptOps.prompt({
           messageID: MessageID.ascending(),
@@ -122,9 +122,12 @@ function interruptIfAborted(signal?: AbortSignal) {
   return Effect.void
 }
 
-export function buildPrompt(input: { judge: SessionCompoundConfig.Judge; branches: BranchResult }) {
+export function buildPrompt(input: { judge: SessionCompoundConfig.Judge; branches: BranchResult; tempDir: string }) {
   return [
-    "You are judging multiple branch responses. Produce structured analysis only, not a final answer.",
+    "Evaluate branch outputs and produce structured guidance for the synthesizer.",
+    "Produce structured analysis only, not a final answer.",
+    "Do not edit workspace files.",
+    `If scratch files are needed, write only under ${input.tempDir}.`,
     "Return only JSON matching this shape: { consensus: string[], contradictions: string[], uniqueInsights: { branch: string, insight: string }[], blindSpots: string[], failures: { branch: string, reason: string }[], confidence: \"low\" | \"medium\" | \"high\" }.",
     ...(input.judge.prompt ? ["", "Judge guidance:", input.judge.prompt] : []),
     "",

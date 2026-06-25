@@ -277,10 +277,10 @@ function promptBranch(
   permission: PermissionV1.Ruleset,
   model: ReturnType<typeof SessionCompoundConfig.parseModel>,
   agent: string | undefined,
-  role: SessionCompoundToolPolicy.CompoundRole,
+  role: Extract<SessionCompoundToolPolicy.CompoundRole, { type: "branch" }>,
 ) {
   return Effect.gen(function* () {
-    const parts = yield* input.promptOps.resolvePromptParts(branchPrompt(input.prompt, input.branch.prompt))
+    const parts = yield* input.promptOps.resolvePromptParts(branchPrompt(input.prompt, input.branch.prompt, role.tempDir))
     yield* interruptIfAborted(input.abort)
     const result = yield* input.promptOps.prompt({
       messageID: MessageID.ascending(),
@@ -304,9 +304,18 @@ function interruptIfAborted(signal?: AbortSignal) {
   return Effect.void
 }
 
-function branchPrompt(prompt: string, guidance?: string) {
-  if (!guidance) return prompt
-  return [prompt, "", "Branch guidance:", guidance].join("\n")
+function branchPrompt(prompt: string, guidance: string | undefined, tempDir: string) {
+  return [
+    "You are a local fusion branch.",
+    "Use tools to research and propose changes when tools are available.",
+    "Do not edit workspace files.",
+    `If scratch files are needed, write only under ${tempDir}.`,
+    "Return recommended edits as text, file paths, and rationale.",
+    "",
+    "Original request:",
+    prompt,
+    ...(guidance ? ["", "Branch guidance:", guidance] : []),
+  ].join("\n")
 }
 
 function outputText(result: SessionV1.WithParts) {

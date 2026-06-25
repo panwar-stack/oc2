@@ -5,6 +5,8 @@ description: Fan out one prompt to multiple local model branches, judge the resu
 
 Local Fusion is a compound model workflow for moments when one model answer is not enough. It sends the same prompt to several configured branches, asks a judge model to compare the branch outputs, then has a synthesizer model produce one final response.
 
+Branches and the judge are research stages. They should not edit workspace files; only the synthesizer should apply final workspace edits when its tools and permissions allow it.
+
 That makes it useful for code reviews, architecture tradeoffs, migration planning, or any task where you want independent perspectives before committing to an answer.
 
 ---
@@ -98,6 +100,8 @@ When you select `logu/logu`, OpenCode renders the current conversation into a tr
 
 The Logu lead only orchestrates the child stages. It does not use normal tool calling itself.
 
+For Logu branch and judge stages, write-capable policies are isolated to a per-stage temporary scratch directory. They can research and draft scratch files there, but they must not edit workspace files. The synthesizer is the only stage that should apply final workspace edits.
+
 Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
 
 ### Tool Policy
@@ -110,9 +114,9 @@ Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesize
 
 Use `"readonly"` when a child stage should inspect files and search the workspace without making changes. Use `"none"` when a child stage should answer from the prompt and conversation context only.
 
-`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu child stage use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
+`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu synthesizer use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. For Logu branches and judge, write-capable access is limited to a per-stage temporary scratch directory and workspace edits remain denied. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
 
-`"all"` is only supported by `local_fusion.logu`. It gives that Logu child stage the unrestricted tool map, still subject to parent and session permissions.
+`"all"` is only supported by `local_fusion.logu`. For the synthesizer, it gives the unrestricted tool map, still subject to parent and session permissions. For branches and judge, it exposes research tools plus scratch-file tools for the per-stage temporary directory; `apply_patch` and workspace edits remain unavailable.
 
 The `/local_fusion` command rejects `"parent_without_teams"` and `"all"`; use `"readonly"` or `"none"` for normal Local Fusion runs.
 

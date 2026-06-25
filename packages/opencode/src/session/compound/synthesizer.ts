@@ -102,6 +102,8 @@ export function buildPrompt(input: {
 }) {
   return [
     "Synthesize one final answer grounded in the original request, successful branch outputs, judge analysis, and explicit branch failures.",
+    "You are the only stage that may make final workspace edits when tools permit.",
+    "Use judge output and branch findings as inputs, but independently verify before editing.",
     ...(input.synthesizer.prompt ? ["", "Synthesizer guidance:", input.synthesizer.prompt] : []),
     "",
     "Original request:",
