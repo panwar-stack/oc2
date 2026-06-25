@@ -6,11 +6,10 @@ import { EffectBridge } from "@/effect/bridge"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { SessionCompoundConfig } from "./config"
+import { SessionCompoundToolPolicy } from "./tool-policy"
 import type { SessionCompoundJudge } from "./judge"
 import type { BranchResult } from "./runner"
 import type { TaskPromptOps } from "@/tool/task"
-
-const toolsDisabled = { "*": false }
 
 export type Result = {
   output: string
@@ -29,7 +28,9 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
 }) {
   yield* interruptIfAborted(input.abort)
   const sessions = yield* Session.Service
+  const parent = yield* sessions.get(input.sessionID)
   const model = SessionCompoundConfig.parseModel(input.synthesizer.model)
+  const toolPolicy = input.synthesizer.toolPolicy ?? "none"
   const child = yield* sessions.create({
     parentID: input.sessionID,
     title: input.mode === "logu" ? "Logu synthesizer" : "Compound synthesizer",
@@ -51,6 +52,7 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
           },
         }
       : {}),
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy, input.mode),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -70,7 +72,7 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
           sessionID: child.id,
           model: { providerID: model.providerID, modelID: model.modelID },
           ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
-          tools: toolsDisabled,
+          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, input.mode, child.permission ?? []),
           parts,
         })
         yield* interruptIfAborted(input.abort)

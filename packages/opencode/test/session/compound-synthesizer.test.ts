@@ -130,6 +130,36 @@ describe("compound synthesizer", () => {
     }),
   )
 
+  it.instance("disables team and local fusion tools for synthesizer parent delegation", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const prompts: SessionPrompt.PromptInput[] = []
+      yield* SessionCompoundSynthesizer.run({
+        sessionID: parent.id,
+        prompt: "Original request",
+        synthesizer: { model: "test/synth", toolPolicy: "parent_without_teams" },
+        branches,
+        judge,
+        promptOps: stubOps({ onPrompt: (input) => prompts.push(input), output: (input) => reply(input, "final answer") }),
+        mode: "logu",
+      })
+      const children = yield* sessions.children(parent.id)
+
+      expect(prompts[0]?.tools).toEqual({
+        task: true,
+        team_create: false,
+        team_spawn: false,
+        local_fusion: false,
+      })
+      expect(children[0]?.permission).toEqual([
+        { permission: "team_create", pattern: "*", action: "deny" },
+        { permission: "team_spawn", pattern: "*", action: "deny" },
+        { permission: "local_fusion", pattern: "*", action: "deny" },
+      ])
+    }),
+  )
+
   it.instance("fails full run when all branches fail", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

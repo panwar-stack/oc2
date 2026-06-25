@@ -6,6 +6,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { SessionCompoundConfig } from "./config"
+import { SessionCompoundToolPolicy } from "./tool-policy"
 import type { BranchResult } from "./runner"
 import type { TaskPromptOps } from "@/tool/task"
 
@@ -31,7 +32,6 @@ export type Result = Schema.Schema.Type<typeof Result>
 
 const decodeResult = Schema.decodeUnknownSync(Result)
 const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
-const toolsDisabled = { "*": false }
 
 export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
   sessionID: SessionID
@@ -44,7 +44,9 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
 }) {
   yield* interruptIfAborted(input.abort)
   const sessions = yield* Session.Service
+  const parent = yield* sessions.get(input.sessionID)
   const model = SessionCompoundConfig.parseModel(input.judge.model)
+  const toolPolicy = input.judge.toolPolicy ?? "none"
   const child = yield* sessions.create({
     parentID: input.sessionID,
     title: input.mode === "logu" ? "Logu judge" : "Compound judge",
@@ -66,6 +68,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
           },
         }
       : {}),
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy, input.mode),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -85,7 +88,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
           sessionID: child.id,
           model: { providerID: model.providerID, modelID: model.modelID },
           ...(input.judge.variant ? { variant: input.judge.variant } : {}),
-          tools: toolsDisabled,
+          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, input.mode, child.permission ?? []),
           parts,
         })
         yield* interruptIfAborted(input.abort)

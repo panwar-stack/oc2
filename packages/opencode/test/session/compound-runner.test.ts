@@ -452,6 +452,44 @@ describe("session compound runner", () => {
     }),
   )
 
+  it.instance("passes unrestricted tools for all child stages in logu mode", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const prompts: SessionPrompt.PromptInput[] = []
+      yield* SessionCompound.run({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({
+          branches: [{ model: "test/branch", toolPolicy: "all" }],
+          judge: { model: "test/judge", toolPolicy: "all" },
+          synthesizer: { model: "test/synth", toolPolicy: "all" },
+        }),
+        promptOps: stubOps({
+          onPrompt: (input) => prompts.push(input),
+          text: (input) => {
+            if (String(input.model?.modelID) === "judge") {
+              return JSON.stringify({
+                consensus: [],
+                contradictions: [],
+                uniqueInsights: [],
+                blindSpots: [],
+                failures: [],
+                confidence: "high",
+              })
+            }
+            if (String(input.model?.modelID) === "synth") return "final answer"
+            return "branch output"
+          },
+        }),
+        mode: "logu",
+      })
+
+      expect(prompts.map((prompt) => String(prompt.model?.modelID))).toEqual(["branch", "judge", "synth"])
+      expect(prompts.map((prompt) => prompt.tools)).toEqual([{}, {}, {}])
+    }),
+  )
+
   it.instance("rejects logu-only tool policies outside logu mode", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

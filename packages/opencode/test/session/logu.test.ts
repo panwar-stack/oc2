@@ -193,6 +193,8 @@ describe("session logu", () => {
         expect(branchPrompt).toContain("Assistant:\nI will inspect.\nTool call read (call-1): {\"file\":\"a.ts\"}")
         expect(branchPrompt).toContain("Tool:\nTool result read (call-1): contents")
         expect(branchPrompt).toContain("User (latest request):\nLatest request\n[unsupported attachment: image/png]")
+        expect(prompts[1]?.tools).toEqual({ "*": false })
+        expect(prompts[2]?.tools).toEqual({ "*": false })
         const children = yield* sessions.children(parent.id)
         expect(children.map((child) => child.title)).toEqual(["Logu branch #1", "Logu judge", "Logu synthesizer"])
         expect(children.map((child) => child.metadata?.logu?.stage)).toEqual(["branch", "judge", "synthesizer"])

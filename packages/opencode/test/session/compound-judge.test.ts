@@ -124,6 +124,30 @@ describe("compound judge", () => {
       expect(prompts[0]?.format).toBeUndefined()
     }),
   )
+
+  it.instance("applies readonly judge tool policy", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      const prompts: SessionPrompt.PromptInput[] = []
+      yield* SessionCompoundJudge.run({
+        sessionID: parent.id,
+        judge: { model: "test/judge", toolPolicy: "readonly" },
+        branches,
+        promptOps: stubOps({ onPrompt: (input) => prompts.push(input), text: JSON.stringify(judgeResult) }),
+      })
+
+      expect(prompts[0]?.tools).toEqual({
+        "*": false,
+        read: true,
+        grep: true,
+        glob: true,
+        webfetch: true,
+        websearch: true,
+        lsp: true,
+      })
+    }),
+  )
 })
 
 async function prepareTools(tools: Record<string, boolean>) {
