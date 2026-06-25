@@ -534,6 +534,52 @@ describe("session compound runner", () => {
     }),
   )
 
+  it.instance("uses distinct scratch directories for branches and judge", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      yield* SessionCompound.run({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({
+          branches: [
+            { model: "test/branch-a", toolPolicy: "all" },
+            { model: "test/branch-b", toolPolicy: "all" },
+          ],
+          judge: { model: "test/judge", toolPolicy: "all" },
+        }),
+        promptOps: stubOps({
+          text: (input) => {
+            if (String(input.model?.modelID) === "judge") {
+              return JSON.stringify({
+                consensus: [],
+                contradictions: [],
+                uniqueInsights: [],
+                blindSpots: [],
+                failures: [],
+                confidence: "high",
+              })
+            }
+            if (String(input.model?.modelID) === "synth") return "final answer"
+            return "branch output"
+          },
+        }),
+        mode: "logu",
+      })
+      const children = yield* sessions.children(parent.id)
+      const scratchPatterns = children
+        .filter((child) => child.metadata?.logu?.stage === "branch" || child.metadata?.logu?.stage === "judge")
+        .map((child) => child.permission?.find((rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow")?.pattern)
+
+      expect(scratchPatterns).toHaveLength(3)
+      expect(scratchPatterns.every((pattern) => pattern !== undefined)).toBe(true)
+      expect(new Set(scratchPatterns).size).toBe(3)
+      expect(scratchPatterns.some((pattern) => pattern?.includes("branch-0"))).toBe(true)
+      expect(scratchPatterns.some((pattern) => pattern?.includes("branch-1"))).toBe(true)
+      expect(scratchPatterns.some((pattern) => pattern?.includes("judge"))).toBe(true)
+    }),
+  )
+
   it.instance("rejects logu-only tool policies outside logu mode", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -604,6 +650,33 @@ describe("session compound runner", () => {
           ...childPermission,
         ]),
       ).toEqual(new Set(["team_create", "team_spawn", "local_fusion"]))
+    }),
+  )
+
+  it.instance("keeps parent edit deny above branch scratch edit allow", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({
+        title: "parent",
+        permission: [{ permission: "edit", pattern: "*", action: "deny" }],
+      })
+      yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/branch", toolPolicy: "all" }] }),
+        promptOps: stubOps(),
+        mode: "logu",
+      })
+      const children = yield* sessions.children(parent.id)
+      const childPermission = children[0]?.permission ?? []
+      const tempEditAllow = childPermission.find(
+        (rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow",
+      )
+
+      expect(tempEditAllow).toBeDefined()
+      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
+        "deny",
+      )
     }),
   )
 

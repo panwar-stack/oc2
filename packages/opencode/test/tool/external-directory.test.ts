@@ -41,9 +41,11 @@ function makeCtx() {
   return { requests, ctx }
 }
 
-function scratchRules(root: string, tempDir: string): PermissionV1.Ruleset {
-  return SessionCompoundToolPolicy.resolveChildPermission([], "all", "logu", {
-    role: { type: "judge", tempDir },
+type ScratchRole = { type: "branch"; index: number; tempDir: string } | { type: "judge"; tempDir: string }
+
+function scratchRules(root: string, role: ScratchRole, parent: PermissionV1.Ruleset = []): PermissionV1.Ruleset {
+  return SessionCompoundToolPolicy.resolveChildPermission(parent, "all", "logu", {
+    role,
     root,
   })
 }
@@ -66,7 +68,7 @@ describe("tool.assertExternalDirectory", () => {
     Effect.gen(function* () {
       const primary = yield* tmpdirScoped({ git: true })
       const tempDir = yield* tmpdirScoped()
-      const ruleset = scratchRules(primary, tempDir)
+      const ruleset = scratchRules(primary, { type: "judge", tempDir })
 
       yield* provideInstance(primary)(
         assertExternalDirectoryEffect(evaluatingCtx(ruleset), path.join(tempDir, "scratch.txt")),
@@ -86,9 +88,9 @@ describe("tool.assertExternalDirectory", () => {
       const primary = yield* tmpdirScoped({ git: true })
       const tempDir = yield* tmpdirScoped()
 
-      expect(Permission.disabled(["write", "edit", "apply_patch", "team_create"], scratchRules(primary, tempDir))).toEqual(
-        new Set(["team_create"]),
-      )
+      expect(
+        Permission.disabled(["write", "edit", "apply_patch", "team_create"], scratchRules(primary, { type: "judge", tempDir })),
+      ).toEqual(new Set(["team_create"]))
 
       expect(
         Permission.disabled(
@@ -99,6 +101,30 @@ describe("tool.assertExternalDirectory", () => {
           }),
         ),
       ).toEqual(new Set(["local_fusion"]))
+    }),
+  )
+
+  it.live("keeps parent external directory deny above branch and judge scratch allows", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const branchDir = yield* tmpdirScoped()
+      const judgeDir = yield* tmpdirScoped()
+      const parentDeny: PermissionV1.Ruleset = [{ permission: "external_directory", pattern: "*", action: "deny" }]
+      const branchRules = scratchRules(primary, { type: "branch", index: 0, tempDir: branchDir }, parentDeny)
+      const judgeRules = scratchRules(primary, { type: "judge", tempDir: judgeDir }, parentDeny)
+
+      expect(Permission.evaluate("external_directory", path.join(branchDir, "*"), branchRules).action).toBe("deny")
+      expect(Permission.evaluate("external_directory", path.join(judgeDir, "*"), judgeRules).action).toBe("deny")
+      expect(
+        (yield* provideInstance(primary)(
+          assertExternalDirectoryEffect(evaluatingCtx(branchRules), path.join(branchDir, "scratch.txt")).pipe(Effect.exit),
+        ))._tag,
+      ).toBe("Failure")
+      expect(
+        (yield* provideInstance(primary)(
+          assertExternalDirectoryEffect(evaluatingCtx(judgeRules), path.join(judgeDir, "scratch.txt")).pipe(Effect.exit),
+        ))._tag,
+      ).toBe("Failure")
     }),
   )
 

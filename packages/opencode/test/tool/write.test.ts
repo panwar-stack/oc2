@@ -61,9 +61,11 @@ const run = Effect.fn("WriteToolTest.run")(function* (
   return yield* tool.execute(args, next)
 })
 
-function scratchRules(root: string, tempDir: string): PermissionV1.Ruleset {
-  return SessionCompoundToolPolicy.resolveChildPermission([], "all", "logu", {
-    role: { type: "branch", index: 0, tempDir },
+type ScratchRole = { type: "branch"; index: number; tempDir: string } | { type: "judge"; tempDir: string }
+
+function scratchRules(root: string, role: ScratchRole, parent: PermissionV1.Ruleset = []): PermissionV1.Ruleset {
+  return SessionCompoundToolPolicy.resolveChildPermission(parent, "all", "logu", {
+    role,
     root,
   })
 }
@@ -87,7 +89,7 @@ describe("tool.write", () => {
       Effect.gen(function* () {
         const primary = yield* tmpdirScoped({ git: true })
         const tempDir = yield* tmpdirScoped()
-        const ruleset = scratchRules(primary, tempDir)
+        const ruleset = scratchRules(primary, { type: "branch", index: 0, tempDir })
         const workspaceFile = path.join(primary, "workspace.txt")
         const scratchFile = path.join(tempDir, "scratch.txt")
 
@@ -99,6 +101,85 @@ describe("tool.write", () => {
 
         yield* provideInstance(primary)(run({ filePath: scratchFile, content: "scratch" }, permissionCtx(ruleset)))
         expect(yield* Effect.promise(() => fs.readFile(scratchFile, "utf-8"))).toBe("scratch")
+      }),
+    )
+
+    it.live("keeps parent edit deny above branch scratch write allow", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const tempDir = yield* tmpdirScoped()
+        const ruleset = scratchRules(primary, { type: "branch", index: 0, tempDir }, [
+          { permission: "edit", pattern: "*", action: "deny" },
+        ])
+        const scratchFile = path.join(tempDir, "scratch.txt")
+
+        const denied = yield* provideInstance(primary)(
+          run({ filePath: scratchFile, content: "scratch" }, permissionCtx(ruleset)).pipe(Effect.exit),
+        )
+
+        expect(denied._tag).toBe("Failure")
+        expect((yield* Effect.promise(() => fs.stat(scratchFile)).pipe(Effect.exit))._tag).toBe("Failure")
+      }),
+    )
+
+    it.live("denies writes to sibling scratch directories", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const branchDir = yield* tmpdirScoped()
+        const siblingDir = yield* tmpdirScoped()
+        const judgeDir = yield* tmpdirScoped()
+        const ruleset = scratchRules(primary, { type: "branch", index: 0, tempDir: branchDir })
+        const siblingFile = path.join(siblingDir, "sibling.txt")
+        const judgeFile = path.join(judgeDir, "judge.txt")
+
+        expect(
+          (yield* provideInstance(primary)(
+            run({ filePath: siblingFile, content: "sibling" }, permissionCtx(ruleset)).pipe(Effect.exit),
+          ))._tag,
+        ).toBe("Failure")
+        expect(
+          (yield* provideInstance(primary)(
+            run({ filePath: judgeFile, content: "judge" }, permissionCtx(ruleset)).pipe(Effect.exit),
+          ))._tag,
+        ).toBe("Failure")
+        expect((yield* Effect.promise(() => fs.stat(siblingFile)).pipe(Effect.exit))._tag).toBe("Failure")
+        expect((yield* Effect.promise(() => fs.stat(judgeFile)).pipe(Effect.exit))._tag).toBe("Failure")
+      }),
+    )
+
+    it.live("denies branch and judge writes to secondary session roots", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const secondary = yield* tmpdirScoped({ git: true })
+        const branchDir = yield* tmpdirScoped()
+        const judgeDir = yield* tmpdirScoped()
+        const branchRules = scratchRules(primary, { type: "branch", index: 0, tempDir: branchDir })
+        const judgeRules = scratchRules(primary, { type: "judge", tempDir: judgeDir })
+        const branchFile = path.join(secondary, "branch.txt")
+        const judgeFile = path.join(secondary, "judge.txt")
+        const info = yield* provideInstance(primary)(
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            const info = yield* session.create({ title: "tool roots" })
+            yield* session.addRoot({ sessionID: info.id, directory: secondary })
+            return info
+          }),
+        )
+
+        expect(
+          (yield* provideInstance(primary)(
+            run({ filePath: branchFile, content: "branch" }, { ...permissionCtx(branchRules), sessionID: info.id }).pipe(
+              Effect.exit,
+            ),
+          ))._tag,
+        ).toBe("Failure")
+        expect(
+          (yield* provideInstance(primary)(
+            run({ filePath: judgeFile, content: "judge" }, { ...permissionCtx(judgeRules), sessionID: info.id }).pipe(Effect.exit),
+          ))._tag,
+        ).toBe("Failure")
+        expect((yield* Effect.promise(() => fs.stat(branchFile)).pipe(Effect.exit))._tag).toBe("Failure")
+        expect((yield* Effect.promise(() => fs.stat(judgeFile)).pipe(Effect.exit))._tag).toBe("Failure")
       }),
     )
 

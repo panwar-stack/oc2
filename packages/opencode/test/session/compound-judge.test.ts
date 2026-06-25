@@ -189,6 +189,33 @@ describe("compound judge", () => {
       )
     }),
   )
+
+  it.instance("keeps parent edit deny above judge scratch edit allow", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({
+        title: "parent",
+        permission: [{ permission: "edit", pattern: "*", action: "deny" }],
+      })
+      yield* SessionCompoundJudge.run({
+        sessionID: parent.id,
+        judge: { model: "test/judge", toolPolicy: "all" },
+        branches,
+        promptOps: stubOps({ text: JSON.stringify(judgeResult) }),
+        mode: "logu",
+      })
+      const children = yield* sessions.children(parent.id)
+      const childPermission = children[0]?.permission ?? []
+      const tempEditAllow = childPermission.find(
+        (rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow",
+      )
+
+      expect(tempEditAllow).toBeDefined()
+      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
+        "deny",
+      )
+    }),
+  )
 })
 
 function containsPath(root: string, target: string) {
