@@ -340,7 +340,7 @@ Safety defaults:
 - Branches default to `"readonly"`, which allows read/search tools and denies all other tools.
 - Branches with `"none"` receive no tools.
 - Judge and synthesizer receive no tools by default.
-- In Logu write-capable branch or judge stages, file writes are restricted to a per-stage temporary scratch directory; workspace edits should be performed only by the synthesizer.
+- In Logu write-capable branch or judge stages, file writes and edits are allowed only inside the assigned temporary scratch directory; `apply_patch` and workspace edits remain unavailable. The synthesizer is the only stage intended to apply final workspace edits when its tools and permissions allow it.
 - Branch internals are not streamed into the parent response; the tool returns one synthesized final answer plus compact metadata.
 
 Failure behavior:

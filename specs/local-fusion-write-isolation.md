@@ -63,9 +63,11 @@ For synthesizer with write-capable policy:
 Temp directory shape:
 
 ```text
-<os.tmpdir()>/opencode-local-fusion/<parent-session-id>/<compound-run-id>/branch-<index>/
-<os.tmpdir()>/opencode-local-fusion/<parent-session-id>/<compound-run-id>/judge/
+<base>/opencode-local-fusion/<parent-session-id>/<compound-run-id>/branch-<index>/
+<base>/opencode-local-fusion/<parent-session-id>/<compound-run-id>/judge/
 ```
+
+The default `<base>` is `os.tmpdir()`. If `<base>/opencode-local-fusion` would be inside any registered session root, OpenCode falls back to a sibling base outside the containing root using `<root-basename>-opencode-local-fusion`, repeating until the scratch root is outside every session root. If no outside base can be found, local fusion fails instead of creating a scratch directory inside a session root. The synthesizer does not use a local fusion scratch directory.
 
 Failure modes:
 

@@ -102,6 +102,8 @@ The Logu lead only orchestrates the child stages. It does not use normal tool ca
 
 For Logu branch and judge stages, write-capable policies are isolated to a per-stage temporary scratch directory. They can research and draft scratch files there, but they must not edit workspace files. The synthesizer is the only stage that should apply final workspace edits.
 
+Scratch files are temporary-only artifacts, not workspace changes. Branch and judge stages can use `write` and `edit` only inside their assigned scratch directory; `apply_patch` and workspace edits are unavailable. OpenCode places scratch directories outside all session roots. It starts from the system temp directory and falls back to a sibling temp base if the default scratch root would be inside a session root. Scratch directory retention is unspecified and not a cleanup guarantee.
+
 Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
 
 ### Tool Policy
@@ -114,7 +116,7 @@ Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesize
 
 Use `"readonly"` when a child stage should inspect files and search the workspace without making changes. Use `"none"` when a child stage should answer from the prompt and conversation context only.
 
-`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu synthesizer use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. For Logu branches and judge, write-capable access is limited to a per-stage temporary scratch directory and workspace edits remain denied. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
+`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu synthesizer use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. For Logu branches and judge, write-capable access is limited to a per-stage temporary scratch directory outside session roots; workspace edits and `apply_patch` remain denied. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
 
 `"all"` is only supported by `local_fusion.logu`. For the synthesizer, it gives the unrestricted tool map, still subject to parent and session permissions. For branches and judge, it exposes research tools plus scratch-file tools for the per-stage temporary directory; `apply_patch` and workspace edits remain unavailable.
 
