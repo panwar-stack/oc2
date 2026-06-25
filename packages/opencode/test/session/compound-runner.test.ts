@@ -419,7 +419,7 @@ describe("session compound runner", () => {
     }),
   )
 
-  it.instance("applies safe branch tool policies", () =>
+  it.instance("applies branch tool policies", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
@@ -427,8 +427,15 @@ describe("session compound runner", () => {
       yield* SessionCompound.runBranches({
         sessionID: parent.id,
         prompt: "go",
-        config: config(),
+        config: config({
+          branches: [
+            { model: "test/branch-a", toolPolicy: "readonly" },
+            { model: "test/branch-b", toolPolicy: "none" },
+            { model: "test/branch-c", toolPolicy: "all" },
+          ],
+        }),
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
+        mode: "logu",
       })
 
       expect(prompts[0]?.tools).toMatchObject({
@@ -441,21 +448,35 @@ describe("session compound runner", () => {
         lsp: true,
       })
       expect(prompts[1]?.tools).toEqual({ "*": false })
+      expect(prompts[2]?.tools).toEqual({})
     }),
   )
 
-  it.instance("rejects parent_without_teams outside logu mode", () =>
+  it.instance("rejects logu-only tool policies outside logu mode", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
-      const parent = yield* sessions.create({ title: "parent" })
-      const exit = yield* SessionCompound.runBranches({
-        sessionID: parent.id,
-        prompt: "go",
-        config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
-        promptOps: stubOps(),
-      }).pipe(Effect.exit)
+      for (const input of [
+        { branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] },
+        { branches: [{ model: "test/branch", toolPolicy: "all" }] },
+        { judge: { model: "test/judge", toolPolicy: "parent_without_teams" } },
+        { judge: { model: "test/judge", toolPolicy: "all" } },
+        { synthesizer: { model: "test/synth", toolPolicy: "parent_without_teams" } },
+        { synthesizer: { model: "test/synth", toolPolicy: "all" } },
+      ]) {
+        const parent = yield* sessions.create({ title: "parent" })
+        const exit = yield* SessionCompound.runBranches({
+          sessionID: parent.id,
+          prompt: "go",
+          config: config(input),
+          promptOps: stubOps(),
+        }).pipe(Effect.exit)
 
-      expect(Exit.isFailure(exit)).toBe(true)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          const error = Cause.squash(exit.cause)
+          expect(error instanceof Error ? error.message : String(error)).toContain("toolPolicy is only supported in logu mode")
+        }
+      }
     }),
   )
 

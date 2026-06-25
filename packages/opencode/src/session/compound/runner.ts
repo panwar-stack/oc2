@@ -4,31 +4,13 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Cause, Effect, Exit, Option } from "effect"
 import { EffectBridge } from "@/effect/bridge"
-import { Permission } from "@/permission"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { SessionCompoundConfig } from "./config"
 import { SessionCompoundJudge } from "./judge"
 import { SessionCompoundSynthesizer } from "./synthesizer"
+import { SessionCompoundToolPolicy } from "./tool-policy"
 import type { TaskPromptOps } from "@/tool/task"
-
-const readonlyTools = {
-  "*": false,
-  read: true,
-  grep: true,
-  glob: true,
-  webfetch: true,
-  websearch: true,
-  lsp: true,
-}
-
-const noTools = { "*": false }
-
-const loguDelegatedTools = {
-  team_create: false,
-  team_spawn: false,
-  local_fusion: false,
-}
 
 export type BranchSuccess = {
   index: number
@@ -75,7 +57,7 @@ export const run = Effect.fn("SessionCompound.run")(function* (input: {
   mode?: "logu"
   loguRunID?: string
 }) {
-  validateToolPolicies(input)
+  SessionCompoundToolPolicy.validate(input)
   yield* interruptIfAborted(input.abort)
   const branches = yield* runBranches(input)
   yield* interruptIfAborted(input.abort)
@@ -119,7 +101,7 @@ export const runBranches = Effect.fn("SessionCompound.runBranches")(function* (i
   mode?: "logu"
   loguRunID?: string
 }) {
-  validateToolPolicies(input)
+  SessionCompoundToolPolicy.validate(input)
   yield* interruptIfAborted(input.abort)
   const results = yield* Effect.forEach(
     input.config.branches,
@@ -173,7 +155,7 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
           },
         }
       : {}),
-    permission: branchPermission(parent.permission ?? [], input.branch.toolPolicy, input.mode),
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], input.branch.toolPolicy, input.mode),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -292,7 +274,7 @@ function promptBranch(
       },
       ...(input.branch.variant ? { variant: input.branch.variant } : {}),
       agent,
-      tools: branchTools(input.branch.toolPolicy, input.mode, permission),
+      tools: SessionCompoundToolPolicy.resolvePromptTools(input.branch.toolPolicy, input.mode, permission),
       parts,
     })
     yield* interruptIfAborted(input.abort)
@@ -303,27 +285,6 @@ function promptBranch(
 function interruptIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) return Effect.interrupt
   return Effect.void
-}
-
-function validateToolPolicies(input: { config: SessionCompoundConfig.Config; mode?: "logu" }) {
-  if (input.mode === "logu") return
-  if (input.config.branches.some((branch) => branch.toolPolicy === "parent_without_teams")) {
-    throw new Error("parent_without_teams toolPolicy is only supported in logu mode")
-  }
-}
-
-function branchTools(
-  policy: SessionCompoundConfig.ToolPolicy,
-  mode: "logu" | undefined,
-  permission: PermissionV1.Ruleset,
-) {
-  if (policy === "none") return noTools
-  if (policy === "readonly") return readonlyTools
-  if (mode !== "logu") throw new Error("parent_without_teams toolPolicy is only supported in logu mode")
-  return {
-    ...(Permission.evaluate("task", "*", permission).action === "deny" ? {} : { task: true }),
-    ...loguDelegatedTools,
-  }
 }
 
 function branchPrompt(prompt: string, guidance?: string) {
@@ -341,13 +302,4 @@ function outputText(result: SessionV1.WithParts) {
 function errorMessage(error: NonNullable<SessionV1.Assistant["error"]>) {
   if ("message" in error.data && typeof error.data.message === "string") return error.data.message
   return error.name
-}
-
-function branchPermission(parent: PermissionV1.Ruleset, policy: SessionCompoundConfig.ToolPolicy, mode: "logu" | undefined) {
-  return [
-    ...parent.filter((rule) => rule.action === "deny" || (rule.permission === "external_directory" && rule.action === "allow")),
-    ...(mode === "logu" && policy === "parent_without_teams"
-      ? Object.keys(loguDelegatedTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const }))
-      : []),
-  ]
 }
