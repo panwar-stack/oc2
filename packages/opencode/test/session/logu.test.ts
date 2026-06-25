@@ -131,6 +131,42 @@ function loguModel(): Provider.Model {
   }
 }
 
+function loguInput(sessionID: SessionID): LLM.StreamInput {
+  return {
+    user: {
+      id: MessageID.ascending(),
+      role: "user",
+      sessionID,
+      time: { created: Date.now() },
+      agent: "build",
+      model: { providerID: ProviderV2.ID.make("logu"), modelID: ModelV2.ID.make("logu") },
+    },
+    sessionID,
+    model: loguModel(),
+    agent,
+    system: [],
+    messages: [{ role: "user", content: "hello" }],
+    tools: {},
+  }
+}
+
+function llmLayerWithoutProviderPath() {
+  return LLM.layer.pipe(
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(
+      Layer.mock(Provider.Service, {
+        getModel: () => Effect.die("provider model lookup should be bypassed"),
+        getLanguage: () => Effect.die("provider language lookup should be bypassed"),
+        getProvider: () => Effect.die("provider info lookup should be bypassed"),
+      }),
+    ),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer)))),
+    Layer.provide(RuntimeFlags.layer({})),
+  )
+}
+
 function errorMessage(exit: Exit.Exit<unknown, unknown>) {
   if (exit._tag !== "Failure") return ""
   return Cause.pretty(exit.cause)
@@ -502,5 +538,48 @@ describe("session logu", () => {
         })
       }),
     { config: loguConfig },
+  )
+
+  it.instance(
+    "fails direct route when logu.model is missing",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* LLM.Service.use((svc) =>
+          svc.stream(loguInput(SessionID.make("session-logu-missing-model"))).pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()), Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(errorMessage(exit)).toContain("logu direct route requires logu.model")
+      }),
+    { config: { logu: { routing: { mode: "never" } } } },
+  )
+
+  it.instance(
+    "rejects recursive direct logu.model before provider lookup",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* LLM.Service.use((svc) =>
+          svc.stream(loguInput(SessionID.make("session-logu-recursive-model"))).pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()), Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(errorMessage(exit)).toContain("logu.model cannot reference logu/logu")
+      }),
+    { config: { logu: { model: "logu/logu", routing: { mode: "never" } } } },
+  )
+
+  it.instance(
+    "uses route-specific missing fusion config errors",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* LLM.Service.use((svc) =>
+          svc.stream(loguInput(SessionID.make("session-logu-missing-fusion"))).pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()), Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(errorMessage(exit)).toContain("logu fusion route requires local_fusion.custom config")
+        expect(errorMessage(exit)).toContain("packages/web/src/content/docs/local-fusion.mdx")
+      }),
+    { config: { logu: { fusion: "custom", routing: { mode: "always" } } } },
   )
 })

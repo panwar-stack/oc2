@@ -22,6 +22,7 @@ export type RunInput = {
   permission?: PermissionV1.Ruleset
   abort: AbortSignal
   promptOps: TaskPromptOps
+  compound?: NonNullable<ConfigV1.Info["local_fusion"]>[string]
 }
 
 export type RunResult = SessionCompound.RunResult
@@ -48,7 +49,7 @@ export function route(input: { config?: ConfigV1.Info["logu"]; system: string[];
 
 export const run = Effect.fn("SessionLogu.run")(function* (input: RunInput) {
   const config = yield* Config.Service
-  const compound = (yield* config.get()).local_fusion?.logu
+  const compound = input.compound ?? (yield* config.get()).local_fusion?.logu
   if (!compound) {
     throw new Error("logu requires local_fusion.logu config; see packages/web/src/content/docs/local-fusion.mdx")
   }

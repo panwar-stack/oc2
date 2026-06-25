@@ -730,6 +730,32 @@ function configModel(model: ModelsDev.Model) {
   }
 }
 
+function loguModel(): Provider.Model {
+  return {
+    id: ModelV2.ID.make("logu"),
+    providerID: ProviderV2.ID.make("logu"),
+    name: "logu",
+    family: "local",
+    api: { id: "logu", url: "", npm: "" },
+    status: "active",
+    headers: {},
+    options: {},
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    limit: { context: 128_000, output: 16_384 },
+    capabilities: {
+      temperature: false,
+      reasoning: false,
+      attachment: false,
+      toolcall: false,
+      input: { text: true, audio: false, image: false, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    release_date: "",
+    variants: {},
+  }
+}
+
 function createEventStream(chunks: unknown[], includeDone = false) {
   const lines = chunks.map((chunk) => `data: ${typeof chunk === "string" ? chunk : JSON.stringify(chunk)}`)
   if (includeDone) {
@@ -754,6 +780,99 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
 
 describe("session.llm.stream", () => {
   const vivgridFixture = { providerID: "vivgrid", modelID: "gemini-3.1-pro-preview" }
+  it.instance(
+    "routes logu never mode through the normal provider path",
+    () =>
+      Effect.gen(function* () {
+        const model = loadFixture("openai", "gpt-5.2").model
+        const request = waitRequest(
+          "/responses",
+          createEventResponse(
+            [
+              {
+                type: "response.created",
+                response: {
+                  id: "resp-logu-direct",
+                  created_at: Math.floor(Date.now() / 1000),
+                  model: model.id,
+                  service_tier: null,
+                },
+              },
+              {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { type: "message", id: "item-logu-direct", status: "in_progress", role: "assistant", content: [] },
+              },
+              {
+                type: "response.content_part.added",
+                item_id: "item-logu-direct",
+                output_index: 0,
+                content_index: 0,
+                part: { type: "output_text", text: "", annotations: [] },
+              },
+              {
+                type: "response.output_text.delta",
+                item_id: "item-logu-direct",
+                delta: "Direct",
+                logprobs: null,
+              },
+              {
+                type: "response.completed",
+                response: {
+                  incomplete_details: null,
+                  usage: {
+                    input_tokens: 1,
+                    input_tokens_details: null,
+                    output_tokens: 1,
+                    output_tokens_details: null,
+                  },
+                  service_tier: null,
+                },
+              },
+            ],
+            true,
+          ),
+        )
+
+        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const sessionID = SessionID.make("session-test-logu-direct")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+
+        yield* drain({
+          user: {
+            id: MessageID.make("msg_user-logu-direct"),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: agent.name,
+            model: { providerID: ProviderV2.ID.make("logu"), modelID: ModelV2.ID.make("logu") },
+          },
+          sessionID,
+          model: loguModel(),
+          agent,
+          system: ["You are a helpful assistant."],
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+
+        const capture = yield* Effect.promise(() => request)
+        expect(capture.url.pathname.endsWith("/responses")).toBe(true)
+        expect(capture.body.model).toBe(resolved.api.id)
+        expect(capture.body.stream).toBe(true)
+      }),
+    {
+      config: () => ({
+        ...openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`),
+        logu: { model: "openai/gpt-5.2", routing: { mode: "never" } },
+      }),
+    },
+  )
+
   it.instance(
     "sends temperature, tokens, and reasoning options for openai-compatible models",
     () =>
