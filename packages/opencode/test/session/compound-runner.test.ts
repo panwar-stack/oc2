@@ -2,6 +2,8 @@ import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import os from "os"
+import path from "path"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Permission } from "@/permission"
 import { Session } from "@/session/session"
@@ -605,6 +607,37 @@ describe("session compound runner", () => {
     }),
   )
 
+  it.instance("keeps branch scratch directory outside session roots", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      yield* sessions.addRoot({ sessionID: parent.id, directory: path.dirname(path.resolve(os.tmpdir())), name: "temp parent" })
+      yield* sessions.addRoot({ sessionID: parent.id, directory: os.tmpdir(), name: "system temp" })
+      const prompts: SessionPrompt.PromptInput[] = []
+      yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
+        promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
+        mode: "logu",
+      })
+      const children = yield* sessions.children(parent.id)
+      const childPermission = children[0]?.permission ?? []
+      const tempEditAllow = childPermission.find(
+        (rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow",
+      )
+      const tempDir = path.resolve(parent.directory, tempEditAllow?.pattern.replace(/\/\*$/, "") ?? ".")
+
+      expect(prompts[0]?.tools).toMatchObject({ write: true, edit: true, apply_patch: false })
+      expect(containsPath(path.resolve(os.tmpdir()), tempDir)).toBe(false)
+      expect(containsPath(path.dirname(path.resolve(os.tmpdir())), tempDir)).toBe(false)
+      expect(Permission.evaluate("edit", "package.json", childPermission).action).toBe("deny")
+      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
+        "allow",
+      )
+    }),
+  )
+
   it.instance("does not re-enable denied task for logu delegation", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -625,3 +658,8 @@ describe("session compound runner", () => {
     }),
   )
 })
+
+function containsPath(root: string, target: string) {
+  const relative = path.relative(root, target)
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+}

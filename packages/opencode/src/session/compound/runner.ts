@@ -134,6 +134,7 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
 }) {
   const sessions = yield* Session.Service
   const parent = yield* sessions.get(input.sessionID)
+  const roots = yield* sessions.listRoots(input.sessionID)
   const model = SessionCompoundConfig.parseModel(input.branch.model)
   const agent = input.branch.agent ?? parent.agent ?? input.agent
   const role = {
@@ -143,6 +144,7 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
       parentSessionID: input.sessionID,
       compoundRunID: input.compoundRunID,
       role: { type: "branch", index: input.index },
+      rootDirectories: roots.map((root) => root.directory),
     }),
   }
   const child = yield* sessions.create({

@@ -46,6 +46,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
   yield* interruptIfAborted(input.abort)
   const sessions = yield* Session.Service
   const parent = yield* sessions.get(input.sessionID)
+  const roots = yield* sessions.listRoots(input.sessionID)
   const model = SessionCompoundConfig.parseModel(input.judge.model)
   const toolPolicy = input.judge.toolPolicy ?? "none"
   const role = {
@@ -54,6 +55,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
       parentSessionID: input.sessionID,
       compoundRunID: input.compoundRunID ?? input.loguRunID ?? crypto.randomUUID(),
       role: { type: "judge" },
+      rootDirectories: roots.map((root) => root.directory),
     }),
   }
   const child = yield* sessions.create({

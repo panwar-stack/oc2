@@ -94,12 +94,14 @@ export function tempDirectory(input: {
   parentSessionID: string
   compoundRunID: string
   role: { type: "branch"; index: number } | { type: "judge" } | { type: "synthesizer" }
+  rootDirectories?: string[]
 }) {
+  const base = tempBase(input.rootDirectories ?? [])
   if (input.role.type === "branch") {
-    return path.join(os.tmpdir(), "opencode-local-fusion", input.parentSessionID, input.compoundRunID, `branch-${input.role.index}`)
+    return path.join(base, "opencode-local-fusion", input.parentSessionID, input.compoundRunID, `branch-${input.role.index}`)
   }
   if (input.role.type === "judge") {
-    return path.join(os.tmpdir(), "opencode-local-fusion", input.parentSessionID, input.compoundRunID, "judge")
+    return path.join(base, "opencode-local-fusion", input.parentSessionID, input.compoundRunID, "judge")
   }
   throw new Error("Synthesizer does not use a local fusion scratch directory")
 }
@@ -118,4 +120,25 @@ function tempEditPattern(tempDir: string, root: string) {
 
 function tempExternalPattern(tempDir: string) {
   return path.join(tempDir, "*").replaceAll("\\", "/")
+}
+
+function tempBase(rootDirectories: string[]) {
+  const roots = rootDirectories.map((root) => path.resolve(root))
+  const suffix = "opencode-local-fusion"
+  let base = path.resolve(os.tmpdir())
+  for (let attempt = 0; attempt <= roots.length; attempt++) {
+    const scratchRoot = path.join(base, suffix)
+    const containingRoot = roots.filter((root) => containsPath(root, scratchRoot)).sort((a, b) => b.length - a.length)[0]
+    if (!containingRoot) return base
+
+    const parent = path.dirname(containingRoot)
+    if (parent === containingRoot) break
+    base = path.join(parent, `${path.basename(containingRoot)}-${suffix}`)
+  }
+  throw new Error("Cannot create local fusion scratch directory outside session roots")
+}
+
+function containsPath(root: string, target: string) {
+  const relative = path.relative(root, target)
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }

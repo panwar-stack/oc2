@@ -2,8 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { Effect, Layer, Schema } from "effect"
+import os from "os"
+import path from "path"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Permission } from "@/permission"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -155,7 +158,43 @@ describe("compound judge", () => {
       })
     }),
   )
+
+  it.instance("keeps judge scratch directory outside session roots", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "parent" })
+      yield* sessions.addRoot({ sessionID: parent.id, directory: path.dirname(path.resolve(os.tmpdir())), name: "temp parent" })
+      yield* sessions.addRoot({ sessionID: parent.id, directory: os.tmpdir(), name: "system temp" })
+      const prompts: SessionPrompt.PromptInput[] = []
+      yield* SessionCompoundJudge.run({
+        sessionID: parent.id,
+        judge: { model: "test/judge", toolPolicy: "parent_without_teams" },
+        branches,
+        promptOps: stubOps({ onPrompt: (input) => prompts.push(input), text: JSON.stringify(judgeResult) }),
+        mode: "logu",
+      })
+      const children = yield* sessions.children(parent.id)
+      const childPermission = children[0]?.permission ?? []
+      const tempEditAllow = childPermission.find(
+        (rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow",
+      )
+      const tempDir = path.resolve(parent.directory, tempEditAllow?.pattern.replace(/\/\*$/, "") ?? ".")
+
+      expect(prompts[0]?.tools).toMatchObject({ write: true, edit: true, apply_patch: false })
+      expect(containsPath(path.resolve(os.tmpdir()), tempDir)).toBe(false)
+      expect(containsPath(path.dirname(path.resolve(os.tmpdir())), tempDir)).toBe(false)
+      expect(Permission.evaluate("edit", "package.json", childPermission).action).toBe("deny")
+      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
+        "allow",
+      )
+    }),
+  )
 })
+
+function containsPath(root: string, target: string) {
+  const relative = path.relative(root, target)
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+}
 
 async function prepareTools(tools: Record<string, boolean>) {
   return (
