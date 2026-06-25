@@ -1,4 +1,4 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
@@ -135,6 +135,79 @@ function errorMessage(exit: Exit.Exit<unknown, unknown>) {
   if (exit._tag !== "Failure") return ""
   return Cause.pretty(exit.cause)
 }
+
+describe("session logu route", () => {
+  test("preserves legacy fusion routing without top-level logu config", () => {
+    expect(SessionLogu.route({ system: [], messages: [] })).toBe("fusion")
+  })
+
+  test("honors explicit routing modes", () => {
+    expect(SessionLogu.route({ config: { routing: { mode: "always" } }, system: [], messages: [] })).toBe("fusion")
+    expect(SessionLogu.route({ config: { routing: { mode: "never" } }, system: [], messages: [] })).toBe("direct")
+  })
+
+  test("defaults omitted mode to auto for simple requests", () => {
+    expect(SessionLogu.route({ config: {}, system: [], messages: [{ role: "user", content: "hello" }] })).toBe("direct")
+    expect(
+      SessionLogu.route({
+        config: { routing: {} },
+        system: [],
+        messages: [{ role: "user", content: "what time is it?" }],
+      }),
+    ).toBe("direct")
+  })
+
+  test("routes complex latest user requests to fusion", () => {
+    for (const content of [
+      "please do a code review of this diff",
+      "compare multiple approaches and tradeoffs for the architecture",
+      "write an implementation plan for the migration",
+      "find the root cause of this auth serialization regression",
+    ]) {
+      expect(SessionLogu.route({ config: {}, system: [], messages: [{ role: "user", content }] })).toBe("fusion")
+    }
+  })
+
+  test("routes long latest user requests to fusion", () => {
+    expect(SessionLogu.route({ config: {}, system: [], messages: [{ role: "user", content: "x".repeat(1201) }] })).toBe(
+      "fusion",
+    )
+  })
+
+  test("routes recent assistant or tool failure context to fusion", () => {
+    expect(
+      SessionLogu.route({
+        config: {},
+        system: [],
+        messages: [{ role: "user", content: "this failed with exit code 1" }],
+      }),
+    ).toBe("fusion")
+
+    expect(
+      SessionLogu.route({
+        config: {},
+        system: [],
+        messages: [
+          { role: "user", content: "run the command" },
+          { role: "assistant", content: "The command failed with exit code 1." },
+          { role: "user", content: "what now?" },
+        ],
+      }),
+    ).toBe("fusion")
+
+    expect(
+      SessionLogu.route({
+        config: {},
+        system: [],
+        messages: [
+          { role: "user", content: "run tests" },
+          { role: "tool", content: [{ type: "tool-result", toolCallId: "call-1", toolName: "bash", output: "Error: boom" }] },
+          { role: "user", content: "explain" },
+        ] as ModelMessage[],
+      }),
+    ).toBe("fusion")
+  })
+})
 
 describe("session logu", () => {
   it.instance("fails with docs pointer when local_fusion.logu is missing", () =>

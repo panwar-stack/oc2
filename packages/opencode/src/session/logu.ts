@@ -3,6 +3,7 @@ export * as SessionLogu from "./logu"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Cause, Effect } from "effect"
 import type { ModelMessage } from "ai"
+import type { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import type { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import type { Provider } from "@/provider/provider"
@@ -24,6 +25,26 @@ export type RunInput = {
 }
 
 export type RunResult = SessionCompound.RunResult
+
+const LONG_PROMPT_CHARS = 1200
+const COMPLEX_PROMPT_PATTERN =
+  /\b(code review|review|architecture|security|migration|regression|root cause|race condition|database|auth|authentication|serialization|broad repo|investigation|spec|specs|implementation plan|tradeoff|tradeoffs|multiple approaches)\b/i
+const FAILURE_CONTEXT_PATTERN =
+  /\b(error|failed|failure|exception|stack trace|traceback|segmentation fault|panic|crash|timed out|timeout|exit code|this failed)\b/i
+
+export function route(input: { config?: ConfigV1.Info["logu"]; system: string[]; messages: ModelMessage[] }): "direct" | "fusion" {
+  if (!input.config) return "fusion"
+  if (input.config.routing?.mode === "always") return "fusion"
+  if (input.config.routing?.mode === "never") return "direct"
+
+  const latestUser = input.messages.findLast((message) => message.role === "user")
+  const latestUserText = latestUser ? renderContent(latestUser.content) : ""
+  if (latestUserText.length > LONG_PROMPT_CHARS) return "fusion"
+  if (COMPLEX_PROMPT_PATTERN.test(latestUserText)) return "fusion"
+  if (FAILURE_CONTEXT_PATTERN.test(latestUserText)) return "fusion"
+  if (recentContext(input.messages).some((text) => FAILURE_CONTEXT_PATTERN.test(text))) return "fusion"
+  return "direct"
+}
 
 export const run = Effect.fn("SessionLogu.run")(function* (input: RunInput) {
   const config = yield* Config.Service
@@ -100,6 +121,13 @@ function roleLabel(role: ModelMessage["role"]) {
 function renderContent(content: ModelMessage["content"]) {
   if (typeof content === "string") return content
   return (content as readonly unknown[]).map(renderPart).filter(Boolean).join("\n")
+}
+
+function recentContext(messages: ModelMessage[]) {
+  return messages
+    .slice(-6)
+    .filter((message) => message.role === "assistant" || message.role === "tool")
+    .map((message) => renderContent(message.content))
 }
 
 function renderPart(part: unknown) {

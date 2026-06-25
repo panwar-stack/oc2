@@ -9,6 +9,7 @@ import { ConfigCommandV1 } from "./command"
 import { ConfigFormatterV1 } from "./formatter"
 import { ConfigLayoutV1 } from "./layout"
 import { ConfigLSPV1 } from "./lsp"
+import { ConfigLogu } from "../../config/logu"
 import { ConfigLocalFusion } from "../../config/local-fusion"
 import { ConfigMCPV1 } from "./mcp"
 import { ConfigPermissionV1 } from "./permission"
@@ -112,6 +113,9 @@ export const Info = Schema.Struct({
   }),
   local_fusion: Schema.optional(Schema.Record(Schema.String, ConfigLocalFusion.Info)).annotate({
     description: "Named local_fusion compound model configurations",
+  }),
+  logu: Schema.optional(ConfigLogu.Info).annotate({
+    description: "Adaptive Logu routing configuration. Omit to preserve legacy always-fusion behavior.",
   }),
   default_agent: Schema.optional(Schema.String).annotate({
     description:
