@@ -56,11 +56,69 @@ Add a named `local_fusion` config to `opencode.json`.
 
 Each branch can use a different model, variant, agent, prompt, tool policy, and timeout.
 
+### Config Shape
+
+Use this as a quick reference for named configs under `local_fusion`.
+
+```jsonc title="opencode.jsonc"
+{
+  "local_fusion": {
+    "config-name": {
+      "branches": [
+        {
+          "model": "provider/model",
+          "variant": "optional-variant",
+          "agent": "optional-agent",
+          "prompt": "Optional branch-specific guidance.",
+          "toolPolicy": "readonly",
+          "timeout": 120000
+        }
+      ],
+      "judge": {
+        "model": "provider/model",
+        "variant": "optional-variant",
+        "prompt": "Optional judge guidance.",
+        "toolPolicy": "none"
+      },
+      "synthesizer": {
+        "model": "provider/model",
+        "variant": "optional-variant",
+        "prompt": "Optional synthesizer guidance.",
+        "toolPolicy": "none"
+      },
+      "limits": {
+        "timeout": 180000,
+        "maxBranches": 3
+      }
+    }
+  }
+}
+```
+
+`branches[].toolPolicy` defaults to `"readonly"`. `judge.toolPolicy` and `synthesizer.toolPolicy` default to `"none"`. `limits.maxBranches` defaults to `3`.
+
 ### Logu Local Model
 
-`logu` is a local compound model exposed through the normal model picker as `logu/logu`. It is always selectable and does not require Logu provider credentials or a provider connect step, but it still needs the underlying branch, judge, and synthesizer providers configured.
+`logu` is a local compound model exposed through the normal model picker as `logu/logu`. It does not require Logu provider credentials or a provider connect step, but it still needs the reserved `local_fusion.logu` config and the underlying branch, judge, and synthesizer providers configured.
 
-Configure Logu with the reserved `local_fusion.logu` config name:
+Configure Logu with the reserved `local_fusion.logu` config name, then select `logu/logu` from `/models` and prompt normally.
+
+```txt frame="none"
+/models
+# select logu/logu
+```
+
+```txt frame="none"
+Review this authentication refactor. Identify correctness risks, security regressions, missing tests, and any simpler implementation path.
+```
+
+When you select `logu/logu`, OpenCode renders the current conversation into a deterministic transcript, runs `local_fusion.logu`, and returns the synthesizer output as the assistant response in the parent session. The transcript includes system context, prior conversation messages, tool calls, tool results, and marks the latest user message as the latest request.
+
+The Logu lead only orchestrates the child stages. It does not use normal tool calling itself. In the TUI, Logu child sessions appear in the sidebar with branch, judge, and synthesizer status, timeout indicators, and pending permission or question counts.
+
+#### Safe Review Mode
+
+Use read-only branches when you want independent review without allowing branch stages to write anything.
 
 ```json title="opencode.json"
 {
@@ -70,25 +128,34 @@ Configure Logu with the reserved `local_fusion.logu` config name:
       "branches": [
         {
           "model": "anthropic/claude-sonnet-4-5",
-          "agent": "build",
-          "toolPolicy": "all"
+          "variant": "default",
+          "agent": "plan",
+          "prompt": "Inspect implementation correctness, edge cases, and maintainability. Return file-specific findings.",
+          "toolPolicy": "readonly",
+          "timeout": 120000
         },
         {
           "model": "openai/gpt-5",
+          "variant": "high",
           "agent": "plan",
-          "toolPolicy": "parent_without_teams"
+          "prompt": "Focus on product behavior, user impact, and missing tests. Challenge assumptions.",
+          "toolPolicy": "readonly",
+          "timeout": 120000
         }
       ],
       "judge": {
         "model": "openai/gpt-5-mini",
-        "toolPolicy": "readonly"
+        "prompt": "Rank branch outputs by correctness, specificity, and risk coverage.",
+        "toolPolicy": "none"
       },
       "synthesizer": {
         "model": "anthropic/claude-sonnet-4-5",
-        "toolPolicy": "all"
+        "variant": "default",
+        "prompt": "Combine the strongest findings into one concise answer with prioritized recommendations.",
+        "toolPolicy": "readonly"
       },
       "limits": {
-        "timeout": 120000,
+        "timeout": 180000,
         "maxBranches": 3
       }
     }
@@ -96,13 +163,88 @@ Configure Logu with the reserved `local_fusion.logu` config name:
 }
 ```
 
-When you select `logu/logu`, OpenCode renders the current conversation into a transcript, runs `local_fusion.logu`, and returns the synthesizer output as the assistant response in the parent session.
+#### Scratch Research Mode
 
-The Logu lead only orchestrates the child stages. It does not use normal tool calling itself.
+Use `all` or `parent_without_teams` on branches or the judge when they need temporary notes. For Logu branch and judge stages, write-capable policies are isolated to a per-stage temporary scratch directory outside all session roots.
 
-For Logu branch and judge stages, write-capable policies are isolated to a per-stage temporary scratch directory. They can research and draft scratch files there, but they must not edit workspace files. The synthesizer is the only stage that should apply final workspace edits.
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "local_fusion": {
+    "logu": {
+      "branches": [
+        {
+          "model": "anthropic/claude-sonnet-4-5",
+          "agent": "plan",
+          "prompt": "Trace the code path. Use scratch files only for temporary notes.",
+          "toolPolicy": "all"
+        },
+        {
+          "model": "openai/gpt-5",
+          "variant": "high",
+          "agent": "plan",
+          "prompt": "Independently analyze architecture tradeoffs and migration risks.",
+          "toolPolicy": "parent_without_teams"
+        }
+      ],
+      "judge": {
+        "model": "openai/gpt-5-mini",
+        "prompt": "Compare branch evidence and identify the strongest recommendation.",
+        "toolPolicy": "all"
+      },
+      "synthesizer": {
+        "model": "anthropic/claude-sonnet-4-5",
+        "prompt": "Return the final answer only. Include concrete file paths and rationale.",
+        "toolPolicy": "readonly"
+      }
+    }
+  }
+}
+```
 
 Scratch files are temporary-only artifacts, not workspace changes. Branch and judge stages can use `write` and `edit` only inside their assigned scratch directory; `apply_patch` and workspace edits are unavailable. OpenCode places scratch directories outside all session roots. It starts from the system temp directory and falls back to a sibling temp base if the default scratch root would be inside a session root. Scratch directory retention is unspecified and not a cleanup guarantee.
+
+#### Implementation Mode
+
+Use a write-capable synthesizer when Logu should apply final workspace edits after branches and the judge finish. Keep branches focused on research and let only the synthesizer edit the workspace.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "local_fusion": {
+    "logu": {
+      "branches": [
+        {
+          "model": "anthropic/claude-sonnet-4-5",
+          "agent": "plan",
+          "prompt": "Research the smallest correct implementation. Do not edit workspace files.",
+          "toolPolicy": "readonly"
+        },
+        {
+          "model": "openai/gpt-5",
+          "variant": "high",
+          "agent": "plan",
+          "prompt": "Look for regressions, tests, and simpler alternatives. Do not edit workspace files.",
+          "toolPolicy": "readonly"
+        }
+      ],
+      "judge": {
+        "model": "openai/gpt-5-mini",
+        "prompt": "Select the safest implementation path and call out unresolved risks.",
+        "toolPolicy": "none"
+      },
+      "synthesizer": {
+        "model": "anthropic/claude-sonnet-4-5",
+        "agent": "build",
+        "prompt": "Implement only the selected final changes, then verify them when possible.",
+        "toolPolicy": "all"
+      }
+    }
+  }
+}
+```
+
+For Logu branch and judge stages, write-capable policies are isolated to scratch. The synthesizer is the only stage that should apply final workspace edits.
 
 Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
 
@@ -115,6 +257,13 @@ Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesize
 - `synthesizer.toolPolicy` defaults to `"none"`.
 
 Use `"readonly"` when a child stage should inspect files and search the workspace without making changes. Use `"none"` when a child stage should answer from the prompt and conversation context only.
+
+| Policy | Normal `/local_fusion` | Logu branch or judge | Logu synthesizer |
+| --- | --- | --- | --- |
+| `none` | No tools | No tools | No tools |
+| `readonly` | Read, search, web, and LSP tools | Read, search, web, and LSP tools | Read, search, web, and LSP tools |
+| `parent_without_teams` | Rejected | Scratch-scoped `write` and `edit`; no workspace edits, `apply_patch`, teams, or nested Local Fusion | Parent-style delegated tools with `team_create`, `team_spawn`, and `local_fusion` disabled |
+| `all` | Rejected | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch` | Unrestricted tool map, still subject to parent and session permissions |
 
 `"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu synthesizer use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. For Logu branches and judge, write-capable access is limited to a per-stage temporary scratch directory outside session roots; workspace edits and `apply_patch` remain denied. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
 
@@ -182,6 +331,17 @@ Inline `local_fusion` tool calls support `"readonly"` and `"none"` branch polici
 
 ---
 
+## Local Fusion vs Logu
+
+| Use case | Choose | Why |
+| --- | --- | --- |
+| Run a named review, planning, or comparison workflow on demand | `/local_fusion <config>` | The slash command sends one explicit prompt to one named config. |
+| Make compound reasoning feel like the active assistant model | `logu/logu` | The model picker route runs `local_fusion.logu` against the current conversation transcript. |
+| Let only the final stage edit files after multiple research branches finish | `logu/logu` with a write-capable synthesizer | Branch and judge writes stay scratch-scoped, while the synthesizer can apply final workspace edits when tools and permissions allow it. |
+| Use inline tool calls from a normal assistant turn | Inline `local_fusion` tool call | Inline calls support ad hoc `readonly` and `none` branch policies without a named config. |
+
+---
+
 ## Failure Modes
 
 If `logu/logu` is selected without `local_fusion.logu`, the assistant turn fails with:
@@ -200,7 +360,18 @@ logu config cannot reference logu/logu at synthesizer.model
 
 A timed-out branch is recorded as a branch failure with `Branch timed out after <timeout>ms`. Logu continues when at least one branch succeeds.
 
+In the TUI sidebar, timed-out Logu child sessions are marked as `timed out`.
+
 If every branch fails, the parent assistant turn fails with `logu failed: All compound branches failed: ...`.
+
+If a normal `/local_fusion` config or inline tool call uses a Logu-only policy, the run fails with:
+
+```txt
+parent_without_teams toolPolicy is only supported in logu mode
+all toolPolicy is only supported in logu mode
+```
+
+If the parent Logu assistant turn is aborted or interrupted, OpenCode cancels active child sessions and stops before starting later stages.
 
 Logu is not available in V2 sessions in this first pass. It is only routed through the current in-process Local Fusion runtime.
 
