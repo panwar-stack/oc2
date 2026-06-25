@@ -69,7 +69,7 @@ Configure Logu with the reserved `local_fusion.logu` config name:
         {
           "model": "anthropic/claude-sonnet-4-5",
           "agent": "build",
-          "toolPolicy": "parent_without_teams"
+          "toolPolicy": "all"
         },
         {
           "model": "openai/gpt-5",
@@ -78,10 +78,12 @@ Configure Logu with the reserved `local_fusion.logu` config name:
         }
       ],
       "judge": {
-        "model": "openai/gpt-5-mini"
+        "model": "openai/gpt-5-mini",
+        "toolPolicy": "readonly"
       },
       "synthesizer": {
-        "model": "anthropic/claude-sonnet-4-5"
+        "model": "anthropic/claude-sonnet-4-5",
+        "toolPolicy": "all"
       },
       "limits": {
         "timeout": 120000,
@@ -94,17 +96,25 @@ Configure Logu with the reserved `local_fusion.logu` config name:
 
 When you select `logu/logu`, OpenCode renders the current conversation into a transcript, runs `local_fusion.logu`, and returns the synthesizer output as the assistant response in the parent session.
 
+The Logu lead only orchestrates the child stages. It does not use normal tool calling itself.
+
 Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
 
 ### Tool Policy
 
-`toolPolicy` is configured per branch. Use `"readonly"` when a branch should inspect files and search the workspace without making changes. Use `"none"` when a branch should answer from the prompt and conversation context only.
+`toolPolicy` controls tool access for Local Fusion child stages.
 
-Branches default to `"readonly"`, while the judge and synthesizer always run with tools disabled.
+- `branches[].toolPolicy` defaults to `"readonly"`.
+- `judge.toolPolicy` defaults to `"none"`.
+- `synthesizer.toolPolicy` defaults to `"none"`.
 
-`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu branch use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for the branch. Branch-spawned subagents also cannot create agent teams or invoke nested local fusion.
+Use `"readonly"` when a child stage should inspect files and search the workspace without making changes. Use `"none"` when a child stage should answer from the prompt and conversation context only.
 
-The `/local_fusion` command rejects `"parent_without_teams"`; use `"readonly"` or `"none"` for normal Local Fusion runs.
+`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu child stage use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
+
+`"all"` is only supported by `local_fusion.logu`. It gives that Logu child stage the unrestricted tool map, still subject to parent and session permissions.
+
+The `/local_fusion` command rejects `"parent_without_teams"` and `"all"`; use `"readonly"` or `"none"` for normal Local Fusion runs.
 
 ```json title="opencode.json"
 {
@@ -124,10 +134,12 @@ The `/local_fusion` command rejects `"parent_without_teams"`; use `"readonly"` o
         }
       ],
       "judge": {
-        "model": "openai/gpt-5-mini"
+        "model": "openai/gpt-5-mini",
+        "toolPolicy": "none"
       },
       "synthesizer": {
-        "model": "anthropic/claude-sonnet-4-5"
+        "model": "anthropic/claude-sonnet-4-5",
+        "toolPolicy": "readonly"
       }
     }
   }
@@ -135,6 +147,8 @@ The `/local_fusion` command rejects `"parent_without_teams"`; use `"readonly"` o
 ```
 
 You can also set `toolPolicy` on inline `local_fusion` tool calls:
+
+Inline `local_fusion` tool calls support `"readonly"` and `"none"` branch policies.
 
 ```json
 {
