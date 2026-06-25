@@ -51,6 +51,16 @@ const loguConfig = {
   },
 }
 
+const customLoguConfig = {
+  local_fusion: {
+    custom: {
+      branches: [{ model: "test/custom-branch" }],
+      judge: { model: "test/custom-judge" },
+      synthesizer: { model: "test/custom-synth" },
+    },
+  },
+}
+
 function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
   const id = MessageID.ascending()
   return {
@@ -91,7 +101,7 @@ function promptOps(input?: {
 }
 
 function defaultText(prompt: SessionPrompt.PromptInput) {
-  if (String(prompt.model?.modelID) === "judge") {
+  if (String(prompt.model?.modelID).endsWith("judge")) {
     return JSON.stringify({
       consensus: ["ok"],
       contradictions: [],
@@ -101,7 +111,7 @@ function defaultText(prompt: SessionPrompt.PromptInput) {
       confidence: "high",
     })
   }
-  if (String(prompt.model?.modelID) === "synth") return "final answer"
+  if (String(prompt.model?.modelID).endsWith("synth")) return "final answer"
   return "ok"
 }
 
@@ -131,7 +141,10 @@ function loguModel(): Provider.Model {
   }
 }
 
-function loguInput(sessionID: SessionID): LLM.StreamInput {
+function loguInput(
+  sessionID: SessionID,
+  messages: ModelMessage[] = [{ role: "user", content: "hello" }],
+): LLM.StreamInput {
   return {
     user: {
       id: MessageID.ascending(),
@@ -145,8 +158,29 @@ function loguInput(sessionID: SessionID): LLM.StreamInput {
     model: loguModel(),
     agent,
     system: [],
-    messages: [{ role: "user", content: "hello" }],
+    messages,
     tools: {},
+  }
+}
+
+function directModel(): Provider.Model {
+  return {
+    ...loguModel(),
+    id: ModelV2.ID.make("direct"),
+    providerID: ProviderV2.ID.make("test"),
+    name: "direct",
+    api: { id: "direct", url: "", npm: "" },
+  }
+}
+
+function providerInfo(): Provider.Info {
+  return {
+    id: ProviderV2.ID.make("test"),
+    source: "custom",
+    name: "Test",
+    env: [],
+    options: {},
+    models: { direct: directModel() },
   }
 }
 
@@ -159,6 +193,31 @@ function llmLayerWithoutProviderPath() {
         getModel: () => Effect.die("provider model lookup should be bypassed"),
         getLanguage: () => Effect.die("provider language lookup should be bypassed"),
         getProvider: () => Effect.die("provider info lookup should be bypassed"),
+      }),
+    ),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer)))),
+    Layer.provide(RuntimeFlags.layer({})),
+  )
+}
+
+function llmLayerWithDirectProviderPath(calls: string[]) {
+  return LLM.layer.pipe(
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(
+      Layer.mock(Provider.Service, {
+        getModel: (providerID, modelID) =>
+          Effect.sync(() => {
+            calls.push(`${providerID}/${modelID}`)
+            return directModel()
+          }),
+        getLanguage: (model) =>
+          Effect.sync(() => {
+            calls.push(`language:${model.providerID}/${model.id}`)
+            throw new Error("direct provider path selected")
+          }),
+        getProvider: () => Effect.succeed(providerInfo()),
       }),
     ),
     Layer.provide(Plugin.defaultLayer),
@@ -196,7 +255,9 @@ describe("session logu route", () => {
   test("routes complex latest user requests to fusion", () => {
     for (const content of [
       "please do a code review of this diff",
+      "perform a security review of this auth flow",
       "compare multiple approaches and tradeoffs for the architecture",
+      "write a spec for the new routing behavior",
       "write an implementation plan for the migration",
       "find the root cause of this auth serialization regression",
     ]) {
@@ -538,6 +599,130 @@ describe("session logu", () => {
         })
       }),
     { config: loguConfig },
+  )
+
+  it.instance(
+    "routes simple auto prompts through the direct provider path at runtime",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = []
+        const exit = yield* LLM.Service.use((svc) =>
+          svc.stream(loguInput(SessionID.make("session-logu-auto-direct"))).pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithDirectProviderPath(calls)), Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(errorMessage(exit)).toContain("direct provider path selected")
+        expect(calls).toEqual(["test/direct", "language:test/direct"])
+      }),
+    { config: { logu: { model: "test/direct", routing: { mode: "auto" } } } },
+  )
+
+  it.instance(
+    "routes complex auto prompts through fusion at runtime",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "parent", agent: "build" })
+        const events = yield* LLM.Service.use((svc) =>
+          svc
+            .stream({
+              ...loguInput(parent.id, [{ role: "user", content: "please do a security review of this diff" }]),
+              promptOps: promptOps(),
+            })
+            .pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()))
+        const children = yield* sessions.children(parent.id)
+
+        expect(Array.from(events).find((event) => event.type === "text-delta")).toMatchObject({ text: "final answer" })
+        expect(children.map((child) => child.title)).toEqual(["Logu branch #1", "Logu judge", "Logu synthesizer"])
+      }),
+    { config: { ...loguConfig, logu: { model: "test/direct", routing: { mode: "auto" } } } },
+  )
+
+  it.instance(
+    "uses custom logu fusion config when auto selects fusion",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "parent", agent: "build" })
+        const events = yield* LLM.Service.use((svc) =>
+          svc
+            .stream({
+              ...loguInput(parent.id, [{ role: "user", content: "write a spec for this migration" }]),
+              promptOps: promptOps(),
+            })
+            .pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()))
+        const children = yield* sessions.children(parent.id)
+
+        expect(Array.from(events).find((event) => event.type === "text-delta")).toMatchObject({ text: "final answer" })
+        expect(children.map((child) => child.metadata?.logu?.model)).toEqual([
+          "test/custom-branch",
+          "test/custom-judge",
+          "test/custom-synth",
+        ])
+      }),
+    {
+      config: {
+        ...customLoguConfig,
+        logu: { model: "test/direct", fusion: "custom", routing: { mode: "auto" } },
+      },
+    },
+  )
+
+  it.instance(
+    "fails missing custom fusion config only when auto selects fusion",
+    () =>
+      Effect.gen(function* () {
+        const directCalls: string[] = []
+        const directExit = yield* LLM.Service.use((svc) =>
+          svc.stream(loguInput(SessionID.make("session-logu-auto-custom-direct"))).pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithDirectProviderPath(directCalls)), Effect.exit)
+        const fusionExit = yield* LLM.Service.use((svc) =>
+          svc
+            .stream(
+              loguInput(SessionID.make("session-logu-auto-custom-missing"), [
+                { role: "user", content: "please do a security review" },
+              ]),
+            )
+            .pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()), Effect.exit)
+
+        expect(Exit.isFailure(directExit)).toBe(true)
+        expect(errorMessage(directExit)).toContain("direct provider path selected")
+        expect(directCalls).toEqual(["test/direct", "language:test/direct"])
+        expect(Exit.isFailure(fusionExit)).toBe(true)
+        expect(errorMessage(fusionExit)).toContain("logu fusion route requires local_fusion.custom config")
+        expect(errorMessage(fusionExit)).toContain("packages/web/src/content/docs/local-fusion.mdx")
+      }),
+    { config: { logu: { model: "test/direct", fusion: "custom", routing: { mode: "auto" } } } },
+  )
+
+  it.instance(
+    "fails missing direct model only when auto selects direct",
+    () =>
+      Effect.gen(function* () {
+        const directExit = yield* LLM.Service.use((svc) =>
+          svc.stream(loguInput(SessionID.make("session-logu-auto-missing-model"))).pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()), Effect.exit)
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "parent", agent: "build" })
+        const fusionEvents = yield* LLM.Service.use((svc) =>
+          svc
+            .stream({
+              ...loguInput(parent.id, [{ role: "user", content: "write an implementation plan for the migration" }]),
+              promptOps: promptOps(),
+            })
+            .pipe(Stream.runCollect),
+        ).pipe(Effect.provide(llmLayerWithoutProviderPath()))
+
+        expect(Exit.isFailure(directExit)).toBe(true)
+        expect(errorMessage(directExit)).toContain("logu direct route requires logu.model")
+        expect(Array.from(fusionEvents).find((event) => event.type === "text-delta")).toMatchObject({
+          text: "final answer",
+        })
+      }),
+    { config: { ...loguConfig, logu: { routing: { mode: "auto" } } } },
   )
 
   it.instance(
