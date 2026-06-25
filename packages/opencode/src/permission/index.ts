@@ -44,15 +44,37 @@ interface State {
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
-  return (
-    rulesets
-      .flat()
-      .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern)) ?? {
-      action: "ask",
-      permission,
-      pattern: "*",
-    }
-  )
+  const rules = rulesets.flat()
+  const match = (next: string) =>
+    rules.findLast((rule) => Wildcard.match(next, rule.permission) && Wildcard.match(pattern, rule.pattern))
+  if (permission === "apply_patch") {
+    const deny = rules.findLast(
+      (rule) =>
+        rule.action === "deny" && Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern),
+    )
+    if (deny) return deny
+    const editRule = match("edit")
+    if (editRule?.action === "deny") return editRule
+    const allow = rules.findLast(
+      (rule) =>
+        rule.action === "allow" && Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern),
+    )
+    if (allow) return allow
+    return (
+      editRule ?? {
+        action: "ask",
+        permission,
+        pattern: "*",
+      }
+    )
+  }
+  const rule = match(permission)
+  if (rule) return rule
+  return {
+    action: "ask",
+    permission,
+    pattern: "*",
+  }
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}

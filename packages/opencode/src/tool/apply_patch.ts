@@ -215,16 +215,19 @@ export const ApplyPatchTool = Tool.define(
       }))
 
       // Check permissions if needed
-      const relativePaths = fileChanges.map((change) => change.relativePath)
+      const relativePaths = Array.from(
+        new Set(fileChanges.flatMap((change) => [change.relativePath, change.moveRelativePath].filter((path) => path !== undefined))),
+      )
+      const metadata = {
+        filepath: relativePaths.join(", "),
+        diff: totalDiff,
+        files,
+      }
       yield* ctx.ask({
-        permission: "edit",
+        permission: "apply_patch",
         patterns: relativePaths,
         always: ["*"],
-        metadata: {
-          filepath: relativePaths.join(", "),
-          diff: totalDiff,
-          files,
-        },
+        metadata,
       })
 
       // Apply the changes

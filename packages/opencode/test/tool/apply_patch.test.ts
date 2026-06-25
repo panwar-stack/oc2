@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import path from "path"
 import * as fs from "fs/promises"
 import { Cause, Effect, Exit, Layer } from "effect"
@@ -14,6 +15,8 @@ import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } f
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Session } from "@/session/session"
 import { testEffect } from "../lib/effect"
+import { Permission } from "../../src/permission"
+import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 
 const it = testEffect(
   Layer.mergeAll(
@@ -85,6 +88,22 @@ const readText = (filepath: string) => Effect.promise(() => fs.readFile(filepath
 const writeText = (filepath: string, content: string) => Effect.promise(() => fs.writeFile(filepath, content, "utf-8"))
 const makeDir = (dir: string) => Effect.promise(() => fs.mkdir(dir, { recursive: true }))
 
+type ScratchRole = { type: "branch"; index: number; tempDir: string } | { type: "judge"; tempDir: string }
+
+const scratchRules = (root: string, role: ScratchRole) =>
+  SessionCompoundToolPolicy.resolveChildPermission([], "all", "logu", { role, root })
+
+const permissionCtx = (ruleset: PermissionV1.Ruleset): ToolCtx => ({
+  ...baseCtx,
+  ask: (request) => {
+    const denied = request.patterns.find(
+      (pattern) => Permission.evaluate(request.permission, pattern, ruleset).action !== "allow",
+    )
+    if (denied) return Effect.die(new PermissionV1.DeniedError({ ruleset }))
+    return Effect.void
+  },
+})
+
 const expectFailure = <A, E, R>(effect: Effect.Effect<A, E, R>, message?: string) =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(effect)
@@ -129,7 +148,7 @@ describe("tool.apply_patch freeform", () => {
 
       expect(yield* readText(filepath)).toBe("hello\n")
       expect(requests.find((request) => request.permission === "external_directory")).toBeUndefined()
-      expect(requests.find((request) => request.permission === "edit")?.patterns).toEqual(["added.txt"])
+      expect(requests.find((request) => request.permission === "apply_patch")?.patterns).toEqual(["added.txt"])
     }),
   )
 
@@ -180,10 +199,12 @@ describe("tool.apply_patch freeform", () => {
           expect(result.output).not.toContain("\\")
         }
         expect(result.metadata.diff).toContain("Index:")
-        expect(calls.length).toBe(1)
+        expect(calls.map((call) => call.permission)).toEqual(["apply_patch"])
 
         // Verify permission metadata includes files array for UI rendering
-        const permissionCall = calls[0]
+        const permissionCall = calls.find((call) => call.permission === "apply_patch")
+        expect(permissionCall).toBeDefined()
+        if (!permissionCall) throw new Error("missing apply_patch permission call")
         expect(permissionCall.metadata.files).toHaveLength(3)
         expect(permissionCall.metadata.files.map((f) => f.type).sort()).toEqual(["add", "delete", "update"])
 
@@ -217,8 +238,10 @@ describe("tool.apply_patch freeform", () => {
 
         yield* execute({ patchText }, ctx)
 
-        expect(calls.length).toBe(1)
-        const permissionCall = calls[0]
+        expect(calls.map((call) => call.permission)).toEqual(["apply_patch"])
+        const permissionCall = calls.find((call) => call.permission === "apply_patch")
+        expect(permissionCall).toBeDefined()
+        if (!permissionCall) throw new Error("missing apply_patch permission call")
         expect(permissionCall.metadata.files).toHaveLength(1)
 
         const moveFile = permissionCall.metadata.files[0]
@@ -260,8 +283,8 @@ describe("tool.apply_patch freeform", () => {
 
       yield* execute({ patchText }, ctx)
 
-      expect(calls.length).toBe(1)
-      const shown = calls[0].metadata.files[0]?.patch ?? ""
+      expect(calls.map((call) => call.permission)).toEqual(["apply_patch"])
+      const shown = calls.find((call) => call.permission === "apply_patch")?.metadata.files[0]?.patch ?? ""
       expect(shown).not.toContain(bom)
       expect(shown).not.toContain("-using System;")
       expect(shown).not.toContain("+using System;")
@@ -269,6 +292,190 @@ describe("tool.apply_patch freeform", () => {
       const content = yield* readText(target)
       expect(content.charCodeAt(0)).toBe(0xfeff)
       expect(content.slice(1)).toBe("using System;\n\nclass Test {}\nclass Next {}\n")
+    }),
+  )
+
+  it.live("denies branch and judge scratch apply_patch when invoked directly", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const branchDir = yield* tmpdirScoped()
+      const judgeDir = yield* tmpdirScoped()
+
+      const branchRules = scratchRules(primary, { type: "branch", index: 0, tempDir: branchDir })
+      const judgeRules = scratchRules(primary, { type: "judge", tempDir: judgeDir })
+      expect(Permission.evaluate("apply_patch", "*", branchRules).action).toBe("deny")
+      expect(Permission.evaluate("apply_patch", "*", judgeRules).action).toBe("deny")
+
+      const branchFile = path.join(branchDir, "branch.txt")
+      const judgeFile = path.join(judgeDir, "judge.txt")
+      yield* writeText(branchFile, "old branch\n")
+      yield* writeText(judgeFile, "old judge\n")
+
+      yield* provideInstance(primary)(
+        expectFailure(
+          execute(
+            {
+              patchText: [
+                "*** Begin Patch",
+                `*** Update File: ${branchFile}`,
+                "@@",
+                "-old branch",
+                "+new branch",
+                "*** End Patch",
+              ].join("\n"),
+            },
+            permissionCtx(branchRules),
+          ),
+        ),
+      )
+      yield* provideInstance(primary)(
+        expectFailure(
+          execute(
+            {
+              patchText: [
+                "*** Begin Patch",
+                `*** Update File: ${judgeFile}`,
+                "@@",
+                "-old judge",
+                "+new judge",
+                "*** End Patch",
+              ].join("\n"),
+            },
+            permissionCtx(judgeRules),
+          ),
+        ),
+      )
+
+      expect(yield* readText(branchFile)).toBe("old branch\n")
+      expect(yield* readText(judgeFile)).toBe("old judge\n")
+    }),
+  )
+
+  it.live("denies mixed branch scratch and workspace patches atomically", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const tempDir = yield* tmpdirScoped()
+      const ruleset = scratchRules(primary, { type: "branch", index: 0, tempDir })
+      const workspaceFile = path.join(primary, "workspace.txt")
+      const scratchFile = path.join(tempDir, "scratch.txt")
+      yield* writeText(workspaceFile, "old workspace\n")
+      yield* writeText(scratchFile, "old scratch\n")
+
+      yield* provideInstance(primary)(
+        expectFailure(
+          execute(
+            {
+              patchText: [
+                "*** Begin Patch",
+                `*** Update File: ${scratchFile}`,
+                "@@",
+                "-old scratch",
+                "+new scratch",
+                "*** Update File: workspace.txt",
+                "@@",
+                "-old workspace",
+                "+new workspace",
+                "*** End Patch",
+              ].join("\n"),
+            },
+            permissionCtx(ruleset),
+          ),
+        ),
+      )
+
+      expect(yield* readText(workspaceFile)).toBe("old workspace\n")
+      expect(yield* readText(scratchFile)).toBe("old scratch\n")
+    }),
+  )
+
+  it.instance("allows apply_patch through existing edit permission rules", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "edit-allowed.txt")
+      yield* writeText(target, "old\n")
+
+      yield* execute(
+        {
+          patchText: "*** Begin Patch\n*** Update File: edit-allowed.txt\n@@\n-old\n+new\n*** End Patch",
+        },
+        permissionCtx([{ permission: "edit", pattern: "*", action: "allow" }]),
+      )
+
+      expect(Permission.evaluate("apply_patch", "edit-allowed.txt", [
+        { permission: "edit", pattern: "*", action: "allow" },
+      ]).action).toBe("allow")
+      expect(yield* readText(target)).toBe("new\n")
+    }),
+  )
+
+  it.instance("keeps edit deny authoritative over apply_patch allow", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "edit-denied.txt")
+      const ruleset: PermissionV1.Ruleset = [
+        { permission: "apply_patch", pattern: "*", action: "allow" },
+        { permission: "edit", pattern: "*", action: "deny" },
+      ]
+      yield* writeText(target, "old\n")
+
+      expect(Permission.evaluate("apply_patch", "edit-denied.txt", ruleset).action).toBe("deny")
+      yield* expectFailure(
+        execute(
+          {
+            patchText: "*** Begin Patch\n*** Update File: edit-denied.txt\n@@\n-old\n+new\n*** End Patch",
+          },
+          permissionCtx(ruleset),
+        ),
+      )
+
+      expect(yield* readText(target)).toBe("old\n")
+    }),
+  )
+
+  it.instance("keeps edit deny authoritative over apply_patch allow for move destinations", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const source = path.join(test.directory, "source.txt")
+      const destination = path.join(test.directory, "blocked.txt")
+      const ruleset: PermissionV1.Ruleset = [
+        { permission: "apply_patch", pattern: "*", action: "allow" },
+        { permission: "edit", pattern: "blocked.txt", action: "deny" },
+      ]
+      yield* writeText(source, "old\n")
+
+      expect(Permission.evaluate("apply_patch", "source.txt", ruleset).action).toBe("allow")
+      expect(Permission.evaluate("apply_patch", "blocked.txt", ruleset).action).toBe("deny")
+      yield* expectFailure(
+        execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: source.txt\n*** Move to: blocked.txt\n@@\n-old\n+new\n*** End Patch",
+          },
+          permissionCtx(ruleset),
+        ),
+      )
+
+      expect(yield* readText(source)).toBe("old\n")
+      yield* expectReadFailure(destination)
+    }),
+  )
+
+  it.instance("honors persisted apply_patch allow when edit is not denied", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "apply-patch-allowed.txt")
+      const ruleset: PermissionV1.Ruleset = [{ permission: "apply_patch", pattern: "*", action: "allow" }]
+      yield* writeText(target, "old\n")
+
+      expect(Permission.evaluate("apply_patch", "apply-patch-allowed.txt", ruleset).action).toBe("allow")
+      yield* execute(
+        {
+          patchText: "*** Begin Patch\n*** Update File: apply-patch-allowed.txt\n@@\n-old\n+new\n*** End Patch",
+        },
+        permissionCtx(ruleset),
+      )
+
+      expect(yield* readText(target)).toBe("new\n")
     }),
   )
 

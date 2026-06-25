@@ -76,6 +76,7 @@ export function resolveChildPermission(
     return [
       { permission: "edit", pattern: "*", action: "deny" as const },
       { permission: "edit", pattern: tempEditPattern(input.role.tempDir, input.root), action: "allow" as const },
+      { permission: "apply_patch", pattern: "*", action: "deny" as const },
       { permission: "external_directory", pattern: tempExternalPattern(input.role.tempDir), action: "allow" as const },
       ...Object.keys(loguDelegatedTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const })),
       ...parentRules,
