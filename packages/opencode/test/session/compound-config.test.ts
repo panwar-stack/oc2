@@ -17,8 +17,8 @@ describe("compound config", () => {
         { model: "anthropic/claude-sonnet-4", toolPolicy: "readonly" },
         { model: "openai/gpt-5", toolPolicy: "none" },
       ],
-      judge: { model: "openai/gpt-5-mini" },
-      synthesizer: { model: "anthropic/claude-sonnet-4" },
+      judge: { model: "openai/gpt-5-mini", toolPolicy: "none" },
+      synthesizer: { model: "anthropic/claude-sonnet-4", toolPolicy: "none" },
       limits: {
         maxBranches: SessionCompoundConfig.DEFAULT_MAX_BRANCHES,
       },
@@ -54,6 +54,14 @@ describe("compound config", () => {
     expect(accepts({ ...validConfig, branches: [{ model: "anthropic/claude-sonnet-4", toolPolicy: "write" }] })).toBe(
       false,
     )
+  })
+
+  test("accepts all tool policy values on child stages", () => {
+    for (const toolPolicy of ["readonly", "none", "parent_without_teams", "all"]) {
+      expect(accepts({ ...validConfig, branches: [{ model: "anthropic/claude-sonnet-4", toolPolicy }] })).toBe(true)
+      expect(accepts({ ...validConfig, judge: { model: "openai/gpt-5-mini", toolPolicy } })).toBe(true)
+      expect(accepts({ ...validConfig, synthesizer: { model: "anthropic/claude-sonnet-4", toolPolicy } })).toBe(true)
+    }
   })
 
   test("rejects invalid model strings", () => {

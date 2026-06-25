@@ -5,7 +5,7 @@ import { PositiveInt } from "../schema"
 
 const Model = Schema.String.check(Schema.isPattern(/^[^/]+\/.+$/))
 
-export const ToolPolicy = Schema.Literals(["readonly", "none", "parent_without_teams"])
+export const ToolPolicy = Schema.Literals(["readonly", "none", "parent_without_teams", "all"])
 export type ToolPolicy = typeof ToolPolicy.Type
 
 export const Branch = Schema.Struct({
@@ -22,6 +22,7 @@ export const Judge = Schema.Struct({
   model: Model,
   variant: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
+  toolPolicy: Schema.optional(ToolPolicy),
 })
 export type Judge = typeof Judge.Type
 
@@ -29,6 +30,7 @@ export const Synthesizer = Schema.Struct({
   model: Model,
   variant: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
+  toolPolicy: Schema.optional(ToolPolicy),
 })
 export type Synthesizer = typeof Synthesizer.Type
 

@@ -22,8 +22,10 @@ export const Limits = ConfigLocalFusion.Limits
 export type Limits = Schema.Schema.Type<typeof Limits> & { maxBranches: number }
 
 export const Config = ConfigLocalFusion.Info
-export type Config = Omit<Schema.Schema.Type<typeof Config>, "branches" | "limits"> & {
+export type Config = Omit<Schema.Schema.Type<typeof Config>, "branches" | "judge" | "synthesizer" | "limits"> & {
   branches: Branch[]
+  judge: Judge & { toolPolicy: ToolPolicy }
+  synthesizer: Synthesizer & { toolPolicy: ToolPolicy }
   limits: Limits
 }
 
@@ -47,8 +49,14 @@ export function parse(input: unknown): Config {
       ...branch,
       toolPolicy: branch.toolPolicy ?? "readonly",
     })),
-    judge: config.judge,
-    synthesizer: config.synthesizer,
+    judge: {
+      ...config.judge,
+      toolPolicy: config.judge.toolPolicy ?? "none",
+    },
+    synthesizer: {
+      ...config.synthesizer,
+      toolPolicy: config.synthesizer.toolPolicy ?? "none",
+    },
     limits,
   }
 }
