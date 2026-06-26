@@ -564,7 +564,7 @@ describe("session compound runner", () => {
     }),
   )
 
-  it.instance("accepts write-capable tool policies outside logu mode", () =>
+  it.instance("accepts write-capable tool policies", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       for (const input of [
