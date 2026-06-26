@@ -9,6 +9,7 @@ import { InstanceRef } from "../../src/effect/instance-ref"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
+import type { LLMEvent as LLMEventType } from "@opencode-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
@@ -56,6 +57,8 @@ const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
 const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
+const collect = (input: LLM.StreamInput) =>
+  LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runCollect, Effect.map((events) => Array.from(events))))
 
 // drainWith builds an isolated runtime so the custom layer fully owns LLM and
 // its transitive deps — `Effect.provide(layer)` over an existing runtime layers
@@ -730,6 +733,100 @@ function configModel(model: ModelsDev.Model) {
   }
 }
 
+const fuguFixture = { providerID: "vivgrid", modelID: "gemini-3.1-pro-preview" }
+const fuguTarget = `${fuguFixture.providerID}/${fuguFixture.modelID}`
+
+function fuguConfig(fugu?: Partial<NonNullable<ConfigV1.Info["fugu"]>>): Partial<ConfigV1.Info> {
+  return {
+    enabled_providers: [fuguFixture.providerID],
+    provider: {
+      [fuguFixture.providerID]: {
+        options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+      },
+    },
+    fugu: {
+      branches: [{ model: fuguTarget, variant: "high" }, { model: fuguTarget, variant: "high" }],
+      synthesizer: { model: fuguTarget, variant: "high" },
+      ...fugu,
+    },
+  }
+}
+
+function testAgent(): Agent.Info {
+  return {
+    name: "test",
+    mode: "primary",
+    options: {},
+    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  }
+}
+
+function fuguInput(model: Provider.Model, input?: Partial<LLM.StreamInput>): LLM.StreamInput {
+  const sessionID = SessionID.make(input?.sessionID ?? "session-test-fugu")
+  const agent = input?.agent ?? testAgent()
+  return {
+    user: {
+      id: MessageID.make("msg_user-fugu"),
+      sessionID,
+      role: "user",
+      time: { created: Date.now() },
+      agent: agent.name,
+      model: { providerID: ProviderV2.ID.make("fugu"), modelID: ModelV2.ID.make("fugu") },
+    } satisfies SessionV1.User,
+    sessionID,
+    model,
+    agent,
+    system: ["System root instruction"],
+    messages: [{ role: "user", content: "Hello from caller" }],
+    tools: {},
+    ...input,
+  }
+}
+
+function visibleText(events: LLMEventType[]) {
+  return events
+    .filter((event) => event.type === "text-delta")
+    .map((event) => event.text)
+    .join("")
+}
+
+function reasoningEffort(body: Record<string, unknown>) {
+  return (body.reasoningEffort as string | undefined) ?? (body.reasoning_effort as string | undefined)
+}
+
+function fuguRuntimeModel(): Provider.Model {
+  return {
+    id: ModelV2.ID.make("fugu"),
+    providerID: ProviderV2.ID.make("fugu"),
+    name: "Fugu",
+    capabilities: {
+      toolcall: false,
+      attachment: false,
+      reasoning: false,
+      temperature: false,
+      interleaved: false,
+      input: { text: true, image: false, audio: false, video: false, pdf: false },
+      output: { text: true, image: false, audio: false, video: false, pdf: false },
+    },
+    api: { id: "fugu", url: "", npm: "" },
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    limit: { context: 200_000, output: 10_000 },
+    status: "active",
+    options: {},
+    headers: {},
+    release_date: "2026-01-01",
+  }
+}
+
+function expectFuguFailure(message: string) {
+  return Effect.gen(function* () {
+    const exit = yield* collect(fuguInput(fuguRuntimeModel())).pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain(message)
+    expect(state.queue).toHaveLength(0)
+  })
+}
+
 function createEventStream(chunks: unknown[], includeDone = false) {
   const lines = chunks.map((chunk) => `data: ${typeof chunk === "string" ? chunk : JSON.stringify(chunk)}`)
   if (includeDone) {
@@ -754,6 +851,193 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
 
 describe("session.llm.stream", () => {
   const vivgridFixture = { providerID: "vivgrid", modelID: "gemini-3.1-pro-preview" }
+
+  it.instance(
+    "runs fugu branches with original context and returns only synthesizer output",
+    () =>
+      Effect.gen(function* () {
+        const branchA = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("hidden branch a"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const branchB = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("hidden branch b"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const synth = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("final answer"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+
+        const events = yield* collect(
+          fuguInput(fuguRuntimeModel(), {
+            tools: {
+              lookup: tool({
+                description: "Lookup data",
+                inputSchema: z.object({}),
+                execute: async () => ({ output: "should not run" }),
+              }),
+            },
+          }),
+        )
+
+        const branchACapture = yield* Effect.promise(() => branchA)
+        const branchBCapture = yield* Effect.promise(() => branchB)
+        const synthCapture = yield* Effect.promise(() => synth)
+        const branchMessages = JSON.stringify(branchACapture.body.messages)
+        const synthMessages = JSON.stringify(synthCapture.body.messages)
+
+        expect(visibleText(events)).toBe("final answer")
+        expect(visibleText(events)).not.toContain("hidden branch")
+        expect(branchMessages).toContain("System root instruction")
+        expect(branchMessages).toContain("Hello from caller")
+        expect(branchMessages).not.toContain("final response synthesizer")
+        expect(branchACapture.body.tools).toBeUndefined()
+        expect(branchBCapture.body.tools).toBeUndefined()
+        expect(synthCapture.body.tools).toBeUndefined()
+        expect(reasoningEffort(branchACapture.body)).toBe("high")
+        expect(reasoningEffort(branchBCapture.body)).toBe("high")
+        expect(reasoningEffort(synthCapture.body)).toBe("high")
+        expect(synthMessages).toContain("final response synthesizer")
+        expect(synthMessages).toContain("hidden branch a")
+        expect(synthMessages).toContain("hidden branch b")
+      }),
+    { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "continues fugu synthesis after one branch fails",
+    () =>
+      Effect.gen(function* () {
+        const branchA = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("branch success"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const branchB = waitRequest("/chat/completions", new Response("branch failed", { status: 500 }))
+        const synth = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("partial final"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+
+        const events = yield* collect(fuguInput(fuguRuntimeModel()))
+        yield* Effect.promise(() => branchA)
+        yield* Effect.promise(() => branchB)
+        const synthCapture = yield* Effect.promise(() => synth)
+        const synthMessages = JSON.stringify(synthCapture.body.messages)
+
+        expect(visibleText(events)).toBe("partial final")
+        expect(synthMessages).toContain("branch success")
+        expect(synthMessages).toContain("Internal Server Error")
+      }),
+    { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "fails fugu before provider requests when config is missing",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* collect(fuguInput(fuguRuntimeModel())).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Fugu configuration is missing")
+        expect(state.queue).toHaveLength(0)
+      }),
+    { config: () => ({}) },
+  )
+
+  it.instance("rejects empty fugu branches before provider requests", () => expectFuguFailure("at least one fugu.branches"), {
+    config: () => fuguConfig({ branches: [] }),
+  })
+
+  it.instance("rejects missing fugu synthesizer before provider requests", () => expectFuguFailure("requires fugu.synthesizer"), {
+    config: () => fuguConfig({ synthesizer: undefined }),
+  })
+
+  it.instance("rejects invalid fugu target variants before provider requests", () => expectFuguFailure("does not support variant"), {
+    config: () => fuguConfig({ branches: [{ model: fuguTarget, variant: "missing" }] }),
+  })
+
+  it.instance("rejects circular fugu branch targets before provider requests", () => expectFuguFailure("cannot resolve to fugu/fugu"), {
+    config: () => fuguConfig({ branches: [{ model: "fugu/fugu" }] }),
+  })
+
+  it.instance("rejects circular fugu judge targets before provider requests", () => expectFuguFailure("cannot resolve to fugu/fugu"), {
+    config: () => fuguConfig({ branches: [{ model: fuguTarget }], judge: { model: "fugu/fugu" } }),
+  })
+
+  it.instance(
+    "rejects circular fugu synthesizer targets before provider requests",
+    () => expectFuguFailure("cannot resolve to fugu/fugu"),
+    {
+      config: () => fuguConfig({ branches: [{ model: fuguTarget }], synthesizer: { model: "fugu/fugu" } }),
+    },
+  )
+
+  it.instance(
+    "fails fugu when all branches fail",
+    () =>
+      Effect.gen(function* () {
+        waitRequest("/chat/completions", new Response("branch a failed", { status: 500 }))
+        waitRequest("/chat/completions", new Response("branch b failed", { status: 500 }))
+
+        const exit = yield* collect(fuguInput(fuguRuntimeModel())).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          const message = Cause.pretty(exit.cause)
+          expect(message).toContain("All fugu branches failed")
+          expect(message).not.toContain(fuguTarget)
+          expect(message).not.toContain("Internal Server Error")
+        }
+        expect(state.queue).toHaveLength(0)
+      }),
+    { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "fails fugu when synthesizer fails",
+    () =>
+      Effect.gen(function* () {
+        waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("branch a"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("branch b"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        waitRequest("/chat/completions", new Response("synth failed", { status: 500 }))
+
+        const exit = yield* collect(fuguInput(fuguRuntimeModel())).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Internal Server Error")
+        expect(state.queue).toHaveLength(0)
+      }),
+    { config: () => fuguConfig() },
+  )
+
   it.instance(
     "sends temperature, tokens, and reasoning options for openai-compatible models",
     () =>

@@ -26,6 +26,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
+import { LLMFugu } from "./llm/fugu"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 import type { TaskPromptOps } from "@/tool/task"
@@ -52,6 +53,11 @@ export type StreamInput = {
 export type StreamRequest = StreamInput & {
   abort: AbortSignal
 }
+
+type ProviderRunResult =
+  | { type: "native"; stream: Stream.Stream<LLMEventType, unknown> }
+  | { type: "event-stream"; stream: Stream.Stream<LLMEventType, unknown> }
+  | { type: "ai-sdk"; result: ReturnType<typeof streamText> }
 
 export interface Interface {
   readonly stream: (input: StreamInput) => Stream.Stream<LLMEventType, unknown>
@@ -97,6 +103,14 @@ const live: Layer.Layer<
         modelID: input.model.id,
         providerID: input.model.providerID,
       })
+
+      if (LLMFugu.isSelected(input.model)) {
+        const cfg = yield* config.get()
+        return {
+          type: "event-stream" as const,
+          stream: yield* LLMFugu.run(input, cfg.fugu, provider, executeProvider),
+        }
+      }
 
       const [language, cfg, item, info] = yield* Effect.all(
         [
@@ -354,6 +368,18 @@ const live: Layer.Layer<
       }
     })
 
+    const toEventStream = (result: ProviderRunResult) => {
+      if (result.type === "native" || result.type === "event-stream") return result.stream
+
+      const state = LLMAISDK.adapterState()
+      return Stream.fromAsyncIterable(result.result.fullStream, (e) => (e instanceof Error ? e : new Error(String(e)))).pipe(
+        Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
+        Stream.flatMap((events) => Stream.fromIterable(events)),
+      )
+    }
+
+    const executeProvider: LLMFugu.Execute = (input) => Stream.unwrap(runProvider(input).pipe(Effect.map(toEventStream)))
+
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
       return yield* runProvider(input)
     })
@@ -368,18 +394,7 @@ const live: Layer.Layer<
             )
 
             const result = yield* run({ ...input, abort: ctrl.signal })
-
-            if (result.type === "native") return result.stream
-
-            // Adapter seam: both runtimes expose the same LLMEvent stream. Native
-            // already returns one; AI SDK streams are converted here.
-            const state = LLMAISDK.adapterState()
-            return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
-              e instanceof Error ? e : new Error(String(e)),
-            ).pipe(
-              Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
-              Stream.flatMap((events) => Stream.fromIterable(events)),
-            )
+            return toEventStream(result)
           }),
         ),
       )
