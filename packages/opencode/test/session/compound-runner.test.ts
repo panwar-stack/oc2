@@ -177,7 +177,6 @@ describe("session compound runner", () => {
             return Effect.succeed(reply(input, "ok"))
           },
         },
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
       const failed = children.find((child) => String(child.model?.id) === "branch-b")
@@ -185,8 +184,7 @@ describe("session compound runner", () => {
       expect(result.successes).toHaveLength(1)
       expect(result.failures).toMatchObject([{ index: 1, model: "test/branch-b", reason: "branch failed" }])
       expect(Object.hasOwn(result.failures[0] ?? {}, "timedOut")).toBe(false)
-      expect(failed?.metadata?.logu?.timedOut).toBeUndefined()
-      expect(failed?.metadata?.logu?.timeoutMS).toBeUndefined()
+      expect(failed?.metadata).toBeUndefined()
     }),
   )
 
@@ -222,21 +220,12 @@ describe("session compound runner", () => {
           ...stubOps({ onCancel: (sessionID) => cancelled.push(sessionID) }),
           prompt: () => Effect.never,
         },
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
 
       expect(result.successes).toEqual([])
       expect(result.failures).toMatchObject([{ index: 0, model: "test/slow", timedOut: true }])
-      expect(children[0]?.metadata?.logu).toMatchObject({
-        stage: "branch",
-        index: 0,
-        model: "test/slow",
-        parentRunID: parent.id,
-        parentSessionID: parent.id,
-        timedOut: true,
-        timeoutMS: 1,
-      })
+      expect(children[0]?.metadata).toBeUndefined()
       expect(cancelled).toHaveLength(1)
     }),
   )
@@ -284,7 +273,6 @@ describe("session compound runner", () => {
             }),
         },
         abort: controller.signal,
-        mode: "logu",
       }).pipe(Effect.exit)
       const children = yield* sessions.children(parent.id)
 
@@ -333,7 +321,6 @@ describe("session compound runner", () => {
         config: config(),
         promptOps,
         abort: controller.signal,
-        mode: "logu",
       }).pipe(Effect.exit, Effect.forkIn(scope))
 
       yield* Deferred.await(firstStarted)
@@ -371,7 +358,6 @@ describe("session compound runner", () => {
             }),
         },
         abort: controller.signal,
-        mode: "logu",
       }).pipe(Effect.exit, Effect.forkIn(scope))
 
       yield* Deferred.await(started)
@@ -417,7 +403,6 @@ describe("session compound runner", () => {
             }),
         },
         abort: controller.signal,
-        mode: "logu",
       }).pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)

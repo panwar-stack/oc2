@@ -64,7 +64,7 @@ const run = Effect.fn("WriteToolTest.run")(function* (
 type ScratchRole = { type: "branch"; index: number; tempDir: string } | { type: "judge"; tempDir: string }
 
 function scratchRules(root: string, role: ScratchRole, parent: PermissionV1.Ruleset = []): PermissionV1.Ruleset {
-  return SessionCompoundToolPolicy.resolveChildPermission(parent, "all", undefined, {
+  return SessionCompoundToolPolicy.resolveChildPermission(parent, "all", {
     role,
     root,
   })

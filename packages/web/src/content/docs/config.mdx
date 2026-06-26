@@ -477,7 +477,7 @@ You can also configure [local models](/docs/models#local). [Learn more](/docs/mo
 
 You can define named configs for the [`local_fusion` tool](/docs/tools#local_fusion) with the `local_fusion` option.
 
-Branches and the judge are research stages. If Logu grants write-capable policies to a branch or judge, writes and edits are isolated to a temporary scratch directory outside session roots, and `apply_patch` remains unavailable. Scratch retention is unspecified; only the synthesizer should apply final edits to workspace files when its tools and permissions allow it.
+Branches and the judge are research stages. If a write-capable policy is configured for a branch or judge, writes and edits are isolated to a temporary scratch directory outside session roots, and `apply_patch` remains unavailable. Scratch retention is unspecified; only the synthesizer should apply final edits to workspace files when its tools and permissions allow it.
 
 ```json title="opencode.json"
 {

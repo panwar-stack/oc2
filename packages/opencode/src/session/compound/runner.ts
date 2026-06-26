@@ -54,12 +54,10 @@ export const run = Effect.fn("SessionCompound.run")(function* (input: {
   agent?: string
   promptOps: TaskPromptOps
   abort?: AbortSignal
-  mode?: "logu"
-  loguRunID?: string
 }) {
   SessionCompoundToolPolicy.validate(input)
   yield* interruptIfAborted(input.abort)
-  const compoundRunID = input.loguRunID ?? crypto.randomUUID()
+  const compoundRunID = crypto.randomUUID()
   const branches = yield* runBranches({ ...input, compoundRunID })
   yield* interruptIfAborted(input.abort)
   if (branches.successes.length === 0) {
@@ -99,13 +97,11 @@ export const runBranches = Effect.fn("SessionCompound.runBranches")(function* (i
   agent?: string
   promptOps: TaskPromptOps
   abort?: AbortSignal
-  mode?: "logu"
-  loguRunID?: string
   compoundRunID?: string
 }) {
   SessionCompoundToolPolicy.validate(input)
   yield* interruptIfAborted(input.abort)
-  const compoundRunID = input.compoundRunID ?? input.loguRunID ?? crypto.randomUUID()
+  const compoundRunID = input.compoundRunID ?? crypto.randomUUID()
   const results = yield* Effect.forEach(
     input.config.branches,
     (branch, index) => runBranch({ ...input, branch, index, compoundRunID }),
@@ -128,8 +124,6 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
   agent?: string
   promptOps: TaskPromptOps
   abort?: AbortSignal
-  mode?: "logu"
-  loguRunID?: string
   compoundRunID: string
 }) {
   const sessions = yield* Session.Service
@@ -149,28 +143,14 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
   }
   const child = yield* sessions.create({
     parentID: input.sessionID,
-    title: input.mode === "logu" ? `Logu branch #${input.index + 1}` : `Compound branch #${input.index + 1}`,
+    title: `Compound branch #${input.index + 1}`,
     agent,
     model: {
       id: model.modelID,
       providerID: model.providerID,
       ...(input.branch.variant ? { variant: input.branch.variant } : {}),
     },
-    ...(input.mode === "logu"
-      ? {
-          metadata: {
-            logu: {
-              stage: "branch",
-              index: input.index,
-              model: input.branch.model,
-              ...(input.branch.variant ? { variant: input.branch.variant } : {}),
-              parentRunID: input.loguRunID ?? input.sessionID,
-              parentSessionID: input.sessionID,
-            },
-          },
-        }
-      : {}),
-    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], input.branch.toolPolicy, input.mode, {
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], input.branch.toolPolicy, {
       role,
       root: parent.directory,
     }),
@@ -217,19 +197,6 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
         }
 
         yield* cancel
-        if (input.mode === "logu") {
-          yield* sessions.setMetadata({
-            sessionID: child.id,
-            metadata: {
-              ...child.metadata,
-              logu: {
-                ...child.metadata?.logu,
-                timedOut: true,
-                timeoutMS: timeout,
-              },
-            },
-          })
-        }
         return {
           type: "failure" as const,
           value: {
@@ -273,7 +240,6 @@ function promptBranch(
     index: number
     promptOps: TaskPromptOps
     abort?: AbortSignal
-    mode?: "logu"
   },
   sessionID: SessionID,
   permission: PermissionV1.Ruleset,
@@ -293,7 +259,7 @@ function promptBranch(
       },
       ...(input.branch.variant ? { variant: input.branch.variant } : {}),
       agent,
-      tools: SessionCompoundToolPolicy.resolvePromptTools(input.branch.toolPolicy, input.mode, permission, role),
+        tools: SessionCompoundToolPolicy.resolvePromptTools(input.branch.toolPolicy, permission, role),
       parts,
     })
     yield* interruptIfAborted(input.abort)

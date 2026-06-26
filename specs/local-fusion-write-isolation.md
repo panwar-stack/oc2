@@ -30,7 +30,7 @@ This prevents parallel branches from making the same repository edits and overwr
 - Synthesizer is the only compound stage allowed to make workspace edits.
 - Parent deny rules remain ceilings. A parent/session edit deny must not be bypassed by local fusion temp-write behavior.
 - Do not change existing `"readonly"` semantics. It must remain non-mutating.
-- Do not enable write-capable policies for normal `/local_fusion` if they are currently Logu-only; keep existing validation unless a later slice explicitly changes it.
+- Keep write-capable branch and judge policies scratch-scoped for normal `/local_fusion`.
 - Leave branch patch application and workspace diff merging out of the first pass.
 
 ## Permission Design
@@ -120,7 +120,7 @@ Before merge, run a fresh read-only sub-agent against the PR diff. It must verif
 - Add or update tests covering `Permission.disabled(...)` behavior when broad edit denies coexist with temp-specific edit allows.
 - Add tests for `write` and `edit` allowing branch/judge temp paths while denying repo paths.
 - Add tests that branch/judge `apply_patch` is not exposed or is denied.
-- Add tests that normal `/local_fusion` still rejects non-Logu `"all"` and `"parent_without_teams"` if current behavior remains unchanged.
+- Add tests that normal `/local_fusion` accepts `"all"` and `"parent_without_teams"` while keeping branch and judge writes scratch-scoped.
 
 Verification:
 
@@ -159,7 +159,7 @@ Use a fresh read-only sub-agent to compare docs and prompts against implemented 
 - Add first-class UI/reporting for branch scratch directories.
 - Add automatic cleanup policy for old local-fusion temp folders.
 - Add optional branch-generated patch artifacts that the synthesizer can inspect without applying.
-- Consider a public policy name such as `"research_with_temp_write"` only if users need to configure this behavior outside existing write-capable Logu policies.
+- Consider a public policy name such as `"research_with_temp_write"` only if users need a narrower name than the existing write-capable policies.
 
 ## Open Questions
 

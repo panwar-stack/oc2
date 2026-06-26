@@ -23,8 +23,6 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
   judge: SessionCompoundJudge.Result
   promptOps: TaskPromptOps
   abort?: AbortSignal
-  mode?: "logu"
-  loguRunID?: string
 }) {
   yield* interruptIfAborted(input.abort)
   const sessions = yield* Session.Service
@@ -33,26 +31,13 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
   const toolPolicy = input.synthesizer.toolPolicy ?? "none"
   const child = yield* sessions.create({
     parentID: input.sessionID,
-    title: input.mode === "logu" ? "Logu synthesizer" : "Compound synthesizer",
+    title: "Compound synthesizer",
     model: {
       id: model.modelID,
       providerID: model.providerID,
       ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
     },
-    ...(input.mode === "logu"
-      ? {
-          metadata: {
-            logu: {
-              stage: "synthesizer",
-              model: input.synthesizer.model,
-              ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
-              parentRunID: input.loguRunID ?? input.sessionID,
-              parentSessionID: input.sessionID,
-            },
-          },
-        }
-      : {}),
-    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy, input.mode),
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy),
   })
   const runCancel = yield* EffectBridge.make()
   const cancel = input.promptOps.cancel(child.id)
@@ -72,7 +57,7 @@ export const run = Effect.fn("SessionCompoundSynthesizer.run")(function* (input:
           sessionID: child.id,
           model: { providerID: model.providerID, modelID: model.modelID },
           ...(input.synthesizer.variant ? { variant: input.synthesizer.variant } : {}),
-          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, input.mode, child.permission ?? []),
+          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, child.permission ?? []),
           parts,
         })
         yield* interruptIfAborted(input.abort)

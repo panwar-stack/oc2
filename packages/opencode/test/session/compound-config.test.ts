@@ -66,12 +66,12 @@ describe("compound config", () => {
   })
 
   test("does not expose apply_patch to branch and judge scratch roles", () => {
-    const branchTools = SessionCompoundToolPolicy.resolvePromptTools("all", undefined, [], {
+    const branchTools = SessionCompoundToolPolicy.resolvePromptTools("all", [], {
       type: "branch",
       index: 0,
       tempDir: "/tmp/branch",
     })
-    const judgeTools = SessionCompoundToolPolicy.resolvePromptTools("parent_without_teams", undefined, [], {
+    const judgeTools = SessionCompoundToolPolicy.resolvePromptTools("parent_without_teams", [], {
       type: "judge",
       tempDir: "/tmp/judge",
     })

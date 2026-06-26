@@ -36,17 +36,15 @@ export type CompoundRole =
   | { type: "judge"; tempDir: string }
   | { type: "synthesizer" }
 
-export function validate(input: { config: SessionCompoundConfig.Config; mode?: "logu" }) {
+export function validate(input: { config: SessionCompoundConfig.Config }) {
   void input
 }
 
 export function resolvePromptTools(
   policy: SessionCompoundConfig.ToolPolicy,
-  mode: "logu" | undefined,
   permission: PermissionV1.Ruleset,
   role?: CompoundRole,
 ) {
-  void mode
   if (policy === "none") return noTools
   if (policy === "readonly") return readonlyTools
   if (isScratchRole(role)) return scratchTools
@@ -60,10 +58,8 @@ export function resolvePromptTools(
 export function resolveChildPermission(
   parent: PermissionV1.Ruleset,
   policy: SessionCompoundConfig.ToolPolicy,
-  mode: "logu" | undefined,
   input?: { role?: CompoundRole; root: string },
 ) {
-  void mode
   const parentRules = parent.filter(
     (rule) => rule.action === "deny" || (rule.permission === "external_directory" && rule.action === "allow"),
   )

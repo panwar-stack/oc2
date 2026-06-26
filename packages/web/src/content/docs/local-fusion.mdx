@@ -3,11 +3,11 @@ title: Local Fusion
 description: Fan out one prompt to multiple local model branches, judge the results, and synthesize a final answer.
 ---
 
-Local Fusion is a compound model workflow for moments when one model answer is not enough. It sends the same prompt to several configured branches, asks a judge model to compare the branch outputs, then has a synthesizer model produce one final response.
+Local Fusion is a compound workflow for moments when one model answer is not enough. It sends the same prompt to several configured branches, asks a judge model to compare the branch outputs, then has a synthesizer model produce one final response.
 
 Branches and the judge are research stages. They should not edit workspace files; only the synthesizer should apply final workspace edits when its tools and permissions allow it.
 
-That makes it useful for code reviews, architecture tradeoffs, migration planning, or any task where you want independent perspectives before committing to an answer.
+That makes Local Fusion useful for code reviews, architecture tradeoffs, migration planning, or any task where you want independent perspectives before committing to an answer.
 
 ---
 
@@ -97,83 +97,7 @@ Use this as a quick reference for named configs under `local_fusion`.
 
 `branches[].toolPolicy` defaults to `"readonly"`. `judge.toolPolicy` and `synthesizer.toolPolicy` default to `"none"`. `limits.maxBranches` defaults to `3`.
 
-### Logu Local Model
-
-`logu` is a local model exposed through the normal model picker as `logu/logu`. It does not require Logu provider credentials or a provider connect step.
-
-Without a top-level `logu` config, `logu/logu` keeps the legacy behavior: every prompt runs the reserved `local_fusion.logu` workflow. This preserves existing configs.
-
-To opt into adaptive routing, add top-level `logu` config. In adaptive mode, OpenCode deterministically routes simple prompts to a direct underlying model and complex prompts to a Local Fusion workflow.
-
-Select `logu/logu` from `/models` and prompt normally.
-
-```txt frame="none"
-/models
-# select logu/logu
-```
-
-```txt frame="none"
-Review this authentication refactor. Identify correctness risks, security regressions, missing tests, and any simpler implementation path.
-```
-
-When routed to fusion, Logu renders the current conversation into a deterministic transcript, runs the configured `local_fusion` workflow, and returns the synthesizer output as the assistant response in the parent session. `local_fusion.logu` remains the fusion workflow definition; top-level `logu` only controls routing and the direct model. The transcript includes system context, prior conversation messages, tool calls, tool results, and marks the latest user message as the latest request.
-
-For fusion routes, the Logu lead only orchestrates the child stages. It does not use normal tool calling itself. In the TUI, Logu child sessions appear in the sidebar with branch, judge, and synthesizer status, timeout indicators, and pending permission or question counts.
-
-#### Adaptive Routing
-
-```jsonc title="opencode.jsonc"
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "logu/logu",
-  "logu": {
-    "model": "anthropic/claude-sonnet-4-5",
-    "fusion": "logu",
-    "routing": {
-      "mode": "auto"
-    }
-  },
-  "local_fusion": {
-    "logu": {
-      "branches": [{ "model": "anthropic/claude-sonnet-4-5" }],
-      "judge": { "model": "openai/gpt-5-mini" },
-      "synthesizer": { "model": "anthropic/claude-sonnet-4-5" }
-    }
-  }
-}
-```
-
-`logu.model` is the underlying provider model used for direct routing. It is required only when the selected route is direct, and it cannot be `logu/logu`.
-
-`logu.fusion` selects the named `local_fusion` config used for fusion routing. It defaults to `"logu"`.
-
-`logu.routing.mode` controls routing:
-
-- `"auto"` routes simple prompts direct and complex prompts to fusion. This is the default when top-level `logu` exists and `routing.mode` is omitted.
-- `"always"` always uses fusion.
-- `"never"` always uses direct model execution.
-
-Use direct routing for greetings, simple factual questions, small explanations, one obvious edit, formatting or docs tweaks, and command-like requests. Use fusion routing for code review, architecture, security, migration, regression, root-cause analysis, database/auth/serialization issues, broad repo investigations, specs, implementation plans, tradeoffs, multiple approaches, long prompts, or recent failure/debugging context.
-
-#### Legacy Always-Fusion Logu
-
-```json title="opencode.json"
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "logu/logu",
-  "local_fusion": {
-    "logu": {
-      "branches": [{ "model": "anthropic/claude-sonnet-4-5" }],
-      "judge": { "model": "openai/gpt-5-mini" },
-      "synthesizer": { "model": "anthropic/claude-sonnet-4-5" }
-    }
-  }
-}
-```
-
-Omit top-level `logu` when you want the legacy behavior where every `logu/logu` prompt runs `local_fusion.logu`.
-
-#### Safe Review Mode
+### Safe Review Mode
 
 Use read-only branches when you want independent review without allowing branch stages to write anything.
 
@@ -181,7 +105,7 @@ Use read-only branches when you want independent review without allowing branch 
 {
   "$schema": "https://opencode.ai/config.json",
   "local_fusion": {
-    "logu": {
+    "safe-review": {
       "branches": [
         {
           "model": "anthropic/claude-sonnet-4-5",
@@ -220,15 +144,15 @@ Use read-only branches when you want independent review without allowing branch 
 }
 ```
 
-#### Scratch Research Mode
+### Scratch Research Mode
 
-Use `all` or `parent_without_teams` on branches or the judge when they need temporary notes. For Logu branch and judge stages, write-capable policies are isolated to a per-stage temporary scratch directory outside all session roots.
+Use `all` or `parent_without_teams` on branches or the judge when they need temporary notes. Write-capable branch and judge stages are isolated to a per-stage temporary scratch directory outside all session roots.
 
 ```json title="opencode.json"
 {
   "$schema": "https://opencode.ai/config.json",
   "local_fusion": {
-    "logu": {
+    "scratch-research": {
       "branches": [
         {
           "model": "anthropic/claude-sonnet-4-5",
@@ -261,15 +185,15 @@ Use `all` or `parent_without_teams` on branches or the judge when they need temp
 
 Scratch files are temporary-only artifacts, not workspace changes. Branch and judge stages can use `write` and `edit` only inside their assigned scratch directory; `apply_patch` and workspace edits are unavailable. OpenCode places scratch directories outside all session roots. It starts from the system temp directory and falls back to a sibling temp base if the default scratch root would be inside a session root. Scratch directory retention is unspecified and not a cleanup guarantee.
 
-#### Implementation Mode
+### Implementation Mode
 
-Use a write-capable synthesizer when Logu should apply final workspace edits after branches and the judge finish. Keep branches focused on research and let only the synthesizer edit the workspace.
+Use a write-capable synthesizer when Local Fusion should apply final workspace edits after branches and the judge finish. Keep branches focused on research and let only the synthesizer edit the workspace.
 
 ```json title="opencode.json"
 {
   "$schema": "https://opencode.ai/config.json",
   "local_fusion": {
-    "logu": {
+    "implementation-panel": {
       "branches": [
         {
           "model": "anthropic/claude-sonnet-4-5",
@@ -301,11 +225,11 @@ Use a write-capable synthesizer when Logu should apply final workspace edits aft
 }
 ```
 
-For Logu branch and judge stages, write-capable policies are isolated to scratch. The synthesizer is the only stage that should apply final workspace edits.
+For branches and the judge, write-capable policies are isolated to scratch. The synthesizer is the only stage that should apply final workspace edits.
 
-Do not use `logu/logu` inside a fusion workflow selected by Logu. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
+---
 
-### Tool Policy
+## Tool Policy
 
 `toolPolicy` controls tool access for Local Fusion child stages.
 
@@ -315,52 +239,18 @@ Do not use `logu/logu` inside a fusion workflow selected by Logu. Branch, judge,
 
 Use `"readonly"` when a child stage should inspect files and search the workspace without making changes. Use `"none"` when a child stage should answer from the prompt and conversation context only.
 
-| Policy | Normal `/local_fusion` | Logu branch or judge | Logu synthesizer |
+| Policy | Branch | Judge | Synthesizer |
 | --- | --- | --- | --- |
 | `none` | No tools | No tools | No tools |
 | `readonly` | Read, search, web, and LSP tools | Read, search, web, and LSP tools | Read, search, web, and LSP tools |
-| `parent_without_teams` | Rejected | Scratch-scoped `write` and `edit`; no workspace edits, `apply_patch`, teams, or nested Local Fusion | Parent-style delegated tools with `team_create`, `team_spawn`, and `local_fusion` disabled |
-| `all` | Rejected | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch` | Unrestricted tool map, still subject to parent and session permissions |
+| `parent_without_teams` | Scratch-scoped `write` and `edit`; no workspace edits, `apply_patch`, teams, or nested Local Fusion | Scratch-scoped `write` and `edit`; no workspace edits, `apply_patch`, teams, or nested Local Fusion | Parent-style tools with `team_create`, `team_spawn`, and `local_fusion` disabled |
+| `all` | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch` | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch` | Unrestricted tool map, still subject to parent and session permissions |
 
-`"parent_without_teams"` is only supported by `local_fusion.logu`. It lets a Logu synthesizer use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. For Logu branches and judge, write-capable access is limited to a per-stage temporary scratch directory outside session roots; workspace edits and `apply_patch` remain denied. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
+`"parent_without_teams"` lets the synthesizer use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. For branches and the judge, write-capable access is limited to a per-stage temporary scratch directory outside session roots; workspace edits and `apply_patch` remain denied. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
 
-`"all"` is only supported by `local_fusion.logu`. For the synthesizer, it gives the unrestricted tool map, still subject to parent and session permissions. For branches and judge, it exposes research tools plus scratch-file tools for the per-stage temporary directory; `apply_patch` and workspace edits remain unavailable.
-
-The `/local_fusion` command rejects `"parent_without_teams"` and `"all"`; use `"readonly"` or `"none"` for normal Local Fusion runs.
-
-```json title="opencode.json"
-{
-  "$schema": "https://opencode.ai/config.json",
-  "local_fusion": {
-    "mixed-review": {
-      "branches": [
-        {
-          "model": "anthropic/claude-sonnet-4-5",
-          "prompt": "Inspect the code and identify concrete correctness risks.",
-          "toolPolicy": "readonly"
-        },
-        {
-          "model": "openai/gpt-5",
-          "prompt": "Reason from the prompt only. Focus on architecture tradeoffs and missing assumptions.",
-          "toolPolicy": "none"
-        }
-      ],
-      "judge": {
-        "model": "openai/gpt-5-mini",
-        "toolPolicy": "none"
-      },
-      "synthesizer": {
-        "model": "anthropic/claude-sonnet-4-5",
-        "toolPolicy": "readonly"
-      }
-    }
-  }
-}
-```
+`"all"` gives the synthesizer the unrestricted tool map, still subject to parent and session permissions. For branches and the judge, it exposes research tools plus scratch-file tools for the per-stage temporary directory; `apply_patch` and workspace edits remain unavailable.
 
 You can also set `toolPolicy` on inline `local_fusion` tool calls:
-
-Inline `local_fusion` tool calls support `"readonly"` and `"none"` branch policies.
 
 ```json
 {
@@ -388,68 +278,14 @@ Inline `local_fusion` tool calls support `"readonly"` and `"none"` branch polici
 
 ---
 
-## Local Fusion vs Logu
-
-| Use case | Choose | Why |
-| --- | --- | --- |
-| Run a named review, planning, or comparison workflow on demand | `/local_fusion <config>` | The slash command sends one explicit prompt to one named config. |
-| Make compound reasoning feel like the active assistant model | `logu/logu` without top-level `logu` | Legacy behavior always runs `local_fusion.logu` against the current conversation transcript. |
-| Route simple prompts to one direct model and complex prompts to a fusion workflow | `logu/logu` with top-level `logu` | Adaptive routing is opt-in; `logu.model` handles direct routes and `local_fusion.<logu.fusion>` handles fusion routes. |
-| Let only the final stage edit files after multiple research branches finish | `logu/logu` with a write-capable synthesizer | Branch and judge writes stay scratch-scoped, while the synthesizer can apply final workspace edits when tools and permissions allow it. |
-| Use inline tool calls from a normal assistant turn | Inline `local_fusion` tool call | Inline calls support ad hoc `readonly` and `none` branch policies without a named config. |
-
----
-
 ## Failure Modes
 
-If `logu/logu` is selected without top-level `logu` and without `local_fusion.logu`, the legacy always-fusion run fails with:
-
-```txt
-logu requires local_fusion.logu config; see packages/web/src/content/docs/local-fusion.mdx
-```
-
-In adaptive routing, if the selected route is fusion and the configured fusion workflow is missing, the run fails with:
-
-```txt
-logu fusion route requires local_fusion.<name> config; see packages/web/src/content/docs/local-fusion.mdx
-```
-
-If the selected route is direct and `logu.model` is missing, the run fails with:
-
-```txt
-logu direct route requires logu.model
-```
-
-If `logu.model` references Logu itself, the run fails with:
-
-```txt
-logu.model cannot reference logu/logu
-```
-
-If the selected fusion workflow references `logu/logu` as an underlying model, the run fails before branch sessions are created. The error names the offending path:
-
-```txt
-logu config cannot reference logu/logu at branches[0].model
-logu config cannot reference logu/logu at judge.model
-logu config cannot reference logu/logu at synthesizer.model
-```
-
-A timed-out branch is recorded as a branch failure with `Branch timed out after <timeout>ms`. Logu continues when at least one branch succeeds.
-
-In the TUI sidebar, timed-out Logu child sessions are marked as `timed out`.
-
-If every branch fails, the parent assistant turn fails with `logu failed: All compound branches failed: ...`.
-
-If a normal `/local_fusion` config or inline tool call uses a Logu-only policy, the run fails with:
-
-```txt
-parent_without_teams toolPolicy is only supported in logu mode
-all toolPolicy is only supported in logu mode
-```
-
-If the parent Logu assistant turn is aborted or interrupted, OpenCode cancels active child sessions and stops before starting later stages.
-
-Logu is not available in V2 sessions in this first pass. It is only routed through the current in-process Local Fusion runtime.
+- Invalid inline config fails before branches start.
+- If every branch fails, the tool fails with branch failure summaries.
+- If at least one branch succeeds, judge and synthesizer still run with the successful outputs and explicit failure summaries.
+- Judge failure fails the tool; OpenCode does not silently synthesize from raw branch outputs.
+- Synthesizer failure fails the tool.
+- Branch timeouts are recorded as branch failures, and the run continues if another branch succeeds.
 
 ---
 

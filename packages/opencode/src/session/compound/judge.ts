@@ -39,8 +39,6 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
   branches: BranchResult
   promptOps: TaskPromptOps
   abort?: AbortSignal
-  mode?: "logu"
-  loguRunID?: string
   compoundRunID?: string
 }) {
   yield* interruptIfAborted(input.abort)
@@ -53,33 +51,20 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
     type: "judge" as const,
     tempDir: SessionCompoundToolPolicy.tempDirectory({
       parentSessionID: input.sessionID,
-      compoundRunID: input.compoundRunID ?? input.loguRunID ?? crypto.randomUUID(),
+      compoundRunID: input.compoundRunID ?? crypto.randomUUID(),
       role: { type: "judge" },
       rootDirectories: roots.map((root) => root.directory),
     }),
   }
   const child = yield* sessions.create({
     parentID: input.sessionID,
-    title: input.mode === "logu" ? "Logu judge" : "Compound judge",
+    title: "Compound judge",
     model: {
       id: model.modelID,
       providerID: model.providerID,
       ...(input.judge.variant ? { variant: input.judge.variant } : {}),
     },
-    ...(input.mode === "logu"
-      ? {
-          metadata: {
-            logu: {
-              stage: "judge",
-              model: input.judge.model,
-              ...(input.judge.variant ? { variant: input.judge.variant } : {}),
-              parentRunID: input.loguRunID ?? input.sessionID,
-              parentSessionID: input.sessionID,
-            },
-          },
-        }
-      : {}),
-    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy, input.mode, {
+    permission: SessionCompoundToolPolicy.resolveChildPermission(parent.permission ?? [], toolPolicy, {
       role,
       root: parent.directory,
     }),
@@ -102,7 +87,7 @@ export const run = Effect.fn("SessionCompoundJudge.run")(function* (input: {
           sessionID: child.id,
           model: { providerID: model.providerID, modelID: model.modelID },
           ...(input.judge.variant ? { variant: input.judge.variant } : {}),
-          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, input.mode, child.permission ?? [], role),
+          tools: SessionCompoundToolPolicy.resolvePromptTools(toolPolicy, child.permission ?? [], role),
           parts,
         })
         yield* interruptIfAborted(input.abort)

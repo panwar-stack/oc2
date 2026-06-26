@@ -44,7 +44,7 @@ function makeCtx() {
 type ScratchRole = { type: "branch"; index: number; tempDir: string } | { type: "judge"; tempDir: string }
 
 function scratchRules(root: string, role: ScratchRole, parent: PermissionV1.Ruleset = []): PermissionV1.Ruleset {
-  return SessionCompoundToolPolicy.resolveChildPermission(parent, "all", undefined, {
+  return SessionCompoundToolPolicy.resolveChildPermission(parent, "all", {
     role,
     root,
   })
@@ -95,7 +95,7 @@ describe("tool.assertExternalDirectory", () => {
       expect(
         Permission.disabled(
           ["write", "edit", "apply_patch", "local_fusion"],
-          SessionCompoundToolPolicy.resolveChildPermission([], "parent_without_teams", undefined, {
+          SessionCompoundToolPolicy.resolveChildPermission([], "parent_without_teams", {
             role: { type: "branch", index: 0, tempDir },
             root: primary,
           }),
