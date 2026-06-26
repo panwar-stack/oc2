@@ -95,6 +95,16 @@ function providerCfg(url: string) {
   }
 }
 
+function fuguProviderCfg(url: string) {
+  return {
+    ...providerCfg(url),
+    fugu: {
+      branches: [{ model: "test/test-model" }, { model: "test/test-model" }],
+      synthesizer: { model: "test/test-model" },
+    },
+  }
+}
+
 function agent(): Agent.Info {
   return {
     name: "build",
@@ -309,6 +319,101 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
         expect(parts.some((part) => part.type === "text" && part.text === "hello")).toBe(true)
       }),
     { config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("session.processor effect tests persist and stream only fugu synthesizer output", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+
+        yield* llm.push(
+          reply().text("hidden branch a").stop(),
+          reply().text("hidden branch b").stop(),
+          reply().text("final ").text("answer").stop(),
+        )
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "current fugu turn")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ProviderV2.ID.make("fugu"), ModelV2.ID.make("fugu"))
+        const deltas: string[] = []
+        const off = yield* events.listen((event) => {
+          if (event.type === SessionEvent.Text.Delta.type) {
+            const data = event.data as typeof SessionEvent.Text.Delta.data.Type
+            deltas.push(data.delta)
+          }
+          return Effect.void
+        })
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ProviderV2.ID.make("fugu"), modelID: ModelV2.ID.make("fugu") },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: ["system instruction", "developer instruction"],
+          messages: [
+            { role: "user", content: "prior user" },
+            { role: "assistant", content: "prior assistant" },
+            { role: "user", content: "current fugu turn" },
+          ],
+          tools: {},
+        })
+
+        yield* off
+
+        const parts = yield* MessageV2.parts(msg.id)
+        const text = parts.find((part): part is SessionV1.TextPart => part.type === "text")
+        const inputs = yield* llm.inputs
+        const serializedInputs = inputs.map((input) => JSON.stringify(input))
+        const synthInput = serializedInputs.find((input) => input.includes("final response synthesizer"))
+        const branchInputs = serializedInputs.filter((input) => !input.includes("final response synthesizer"))
+        const visibleParts = JSON.stringify(parts)
+        const streamedText = deltas.join("")
+
+        expect(value).toBe("continue")
+        expect(yield* llm.calls).toBe(3)
+        expect(text?.text).toBe("final answer")
+        expect(visibleParts).not.toContain("hidden branch")
+        expect(visibleParts).not.toContain("test/test-model")
+        expect(deltas).toEqual(["final ", "answer"])
+        expect(streamedText).not.toContain("hidden branch")
+        expect(streamedText).not.toContain("test/test-model")
+
+        expect(branchInputs).toHaveLength(2)
+        for (const input of branchInputs) {
+          expect(input).toContain("system instruction")
+          expect(input).toContain("developer instruction")
+          expect(input).toContain("prior user")
+          expect(input).toContain("prior assistant")
+          expect(input).toContain("current fugu turn")
+          expect(input).not.toContain("hidden branch")
+          expect(input).not.toContain("final response synthesizer")
+        }
+
+        expect(synthInput).toContain("system instruction")
+        expect(synthInput).toContain("developer instruction")
+        expect(synthInput).toContain("prior user")
+        expect(synthInput).toContain("prior assistant")
+        expect(synthInput).toContain("current fugu turn")
+        expect(synthInput).toContain("hidden branch a")
+        expect(synthInput).toContain("hidden branch b")
+      }),
+    { config: (url) => fuguProviderCfg(url) },
   ),
 )
 

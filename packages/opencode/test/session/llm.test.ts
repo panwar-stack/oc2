@@ -672,7 +672,8 @@ afterAll(() => {
   void state.server?.stop()
 })
 
-function createChatStream(text: string) {
+function createChatStream(text: string | string[]) {
+  const chunks = Array.isArray(text) ? text : [text]
   const payload =
     [
       `data: ${JSON.stringify({
@@ -680,11 +681,14 @@ function createChatStream(text: string) {
         object: "chat.completion.chunk",
         choices: [{ delta: { role: "assistant" } }],
       })}`,
-      `data: ${JSON.stringify({
-        id: "chatcmpl-1",
-        object: "chat.completion.chunk",
-        choices: [{ delta: { content: text } }],
-      })}`,
+      ...chunks.map(
+        (chunk) =>
+          `data: ${JSON.stringify({
+            id: "chatcmpl-1",
+            object: "chat.completion.chunk",
+            choices: [{ delta: { content: chunk } }],
+          })}`,
+      ),
       `data: ${JSON.stringify({
         id: "chatcmpl-1",
         object: "chat.completion.chunk",
@@ -784,10 +788,11 @@ function fuguInput(model: Provider.Model, input?: Partial<LLM.StreamInput>): LLM
 }
 
 function visibleText(events: LLMEventType[]) {
-  return events
-    .filter((event) => event.type === "text-delta")
-    .map((event) => event.text)
-    .join("")
+  return textDeltas(events).join("")
+}
+
+function textDeltas(events: LLMEventType[]) {
+  return events.filter((event) => event.type === "text-delta").map((event) => event.text)
 }
 
 function reasoningEffort(body: Record<string, unknown>) {
@@ -872,7 +877,7 @@ describe("session.llm.stream", () => {
         )
         const synth = waitRequest(
           "/chat/completions",
-          new Response(createChatStream("final answer"), {
+          new Response(createChatStream(["final ", "answer"]), {
             status: 200,
             headers: { "Content-Type": "text/event-stream" },
           }),
@@ -896,6 +901,7 @@ describe("session.llm.stream", () => {
         const branchMessages = JSON.stringify(branchACapture.body.messages)
         const synthMessages = JSON.stringify(synthCapture.body.messages)
 
+        expect(textDeltas(events)).toEqual(["final ", "answer"])
         expect(visibleText(events)).toBe("final answer")
         expect(visibleText(events)).not.toContain("hidden branch")
         expect(branchMessages).toContain("System root instruction")
