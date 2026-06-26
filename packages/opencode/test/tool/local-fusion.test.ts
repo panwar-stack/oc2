@@ -245,7 +245,7 @@ describe("local_fusion tool", () => {
     }),
   )
 
-  it.instance("rejects logu-only tool policies for normal tool calls", () =>
+  it.instance("accepts write-capable tool policies for inline configs", () =>
     Effect.gen(function* () {
       const info = yield* LocalFusionTool
       const tool = yield* Tool.init(info)
@@ -253,21 +253,22 @@ describe("local_fusion tool", () => {
       const parent = yield* sessions.create({ title: "parent" })
 
       for (const toolPolicy of ["parent_without_teams", "all"] as const) {
-        const exit = yield* tool
-          .execute(
-            params({ branches: [{ model: "test/branch", toolPolicy }] }),
-            context(parent.id, { promptOps: promptOps() }),
-          )
-          .pipe(Effect.exit)
+        const result = yield* tool.execute(
+          params({
+            branches: [{ model: "test/branch", toolPolicy }],
+            judge: { model: "test/judge", toolPolicy },
+            synthesizer: { model: "test/synth", toolPolicy },
+          }),
+          context(parent.id, { promptOps: promptOps() }),
+        )
 
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+        expect(result.output).toBe("final fused answer")
       }
     }),
   )
 
   it.instance(
-    "rejects logu-only tool policies from named configs outside logu mode",
+    "accepts write-capable tool policies from named configs",
     () =>
       Effect.gen(function* () {
         const info = yield* LocalFusionTool
@@ -276,12 +277,9 @@ describe("local_fusion tool", () => {
         const parent = yield* sessions.create({ title: "parent" })
 
         for (const config of ["delegated-panel", "all-panel"]) {
-          const exit = yield* tool
-            .execute({ prompt: "Compare answers", config }, context(parent.id, { promptOps: promptOps() }))
-            .pipe(Effect.exit)
+          const result = yield* tool.execute({ prompt: "Compare answers", config }, context(parent.id, { promptOps: promptOps() }))
 
-          expect(Exit.isFailure(exit)).toBe(true)
-          if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("only supported in logu mode")
+          expect(result.output).toBe("final fused answer")
         }
       }),
     {

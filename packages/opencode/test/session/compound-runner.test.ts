@@ -442,7 +442,6 @@ describe("session compound runner", () => {
           ],
         }),
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
-        mode: "logu",
       })
 
       expect(prompts[0]?.tools).toMatchObject({
@@ -470,7 +469,7 @@ describe("session compound runner", () => {
     }),
   )
 
-  it.instance("uses scratch tools for branch and judge write-capable policies in logu mode", () =>
+  it.instance("uses scratch tools for branch and judge write-capable policies", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
@@ -500,7 +499,6 @@ describe("session compound runner", () => {
             return "branch output"
           },
         }),
-        mode: "logu",
       })
 
       expect(prompts.map((prompt) => String(prompt.model?.modelID))).toEqual(["branch", "judge", "synth"])
@@ -564,12 +562,13 @@ describe("session compound runner", () => {
             return "branch output"
           },
         }),
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
       const scratchPatterns = children
-        .filter((child) => child.metadata?.logu?.stage === "branch" || child.metadata?.logu?.stage === "judge")
-        .map((child) => child.permission?.find((rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow")?.pattern)
+        .map((child) =>
+          child.permission?.find((rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow")?.pattern,
+        )
+        .filter((pattern) => pattern !== undefined)
 
       expect(scratchPatterns).toHaveLength(3)
       expect(scratchPatterns.every((pattern) => pattern !== undefined)).toBe(true)
@@ -580,7 +579,7 @@ describe("session compound runner", () => {
     }),
   )
 
-  it.instance("rejects logu-only tool policies outside logu mode", () =>
+  it.instance("accepts write-capable tool policies outside logu mode", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       for (const input of [
@@ -592,23 +591,34 @@ describe("session compound runner", () => {
         { synthesizer: { model: "test/synth", toolPolicy: "all" } },
       ]) {
         const parent = yield* sessions.create({ title: "parent" })
-        const exit = yield* SessionCompound.runBranches({
+        const result = yield* SessionCompound.run({
           sessionID: parent.id,
           prompt: "go",
           config: config(input),
-          promptOps: stubOps(),
-        }).pipe(Effect.exit)
+          promptOps: stubOps({
+            text: (input) => {
+              if (String(input.model?.modelID) === "judge") {
+                return JSON.stringify({
+                  consensus: [],
+                  contradictions: [],
+                  uniqueInsights: [],
+                  blindSpots: [],
+                  failures: [],
+                  confidence: "high",
+                })
+              }
+              if (String(input.model?.modelID) === "synth") return "final answer"
+              return "branch output"
+            },
+          }),
+        })
 
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          const error = Cause.squash(exit.cause)
-          expect(error instanceof Error ? error.message : String(error)).toContain("toolPolicy is only supported in logu mode")
-        }
+        expect(result.output).toBe("final answer")
       }
     }),
   )
 
-  it.instance("uses scratch permissions for branch parent delegation in logu mode", () =>
+  it.instance("uses scratch permissions for branch parent delegation", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
@@ -618,7 +628,6 @@ describe("session compound runner", () => {
         prompt: "go",
         config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
       const childPermission = children[0]?.permission ?? []
@@ -637,14 +646,8 @@ describe("session compound runner", () => {
       expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
         "allow",
       )
-      expect(children[0]?.title).toBe("Logu branch #1")
-      expect(children[0]?.metadata?.logu).toMatchObject({
-        stage: "branch",
-        index: 0,
-        model: "test/branch",
-        parentRunID: parent.id,
-        parentSessionID: parent.id,
-      })
+      expect(children[0]?.title).toBe("Compound branch #1")
+      expect(children[0]?.metadata?.logu).toBeUndefined()
       expect(
         Permission.disabled(["write", "edit", "apply_patch", "team_create", "team_spawn", "local_fusion"], [
           ...childPermission,
@@ -665,7 +668,6 @@ describe("session compound runner", () => {
         prompt: "go",
         config: config({ branches: [{ model: "test/branch", toolPolicy: "all" }] }),
         promptOps: stubOps(),
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
       const childPermission = children[0]?.permission ?? []
@@ -692,7 +694,6 @@ describe("session compound runner", () => {
         prompt: "go",
         config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
       const childPermission = children[0]?.permission ?? []
@@ -711,7 +712,7 @@ describe("session compound runner", () => {
     }),
   )
 
-  it.instance("does not re-enable denied task for logu delegation", () =>
+  it.instance("does not re-enable denied task for parent delegation", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({
@@ -724,7 +725,6 @@ describe("session compound runner", () => {
         prompt: "go",
         config: config({ branches: [{ model: "test/branch", toolPolicy: "parent_without_teams" }] }),
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }),
-        mode: "logu",
       })
 
       expect(prompts[0]?.tools).toMatchObject({ write: true, edit: true, apply_patch: false })

@@ -91,7 +91,7 @@ const makeDir = (dir: string) => Effect.promise(() => fs.mkdir(dir, { recursive:
 type ScratchRole = { type: "branch"; index: number; tempDir: string } | { type: "judge"; tempDir: string }
 
 const scratchRules = (root: string, role: ScratchRole) =>
-  SessionCompoundToolPolicy.resolveChildPermission([], "all", "logu", { role, root })
+  SessionCompoundToolPolicy.resolveChildPermission([], "all", undefined, { role, root })
 
 const permissionCtx = (ruleset: PermissionV1.Ruleset): ToolCtx => ({
   ...baseCtx,

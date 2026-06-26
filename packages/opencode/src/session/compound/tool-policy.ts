@@ -18,7 +18,7 @@ const readonlyTools = {
 
 const noTools = { "*": false }
 
-const loguDelegatedTools = {
+const parentDelegationDisabledTools = {
   team_create: false,
   team_spawn: false,
   local_fusion: false,
@@ -37,13 +37,7 @@ export type CompoundRole =
   | { type: "synthesizer" }
 
 export function validate(input: { config: SessionCompoundConfig.Config; mode?: "logu" }) {
-  if (input.mode === "logu") return
-  const loguOnlyPolicy = [
-    ...input.config.branches.map((branch) => branch.toolPolicy),
-    input.config.judge.toolPolicy,
-    input.config.synthesizer.toolPolicy,
-  ].find((policy) => policy === "parent_without_teams" || policy === "all")
-  if (loguOnlyPolicy) throw new Error(`${loguOnlyPolicy} toolPolicy is only supported in logu mode`)
+  void input
 }
 
 export function resolvePromptTools(
@@ -52,14 +46,14 @@ export function resolvePromptTools(
   permission: PermissionV1.Ruleset,
   role?: CompoundRole,
 ) {
+  void mode
   if (policy === "none") return noTools
   if (policy === "readonly") return readonlyTools
-  if (mode !== "logu") throw new Error(`${policy} toolPolicy is only supported in logu mode`)
   if (isScratchRole(role)) return scratchTools
   if (policy === "all") return {}
   return {
     ...(Permission.evaluate("task", "*", permission).action === "deny" ? {} : { task: true }),
-    ...loguDelegatedTools,
+    ...parentDelegationDisabledTools,
   }
 }
 
@@ -69,24 +63,27 @@ export function resolveChildPermission(
   mode: "logu" | undefined,
   input?: { role?: CompoundRole; root: string },
 ) {
+  void mode
   const parentRules = parent.filter(
     (rule) => rule.action === "deny" || (rule.permission === "external_directory" && rule.action === "allow"),
   )
-  if (mode === "logu" && isScratchRole(input?.role) && isWriteCapable(policy)) {
+  if (isScratchRole(input?.role) && isWriteCapable(policy)) {
     return [
       { permission: "edit", pattern: "*", action: "deny" as const },
       { permission: "edit", pattern: tempEditPattern(input.role.tempDir, input.root), action: "allow" as const },
       { permission: "apply_patch", pattern: "*", action: "deny" as const },
       { permission: "external_directory", pattern: tempExternalPattern(input.role.tempDir), action: "allow" as const },
-      ...Object.keys(loguDelegatedTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const })),
+      ...(policy === "parent_without_teams"
+        ? Object.keys(parentDelegationDisabledTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const }))
+        : []),
       ...parentRules,
     ]
   }
 
   return [
     ...parentRules,
-    ...(mode === "logu" && policy === "parent_without_teams"
-      ? Object.keys(loguDelegatedTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const }))
+    ...(policy === "parent_without_teams"
+      ? Object.keys(parentDelegationDisabledTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const }))
       : []),
   ]
 }

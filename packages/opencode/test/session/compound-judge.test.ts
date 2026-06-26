@@ -171,7 +171,6 @@ describe("compound judge", () => {
         judge: { model: "test/judge", toolPolicy: "parent_without_teams" },
         branches,
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input), text: JSON.stringify(judgeResult) }),
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
       const childPermission = children[0]?.permission ?? []
@@ -202,7 +201,6 @@ describe("compound judge", () => {
         judge: { model: "test/judge", toolPolicy: "all" },
         branches,
         promptOps: stubOps({ text: JSON.stringify(judgeResult) }),
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
       const childPermission = children[0]?.permission ?? []

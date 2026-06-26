@@ -144,7 +144,6 @@ describe("compound synthesizer", () => {
         branches,
         judge,
         promptOps: stubOps({ onPrompt: (input) => prompts.push(input), output: (input) => reply(input, "final answer") }),
-        mode: "logu",
       })
       const children = yield* sessions.children(parent.id)
 
