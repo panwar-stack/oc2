@@ -99,9 +99,13 @@ Use this as a quick reference for named configs under `local_fusion`.
 
 ### Logu Local Model
 
-`logu` is a local compound model exposed through the normal model picker as `logu/logu`. It does not require Logu provider credentials or a provider connect step, but it still needs the reserved `local_fusion.logu` config and the underlying branch, judge, and synthesizer providers configured.
+`logu` is a local model exposed through the normal model picker as `logu/logu`. It does not require Logu provider credentials or a provider connect step.
 
-Configure Logu with the reserved `local_fusion.logu` config name, then select `logu/logu` from `/models` and prompt normally.
+Without a top-level `logu` config, `logu/logu` keeps the legacy behavior: every prompt runs the reserved `local_fusion.logu` workflow. This preserves existing configs.
+
+To opt into adaptive routing, add top-level `logu` config. In adaptive mode, OpenCode deterministically routes simple prompts to a direct underlying model and complex prompts to a Local Fusion workflow.
+
+Select `logu/logu` from `/models` and prompt normally.
 
 ```txt frame="none"
 /models
@@ -112,9 +116,62 @@ Configure Logu with the reserved `local_fusion.logu` config name, then select `l
 Review this authentication refactor. Identify correctness risks, security regressions, missing tests, and any simpler implementation path.
 ```
 
-When you select `logu/logu`, OpenCode renders the current conversation into a deterministic transcript, runs `local_fusion.logu`, and returns the synthesizer output as the assistant response in the parent session. The transcript includes system context, prior conversation messages, tool calls, tool results, and marks the latest user message as the latest request.
+When routed to fusion, Logu renders the current conversation into a deterministic transcript, runs the configured `local_fusion` workflow, and returns the synthesizer output as the assistant response in the parent session. `local_fusion.logu` remains the fusion workflow definition; top-level `logu` only controls routing and the direct model. The transcript includes system context, prior conversation messages, tool calls, tool results, and marks the latest user message as the latest request.
 
-The Logu lead only orchestrates the child stages. It does not use normal tool calling itself. In the TUI, Logu child sessions appear in the sidebar with branch, judge, and synthesizer status, timeout indicators, and pending permission or question counts.
+For fusion routes, the Logu lead only orchestrates the child stages. It does not use normal tool calling itself. In the TUI, Logu child sessions appear in the sidebar with branch, judge, and synthesizer status, timeout indicators, and pending permission or question counts.
+
+#### Adaptive Routing
+
+```jsonc title="opencode.jsonc"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "logu/logu",
+  "logu": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "fusion": "logu",
+    "routing": {
+      "mode": "auto"
+    }
+  },
+  "local_fusion": {
+    "logu": {
+      "branches": [{ "model": "anthropic/claude-sonnet-4-5" }],
+      "judge": { "model": "openai/gpt-5-mini" },
+      "synthesizer": { "model": "anthropic/claude-sonnet-4-5" }
+    }
+  }
+}
+```
+
+`logu.model` is the underlying provider model used for direct routing. It is required only when the selected route is direct, and it cannot be `logu/logu`.
+
+`logu.fusion` selects the named `local_fusion` config used for fusion routing. It defaults to `"logu"`.
+
+`logu.routing.mode` controls routing:
+
+- `"auto"` routes simple prompts direct and complex prompts to fusion. This is the default when top-level `logu` exists and `routing.mode` is omitted.
+- `"always"` always uses fusion.
+- `"never"` always uses direct model execution.
+
+Use direct routing for greetings, simple factual questions, small explanations, one obvious edit, formatting or docs tweaks, and command-like requests. Use fusion routing for code review, architecture, security, migration, regression, root-cause analysis, database/auth/serialization issues, broad repo investigations, specs, implementation plans, tradeoffs, multiple approaches, long prompts, or recent failure/debugging context.
+
+#### Legacy Always-Fusion Logu
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "logu/logu",
+  "local_fusion": {
+    "logu": {
+      "branches": [{ "model": "anthropic/claude-sonnet-4-5" }],
+      "judge": { "model": "openai/gpt-5-mini" },
+      "synthesizer": { "model": "anthropic/claude-sonnet-4-5" }
+    }
+  }
+}
+```
+
+Omit top-level `logu` when you want the legacy behavior where every `logu/logu` prompt runs `local_fusion.logu`.
 
 #### Safe Review Mode
 
@@ -246,7 +303,7 @@ Use a write-capable synthesizer when Logu should apply final workspace edits aft
 
 For Logu branch and judge stages, write-capable policies are isolated to scratch. The synthesizer is the only stage that should apply final workspace edits.
 
-Do not use `logu/logu` inside `local_fusion.logu`. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
+Do not use `logu/logu` inside a fusion workflow selected by Logu. Branch, judge, and synthesizer models must reference real underlying provider models, such as `anthropic/claude-sonnet-4-5` or `openai/gpt-5`.
 
 ### Tool Policy
 
@@ -336,7 +393,8 @@ Inline `local_fusion` tool calls support `"readonly"` and `"none"` branch polici
 | Use case | Choose | Why |
 | --- | --- | --- |
 | Run a named review, planning, or comparison workflow on demand | `/local_fusion <config>` | The slash command sends one explicit prompt to one named config. |
-| Make compound reasoning feel like the active assistant model | `logu/logu` | The model picker route runs `local_fusion.logu` against the current conversation transcript. |
+| Make compound reasoning feel like the active assistant model | `logu/logu` without top-level `logu` | Legacy behavior always runs `local_fusion.logu` against the current conversation transcript. |
+| Route simple prompts to one direct model and complex prompts to a fusion workflow | `logu/logu` with top-level `logu` | Adaptive routing is opt-in; `logu.model` handles direct routes and `local_fusion.<logu.fusion>` handles fusion routes. |
 | Let only the final stage edit files after multiple research branches finish | `logu/logu` with a write-capable synthesizer | Branch and judge writes stay scratch-scoped, while the synthesizer can apply final workspace edits when tools and permissions allow it. |
 | Use inline tool calls from a normal assistant turn | Inline `local_fusion` tool call | Inline calls support ad hoc `readonly` and `none` branch policies without a named config. |
 
@@ -344,13 +402,31 @@ Inline `local_fusion` tool calls support `"readonly"` and `"none"` branch polici
 
 ## Failure Modes
 
-If `logu/logu` is selected without `local_fusion.logu`, the assistant turn fails with:
+If `logu/logu` is selected without top-level `logu` and without `local_fusion.logu`, the legacy always-fusion run fails with:
 
 ```txt
 logu requires local_fusion.logu config; see packages/web/src/content/docs/local-fusion.mdx
 ```
 
-If a Logu config references `logu/logu` as an underlying model, the run fails before branch sessions are created. The error names the offending path:
+In adaptive routing, if the selected route is fusion and the configured fusion workflow is missing, the run fails with:
+
+```txt
+logu fusion route requires local_fusion.<name> config; see packages/web/src/content/docs/local-fusion.mdx
+```
+
+If the selected route is direct and `logu.model` is missing, the run fails with:
+
+```txt
+logu direct route requires logu.model
+```
+
+If `logu.model` references Logu itself, the run fails with:
+
+```txt
+logu.model cannot reference logu/logu
+```
+
+If the selected fusion workflow references `logu/logu` as an underlying model, the run fails before branch sessions are created. The error names the offending path:
 
 ```txt
 logu config cannot reference logu/logu at branches[0].model
