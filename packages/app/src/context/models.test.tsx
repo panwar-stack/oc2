@@ -30,11 +30,10 @@ mock.module("@/context/server-sync", () => ({
     data: {
       provider: {
         all: new Map([
-          ["logu", provider("logu", { logu: model("logu") })],
           ["anthropic", provider("anthropic", { "claude-sonnet-4": model("claude-sonnet-4") })],
         ]),
-        connected: ["logu"],
-        default: { logu: "logu" },
+        connected: ["anthropic"],
+        default: { anthropic: "claude-sonnet-4" },
       },
     },
     child: () => [{ provider_ready: false }],
@@ -66,7 +65,7 @@ afterEach(() => {
 })
 
 describe("ModelsProvider", () => {
-  test("lists logu from connected providers without auth or connect UI", async () => {
+  test("lists connected provider models", async () => {
     const { ModelsProvider, useModels } = await import("./models")
     let listed: ReturnType<ReturnType<typeof useModels>["list"]> = []
     let visible = false
@@ -74,7 +73,7 @@ describe("ModelsProvider", () => {
     function Probe() {
       const models = useModels()
       listed = models.list()
-      visible = models.visible({ providerID: "logu", modelID: "logu" })
+      visible = models.visible({ providerID: "anthropic", modelID: "claude-sonnet-4" })
       return undefined
     }
 
@@ -88,9 +87,8 @@ describe("ModelsProvider", () => {
     })
 
     try {
-      expect(listed.some((item) => item.provider.id === "logu" && item.id === "logu")).toBe(true)
+      expect(listed.some((item) => item.provider.id === "anthropic" && item.id === "claude-sonnet-4")).toBe(true)
       expect(visible).toBe(true)
-      expect(listed.some((item) => item.provider.id === "anthropic")).toBe(false)
     } finally {
       dispose()
     }

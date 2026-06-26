@@ -145,35 +145,6 @@ it.instance(
   { config: { enabled_providers: ["anthropic"] } },
 )
 
-it.instance("logu is always listed without credentials", () =>
-  Effect.gen(function* () {
-    const providers = yield* list
-    const provider = providers[ProviderV2.ID.make("logu")]
-    const model = provider.models[ModelV2.ID.make("logu")]
-
-    expect(provider.name).toBe("Logu")
-    expect(provider.env).toEqual([])
-    expect(provider.key).toBeUndefined()
-    expect(model.name).toBe("logu")
-    expect(model.api.url).toBe("")
-    expect(model.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
-    expect(model.capabilities).toMatchObject({
-      attachment: false,
-      input: { text: true, audio: false, image: false, video: false, pdf: false },
-      output: { text: true, audio: false, image: false, video: false, pdf: false },
-    })
-  }),
-)
-
-it.instance(
-  "disabled_providers excludes logu",
-  Effect.gen(function* () {
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.make("logu")]).toBeUndefined()
-  }),
-  { config: { disabled_providers: ["logu"] } },
-)
-
 it.instance(
   "model whitelist filters models for provider",
   Effect.gen(function* () {
@@ -365,6 +336,10 @@ test("parseModel handles model IDs with slashes", () => {
   expect(String(result.modelID)).toBe("anthropic/claude-3-opus")
 })
 
+test("parseModel rejects removed logu model", () => {
+  expect(() => Provider.parseModel("logu/logu")).toThrow("logu/logu has been removed; use /local_fusion instead")
+})
+
 it.instance("defaultModel returns first available model when no config set", () =>
   Effect.gen(function* () {
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
@@ -395,13 +370,13 @@ it.instance(
   { config: { enabled_providers: [] } },
 )
 
-it.instance("defaultModel skips recent logu when local_fusion.logu is missing", () =>
+it.instance("defaultModel skips recent entries for missing providers", () =>
   Effect.gen(function* () {
     yield* Effect.promise(() => mkdir(Global.Path.state, { recursive: true }))
     yield* Effect.promise(() =>
       Bun.write(
         path.join(Global.Path.state, "model.json"),
-        JSON.stringify({ recent: [{ providerID: "logu", modelID: "logu" }] }),
+        JSON.stringify({ recent: [{ providerID: "missing-provider", modelID: "missing-model" }] }),
       ),
     )
 
@@ -410,7 +385,7 @@ it.instance("defaultModel skips recent logu when local_fusion.logu is missing", 
       expect(exit.cause.toString()).toContain("ProviderNoProvidersError")
       return
     }
-    expect(String(exit.value.providerID)).not.toBe("logu")
+    expect(String(exit.value.providerID)).not.toBe("missing-provider")
   }),
 )
 

@@ -1,9 +1,7 @@
 import { describe, expect } from "bun:test"
 import { LLM } from "@opencode-ai/llm"
 import { LLMClient } from "@opencode-ai/llm/route"
-import { Catalog } from "@opencode-ai/core/catalog"
-import { PluginBoot } from "@opencode-ai/core/plugin/boot"
-import { ConfigProvider, DateTime, Effect, Option } from "effect"
+import { ConfigProvider, DateTime, Effect } from "effect"
 import { Headers } from "effect/unstable/http"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -282,57 +280,6 @@ describe("SessionRunnerModel", () => {
       })
     }),
   )
-
-  it.effect("skips synthetic logu/logu when resolving an unselected Session model", () => {
-    const logu = new ModelV2.Info({
-      ...model({ type: "native", settings: {} }),
-      id: ModelV2.ID.make("logu"),
-      providerID: ProviderV2.ID.make("logu"),
-      name: "logu",
-      api: { id: ModelV2.ID.make("logu"), type: "native", settings: {} },
-    })
-    const available = model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" })
-    const session = SessionV2.Info.make({
-      id: SessionV2.ID.make("ses_logu_default"),
-      projectID: ProjectV2.ID.global,
-      title: "test",
-      cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0), processing: 0 },
-      location: { directory: AbsolutePath.make("/project") },
-    })
-
-    return Effect.gen(function* () {
-      const service = yield* SessionRunnerModel.Service
-      const resolved = yield* service.resolve(session)
-
-      expect(resolved).toMatchObject({ id: "api-test-model", provider: "test-provider" })
-    }).pipe(
-      Effect.provide(SessionRunnerModel.locationLayer),
-      Effect.provideService(PluginBoot.Service, PluginBoot.Service.of({ wait: () => Effect.void })),
-      Effect.provideService(
-        Catalog.Service,
-        Catalog.Service.of({
-          transform: () => Effect.die("unexpected catalog.transform"),
-          provider: {
-            get: (providerID) =>
-              providerID === available.providerID
-                ? Effect.succeed(provider({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }))
-                : Effect.die("unexpected provider.get"),
-            all: () => Effect.succeed([]),
-            available: () => Effect.succeed([]),
-          },
-          model: {
-            get: () => Effect.die("unexpected model.get"),
-            all: () => Effect.succeed([]),
-            available: () => Effect.succeed([logu, available]),
-            default: () => Effect.succeed(Option.some(logu)),
-            small: () => Effect.succeed(Option.none<ModelV2.Info>()),
-          },
-        }),
-      ),
-    )
-  })
 
   it.effect("reports whether a catalog model has a supported native route", () =>
     Effect.sync(() => {

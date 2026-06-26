@@ -1470,8 +1470,19 @@ test("config parser preserves permission order while rejecting unknown top-level
     ConfigParse.schema(ConfigV1.Info, { invalid_field: true }, "test")
     throw new Error("expected config parse to fail")
   } catch (err) {
-    const error = err as { data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[] }> } }
+    const error = err as { data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[]; message?: string }> } }
     expect(error.data?.issues?.[0]).toMatchObject({ code: "unrecognized_keys", keys: ["invalid_field"], path: [] })
+  }
+
+  try {
+    ConfigParse.schema(ConfigV1.Info, { logu: {} }, "test")
+    throw new Error("expected logu config parse to fail")
+  } catch (err) {
+    const error = err as { data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[]; message?: string }> } }
+    expect(error.data?.issues?.[0]).toMatchObject({
+      path: [],
+      message: "logu config has been removed; use local_fusion instead",
+    })
   }
 })
 

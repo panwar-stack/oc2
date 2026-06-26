@@ -39,6 +39,20 @@ export function schema<S extends EffectSchema.Decoder<unknown, never>>(
 ): DeepMutable<S["Type"]> {
   const extra = topLevelExtraKeys(schema, data)
   if (extra.length) {
+    if (extra.includes("logu")) {
+      throw new InvalidError({
+        path: source,
+        issues: [
+          {
+            code: "unrecognized_keys",
+            keys: ["logu"],
+            path: [],
+            message: "logu config has been removed; use local_fusion instead",
+          },
+        ],
+      })
+    }
+
     throw new InvalidError({
       path: source,
       issues: [

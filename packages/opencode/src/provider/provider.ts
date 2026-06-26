@@ -200,11 +200,6 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         options: ok ? {} : { apiKey: "public" },
       }
     }),
-    logu: () =>
-      Effect.succeed({
-        autoload: true,
-        options: {},
-      }),
     openai: () =>
       Effect.succeed({
         autoload: false,
@@ -1040,70 +1035,6 @@ export const Model = Schema.Struct({
 }).annotate({ identifier: "Model" })
 export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
 
-const LOGU_PROVIDER_ID = ProviderV2.ID.make("logu")
-const LOGU_MODEL_ID = ModelV2.ID.make("logu")
-
-function loguProvider(): Info {
-  return {
-    id: LOGU_PROVIDER_ID,
-    source: "custom",
-    name: "Logu",
-    env: [],
-    options: {},
-    models: {
-      [LOGU_MODEL_ID]: {
-        id: LOGU_MODEL_ID,
-        providerID: LOGU_PROVIDER_ID,
-        name: "logu",
-        family: "local",
-        api: {
-          id: "logu",
-          url: "",
-          npm: "",
-        },
-        status: "active",
-        headers: {},
-        options: {},
-        cost: {
-          input: 0,
-          output: 0,
-          cache: {
-            read: 0,
-            write: 0,
-          },
-        },
-        limit: {
-          context: 128_000,
-          output: 16_384,
-        },
-        capabilities: {
-          temperature: false,
-          reasoning: false,
-          attachment: false,
-          toolcall: false,
-          input: {
-            text: true,
-            audio: false,
-            image: false,
-            video: false,
-            pdf: false,
-          },
-          output: {
-            text: true,
-            audio: false,
-            image: false,
-            video: false,
-            pdf: false,
-          },
-          interleaved: false,
-        },
-        release_date: "",
-        variants: {},
-      },
-    },
-  }
-}
-
 export const Info = Schema.Struct({
   id: ProviderV2.ID,
   name: Schema.String,
@@ -1371,10 +1302,7 @@ export const layer = Layer.effect(
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
         const modelsDev = yield* modelsDevSvc.get()
-        const catalog = {
-          ...mapValues(modelsDev, fromModelsDevProvider),
-          [LOGU_PROVIDER_ID]: loguProvider(),
-        }
+        const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
@@ -2025,16 +1953,13 @@ export const layer = Layer.effect(
         Effect.catch(() => Effect.succeed([] as { providerID: ProviderV2.ID; modelID: ModelV2.ID }[])),
       )
       for (const entry of recent) {
-        if (entry.providerID === LOGU_PROVIDER_ID && !cfg.local_fusion?.logu) continue
         const provider = s.providers[entry.providerID]
         if (!provider) continue
         if (!provider.models[entry.modelID]) continue
         return { providerID: entry.providerID, modelID: entry.modelID }
       }
 
-      const provider = Object.values(s.providers).find(
-        (p) => p.id !== LOGU_PROVIDER_ID && (!cfg.provider || Object.keys(cfg.provider).includes(p.id)),
-      )
+      const provider = Object.values(s.providers).find((p) => !cfg.provider || Object.keys(cfg.provider).includes(p.id))
       if (!provider) return yield* new NoProvidersError()
       const [model] = sort(Object.values(provider.models))
       if (!model) return yield* new NoModelsError({ providerID: provider.id })
@@ -2072,9 +1997,13 @@ export function sort<T extends { id: string }>(models: T[]) {
 
 export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
+  const modelID = rest.join("/")
+  if (providerID === "logu" && modelID === "logu") {
+    throw new Error("logu/logu has been removed; use /local_fusion instead")
+  }
   return {
     providerID: ProviderV2.ID.make(providerID),
-    modelID: ModelV2.ID.make(rest.join("/")),
+    modelID: ModelV2.ID.make(modelID),
   }
 }
 

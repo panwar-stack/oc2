@@ -6,7 +6,7 @@ import { Log } from "@opencode-ai/core/util/log"
 import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
-import { LLMEvent, type LLMEvent as LLMEventType } from "@opencode-ai/llm"
+import type { LLMEvent as LLMEventType } from "@opencode-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
 import type { LLMClientService } from "@opencode-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
@@ -28,8 +28,6 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
-import { SessionLogu } from "./logu"
-import { Session } from "./session"
 import type { TaskPromptOps } from "@/tool/task"
 
 const log = Log.create({ service: "llm" })
@@ -356,56 +354,7 @@ const live: Layer.Layer<
       }
     })
 
-    const runLoguFusion = Effect.fn("LLM.runLoguFusion")(function* (
-      input: StreamRequest,
-      options?: Pick<SessionLogu.RunInput, "compound">,
-    ) {
-      if (!input.promptOps) throw new Error("logu requires promptOps")
-      const sessions = yield* Effect.serviceOption(Session.Service)
-      if (Option.isNone(sessions)) throw new Error("logu requires Session service")
-      const result = yield* SessionLogu.run({
-        sessionID: SessionID.make(input.sessionID),
-        model: input.model,
-        agent: input.agent,
-        system: input.system,
-        messages: input.messages,
-        permission: input.permission,
-        abort: input.abort,
-        promptOps: input.promptOps,
-        ...options,
-      }).pipe(Effect.provideService(Config.Service, config), Effect.provideService(Session.Service, sessions.value))
-      return {
-        type: "logu" as const,
-        stream: Stream.fromIterable(loguEvents(result.output)),
-      }
-    })
-
-    const runLogu = Effect.fn("LLM.runLogu")(function* (input: StreamRequest) {
-      const cfg = yield* config.get()
-      if (!cfg.logu) return yield* runLoguFusion(input)
-
-      const selected = SessionLogu.route({ config: cfg.logu, system: input.system, messages: input.messages })
-      if (selected === "fusion") {
-        const fusion = cfg.logu.fusion ?? "logu"
-        const compound = cfg.local_fusion?.[fusion]
-        if (!compound) {
-          throw new Error(
-            `logu fusion route requires local_fusion.${fusion} config; see packages/web/src/content/docs/local-fusion.mdx`,
-          )
-        }
-        return yield* runLoguFusion(input, { compound })
-      }
-
-      if (!cfg.logu.model) throw new Error("logu direct route requires logu.model")
-      const parsed = Provider.parseModel(cfg.logu.model)
-      if (String(parsed.providerID) === "logu" && String(parsed.modelID) === "logu") {
-        throw new Error("logu.model cannot reference logu/logu")
-      }
-      return yield* runProvider({ ...input, model: yield* provider.getModel(parsed.providerID, parsed.modelID) })
-    })
-
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
-      if (isLoguModel(input.model)) return yield* runLogu(input)
       return yield* runProvider(input)
     })
 
@@ -420,7 +369,7 @@ const live: Layer.Layer<
 
             const result = yield* run({ ...input, abort: ctrl.signal })
 
-            if (result.type === "native" || result.type === "logu") return result.stream
+            if (result.type === "native") return result.stream
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.
@@ -455,21 +404,5 @@ export const defaultLayer = Layer.suspend(() =>
 )
 
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
-
-function loguEvents(output: string) {
-  const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
-  return [
-    LLMEvent.stepStart({ index: 0 }),
-    LLMEvent.textStart({ id: "text-0" }),
-    LLMEvent.textDelta({ id: "text-0", text: output }),
-    LLMEvent.textEnd({ id: "text-0" }),
-    LLMEvent.stepFinish({ index: 0, reason: "stop", usage }),
-    LLMEvent.finish({ reason: "stop", usage }),
-  ]
-}
-
-function isLoguModel(model: Provider.Model) {
-  return String(model.providerID) === "logu" && String(model.id) === "logu"
-}
 
 export * as LLM from "./llm"

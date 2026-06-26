@@ -354,29 +354,6 @@ describe("provider HttpApi", () => {
   )
 
   it.instance(
-    "serves logu as connected provider without credentials",
-    Effect.gen(function* () {
-      const directory = (yield* TestInstance).directory
-      const headers = { "x-opencode-directory": directory }
-      const response = yield* request("/provider", { headers })
-      const configResponse = yield* request("/config/providers", { headers })
-
-      expect(response.status).toBe(200)
-      expect(configResponse.status).toBe(200)
-      const body = yield* response.json
-      const configBody = yield* configResponse.json
-      const provider = providerByID(body, "all", "logu")
-      const configProvider = providerByID(configBody, "providers", "logu")
-
-      expect(provider).toBeDefined()
-      expect(configProvider).toBeDefined()
-      expect(isRecord(provider) && isRecord(provider.models) && isRecord(provider.models.logu)).toBe(true)
-      expect(isRecord(body) && Array.isArray(body.connected) && body.connected.includes("logu")).toBe(true)
-    }),
-    projectOptions,
-  )
-
-  it.instance(
     "serves provider lists when auth loaders add runtime fetch options",
     Effect.gen(function* () {
       const directory = (yield* TestInstance).directory
