@@ -4,6 +4,7 @@ import { Catalog } from "@opencode-ai/core/catalog"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { FuguPlugin } from "@opencode-ai/core/plugin/fugu"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { Policy } from "@opencode-ai/core/policy"
 import { Project } from "@opencode-ai/core/project"
@@ -21,6 +22,37 @@ const it = testEffect(
 )
 
 describe("CatalogV2", () => {
+  it.effect("exposes virtual fugu provider and model", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+
+      yield* FuguPlugin.Plugin.effect
+
+      expect((yield* catalog.provider.available()).find((provider) => provider.id === "fugu")).toMatchObject({
+        id: "fugu",
+        name: "Fugu",
+        enabled: { via: "custom", data: {} },
+        env: [],
+        api: { type: "native", settings: {} },
+      })
+      expect(
+        (yield* catalog.model.available()).find((model) => model.providerID === "fugu" && model.id === "fugu"),
+      ).toMatchObject({
+        id: "fugu",
+        providerID: "fugu",
+        family: "virtual",
+        name: "Fugu",
+        api: { id: "fugu", type: "native", settings: {} },
+        capabilities: { tools: false, input: ["text"], output: ["text"] },
+        variants: [],
+        cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }],
+        status: "active",
+        enabled: true,
+        limit: { context: 128_000, output: 16_384 },
+      })
+    }),
+  )
+
   it.effect("normalizes provider baseURL into api url", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

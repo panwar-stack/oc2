@@ -68,6 +68,8 @@ const providerLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   )
 
 const list = Provider.use.list()
+const fuguProviderID = ProviderV2.ID.make("fugu")
+const fuguModelID = ModelV2.ID.make("fugu")
 
 const paid = (providers: Record<string, { models: Record<string, { cost: { input: number } }> }>) => {
   const item = providers[ProviderV2.ID.make("opencode")]
@@ -101,6 +103,49 @@ const alphaProviderConfig = {
     },
   },
 }
+
+it.instance("includes virtual fugu provider without config", () =>
+  Effect.gen(function* () {
+    const providers = yield* list
+    const provider = providers[fuguProviderID]
+    const model = provider?.models[fuguModelID]
+
+    expect(provider).toBeDefined()
+    expect(provider.source).toBe("custom")
+    expect(provider.env).toEqual([])
+    expect(provider.options).toEqual({})
+    expect(model).toBeDefined()
+    expect(model.status).toBe("active")
+    expect(model.capabilities.toolcall).toBe(false)
+    expect(model.capabilities.input).toEqual({ text: true, audio: false, image: false, video: false, pdf: false })
+    expect(model.capabilities.output).toEqual({ text: true, audio: false, image: false, video: false, pdf: false })
+    expect(model.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
+  }),
+)
+
+it.instance(
+  "provider filters apply to virtual fugu provider",
+  Effect.gen(function* () {
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    expect((yield* list)[fuguProviderID]).toBeUndefined()
+  }),
+  { config: { enabled_providers: ["anthropic"] } },
+)
+
+it.instance(
+  "disabled_providers excludes virtual fugu provider",
+  Effect.gen(function* () {
+    expect((yield* list)[fuguProviderID]).toBeUndefined()
+  }),
+  { config: { disabled_providers: ["fugu"] } },
+)
+
+it.instance("default model fallback does not choose virtual fugu", () =>
+  Effect.gen(function* () {
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    expect((yield* Provider.use.defaultModel()).providerID).not.toBe(fuguProviderID)
+  }),
+)
 
 it.instance("provider loaded from env variable", () =>
   Effect.gen(function* () {

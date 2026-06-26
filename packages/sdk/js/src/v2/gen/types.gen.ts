@@ -1738,6 +1738,48 @@ export type ReferenceConfig = {
   [key: string]: ReferenceConfigEntry
 }
 
+export type LocalFusionConfig = {
+  branches: Array<{
+    model: string
+    variant?: string
+    agent?: string
+    prompt?: string
+    toolPolicy?: "readonly" | "none" | "parent_without_teams" | "all"
+    timeout?: number
+  }>
+  judge: {
+    model: string
+    variant?: string
+    prompt?: string
+    toolPolicy?: "readonly" | "none" | "parent_without_teams" | "all"
+  }
+  synthesizer: {
+    model: string
+    variant?: string
+    prompt?: string
+    toolPolicy?: "readonly" | "none" | "parent_without_teams" | "all"
+  }
+  limits?: {
+    timeout?: number
+    maxBranches?: number
+  }
+}
+
+export type FuguConfig = {
+  branches?: Array<{
+    model: string
+    variant?: string
+  }>
+  judge?: {
+    model: string
+    variant?: string
+  }
+  synthesizer?: {
+    model: string
+    variant?: string
+  }
+}
+
 export type PermissionActionConfig = "ask" | "allow" | "deny"
 
 export type PermissionObjectConfig = {
@@ -2026,6 +2068,10 @@ export type Config = {
   enabled_providers?: Array<string>
   model?: string
   small_model?: string
+  local_fusion?: {
+    [key: string]: LocalFusionConfig
+  }
+  fugu?: FuguConfig
   default_agent?: string
   username?: string
   mode?: {

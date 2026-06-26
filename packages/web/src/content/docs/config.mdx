@@ -511,6 +511,32 @@ Run it in the TUI with:
 
 The first argument, `research-panel`, selects the named config. Everything after it is sent as the prompt.
 
+### Fugu
+
+`fugu/fugu` is a virtual model you can select like any other model. It is available in model pickers even when your config has no `fugu` section.
+
+When selected, Fugu uses the configured branch models and synthesizer model for the request. Missing or invalid `fugu` config fails at request time.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "fugu": {
+    "branches": [
+      { "model": "anthropic/claude-sonnet-4-5", "variant": "default" },
+      { "model": "openai/gpt-5", "variant": "high" }
+    ],
+    "judge": { "model": "openai/gpt-5-mini" },
+    "synthesizer": { "model": "anthropic/claude-sonnet-4-5", "variant": "default" }
+  }
+}
+```
+
+- `branches` - Candidate models that receive the original request context. At least one branch is required when `fugu/fugu` is used.
+- `judge` - Optional model config that is parsed and preserved. It is not executed in the first runtime pass.
+- `synthesizer` - Final model config used to produce the caller-visible response. It is required when `fugu/fugu` is used.
+
+Branch, judge, and synthesizer targets must resolve to normal models and cannot point back to `fugu/fugu`; circular routing is rejected. In the first pass, hidden branch and synthesizer calls do not execute tools.
+
 ---
 
 ### Policies

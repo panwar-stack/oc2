@@ -263,6 +263,45 @@ function setEnvScoped(key: string, value: string) {
 }
 
 describe("provider HttpApi", () => {
+  it.instance(
+    "serves virtual fugu provider in picker lists",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const headers = { "x-opencode-directory": directory }
+      const providerResponse = yield* request("/provider", { headers })
+      const configResponse = yield* request("/config/providers", { headers })
+
+      expect(providerResponse.status).toBe(200)
+      expect(configResponse.status).toBe(200)
+
+      const providerBody = yield* providerResponse.json
+      const configBody = yield* configResponse.json
+      const provider = providerByID(providerBody, "all", "fugu")
+      const configProvider = providerByID(configBody, "providers", "fugu")
+
+      expect(
+        isRecord(providerBody) && Array.isArray(providerBody.connected) && providerBody.connected.includes("fugu"),
+      ).toBe(true)
+      expect(isRecord(provider) && isRecord(provider.models) && isRecord(provider.models.fugu)).toBe(true)
+      expect(
+        isRecord(provider) &&
+          isRecord(provider.models) &&
+          isRecord(provider.models.fugu) &&
+          provider.models.fugu.status,
+      ).toBe("active")
+      expect(isRecord(configProvider) && isRecord(configProvider.models) && isRecord(configProvider.models.fugu)).toBe(
+        true,
+      )
+      expect(
+        isRecord(configProvider) &&
+          isRecord(configProvider.models) &&
+          isRecord(configProvider.models.fugu) &&
+          configProvider.models.fugu.status,
+      ).toBe("active")
+    }),
+    projectOptions,
+  )
+
   it.instance.skip(
     "returns public v2 provider not found errors",
     Effect.gen(function* () {

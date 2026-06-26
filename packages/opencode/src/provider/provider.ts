@@ -1256,6 +1256,53 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   }
 }
 
+const FUGU_PROVIDER_ID = ProviderV2.ID.make("fugu")
+const FUGU_MODEL_ID = ModelV2.ID.make("fugu")
+
+const FUGU_PROVIDER: Info = {
+  id: FUGU_PROVIDER_ID,
+  name: "Fugu",
+  source: "custom",
+  env: [],
+  options: {},
+  models: {
+    fugu: {
+      id: FUGU_MODEL_ID,
+      providerID: FUGU_PROVIDER_ID,
+      api: {
+        id: FUGU_MODEL_ID,
+        url: "",
+        npm: "",
+      },
+      name: "Fugu",
+      family: "virtual",
+      capabilities: {
+        temperature: false,
+        reasoning: false,
+        attachment: false,
+        toolcall: false,
+        input: { text: true, audio: false, image: false, video: false, pdf: false },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: {
+        input: 0,
+        output: 0,
+        cache: { read: 0, write: 0 },
+      },
+      limit: {
+        context: 128_000,
+        output: 16_384,
+      },
+      status: "active",
+      options: {},
+      headers: {},
+      release_date: "",
+      variants: {},
+    },
+  },
+}
+
 function modelSuggestions(provider: Info | undefined, modelID: ModelV2.ID, enableExperimentalModels: boolean) {
   const available = provider
     ? Object.keys(provider.models).filter((id) => {
@@ -1565,6 +1612,8 @@ export const layer = Layer.effect(
             }
           })
         }
+
+        if (isProviderAllowed(FUGU_PROVIDER_ID)) providers[FUGU_PROVIDER_ID] = toPublicInfo(FUGU_PROVIDER)
 
         for (const [id, provider] of Object.entries(providers)) {
           const providerID = ProviderV2.ID.make(id)
@@ -1959,7 +2008,9 @@ export const layer = Layer.effect(
         return { providerID: entry.providerID, modelID: entry.modelID }
       }
 
-      const provider = Object.values(s.providers).find((p) => !cfg.provider || Object.keys(cfg.provider).includes(p.id))
+      const provider = Object.values(s.providers).find(
+        (p) => p.id !== FUGU_PROVIDER_ID && (!cfg.provider || Object.keys(cfg.provider).includes(p.id)),
+      )
       if (!provider) return yield* new NoProvidersError()
       const [model] = sort(Object.values(provider.models))
       if (!model) return yield* new NoModelsError({ providerID: provider.id })

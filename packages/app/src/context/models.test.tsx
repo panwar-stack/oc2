@@ -31,8 +31,9 @@ mock.module("@/context/server-sync", () => ({
       provider: {
         all: new Map([
           ["anthropic", provider("anthropic", { "claude-sonnet-4": model("claude-sonnet-4") })],
+          ["fugu", provider("fugu", { fugu: model("fugu") })],
         ]),
-        connected: ["anthropic"],
+        connected: ["anthropic", "fugu"],
         default: { anthropic: "claude-sonnet-4" },
       },
     },
@@ -73,7 +74,9 @@ describe("ModelsProvider", () => {
     function Probe() {
       const models = useModels()
       listed = models.list()
-      visible = models.visible({ providerID: "anthropic", modelID: "claude-sonnet-4" })
+      visible =
+        models.visible({ providerID: "anthropic", modelID: "claude-sonnet-4" }) &&
+        models.visible({ providerID: "fugu", modelID: "fugu" })
       return undefined
     }
 
@@ -88,6 +91,7 @@ describe("ModelsProvider", () => {
 
     try {
       expect(listed.some((item) => item.provider.id === "anthropic" && item.id === "claude-sonnet-4")).toBe(true)
+      expect(listed.some((item) => item.provider.id === "fugu" && item.id === "fugu")).toBe(true)
       expect(visible).toBe(true)
     } finally {
       dispose()

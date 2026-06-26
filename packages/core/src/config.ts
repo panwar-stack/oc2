@@ -15,6 +15,7 @@ import { ConfigCompaction } from "./config/compaction"
 import { ConfigCommand } from "./config/command"
 import { ConfigExperimental } from "./config/experimental"
 import { ConfigFormatter } from "./config/formatter"
+import { ConfigFugu } from "./config/fugu"
 import { ConfigLSP } from "./config/lsp"
 import { ConfigLocalFusion } from "./config/local-fusion"
 import { ConfigMCP } from "./config/mcp"
@@ -106,6 +107,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),
   local_fusion: Schema.Record(Schema.String, ConfigLocalFusion.Info).pipe(Schema.optional).annotate({
     description: "Named local_fusion compound model configurations",
+  }),
+  fugu: ConfigFugu.Info.pipe(Schema.optional).annotate({
+    description: "Fugu virtual model configuration",
   }),
 }) {}
 

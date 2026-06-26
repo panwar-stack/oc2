@@ -20,6 +20,7 @@ const keys = new Set([
   "enabled_providers",
   "small_model",
   "local_fusion",
+  "fugu",
   "mode",
   "agent",
   "provider",
@@ -71,6 +72,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
     experimental: info.experimental?.policies && { policies: info.experimental.policies },
     providers: providers(info.provider),
     local_fusion: info.local_fusion,
+    fugu: info.fugu,
   }
 }
 

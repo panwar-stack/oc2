@@ -22,6 +22,7 @@ import { CommandPlugin } from "./command"
 import { SkillPlugin } from "./skill"
 import { ConfigProviderPlugin } from "../config/plugin/provider"
 import { EnvPlugin } from "./env"
+import { FuguPlugin } from "./fugu"
 import { ModelsDevPlugin } from "./models-dev"
 import { ProviderPlugins } from "./provider"
 import { SkillV2 } from "../skill"
@@ -100,6 +101,7 @@ export const layer = Layer.effect(
         yield* add(item)
       }
       yield* add(ModelsDevPlugin)
+      yield* add(FuguPlugin.Plugin)
       yield* add(ConfigProviderPlugin.Plugin)
       yield* add(ConfigAgentPlugin.Plugin)
       yield* add(ConfigCommandPlugin.Plugin)

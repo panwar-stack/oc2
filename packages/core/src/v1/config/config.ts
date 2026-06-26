@@ -9,6 +9,7 @@ import { ConfigCommandV1 } from "./command"
 import { ConfigFormatterV1 } from "./formatter"
 import { ConfigLayoutV1 } from "./layout"
 import { ConfigLSPV1 } from "./lsp"
+import { ConfigFugu } from "../../config/fugu"
 import { ConfigLocalFusion } from "../../config/local-fusion"
 import { ConfigMCPV1 } from "./mcp"
 import { ConfigPermissionV1 } from "./permission"
@@ -113,6 +114,9 @@ export const Info = Schema.Struct({
   local_fusion: Schema.optional(Schema.Record(Schema.String, ConfigLocalFusion.Info)).annotate({
     description: "Named local_fusion compound model configurations",
   }),
+  fugu: Schema.optional(ConfigFugu.Info).annotate({
+    description: "Fugu virtual model configuration",
+  }),
   default_agent: Schema.optional(Schema.String).annotate({
     description:
       "Default agent to use when none is specified. Must be a primary agent. Falls back to 'build' if not set or if the specified agent is invalid.",
@@ -155,7 +159,8 @@ export const Info = Schema.Struct({
       "Enable or configure LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.",
   }),
   memory: Schema.optional(Memory).annotate({
-    description: "Repository memory configuration. Agent tools remain disabled unless memory.enabled is true and an index exists.",
+    description:
+      "Repository memory configuration. Agent tools remain disabled unless memory.enabled is true and an index exists.",
   }),
   instructions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Additional instruction files or patterns to include",

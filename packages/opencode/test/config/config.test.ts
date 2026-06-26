@@ -1,5 +1,7 @@
 import { test, expect, describe, afterEach, beforeEach, spyOn } from "bun:test"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { Config as CoreConfig } from "@opencode-ai/core/config"
+import { ConfigMigrateV1 } from "@opencode-ai/core/v1/config/migrate"
 import { Effect, Exit, Layer, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
@@ -406,6 +408,47 @@ it.instance(
 )
 
 it.instance(
+  "loads fugu config",
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.fugu?.branches?.[0]?.model).toBe("test/branch")
+    expect(config.fugu?.branches?.[0]?.variant).toBe("branch-fast")
+    expect(config.fugu?.judge?.model).toBe("test/judge")
+    expect(config.fugu?.judge?.variant).toBe("judge-high")
+    expect(config.fugu?.synthesizer?.model).toBe("test/synth")
+    expect(config.fugu?.synthesizer?.variant).toBe("synth-low")
+  }),
+  {
+    config: {
+      fugu: {
+        branches: [{ model: "test/branch", variant: "branch-fast" }],
+        judge: { model: "test/judge", variant: "judge-high" },
+        synthesizer: { model: "test/synth", variant: "synth-low" },
+      },
+    },
+  },
+)
+
+test("config parser accepts missing fugu config", () => {
+  expect(ConfigParse.schema(ConfigV1.Info, {}, "test").fugu).toBeUndefined()
+})
+
+test("v1 migration preserves fugu judge", () => {
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    { fugu: { judge: { model: "test/judge", variant: "judge-high" } } },
+    "test",
+  )
+  const migrated = ConfigMigrateV1.migrate(config)
+
+  expect(ConfigMigrateV1.isV1({ fugu: { judge: { model: "test/judge" } } })).toBe(true)
+  expect(ConfigParse.schema(CoreConfig.Info, migrated, "test").fugu?.judge).toEqual({
+    model: "test/judge",
+    variant: "judge-high",
+  })
+})
+
+it.instance(
   "loads shell config field",
   Effect.gen(function* () {
     const config = yield* Config.use.get()
@@ -463,7 +506,9 @@ test("sandbox allows disabled config without profiles", () => {
 test("sandbox rejects invalid allowlist hosts", () => {
   expect(() => parseSandboxConfig({ profiles: { workspace: { network: { mode: "allowlist" } } } })).toThrow()
   expect(() => parseSandboxConfig({ profiles: { workspace: { network: { mode: "allowlist", hosts: [] } } } })).toThrow()
-  expect(() => parseSandboxConfig({ profiles: { workspace: { network: { mode: "allowlist", hosts: [""] } } } })).toThrow()
+  expect(() =>
+    parseSandboxConfig({ profiles: { workspace: { network: { mode: "allowlist", hosts: [""] } } } }),
+  ).toThrow()
 })
 
 test("sandbox rejects invalid network mode", () => {
@@ -1467,10 +1512,12 @@ test("config parser preserves permission order while rejecting unknown top-level
 
   expect(Object.keys(config.permission!)).toEqual(["bash", "*", "edit"])
   try {
-    ConfigParse.schema(ConfigV1.Info, { invalid_field: true }, "test")
+    ConfigParse.schema(ConfigV1.Info, { fugu: { judge: { model: "test/judge" } }, invalid_field: true }, "test")
     throw new Error("expected config parse to fail")
   } catch (err) {
-    const error = err as { data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[]; message?: string }> } }
+    const error = err as {
+      data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[]; message?: string }> }
+    }
     expect(error.data?.issues?.[0]).toMatchObject({ code: "unrecognized_keys", keys: ["invalid_field"], path: [] })
   }
 
@@ -1478,7 +1525,9 @@ test("config parser preserves permission order while rejecting unknown top-level
     ConfigParse.schema(ConfigV1.Info, { logu: {} }, "test")
     throw new Error("expected logu config parse to fail")
   } catch (err) {
-    const error = err as { data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[]; message?: string }> } }
+    const error = err as {
+      data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[]; message?: string }> }
+    }
     expect(error.data?.issues?.[0]).toMatchObject({
       path: [],
       message: "logu config has been removed; use local_fusion instead",
