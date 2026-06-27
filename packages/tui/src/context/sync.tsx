@@ -20,6 +20,7 @@ import type {
   SnapshotFileDiff,
   ConsoleState,
   SessionRoot,
+  EventSessionNextFuguStatus,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -85,6 +86,9 @@ export const {
       session_status: {
         [sessionID: string]: SessionStatus
       }
+      fugu_status: {
+        [sessionID: string]: EventSessionNextFuguStatus["properties"] | undefined
+      }
       team_member_status: {
         [sessionID: string]: { status: string; lifecycle?: string; daemonState?: string | null }
       }
@@ -128,6 +132,7 @@ export const {
       session: [],
       session_root: {},
       session_status: {},
+      fugu_status: {},
       team_member_status: {},
       session_diff: {},
       todo: {},
@@ -309,6 +314,32 @@ export const {
 
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
+          if (event.properties.status.type === "idle") {
+            setStore(
+              "fugu_status",
+              produce((draft) => {
+                delete draft[event.properties.sessionID]
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.fugu.status": {
+          if (store.session_status[event.properties.sessionID]?.type === "idle") break
+          const current = store.fugu_status[event.properties.sessionID]
+          if (current?.runID === event.properties.runID && current.timestamp > event.properties.timestamp) break
+          if (current && current.runID !== event.properties.runID) break
+          if (event.properties.phase === "complete" || event.properties.phase === "failed") {
+            setStore(
+              "fugu_status",
+              produce((draft) => {
+                delete draft[event.properties.sessionID]
+              }),
+            )
+            break
+          }
+          setStore("fugu_status", event.properties.sessionID, event.properties)
           break
         }
 
