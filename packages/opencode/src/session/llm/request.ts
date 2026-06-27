@@ -33,6 +33,7 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  readonly forbidImplicitTools?: boolean
 }
 
 export type Prepared = {
@@ -147,6 +148,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
 
   const tools = resolveTools(input)
   if (
+    !input.forbidImplicitTools &&
     input.model.providerID.includes("github-copilot") &&
     Object.keys(tools).length === 0 &&
     hasToolCalls(input.messages)

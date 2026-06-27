@@ -48,6 +48,7 @@ export type StreamInput = {
   promptOps?: TaskPromptOps
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  forbidImplicitTools?: boolean
 }
 
 export type StreamRequest = StreamInput & {

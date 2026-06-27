@@ -90,6 +90,7 @@ export function run(
       messages: [...input.messages, synthesizerMessage(results)],
       tools: {},
       toolChoice: "none",
+      forbidImplicitTools: true,
     }).pipe(
       Stream.tap((event) => {
         if (event.type === "finish") {
@@ -104,6 +105,14 @@ export function run(
         }
         return Effect.void
       }),
+      Stream.tapError((error) =>
+        Effect.logError("fugu synthesizer failed").pipe(
+          Effect.annotateLogs({
+            "fugu.synthesizer": targetLabel(resolved.synthesizer),
+            "fugu.error": errorMessage(error),
+          }),
+        ),
+      ),
     )
   })
 }
@@ -185,6 +194,7 @@ function collectBranch(input: StreamRequest, branch: ResolvedTarget, execute: Ex
     user: withTargetModel(input, branch),
     tools: {},
     toolChoice: "none",
+    forbidImplicitTools: true,
   }).pipe(
     Stream.runCollect,
     Effect.matchEffect({

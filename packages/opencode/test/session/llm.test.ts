@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import path from "path"
 import { tool, type ModelMessage } from "ai"
-import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Logger, Stream } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
@@ -25,6 +25,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Permission } from "@/permission"
 import { LLMAISDK } from "@/session/llm/ai-sdk"
+import { LLMFugu } from "@/session/llm/fugu"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -718,7 +719,7 @@ function loadFixture(providerID: string, modelID: string) {
   return { provider, model }
 }
 
-function configModel(model: ModelsDev.Model) {
+function configModel(model: ModelsDev.Model): ConfigModel {
   return {
     id: model.id,
     name: model.name,
@@ -729,11 +730,13 @@ function configModel(model: ModelsDev.Model) {
     temperature: model.temperature,
     tool_call: model.tool_call,
     interleaved: model.interleaved,
-    cost: model.cost ? { ...model.cost, tiers: undefined } : undefined,
+    cost: model.cost ? { ...model.cost } : undefined,
     limit: model.limit,
-    modalities: model.modalities,
+    modalities: model.modalities
+      ? { input: [...model.modalities.input], output: [...model.modalities.output] }
+      : undefined,
     status: model.status,
-    provider: model.provider,
+    provider: model.provider ? { ...model.provider } : undefined,
   }
 }
 
@@ -789,6 +792,28 @@ function fuguInput(model: Provider.Model, input?: Partial<LLM.StreamInput>): LLM
     tools: {},
     ...input,
   }
+}
+
+function toolHistoryMessages(): ModelMessage[] {
+  return [
+    { role: "user", content: "Use a tool first" },
+    {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: "call-1", toolName: "lookup", input: {} }],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "call-1",
+          toolName: "lookup",
+          output: { type: "json", value: { ok: true } },
+        },
+      ],
+    },
+    { role: "user", content: "Now answer" },
+  ]
 }
 
 function visibleText(events: LLMEventType[]) {
@@ -922,6 +947,117 @@ describe("session.llm.stream", () => {
         expect(synthMessages).toContain("hidden branch b")
       }),
     { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "does not add implicit copilot noop tools to fugu hidden requests with prior tool history",
+    () =>
+      Effect.gen(function* () {
+        const branchA = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("hidden branch a"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const branchB = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("hidden branch b"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const synth = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("final answer"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+
+        yield* collect(fuguInput(fuguRuntimeModel(), { messages: toolHistoryMessages() }))
+
+        expect((yield* Effect.promise(() => branchA)).body.tools).toBeUndefined()
+        expect((yield* Effect.promise(() => branchB)).body.tools).toBeUndefined()
+        expect((yield* Effect.promise(() => synth)).body.tools).toBeUndefined()
+      }),
+    {
+      config: () => {
+        const model = loadFixture("github-copilot", "claude-opus-4.6").model
+        return {
+          enabled_providers: ["github-copilot"],
+          provider: {
+            "github-copilot": {
+              options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+              models: { [model.id]: configModel(model) },
+            },
+          },
+          fugu: {
+            branches: [{ model: `github-copilot/${model.id}` }, { model: `github-copilot/${model.id}` }],
+            synthesizer: { model: `github-copilot/${model.id}` },
+          },
+        } satisfies Partial<ConfigV1.Info>
+      },
+    },
+  )
+
+  it.instance(
+    "keeps implicit copilot noop tool for normal requests with prior tool history",
+    () =>
+      Effect.gen(function* () {
+        const model = loadFixture("github-copilot", "claude-opus-4.6").model
+        const request = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("Hello"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const resolved = yield* Provider.use.getModel(ProviderV2.ID.make("github-copilot"), ModelV2.ID.make(model.id))
+        const sessionID = SessionID.make("session-test-copilot-noop")
+        const agent = testAgent()
+
+        yield* drain({
+          user: {
+            id: MessageID.make("msg_user-copilot-noop"),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: agent.name,
+            model: { providerID: ProviderV2.ID.make("github-copilot"), modelID: resolved.id },
+          } satisfies SessionV1.User,
+          sessionID,
+          model: resolved,
+          agent,
+          system: [],
+          messages: toolHistoryMessages(),
+          tools: {},
+        })
+
+        const capture = yield* Effect.promise(() => request)
+        const names = Array.isArray(capture.body.tools)
+          ? capture.body.tools.flatMap((item) => {
+              if (!item || typeof item !== "object") return []
+              const value = item as { function?: { name?: unknown } }
+              return typeof value.function?.name === "string" ? [value.function.name] : []
+            })
+          : []
+        expect(names).toContain("_noop")
+      }),
+    {
+      config: () => {
+        const model = loadFixture("github-copilot", "claude-opus-4.6").model
+        return {
+          enabled_providers: ["github-copilot"],
+          provider: {
+            "github-copilot": {
+              options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+              models: { [model.id]: configModel(model) },
+            },
+          },
+        } satisfies Partial<ConfigV1.Info>
+      },
+    },
   )
 
   it.instance(
@@ -1116,6 +1252,43 @@ describe("session.llm.stream", () => {
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Internal Server Error")
         expect(state.queue).toHaveLength(0)
+      }),
+    { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "logs fugu synthesizer thrown stream failures with target metadata",
+    () =>
+      Effect.gen(function* () {
+        const logs: Array<ReturnType<typeof Logger.formatStructured.log>> = []
+        const logger = Logger.map(Logger.formatStructured, (entry) => {
+          logs.push(entry)
+        })
+        const provider = yield* Provider.Service
+        let calls = 0
+        const exit = yield* LLMFugu.run(
+          { ...fuguInput(fuguRuntimeModel()), abort: new AbortController().signal },
+          fuguConfig().fugu,
+          provider,
+          () => {
+            calls++
+            if (calls <= 2) return Stream.make({ type: "text-delta", id: `branch-${calls}`, text: `branch ${calls}` })
+            return Stream.fail(new Error("synthetic stream failure"))
+          },
+        ).pipe(
+          Effect.flatMap((stream) => Stream.runDrain(stream)),
+          Effect.provide(Logger.layer([logger])),
+          Effect.exit,
+        )
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        const failure = logs.find((entry) => entry.message === "fugu synthesizer failed")
+        expect(failure).toBeDefined()
+        expect(failure?.annotations["fugu.synthesizer"]).toBe(`${fuguTarget}@high`)
+        expect(failure?.annotations["fugu.error"]).toBe("synthetic stream failure")
+        expect(failure?.cause).toBeUndefined()
+        expect(JSON.stringify(failure)).not.toContain("branch 1")
+        expect(JSON.stringify(failure)).not.toContain("Hello from caller")
       }),
     { config: () => fuguConfig() },
   )
