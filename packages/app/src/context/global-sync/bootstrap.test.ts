@@ -26,6 +26,7 @@ describe("bootstrapDirectory", () => {
       session: [],
       sessionTotal: 0,
       session_status: {},
+      fugu_status: {},
       session_working(id: string) {
         return this.session_status[id]?.type !== "idle"
       },

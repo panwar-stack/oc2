@@ -70,6 +70,7 @@ import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
 import { makeTimer } from "@solid-primitives/timer"
 import { MessageComment, SummaryDiff, Timeline, TimelineRow, TimelineRowMap } from "./message-timeline.data"
+import type { FuguStatus as LiveFuguStatus } from "@/context/global-sync/types"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -167,6 +168,45 @@ function TimelineThinkingRow(props: { reasoningHeading?: string; showReasoningSu
       </Show>
     </div>
   )
+}
+
+function TimelineFuguStatusRow(props: { status: LiveFuguStatus }) {
+  const complete = () => props.status.branches.filter((branch) => branch.status === "complete").length
+  const judge = () => (props.status.judge?.status === "skipped" ? undefined : props.status.judge)
+  const phase = () => {
+    if (props.status.phase === "synthesizing" || props.status.synthesizer.status !== "pending") {
+      return `synthesizer ${fuguStatusLabel(props.status.synthesizer.status)}`
+    }
+    const value = judge()
+    if (value) return `judge ${fuguStatusLabel(value.status)}`
+    return `synthesizer ${fuguStatusLabel(props.status.synthesizer.status)}`
+  }
+
+  return (
+    <div data-slot="session-turn-fugu-status" class="text-12-regular text-text-weak flex flex-col gap-1 py-1">
+      <div>
+        Fugu · {complete()}/{props.status.branches.length} branches complete · {phase()}
+      </div>
+      <div class="flex flex-wrap gap-x-4 gap-y-1">
+        <Index each={props.status.branches}>
+          {(branch) => (
+            <span class="whitespace-nowrap">
+              Branch {branch().index + 1} · {fuguStatusLabel(branch().status)}
+            </span>
+          )}
+        </Index>
+        <Show when={judge()}>
+          {(value) => <span class="whitespace-nowrap">Judge · {fuguStatusLabel(value().status)}</span>}
+        </Show>
+      </div>
+    </div>
+  )
+}
+
+function fuguStatusLabel(status: LiveFuguStatus["branches"][number]["status"]) {
+  if (status === "pending") return "idle"
+  if (status === "timed_out") return "timed out"
+  return status
 }
 
 function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
@@ -326,6 +366,11 @@ export function MessageTimeline(props: {
     if (!id) return idle
     return sync.data.session_status[id] ?? idle
   })
+  const fuguStatus = createMemo(() => {
+    const id = sessionID()
+    if (!id) return
+    return sync.data.fugu_status[id]
+  })
   const working = createMemo(() => sessionStatus().type !== "idle")
   const tint = createMemo(() => messageAgentColor(sessionMessages(), sync.data.agent))
 
@@ -407,6 +452,7 @@ export function MessageTimeline(props: {
       () => props.userMessages,
       (userMessage, indexAccessor) => {
         return createMemo((previous: TimelineRow.TimelineRow[] | undefined) => {
+          const active = activeMessageID() === userMessage.id
           const rows = Timeline.constructMessageRows(
             userMessage,
             getMsgParts,
@@ -414,7 +460,8 @@ export function MessageTimeline(props: {
             indexAccessor(),
             settings.general.showReasoningSummaries(),
             sessionStatus().type,
-            activeMessageID() === userMessage.id,
+            active,
+            active ? fuguStatus() : undefined,
           )
 
           return reuseTimelineRows(previous, rows)
@@ -1210,6 +1257,16 @@ export function MessageTimeline(props: {
                 reasoningHeading={thinkingRow().reasoningHeading}
                 showReasoningSummaries={settings.general.showReasoningSummaries()}
               />
+            </div>
+          </TimelineRowFrame>
+        )
+      }
+      case "FuguStatus": {
+        const fuguStatusRow = row as Accessor<TimelineRowByTag<"FuguStatus">>
+        return (
+          <TimelineRowFrame row={fuguStatusRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+              <TimelineFuguStatusRow status={fuguStatusRow().status} />
             </div>
           </TimelineRowFrame>
         )

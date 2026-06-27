@@ -1,4 +1,5 @@
 import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
+import type { FuguStatus as LiveFuguStatus } from "@/context/global-sync/types"
 import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@opencode-ai/sdk/v2"
 import { groupParts, PartGroup, renderable } from "@opencode-ai/ui/message-part"
 import { Data, Equal } from "effect"
@@ -25,6 +26,7 @@ export type TimelineRowMap = {
     previousAssistantPart: boolean
   }
   Thinking: { userMessageID: string; reasoningHeading?: string }
+  FuguStatus: { userMessageID: string; status: LiveFuguStatus }
   Retry: { userMessageID: string }
   DiffSummary: { userMessageID: string; diffs: SummaryDiff[] }
   Error: { userMessageID: string; text: string }
@@ -54,6 +56,10 @@ export namespace TimelineRow {
     userMessageID: string
     reasoningHeading?: string
   }> {}
+  export class FuguStatus extends Data.TaggedClass("FuguStatus")<{
+    userMessageID: string
+    status: LiveFuguStatus
+  }> {}
   export class DiffSummary extends Data.TaggedClass("DiffSummary")<{
     userMessageID: string
     diffs: SummaryDiff[]
@@ -73,6 +79,7 @@ export namespace TimelineRow {
     | TurnDivider
     | AssistantPart
     | Thinking
+    | FuguStatus
     | DiffSummary
     | Error
     | Retry
@@ -90,6 +97,8 @@ export namespace TimelineRow {
         return `assistant-part:${row.userMessageID}:${row.group.key}`
       case "Thinking":
         return `thinking:${row.userMessageID}`
+      case "FuguStatus":
+        return `fugu-status:${row.userMessageID}`
       case "DiffSummary":
         return `diff-summary:${row.userMessageID}`
       case "Error":
@@ -115,6 +124,7 @@ export namespace Timeline {
     showReasoning: boolean,
     status: SessionStatus["type"],
     isActive: boolean,
+    fuguStatus?: LiveFuguStatus,
   ) {
     const rows: TimelineRow.TimelineRow[] = []
 
@@ -195,6 +205,15 @@ export namespace Timeline {
       )
       assistantGroupIndex += 1
     })
+
+    if (isActive && status !== "idle" && fuguStatus && fuguStatus.phase !== "complete" && fuguStatus.phase !== "failed") {
+      rows.push(
+        new TimelineRow.FuguStatus({
+          userMessageID: userMessage.id,
+          status: fuguStatus,
+        }),
+      )
+    }
 
     if (isActive && status === "busy" && !error && (showReasoning ? assistantPartRefs.length === 0 : true)) {
       const heading = assistantMessages

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type {
+  EventSessionNextFuguStatus,
   Message,
   Part,
   PermissionRequest,
@@ -64,6 +65,20 @@ const questionRequest = (id: string, sessionID: string, title = id) =>
     ],
   }) as QuestionRequest
 
+const fuguStatus = (input: Partial<EventSessionNextFuguStatus["properties"]> = {}) =>
+  ({
+    sessionID: input.sessionID ?? "ses_1",
+    timestamp: input.timestamp ?? 1,
+    runID: input.runID ?? "run_1",
+    phase: input.phase ?? "branching",
+    branches: input.branches ?? [
+      { index: 0, status: "complete" },
+      { index: 1, status: "working" },
+    ],
+    judge: input.judge ?? { status: "working" },
+    synthesizer: input.synthesizer ?? { status: "pending" },
+  }) satisfies EventSessionNextFuguStatus["properties"]
+
 const baseState = (input: Partial<State> = {}) =>
   ({
     status: "complete",
@@ -78,6 +93,7 @@ const baseState = (input: Partial<State> = {}) =>
     session: [],
     sessionTotal: 0,
     session_status: {},
+    fugu_status: {},
     session_diff: {},
     todo: {},
     permission: {},
@@ -207,6 +223,7 @@ describe("applyDirectoryEvent", () => {
         permission: { ses_1: [] },
         question: { ses_1: [] },
         session_status: { ses_1: { type: "busy" } },
+        fugu_status: { ses_1: fuguStatus() },
       }),
     )
 
@@ -228,6 +245,7 @@ describe("applyDirectoryEvent", () => {
     expect(store.permission.ses_1).toBeUndefined()
     expect(store.question.ses_1).toBeUndefined()
     expect(store.session_status.ses_1).toBeUndefined()
+    expect(store.fugu_status.ses_1).toBeUndefined()
   })
 
   test("cleans session caches when deleted and decrements only root totals", () => {
@@ -253,6 +271,7 @@ describe("applyDirectoryEvent", () => {
           permission: { [item.info.id]: [] },
           question: { [item.info.id]: [] },
           session_status: { [item.info.id]: { type: "busy" } },
+          fugu_status: { [item.info.id]: fuguStatus({ sessionID: item.info.id }) },
         }),
       )
 
@@ -274,6 +293,7 @@ describe("applyDirectoryEvent", () => {
       expect(store.permission[item.info.id]).toBeUndefined()
       expect(store.question[item.info.id]).toBeUndefined()
       expect(store.session_status[item.info.id]).toBeUndefined()
+      expect(store.fugu_status[item.info.id]).toBeUndefined()
     }
   })
 
@@ -293,6 +313,7 @@ describe("applyDirectoryEvent", () => {
         permission: { [dropped.id]: [] },
         question: { [dropped.id]: [] },
         session_status: { [dropped.id]: { type: "busy" } },
+        fugu_status: { [dropped.id]: fuguStatus({ sessionID: dropped.id }) },
       }),
     )
 
@@ -317,7 +338,155 @@ describe("applyDirectoryEvent", () => {
     expect(store.permission[dropped.id]).toBeUndefined()
     expect(store.question[dropped.id]).toBeUndefined()
     expect(store.session_status[dropped.id]).toBeUndefined()
+    expect(store.fugu_status[dropped.id]).toBeUndefined()
     expect(todos).toEqual([dropped.id])
+  })
+
+  test("tracks and clears live Fugu status", () => {
+    const [store, setStore] = createStore(baseState({ session_status: { ses_1: { type: "busy" } } }))
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus() },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1?.runID).toBe("run_1")
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus({ phase: "complete" }) },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1?.phase).toBe("complete")
+  })
+
+  test("does not let stale final Fugu status clear a newer run", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session_status: { ses_1: { type: "busy" } },
+        fugu_status: { ses_1: fuguStatus({ runID: "run_2" }) },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus({ runID: "run_1", phase: "failed" }) },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1?.runID).toBe("run_2")
+  })
+
+  test("does not let stale non-final Fugu status replace a newer run", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session_status: { ses_1: { type: "busy" } },
+        fugu_status: { ses_1: fuguStatus({ runID: "run_2", timestamp: 2 }) },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus({ runID: "run_1", timestamp: 1 }) },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1?.runID).toBe("run_2")
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus({ runID: "run_1", timestamp: 3 }) },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1?.runID).toBe("run_2")
+  })
+
+  test("does not let non-final Fugu status recreate after final status", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session_status: { ses_1: { type: "busy" } },
+        fugu_status: { ses_1: fuguStatus({ phase: "complete", timestamp: 2 }) },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus({ timestamp: 1 }) },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1?.phase).toBe("complete")
+  })
+
+  test("ignores non-final Fugu status while session is idle", () => {
+    const [store, setStore] = createStore(baseState({ session_status: { ses_1: { type: "idle" } } }))
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus() },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1).toBeUndefined()
+  })
+
+  test("ignores final Fugu status while session is idle", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session_status: { ses_1: { type: "idle" } },
+        fugu_status: { ses_1: fuguStatus({ runID: "run_2" }) },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: { type: "session.next.fugu.status", properties: fuguStatus({ phase: "complete" }) },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1).toBeUndefined()
+  })
+
+  test("clears live Fugu status when session becomes idle", () => {
+    const [store, setStore] = createStore(baseState({ fugu_status: { ses_1: fuguStatus() } }))
+
+    applyDirectoryEvent({
+      event: { type: "session.status", properties: { sessionID: "ses_1", status: { type: "idle" } } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.fugu_status.ses_1).toBeUndefined()
   })
 
   test("cleanupDroppedSessionCaches clears part-only orphan state", () => {

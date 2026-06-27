@@ -2,6 +2,7 @@ import { Binary } from "@opencode-ai/core/util/binary"
 import { produce, reconcile, type SetStoreFunction, type Store } from "solid-js/store"
 import type {
   Message,
+  EventSessionNextFuguStatus,
   Part,
   PermissionRequest,
   Project,
@@ -75,6 +76,7 @@ export function cleanupDroppedSessionCaches(
     ...Object.keys(store.permission),
     ...Object.keys(store.question),
     ...Object.keys(store.session_status),
+    ...Object.keys(store.fugu_status),
     ...Object.values(store.part)
       .map((parts) => parts?.find((part) => !!part?.sessionID)?.sessionID)
       .filter((sessionID): sessionID is string => !!sessionID),
@@ -182,6 +184,34 @@ export function applyDirectoryEvent(input: {
     case "session.status": {
       const props = event.properties as { sessionID: string; status: SessionStatus }
       input.setStore("session_status", props.sessionID, reconcile(props.status))
+      if (props.status.type === "idle") {
+        input.setStore(
+          produce((draft) => {
+            delete draft.fugu_status[props.sessionID]
+          }),
+        )
+      }
+      break
+    }
+    case "session.next.fugu.status": {
+      const props = event.properties as EventSessionNextFuguStatus["properties"]
+      if ((input.store.session_status[props.sessionID]?.type ?? "idle") === "idle") {
+        input.setStore(
+          produce((draft) => {
+            delete draft.fugu_status[props.sessionID]
+          }),
+        )
+        break
+      }
+      const current = input.store.fugu_status[props.sessionID]
+      if (current && current.runID !== props.runID) break
+      if (props.phase === "complete" || props.phase === "failed") {
+        input.setStore("fugu_status", props.sessionID, reconcile(props))
+        break
+      }
+      if (current && props.timestamp < current.timestamp) break
+      if (current && current.runID === props.runID && (current.phase === "complete" || current.phase === "failed")) break
+      input.setStore("fugu_status", props.sessionID, reconcile(props))
       break
     }
     case "message.updated": {

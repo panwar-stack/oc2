@@ -2,6 +2,7 @@ import type {
   Agent,
   Command,
   Config,
+  EventSessionNextFuguStatus,
   LspStatus,
   McpStatus,
   Message,
@@ -30,6 +31,8 @@ export type ProjectMeta = {
   }
 }
 
+export type FuguStatus = EventSessionNextFuguStatus["properties"]
+
 export type State = {
   status: "loading" | "partial" | "complete"
   agent: Agent[]
@@ -45,6 +48,9 @@ export type State = {
   sessionTotal: number
   session_status: {
     [sessionID: string]: SessionStatus
+  }
+  fugu_status: {
+    [sessionID: string]: FuguStatus | undefined
   }
   session_working(id: string): boolean
   session_diff: {

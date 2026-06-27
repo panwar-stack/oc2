@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type {
+  EventSessionNextFuguStatus,
   Message,
   Part,
   PermissionRequest,
@@ -33,6 +34,7 @@ describe("app session cache", () => {
   test("dropSessionCaches clears orphaned parts without message rows", () => {
     const store: {
       session_status: Record<string, SessionStatus | undefined>
+      fugu_status: Record<string, EventSessionNextFuguStatus["properties"] | undefined>
       session_diff: Record<string, SnapshotFileDiff[] | undefined>
       todo: Record<string, Todo[] | undefined>
       message: Record<string, Message[] | undefined>
@@ -42,6 +44,16 @@ describe("app session cache", () => {
       part_text_accum_delta: Record<string, string | undefined>
     } = {
       session_status: { ses_1: { type: "busy" } as SessionStatus },
+      fugu_status: {
+        ses_1: {
+          sessionID: "ses_1",
+          timestamp: 1,
+          runID: "run_1",
+          phase: "branching",
+          branches: [{ index: 0, status: "working" }],
+          synthesizer: { status: "pending" },
+        },
+      },
       session_diff: { ses_1: [] },
       todo: { ses_1: [] as Todo[] },
       message: {},
@@ -59,6 +71,7 @@ describe("app session cache", () => {
     expect(store.todo.ses_1).toBeUndefined()
     expect(store.session_diff.ses_1).toBeUndefined()
     expect(store.session_status.ses_1).toBeUndefined()
+    expect(store.fugu_status.ses_1).toBeUndefined()
     expect(store.permission.ses_1).toBeUndefined()
     expect(store.question.ses_1).toBeUndefined()
   })
@@ -67,6 +80,7 @@ describe("app session cache", () => {
     const m = msg("msg_1", "ses_1")
     const store: {
       session_status: Record<string, SessionStatus | undefined>
+      fugu_status: Record<string, EventSessionNextFuguStatus["properties"] | undefined>
       session_diff: Record<string, SnapshotFileDiff[] | undefined>
       todo: Record<string, Todo[] | undefined>
       message: Record<string, Message[] | undefined>
@@ -76,6 +90,7 @@ describe("app session cache", () => {
       part_text_accum_delta: Record<string, string | undefined>
     } = {
       session_status: {},
+      fugu_status: {},
       session_diff: {},
       todo: {},
       message: { ses_1: [m] },

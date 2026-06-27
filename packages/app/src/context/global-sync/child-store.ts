@@ -213,6 +213,7 @@ export function createChildStoreManager(input: {
             session: [],
             sessionTotal: 0,
             session_status: {},
+            fugu_status: {},
             session_working(id: string) {
               const type = this.session_status[id]?.type
               return (type ?? "idle") !== "idle"

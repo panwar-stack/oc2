@@ -1,5 +1,6 @@
 import type {
   Message,
+  EventSessionNextFuguStatus,
   Part,
   PermissionRequest,
   QuestionRequest,
@@ -12,6 +13,7 @@ export const SESSION_CACHE_LIMIT = 40
 
 type SessionCache = {
   session_status: Record<string, SessionStatus | undefined>
+  fugu_status: Record<string, EventSessionNextFuguStatus["properties"] | undefined>
   session_diff: Record<string, SnapshotFileDiff[] | undefined>
   todo: Record<string, Todo[] | undefined>
   message: Record<string, Message[] | undefined>
@@ -39,6 +41,7 @@ export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<stri
     delete store.todo[sessionID]
     delete store.session_diff[sessionID]
     delete store.session_status[sessionID]
+    delete store.fugu_status[sessionID]
     delete store.permission[sessionID]
     delete store.question[sessionID]
   }
