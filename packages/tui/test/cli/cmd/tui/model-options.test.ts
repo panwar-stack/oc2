@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { sortModelOptions } from "../../../../src/component/dialog-model"
+import { createDialogModelProviderOptions, sortModelOptions } from "../../../../src/component/dialog-model"
+
+const fuguProvider = {
+  id: "fugu",
+  name: "Fugu",
+  models: {
+    fugu: {
+      id: "fugu",
+      providerID: "fugu",
+      name: "Fugu",
+      status: "active",
+      release_date: "",
+      cost: { input: 0 },
+    },
+  },
+}
 
 describe("sortModelOptions", () => {
   test("orders provider-scoped model choices by newest release first", () => {
@@ -26,5 +41,39 @@ describe("sortModelOptions", () => {
     )
 
     expect(sorted.map((model) => model.title)).toEqual(["Alpha", "Gamma", "Beta"])
+  })
+
+  test("builds fugu option through the dialog model provider path", () => {
+    const options = createDialogModelProviderOptions({
+      providers: [fuguProvider],
+      favorites: [],
+      recents: [],
+      connected: true,
+      showSections: true,
+      onSelect: () => {},
+    })
+
+    expect(options).toContainEqual(
+      expect.objectContaining({
+        value: { providerID: "fugu", modelID: "fugu" },
+        title: "Fugu",
+        category: "Fugu",
+        footer: undefined,
+      }),
+    )
+  })
+
+  test("keeps fugu option in provider-scoped dialog model path", () => {
+    const options = createDialogModelProviderOptions({
+      providers: [fuguProvider],
+      favorites: [],
+      recents: [],
+      providerID: "fugu",
+      connected: true,
+      showSections: true,
+      onSelect: () => {},
+    })
+
+    expect(options.map((option) => option.value)).toEqual([{ providerID: "fugu", modelID: "fugu" }])
   })
 })

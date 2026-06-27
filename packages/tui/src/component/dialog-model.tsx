@@ -9,6 +9,23 @@ import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 
+type ModelRef = { providerID: string; modelID: string }
+
+type ModelProvider = {
+  id: string
+  name: string
+  models: Record<
+    string,
+    {
+      providerID: string
+      name?: string
+      status: string
+      release_date: string
+      cost?: { input: number }
+    }
+  >
+}
+
 export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
   const sync = useSync()
@@ -58,44 +75,15 @@ export function DialogModel(props: { providerID?: string }) {
       "Recent",
     )
 
-    const providerOptions = pipe(
-      sync.data.provider,
-      sortBy(
-        (provider) => provider.id !== "opencode",
-        (provider) => provider.name,
-      ),
-      flatMap((provider) =>
-        pipe(
-          provider.models,
-          entries(),
-          filter(([_, info]) => info.status !== "deprecated"),
-          filter(([_, info]) => (props.providerID ? info.providerID === props.providerID : true)),
-          map(([model, info]) => ({
-            value: { providerID: provider.id, modelID: model },
-            title: info.name ?? model,
-            releaseDate: info.release_date,
-            description: favorites.some((item) => item.providerID === provider.id && item.modelID === model)
-              ? "(Favorite)"
-              : undefined,
-            category: connected() ? provider.name : undefined,
-            disabled: provider.id === "opencode" && model.includes("-nano"),
-            footer: info.cost?.input === 0 && provider.id === "opencode" ? "Free" : undefined,
-            onSelect() {
-              onSelect(provider.id, model)
-            },
-          })),
-          filter((x) => {
-            if (!showSections) return true
-            if (favorites.some((item) => item.providerID === x.value.providerID && item.modelID === x.value.modelID))
-              return false
-            if (recents.some((item) => item.providerID === x.value.providerID && item.modelID === x.value.modelID))
-              return false
-            return true
-          }),
-          (options) => sortModelOptions(options, props.providerID !== undefined),
-        ),
-      ),
-    )
+    const providerOptions = createDialogModelProviderOptions({
+      providers: sync.data.provider,
+      favorites,
+      recents,
+      providerID: props.providerID,
+      connected: connected(),
+      showSections,
+      onSelect,
+    })
 
     const popularProviders = !connected()
       ? pipe(
@@ -169,6 +157,55 @@ export function DialogModel(props: { providerID?: string }) {
       title={title()}
       current={local.model.current()}
     />
+  )
+}
+
+export function createDialogModelProviderOptions(input: {
+  providers: ModelProvider[]
+  favorites: ModelRef[]
+  recents: ModelRef[]
+  providerID?: string
+  connected: boolean
+  showSections: boolean
+  onSelect: (providerID: string, modelID: string) => void
+}) {
+  return pipe(
+    input.providers,
+    sortBy(
+      (provider) => provider.id !== "opencode",
+      (provider) => provider.name,
+    ),
+    flatMap((provider) =>
+      pipe(
+        provider.models,
+        entries(),
+        filter(([_, info]) => info.status !== "deprecated"),
+        filter(([_, info]) => (input.providerID ? info.providerID === input.providerID : true)),
+        map(([model, info]) => ({
+          value: { providerID: provider.id, modelID: model },
+          title: info.name ?? model,
+          releaseDate: info.release_date,
+          description: input.favorites.some((item) => item.providerID === provider.id && item.modelID === model)
+            ? "(Favorite)"
+            : undefined,
+          category: input.connected ? provider.name : undefined,
+          disabled: provider.id === "opencode" && model.includes("-nano"),
+          footer: info.cost?.input === 0 && provider.id === "opencode" ? "Free" : undefined,
+          onSelect() {
+            input.onSelect(provider.id, model)
+          },
+        })),
+        filter((x) => {
+          if (!input.showSections) return true
+          if (input.favorites.some((item) => item.providerID === x.value.providerID && item.modelID === x.value.modelID))
+            return false
+          if (input.recents.some((item) => item.providerID === x.value.providerID && item.modelID === x.value.modelID))
+            return false
+          return true
+        }),
+        (options) => sortModelOptions(options, input.providerID !== undefined),
+      ),
+    ),
   )
 }
 
