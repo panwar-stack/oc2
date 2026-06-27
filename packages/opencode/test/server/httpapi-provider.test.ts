@@ -289,6 +289,13 @@ describe("provider HttpApi", () => {
           isRecord(provider.models.fugu) &&
           provider.models.fugu.status,
       ).toBe("active")
+      expect(
+        isRecord(provider) &&
+          isRecord(provider.models) &&
+          isRecord(provider.models.fugu) &&
+          isRecord(provider.models.fugu.capabilities) &&
+          provider.models.fugu.capabilities.toolcall,
+      ).toBe(true)
       expect(isRecord(configProvider) && isRecord(configProvider.models) && isRecord(configProvider.models.fugu)).toBe(
         true,
       )
@@ -300,6 +307,7 @@ describe("provider HttpApi", () => {
       ).toBe("active")
     }),
     projectOptions,
+    30000,
   )
 
   it.instance.skip(

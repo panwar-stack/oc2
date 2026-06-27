@@ -30,8 +30,8 @@ export const Plugin = PluginV2.define({
         model.family = ModelV2.Family.make("virtual")
         model.api = { id: modelID, type: "native", settings: {} }
         model.capabilities = {
-          tools: false,
-          input: ["text"],
+          tools: true,
+          input: ["text", "audio", "image", "video", "pdf"],
           output: ["text"],
         }
         model.variants = []

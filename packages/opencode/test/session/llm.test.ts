@@ -824,6 +824,16 @@ function textDeltas(events: LLMEventType[]) {
   return events.filter((event) => event.type === "text-delta").map((event) => event.text)
 }
 
+function requestToolNames(body: Record<string, unknown>) {
+  return Array.isArray(body.tools)
+    ? body.tools.flatMap((item) => {
+        if (!item || typeof item !== "object") return []
+        const value = item as { function?: { name?: unknown } }
+        return typeof value.function?.name === "string" ? [value.function.name] : []
+      })
+    : []
+}
+
 function reasoningEffort(body: Record<string, unknown>) {
   return (body.reasoningEffort as string | undefined) ?? (body.reasoning_effort as string | undefined)
 }
@@ -834,12 +844,12 @@ function fuguRuntimeModel(): Provider.Model {
     providerID: ProviderV2.ID.make("fugu"),
     name: "Fugu",
     capabilities: {
-      toolcall: false,
-      attachment: false,
-      reasoning: false,
-      temperature: false,
-      interleaved: false,
-      input: { text: true, image: false, audio: false, video: false, pdf: false },
+      toolcall: true,
+      attachment: true,
+      reasoning: true,
+      temperature: true,
+      interleaved: true,
+      input: { text: true, image: true, audio: true, video: true, pdf: true },
       output: { text: true, image: false, audio: false, video: false, pdf: false },
     },
     api: { id: "fugu", url: "", npm: "" },
@@ -938,7 +948,7 @@ describe("session.llm.stream", () => {
         expect(branchMessages).not.toContain("final response synthesizer")
         expect(branchACapture.body.tools).toBeUndefined()
         expect(branchBCapture.body.tools).toBeUndefined()
-        expect(synthCapture.body.tools).toBeUndefined()
+        expect(requestToolNames(synthCapture.body)).toEqual(["lookup"])
         expect(reasoningEffort(branchACapture.body)).toBe("high")
         expect(reasoningEffort(branchBCapture.body)).toBe("high")
         expect(reasoningEffort(synthCapture.body)).toBe("high")
@@ -950,7 +960,7 @@ describe("session.llm.stream", () => {
   )
 
   it.instance(
-    "does not add implicit copilot noop tools to fugu hidden requests with prior tool history",
+    "adds implicit copilot noop only to fugu synthesizer with prior tool history",
     () =>
       Effect.gen(function* () {
         const branchA = waitRequest(
@@ -979,7 +989,7 @@ describe("session.llm.stream", () => {
 
         expect((yield* Effect.promise(() => branchA)).body.tools).toBeUndefined()
         expect((yield* Effect.promise(() => branchB)).body.tools).toBeUndefined()
-        expect((yield* Effect.promise(() => synth)).body.tools).toBeUndefined()
+        expect(requestToolNames((yield* Effect.promise(() => synth)).body)).toEqual(["_noop"])
       }),
     {
       config: () => {
@@ -1035,14 +1045,7 @@ describe("session.llm.stream", () => {
         })
 
         const capture = yield* Effect.promise(() => request)
-        const names = Array.isArray(capture.body.tools)
-          ? capture.body.tools.flatMap((item) => {
-              if (!item || typeof item !== "object") return []
-              const value = item as { function?: { name?: unknown } }
-              return typeof value.function?.name === "string" ? [value.function.name] : []
-            })
-          : []
-        expect(names).toContain("_noop")
+        expect(requestToolNames(capture.body)).toContain("_noop")
       }),
     {
       config: () => {

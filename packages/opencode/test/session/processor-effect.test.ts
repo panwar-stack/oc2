@@ -417,6 +417,75 @@ it.live("session.processor effect tests persist and stream only fugu synthesizer
   ),
 )
 
+it.live("session.processor effect tests complete fugu synthesizer tool calls", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.push(
+          reply().text("hidden branch a").stop(),
+          reply().text("hidden branch b").stop(),
+          reply().tool("lookup", { query: "weather" }),
+        )
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "current fugu tool turn")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ProviderV2.ID.make("fugu"), ModelV2.ID.make("fugu"))
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ProviderV2.ID.make("fugu"), modelID: ModelV2.ID.make("fugu") },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "current fugu tool turn" }],
+          tools: {
+            lookup: tool({
+              description: "Look up information",
+              inputSchema: z.object({ query: z.string() }),
+              execute: async (input) => ({
+                title: "Weather lookup",
+                output: `result:${input.query}`,
+                metadata: { source: "fugu-test" },
+              }),
+            }),
+          },
+        })
+
+        const parts = yield* MessageV2.parts(msg.id)
+        const visibleParts = JSON.stringify(parts)
+        const call = parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
+
+        expect(value).toBe("continue")
+        expect(yield* llm.calls).toBe(3)
+        expect(visibleParts).not.toContain("hidden branch")
+        expect(call?.callID).toBe("call_1")
+        expect(call?.tool).toBe("lookup")
+        expect(call?.state.status).toBe("completed")
+        if (call?.state.status !== "completed") return
+        expect(call.state.input).toEqual({ query: "weather" })
+        expect(call.state.output).toBe("result:weather")
+        expect(call.state.title).toBe("Weather lookup")
+        expect(call.state.metadata).toEqual({ source: "fugu-test" })
+      }),
+    { config: (url) => fuguProviderCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests preserve text start time", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

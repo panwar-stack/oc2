@@ -43,7 +43,7 @@ describe("CatalogV2", () => {
         family: "virtual",
         name: "Fugu",
         api: { id: "fugu", type: "native", settings: {} },
-        capabilities: { tools: false, input: ["text"], output: ["text"] },
+        capabilities: { tools: true, input: ["text", "audio", "image", "video", "pdf"], output: ["text"] },
         variants: [],
         cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }],
         status: "active",

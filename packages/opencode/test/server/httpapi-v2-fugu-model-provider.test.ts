@@ -40,12 +40,14 @@ describe("v2 fugu model/provider HttpApi", () => {
 
       const modelBody = yield* modelResponse.json
       const providerBody = yield* providerResponse.json
+      const fuguModel = responseData(modelBody).find(
+        (model) => isRecord(model) && model.id === "fugu" && model.providerID === "fugu",
+      )
 
       expect(isRecord(modelBody) && isRecord(modelBody.location) && modelBody.location.directory).toBe(directory)
       expect(isRecord(providerBody) && isRecord(providerBody.location) && providerBody.location.directory).toBe(directory)
-      expect(
-        responseData(modelBody).some((model) => isRecord(model) && model.id === "fugu" && model.providerID === "fugu"),
-      ).toBe(true)
+      expect(isRecord(fuguModel)).toBe(true)
+      expect(isRecord(fuguModel) && isRecord(fuguModel.capabilities) && fuguModel.capabilities.tools).toBe(true)
       expect(responseData(providerBody).some((provider) => isRecord(provider) && provider.id === "fugu")).toBe(true)
     }),
     projectOptions,
