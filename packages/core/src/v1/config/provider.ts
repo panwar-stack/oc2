@@ -60,6 +60,7 @@ export const Model = Schema.Struct({
   ),
   options: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  required_variant: Schema.optional(Schema.String),
   variants: Schema.optional(
     Schema.Record(
       Schema.String,

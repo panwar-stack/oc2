@@ -16,6 +16,7 @@ type ResolvedTarget = {
   readonly index?: number
   readonly role: "branch" | "judge" | "synthesizer"
   readonly config: Target
+  readonly label: string
   readonly parsed: {
     readonly providerID: ProviderV2.ID
     readonly modelID: ModelV2.ID
@@ -136,15 +137,44 @@ function validate(config: ConfigFugu.Info | undefined, provider: Provider.Interf
 
 function resolveTarget(provider: Provider.Interface, role: ResolvedTarget["role"], target: Target, index?: number) {
   return Effect.gen(function* () {
-    const parsed = Provider.parseModel(target.model)
+    const label = target.model?.trim()
+    if (!label) {
+      return yield* Effect.fail(new Error(`Fugu ${role} target model is required`))
+    }
+
+    const [providerPart, ...modelParts] = label.split("/")
+    const modelPart = modelParts.join("/")
+    if (!providerPart || !modelPart) {
+      return yield* Effect.fail(new Error(`Fugu ${role} target ${label} must use provider/model`))
+    }
+
+    const parsed = {
+      providerID: ProviderV2.ID.make(providerPart),
+      modelID: ModelV2.ID.make(modelPart),
+    }
     if (parsed.providerID === "fugu" && parsed.modelID === "fugu") {
       return yield* Effect.fail(new Error(`Fugu ${role} target cannot resolve to fugu/fugu`))
     }
-    const model = yield* provider.getModel(parsed.providerID, parsed.modelID)
-    if (target.variant && !model.variants?.[target.variant]) {
-      return yield* Effect.fail(new Error(`Fugu ${role} target ${target.model} does not support variant ${target.variant}`))
+    const model = yield* provider.getModel(parsed.providerID, parsed.modelID).pipe(
+      Effect.catchTag("ProviderModelNotFoundError", () =>
+        Effect.fail(new Error(`Fugu ${role} target ${label} could not be resolved`)),
+      ),
+    )
+    if (model.required_variant && !model.variants?.[model.required_variant]) {
+      return yield* Effect.fail(
+        new Error(`Fugu ${role} target ${label} requires unavailable variant ${model.required_variant}`),
+      )
     }
-    return { index, role, config: target, parsed, model } satisfies ResolvedTarget
+    if (model.required_variant && !target.variant) {
+      return yield* Effect.fail(new Error(`Fugu ${role} target ${label} requires variant ${model.required_variant}`))
+    }
+    if (model.required_variant && target.variant !== model.required_variant) {
+      return yield* Effect.fail(new Error(`Fugu ${role} target ${label} requires variant ${model.required_variant}`))
+    }
+    if (target.variant && !model.variants?.[target.variant]) {
+      return yield* Effect.fail(new Error(`Fugu ${role} target ${label} does not support variant ${target.variant}`))
+    }
+    return { index, role, config: target, label, parsed, model } satisfies ResolvedTarget
   })
 }
 
@@ -189,7 +219,7 @@ function branchResult(branch: ResolvedTarget, events: LLMEventType[]): BranchRes
 
   return {
     index: branch.index ?? 0,
-    model: branch.config.model,
+    model: branch.label,
     variant: branch.config.variant,
     status: "success",
     text,
@@ -199,7 +229,7 @@ function branchResult(branch: ResolvedTarget, events: LLMEventType[]): BranchRes
 function branchFailure(branch: ResolvedTarget, error: string): BranchFailure {
   return {
     index: branch.index ?? 0,
-    model: branch.config.model,
+    model: branch.label,
     variant: branch.config.variant,
     status: "error",
     error,
@@ -239,7 +269,7 @@ function synthesizerMessage(results: BranchResult[]): ModelMessage {
 }
 
 function targetLabel(target: ResolvedTarget) {
-  return target.config.variant ? `${target.config.model}@${target.config.variant}` : target.config.model
+  return target.config.variant ? `${target.label}@${target.config.variant}` : target.label
 }
 
 function branchSummary(result: BranchResult) {

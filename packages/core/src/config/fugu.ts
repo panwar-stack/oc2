@@ -2,10 +2,8 @@ export * as ConfigFugu from "./fugu"
 
 import { Schema } from "effect"
 
-const Model = Schema.String.check(Schema.isPattern(/^[^/]+\/.+$/))
-
 const Target = Schema.Struct({
-  model: Model,
+  model: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
 })
 

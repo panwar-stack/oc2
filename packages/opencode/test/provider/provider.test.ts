@@ -124,10 +124,10 @@ it.instance("includes virtual fugu provider without config", () =>
 )
 
 it.instance(
-  "provider filters apply to virtual fugu provider",
+  "enabled_providers does not hide virtual fugu provider",
   Effect.gen(function* () {
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
-    expect((yield* list)[fuguProviderID]).toBeUndefined()
+    expect((yield* list)[fuguProviderID]).toBeDefined()
   }),
   { config: { enabled_providers: ["anthropic"] } },
 )
@@ -623,12 +623,12 @@ it.instance(
 )
 
 it.instance(
-  "enabled_providers with empty array allows no providers",
+  "enabled_providers with empty array allows only virtual fugu",
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")
     yield* set("OPENAI_API_KEY", "test-openai-key")
     const providers = yield* list
-    expect(Object.keys(providers).length).toBe(0)
+    expect(Object.keys(providers)).toEqual([fuguProviderID])
   }),
   { config: { enabled_providers: [] } },
 )
@@ -939,10 +939,12 @@ it.instance(
     expect(providers[ProviderV2.ID.openai]).toBeUndefined()
     // google: not in enabled = NOT allowed (even though not disabled)
     expect(providers[ProviderV2.ID.google]).toBeUndefined()
+    // fugu: virtual model remains additive unless explicitly disabled
+    expect(providers[fuguProviderID]).toBeDefined()
   }),
   {
-    // enabled_providers takes precedence — only these are considered
-    // Then disabled_providers filters from the enabled set
+    // enabled_providers remains an allowlist for normal providers.
+    // disabled_providers is still the explicit virtual fugu escape hatch.
     config: { enabled_providers: ["anthropic", "openai"], disabled_providers: ["openai"] },
   },
 )

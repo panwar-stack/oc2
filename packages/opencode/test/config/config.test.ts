@@ -433,6 +433,30 @@ test("config parser accepts missing fugu config", () => {
   expect(ConfigParse.schema(ConfigV1.Info, {}, "test").fugu).toBeUndefined()
 })
 
+test("config parser accepts incomplete and malformed fugu targets", () => {
+  const input = {
+    fugu: {
+      branches: [{}, { model: "" }, { model: "missing-slash" }, { model: "/model" }, { model: "provider/" }],
+      judge: {},
+      synthesizer: { model: "bad" },
+    },
+  }
+  const v1 = ConfigParse.schema(ConfigV1.Info, input, "test")
+  const current = ConfigParse.schema(CoreConfig.Info, input, "test")
+
+  expect(v1.fugu?.branches?.[0]?.model).toBeUndefined()
+  expect(v1.fugu?.branches?.map((branch) => branch.model)).toEqual([
+    undefined,
+    "",
+    "missing-slash",
+    "/model",
+    "provider/",
+  ])
+  expect(v1.fugu?.judge?.model).toBeUndefined()
+  expect(v1.fugu?.synthesizer?.model).toBe("bad")
+  expect(current.fugu).toEqual(v1.fugu)
+})
+
 test("v1 migration preserves fugu judge", () => {
   const config = ConfigParse.schema(
     ConfigV1.Info,

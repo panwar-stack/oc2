@@ -1767,15 +1767,15 @@ export type LocalFusionConfig = {
 
 export type FuguConfig = {
   branches?: Array<{
-    model: string
+    model?: string
     variant?: string
   }>
   judge?: {
-    model: string
+    model?: string
     variant?: string
   }
   synthesizer?: {
-    model: string
+    model?: string
     variant?: string
   }
 }
@@ -1937,6 +1937,7 @@ export type ProviderConfig = {
       headers?: {
         [key: string]: string
       }
+      required_variant?: string
       /**
        * Variant-specific configuration
        */
@@ -2247,6 +2248,7 @@ export type Model = {
     [key: string]: string
   }
   release_date: string
+  required_variant?: string
   variants?: {
     [key: string]: {
       [key: string]: unknown

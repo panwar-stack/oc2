@@ -517,6 +517,8 @@ The first argument, `research-panel`, selects the named config. Everything after
 
 When selected, Fugu uses the configured branch models and synthesizer model for the request. Missing or invalid `fugu` config fails at request time.
 
+Generated schemas and SDK types permit omitted target models so OpenCode can start, but each configured branch, judge, and synthesizer target still needs a `model` when `fugu/fugu` is used.
+
 ```json title="opencode.json"
 {
   "$schema": "https://opencode.ai/config.json",
