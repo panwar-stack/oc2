@@ -10,9 +10,11 @@ import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
 import type { LLMEvent as LLMEventType } from "@opencode-ai/llm"
+import type { EventV2 } from "@opencode-ai/core/event"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
@@ -29,6 +31,7 @@ import { LLMFugu } from "@/session/llm/fugu"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { SessionEvent } from "@opencode-ai/core/session/event"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -54,7 +57,7 @@ const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: stri
   }
 }
 
-const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
+const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, EventV2Bridge.defaultLayer))
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
 const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
@@ -952,11 +955,113 @@ describe("session.llm.stream", () => {
         expect(reasoningEffort(branchACapture.body)).toBe("high")
         expect(reasoningEffort(branchBCapture.body)).toBe("high")
         expect(reasoningEffort(synthCapture.body)).toBe("high")
-        expect(synthMessages).toContain("final response synthesizer")
+        expect(synthMessages).toContain("final answer synthesizer")
         expect(synthMessages).toContain("hidden branch a")
         expect(synthMessages).toContain("hidden branch b")
       }),
     { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "emits live fugu status events without branch output",
+    () =>
+      Effect.gen(function* () {
+        const branchA = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("hidden branch a"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const branchB = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("hidden branch b"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const judge = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("secret judge guidance"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const synth = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream(["final ", "answer"]), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const input = fuguInput(fuguRuntimeModel())
+        const statuses: EventV2.Data<typeof SessionEvent.Fugu.Status>[] = []
+        const eventBridge = yield* EventV2Bridge.Service
+        const unsubscribe = yield* eventBridge.subscribeCallback(SessionEvent.Fugu.Status, (event) => {
+          statuses.push(event.data)
+        })
+
+        const events = yield* collect(input)
+        unsubscribe()
+        yield* Effect.promise(() => branchA)
+        yield* Effect.promise(() => branchB)
+        yield* Effect.promise(() => judge)
+        yield* Effect.promise(() => synth)
+
+        expect(textDeltas(events)).toEqual(["final ", "answer"])
+        expect(visibleText(events)).toBe("final answer")
+        expect(visibleText(events)).not.toContain("hidden branch")
+        expect(visibleText(events)).not.toContain("secret judge")
+
+        const serialized = JSON.stringify(statuses)
+        expect(serialized).not.toContain("hidden branch")
+        expect(serialized).not.toContain("secret judge")
+        expect(serialized).not.toContain(fuguTarget)
+        expect(serialized).not.toContain(fuguFixture.modelID)
+        expect(new Set(statuses.map((status) => status.runID)).size).toBe(1)
+        expect(statuses[0]?.runID).toMatch(/^fugu_/)
+        expect(statuses.every((status) => status.sessionID === input.sessionID)).toBe(true)
+
+        const frames = statuses.map((status) => ({
+          phase: status.phase,
+          branches: status.branches.map((branch) => [branch.index, branch.status]),
+          judge: status.judge?.status,
+          synthesizer: status.synthesizer.status,
+        }))
+        expect(frames[0]).toEqual({
+          phase: "branching",
+          branches: [
+            [0, "pending"],
+            [1, "pending"],
+          ],
+          judge: "pending",
+          synthesizer: "pending",
+        })
+
+        const branchStatusIndex = (branchIndex: number, status: string) =>
+          frames.findIndex((frame) => frame.branches.some((branch) => branch[0] === branchIndex && branch[1] === status))
+        const branch0Working = branchStatusIndex(0, "working")
+        const branch0Complete = branchStatusIndex(0, "complete")
+        const branch1Working = branchStatusIndex(1, "working")
+        const branch1Complete = branchStatusIndex(1, "complete")
+        const judgeWorking = frames.findIndex((frame) => frame.judge === "working")
+        const judgeComplete = frames.findIndex((frame) => frame.judge === "complete")
+        const synthWorking = frames.findIndex((frame) => frame.synthesizer === "working")
+        const lastStatus = statuses[statuses.length - 1]
+
+        expect(branch0Working).toBeGreaterThan(-1)
+        expect(branch0Complete).toBeGreaterThan(branch0Working)
+        expect(branch1Working).toBeGreaterThan(-1)
+        expect(branch1Complete).toBeGreaterThan(branch1Working)
+        expect(judgeWorking).toBeGreaterThan(Math.max(branch0Complete, branch1Complete))
+        expect(judgeComplete).toBeGreaterThan(judgeWorking)
+        expect(synthWorking).toBeGreaterThan(judgeComplete)
+        expect(lastStatus?.phase).toBe("complete")
+        expect(lastStatus?.branches.map((branch) => branch.status)).toEqual(["complete", "complete"])
+        expect(lastStatus?.judge?.status).toBe("complete")
+        expect(lastStatus?.synthesizer.status).toBe("complete")
+      }),
+    { config: () => fuguConfig({ judge: { model: fuguTarget, variant: "high" } }) },
   )
 
   it.instance(
@@ -1264,6 +1369,7 @@ describe("session.llm.stream", () => {
     () =>
       Effect.gen(function* () {
         const logs: Array<ReturnType<typeof Logger.formatStructured.log>> = []
+        const statuses: LLMFugu.Status[] = []
         const logger = Logger.map(Logger.formatStructured, (entry) => {
           logs.push(entry)
         })
@@ -1278,6 +1384,7 @@ describe("session.llm.stream", () => {
             if (calls <= 2) return Stream.make({ type: "text-delta", id: `branch-${calls}`, text: `branch ${calls}` })
             return Stream.fail(new Error("synthetic stream failure"))
           },
+          (status) => Effect.sync(() => statuses.push(status)),
         ).pipe(
           Effect.flatMap((stream) => Stream.runDrain(stream)),
           Effect.provide(Logger.layer([logger])),
@@ -1292,6 +1399,10 @@ describe("session.llm.stream", () => {
         expect(failure?.cause).toBeUndefined()
         expect(JSON.stringify(failure)).not.toContain("branch 1")
         expect(JSON.stringify(failure)).not.toContain("Hello from caller")
+        expect(statuses[statuses.length - 1]?.phase).toBe("failed")
+        expect(statuses[statuses.length - 1]?.synthesizer.status).toBe("failed")
+        expect(JSON.stringify(statuses)).not.toContain("branch 1")
+        expect(JSON.stringify(statuses)).not.toContain("Hello from caller")
       }),
     { config: () => fuguConfig() },
   )

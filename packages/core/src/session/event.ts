@@ -469,6 +469,33 @@ export namespace Compaction {
   export type Ended = typeof Ended.Type
 }
 
+export const FuguTargetStatus = Schema.Literals(["pending", "working", "complete", "failed", "timed_out", "skipped"])
+export type FuguTargetStatus = typeof FuguTargetStatus.Type
+
+export namespace Fugu {
+  export const Status = EventV2.define({
+    type: "session.next.fugu.status",
+    schema: {
+      ...Base,
+      runID: Schema.String,
+      phase: Schema.Literals(["branching", "judging", "synthesizing", "complete", "failed"]),
+      branches: Schema.Array(
+        Schema.Struct({
+          index: NonNegativeInt,
+          status: FuguTargetStatus,
+        }),
+      ),
+      judge: Schema.Struct({
+        status: FuguTargetStatus,
+      }).pipe(Schema.optional),
+      synthesizer: Schema.Struct({
+        status: FuguTargetStatus,
+      }),
+    },
+  })
+  export type Status = typeof Status.Type
+}
+
 const DurableDefinitions = [
   AgentSwitched,
   ModelSwitched,
@@ -498,7 +525,7 @@ const DurableDefinitions = [
   Compaction.Started,
   Compaction.Ended,
 ] as const
-const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta] as const
+const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta, Fugu.Status] as const
 
 export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
 export type DurableEvent = typeof Durable.Type

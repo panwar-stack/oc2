@@ -3,7 +3,7 @@ import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Log } from "@opencode-ai/core/util/log"
-import { Context, Effect, Layer } from "effect"
+import { Context, DateTime, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent as LLMEventType } from "@opencode-ai/llm"
@@ -18,6 +18,7 @@ import { Plugin } from "@/plugin"
 import { Permission } from "@/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { SessionEvent } from "@opencode-ai/core/session/event"
 import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
@@ -109,7 +110,15 @@ const live: Layer.Layer<
         const cfg = yield* config.get()
         return {
           type: "event-stream" as const,
-          stream: yield* LLMFugu.run(input, cfg.fugu, provider, executeProvider),
+          stream: yield* LLMFugu.run(input, cfg.fugu, provider, executeProvider, (status) =>
+            events
+              .publish(SessionEvent.Fugu.Status, {
+                ...status,
+                sessionID: SessionID.make(input.sessionID),
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+              .pipe(Effect.asVoid),
+          ),
         }
       }
 

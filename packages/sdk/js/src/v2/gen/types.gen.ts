@@ -46,6 +46,7 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventSessionNextFuguStatus
   | EventTuiPromptAppend2
   | EventTuiCommandExecute2
   | EventTuiToastShow2
@@ -1198,6 +1199,26 @@ export type GlobalEvent = {
           reason: "auto" | "manual"
           text: string
           recent: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.fugu.status"
+        properties: {
+          timestamp: number
+          sessionID: string
+          runID: string
+          phase: "branching" | "judging" | "synthesizing" | "complete" | "failed"
+          branches: Array<{
+            index: number
+            status: "pending" | "working" | "complete" | "failed" | "timed_out" | "skipped"
+          }>
+          judge?: {
+            status: "pending" | "working" | "complete" | "failed" | "timed_out" | "skipped"
+          }
+          synthesizer: {
+            status: "pending" | "working" | "complete" | "failed" | "timed_out" | "skipped"
+          }
         }
       }
     | {
@@ -5649,6 +5670,27 @@ export type EventSessionNextCompactionEnded = {
     reason: "auto" | "manual"
     text: string
     recent: string
+  }
+}
+
+export type EventSessionNextFuguStatus = {
+  id: string
+  type: "session.next.fugu.status"
+  properties: {
+    timestamp: number
+    sessionID: string
+    runID: string
+    phase: "branching" | "judging" | "synthesizing" | "complete" | "failed"
+    branches: Array<{
+      index: number
+      status: "pending" | "working" | "complete" | "failed" | "timed_out" | "skipped"
+    }>
+    judge?: {
+      status: "pending" | "working" | "complete" | "failed" | "timed_out" | "skipped"
+    }
+    synthesizer: {
+      status: "pending" | "working" | "complete" | "failed" | "timed_out" | "skipped"
+    }
   }
 }
 

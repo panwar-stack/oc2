@@ -1,7 +1,10 @@
 import { ConfigFugu } from "@opencode-ai/core/config/fugu"
+import type { EventV2 } from "@opencode-ai/core/event"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import type { SessionEvent } from "@opencode-ai/core/session/event"
 import { Log } from "@opencode-ai/core/util/log"
+import { Identifier } from "@opencode-ai/core/util/identifier"
 import type { LLMEvent as LLMEventType } from "@opencode-ai/llm"
 import { Provider } from "@/provider/provider"
 import { Effect, Stream } from "effect"
@@ -122,6 +125,8 @@ type JudgeResult = {
 }
 
 export type Execute = (input: StreamRequest) => Stream.Stream<LLMEventType, unknown, never>
+export type Status = Omit<EventV2.Data<typeof SessionEvent.Fugu.Status>, "sessionID" | "timestamp">
+export type StatusPublisher = (status: Status) => Effect.Effect<void>
 
 export const isSelected = (model: Provider.Model) => model.providerID === "fugu" && model.id === "fugu"
 
@@ -130,9 +135,40 @@ export function run(
   config: ConfigFugu.Info | undefined,
   provider: Provider.Interface,
   execute: Execute,
+  publishStatus: StatusPublisher = () => Effect.void,
 ): Effect.Effect<Stream.Stream<LLMEventType, unknown, never>, unknown> {
   return Effect.gen(function* () {
     const resolved = yield* validate(config, provider)
+    const runID = `fugu_${Identifier.ascending()}`
+    const branchStatuses = resolved.branches.map((branch) => ({
+      index: branch.index ?? 0,
+      status: "pending" as Status["branches"][number]["status"],
+    }))
+    const judgeStatus = { status: (resolved.judge ? "pending" : "skipped") as Status["synthesizer"]["status"] }
+    const synthesizerStatus = { status: "pending" as Status["synthesizer"]["status"] }
+    const emitStatus = (phase: Status["phase"]) =>
+      publishStatus({
+        runID,
+        phase,
+        branches: branchStatuses.map((branch) => ({ ...branch })),
+        judge: { ...judgeStatus },
+        synthesizer: { ...synthesizerStatus },
+      })
+    const updateBranchStatus = (branch: ResolvedTarget, status: Status["branches"][number]["status"]) => {
+      const branchStatus = branchStatuses.find((item) => item.index === (branch.index ?? 0))
+      if (branchStatus) branchStatus.status = status
+      return emitStatus("branching")
+    }
+    const updateJudgeStatus = (status: Status["synthesizer"]["status"]) => {
+      judgeStatus.status = status
+      return emitStatus("judging")
+    }
+    const updateSynthesizerStatus = (status: Status["synthesizer"]["status"], phase: Status["phase"]) => {
+      synthesizerStatus.status = status
+      return emitStatus(phase)
+    }
+
+    yield* emitStatus("branching")
     yield* Effect.logInfo("fugu selected").pipe(
       Effect.annotateLogs({
         "fugu.branches": resolved.branches.length,
@@ -142,18 +178,20 @@ export function run(
 
     const results = yield* Effect.forEach(
       resolved.branches,
-      (branch) => collectBranch(input, branch, execute),
+      (branch) => collectBranch(input, branch, execute, updateBranchStatus),
       { concurrency: "unbounded" },
     )
     const successes = results.filter((result): result is BranchSuccess => result.status === "success")
     if (successes.length === 0) {
+      judgeStatus.status = "skipped"
+      yield* updateSynthesizerStatus("skipped", "failed")
       yield* Effect.logWarning("all fugu branches failed").pipe(
         Effect.annotateLogs({ "fugu.branch.failures": results.map(branchSummary).join("; ") }),
       )
       return yield* Effect.fail(new Error("All fugu branches failed"))
     }
 
-    const judge = resolved.judge ? yield* collectJudge(input, resolved.judge, results, execute) : undefined
+    const judge = resolved.judge ? yield* collectJudge(input, resolved.judge, results, execute, updateJudgeStatus) : undefined
 
     yield* Effect.logInfo("fugu synthesizer selected").pipe(
       Effect.annotateLogs({
@@ -163,6 +201,7 @@ export function run(
       }),
     )
 
+    yield* updateSynthesizerStatus("working", "synthesizing")
     const stream = execute({
       ...input,
       model: resolved.synthesizer.model,
@@ -179,26 +218,38 @@ export function run(
         }
         if (event.type === "finish") {
           logTargetOutput(input, resolved.synthesizer, { status: "success", text: synthesizerOutput.join("") })
-          return Effect.logInfo("fugu synthesizer finished").pipe(
-            Effect.annotateLogs({ "fugu.synthesizer": targetLabel(resolved.synthesizer) }),
+          return updateSynthesizerStatus("complete", "complete").pipe(
+            Effect.andThen(
+              Effect.logInfo("fugu synthesizer finished").pipe(
+                Effect.annotateLogs({ "fugu.synthesizer": targetLabel(resolved.synthesizer) }),
+              ),
+            ),
           )
         }
         if (event.type === "provider-error") {
           logTargetOutput(input, resolved.synthesizer, { status: "error", error: event.message })
-          return Effect.logError("fugu synthesizer failed").pipe(
-            Effect.annotateLogs({ "fugu.synthesizer": targetLabel(resolved.synthesizer), "fugu.error": event.message }),
+          return updateSynthesizerStatus(failureStatus(event.message), "failed").pipe(
+            Effect.andThen(
+              Effect.logError("fugu synthesizer failed").pipe(
+                Effect.annotateLogs({ "fugu.synthesizer": targetLabel(resolved.synthesizer), "fugu.error": event.message }),
+              ),
+            ),
           )
         }
         return Effect.void
       }),
       Stream.tapError((error) =>
-        Effect.sync(() => logTargetOutput(input, resolved.synthesizer, { status: "error", error: errorMessage(error) })).pipe(
+        updateSynthesizerStatus(failureStatus(errorMessage(error)), "failed").pipe(
           Effect.andThen(
-            Effect.logError("fugu synthesizer failed").pipe(
-              Effect.annotateLogs({
-                "fugu.synthesizer": targetLabel(resolved.synthesizer),
-                "fugu.error": errorMessage(error),
-              }),
+            Effect.sync(() => logTargetOutput(input, resolved.synthesizer, { status: "error", error: errorMessage(error) })).pipe(
+              Effect.andThen(
+                Effect.logError("fugu synthesizer failed").pipe(
+                  Effect.annotateLogs({
+                    "fugu.synthesizer": targetLabel(resolved.synthesizer),
+                    "fugu.error": errorMessage(error),
+                  }),
+                ),
+              ),
             ),
           ),
         ),
@@ -279,42 +330,52 @@ function resolveTarget(provider: Provider.Interface, role: ResolvedTarget["role"
   })
 }
 
-function collectBranch(input: StreamRequest, branch: ResolvedTarget, execute: Execute) {
-  return execute({
-    ...input,
-    model: branch.model,
-    user: withTargetModel(input, branch),
-    tools: {},
-    toolChoice: "none",
-    forbidImplicitTools: true,
-  }).pipe(
-    Stream.runCollect,
-    Effect.matchEffect({
-      onFailure: (error) => Effect.succeed(branchFailure(branch, errorMessage(error))),
-      onSuccess: (chunk) => Effect.succeed(branchResult(branch, Array.from(chunk))),
-    }),
-    Effect.tap((result) =>
-      result.status === "success"
-        ? Effect.sync(() => logBranchResult(input, branch, result)).pipe(
-            Effect.andThen(
-              Effect.logInfo("fugu branch finished").pipe(
-                Effect.annotateLogs({ "fugu.branch": targetLabel(branch), "fugu.branch.index": branch.index ?? 0 }),
-              ),
-            ),
-          )
-        : Effect.sync(() => logBranchResult(input, branch, result)).pipe(
-            Effect.andThen(
-              Effect.logWarning("fugu branch failed").pipe(
-                Effect.annotateLogs({
-                  "fugu.branch": targetLabel(branch),
-                  "fugu.branch.index": branch.index ?? 0,
-                  "fugu.error": result.error,
-                }),
-              ),
-            ),
+function collectBranch(
+  input: StreamRequest,
+  branch: ResolvedTarget,
+  execute: Execute,
+  publishStatus: (branch: ResolvedTarget, status: Status["branches"][number]["status"]) => Effect.Effect<void>,
+) {
+  return Effect.gen(function* () {
+    yield* publishStatus(branch, "working")
+    const result = yield* execute({
+      ...input,
+      model: branch.model,
+      user: withTargetModel(input, branch),
+      tools: {},
+      toolChoice: "none",
+      forbidImplicitTools: true,
+    }).pipe(
+      Stream.runCollect,
+      Effect.match({
+        onFailure: (error) => branchFailure(branch, errorMessage(error)),
+        onSuccess: (chunk) => branchResult(branch, Array.from(chunk)),
+      }),
+    )
+    yield* publishStatus(branch, result.status === "success" ? "complete" : failureStatus(result.error))
+    if (result.status === "success") {
+      yield* Effect.sync(() => logBranchResult(input, branch, result)).pipe(
+        Effect.andThen(
+          Effect.logInfo("fugu branch finished").pipe(
+            Effect.annotateLogs({ "fugu.branch": targetLabel(branch), "fugu.branch.index": branch.index ?? 0 }),
           ),
-    ),
-  )
+        ),
+      )
+      return result
+    }
+    yield* Effect.sync(() => logBranchResult(input, branch, result)).pipe(
+      Effect.andThen(
+        Effect.logWarning("fugu branch failed").pipe(
+          Effect.annotateLogs({
+            "fugu.branch": targetLabel(branch),
+            "fugu.branch.index": branch.index ?? 0,
+            "fugu.error": result.error,
+          }),
+        ),
+      ),
+    )
+    return result
+  })
 }
 
 function collectJudge(
@@ -322,24 +383,30 @@ function collectJudge(
   judge: ResolvedTarget,
   results: BranchResult[],
   execute: Execute,
+  publishStatus: (status: Status["synthesizer"]["status"]) => Effect.Effect<void>,
 ): Effect.Effect<JudgeResult> {
-  return execute({
-    ...input,
-    model: judge.model,
-    user: withTargetModel(input, judge),
-    tools: {},
-    toolChoice: "none",
-    forbidImplicitTools: true,
-    system: [FUGU_BRANCH_EVALUATOR_INSTRUCTION],
-    messages: [...input.messages, judgeMessage(results)],
-  }).pipe(
-    Stream.runCollect,
-    Effect.match({
-      onFailure: (error) => judgeResult(judge, { status: "error", error: errorMessage(error) }),
-      onSuccess: (chunk) => judgeResult(judge, resultOutput(Array.from(chunk))),
-    }),
-    Effect.tap((result) => Effect.sync(() => logTargetOutput(input, judge, result))),
-  )
+  return Effect.gen(function* () {
+    yield* publishStatus("working")
+    const result = yield* execute({
+      ...input,
+      model: judge.model,
+      user: withTargetModel(input, judge),
+      tools: {},
+      toolChoice: "none",
+      forbidImplicitTools: true,
+      system: [FUGU_BRANCH_EVALUATOR_INSTRUCTION],
+      messages: [...input.messages, judgeMessage(results)],
+    }).pipe(
+      Stream.runCollect,
+      Effect.match({
+        onFailure: (error) => judgeResult(judge, { status: "error", error: errorMessage(error) }),
+        onSuccess: (chunk) => judgeResult(judge, resultOutput(Array.from(chunk))),
+      }),
+    )
+    yield* publishStatus(result.status === "success" ? "complete" : failureStatus(result.error ?? ""))
+    yield* Effect.sync(() => logTargetOutput(input, judge, result))
+    return result
+  })
 }
 
 function branchResult(branch: ResolvedTarget, events: LLMEventType[]): BranchResult {
@@ -461,6 +528,11 @@ function targetLabel(target: ResolvedTarget) {
 function branchSummary(result: BranchResult) {
   if (result.status === "success") return `${result.model}: success`
   return `${result.model}: ${result.error}`
+}
+
+function failureStatus(error: string): "failed" | "timed_out" {
+  if (/\b(timed?\s*out|timeout|deadline)\b/i.test(error)) return "timed_out"
+  return "failed"
 }
 
 function errorMessage(error: unknown) {
