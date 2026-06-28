@@ -107,6 +107,11 @@ const live: Layer.Layer<
       })
 
       if (LLMFugu.isSelected(input.model)) {
+        // log.info("INPUT", {
+        //   model: input.model,
+        //   messages: input.messages,
+        //   tools: Object.keys(input.tools),
+        // });
         const cfg = yield* config.get()
         return {
           type: "event-stream" as const,
