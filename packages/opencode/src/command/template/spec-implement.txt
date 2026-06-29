@@ -2,7 +2,7 @@
 
 Understand the specification thoroughly at `$1`.
 
-Implement only the work required for PR `#$2`.
+Implement only the work required for PR `#$2` in the spec `$1`. Must use agent teams.
 
 if `#$2` is missing then use agent teams to implement the specification one pull request at a time. Each pull request must be implemented, verified, tested, and reviewed before work begins on the next pull request. Before beginning on the next pull request, commit the current pull request changes.
 
