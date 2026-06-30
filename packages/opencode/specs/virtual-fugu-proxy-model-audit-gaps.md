@@ -1,5 +1,7 @@
 # Virtual Fugu Proxy Model Audit Gaps
 
+Status note: this audit captured first-pass hidden-tool constraints. Current behavior keeps private branch/judge stages non-executing, but may pass caller tool definitions to them as suggestions; only the synthesizer receives executable tools and returns caller-visible tool calls.
+
 ## Goal
 
 Close the audited implementation gaps in `packages/opencode/specs/virtual-fugu-proxy-model.md` without redesigning the Fugu proxy model. The follow-up work must preserve the existing virtual model approach, keep non-`fugu` model behavior unchanged, and make the original spec's request-time validation, no-hidden-tools, visibility, logging, and coverage requirements deterministic.

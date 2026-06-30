@@ -1,5 +1,7 @@
 # Virtual Fugu Proxy Model
 
+Status note: the runtime has moved past the first-pass constraints in this original plan. `judge` is now executed when configured, the synthesizer receives executable caller tools and returns the only caller-visible tool calls, and private branch/judge stages may receive caller tool definitions as non-executing suggestions.
+
 ## Goal
 
 Add `fugu` as a virtual application-level model selectable like any other model. When selected, `fugu` must use the caller's normal model request as the source of truth, fan out that turn to configured branch models through existing model and variant resolution, send branch outputs plus the original context to a configured synthesizer model, and return only the synthesizer response.

@@ -533,11 +533,11 @@ Generated schemas and SDK types permit omitted target models so OpenCode can sta
 }
 ```
 
-- `branches` - Candidate models that receive the original request context. At least one branch is required when `fugu/fugu` is used.
-- `judge` - Optional model config that is parsed and preserved. It is not executed in the first runtime pass.
-- `synthesizer` - Final model config used to produce the caller-visible response. It is required when `fugu/fugu` is used.
+- `branches` - Private candidate models that receive the original request context and the caller's tool definitions as non-executing suggestions. At least one branch is required when `fugu/fugu` is used.
+- `judge` - Optional private evaluator model. When configured, it evaluates branch outputs and sends guidance to the synthesizer. It may see the caller's tool definitions as non-executing suggestions.
+- `synthesizer` - Final caller-visible model. It receives the original context, private branch outputs, optional judge guidance, and the caller's executable tools. Its text and tool calls are the only output returned to the session.
 
-Branch, judge, and synthesizer targets must resolve to normal models and cannot point back to `fugu/fugu`; circular routing is rejected. In the first pass, hidden branch and synthesizer calls do not execute tools.
+Branch, judge, and synthesizer targets must resolve to normal models and cannot point back to `fugu/fugu`; circular routing is rejected. Hidden branch and judge calls do not execute tools.
 
 ---
 

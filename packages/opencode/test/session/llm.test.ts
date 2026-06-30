@@ -710,6 +710,49 @@ function createChatStream(text: string | string[]) {
   })
 }
 
+function createToolCallStream(input: unknown) {
+  const payload =
+    [
+      `data: ${JSON.stringify({
+        id: "chatcmpl-1",
+        object: "chat.completion.chunk",
+        choices: [{ delta: { role: "assistant" } }],
+      })}`,
+      `data: ${JSON.stringify({
+        id: "chatcmpl-1",
+        object: "chat.completion.chunk",
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_lookup",
+                  type: "function",
+                  function: { name: "lookup", arguments: JSON.stringify(input) },
+                },
+              ],
+            },
+          },
+        ],
+      })}`,
+      `data: ${JSON.stringify({
+        id: "chatcmpl-1",
+        object: "chat.completion.chunk",
+        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+      })}`,
+      "data: [DONE]",
+    ].join("\n\n") + "\n\n"
+
+  const encoder = new TextEncoder()
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload))
+      controller.close()
+    },
+  })
+}
+
 const MODELS_FIXTURE = JSON.parse(
   await Bun.file(path.join(import.meta.dir, "../tool/fixtures/models-api.json")).text(),
 ) as Record<string, ModelsDev.Provider>
@@ -951,8 +994,8 @@ describe("session.llm.stream", () => {
         expect(branchMessages).not.toContain("internal branch model")
         expect(branchMessages).not.toContain("proxy architecture")
         expect(branchMessages).not.toContain("final response synthesizer")
-        expect(branchACapture.body.tools).toBeUndefined()
-        expect(branchBCapture.body.tools).toBeUndefined()
+        expect(requestToolNames(branchACapture.body)).toEqual(["lookup"])
+        expect(requestToolNames(branchBCapture.body)).toEqual(["lookup"])
         expect(requestToolNames(synthCapture.body)).toEqual(["lookup"])
         expect(reasoningEffort(branchACapture.body)).toBe("high")
         expect(reasoningEffort(branchBCapture.body)).toBe("high")
@@ -1124,6 +1167,58 @@ describe("session.llm.stream", () => {
         } satisfies Partial<ConfigV1.Info>
       },
     },
+  )
+
+  it.instance(
+    "passes private branch tool-call proposals to the fugu synthesizer without returning them",
+    () =>
+      Effect.gen(function* () {
+        const branchA = waitRequest(
+          "/chat/completions",
+          new Response(createToolCallStream({ query: "branch-a" }), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const branchB = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("hidden branch b"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const synth = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("final answer"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+
+        const events = yield* collect(
+          fuguInput(fuguRuntimeModel(), {
+            tools: {
+              lookup: tool({
+                description: "Lookup data",
+                inputSchema: z.object({ query: z.string() }),
+                execute: async () => ({ output: "should not run" }),
+              }),
+            },
+          }),
+        )
+
+        expect(requestToolNames((yield* Effect.promise(() => branchA)).body)).toEqual(["lookup"])
+        yield* Effect.promise(() => branchB)
+        const synthMessages = JSON.stringify((yield* Effect.promise(() => synth)).body.messages)
+
+        expect(events.filter((event) => event.type === "tool-call")).toHaveLength(0)
+        expect(visibleText(events)).toBe("final answer")
+        expect(synthMessages).toContain("toolCalls")
+        expect(synthMessages).toContain("lookup")
+        expect(synthMessages).toContain("branch-a")
+        expect(synthMessages).toContain("suggestions only")
+      }),
+    { config: () => fuguConfig() },
   )
 
   it.instance(
