@@ -1,6 +1,6 @@
 # Virtual Fugu Proxy Model
 
-Status note: the runtime has moved past the first-pass constraints in this original plan. `judge` is now executed when configured, the synthesizer receives executable caller tools and returns the only caller-visible tool calls, and private branch/judge stages may receive caller tool definitions as non-executing suggestions.
+Status note: implemented. This document started as the original design plan; the implementation has moved past the initial first-pass constraints. `judge` now executes when configured, private branch and judge stages receive caller tool definitions as non-executing suggestions, the synthesizer receives executable caller tools, and only synthesizer output is returned to the session.
 
 ## Goal
 
@@ -23,50 +23,51 @@ The implementation strategy is to add a small virtual model surface for selectio
 - `packages/opencode/src/session/processor.ts` consumes `llm.stream(...)` events and persists assistant output, retries, errors, and interrupts.
 - `packages/opencode/src/session/compound/runner.ts`, `judge.ts`, `synthesizer.ts`, and `config.ts` already implement tool-level fan-out/synthesis behavior for local fusion and should be reused or extracted where they fit.
 
-## Non-Negotiables
+## Implemented Constraints
 
 - `fugu` must be selectable even when `opencode.json` has no `fugu` config.
 - Missing or invalid `fugu` config must fail at request time with a clear configuration error.
-- Branch and synthesizer targets must resolve through existing model and variant resolution.
+- Branch, judge, and synthesizer targets must resolve through existing model and variant resolution.
 - Do not hardcode OpenAI, DeepSeek, provider IDs, credentials, or request formats.
 - Do not call `Provider.getLanguage(...)` for `fugu`; intercept before real provider loading.
-- Reject circular routing where any branch, judge, or synthesizer resolves to `fugu`.
-- Do not expose branch responses, branch metadata, prompts, provider keys, stack traces, or routing internals to the caller unless existing debug logging explicitly allows it.
+- Reject circular routing where any branch, judge, or synthesizer resolves to `fugu/fugu`.
+- Do not expose branch responses, judge guidance, branch metadata, prompts, provider keys, stack traces, private tool-call proposals, or routing internals to the caller unless existing debug logging explicitly allows it.
 - Each turn must recompute branches from the caller-supplied conversation context. Do not create visible per-branch conversations as durable user-facing history.
-- First pass must preserve behavior for non-`fugu` models and must not change default model selection.
-- First pass must not allow hidden branch or synthesizer tool execution. Branch and synthesizer calls should run with no tools unless a reviewed tool-policy design is added.
-- `judge` config must be parsed and preserved. Do not add judge execution in the first pass unless reuse of existing compound code makes it natural without changing user-visible behavior.
+- Preserve behavior for non-`fugu` models and do not change default model selection.
+- Branch and judge calls must not execute tools. They may receive caller tool definitions with executable handlers removed so tool calls can be treated as private suggestions.
+- The synthesizer is the only caller-visible model stream. It receives the caller's executable tools and `toolChoice`, may emit tool calls normally, and returns the only Fugu text/tool output to the session.
+- `judge` is optional. When configured, it executes after branch collection and sends private evaluator guidance to the synthesizer.
 
 ## Config
 
-Add a top-level config object to `ConfigV1.Info`:
+The config schema is permissive so opencode can start and invalid Fugu setup fails only when `fugu/fugu` is selected:
 
 ```ts
 fugu?: {
   branches?: Array<{
-    model: string
+    model?: string
     variant?: string
   }>
   judge?: {
-    model: string
+    model?: string
     variant?: string
   }
   synthesizer?: {
-    model: string
+    model?: string
     variant?: string
   }
 }
 ```
 
-Runtime request validation must require:
+Runtime request validation in `packages/opencode/src/session/llm/fugu.ts` requires:
 
 - `fugu.branches` exists and has at least one item.
-- Every branch has `model` and does not resolve to `fugu`.
-- Every branch has `variant` when the existing resolver requires one.
+- Every branch has a non-empty `model`, uses `provider/model`, resolves to a normal model, and does not resolve to `fugu/fugu`.
+- Every branch has the exact `variant` when the resolved model requires one, and any supplied variant is supported by the target model.
 - `fugu.synthesizer` exists.
-- `fugu.synthesizer.model` exists and does not resolve to `fugu`.
-- `fugu.synthesizer.variant` exists when the existing resolver requires one.
-- `fugu.judge`, when present, has `model`, resolves through the same parser, and does not resolve to `fugu`.
+- `fugu.synthesizer.model` exists, uses `provider/model`, resolves to a normal model, and does not resolve to `fugu/fugu`.
+- `fugu.synthesizer.variant` satisfies the same required/supported variant checks as branches.
+- `fugu.judge`, when present, has `model`, resolves through the same runtime validator, and does not resolve to `fugu/fugu`.
 
 Example:
 
@@ -83,10 +84,7 @@ Example:
 }
 ```
 
-Docs to update:
-
-- `packages/web/src/content/docs/config.mdx` with config shape, request-time failure behavior, circular-routing rejection, no-hidden-tools first-pass behavior, and judge limitation.
-- Generated JS SDK types after OpenAPI config schema changes.
+Public docs in `packages/web/src/content/docs/config.mdx` describe `model` as required for a usable Fugu configuration even though generated schemas and SDK types allow it to be omitted for request-time validation.
 
 ## Model Surface
 
@@ -101,130 +99,78 @@ Required surfaces:
 - Legacy `/provider` must include a connected non-deprecated `fugu` provider with one `fugu` model so `packages/app/src/context/models.tsx` can list it.
 - Legacy `/config/providers` must include the same connected provider/model so `packages/tui/src/component/dialog-model.tsx` can list it.
 - v2 `/api/model` and `/api/provider` must include the virtual model through catalog population, preferably a small additive catalog transform near existing provider/model plugin setup.
-- The virtual model must use safe static metadata values that satisfy legacy `Provider.Model` and v2 `ModelV2.Info` requirements: enabled, non-deprecated status, no real API connection, zero cost, conservative limits, empty or explicit variants, and no tool-specific capabilities beyond what the adapter supports.
+- The virtual model must use safe static metadata values that satisfy legacy `Provider.Model` and v2 `ModelV2.Info` requirements: enabled, non-deprecated status, no real API connection, zero cost, conservative limits, empty or explicit variants, and tool capability enabled because the synthesizer can use caller tools.
 
 ## Runtime Flow
 
 1. `packages/opencode/src/session/prompt.ts` continues storing the selected model and variant with the existing `PromptInput` shape.
 2. `packages/opencode/src/session/llm.ts` detects `{ providerID: "fugu", modelID: "fugu" }` before `Provider.getLanguage(...)`.
 3. The `fugu` path reads `Config.Service` and validates `config.fugu` at request time.
-4. Branch and synthesizer targets are parsed with `Provider.parseModel(...)` and resolved with `Provider.getModel(...)`.
-5. Branch and synthesizer requests update both the resolved `Provider.Model` and the copied request/user model variant so existing variant application is reused.
-6. Branch calls receive the original system messages, developer messages, conversation history, and current turn unchanged, but no executable tools in the first pass.
-7. Branch calls run concurrently where the Effect/request architecture allows.
-8. Branch collection records `{ model, variant, status, text | error }`.
-9. If at least one branch succeeds, build a synthesizer request using the configured synthesizer model/variant, original context, branch outputs, and branch metadata.
-10. Return only the synthesizer `LLMEvent` stream to `SessionProcessor.process(...)`.
+4. Branch, judge, and synthesizer targets are parsed as `provider/model` labels and resolved with `Provider.getModel(...)`.
+5. Branch, judge, and synthesizer requests update both the resolved `Provider.Model` and the copied request/user model variant so existing variant application is reused.
+6. Branch calls receive the original system messages, developer messages, conversation history, and current turn unchanged, plus caller tool definitions with `execute` removed.
+7. Branch calls run concurrently with unbounded Effect concurrency.
+8. Branch collection records `{ model, variant, status, text | toolCalls | error }`. A branch succeeds when it returns text or private tool-call proposals.
+9. If at least one branch succeeds and `fugu.judge` is configured, the judge receives the original context plus private branch results and returns evaluator guidance.
+10. If at least one branch succeeds, build a synthesizer request using the configured synthesizer model/variant, original context, branch outputs, optional judge guidance, the Fugu synthesizer instruction, and the caller's executable tools.
+11. Return only the synthesizer `LLMEvent` stream to `SessionProcessor.process(...)`.
 
 Synthesizer instruction:
 
 ```text
-You are the final response synthesizer for a proxy model. You will receive the original conversation context and multiple candidate responses from branch models. Produce a single final answer for the caller. Preserve the caller intent, follow the original system and developer instructions, correct errors where branch responses disagree, and do not mention that multiple models were used unless the caller explicitly asks about the implementation. Do not simply concatenate branch responses; reconcile them into one answer.
+You are the final answer synthesizer for a proxy model. You will receive the original conversation context, active system and developer instructions, multiple candidate answers, and optional candidate tool-call suggestions or evaluator guidance. Produce one final answer for the caller. Preserve the caller intent, follow the original instructions, reconcile disagreements, correct errors, and do not mention branch models or proxy architecture unless the caller explicitly asks. Candidate tool calls are suggestions only; emit your own tool calls using your available tools when a tool is actually needed.
 ```
 
 ## Streaming
 
-Preferred first pass:
-
-- Branch calls complete internally before synthesis starts.
+- Branch and judge calls complete internally before synthesis starts.
 - The synthesizer response streams to the caller through normal `LLMEvent` handling.
-
-Fallback:
-
-- Emit one normal text block containing the completed synthesizer response.
-- Add an internal code note naming the missing seam needed to stream synthesizer deltas.
-- Do not expose branch progress as caller-visible streaming events.
+- Branch progress is not exposed as caller-visible model output. Live orchestration progress is emitted separately through `session.next.fugu.status`.
 
 ## Error Handling And Logs
 
-- Missing `config.fugu`, empty branches, missing synthesizer, invalid target model, invalid required variant, and circular `fugu` targets must fail before provider requests start.
-- If one branch fails and at least one succeeds, continue to synthesis with successful text and structured failed-branch records.
+- Missing `config.fugu`, empty branches, missing synthesizer, missing target model, malformed target model, unresolved target model, invalid required variant, invalid supplied variant, and circular `fugu/fugu` targets must fail before provider requests start.
+- If one branch fails and at least one succeeds, continue to synthesis with successful text, private tool-call suggestions, and structured failed-branch records.
 - If all branches fail, return a normal model error.
-- If the synthesizer fails, return a normal model error.
+- If the synthesizer fails or its stream throws, return a normal model error and emit Fugu-specific failure status/logging.
 - Logs must include `fugu` selected, branch count, branch model/variant names, branch success/failure, synthesizer model/variant, and synthesizer success/failure.
 - Logs must not include full prompts or responses by default.
 
-## Implementation Slices
+## Live Status
 
-### PR 1: Config Schema And Virtual Model Visibility
+- Fugu publishes live-only `session.next.fugu.status` events after validation succeeds.
+- Status includes a run ID, phase, branch statuses, optional judge status, and synthesizer status.
+- Status never includes branch text, judge guidance, tool proposals, errors, model IDs, variants, prompts, provider keys, or stack traces.
+- The app and TUI render inline Fugu progress near the active turn and clear it when the run completes, fails, or the session becomes idle.
 
-- Add `fugu` to `ConfigV1.Info` in `packages/core/src/v1/config/config.ts`.
-- Evaluate/update `packages/core/src/v1/config/migrate.ts` so v1 detection and migration preserve `fugu`.
-- Add config parser tests in `packages/opencode/test/config/config.test.ts` for accepted `fugu`, missing optional `fugu`, unknown-key regression, and preserved `judge`.
-- Inject a built-in virtual `fugu` provider/model into `packages/opencode/src/provider/provider.ts` for `/provider` and `/config/providers`.
-- Inject the same virtual provider/model into the v2 catalog path via a small catalog/provider population seam near `packages/core/src/plugin/models-dev.ts`, `packages/core/src/config/plugin/provider.ts`, or `Catalog.Service.transform()`.
-- Add/update provider and picker visibility tests.
-- Update `packages/web/src/content/docs/config.mdx`.
-- Regenerate JS SDK types with `./packages/sdk/js/script/build.ts`.
+## Implementation Summary
 
-Verification:
+- Config schema and v1 migration preserve the top-level `fugu` object in `packages/core/src/config/fugu.ts`, `packages/core/src/config.ts`, and `packages/core/src/v1/config/config.ts`.
+- Legacy provider lists inject a connected virtual `fugu` provider/model in `packages/opencode/src/provider/provider.ts`; `enabled_providers` does not hide it, while `disabled_providers: ["fugu"]` is an explicit opt-out.
+- The v2 catalog path injects the same virtual provider/model through `packages/core/src/plugin/fugu.ts`.
+- Runtime orchestration lives in `packages/opencode/src/session/llm/fugu.ts` and is selected from `packages/opencode/src/session/llm.ts`.
+- Request preparation supports `forbidImplicitTools` in `packages/opencode/src/session/llm/request.ts`; branch and judge calls use it to prevent implicit compatibility tools.
+- Live inline status is published as `session.next.fugu.status` and rendered by the app and TUI while the active Fugu turn is running.
 
-- `cd packages/core && bun typecheck`
-- `cd packages/core && bun test test/config/config.test.ts test/catalog.test.ts`
-- `cd packages/opencode && bun typecheck`
-- `cd packages/opencode && bun test test/config/config.test.ts test/provider/provider.test.ts test/server/httpapi-provider.test.ts --timeout 30000`
-- `cd packages/server && bun typecheck`
-- `cd packages/app && bun typecheck`
-- `cd packages/app && bun test --preload ./happydom.ts ./src/context/models.test.tsx`
-- `cd packages/tui && bun typecheck`
-- `cd packages/tui && bun test test/cli/cmd/tui/model-options.test.ts test/util/model.test.ts --timeout 30000`
-- `./packages/sdk/js/script/build.ts`
+## Verification Coverage
 
-Review:
-
-Run a fresh read-only sub-agent/teammate against the PR diff and this slice. Verify `fugu` appears without config, non-`fugu` provider lists are unchanged except the additive virtual model, docs match schema, and no provider routing was added.
-
-### PR 2: Runtime Adapter And Core Behavior
-
-- Add a focused `fugu` adapter near `packages/opencode/src/session/llm.ts` or under `packages/opencode/src/session/llm/`.
-- Validate `config.fugu` at request time.
-- Resolve branch and synthesizer targets through existing parser/model resolution.
-- Reject circular branch, judge, and synthesizer targets.
-- Update both resolved model and copied request/user variant for branch and synthesizer calls.
-- Fan out branch calls concurrently with the parent abort signal.
-- Disable tools for branch and synthesizer calls in the first pass.
-- Collect branch text and structured failures without caller-visible exposure.
-- Build the synthesizer request with original context, branch outputs, metadata, and required instruction.
-- Return only synthesizer events.
-- Add tests for fanout, original context preservation, synthesizer input, synthesizer-only output, missing config, circular rejection, partial branch failure, all-branch failure, and synthesizer failure.
-- Add internal logs for selection, branch count, branch success/failure, synthesizer target, and synthesizer success/failure.
-
-Verification:
-
-- `cd packages/opencode && bun typecheck`
-- `cd packages/opencode && bun test test/session/llm.test.ts test/session/compound-runner.test.ts test/session/compound-synthesizer.test.ts test/tool/local-fusion.test.ts --timeout 30000`
-
-Review:
-
-Run a fresh read-only sub-agent/teammate against the PR diff and this slice. Verify the adapter cannot recurse into `fugu`, branch calls preserve original context except model/variant and tool removal, partial branch failures are only synthesizer input, and normal models still use the existing provider path.
-
-### PR 3: End-To-End Session And Streaming Coverage
-
-- Add session/processor tests showing a normal request to `{ providerID: "fugu", modelID: "fugu" }` persists only the synthesizer response.
-- Test system messages, developer messages, prior user/assistant history, and current turn reach every branch and the synthesizer.
-- Test branch text and metadata are not persisted or streamed to the caller.
-- Preserve synthesizer streaming if the adapter can return synthesizer deltas without invasive changes.
-- If streaming is deferred, add a narrow nonstreaming test and internal code note documenting the future streaming seam.
-
-Verification:
-
-- `cd packages/opencode && bun typecheck`
-- `cd packages/opencode && bun test test/session/llm.test.ts test/session/processor.test.ts test/provider/provider.test.ts --timeout 30000`
-- `cd packages/server && bun typecheck`
-
-Review:
-
-Run a fresh read-only sub-agent/teammate against the PR diff and this slice. Verify acceptance cases are covered, branch internals remain hidden, and the streaming/nonstreaming decision is explicit in code and tests.
+- Config parsing and migration: `packages/opencode/test/config/config.test.ts`.
+- Legacy provider visibility, allowlist behavior, disable behavior, and default-model fallback: `packages/opencode/test/provider/provider.test.ts`.
+- Runtime validation, branch fan-out, judge guidance, synthesizer-only output, tool proposal handling, partial/all failure behavior, synthesizer failure logging, and live status events: `packages/opencode/test/session/llm.test.ts`.
+- v2 `/api/model` and `/api/provider` visibility: `packages/opencode/test/server/httpapi-v2-fugu-model-provider.test.ts`.
+- App model picker visibility: `packages/app/src/context/models.test.tsx`.
+- App Fugu live-state cleanup: `packages/app/src/context/global-sync/event-reducer.test.ts` and `packages/app/src/context/global-sync/session-cache.test.ts`.
+- TUI model parsing and picker visibility: `packages/tui/test/util/model.test.ts` and `packages/tui/test/cli/cmd/tui/model-options.test.ts`.
 
 ## Future Work
 
-- Execute `fugu.judge` using `packages/opencode/src/session/compound/judge.ts` if judge-guided synthesis becomes a product requirement.
-- Add branch timeouts, tool policy, or prompt customization after the base API-level proxy works.
+- Add branch timeouts, richer tool policy controls, or prompt customization only with a reviewed design.
 - Add richer debug observability behind existing debug controls.
 - Support nested proxy models only with an explicit recursion-depth design.
+- Persist completed Fugu orchestration status only if durable replay becomes a product requirement.
 
 ## Open Questions
 
-- Should `judge` be required even though first-pass runtime does not use it? Default: no, keep it optional but parsed and preserved.
-- Should v2 `/api/model` visibility be required in PR 1? Default: yes, include it so app, TUI, and v2 API do not diverge.
-- If a branch emits tool calls but no final text, should it count as successful? Default: no, because first-pass branches should not execute tools and synthesis needs text candidates.
+- Should `disabled_providers: ["fugu"]` continue to hide the virtual model? Current behavior: yes, it is the explicit opt-out.
+- Should completed inline Fugu status remain visible after the synthesizer finishes? Current behavior: no, app/TUI clear the live row when the run completes, fails, or the session becomes idle.
+- Should failed branch errors be shown in UI status? Current behavior: no, only `failed` or `timed out` is exposed; details stay in logs.

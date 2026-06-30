@@ -1,39 +1,14 @@
 # Fugu Inline Status Updates
 
+Status note: implemented. Fugu orchestration publishes live-only status events while `fugu/fugu` is running, and both app and TUI render inline progress near the active user turn without persisting branch or judge details as durable history.
+
 ## Goal
 
-Show live Fugu orchestration status inline in the active session conversation while `fugu/fugu` is running.
-
-Default implementation: add a session-scoped live-only status event, emit it from the Fugu runtime as branches, judge, and synthesizer transition, then render a compact status row in app and TUI session views. Do not persist branch/judge status as durable history in the first pass.
-
-## Current State
-
-- `packages/opencode/src/session/llm/fugu.ts` runs branches concurrently, collects branch streams internally, optionally runs a judge, then returns only the synthesizer `LLMEvent` stream.
-- `packages/opencode/src/session/llm/fugu.ts` logs branch, judge, and synthesizer output, but emits no structured UI/session status event.
-- `packages/core/src/config/fugu.ts` defines the current `fugu.branches`, `fugu.judge`, and `fugu.synthesizer` config shape.
-- `packages/core/src/session/event.ts` already separates durable events from live-only stream fragments. Live-only deltas omit `sync`.
-- `packages/opencode/src/event-v2-bridge.ts` publishes all `EventV2` events to the legacy SSE bus.
-- `packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts` streams events to app/TUI clients.
-- `packages/app/src/context/global-sync/event-reducer.ts` reduces known session events into app state, but has no Fugu status cache.
-- `packages/app/src/pages/session/message-timeline.data.ts` builds conversation rows from messages, parts, session status, and active-turn state.
-- `packages/app/src/pages/session/message-timeline.tsx` renders active conversation rows and already has a `Thinking` row for busy sessions.
-- `packages/tui/src/context/sync.tsx` listens to the same event stream and stores session-scoped live state such as `session_status`.
-- `packages/tui/src/routes/session/index.tsx` renders the live session conversation from synced messages and parts.
-
-## Non-Negotiables
-
-- Status must be live-only in the first pass. Do not add database tables, migrations, durable message projection, or replay semantics.
-- Status must blend into the active turn, near the existing thinking/progress UI, not as a toast, header-only indicator, or side panel.
-- Status must not expose branch output, judge output, prompts, provider keys, stack traces, or model names by default.
-- Branches should be identified as `Branch 1`, `Branch 2`, etc. Preserve config order.
-- The Fugu runtime behavior must not change except for status publication. Do not add new branch timeout policy, tool policy, or retry behavior.
-- `timed out` may be displayed only when an existing provider/runtime failure can be classified as timeout-like. Other failures display as `failed`.
-- Normal non-`fugu` sessions must not allocate or render Fugu status state.
-- Generated SDK types must be regenerated if the event schema changes public SDK event types.
+Show live Fugu orchestration status inline in the active session conversation while preserving the privacy boundary around branch output, judge guidance, prompts, provider keys, stack traces, model names, variants, and private tool-call proposals.
 
 ## Event Surface
 
-Add a live-only event under `packages/core/src/session/event.ts`:
+`packages/core/src/session/event.ts` defines the live-only event:
 
 ```ts
 type FuguTargetStatus =
@@ -68,132 +43,84 @@ Event name:
 "session.next.fugu.status"
 ```
 
-Rules:
+Implemented rules:
 
-- Define it without `sync` so it is live-only, like `session.next.text.delta`.
-- Include it in the session all-event union used by live reducers.
-- Do not include branch text, errors, model IDs, variants, or judge guidance.
-- Use `runID` to ignore stale status from an older Fugu turn in the same session.
-- Emit a final `complete` or `failed` event so clients can clear the live row deterministically.
+- The event is included in the session all-event union and ephemeral definitions, not the durable definitions.
+- It has no `sync` option, so it is live-only like text, reasoning, tool-input, and compaction deltas.
+- It carries a `runID` so clients can ignore stale status from an older Fugu turn in the same session.
+- It does not include branch text, judge guidance, errors, model IDs, variants, prompts, provider keys, stack traces, or tool-call proposals.
 
 ## Runtime Behavior
 
-Update `packages/opencode/src/session/llm.ts` and `packages/opencode/src/session/llm/fugu.ts`:
+`packages/opencode/src/session/llm.ts` passes a status publisher into `LLMFugu.run(...)`. `packages/opencode/src/session/llm/fugu.ts` emits status after request-time validation succeeds.
 
-- Pass a narrow status publisher into `LLMFugu.run(...)`.
-- Emit initial status after Fugu config validation succeeds and before branches start.
-- Emit each branch transition from `pending` to `working`, then `complete`, `failed`, or `timed_out`.
-- Emit judge `working`, `complete`, `failed`, or `skipped` when `config.fugu.judge` is absent.
-- Emit synthesizer `working` when synthesis begins.
-- Emit final `complete` when the synthesizer emits `finish`.
-- Emit final `failed` when the synthesizer emits `provider-error` or the stream fails.
-- Preserve current `LLMEvent` streaming behavior so downstream message persistence still sees only synthesizer output.
+Implemented transitions:
 
-Example display text:
+- Initial `branching` event with all branches `pending`, judge `pending` or `skipped`, and synthesizer `pending`.
+- Branch `working` when each branch starts.
+- Branch `complete`, `failed`, or `timed_out` when each branch finishes.
+- Judge `working` and then `complete`, `failed`, or `timed_out` when `fugu.judge` is configured.
+- Synthesizer `working` when synthesis begins.
+- Final `complete` when the synthesizer emits `finish`.
+- Final `failed` when all branches fail before synthesis starts, when the synthesizer emits `provider-error`, or when the synthesizer stream fails.
 
-```text
-Fugu · 2/4 branches complete · judge working
+The Fugu `LLMEvent` stream still exposes only synthesizer output to downstream session persistence. Branch output and judge guidance remain private synthesis inputs.
 
-Branch 1 · idle
-Branch 2 · working
-Branch 3 · timed out
-Judge · working
-```
+## App Behavior
 
-Recommended status wording:
+Implemented app paths:
 
+- `packages/app/src/context/global-sync/types.ts` stores `fugu_status` as session-scoped live state.
+- `packages/app/src/context/global-sync/session-cache.ts` clears `fugu_status` during session cache eviction.
+- `packages/app/src/context/global-sync/event-reducer.ts` reduces `session.next.fugu.status`, ignores stale run IDs, ignores stale non-final timestamps, accepts final `complete` or `failed` events for the current run, and clears status when `session.status` becomes `idle`.
+- The app reducer may retain final `complete` or `failed` status until idle/cache cleanup, but `packages/app/src/pages/session/message-timeline.data.ts` suppresses final phases so they do not render as durable-looking rows.
+- `packages/app/src/pages/session/message-timeline.data.ts` inserts a `FuguStatus` timeline row only for the active turn while the session is not idle and the phase is not final.
+- `packages/app/src/pages/session/message-timeline.tsx` renders the row using subdued timeline styling and labels branches as `Branch 1`, `Branch 2`, etc.
+
+App display behavior:
+
+- Header format: `Fugu · <complete>/<total> branches complete · <phase>`.
+- Branch rows use config order and one-based branch numbers.
 - `pending` renders as `idle`.
-- `complete` renders as `complete`.
-- `failed` renders as `failed`.
 - `timed_out` renders as `timed out`.
-- `skipped` renders as `skipped`.
-
-## App UI
-
-Update app live state and timeline rendering:
-
-- Add `fugu_status: Record<string, FuguStatus | undefined>` to `packages/app/src/context/global-sync/types.ts`.
-- Add cache cleanup in `packages/app/src/context/global-sync/session-cache.ts`.
-- Add an event case in `packages/app/src/context/global-sync/event-reducer.ts` for `session.next.fugu.status`.
-- Add a `FuguStatus` timeline row in `packages/app/src/pages/session/message-timeline.data.ts`.
-- Insert the row only for the active user turn when live Fugu status exists and `session_status` is not `idle`.
-- Render the row in `packages/app/src/pages/session/message-timeline.tsx` using existing timeline spacing and subdued session-progress styling.
-- Clear the row on final `complete`, final `failed`, `session.status` idle, or cache eviction.
+- Skipped judge status is omitted from the row.
 
 ## TUI Behavior
 
-Update TUI live state and session rendering:
+Implemented TUI paths:
 
-- Add `fugu_status` to the store in `packages/tui/src/context/sync.tsx`.
-- Reduce `session.next.fugu.status` into `fugu_status[sessionID]`.
-- Clear stale status on final `complete`, final `failed`, or `session.status` idle.
-- Render a compact block in `packages/tui/src/routes/session/index.tsx` under the active turn, near the current pending/thinking output.
-- Use plain text that works in narrow terminals and avoids wrapping branch rows when possible.
+- `packages/tui/src/context/sync.tsx` stores `fugu_status` as session-scoped live state.
+- It ignores stale run IDs and stale timestamps, clears status when `session.status` becomes `idle`, and deletes status immediately on final `complete` or `failed` phases.
+- `packages/tui/src/routes/session/index.tsx` renders `FuguStatusBlock` under the active user message when live Fugu status exists.
+- The block uses plain text with `wrapMode="none"` and labels branches as `Branch 1`, `Branch 2`, etc.
+- It displays the synthesizer row in addition to branch and optional judge rows.
 
-## Implementation Slices
+TUI display behavior:
 
-### PR 1: Live Event And Runtime Emission
+- Header format: `Fugu · <complete>/<total> branches complete · <phase>`.
+- If a branch is working, the phase reads `branch N working`.
+- If the judge is working, the phase reads `judge working`.
+- If the synthesizer is working, the phase reads `synthesizer working`.
+- `pending` renders as `idle`.
+- Underscores are rendered as spaces, so `timed_out` displays as `timed out`.
 
-- Add `session.next.fugu.status` in `packages/core/src/session/event.ts` as live-only.
-- Add a small status publisher type in `packages/opencode/src/session/llm/fugu.ts`.
-- Pass the publisher from `packages/opencode/src/session/llm.ts`.
-- Emit status transitions for branches, judge, and synthesizer.
-- Add `packages/opencode/test/session/llm.test.ts` coverage for event order and no branch output leakage.
-- Regenerate SDK types if event schemas flow into the JS SDK.
+## Tests And Coverage
 
-Verification:
+- Runtime event order, privacy, judge guidance, and synthesizer-only output are covered in `packages/opencode/test/session/llm.test.ts`.
+- App live-state reduction and cleanup are covered in `packages/app/src/context/global-sync/event-reducer.test.ts` and `packages/app/src/context/global-sync/session-cache.test.ts`.
+- TUI picker visibility is covered in `packages/tui/test/cli/cmd/tui/model-options.test.ts`; inline rendering currently relies on the route component implementation rather than a dedicated renderer test.
 
-- `cd packages/core && bun typecheck`
-- `cd packages/opencode && bun typecheck`
-- `cd packages/opencode && bun test test/session/llm.test.ts --timeout 30000`
-- `./packages/sdk/js/script/build.ts`
+## Constraints
 
-Review:
-
-Run a fresh read-only teammate against the PR diff and this slice. Verify the event is live-only, Fugu output remains hidden, non-Fugu streaming is unchanged, and final status clears deterministically.
-
-### PR 2: App Inline Conversation Row
-
-- Add app `fugu_status` state and cache cleanup.
-- Reduce `session.next.fugu.status` in `packages/app/src/context/global-sync/event-reducer.ts`.
-- Add a Fugu status row in `packages/app/src/pages/session/message-timeline.data.ts`.
-- Render the row in `packages/app/src/pages/session/message-timeline.tsx`.
-- Add focused tests for reducer behavior and timeline row construction if existing test seams allow it.
-
-Verification:
-
-- `cd packages/app && bun typecheck`
-- `cd packages/app && bun test --preload ./happydom.ts ./src/context/global-sync/event-reducer.test.ts`
-
-Review:
-
-Run a fresh read-only teammate against the PR diff and this slice. Verify the row appears only for active Fugu turns, clears on idle/final state, and does not disturb normal timeline row keys.
-
-### PR 3: TUI Inline Conversation Row
-
-- Add TUI `fugu_status` state in `packages/tui/src/context/sync.tsx`.
-- Reduce and clear `session.next.fugu.status`.
-- Render the status block in `packages/tui/src/routes/session/index.tsx`.
-- Keep output readable at narrow widths and use branch numbers, not model names.
-
-Verification:
-
-- `cd packages/tui && bun typecheck`
-- `cd packages/tui && bun test test/util/model.test.ts --timeout 30000`
-
-Review:
-
-Run a fresh read-only teammate against the PR diff and this slice. Verify TUI live rendering does not require durable message replay and normal sessions do not show Fugu UI.
+- Status is live-only. Do not add database tables, migrations, durable message projection, or replay semantics without a separate design.
+- Status must stay near the active turn, not as a toast, header-only indicator, or side panel.
+- Status must not expose branch output, judge output, prompts, provider keys, stack traces, model names, variants, private tool-call proposals, or raw errors.
+- The Fugu runtime behavior must not change as part of status rendering.
+- Normal non-`fugu` sessions should not render Fugu status state.
 
 ## Future Work
 
-- Persist Fugu status history as durable message parts only if reviewers decide completed Fugu orchestration should be replayable.
+- Persist completed Fugu status history only if reviewers decide completed orchestration should be replayable.
 - Add configurable branch timeout behavior separately from status rendering.
 - Add a debug-only expanded view with branch model names or errors, gated behind an explicit setting.
-- Add docs to `packages/web/src/content/docs/config.mdx` only if Fugu status becomes configurable or documented as a user-facing feature.
-
-## Open Questions
-
-- Should the final successful status remain visible after the synthesizer finishes? Default: no, clear it when the final answer is complete to avoid durable-looking history.
-- Should failed branch errors be visible in the inline row? Default: no, show only `failed`; keep details in logs.
-- Should `judge` be shown when no judge is configured? Default: omit the judge row and use header text like `synthesizer working`.
+- Add dedicated TUI rendering tests if the route renderer gains a narrow test seam for this block.
