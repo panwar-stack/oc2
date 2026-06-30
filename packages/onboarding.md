@@ -1,0 +1,92 @@
+# Packages onboarding
+
+`packages/` is the main workspace area for OpenCode. It contains the core runtime, user-facing apps, cloud services, shared libraries, documentation, and build infrastructure.
+
+Use this guide as a first map when deciding where a feature, bug fix, or investigation belongs. For exact commands, package-specific rules, and tests, check the nearest `package.json`, `README.md`, or `AGENTS.md` before editing.
+
+## How to read this directory
+
+- Core runtime packages implement Sessions, Agents, Tools, Providers, permissions, persistence, API routes, and SDK surfaces.
+- User-facing surfaces render OpenCode in terminals, browsers, desktop shells, Slack, and public docs sites.
+- Cloud and product services back hosted OpenCode products, sharing, sync, stats, billing, and support workflows.
+- Shared libraries and tooling support UI, Effect/SQLite integration, build scripts, tests, and CI images.
+- Some folders are assets or generated/local runtime artifacts, not normal source packages.
+
+## Core runtime
+
+| Folder | Package | Responsibility | Touch this when |
+| --- | --- | --- | --- |
+| `opencode` | `opencode` | Main product package and primary CLI. Owns the command surface, session runtime, agents, tools, permissions, provider orchestration, config, MCP/ACP integration, memory, team features, sharing/sync, and storage. | You are changing core product behavior, CLI commands, agent/session orchestration, tools, provider wiring, MCP/ACP, memory, or sync behavior. |
+| `core` | `@opencode-ai/core` | Shared foundational library for config, auth/accounts, provider and model catalog data, sessions, filesystem, git, projects/workspaces, permissions, plugins, tools, system context, database schema/migrations, and PTY abstractions. | You need reusable domain/runtime primitives that are shared by the app, TUI, server, CLI, or other packages. |
+| `llm` | `@opencode-ai/llm` | Provider-neutral LLM core. Defines canonical request, message, event, tool, route, protocol, provider, streaming, prompt caching, and typed tool-dispatch schemas. Provider quirks live here behind common abstractions. | You are adding or fixing model provider behavior, request/response conversion, streaming events, prompt caching, or typed LLM protocol handling. |
+| `server` | `@opencode-ai/server` | Effect `HttpApi` server package. Defines typed API groups and handlers for health, agents, sessions/messages, models/providers, permissions, filesystem, commands, skills, events, and questions. | You are changing the HTTP API, route handlers, server auth/middleware, API schemas, or web handler wiring. |
+| `sdk` | `@opencode-ai/sdk` in `sdk/js` | OpenAPI-backed JavaScript SDK workspace. The top-level `openapi.json` is the generated API spec; `sdk/js` exposes typed clients, v1/v2 clients/servers, and `createOpencode()`. | You are changing public client/server SDK behavior, generated API types, or code that consumers use to talk to an OpenCode server. Regenerate with `./packages/sdk/js/script/build.ts` when API shapes change. |
+| `plugin` | `@opencode-ai/plugin` | Public plugin authoring API. Defines plugin hooks, provider/auth hooks, custom tool definitions, shell helpers, and TUI extension points. | You are changing what plugin authors can implement or how plugins extend tools, providers, auth, or the TUI. |
+
+## User-facing surfaces
+
+| Folder | Package | Responsibility | Touch this when |
+| --- | --- | --- | --- |
+| `tui` | `@opencode-ai/tui` | Solid/OpenTUI terminal interface. Exports the app runner plus config, context, runtime, keymap, plugin slots, built-in feature plugins, prompt/editor UI, dialogs, toasts, spinner/logo, and terminal utilities. | You are changing terminal UX, keybindings, prompt display, TUI plugins, editor integration, dialogs, or terminal rendering behavior. |
+| `cli` | `@opencode-ai/cli` | Bun CLI package around an Effect command runtime. Wires daemon/service commands, serve/debug/migrate handlers, and TUI integration. | You are changing this newer/alternate CLI command entrypoint, daemon commands, or command-runtime services. |
+| `app` | `@opencode-ai/app` | Solid/Vite browser UI and desktop renderer for OpenCode sessions. Owns session pages, prompt input, terminal panel, file/session UI, settings, i18n, WSL UI, updater/menu exports, and shared app UI behavior. | You are changing the web UI used by browser and desktop contexts. |
+| `desktop` | `@opencode-ai/desktop` | Electron desktop app. Packages the shared app renderer, starts and manages the local sidecar server, handles native IPC, menus, updates, logging, deep links, WSL sidecars, and platform packaging. | You are changing desktop-only native behavior, Electron packaging, auto-updates, IPC, sidecar startup, or desktop shell integration. |
+| `web` | `@opencode-ai/web` | Astro/Starlight public website and docs/marketing package for opencode.ai content, localized docs, pages, components, styles, middleware, and i18n. | You are changing the public website, documentation site content, marketing pages, or localization for the web presence. |
+| `slack` | `@opencode-ai/slack` | Slack Bolt bot integration. Starts an OpenCode server, creates or reuses sessions per Slack thread, shares session URLs, forwards Slack messages as prompts, and posts text/tool updates back to Slack. | You are changing Slack thread/session behavior, Slack event handling, or Slack response rendering. |
+
+## Cloud and product services
+
+| Folder | Package | Responsibility | Touch this when |
+| --- | --- | --- | --- |
+| `console` | Multiple `@opencode-ai/console-*` packages | Hosted console/dashboard product. Contains the SolidStart console app, backend/domain core, deployable functions, email templates, resource bindings, and support app. | You are changing the hosted console, accounts, billing, subscriptions, workspaces, provider/model management, console emails, resource bindings, or support workflows. |
+| `function` | `@opencode-ai/function` | Cloudflare Worker/Hono API for sharing, sync, and integrations. Defines the `SyncServer` Durable Object, R2-backed session share storage, websocket polling, share routes, Feishu-to-Discord bridge, and GitHub auth/OIDC-related endpoints. | You are changing top-level hosted sharing/sync APIs, Durable Object behavior, R2 share storage, or integration endpoints. |
+| `enterprise` | `@opencode-ai/enterprise` | SolidStart/Hono enterprise/share app with a Cloudflare-oriented build target. Includes routes and small core share/storage utilities. | You are changing enterprise-hosted UI or share/storage behavior specific to this app. |
+| `stats` | Multiple `@opencode-ai/stats-*` packages | OpenCode Stats site and service. Contains a SolidStart frontend, Effect services, config, Drizzle schema/migrations, Athena/database/stat-sync domains, and ingestion/server entrypoints. | You are changing stats ingestion, stat-sync/backfill, analytics storage, stats APIs, or the stats frontend. |
+
+### `console` subfolders
+
+| Folder | Responsibility |
+| --- | --- |
+| `console/app` | SolidStart/Vite console web app. |
+| `console/core` | Console backend and domain services for accounts, billing, provider/model data, workspaces, subscriptions, and database scripts. |
+| `console/function` | Console-specific deployable function entrypoints. Do not confuse this with top-level `packages/function`. |
+| `console/mail` | JSX email templates. |
+| `console/resource` | Node/Cloudflare resource binding abstraction. |
+| `console/support` | Support app backed by console core. |
+
+### `stats` subfolders
+
+| Folder | Responsibility |
+| --- | --- |
+| `stats/app` | SolidStart stats frontend/site. |
+| `stats/core` | Effect services, config, Drizzle schema/migrations, Athena/database/stat-sync domains, and backfill logic. |
+| `stats/server` | Server/runtime entrypoints for stats ingestion and service behavior. |
+
+## Shared libraries and tooling
+
+| Folder | Package | Responsibility | Touch this when |
+| --- | --- | --- | --- |
+| `ui` | `@opencode-ai/ui` | Shared Solid component and design-system package. Includes components, styles, themes, context providers, hooks, icons, fonts/audio assets, markdown/diff/session rendering, and v2 components. | You are changing reusable UI primitives or design behavior used by app, desktop, console, enterprise, stats, TUI, or Storybook. |
+| `storybook` | `@opencode-ai/storybook` | Storybook workspace for developing and documenting shared UI components with Solid/Vite. | You need an isolated visual development surface for `ui` components. |
+| `http-recorder` | `@opencode-ai/http-recorder` | Test utility for recording and replaying Effect HTTP and WebSocket traffic as deterministic JSON cassettes with redaction and ordered matching. | You are adding deterministic provider/integration tests that need recorded HTTP or WebSocket traffic. |
+| `effect-drizzle-sqlite` | `@opencode-ai/effect-drizzle-sqlite` | Vendored generic Drizzle ORM adapter for Effect SQLite. Provides Effect-backed Drizzle database/session/migrator support and Effect-yieldable SQLite query builders. | You are changing the generic Drizzle/Effect/SQLite bridge. Keep OpenCode-specific logic out. |
+| `effect-sqlite-node` | `@opencode-ai/effect-sqlite-node` | Node `node:sqlite` implementation of Effect `SqlClient`, including WAL/default options, serialized access, transactions, and extension loading. | You are changing Node SQLite client behavior used by database runtime paths. |
+| `script` | `@opencode-ai/script` | Shared release/build helper. Computes Bun compatibility, release channel/version, preview/release flags, and team list from env, git, root package metadata, and `.github/TEAM_MEMBERS`. | You are changing shared build/release metadata helpers used by scripts. |
+| `containers` | None | CI/container infrastructure for prebuilt Linux images used by GitHub Actions, including base, Bun/Node, Rust, Tauri Linux, and publish images. | You are changing CI image contents or the image build process. |
+
+## Docs, assets, and local artifacts
+
+| Folder | Package | Responsibility | Touch this when |
+| --- | --- | --- | --- |
+| `docs` | Docs config name `@opencode-ai/docs` | Mintlify-style docs source focused on SDK docs and OpenAPI reference. Contains docs config, OpenAPI docs, quickstart/development pages, images, snippets, and navigation. | You are changing generated/reference docs or Mintlify docs content in this package. |
+| `identity` | None | Static OpenCode brand identity assets, including SVG and PNG marks in default/light variants and multiple sizes. | You are updating logo or brand mark assets. |
+| `runtime` | None | Local/generated-looking runtime area currently containing cache/dependency artifacts rather than maintained source code. | Usually do not edit this directly; treat it as a local artifact unless a specific workflow says otherwise. |
+
+## Development notes
+
+- This repo uses Bun workspaces. Use the relevant package directory and package scripts instead of running tests from the repo root.
+- Run `bun typecheck` from the package you are changing when applicable; do not call `tsc` directly.
+- Server API changes can require SDK/OpenAPI regeneration. For the JS SDK, use `./packages/sdk/js/script/build.ts`.
+- `packages/function` and `packages/console/function` are separate Cloudflare/serverless areas with different responsibilities.
+- `identity` and `runtime` are not normal source packages.
+- Some package READMEs are starter-template or sparse. Prefer `package.json`, `src/`, package-specific `AGENTS.md`, and nearby tests/specs when you need current truth.
