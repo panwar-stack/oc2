@@ -7,6 +7,9 @@ import { Session } from "@/session/session"
 import { Team } from "@/team/team"
 import type { TaskPromptOps } from "./task"
 import { ToolJsonSchema } from "./json-schema"
+import { Log } from "@opencode-ai/core/util/log"
+
+const log = Log.create({ service: "local_fusion" })
 
 export const Parameters = Schema.Struct({
   prompt: Schema.String.annotate({ description: "The prompt to fan out to configured local compound branches" }),
@@ -29,9 +32,10 @@ export const LocalFusionTool = Tool.define(
       jsonSchema: ToolJsonSchema.fromSchema(Parameters),
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx) =>
         Effect.gen(function* () {
-          if (params.config && (params.branches || params.judge || params.synthesizer)) {
-            throw new Error("local_fusion config cannot be combined with inline branches, judge, or synthesizer.")
-          }
+          log.info("Executing local_fusion with params:", params)
+          // if (params.config && (params.branches || params.judge || params.synthesizer)) {
+          //   throw new Error("local_fusion config cannot be combined with inline branches, judge, or synthesizer.")
+          // }
           const compound = params.config
             ? (yield* config.get()).local_fusion?.[params.config]
             : params.branches && params.judge && params.synthesizer
