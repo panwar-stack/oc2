@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { Opengrep } from "@opencode-ai/core/filesystem/opengrep"
+import * as Log from "@opencode-ai/core/util/log"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -21,6 +22,7 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 afterEach(async () => {
+  mock.restore()
   await disposeAllInstances()
 })
 
@@ -144,6 +146,7 @@ describe("local_fusion tool", () => {
         const tool = yield* Tool.init(info)
         const sessions = yield* Session.Service
         const parent = yield* sessions.create({ title: "parent" })
+        const infoLog = spyOn(Log.create({ service: "local_fusion" }), "info")
         const result = yield* tool.execute(
           { prompt: "Compare answers", config: "research-panel" },
           context(parent.id, { promptOps: promptOps() }),
@@ -155,14 +158,21 @@ describe("local_fusion tool", () => {
           judgeModel: "test/judge",
           synthesizerModel: "test/synth",
         })
+        const logCall = infoLog.mock.calls.find(([message]) => message === "Executing local_fusion with config:")
+        expect(logCall?.[1]).toMatchObject({
+          config: "research-panel",
+          branches: [{ model: "test/branch", variant: "high", toolPolicy: "readonly" }],
+          judge: { model: "test/judge", variant: "high", toolPolicy: "none" },
+          synthesizer: { model: "test/synth", variant: "high", toolPolicy: "none" },
+        })
       }),
     {
       config: {
         local_fusion: {
           "research-panel": {
-            branches: [{ model: "test/branch" }],
-            judge: { model: "test/judge" },
-            synthesizer: { model: "test/synth" },
+            branches: [{ model: "test/branch", variant: "high" }],
+            judge: { model: "test/judge", variant: "high" },
+            synthesizer: { model: "test/synth", variant: "high" },
           },
         },
       },
@@ -204,19 +214,41 @@ describe("local_fusion tool", () => {
     }),
   )
 
-  it.instance("rejects mixing named and inline config", () =>
-    Effect.gen(function* () {
-      const info = yield* LocalFusionTool
-      const tool = yield* Tool.init(info)
-      const sessions = yield* Session.Service
-      const parent = yield* sessions.create({ title: "parent" })
-      const exit = yield* tool
-        .execute(params({ config: "research-panel" }), context(parent.id, { promptOps: promptOps() }))
-        .pipe(Effect.exit)
+  it.instance(
+    "uses named config when inline fields are present",
+    () =>
+      Effect.gen(function* () {
+        const info = yield* LocalFusionTool
+        const tool = yield* Tool.init(info)
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ title: "parent" })
+        const result = yield* tool.execute(
+          params({
+            config: "research-panel",
+            branches: [{ model: "test/inline-branch" }],
+            judge: { model: "test/inline-judge" },
+            synthesizer: { model: "test/inline-synth" },
+          }),
+          context(parent.id, { promptOps: promptOps() }),
+        )
 
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("cannot be combined")
-    }),
+        expect(result.output).toBe("final fused answer")
+        expect(result.metadata).toMatchObject({
+          judgeModel: "test/judge",
+          synthesizerModel: "test/synth",
+        })
+      }),
+    {
+      config: {
+        local_fusion: {
+          "research-panel": {
+            branches: [{ model: "test/branch" }],
+            judge: { model: "test/judge" },
+            synthesizer: { model: "test/synth" },
+          },
+        },
+      },
+    },
   )
 
   it.instance("rejects missing inline config fields", () =>

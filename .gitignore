@@ -34,3 +34,4 @@ logs/
 tsconfig.tsbuildinfo
 .claude
 /openspec
+scratch.md

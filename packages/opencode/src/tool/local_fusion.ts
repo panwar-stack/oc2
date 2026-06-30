@@ -32,7 +32,6 @@ export const LocalFusionTool = Tool.define(
       jsonSchema: ToolJsonSchema.fromSchema(Parameters),
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx) =>
         Effect.gen(function* () {
-          log.info("Executing local_fusion with params:", params)
           // if (params.config && (params.branches || params.judge || params.synthesizer)) {
           //   throw new Error("local_fusion config cannot be combined with inline branches, judge, or synthesizer.")
           // }
@@ -45,6 +44,14 @@ export const LocalFusionTool = Tool.define(
             if (params.config) throw new Error(`local_fusion config not found: ${params.config}`)
             throw new Error("local_fusion requires config or inline branches, judge, and synthesizer.")
           }
+          const compoundConfig = SessionCompoundConfig.parse(compound)
+          log.info("Executing local_fusion with config:", {
+            prompt: params.prompt,
+            config: params.config,
+            branches: compoundConfig.branches,
+            judge: compoundConfig.judge,
+            synthesizer: compoundConfig.synthesizer,
+          })
 
           const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
           if (!promptOps) throw new Error("local_fusion requires promptOps in ctx.extra")
@@ -55,7 +62,7 @@ export const LocalFusionTool = Tool.define(
           const result = yield* SessionCompound.run({
             sessionID: ctx.sessionID,
             prompt: params.prompt,
-            config: SessionCompoundConfig.parse(compound),
+            config: compoundConfig,
             agent: ctx.agent,
             promptOps,
             abort: ctx.abort,
