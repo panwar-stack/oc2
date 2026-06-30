@@ -255,6 +255,7 @@ export default defineConfig({
             "agents",
             "agent-teams",
             "local-fusion",
+            "fugu",
             "models",
             "themes",
             "keybinds",

@@ -1,0 +1,111 @@
+---
+title: Fugu
+description: Run one OpenCode turn through multiple private model branches and synthesize a single final answer.
+---
+
+Fugu is a virtual model for compound model runs. Select `fugu/fugu` like any other model and OpenCode fans the request out to configured branch models, optionally asks a judge model to evaluate the candidates, then streams one final answer from a synthesizer model.
+
+Use it when a task benefits from independent model perspectives but you still want one normal OpenCode response, one normal tool-execution path, and one session history.
+
+---
+
+## Configure
+
+Add a top-level `fugu` block to `opencode.json`.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "fugu": {
+    "branches": [
+      { "model": "anthropic/claude-sonnet-4-5", "variant": "default" },
+      { "model": "openai/gpt-5", "variant": "high" }
+    ],
+    "judge": { "model": "openai/gpt-5-mini" },
+    "synthesizer": { "model": "anthropic/claude-sonnet-4-5", "variant": "default" }
+  }
+}
+```
+
+- `branches` are the private candidate models. At least one branch is required when `fugu/fugu` is used.
+- `judge` is optional. When configured, it compares branch outputs and passes private guidance to the synthesizer.
+- `synthesizer` is required. Its text and tool calls are the only output returned to the session.
+
+Branch, judge, and synthesizer targets must use `provider/model`, resolve to normal models, and cannot point back to `fugu/fugu`. If a target model requires a variant, include the supported `variant` in the target config.
+
+:::caution[Request-time validation]
+The generated config schema is permissive so OpenCode can start with an incomplete `fugu` block. Strict validation runs only when `fugu/fugu` is selected.
+:::
+
+---
+
+## Use
+
+Select the virtual model from the CLI.
+
+```bash frame="none"
+opencode --model fugu/fugu
+# or
+opencode -m fugu/fugu
+```
+
+You can also make it the default model in config.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "fugu/fugu"
+}
+```
+
+Fugu is available in model pickers even before a `fugu` block exists. Missing or invalid Fugu config fails only when a request actually uses `fugu/fugu`.
+
+Fugu does not have its own API key or provider settings. The real providers used by your branch, judge, and synthesizer models still need their normal authentication and configuration.
+
+---
+
+## Design
+
+Fugu is implemented as a virtual provider/model pair: provider `fugu`, model `fugu`. It is visible in model selection, but it is not a provider SDK and it does not send requests to a Fugu service.
+
+Instead, OpenCode intercepts `fugu/fugu` before normal provider language-model loading. The Fugu runtime validates the configured targets, resolves each target through the existing provider/model registry, then builds normal model requests for the branch, judge, and synthesizer stages.
+
+This keeps Fugu additive:
+
+- normal models still resolve through the existing provider system
+- normal model selection still works for every non-Fugu request
+- default model fallback does not automatically choose Fugu
+- `disabled_providers: ["fugu"]` can explicitly hide the virtual model
+
+---
+
+## Architecture
+
+Each Fugu turn follows the same shape.
+
+1. OpenCode receives a normal model stream request for `fugu/fugu`.
+2. The Fugu runtime validates `fugu.branches`, optional `fugu.judge`, and `fugu.synthesizer`.
+3. Branch models run concurrently with the original conversation context.
+4. If a judge is configured, it evaluates the private branch results.
+5. The synthesizer receives the original context, branch outputs, optional judge guidance, and the caller's executable tools.
+6. Only the synthesizer stream is returned to the session processor.
+
+Branches and the judge are private research stages. They can see caller tool definitions as suggestions, but their tools do not execute. The synthesizer is the only stage with executable caller tools, so visible tool calls and persisted assistant output come from the synthesizer alone.
+
+If at least one branch succeeds, Fugu can continue to synthesis. If every branch fails, the request fails instead of asking the synthesizer to work without candidates.
+
+---
+
+## Status
+
+While a Fugu turn runs, OpenCode emits live `session.next.fugu.status` events. The app and TUI use these events to show progress through branching, judging, synthesis, completion, or failure.
+
+Status events are intentionally small and live-only. They show orchestration progress, but they do not expose branch text, judge guidance, target model IDs, variants, prompts, provider keys, raw errors, or private tool-call suggestions.
+
+---
+
+## When To Use It
+
+Fugu is useful for code review, planning, architecture tradeoffs, complex debugging, and other prompts where several independent model attempts can improve the final response.
+
+It is not a replacement for configuring providers, choosing a good default model, or giving the agent clear instructions. Treat it as a higher-confidence model route for important turns where the extra latency and model usage are worth the additional synthesis step.
