@@ -28,6 +28,26 @@ describe("command", () => {
           expect(yield* Effect.promise(() => Promise.resolve(clarify.template))).toContain("Clarify Request")
           expect(yield* Effect.promise(() => Promise.resolve(clarify.template))).toContain("/spec-planner")
 
+          const useTeam = yield* command.get("use-team")
+          if (!useTeam) throw new Error("use-team command not found")
+
+          expect(useTeam.source).toBe("command")
+          expect(useTeam.description).toBe("use agent team to accomplish the task")
+          expect(useTeam.hints).toEqual(["$ARGUMENTS"])
+          expect(yield* Effect.promise(() => Promise.resolve(useTeam.template))).toContain(
+            "use agent teams to do the following",
+          )
+
+          const fast = yield* command.get("fast")
+          if (!fast) throw new Error("fast command not found")
+
+          expect(fast.source).toBe("command")
+          expect(fast.description).toBe("run a prompt in a fast subtask")
+          expect(fast.model).toBe(Command.Model.SMALL)
+          expect(fast.subtask).toBe(true)
+          expect(fast.hints).toEqual(["$ARGUMENTS"])
+          expect(yield* Effect.promise(() => Promise.resolve(fast.template))).toContain("$ARGUMENTS")
+
           const implementSpecPr = yield* command.get("spec-implement")
           if (!implementSpecPr) throw new Error("spec-implement command not found")
 
@@ -37,7 +57,7 @@ describe("command", () => {
           )
           expect(implementSpecPr.hints).toEqual(["$1", "$2"])
           expect(yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))).toContain(
-            "Implement only the work required for PR `#$2`.",
+            "Implement only the work required for PR `#$2`",
           )
 
           const learn = yield* command.get("learn")

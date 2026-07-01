@@ -8,6 +8,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_CLARIFY from "./template/clarify.txt"
+import PROMPT_FAST from "./template/fast.txt"
 import PROMPT_IMPLEMENT_SPEC_PR from "./template/spec-implement.txt"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_LEARN from "./template/learn.txt"
@@ -15,6 +16,7 @@ import PROMPT_LOCAL_FUSION from "./template/local-fusion.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_SPEC_PLANNER from "./template/spec-planner.txt"
 import PROMPT_TEAM_REPORT from "./template/team-report.txt"
+import PROMPT_USE_TEAM from "./template/use-team.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -58,6 +60,7 @@ export function hints(template: string) {
 
 export const Default = {
   CLARIFY: "clarify",
+  FAST: "fast",
   IMPLEMENT_SPEC_PR: "spec-implement",
   INIT: "init",
   LEARN: "learn",
@@ -65,6 +68,11 @@ export const Default = {
   REVIEW: "review",
   SPEC_PLANNER: "spec-planner",
   TEAM_REPORT: "team-report",
+  USE_TEAM: "use-team",
+} as const
+
+export const Model = {
+  SMALL: "small_model",
 } as const
 
 export interface Interface {
@@ -131,6 +139,26 @@ export const layer = Layer.effect(
           return PROMPT_CLARIFY
         },
         hints: hints(PROMPT_CLARIFY),
+      }
+      commands[Default.USE_TEAM] = {
+        name: Default.USE_TEAM,
+        description: "use agent team to accomplish the task",
+        source: "command",
+        get template() {
+          return PROMPT_USE_TEAM
+        },
+        hints: hints(PROMPT_USE_TEAM),
+      }
+      commands[Default.FAST] = {
+        name: Default.FAST,
+        description: "run a prompt in a fast subtask",
+        source: "command",
+        model: Model.SMALL,
+        get template() {
+          return PROMPT_FAST
+        },
+        subtask: true,
+        hints: hints(PROMPT_FAST),
       }
       commands[Default.SPEC_PLANNER] = {
         name: Default.SPEC_PLANNER,

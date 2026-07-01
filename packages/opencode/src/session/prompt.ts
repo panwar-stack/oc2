@@ -1691,6 +1691,12 @@ export const layer = Layer.effect(
       template = template.trim()
 
       const taskModel = yield* Effect.gen(function* () {
+        if (cmd.model === Command.Model.SMALL) {
+          const current = input.model ? Provider.parseModel(input.model) : yield* currentModel(input.sessionID)
+          const small = yield* provider.getSmallModel(current.providerID)
+          if (small) return { providerID: small.providerID, modelID: small.id }
+          return current
+        }
         if (cmd.model) return Provider.parseModel(cmd.model)
         if (cmd.agent) {
           const cmdAgent = yield* agents.get(cmd.agent)
