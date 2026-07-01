@@ -1605,6 +1605,57 @@ it.instance(
   10_000,
 )
 
+raceNoLLMServer.instance(
+  "spawn command launches background child without parent handoff",
+  () =>
+    Effect.gen(function* () {
+      const { directory } = yield* TestInstance
+      yield* writeConfig(directory, { ...cfg, model: "test/test-model", small_model: "test/test-model" })
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const jobs = yield* BackgroundJob.Service
+      const started = yield* Deferred.make<void>()
+      processorCreateStarted.push(() => succeedVoid(started))
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      const result = yield* prompt.command({
+        sessionID: chat.id,
+        command: "spawn",
+        arguments: "look into the cache key path",
+        agent: "build",
+        model: "test/test-model",
+      })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role !== "assistant") return
+      expect(result.info.finish).toBe("stop")
+      const tool = completedTool(result.parts)
+      if (!tool) return
+      expect(tool.metadata?.providerExecuted).toBe(true)
+      expect(tool.state.output).toContain("will not inject results")
+
+      const children = yield* sessions.children(chat.id)
+      expect(children).toHaveLength(1)
+      const child = children[0]
+      if (!child) throw new Error("spawn child not found")
+      expect(child.agent).toBe("build")
+      expect(child.parentID).toBe(chat.id)
+      expect((yield* jobs.get(child.id))?.status).toBe("running")
+      yield* awaitWithTimeout(Deferred.await(started), "spawn child did not start")
+
+      const messages = yield* MessageV2.filterCompactedEffect(chat.id)
+      expect(messages.filter((msg) => msg.info.role === "user")).toHaveLength(1)
+      expect(
+        messages.some((msg) =>
+          msg.parts.some((part) => part.type === "text" && part.text.includes("Summarize the task tool output")),
+        ),
+      ).toBe(false)
+
+      yield* jobs.cancel(child.id)
+    }),
+  5_000,
+)
+
 it.instance(
   "cancel with queued callers resolves all cleanly",
   () =>

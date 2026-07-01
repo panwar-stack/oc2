@@ -8,7 +8,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_CLARIFY from "./template/clarify.txt"
-import PROMPT_FAST from "./template/fast.txt"
+import PROMPT_SPAWN from "./template/spawn.txt"
 import PROMPT_IMPLEMENT_SPEC_PR from "./template/spec-implement.txt"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_LEARN from "./template/learn.txt"
@@ -60,12 +60,12 @@ export function hints(template: string) {
 
 export const Default = {
   CLARIFY: "clarify",
-  FAST: "fast",
   IMPLEMENT_SPEC_PR: "spec-implement",
   INIT: "init",
   LEARN: "learn",
   LOCAL_FUSION: "local_fusion",
   REVIEW: "review",
+  SPAWN: "spawn",
   SPEC_PLANNER: "spec-planner",
   TEAM_REPORT: "team-report",
   USE_TEAM: "use-team",
@@ -149,16 +149,16 @@ export const layer = Layer.effect(
         },
         hints: hints(PROMPT_USE_TEAM),
       }
-      commands[Default.FAST] = {
-        name: Default.FAST,
-        description: "run a prompt in a fast subtask",
+      commands[Default.SPAWN] = {
+        name: Default.SPAWN,
+        description: "run a prompt in a background subtask",
         source: "command",
         model: Model.SMALL,
         get template() {
-          return PROMPT_FAST
+          return PROMPT_SPAWN
         },
         subtask: true,
-        hints: hints(PROMPT_FAST),
+        hints: hints(PROMPT_SPAWN),
       }
       commands[Default.SPEC_PLANNER] = {
         name: Default.SPEC_PLANNER,

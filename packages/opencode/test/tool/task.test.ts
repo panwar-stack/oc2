@@ -500,6 +500,53 @@ describe("tool.task", () => {
     }),
   )
 
+  it.instance("internal background context skips public flag and parent injection", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let parentPrompts = 0
+
+      const result = yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: {
+            background: true,
+            notify: false,
+            promptOps: {
+              ...stubOps({ text: "background done" }),
+              prompt: (input) => {
+                if (input.sessionID === chat.id) {
+                  parentPrompts++
+                  return Effect.succeed(reply(input, "injected"))
+                }
+                return Effect.succeed(reply(input, "background done"))
+              },
+            } satisfies TaskPromptOps,
+          },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.metadata.background).toBe(true)
+      expect(result.output).toContain("will not inject results")
+      const waited = yield* jobs.wait({ id: result.metadata.sessionId, timeout: 1_000 })
+      expect(waited.info?.status).toBe("completed")
+      expect(parentPrompts).toBe(0)
+    }),
+  )
+
   it.instance("promotes a running foreground task without restarting it", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service

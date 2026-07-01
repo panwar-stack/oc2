@@ -314,6 +314,7 @@ export const layer = Layer.effect(
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
       const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
+      const isSpawnCommand = task.command === Command.Default.SPAWN
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
         role: "assistant",
@@ -377,7 +378,11 @@ export const layer = Layer.effect(
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
+          extra: {
+            bypassAgentCheck: true,
+            promptOps,
+            ...(isSpawnCommand ? { background: true, notify: false } : {}),
+          },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
@@ -438,13 +443,14 @@ export const layer = Layer.effect(
         result,
       )
 
-      assistantMessage.finish = "tool-calls"
+      assistantMessage.finish = isSpawnCommand ? "stop" : "tool-calls"
       assistantMessage.time.completed = Date.now()
       yield* sessions.updateMessage(assistantMessage)
 
       if (result && part.state.status === "running") {
         yield* sessions.updatePart({
           ...part,
+          ...(isSpawnCommand ? { metadata: { ...part.metadata, providerExecuted: true } } : {}),
           state: {
             status: "completed",
             input: part.state.input,
@@ -460,6 +466,7 @@ export const layer = Layer.effect(
       if (!result) {
         yield* sessions.updatePart({
           ...part,
+          ...(isSpawnCommand ? { metadata: { ...part.metadata, providerExecuted: true } } : {}),
           state: {
             status: "error",
             error: error ? `Tool execution failed: ${error.message}` : "Tool execution failed",
@@ -473,6 +480,7 @@ export const layer = Layer.effect(
         } satisfies SessionV1.ToolPart)
       }
 
+      if (isSpawnCommand) return
       if (!task.command) return
 
       const summaryUserMsg: SessionV1.User = {

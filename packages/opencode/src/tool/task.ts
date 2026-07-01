@@ -40,6 +40,10 @@ const BACKGROUND_UPDATED = [
   "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
   "Work on non-overlapping tasks, or briefly tell the user what you sent and end your response.",
 ].join("\n")
+const BACKGROUND_STARTED_NO_NOTIFY = [
+  "The task is working in the background.",
+  "It will not inject results back into this session. Open the child session to inspect progress or results.",
+].join("\n")
 
 const BaseParameterFields = {
   description: Schema.String.annotate({ description: "A short (3-5 words) description of the task" }),
@@ -95,8 +99,9 @@ export const TaskTool = Tool.define(
       ctx: Tool.Context,
     ) {
       const cfg = yield* config.get()
-      const runInBackground = params.background === true
-      if (runInBackground && !flags.experimentalBackgroundSubagents) {
+      const runInBackground = params.background === true || ctx.extra?.background === true
+      const notifyParent = ctx.extra?.notify !== false
+      if (params.background === true && !flags.experimentalBackgroundSubagents) {
         return yield* Effect.fail(
           new Error("Background subagents require OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
         )
@@ -258,13 +263,18 @@ export const TaskTool = Tool.define(
         type: id,
         title: params.description,
         metadata,
-        onPromote: Effect.all([
-          ctx.metadata({
-            title: params.description,
-            metadata: { ...metadata, background: true, jobId: nextSession.id },
-          }),
-          notify(nextSession.id),
-        ]),
+        onPromote: notifyParent
+          ? Effect.all([
+              ctx.metadata({
+                title: params.description,
+                metadata: { ...metadata, background: true, jobId: nextSession.id },
+              }),
+              notify(nextSession.id),
+            ])
+          : ctx.metadata({
+              title: params.description,
+              metadata: { ...metadata, background: true, jobId: nextSession.id },
+            }),
         run: runTask().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id))),
       })
 
@@ -280,13 +290,13 @@ export const TaskTool = Tool.define(
             sessionID: nextSession.id,
             state: "running",
             summary: "Background task started",
-            text: BACKGROUND_STARTED,
+            text: notifyParent ? BACKGROUND_STARTED : BACKGROUND_STARTED_NO_NOTIFY,
           }),
         }
       }
 
       if (runInBackground) {
-        yield* notify(info.id)
+        if (notifyParent) yield* notify(info.id)
         return backgroundResult()
       }
 

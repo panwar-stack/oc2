@@ -38,15 +38,16 @@ describe("command", () => {
             "use agent teams to do the following",
           )
 
-          const fast = yield* command.get("fast")
-          if (!fast) throw new Error("fast command not found")
+          const spawn = yield* command.get("spawn")
+          if (!spawn) throw new Error("spawn command not found")
 
-          expect(fast.source).toBe("command")
-          expect(fast.description).toBe("run a prompt in a fast subtask")
-          expect(fast.model).toBe(Command.Model.SMALL)
-          expect(fast.subtask).toBe(true)
-          expect(fast.hints).toEqual(["$ARGUMENTS"])
-          expect(yield* Effect.promise(() => Promise.resolve(fast.template))).toContain("$ARGUMENTS")
+          expect(spawn.source).toBe("command")
+          expect(spawn.description).toBe("run a prompt in a background subtask")
+          expect(spawn.model).toBe(Command.Model.SMALL)
+          expect(spawn.subtask).toBe(true)
+          expect(spawn.hints).toEqual(["$ARGUMENTS"])
+          expect(yield* Effect.promise(() => Promise.resolve(spawn.template))).toContain("$ARGUMENTS")
+          expect(yield* command.get("fast")).toBeUndefined()
 
           const implementSpecPr = yield* command.get("spec-implement")
           if (!implementSpecPr) throw new Error("spec-implement command not found")
