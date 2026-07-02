@@ -383,6 +383,28 @@ const userTexts = (request: LLMRequest) =>
       : [],
   )
 
+const resetRequestCapture = () => {
+  requests.length = 0
+  responses = undefined
+  responseStream = undefined
+  streamGate = undefined
+  streamStarted = undefined
+  response = []
+}
+
+const capturedRequest = () => {
+  const request = requests[0]
+  if (!request) throw new Error("Expected a captured LLM request")
+  return request
+}
+
+const toolDefinitionsDigestOf = (request: LLMRequest) => {
+  const digest = request.metadata?.toolDefinitionsDigest
+  if (typeof digest !== "string") throw new Error("Expected a tool definitions digest")
+  expect(digest).toMatch(/^[0-9a-f]{64}$/)
+  return digest
+}
+
 const replaySessionProjection = (id: SessionV2.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -692,6 +714,161 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["alpha", "defect", "echo", "zeta"])
+    }),
+  )
+
+  it.effect("keeps the tool digest stable across registration order changes", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const session = yield* SessionV2.Service
+      const tool = Tool.make({
+        description: "Digest ordering fixture",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () => Effect.succeed({}),
+      })
+      let firstDigest = ""
+      let secondDigest = ""
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* registry.register({ zeta: tool, alpha: tool })
+          yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Digest order one" }), resume: false })
+          resetRequestCapture()
+          yield* session.resume(sessionID)
+          firstDigest = toolDefinitionsDigestOf(capturedRequest())
+        }),
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* registry.register({ alpha: tool, zeta: tool })
+          yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Digest order two" }), resume: false })
+          resetRequestCapture()
+          yield* session.resume(sessionID)
+          secondDigest = toolDefinitionsDigestOf(capturedRequest())
+        }),
+      )
+
+      expect(secondDigest).toBe(firstDigest)
+    }),
+  )
+
+  it.effect("canonicalizes schema object keys before computing the tool digest", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const session = yield* SessionV2.Service
+      const output = Schema.Struct({})
+      const zetaFirst = Tool.make({
+        description: "Canonical schema fixture",
+        input: Schema.Struct({ zeta: Schema.String, alpha: Schema.String }),
+        output,
+        execute: () => Effect.succeed({}),
+      })
+      const alphaFirst = Tool.make({
+        description: "Canonical schema fixture",
+        input: Schema.Struct({ alpha: Schema.String, zeta: Schema.String }),
+        output,
+        execute: () => Effect.succeed({}),
+      })
+      let firstDigest = ""
+      let secondDigest = ""
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* registry.register({ schema_probe: zetaFirst })
+          yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Digest schema one" }), resume: false })
+          resetRequestCapture()
+          yield* session.resume(sessionID)
+          firstDigest = toolDefinitionsDigestOf(capturedRequest())
+        }),
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* registry.register({ schema_probe: alphaFirst })
+          yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Digest schema two" }), resume: false })
+          resetRequestCapture()
+          yield* session.resume(sessionID)
+          secondDigest = toolDefinitionsDigestOf(capturedRequest())
+        }),
+      )
+
+      expect(secondDigest).toBe(firstDigest)
+    }),
+  )
+
+  it.effect("changes the tool digest when tool content changes", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const session = yield* SessionV2.Service
+      const first = Tool.make({
+        description: "Digest content fixture one",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () => Effect.succeed({}),
+      })
+      const second = Tool.make({
+        description: "Digest content fixture two",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () => Effect.succeed({}),
+      })
+      let firstDigest = ""
+      let secondDigest = ""
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* registry.register({ content_probe: first })
+          yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Digest content one" }), resume: false })
+          resetRequestCapture()
+          yield* session.resume(sessionID)
+          firstDigest = toolDefinitionsDigestOf(capturedRequest())
+        }),
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* registry.register({ content_probe: second })
+          yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Digest content two" }), resume: false })
+          resetRequestCapture()
+          yield* session.resume(sessionID)
+          secondDigest = toolDefinitionsDigestOf(capturedRequest())
+        }),
+      )
+
+      expect(secondDigest).not.toBe(firstDigest)
+    }),
+  )
+
+  it.effect("keeps the tool digest diagnostic-only on the LLM request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Digest diagnostics" }), resume: false })
+
+      resetRequestCapture()
+      yield* session.resume(sessionID)
+
+      const request = capturedRequest()
+      const digest = toolDefinitionsDigestOf(request)
+      expect(request.metadata).toEqual({ toolDefinitionsDigest: digest })
+      expect(request.providerOptions?.openai?.promptCacheKey).toBe(sessionID)
+      expect(request.providerOptions?.openai?.promptCacheKey).not.toBe(digest)
+      expect(request.cache).toEqual({ tools: true, system: false, messages: "latest-user-message" })
+      expect(request.tools.every((tool) => tool.metadata?.toolDefinitionsDigest === undefined)).toBe(true)
+      expect(
+        JSON.stringify({
+          providerOptions: request.providerOptions,
+          cache: request.cache,
+          system: request.system,
+          messages: request.messages,
+          tools: request.tools,
+          toolChoice: request.toolChoice,
+          generation: request.generation,
+          responseFormat: request.responseFormat,
+        }),
+      ).not.toContain(digest)
     }),
   )
 

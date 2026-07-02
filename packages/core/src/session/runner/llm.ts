@@ -7,6 +7,7 @@ import {
   SystemPart,
   isContextOverflowFailure,
   type ProviderErrorEvent,
+  type ToolDefinition,
 } from "@opencode-ai/llm"
 import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
@@ -22,6 +23,7 @@ import { SystemContextRegistry } from "../../system-context/registry"
 import { SkillGuidance } from "../../skill/guidance"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
+import { Hash } from "../../util/hash"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
@@ -86,6 +88,35 @@ import { toLLMMessages } from "./to-llm-message"
 
 // QUESTION: Did this exist previously, or did we add this limit? Does it make sense?
 const MAX_STEPS = 25
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const isStringArray = (value: ReadonlyArray<unknown>): value is ReadonlyArray<string> =>
+  value.every((item) => typeof item === "string")
+
+const canonicalizeObjectKeys = (value: unknown, parentKey?: string): unknown => {
+  if (Array.isArray(value)) {
+    const items = parentKey === "required" && isStringArray(value) ? value.toSorted() : value
+    return items.map((item) => canonicalizeObjectKeys(item))
+  }
+  if (!isPlainRecord(value)) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalizeObjectKeys(item, key)]),
+  )
+}
+
+const toolDefinitionsDigest = (definitions: ReadonlyArray<ToolDefinition>) =>
+  Hash.sha256(
+    JSON.stringify(
+      definitions
+        .toSorted((left, right) => left.name.localeCompare(right.name))
+        .map((definition) => canonicalizeObjectKeys(definition)),
+    ),
+  )
 
 export const layer = Layer.effect(
   Service,
@@ -214,6 +245,7 @@ export const layer = Layer.effect(
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
+      const toolDigest = toolDefinitionsDigest(toolMaterialization.definitions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const stableSystem = [agent.info?.system, system.baseline].filter(
         (part): part is string => part !== undefined && part.length > 0,
@@ -231,7 +263,16 @@ export const layer = Layer.effect(
         ],
         messages: toLLMMessages(context, model),
         tools: toolMaterialization.definitions,
+        metadata: { toolDefinitionsDigest: toolDigest },
       })
+      yield* Effect.logDebug("Prepared LLM request tool definitions digest").pipe(
+        Effect.annotateLogs({
+          sessionID: session.id,
+          providerID: model.provider,
+          modelID: model.id,
+          toolDefinitionsDigest: toolDigest,
+        }),
+      )
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(rebuildPreparedTurn())
       const publisher = createLLMEventPublisher(events, {
