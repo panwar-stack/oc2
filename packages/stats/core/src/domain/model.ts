@@ -31,6 +31,7 @@ export type ModelStatMetric = {
   outputTokens: number
   reasoningTokens: number
   cacheReadTokens: number
+  cacheWriteTokens: number
   totalTokens: number
   inputCostMicrocents: number
   outputCostMicrocents: number
@@ -68,6 +69,7 @@ export class ModelStatRepo extends Context.Service<ModelStatRepo, ModelStatRepo.
                 outputTokens: modelStat.output_tokens,
                 reasoningTokens: modelStat.reasoning_tokens,
                 cacheReadTokens: modelStat.cache_read_tokens,
+                cacheWriteTokens: modelStat.cache_write_tokens,
                 totalTokens: modelStat.total_tokens,
                 inputCostMicrocents: modelStat.input_cost_microcents,
                 outputCostMicrocents: modelStat.output_cost_microcents,
@@ -98,6 +100,7 @@ export class ModelStatRepo extends Context.Service<ModelStatRepo, ModelStatRepo.
                       output_tokens: inserted("output_tokens"),
                       reasoning_tokens: inserted("reasoning_tokens"),
                       cache_read_tokens: inserted("cache_read_tokens"),
+                      cache_write_tokens: inserted("cache_write_tokens"),
                       total_tokens: inserted("total_tokens"),
                       input_cost_microcents: inserted("input_cost_microcents"),
                       output_cost_microcents: inserted("output_cost_microcents"),

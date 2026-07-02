@@ -112,6 +112,7 @@ export class ProviderStatRepo extends Context.Service<ProviderStatRepo, Provider
                       output_tokens: inserted("output_tokens"),
                       reasoning_tokens: inserted("reasoning_tokens"),
                       cache_read_tokens: inserted("cache_read_tokens"),
+                      cache_write_tokens: inserted("cache_write_tokens"),
                       total_tokens: inserted("total_tokens"),
                       input_cost_microcents: inserted("input_cost_microcents"),
                       output_cost_microcents: inserted("output_cost_microcents"),

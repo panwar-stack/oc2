@@ -16,6 +16,7 @@ export type StatBaseAggregate = {
   output_tokens: number
   reasoning_tokens: number
   cache_read_tokens: number
+  cache_write_tokens: number
   total_tokens: number
   input_cost_microcents: number
   output_cost_microcents: number
@@ -45,6 +46,7 @@ export type StatBaseRow = {
   output_tokens?: number
   reasoning_tokens?: number
   cache_read_tokens?: number
+  cache_write_tokens?: number
   total_tokens?: number
   input_cost_microcents?: number
   output_cost_microcents?: number
@@ -75,6 +77,7 @@ export function toStatBaseRow(data: StatBaseAggregate) {
     output_tokens: data.output_tokens,
     reasoning_tokens: data.reasoning_tokens,
     cache_read_tokens: data.cache_read_tokens,
+    cache_write_tokens: data.cache_write_tokens,
     total_tokens: data.total_tokens,
     input_cost_microcents: data.input_cost_microcents,
     output_cost_microcents: data.output_cost_microcents,
@@ -126,6 +129,7 @@ export function combineRows<T extends StatBaseRow>(left: T, right: T): T {
     output_tokens: (left.output_tokens ?? 0) + (right.output_tokens ?? 0),
     reasoning_tokens: (left.reasoning_tokens ?? 0) + (right.reasoning_tokens ?? 0),
     cache_read_tokens: (left.cache_read_tokens ?? 0) + (right.cache_read_tokens ?? 0),
+    cache_write_tokens: (left.cache_write_tokens ?? 0) + (right.cache_write_tokens ?? 0),
     total_tokens: (left.total_tokens ?? 0) + (right.total_tokens ?? 0),
     input_cost_microcents: (left.input_cost_microcents ?? 0) + (right.input_cost_microcents ?? 0),
     output_cost_microcents: (left.output_cost_microcents ?? 0) + (right.output_cost_microcents ?? 0),

@@ -127,6 +127,7 @@ function metricColumns() {
     output_tokens: bigint({ mode: "number" }).notNull().default(0),
     reasoning_tokens: bigint({ mode: "number" }).notNull().default(0),
     cache_read_tokens: bigint({ mode: "number" }).notNull().default(0),
+    cache_write_tokens: bigint({ mode: "number" }).notNull().default(0),
     total_tokens: bigint({ mode: "number" }).notNull().default(0),
     input_cost_microcents: bigint({ mode: "number" }).notNull().default(0),
     output_cost_microcents: bigint({ mode: "number" }).notNull().default(0),

@@ -122,6 +122,7 @@ type ModelAggregate = {
   outputTokens: number
   reasoningTokens: number
   cacheReadTokens: number
+  cacheWriteTokens: number
   totalTokens: number
   inputCostMicrocents: number
   outputCostMicrocents: number
@@ -496,7 +497,8 @@ function buildModelTokenMix(aggregate: ModelAggregate): ModelMixEntry[] {
     { label: "Input", tokens: aggregate.inputTokens },
     { label: "Output", tokens: aggregate.outputTokens },
     { label: "Reasoning", tokens: aggregate.reasoningTokens },
-    { label: "Cached", tokens: aggregate.cacheReadTokens },
+    { label: "Cache Read", tokens: aggregate.cacheReadTokens },
+    { label: "Cache Write", tokens: aggregate.cacheWriteTokens },
   ].filter((item) => item.tokens > 0)
   const total = items.reduce((sum, item) => sum + item.tokens, 0)
   if (total === 0) return []
@@ -608,6 +610,7 @@ function combineRowsForModel(model: string, rows: StatMetricRow[]): ModelAggrega
     outputTokens: 0,
     reasoningTokens: 0,
     cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     totalTokens: 0,
     inputCostMicrocents: 0,
     outputCostMicrocents: 0,
@@ -624,6 +627,7 @@ function combineModelAggregate(current: ModelAggregate | undefined, row: StatMet
     outputTokens: (current?.outputTokens ?? 0) + row.outputTokens,
     reasoningTokens: (current?.reasoningTokens ?? 0) + row.reasoningTokens,
     cacheReadTokens: (current?.cacheReadTokens ?? 0) + row.cacheReadTokens,
+    cacheWriteTokens: (current?.cacheWriteTokens ?? 0) + row.cacheWriteTokens,
     totalTokens: (current?.totalTokens ?? 0) + row.totalTokens,
     inputCostMicrocents: (current?.inputCostMicrocents ?? 0) + row.inputCostMicrocents,
     outputCostMicrocents: (current?.outputCostMicrocents ?? 0) + row.outputCostMicrocents,

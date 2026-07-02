@@ -246,6 +246,8 @@ function metricQuery(breakdowns: string[], limit: number, filters: ReturnType<ty
       { op: "SUM", column: "tokens.output" },
       { op: "SUM", column: "tokens.reasoning" },
       { op: "SUM", column: "tokens.cache_read" },
+      { op: "SUM", column: "tokens.cache_write_5m" },
+      { op: "SUM", column: "tokens.cache_write_1h" },
       { op: "SUM", column: "tokens" },
       { op: "SUM", column: "cost.input.microcents" },
       { op: "SUM", column: "cost.output.microcents" },
@@ -451,6 +453,10 @@ function baseAggregate(row: RawRow, grain: Grain, opts: ImportOptions): StatBase
     output_tokens: integer(row, "output_tokens", ["SUM(tokens.output)", "SUM(tokens_output)"]),
     reasoning_tokens: integer(row, "reasoning_tokens", ["SUM(tokens.reasoning)", "SUM(tokens_reasoning)"]),
     cache_read_tokens: integer(row, "cache_read_tokens", ["SUM(tokens.cache_read)", "SUM(tokens_cache_read)"]),
+    cache_write_tokens:
+      integer(row, "cache_write_tokens", ["SUM(tokens.cache_write)", "SUM(tokens_cache_write)"]) ||
+      integer(row, "cache_write_tokens_5m", ["SUM(tokens.cache_write_5m)", "SUM(tokens_cache_write_5m)"]) +
+        integer(row, "cache_write_tokens_1h", ["SUM(tokens.cache_write_1h)", "SUM(tokens_cache_write_1h)"]),
     total_tokens: integer(row, "total_tokens", ["SUM(stat_tokens_total)", "SUM(tokens)", "SUM(tokens_total)"]),
     input_cost_microcents: integer(row, "input_cost_microcents", [
       "SUM(cost.input.microcents)",
@@ -812,6 +818,7 @@ async function upsertModelRows(db: ReturnType<typeof drizzle>, rows: ModelStatRo
           output_tokens: inserted("output_tokens"),
           reasoning_tokens: inserted("reasoning_tokens"),
           cache_read_tokens: inserted("cache_read_tokens"),
+          cache_write_tokens: inserted("cache_write_tokens"),
           total_tokens: inserted("total_tokens"),
           input_cost_microcents: inserted("input_cost_microcents"),
           output_cost_microcents: inserted("output_cost_microcents"),
@@ -849,6 +856,7 @@ async function upsertProviderRows(db: ReturnType<typeof drizzle>, rows: Provider
           output_tokens: inserted("output_tokens"),
           reasoning_tokens: inserted("reasoning_tokens"),
           cache_read_tokens: inserted("cache_read_tokens"),
+          cache_write_tokens: inserted("cache_write_tokens"),
           total_tokens: inserted("total_tokens"),
           input_cost_microcents: inserted("input_cost_microcents"),
           output_cost_microcents: inserted("output_cost_microcents"),
@@ -891,6 +899,7 @@ async function upsertGeoRows(db: ReturnType<typeof drizzle>, rows: GeoStatRow[],
           output_tokens: inserted("output_tokens"),
           reasoning_tokens: inserted("reasoning_tokens"),
           cache_read_tokens: inserted("cache_read_tokens"),
+          cache_write_tokens: inserted("cache_write_tokens"),
           total_tokens: inserted("total_tokens"),
           input_cost_microcents: inserted("input_cost_microcents"),
           output_cost_microcents: inserted("output_cost_microcents"),

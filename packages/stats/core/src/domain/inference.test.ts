@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { toGeoAggregate, toModelAggregate, toProviderAggregate } from "./inference"
+import { buildStatsQuery, toGeoAggregate, toModelAggregate, toProviderAggregate } from "./inference"
 import { modelAuthor, normalizeInferenceModel, statModel, statProvider } from "./model-normalization"
 
 describe("inference stat normalization", () => {
@@ -81,6 +81,35 @@ describe("inference stat normalization", () => {
         period_key: "2026-W20",
       }),
     ).toMatchObject([{ period_key: "2026-W20" }])
+  })
+
+  test("aggregate query exposes cache write tokens separately", () => {
+    process.env.SST_RESOURCE_App = "{}"
+    process.env.SST_RESOURCE_InferenceEvent = JSON.stringify({ catalog: "catalog", database: "database", table: "table" })
+    process.env.SST_RESOURCE_StatsSyncConfig = JSON.stringify({ dataset: "zen" })
+
+    const query = buildStatsQuery(new Date("2026-01-01T00:00:00Z"), new Date("2026-01-31T00:00:00Z"), "model")
+    expect(query).toContain(
+      "COALESCE(SUM(COALESCE(tokens_cache_write_5m, 0) + COALESCE(tokens_cache_write_1h, 0)), 0) AS cache_write_tokens",
+    )
+    expect(query).toContain(
+      "tokens_cache_read,\n    tokens_cache_write_5m,\n    tokens_cache_write_1h,\n    COALESCE(tokens_cache_read, 0) + COALESCE(tokens_cache_write_5m, 0) + COALESCE(tokens_cache_write_1h, 0) + COALESCE(tokens_input, 0) + COALESCE(tokens_output, 0) AS tokens_total",
+    )
+  })
+
+  test("aggregates map cache write tokens separately from cache read tokens", () => {
+    const row = {
+      ...aggregate("gpt-5.5-pro", "openai"),
+      cache_read_tokens: "10",
+      cache_write_tokens: "7",
+      total_tokens: "100",
+    }
+
+    expect(toModelAggregate(row)).toMatchObject([{ cache_read_tokens: 10, cache_write_tokens: 7, total_tokens: 100 }])
+    expect(toProviderAggregate(row)).toMatchObject([{ cache_read_tokens: 10, cache_write_tokens: 7 }])
+    expect(toGeoAggregate({ ...row, country: "US" })).toMatchObject([
+      { cache_read_tokens: 10, cache_write_tokens: 7 },
+    ])
   })
 })
 
