@@ -660,12 +660,38 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.model).toBe(model)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo"])
       expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "Second" }] },
       ])
       expect(yield* session.messages({ sessionID })).toHaveLength(2)
+    }),
+  )
+
+  it.effect("sorts out-of-order tool registrations before building the LLM request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const registry = yield* ToolRegistry.Service
+      const session = yield* SessionV2.Service
+      const tool = Tool.make({
+        description: "Ordering fixture",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () => Effect.succeed({}),
+      })
+      yield* registry.register({ zeta: tool, alpha: tool })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Sort tools" }), resume: false })
+
+      requests.length = 0
+      responses = undefined
+      streamGate = undefined
+      streamStarted = undefined
+      response = []
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["alpha", "defect", "echo", "zeta"])
     }),
   )
 
@@ -1756,7 +1782,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo"])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Use tools" },
         {

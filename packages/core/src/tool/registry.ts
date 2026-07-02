@@ -109,7 +109,9 @@ const registryLayer = Layer.effect(
         for (const [name, registration] of registrations)
           if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
         return {
-          definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
+          definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)).toSorted(
+            (a, b) => a.name.localeCompare(b.name),
+          ),
           settle: (input) => {
             const registration = registrations.get(input.call.name)
             if (registration) return settleWith(input, registration.identity)
