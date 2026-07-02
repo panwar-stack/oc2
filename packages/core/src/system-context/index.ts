@@ -28,9 +28,12 @@ export type Key = typeof Key.Type
 export const unavailable = Symbol.for("@opencode/SystemContext.Unavailable")
 export type Unavailable = typeof unavailable
 
+export type Stability = "stable" | "variable"
+
 /** Defines one typed source before its value type is hidden by `make`. */
 export interface Source<A> {
   readonly key: Key
+  readonly stability?: Stability
   readonly codec: Schema.Codec<A, Schema.Json, never, never>
   readonly load: Effect.Effect<A | Unavailable>
   readonly baseline: (current: A) => string
@@ -94,6 +97,7 @@ export class DuplicateKeyError extends Schema.TaggedErrorClass<DuplicateKeyError
 
 interface PackedSource {
   readonly key: Key
+  readonly stability: Stability
   readonly load: Effect.Effect<Loaded | Unavailable>
 }
 
@@ -135,6 +139,7 @@ export function make<A>(source: Source<A>): SystemContext {
   return context([
     {
       key: source.key,
+      stability: source.stability ?? "stable",
       load: source.load.pipe(
         Effect.map((value) => {
           if (isUnavailable(value)) return value
@@ -175,6 +180,18 @@ export function combine(values: ReadonlyArray<SystemContext>): SystemContext {
   return context(sources)
 }
 
+export function stable(value: SystemContext): SystemContext {
+  return filter(value, "stable")
+}
+
+export function variable(value: SystemContext): SystemContext {
+  return filter(value, "variable")
+}
+
+export function render(value: SystemContext): Effect.Effect<string> {
+  return observe(value).pipe(Effect.map(renderObservation))
+}
+
 const observe = (value: SystemContext) =>
   Effect.forEach(
     value[ContextTypeId],
@@ -205,9 +222,14 @@ function initializeObservation(entries: ReadonlyArray<Entry>): Generation {
   const available = entries.filter((entry): entry is AvailableEntry => entry._tag === "Available")
   const rendered = available.map((entry) => [entry.key, entry.baseline()] as const)
   return {
-    baseline: render(rendered.map(([, result]) => result.text)),
+    baseline: joinRendered(rendered.map(([, result]) => result.text)),
     snapshot: Object.fromEntries(rendered.map(([key, result]) => [key, result.snapshot])),
   }
+}
+
+function renderObservation(entries: ReadonlyArray<Entry>) {
+  const available = entries.filter((entry): entry is AvailableEntry => entry._tag === "Available")
+  return joinRendered(available.map((entry) => entry.baseline().text))
 }
 
 /** Reconciles current source values with one active generation. */
@@ -272,7 +294,7 @@ function reconcileObservation(
     updates.push(removed)
   }
   if (updates.length === 0) return { _tag: "Unchanged" }
-  return { _tag: "Updated", text: render(updates), snapshot }
+  return { _tag: "Updated", text: joinRendered(updates), snapshot }
 }
 
 /** Creates a complete replacement generation or blocks while admitted context is unavailable. */
@@ -290,7 +312,11 @@ function context(sources: ReadonlyArray<PackedSource>): SystemContext {
   return { [ContextTypeId]: sources }
 }
 
-function render(parts: ReadonlyArray<string>) {
+function filter(value: SystemContext, stability: Stability): SystemContext {
+  return context(value[ContextTypeId].filter((source) => source.stability === stability))
+}
+
+function joinRendered(parts: ReadonlyArray<string>) {
   return parts.join("\n\n")
 }
 

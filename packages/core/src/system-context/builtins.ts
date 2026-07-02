@@ -21,6 +21,7 @@ const builtIns = Layer.effectDiscard(
     const context = SystemContext.combine([
       SystemContext.make({
         key: SystemContext.Key.make("core/environment"),
+        stability: "variable",
         codec: Schema.toCodecJson(Schema.String),
         load: Effect.succeed(environment),
         baseline: (environment) =>
@@ -29,6 +30,7 @@ const builtIns = Layer.effectDiscard(
       }),
       SystemContext.make({
         key: SystemContext.Key.make("core/date"),
+        stability: "variable",
         codec: Schema.toCodecJson(Schema.String),
         load: DateTime.nowAsDate.pipe(Effect.map((date) => date.toDateString())),
         baseline: (date) => `Today's date: ${date}`,

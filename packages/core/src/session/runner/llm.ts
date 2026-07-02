@@ -1,4 +1,5 @@
 import {
+  CacheHint,
   LLM,
   LLMClient,
   LLMError,
@@ -214,12 +215,20 @@ export const layer = Layer.effect(
       const context = entries.map((entry) => entry.message)
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const stableSystem = [agent.info?.system, system.baseline].filter(
+        (part): part is string => part !== undefined && part.length > 0,
+      )
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline]
-          .filter((part): part is string => part !== undefined && part.length > 0)
-          .map(SystemPart.make),
+        cache: { tools: true, system: false, messages: "latest-user-message" },
+        system: [
+          ...stableSystem.map((part, index) => {
+            const stable = SystemPart.make(part)
+            return index === stableSystem.length - 1 ? { ...stable, cache: new CacheHint({ type: "ephemeral" }) } : stable
+          }),
+          ...(system.variableContext.length === 0 ? [] : [SystemPart.make(system.variableContext)]),
+        ],
         messages: toLLMMessages(context, model),
         tools: toolMaterialization.definitions,
       })

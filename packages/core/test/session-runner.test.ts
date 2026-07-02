@@ -165,7 +165,9 @@ const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(Effect.as(session.model?.id === "replacement" ? replacementModel : currentModel)),
 )
 const systemContextKey = SystemContext.Key.make("test/context")
+const systemVariableContextKey = SystemContext.Key.make("test/variable-context")
 let systemBaseline = "Initial context"
+let systemVariableContext = ""
 let systemRemoved = false
 let systemUnavailable = false
 let systemLoadHook = Effect.void
@@ -192,6 +194,18 @@ const systemContext = Layer.effectDiscard(
                     update: (_previous, current) => current,
                     removed: () => "System context source removed: test/context",
                   }),
+                  ...(systemVariableContext.length === 0
+                    ? []
+                    : [
+                        SystemContext.make({
+                          key: systemVariableContextKey,
+                          stability: "variable",
+                          codec: Schema.toCodecJson(Schema.String),
+                          load: Effect.succeed(systemVariableContext),
+                          baseline: String,
+                          update: (_previous, current) => current,
+                        }),
+                      ]),
                 ],
           ),
         ),
@@ -314,6 +328,7 @@ const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   response = []
   systemBaseline = "Initial context"
+  systemVariableContext = ""
   systemRemoved = false
   systemUnavailable = false
   systemLoadHook = Effect.void
@@ -830,6 +845,37 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", "Initial context"])
+    }),
+  )
+
+  it.effect("places the cache hint on stable system context before variable context", () =>
+    Effect.gen(function* () {
+      yield* setup
+      systemVariableContext = "Variable context"
+      const agent = yield* AgentV2.Service
+      yield* agent.update((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.system = "Build agent instructions"
+          agent.mode = "primary"
+        }),
+      )
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
+
+      requests.length = 0
+      response = fragmentFixture("text", "text-cache-boundary", ["Done"]).completeEvents
+      yield* session.resume(sessionID)
+
+      const request = requests.at(-1)
+      expect(request?.system.map((part) => part.text)).toEqual([
+        "Build agent instructions",
+        "Initial context",
+        "Variable context",
+      ])
+      expect(request?.system[0]?.cache).toBeUndefined()
+      expect(request?.system[1]?.cache?.type).toBe("ephemeral")
+      expect(request?.system[2]?.cache).toBeUndefined()
+      expect(request?.cache).toEqual({ tools: true, system: false, messages: "latest-user-message" })
     }),
   )
 

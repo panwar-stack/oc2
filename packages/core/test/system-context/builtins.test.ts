@@ -16,22 +16,24 @@ const projectDirectory = AbsolutePath.make(FSUtil.resolve("/repo"))
 const instructionFile = FSUtil.resolve("/repo/AGENTS.md")
 const timestamp = Date.parse("2026-06-03T12:00:00.000Z")
 const localDate = (time: number) => new Date(time).toDateString()
-const locationLayer = Layer.succeed(
-  Location.Service,
-  Location.Service.of(
-    location(
-      { directory },
-      { projectDirectory, vcs: { type: "git", store: AbsolutePath.make(FSUtil.resolve("/repo/.git")) } },
+const locationLayerFor = (directory: AbsolutePath) =>
+  Layer.succeed(
+    Location.Service,
+    Location.Service.of(
+      location(
+        { directory },
+        { projectDirectory, vcs: { type: "git", store: AbsolutePath.make(FSUtil.resolve("/repo/.git")) } },
+      ),
     ),
-  ),
-)
-const it = testEffect(
+  )
+const locationLayer = locationLayerFor(directory)
+const builtInsLayerFor = (providedLocation: ReturnType<typeof locationLayerFor>, fsLayer = FSUtil.defaultLayer) =>
   SystemContextBuiltIns.locationLayer.pipe(
-    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(fsLayer),
     Layer.provide(Global.layerWith({ config: "/global" })),
-    Layer.provide(locationLayer),
-  ),
-)
+    Layer.provide(providedLocation),
+  )
+const it = testEffect(builtInsLayerFor(locationLayer))
 const instructionFS = Layer.effect(
   FSUtil.Service,
   FSUtil.Service.pipe(
@@ -44,13 +46,7 @@ const instructionFS = Layer.effect(
     ),
   ),
 ).pipe(Layer.provide(FSUtil.defaultLayer))
-const itWithInstructions = testEffect(
-  SystemContextBuiltIns.locationLayer.pipe(
-    Layer.provide(instructionFS),
-    Layer.provide(Global.layerWith({ config: "/global" })),
-    Layer.provide(locationLayer),
-  ),
-)
+const itWithInstructions = testEffect(builtInsLayerFor(locationLayer, instructionFS))
 
 describe("SystemContextBuiltIns", () => {
   it.effect("loads location-scoped environment and host-local date context", () =>
@@ -60,6 +56,33 @@ describe("SystemContextBuiltIns", () => {
       const initialized = yield* SystemContext.initialize(yield* context.load())
 
       expect(initialized.baseline).toBe(
+        [
+          "Here is some useful information about the environment you are running in:",
+          "<env>",
+          `  Working directory: ${directory}`,
+          `  Workspace root folder: ${projectDirectory}`,
+          "  Is directory a git repo: yes",
+          `  Platform: ${process.platform}`,
+          "</env>",
+          "",
+          `Today's date: ${localDate(timestamp)}`,
+        ].join("\n"),
+      )
+    }),
+  )
+
+  itWithInstructions.effect("keeps date and environment out of the stable baseline", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(timestamp)
+      const context = yield* SystemContextRegistry.Service
+      const loaded = yield* context.load()
+      const stable = yield* SystemContext.initialize(SystemContext.stable(loaded))
+      const variable = yield* SystemContext.render(SystemContext.variable(loaded))
+
+      expect(stable.baseline).toBe(`Instructions from: ${instructionFile}\nBe precise.`)
+      expect(stable.baseline).not.toContain("Working directory")
+      expect(stable.baseline).not.toContain("Today's date")
+      expect(variable).toBe(
         [
           "Here is some useful information about the environment you are running in:",
           "<env>",

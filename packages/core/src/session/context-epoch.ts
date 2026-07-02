@@ -35,6 +35,7 @@ const retryRevisionMismatch = <A, E>(attempt: () => Effect.Effect<A, E>): Effect
 
 interface Prepared {
   readonly baseline: string
+  readonly variableContext: string
   readonly baselineSeq: number
   readonly revision: number
 }
@@ -64,6 +65,14 @@ export function prepare(
   )
 }
 
+const splitContext = Effect.fnUntraced(function* (context: Effect.Effect<SystemContext.SystemContext>) {
+  const value = yield* context
+  return {
+    stable: SystemContext.stable(value),
+    variableContext: yield* SystemContext.render(SystemContext.variable(value)),
+  }
+})
+
 const prepareOnce = Effect.fnUntraced(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -72,11 +81,13 @@ const prepareOnce = Effect.fnUntraced(function* (
   location: Location.Ref,
   agent: AgentV2.ID,
 ) {
-  const [value, stored] = yield* Effect.all([context, find(db, sessionID)], { concurrency: "unbounded" })
+  const [{ stable, variableContext }, stored] = yield* Effect.all([splitContext(context), find(db, sessionID)], {
+    concurrency: "unbounded",
+  })
   if (!stored) {
-    const generation = yield* SystemContext.initialize(value)
+    const generation = yield* SystemContext.initialize(stable)
     const baselineSeq = yield* insert(db, sessionID, location, agent, generation)
-    return { baseline: generation.baseline, baselineSeq, revision: 0 }
+    return { baseline: generation.baseline, variableContext, baselineSeq, revision: 0 }
   }
 
   const snapshot = yield* Schema.decodeUnknownEffect(SystemContext.Snapshot)(stored.snapshot).pipe(
@@ -85,20 +96,20 @@ const prepareOnce = Effect.fnUntraced(function* (
   const replacingAgent = stored.agent !== agent
   const result =
     stored.replacement_seq === null && !replacingAgent
-      ? yield* SystemContext.reconcile(value, snapshot)
-      : yield* SystemContext.replace(value, snapshot)
+      ? yield* SystemContext.reconcile(stable, snapshot)
+      : yield* SystemContext.replace(stable, snapshot)
   if (result._tag === "ReplacementBlocked" && replacingAgent) {
     yield* fence(db, sessionID, agent, stored.revision)
     return yield* new AgentReplacementBlocked({ sessionID, previous: stored.agent, current: agent })
   }
   if (result._tag === "Unchanged" || result._tag === "ReplacementBlocked") {
     yield* fence(db, sessionID, agent, stored.revision)
-    return { baseline: stored.baseline, baselineSeq: stored.baseline_seq, revision: stored.revision }
+    return { baseline: stored.baseline, variableContext, baselineSeq: stored.baseline_seq, revision: stored.revision }
   }
   if (result._tag === "ReplacementReady") {
     const replacementSeq = stored.replacement_seq ?? (yield* SessionInput.latestSeq(db, sessionID))
     yield* replace(db, sessionID, agent, stored.revision, replacementSeq, result.generation)
-    return { baseline: result.generation.baseline, baselineSeq: replacementSeq, revision: stored.revision + 1 }
+    return { baseline: result.generation.baseline, variableContext, baselineSeq: replacementSeq, revision: stored.revision + 1 }
   }
 
   yield* events.publish(
@@ -106,7 +117,7 @@ const prepareOnce = Effect.fnUntraced(function* (
     { sessionID, messageID: SessionMessageID.ID.create(), timestamp: yield* DateTime.now, text: result.text },
     { commit: () => advance(db, sessionID, stored.revision, result.snapshot).pipe(Effect.orDie) },
   )
-  return { baseline: stored.baseline, baselineSeq: stored.baseline_seq, revision: stored.revision + 1 }
+  return { baseline: stored.baseline, variableContext, baselineSeq: stored.baseline_seq, revision: stored.revision + 1 }
 })
 
 const initializeOnce = Effect.fnUntraced(function* (
@@ -117,9 +128,10 @@ const initializeOnce = Effect.fnUntraced(function* (
   agent: AgentV2.ID,
 ) {
   if (yield* exists(db, sessionID)) return
-  const generation = yield* context.pipe(Effect.flatMap(SystemContext.initialize))
+  const { stable, variableContext } = yield* splitContext(context)
+  const generation = yield* SystemContext.initialize(stable)
   const baselineSeq = yield* insert(db, sessionID, location, agent, generation)
-  return { baseline: generation.baseline, baselineSeq, revision: 0 }
+  return { baseline: generation.baseline, variableContext, baselineSeq, revision: 0 }
 })
 
 const exists = Effect.fn("SessionContextEpoch.exists")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
