@@ -15,7 +15,7 @@ const fullRunFiles = new Set([
 ])
 const fullRunPrefixes = [".github/actions/", "containers/", "patches/", "script/"]
 const generatedPrefixes = [
-  "packages/opencode/src/server/",
+  "packages/opencode/src/",
   "packages/sdk/",
   "packages/server/",
   "packages/ui/script/",
@@ -117,7 +117,12 @@ function packageForFile(file: string, packages: WorkspacePackage[]) {
 }
 
 function isDocsOnly(file: string) {
-  return file.endsWith(".md") || file.startsWith("docs/") || file.startsWith("packages/docs/")
+  return (
+    file.endsWith(".md") ||
+    file.startsWith("docs/") ||
+    file.startsWith("packages/docs/") ||
+    (file.endsWith(".mdx") && file.startsWith("packages/web/src/content/docs/"))
+  )
 }
 
 function unique<T>(items: T[]) {
