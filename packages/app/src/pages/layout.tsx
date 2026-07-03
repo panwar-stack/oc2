@@ -90,6 +90,7 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
+import { createWorkspaceNaming } from "./layout/workspace-naming"
 
 export default function Layout(props: ParentProps) {
   const serverSDK = useServerSDK()
@@ -564,28 +565,7 @@ export default function Layout(props: ParentProps) {
     }
   })
 
-  const workspaceName = (directory: string, projectId?: string, branch?: string) => {
-    const key = pathKey(directory)
-    const direct = store.workspaceName[key] ?? store.workspaceName[directory]
-    if (direct) return direct
-    if (!projectId) return
-    if (!branch) return
-    return store.workspaceBranchName[projectId]?.[branch]
-  }
-
-  const setWorkspaceName = (directory: string, next: string, projectId?: string, branch?: string) => {
-    const key = pathKey(directory)
-    setStore("workspaceName", key, next)
-    if (!projectId) return
-    if (!branch) return
-    if (!store.workspaceBranchName[projectId]) {
-      setStore("workspaceBranchName", projectId, {})
-    }
-    setStore("workspaceBranchName", projectId, branch, next)
-  }
-
-  const workspaceLabel = (directory: string, branch?: string, projectId?: string) =>
-    workspaceName(directory, projectId, branch) ?? branch ?? getFilename(directory)
+  const { workspaceName, setWorkspaceName, workspaceLabel } = createWorkspaceNaming(store, setStore)
 
   const workspaceSetting = createMemo(() => {
     const project = currentProject()

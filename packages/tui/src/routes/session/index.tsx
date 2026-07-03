@@ -37,7 +37,6 @@ import type {
   TextPart,
   ReasoningPart,
   SessionStatus,
-  EventSessionNextFuguStatus,
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
@@ -86,6 +85,12 @@ import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap 
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { DialogRoots } from "./dialog-roots"
 import { collectExportSessionFromClient } from "../../util/session-export"
+import { FuguStatusBlock } from "./fugu-status"
+import {
+  sessionBindingCommands,
+  sessionGlobalBindingCommands,
+  sessionGlobalUnfocusedBindingCommands,
+} from "./session-keybinds"
 
 addDefaultParsers(parsers.parsers)
 
@@ -114,54 +119,6 @@ function goUpsellKeys(action: RetryAction) {
     }
   }
 }
-
-const sessionBindingCommands = [
-  "session.share",
-  "session.rename",
-  "session.timeline",
-  "session.fork",
-  "session.compact",
-  "session.roots",
-  "session.unshare",
-  "session.undo",
-  "session.redo",
-  "session.sidebar.toggle",
-  "session.toggle.conceal",
-  "session.toggle.timestamps",
-  "session.toggle.thinking",
-  "session.toggle.actions",
-  "session.toggle.scrollbar",
-  "session.toggle.generic_tool_output",
-  "session.first",
-  "session.last",
-  "session.messages_last_user",
-  "session.message.next",
-  "session.message.previous",
-  "messages.copy",
-  "session.copy",
-  "session.export",
-  "session.child.first",
-  "session.parent",
-  "session.child.next",
-  "session.child.previous",
-  "team.cycle.lead",
-  "team.member.first",
-  "team.member.next",
-  "team.member.previous",
-  "team.panel.toggle",
-  "team.task.list",
-] as const
-
-const sessionGlobalBindingCommands = [
-  "session.page.up",
-  "session.page.down",
-  "session.line.up",
-  "session.line.down",
-  "session.half.page.up",
-  "session.half.page.down",
-] as const
-
-const sessionGlobalUnfocusedBindingCommands = ["session.first", "session.last"] as const
 
 const context = createContext<{
   width: number
@@ -1656,48 +1613,6 @@ function UserMessage(props: {
       </Show>
     </>
   )
-}
-
-function FuguStatusBlock(props: { status: EventSessionNextFuguStatus["properties"] }) {
-  const { theme } = useTheme()
-  const complete = createMemo(() => props.status.branches.filter((branch) => branch.status === "complete").length)
-  const phase = createMemo(() => {
-    const workingBranch = props.status.branches.find((branch) => branch.status === "working")
-    if (workingBranch) return `branch ${workingBranch.index + 1} working`
-    if (props.status.judge?.status === "working") return "judge working"
-    if (props.status.synthesizer.status === "working") return "synthesizer working"
-    return fuguLabel(props.status.phase)
-  })
-
-  return (
-    <box paddingLeft={3} marginTop={1} flexDirection="column">
-      <text fg={theme.textMuted} wrapMode="none">
-        Fugu · {complete()}/{props.status.branches.length} branches complete · {phase()}
-      </text>
-      <For each={props.status.branches}>
-        {(branch) => (
-          <text fg={theme.textMuted} wrapMode="none">
-            Branch {branch.index + 1} · {fuguLabel(branch.status)}
-          </text>
-        )}
-      </For>
-      <Show when={props.status.judge}>
-        {(judge) => (
-          <text fg={theme.textMuted} wrapMode="none">
-            Judge · {fuguLabel(judge().status)}
-          </text>
-        )}
-      </Show>
-      <text fg={theme.textMuted} wrapMode="none">
-        Synthesizer · {fuguLabel(props.status.synthesizer.status)}
-      </text>
-    </box>
-  )
-}
-
-function fuguLabel(value: string) {
-  if (value === "pending") return "idle"
-  return value.replaceAll("_", " ")
 }
 
 function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {
