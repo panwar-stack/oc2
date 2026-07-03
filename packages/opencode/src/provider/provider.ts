@@ -1115,6 +1115,10 @@ export type Error = ModelNotFoundError | InitError | NoProvidersError | NoModels
 
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderV2.ID, Info>>
+  readonly listPublic: () => Effect.Effect<{
+    providers: Record<ProviderV2.ID, Info>
+    catalog: Record<ProviderV2.ID, Info>
+  }>
   readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
   readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
@@ -1130,6 +1134,8 @@ interface State {
   models: Map<string, LanguageModelV3>
   providers: Record<ProviderV2.ID, Info>
   catalog: Record<ProviderV2.ID, Info>
+  publicProviders: Record<ProviderV2.ID, Info>
+  publicCatalog: Record<ProviderV2.ID, Info>
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
@@ -1669,10 +1675,18 @@ export const layer = Layer.effect(
           log.info("found", { providerID })
         }
 
+        const publicProviders = mapValues(providers, toPublicInfo)
+        const publicCatalog = mapValues(
+          pickBy(catalog, (_, id) => isProviderAllowed(ProviderV2.ID.make(id))),
+          toPublicInfo,
+        )
+
         return {
           models: languages,
           providers,
           catalog,
+          publicProviders,
+          publicCatalog,
           sdk,
           modelLoaders,
           varsLoaders,
@@ -1681,6 +1695,9 @@ export const layer = Layer.effect(
     )
 
     const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
+    const listPublic = Effect.fn("Provider.listPublic")(() =>
+      InstanceState.use(state, (s) => ({ providers: s.publicProviders, catalog: s.publicCatalog })),
+    )
 
     async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>) {
       try {
@@ -2023,7 +2040,7 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({ list, listPublic, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
   }),
 )
 

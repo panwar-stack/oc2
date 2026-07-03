@@ -1,13 +1,13 @@
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
-import { Session } from "@/session/session"
-import { NotFoundError } from "@/storage/storage"
 import { Database } from "@opencode-ai/core/database/database"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { Project } from "@/project/project"
+import { ProjectV2 } from "@opencode-ai/core/project"
 import { InstanceRef } from "@/effect/instance-ref"
+import { and, eq, gte, inArray, sql, type SQL } from "drizzle-orm"
 
-interface SessionStats {
+export interface SessionStats {
   totalSessions: number
   totalMessages: number
   totalCost: number
@@ -80,18 +80,12 @@ export const StatsCommand = effectCmd({
   }),
 })
 
-const getAllSessions = Effect.fnUntraced(function* () {
-  const { db } = yield* Database.Service
-  return (yield* db.select().from(SessionTable).all().pipe(Effect.orDie)).map((row) => Session.fromRow(row))
-})
-
-const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
+export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
   days?: number,
   projectFilter?: string,
   currentProject?: Project.Info,
 ) {
-  const svc = yield* Session.Service
-  const sessions = yield* getAllSessions()
+  const { db } = yield* Database.Service
   const MS_IN_DAY = 24 * 60 * 60 * 1000
 
   const cutoffTime = (() => {
@@ -110,16 +104,23 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
     return days
   })()
 
-  let filteredSessions = cutoffTime > 0 ? sessions.filter((session) => session.time.updated >= cutoffTime) : sessions
-
+  const filters: SQL[] = []
+  if (cutoffTime > 0) filters.push(gte(SessionTable.time_updated, cutoffTime))
   if (projectFilter !== undefined) {
-    if (projectFilter === "") {
+    const projectID: ProjectV2.ID = (() => {
+      if (projectFilter !== "") return ProjectV2.ID.make(projectFilter)
       if (!currentProject) throw new Error("currentProject required when projectFilter is empty string")
-      filteredSessions = filteredSessions.filter((session) => session.projectID === currentProject.id)
-    } else {
-      filteredSessions = filteredSessions.filter((session) => session.projectID === projectFilter)
-    }
+      return ProjectV2.ID.make(currentProject.id)
+    })()
+    filters.push(eq(SessionTable.project_id, projectID))
   }
+
+  const filteredSessions = yield* db
+    .select()
+    .from(SessionTable)
+    .where(filters.length > 0 ? and(...filters) : undefined)
+    .all()
+    .pipe(Effect.orDie)
 
   const stats: SessionStats = {
     totalSessions: filteredSessions.length,
@@ -157,109 +158,78 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
 
   let earliestTime = Date.now()
   let latestTime = 0
-
   const sessionTotalTokens: number[] = []
 
-  const results = yield* Effect.forEach(
-    filteredSessions,
-    (session) =>
-      Effect.gen(function* () {
-        const messages = yield* svc
-          .messages({ sessionID: session.id })
-          .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed([])))
+  for (const session of filteredSessions) {
+    earliestTime = Math.min(earliestTime, cutoffTime > 0 ? session.time_updated : session.time_created)
+    latestTime = Math.max(latestTime, session.time_updated)
+    sessionTotalTokens.push(
+      session.tokens_input +
+        session.tokens_output +
+        session.tokens_reasoning +
+        session.tokens_cache_read +
+        session.tokens_cache_write,
+    )
 
-        const sessionCost = session.cost ?? 0
-        const sessionTokens = session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-        let sessionToolUsage: Record<string, number> = {}
-        let sessionModelUsage: Record<
-          string,
-          {
-            messages: number
-            tokens: { input: number; output: number; cache: { read: number; write: number } }
-            cost: number
-          }
-        > = {}
+    stats.totalCost += session.cost
+    stats.totalTokens.input += session.tokens_input
+    stats.totalTokens.output += session.tokens_output
+    stats.totalTokens.reasoning += session.tokens_reasoning
+    stats.totalTokens.cache.read += session.tokens_cache_read
+    stats.totalTokens.cache.write += session.tokens_cache_write
+  }
 
-        for (const message of messages) {
-          if (message.info.role === "assistant") {
-            const modelKey = `${message.info.providerID}/${message.info.modelID}`
-            if (!sessionModelUsage[modelKey]) {
-              sessionModelUsage[modelKey] = {
-                messages: 0,
-                tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-                cost: 0,
-              }
-            }
-            sessionModelUsage[modelKey].messages++
-            sessionModelUsage[modelKey].cost += message.info.cost || 0
+  const sessionIDs = filteredSessions.map((session) => session.id)
+  const messageCount = yield* db
+    .select({ count: sql<number>`count(*)` })
+    .from(MessageTable)
+    .where(inArray(MessageTable.session_id, sessionIDs))
+    .get()
+    .pipe(Effect.orDie)
+  stats.totalMessages = messageCount?.count ?? 0
 
-            if (message.info.tokens) {
-              sessionModelUsage[modelKey].tokens.input += message.info.tokens.input || 0
-              sessionModelUsage[modelKey].tokens.output +=
-                (message.info.tokens.output || 0) + (message.info.tokens.reasoning || 0)
-              sessionModelUsage[modelKey].tokens.cache.read += message.info.tokens.cache?.read || 0
-              sessionModelUsage[modelKey].tokens.cache.write += message.info.tokens.cache?.write || 0
-            }
-          }
+  const modelRows = yield* db
+    .select({
+      providerID: sql<string>`json_extract(${MessageTable.data}, '$.providerID')`,
+      modelID: sql<string>`json_extract(${MessageTable.data}, '$.modelID')`,
+      messages: sql<number>`count(*)`,
+      cost: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.cost'), 0)), 0)`,
+      input: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.input'), 0)), 0)`,
+      output: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.output'), 0) + coalesce(json_extract(${MessageTable.data}, '$.tokens.reasoning'), 0)), 0)`,
+      cacheRead: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.cache.read'), 0)), 0)`,
+      cacheWrite: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.cache.write'), 0)), 0)`,
+    })
+    .from(MessageTable)
+    .where(and(inArray(MessageTable.session_id, sessionIDs), sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`))
+    .groupBy(
+      sql`json_extract(${MessageTable.data}, '$.providerID')`,
+      sql`json_extract(${MessageTable.data}, '$.modelID')`,
+    )
+    .all()
+    .pipe(Effect.orDie)
 
-          for (const part of message.parts) {
-            if (part.type === "tool" && part.tool) {
-              sessionToolUsage[part.tool] = (sessionToolUsage[part.tool] || 0) + 1
-            }
-          }
-        }
-
-        return {
-          messageCount: messages.length,
-          sessionCost,
-          sessionTokens,
-          sessionTotalTokens:
-            sessionTokens.input +
-            sessionTokens.output +
-            sessionTokens.reasoning +
-            sessionTokens.cache.read +
-            sessionTokens.cache.write,
-          sessionToolUsage,
-          sessionModelUsage,
-          earliestTime: cutoffTime > 0 ? session.time.updated : session.time.created,
-          latestTime: session.time.updated,
-        }
-      }),
-    { concurrency: 20 },
-  )
-
-  for (const result of results) {
-    earliestTime = Math.min(earliestTime, result.earliestTime)
-    latestTime = Math.max(latestTime, result.latestTime)
-    sessionTotalTokens.push(result.sessionTotalTokens)
-
-    stats.totalMessages += result.messageCount
-    stats.totalCost += result.sessionCost
-    stats.totalTokens.input += result.sessionTokens.input
-    stats.totalTokens.output += result.sessionTokens.output
-    stats.totalTokens.reasoning += result.sessionTokens.reasoning
-    stats.totalTokens.cache.read += result.sessionTokens.cache.read
-    stats.totalTokens.cache.write += result.sessionTokens.cache.write
-
-    for (const [tool, count] of Object.entries(result.sessionToolUsage)) {
-      stats.toolUsage[tool] = (stats.toolUsage[tool] || 0) + count
+  for (const row of modelRows) {
+    if (!row.providerID || !row.modelID) continue
+    stats.modelUsage[`${row.providerID}/${row.modelID}`] = {
+      messages: row.messages,
+      tokens: { input: row.input, output: row.output, cache: { read: row.cacheRead, write: row.cacheWrite } },
+      cost: row.cost,
     }
+  }
 
-    for (const [model, usage] of Object.entries(result.sessionModelUsage)) {
-      if (!stats.modelUsage[model]) {
-        stats.modelUsage[model] = {
-          messages: 0,
-          tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-          cost: 0,
-        }
-      }
-      stats.modelUsage[model].messages += usage.messages
-      stats.modelUsage[model].tokens.input += usage.tokens.input
-      stats.modelUsage[model].tokens.output += usage.tokens.output
-      stats.modelUsage[model].tokens.cache.read += usage.tokens.cache.read
-      stats.modelUsage[model].tokens.cache.write += usage.tokens.cache.write
-      stats.modelUsage[model].cost += usage.cost
-    }
+  const toolRows = yield* db
+    .select({
+      tool: sql<string>`json_extract(${PartTable.data}, '$.tool')`,
+      count: sql<number>`count(*)`,
+    })
+    .from(PartTable)
+    .where(and(inArray(PartTable.session_id, sessionIDs), sql`json_extract(${PartTable.data}, '$.type') = 'tool'`))
+    .groupBy(sql`json_extract(${PartTable.data}, '$.tool')`)
+    .all()
+    .pipe(Effect.orDie)
+
+  for (const row of toolRows) {
+    if (row.tool) stats.toolUsage[row.tool] = row.count
   }
 
   const rangeDays = Math.max(1, Math.ceil((latestTime - earliestTime) / MS_IN_DAY))

@@ -22,10 +22,10 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
     })
 
     const providers = Effect.fn("ConfigHttpApi.providers")(function* () {
-      const providers = yield* providerSvc.list()
+      const publicProviders = yield* providerSvc.listPublic()
       return {
-        providers: Object.values(providers).map(Provider.toPublicInfo),
-        default: Provider.defaultModelIDs(providers),
+        providers: Object.values(publicProviders.providers),
+        default: Provider.defaultModelIDs(publicProviders.providers),
       }
     })
 

@@ -72,6 +72,12 @@ function hasProviderMutationMarker(input: unknown, key: "all" | "providers", id:
   return isRecord(provider.options) && provider.options.mutatedByPlugin === true
 }
 
+function providerOptions(input: unknown, key: "all" | "providers", id: string) {
+  const provider = providerByID(input, key, id)
+  if (!isRecord(provider) || !isRecord(provider.options)) return {}
+  return provider.options
+}
+
 function requestAuthorize(input: {
   providerID: string
   method: number
@@ -202,6 +208,9 @@ function writeFunctionOptionsPlugin(dir: string) {
         "        return {",
         '        apiKey: "",',
         "        fetch: async (input, init) => fetch(input, init),",
+        "        symbol: Symbol('hidden'),",
+        "        secret: undefined,",
+        "        bigint: 123n,",
         "        }",
         "      },",
         "      methods: [{ type: 'api', label: 'API key' }],",
@@ -423,6 +432,15 @@ describe("provider HttpApi", () => {
       expect(hasProviderWithFetch(configBody, "providers")).toBe(false)
       expect(hasNonZeroModelCost(providerBody, "all", "google")).toBe(true)
       expect(hasNonZeroModelCost(configBody, "providers", "google")).toBe(true)
+
+      const providerPublicOptions = providerOptions(providerBody, "all", "google")
+      const configPublicOptions = providerOptions(configBody, "providers", "google")
+      for (const options of [providerPublicOptions, configPublicOptions]) {
+        expect(Object.hasOwn(options, "fetch")).toBe(false)
+        expect(Object.hasOwn(options, "symbol")).toBe(false)
+        expect(Object.hasOwn(options, "secret")).toBe(false)
+        expect(options.bigint).toBe("123")
+      }
     }),
     { ...projectOptions, init: writeFunctionOptionsPlugin },
   )
