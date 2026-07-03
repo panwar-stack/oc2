@@ -18,7 +18,9 @@ export default {
           \`primary\` integer DEFAULT false NOT NULL
         );
       `)
-      yield* tx.run(`CREATE UNIQUE INDEX IF NOT EXISTS \`session_root_session_directory_idx\` ON \`session_root\` (\`session_id\`, \`directory\`);`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX IF NOT EXISTS \`session_root_session_directory_idx\` ON \`session_root\` (\`session_id\`, \`directory\`);`,
+      )
       yield* tx.run(`CREATE INDEX IF NOT EXISTS \`session_root_session_idx\` ON \`session_root\` (\`session_id\`);`)
     })
   },

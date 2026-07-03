@@ -16,7 +16,9 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE UNIQUE INDEX IF NOT EXISTS \`team_active_lead_session_idx\` ON \`team\` (\`lead_session_id\`) WHERE \`status\` = 'active';`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX IF NOT EXISTS \`team_active_lead_session_idx\` ON \`team\` (\`lead_session_id\`) WHERE \`status\` = 'active';`,
+      )
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`team_member\` (
           \`id\` text PRIMARY KEY NOT NULL,
@@ -35,8 +37,12 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE UNIQUE INDEX IF NOT EXISTS \`team_member_team_idx\` ON \`team_member\` (\`team_id\`, \`session_id\`);`)
-      yield* tx.run(`CREATE UNIQUE INDEX IF NOT EXISTS \`team_member_session_idx\` ON \`team_member\` (\`session_id\`);`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX IF NOT EXISTS \`team_member_team_idx\` ON \`team_member\` (\`team_id\`, \`session_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX IF NOT EXISTS \`team_member_session_idx\` ON \`team_member\` (\`session_id\`);`,
+      )
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`team_task\` (
           \`id\` text PRIMARY KEY NOT NULL,
@@ -63,8 +69,12 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE UNIQUE INDEX IF NOT EXISTS \`team_message_team_idx\` ON \`team_message\` (\`team_id\`, \`id\`);`)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`team_message_recipient_idx\` ON \`team_message\` (\`team_id\`, \`delivery_status\`);`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX IF NOT EXISTS \`team_message_team_idx\` ON \`team_message\` (\`team_id\`, \`id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`team_message_recipient_idx\` ON \`team_message\` (\`team_id\`, \`delivery_status\`);`,
+      )
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`team_message_recipient\` (
           \`id\` text PRIMARY KEY NOT NULL,
@@ -76,8 +86,12 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE UNIQUE INDEX IF NOT EXISTS \`team_message_recipient_message_idx\` ON \`team_message_recipient\` (\`message_id\`, \`recipient\`);`)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`team_message_recipient_status_idx\` ON \`team_message_recipient\` (\`team_id\`, \`recipient\`, \`delivery_status\`);`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX IF NOT EXISTS \`team_message_recipient_message_idx\` ON \`team_message_recipient\` (\`message_id\`, \`recipient\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`team_message_recipient_status_idx\` ON \`team_message_recipient\` (\`team_id\`, \`recipient\`, \`delivery_status\`);`,
+      )
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`team_usage_event\` (
           \`id\` text PRIMARY KEY NOT NULL,
@@ -89,7 +103,9 @@ export default {
           \`time_created\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`team_usage_event_team_idx\` ON \`team_usage_event\` (\`team_id\`, \`time_created\`);`)
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`team_usage_event_team_idx\` ON \`team_usage_event\` (\`team_id\`, \`time_created\`);`,
+      )
     })
   },
 } satisfies DatabaseMigration.Migration

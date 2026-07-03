@@ -13,9 +13,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+
+      - name: Determine CI scope
+        id: scope
+        run: ./script/ci-scope.ts
 
       - name: Cache Turbo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -30,5 +36,10 @@ jobs:
         run: bun run check:packages
         continue-on-error: true
 
+      - name: Check generated artifacts
+        if: steps.scope.outputs.check_generated == 'true'
+        run: bun run check:generated
+
       - name: Run typecheck
-        run: bun typecheck
+        if: steps.scope.outputs.run_typecheck == 'true'
+        run: bun turbo typecheck ${{ steps.scope.outputs.turbo_filter }}

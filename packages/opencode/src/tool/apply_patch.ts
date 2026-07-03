@@ -216,7 +216,11 @@ export const ApplyPatchTool = Tool.define(
 
       // Check permissions if needed
       const relativePaths = Array.from(
-        new Set(fileChanges.flatMap((change) => [change.relativePath, change.moveRelativePath].filter((path) => path !== undefined))),
+        new Set(
+          fileChanges.flatMap((change) =>
+            [change.relativePath, change.moveRelativePath].filter((path) => path !== undefined),
+          ),
+        ),
       )
       const metadata = {
         filepath: relativePaths.join(", "),

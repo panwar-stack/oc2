@@ -37,8 +37,12 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`repository_memory_commit_repository_id_hash_idx\` ON \`repository_memory_commit\` (\`repository_id\`, \`hash\`);`)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`repository_memory_commit_repository_id_author_time_idx\` ON \`repository_memory_commit\` (\`repository_id\`, \`author_time\`);`)
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`repository_memory_commit_repository_id_hash_idx\` ON \`repository_memory_commit\` (\`repository_id\`, \`hash\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`repository_memory_commit_repository_id_author_time_idx\` ON \`repository_memory_commit\` (\`repository_id\`, \`author_time\`);`,
+      )
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`repository_memory_file_activity\` (
           \`id\` text PRIMARY KEY NOT NULL,
@@ -51,7 +55,9 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`repository_memory_file_activity_repository_id_path_idx\` ON \`repository_memory_file_activity\` (\`repository_id\`, \`path\`);`)
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`repository_memory_file_activity_repository_id_path_idx\` ON \`repository_memory_file_activity\` (\`repository_id\`, \`path\`);`,
+      )
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`repository_memory_file_summary\` (
           \`id\` text PRIMARY KEY NOT NULL,
@@ -67,7 +73,9 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`repository_memory_file_summary_repository_id_path_idx\` ON \`repository_memory_file_summary\` (\`repository_id\`, \`path\`);`)
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`repository_memory_file_summary_repository_id_path_idx\` ON \`repository_memory_file_summary\` (\`repository_id\`, \`path\`);`,
+      )
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS \`repository_memory_retrieval_log\` (
           \`id\` text PRIMARY KEY NOT NULL,
@@ -84,7 +92,9 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS \`repository_memory_retrieval_log_repository_id_session_id_idx\` ON \`repository_memory_retrieval_log\` (\`repository_id\`, \`session_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`repository_memory_retrieval_log_repository_id_session_id_idx\` ON \`repository_memory_retrieval_log\` (\`repository_id\`, \`session_id\`);`,
+      )
     })
   },
 } satisfies DatabaseMigration.Migration

@@ -330,7 +330,13 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
   })
 }
 
-function sandboxCmd(command: string, cwd: string, env: NodeJS.ProcessEnv, mounts: SandboxMount[], network?: SandboxNetwork) {
+function sandboxCmd(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  mounts: SandboxMount[],
+  network?: SandboxNetwork,
+) {
   if (network?.mode === "allowlist") return sandboxAllowlistCmd(command, cwd, env, mounts, network.hosts)
   return ChildProcess.make(
     "docker",
@@ -361,7 +367,13 @@ function sandboxCmd(command: string, cwd: string, env: NodeJS.ProcessEnv, mounts
   )
 }
 
-function sandboxAllowlistCmd(command: string, cwd: string, env: NodeJS.ProcessEnv, mounts: SandboxMount[], hosts: string[]) {
+function sandboxAllowlistCmd(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  mounts: SandboxMount[],
+  hosts: string[],
+) {
   return ChildProcess.make(
     process.execPath,
     [

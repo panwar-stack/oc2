@@ -11,13 +11,7 @@ Show live Fugu orchestration status inline in the active session conversation wh
 `packages/core/src/session/event.ts` defines the live-only event:
 
 ```ts
-type FuguTargetStatus =
-  | "pending"
-  | "working"
-  | "complete"
-  | "failed"
-  | "timed_out"
-  | "skipped"
+type FuguTargetStatus = "pending" | "working" | "complete" | "failed" | "timed_out" | "skipped"
 
 type FuguStatusEvent = {
   sessionID: string

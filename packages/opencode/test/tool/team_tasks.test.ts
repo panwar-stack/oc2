@@ -53,12 +53,17 @@ describe("tool.team_tasks", () => {
             { description: "Implement the task workflow", assignee: seed.worker.session_id },
             context(seed.lead.id),
           )
-          const taskID = (yield* getTasks(seed.info.id)).find((task) => task.description === "Implement the task workflow")?.id
+          const taskID = (yield* getTasks(seed.info.id)).find(
+            (task) => task.description === "Implement the task workflow",
+          )?.id
           const listed = yield* listDef.execute({}, context(seed.lead.id))
 
           if (!taskID) throw new Error("created task was not persisted")
           const claimed = yield* claimDef.execute({ task_id: taskID }, context(seed.worker.session_id))
-          const updated = yield* updateDef.execute({ task_id: taskID, status: "completed" }, context(seed.worker.session_id))
+          const updated = yield* updateDef.execute(
+            { task_id: taskID, status: "completed" },
+            context(seed.worker.session_id),
+          )
           const row = yield* getTask(taskID)
 
           expect(created.title).toBe("Task Created")
@@ -271,7 +276,10 @@ describe("tool.team_tasks", () => {
           const claimTool = yield* TeamTaskClaimTool
           const claimDef = yield* claimTool.init()
 
-          const result = yield* claimDef.execute({ task_id: "task_waiting_on_cancelled" }, context(seed.worker.session_id))
+          const result = yield* claimDef.execute(
+            { task_id: "task_waiting_on_cancelled" },
+            context(seed.worker.session_id),
+          )
           const row = yield* getTask("task_waiting_on_cancelled")
 
           expect(result.title).toBe("Task Claim Failed")

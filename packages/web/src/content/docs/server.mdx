@@ -146,26 +146,26 @@ The opencode server exposes the following APIs.
 
 ### Sessions
 
-| Method   | Path                                     | Description                           | Notes                                                                              |
-| -------- | ---------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------- |
-| `GET`    | `/session`                               | List all sessions                     | Returns <a href={typesUrl}><code>Session[]</code></a>                              |
-| `POST`   | `/session`                               | Create a new session                  | body: `{ parentID?, title? }`, returns <a href={typesUrl}><code>Session</code></a> |
-| `GET`    | `/session/status`                        | Get session status for all sessions   | Returns `{ [sessionID: string]: `<a href={typesUrl}>SessionStatus</a>` }`          |
-| `GET`    | `/session/:id`                           | Get session details                   | Returns <a href={typesUrl}><code>Session</code></a>                                |
-| `DELETE` | `/session/:id`                           | Delete a session and all its data     | Returns `boolean`                                                                  |
-| `PATCH`  | `/session/:id`                           | Update session properties             | body: `{ title? }`, returns <a href={typesUrl}><code>Session</code></a>            |
-| `GET`    | `/session/:id/children`                  | Get a session's child sessions        | Returns <a href={typesUrl}><code>Session[]</code></a>                              |
-| `GET`    | `/session/:id/todo`                      | Get the todo list for a session       | Returns <a href={typesUrl}><code>Todo[]</code></a>                                 |
+| Method   | Path                                     | Description                                 | Notes                                                                              |
+| -------- | ---------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `GET`    | `/session`                               | List all sessions                           | Returns <a href={typesUrl}><code>Session[]</code></a>                              |
+| `POST`   | `/session`                               | Create a new session                        | body: `{ parentID?, title? }`, returns <a href={typesUrl}><code>Session</code></a> |
+| `GET`    | `/session/status`                        | Get session status for all sessions         | Returns `{ [sessionID: string]: `<a href={typesUrl}>SessionStatus</a>` }`          |
+| `GET`    | `/session/:id`                           | Get session details                         | Returns <a href={typesUrl}><code>Session</code></a>                                |
+| `DELETE` | `/session/:id`                           | Delete a session and all its data           | Returns `boolean`                                                                  |
+| `PATCH`  | `/session/:id`                           | Update session properties                   | body: `{ title? }`, returns <a href={typesUrl}><code>Session</code></a>            |
+| `GET`    | `/session/:id/children`                  | Get a session's child sessions              | Returns <a href={typesUrl}><code>Session[]</code></a>                              |
+| `GET`    | `/session/:id/todo`                      | Get the todo list for a session             | Returns <a href={typesUrl}><code>Todo[]</code></a>                                 |
 | `POST`   | `/session/:id/init`                      | Run `/init` to create or update `AGENTS.md` | body: `{ messageID, providerID, modelID }`, returns `boolean`                      |
-| `POST`   | `/session/:id/fork`                      | Fork an existing session at a message | body: `{ messageID? }`, returns <a href={typesUrl}><code>Session</code></a>        |
-| `POST`   | `/session/:id/abort`                     | Abort a running session               | Returns `boolean`                                                                  |
-| `POST`   | `/session/:id/share`                     | Share a session                       | Returns <a href={typesUrl}><code>Session</code></a>                                |
-| `DELETE` | `/session/:id/share`                     | Unshare a session                     | Returns <a href={typesUrl}><code>Session</code></a>                                |
-| `GET`    | `/session/:id/diff`                      | Get the diff for this session         | query: `messageID?`, returns <a href={typesUrl}><code>FileDiff[]</code></a>        |
-| `POST`   | `/session/:id/summarize`                 | Summarize the session                 | body: `{ providerID, modelID }`, returns `boolean`                                 |
-| `POST`   | `/session/:id/revert`                    | Revert a message                      | body: `{ messageID, partID? }`, returns `boolean`                                  |
-| `POST`   | `/session/:id/unrevert`                  | Restore all reverted messages         | Returns `boolean`                                                                  |
-| `POST`   | `/session/:id/permissions/:permissionID` | Respond to a permission request       | body: `{ response, remember? }`, returns `boolean`                                 |
+| `POST`   | `/session/:id/fork`                      | Fork an existing session at a message       | body: `{ messageID? }`, returns <a href={typesUrl}><code>Session</code></a>        |
+| `POST`   | `/session/:id/abort`                     | Abort a running session                     | Returns `boolean`                                                                  |
+| `POST`   | `/session/:id/share`                     | Share a session                             | Returns <a href={typesUrl}><code>Session</code></a>                                |
+| `DELETE` | `/session/:id/share`                     | Unshare a session                           | Returns <a href={typesUrl}><code>Session</code></a>                                |
+| `GET`    | `/session/:id/diff`                      | Get the diff for this session               | query: `messageID?`, returns <a href={typesUrl}><code>FileDiff[]</code></a>        |
+| `POST`   | `/session/:id/summarize`                 | Summarize the session                       | body: `{ providerID, modelID }`, returns `boolean`                                 |
+| `POST`   | `/session/:id/revert`                    | Revert a message                            | body: `{ messageID, partID? }`, returns `boolean`                                  |
+| `POST`   | `/session/:id/unrevert`                  | Restore all reverted messages               | Returns `boolean`                                                                  |
+| `POST`   | `/session/:id/permissions/:permissionID` | Respond to a permission request             | body: `{ response, remember? }`, returns `boolean`                                 |
 
 ---
 
@@ -235,15 +235,15 @@ The opencode server exposes the following APIs.
 
 These endpoints support [repository memory](/docs/memory). Memory results are historical hints; verify commit diffs and summaries against the current working tree before editing.
 
-| Method   | Path                              | Description                               | Response                                                                 |
-| -------- | --------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ |
-| `POST`   | `/memory/index`                   | Start a background repository index job   | <a href={typesV2Url}><code>MemoryIndexResponse</code></a>                |
-| `GET`    | `/memory/status`                  | Get repository memory status              | <a href={typesV2Url}><code>MemoryStatusResponse</code></a>               |
-| `POST`   | `/memory/search/commit`           | Search historical commit memory           | <a href={typesV2Url}><code>MemoryCommitSearchResponse</code></a>         |
-| `GET`    | `/memory/commit/:hash`            | Examine a historical commit memory record | <a href={typesV2Url}><code>MemoryCommitResponse</code></a>               |
-| `POST`   | `/memory/search/summary`          | Search cached file summary memory         | <a href={typesV2Url}><code>MemorySummarySearchResponse</code></a>        |
-| `GET`    | `/memory/summary?path=<file-path>` | View a cached file summary                | <a href={typesV2Url}><code>MemorySummaryResponse</code></a>              |
-| `DELETE` | `/memory`                         | Clear memory for the active repository    | <a href={typesV2Url}><code>MemoryClearResponse</code></a>                |
+| Method   | Path                               | Description                               | Response                                                          |
+| -------- | ---------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| `POST`   | `/memory/index`                    | Start a background repository index job   | <a href={typesV2Url}><code>MemoryIndexResponse</code></a>         |
+| `GET`    | `/memory/status`                   | Get repository memory status              | <a href={typesV2Url}><code>MemoryStatusResponse</code></a>        |
+| `POST`   | `/memory/search/commit`            | Search historical commit memory           | <a href={typesV2Url}><code>MemoryCommitSearchResponse</code></a>  |
+| `GET`    | `/memory/commit/:hash`             | Examine a historical commit memory record | <a href={typesV2Url}><code>MemoryCommitResponse</code></a>        |
+| `POST`   | `/memory/search/summary`           | Search cached file summary memory         | <a href={typesV2Url}><code>MemorySummarySearchResponse</code></a> |
+| `GET`    | `/memory/summary?path=<file-path>` | View a cached file summary                | <a href={typesV2Url}><code>MemorySummaryResponse</code></a>       |
+| `DELETE` | `/memory`                          | Clear memory for the active repository    | <a href={typesV2Url}><code>MemoryClearResponse</code></a>         |
 
 ---
 
@@ -259,14 +259,14 @@ These endpoints support [repository memory](/docs/memory). Memory results are hi
 
 These endpoints support [Agent Teams](/docs/agent-teams).
 
-| Method | Path                        | Description                                  | Response                                            |
-| ------ | --------------------------- | -------------------------------------------- | --------------------------------------------------- |
-| `GET`  | `/team?sessionID=<session>` | Get the active team for a lead session       | <a href={typesV2Url}><code>TeamInfo</code></a>      |
-| `GET`  | `/team/{teamID}`            | Get a team by ID                             | <a href={typesV2Url}><code>TeamInfo</code></a>      |
+| Method | Path                        | Description                                  | Response                                             |
+| ------ | --------------------------- | -------------------------------------------- | ---------------------------------------------------- |
+| `GET`  | `/team?sessionID=<session>` | Get the active team for a lead session       | <a href={typesV2Url}><code>TeamInfo</code></a>       |
+| `GET`  | `/team/{teamID}`            | Get a team by ID                             | <a href={typesV2Url}><code>TeamInfo</code></a>       |
 | `GET`  | `/team/{teamID}/eval`       | Get a team evaluation report                 | <a href={typesV2Url}><code>TeamEvalReport</code></a> |
-| `GET`  | `/team/{teamID}/tasks`      | List shared team tasks                       | <a href={typesV2Url}><code>TeamTask[]</code></a>    |
-| `GET`  | `/team/{teamID}/messages`   | List team messages                           | <a href={typesV2Url}><code>TeamMessage[]</code></a> |
-| `POST` | `/team/{teamID}/shutdown`   | Shut down a team and cancel active teammates | `boolean`                                           |
+| `GET`  | `/team/{teamID}/tasks`      | List shared team tasks                       | <a href={typesV2Url}><code>TeamTask[]</code></a>     |
+| `GET`  | `/team/{teamID}/messages`   | List team messages                           | <a href={typesV2Url}><code>TeamMessage[]</code></a>  |
+| `POST` | `/team/{teamID}/shutdown`   | Shut down a team and cancel active teammates | `boolean`                                            |
 
 ---
 

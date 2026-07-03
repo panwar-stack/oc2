@@ -70,7 +70,11 @@ export function resolveChildPermission(
       { permission: "apply_patch", pattern: "*", action: "deny" as const },
       { permission: "external_directory", pattern: tempExternalPattern(input.role.tempDir), action: "allow" as const },
       ...(policy === "parent_without_teams"
-        ? Object.keys(parentDelegationDisabledTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const }))
+        ? Object.keys(parentDelegationDisabledTools).map((permission) => ({
+            permission,
+            pattern: "*",
+            action: "deny" as const,
+          }))
         : []),
       ...parentRules,
     ]
@@ -79,7 +83,11 @@ export function resolveChildPermission(
   return [
     ...parentRules,
     ...(policy === "parent_without_teams"
-      ? Object.keys(parentDelegationDisabledTools).map((permission) => ({ permission, pattern: "*", action: "deny" as const }))
+      ? Object.keys(parentDelegationDisabledTools).map((permission) => ({
+          permission,
+          pattern: "*",
+          action: "deny" as const,
+        }))
       : []),
   ]
 }
@@ -92,7 +100,13 @@ export function tempDirectory(input: {
 }) {
   const base = tempBase(input.rootDirectories ?? [])
   if (input.role.type === "branch") {
-    return path.join(base, "opencode-local-fusion", input.parentSessionID, input.compoundRunID, `branch-${input.role.index}`)
+    return path.join(
+      base,
+      "opencode-local-fusion",
+      input.parentSessionID,
+      input.compoundRunID,
+      `branch-${input.role.index}`,
+    )
   }
   if (input.role.type === "judge") {
     return path.join(base, "opencode-local-fusion", input.parentSessionID, input.compoundRunID, "judge")
@@ -122,7 +136,9 @@ function tempBase(rootDirectories: string[]) {
   let base = path.resolve(os.tmpdir())
   for (let attempt = 0; attempt <= roots.length; attempt++) {
     const scratchRoot = path.join(base, suffix)
-    const containingRoot = roots.filter((root) => containsPath(root, scratchRoot)).sort((a, b) => b.length - a.length)[0]
+    const containingRoot = roots
+      .filter((root) => containsPath(root, scratchRoot))
+      .sort((a, b) => b.length - a.length)[0]
     if (!containingRoot) return base
 
     const parent = path.dirname(containingRoot)

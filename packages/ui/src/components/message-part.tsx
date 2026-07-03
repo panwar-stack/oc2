@@ -1015,7 +1015,9 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
   const copied = () => state.copied
   const busy = () => state.busy
 
-  const textPart = createMemo(() => props.parts?.find((p) => p.type === "text" && !(p as TextPart).synthetic) as TextPart | undefined)
+  const textPart = createMemo(
+    () => props.parts?.find((p) => p.type === "text" && !(p as TextPart).synthetic) as TextPart | undefined,
+  )
 
   const text = createMemo(() => textPart()?.text || "")
 

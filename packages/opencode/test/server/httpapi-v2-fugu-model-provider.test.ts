@@ -45,7 +45,9 @@ describe("v2 fugu model/provider HttpApi", () => {
       )
 
       expect(isRecord(modelBody) && isRecord(modelBody.location) && modelBody.location.directory).toBe(directory)
-      expect(isRecord(providerBody) && isRecord(providerBody.location) && providerBody.location.directory).toBe(directory)
+      expect(isRecord(providerBody) && isRecord(providerBody.location) && providerBody.location.directory).toBe(
+        directory,
+      )
       expect(isRecord(fuguModel)).toBe(true)
       expect(isRecord(fuguModel) && isRecord(fuguModel.capabilities) && fuguModel.capabilities.tools).toBe(true)
       expect(responseData(providerBody).some((provider) => isRecord(provider) && provider.id === "fugu")).toBe(true)

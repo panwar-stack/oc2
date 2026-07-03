@@ -4,7 +4,15 @@ import { Dynamic } from "solid-js/web"
 
 export { TestTuiContexts } from "./fixture/tui-environment"
 export { createTuiResolvedConfig } from "./fixture/tui-runtime"
-export { createEventSource, createFetch, directory, eventSource, json, wait, worktree } from "./cli/cmd/tui/sync-fixture"
+export {
+  createEventSource,
+  createFetch,
+  directory,
+  eventSource,
+  json,
+  wait,
+  worktree,
+} from "./cli/cmd/tui/sync-fixture"
 
 export { ArgsProvider } from "../src/context/args"
 export { EditorContextProvider } from "../src/context/editor"
@@ -25,6 +33,8 @@ export { DialogRoots } from "../src/routes/session/dialog-roots"
 
 export function SessionRootsCommand() {
   // Loading the full session route statically also loads Prompt before prompt-footer mocks register.
-  const [Command] = createResource<Component>(() => import("../src/routes/session").then((module) => module.SessionRootsCommand))
+  const [Command] = createResource<Component>(() =>
+    import("../src/routes/session").then((module) => module.SessionRootsCommand),
+  )
   return <Show when={Command()}>{(Current) => <Dynamic component={Current()} />}</Show>
 }

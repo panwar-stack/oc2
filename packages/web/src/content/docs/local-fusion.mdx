@@ -71,27 +71,27 @@ Use this as a quick reference for named configs under `local_fusion`.
           "agent": "optional-agent",
           "prompt": "Optional branch-specific guidance.",
           "toolPolicy": "readonly",
-          "timeout": 120000
-        }
+          "timeout": 120000,
+        },
       ],
       "judge": {
         "model": "provider/model",
         "variant": "optional-variant",
         "prompt": "Optional judge guidance.",
-        "toolPolicy": "none"
+        "toolPolicy": "none",
       },
       "synthesizer": {
         "model": "provider/model",
         "variant": "optional-variant",
         "prompt": "Optional synthesizer guidance.",
-        "toolPolicy": "none"
+        "toolPolicy": "none",
       },
       "limits": {
         "timeout": 180000,
-        "maxBranches": 3
-      }
-    }
-  }
+        "maxBranches": 3,
+      },
+    },
+  },
 }
 ```
 
@@ -239,12 +239,12 @@ For branches and the judge, write-capable policies are isolated to scratch. The 
 
 Use `"readonly"` when a child stage should inspect files and search the workspace without making changes. Use `"none"` when a child stage should answer from the prompt and conversation context only.
 
-| Policy | Branch | Judge | Synthesizer |
-| --- | --- | --- | --- |
-| `none` | No tools | No tools | No tools |
-| `readonly` | Read, search, web, and LSP tools | Read, search, web, and LSP tools | Read, search, web, and LSP tools |
+| Policy                 | Branch                                                                                              | Judge                                                                                               | Synthesizer                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `none`                 | No tools                                                                                            | No tools                                                                                            | No tools                                                                         |
+| `readonly`             | Read, search, web, and LSP tools                                                                    | Read, search, web, and LSP tools                                                                    | Read, search, web, and LSP tools                                                 |
 | `parent_without_teams` | Scratch-scoped `write` and `edit`; no workspace edits, `apply_patch`, teams, or nested Local Fusion | Scratch-scoped `write` and `edit`; no workspace edits, `apply_patch`, teams, or nested Local Fusion | Parent-style tools with `team_create`, `team_spawn`, and `local_fusion` disabled |
-| `all` | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch` | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch` | Unrestricted tool map, still subject to parent and session permissions |
+| `all`                  | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch`                              | Scratch-scoped `write` and `edit`; no workspace edits or `apply_patch`                              | Unrestricted tool map, still subject to parent and session permissions           |
 
 `"parent_without_teams"` lets the synthesizer use the parent session's normal tool resolution, enables `task` subagents when the parent permissions allow them, and force-disables `team_create`, `team_spawn`, and `local_fusion` for that child stage. For branches and the judge, write-capable access is limited to a per-stage temporary scratch directory outside session roots; workspace edits and `apply_patch` remain denied. Child-spawned subagents also cannot create agent teams or invoke nested local fusion.
 

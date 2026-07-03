@@ -38,7 +38,10 @@ describe("Memory service", () => {
   it.live("upserts repositories and searches scoped token_text", () =>
     Effect.gen(function* () {
       const memory = yield* Memory.Service
-      const repository = yield* memory.ensureRepository({ reference: "github:opencode-ai/opencode", default_branch: "dev" })
+      const repository = yield* memory.ensureRepository({
+        reference: "github:opencode-ai/opencode",
+        default_branch: "dev",
+      })
       const now = Date.now()
 
       yield* Database.Database.Service.use((database) =>

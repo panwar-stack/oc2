@@ -30,7 +30,11 @@ export const TeamTaskUpdateTool = Tool.define(
           const current = yield* team.getTask(context.value.team.id, params.task_id)
           if (Option.isNone(current)) return { title: "Task Update Failed", output: "Task not found.", metadata: {} }
           if (context.value.team.lead_session_id !== ctx.sessionID && current.value.assignee !== ctx.sessionID)
-            return { title: "Task Update Failed", output: "Only the lead or assigned teammate can update this task.", metadata: {} }
+            return {
+              title: "Task Update Failed",
+              output: "Only the lead or assigned teammate can update this task.",
+              metadata: {},
+            }
           const result = yield* team.updateTask(context.value.team.id, params.task_id, {
             status: params.status,
             assignee: params.assignee,

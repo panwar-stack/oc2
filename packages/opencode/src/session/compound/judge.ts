@@ -115,7 +115,7 @@ export function buildPrompt(input: { judge: SessionCompoundConfig.Judge; branche
     "Produce structured analysis only, not a final answer.",
     "Do not edit workspace files.",
     `If scratch files are needed, write only under ${input.tempDir}.`,
-    "Return only JSON matching this shape: { consensus: string[], contradictions: string[], uniqueInsights: { branch: string, insight: string }[], blindSpots: string[], failures: { branch: string, reason: string }[], confidence: \"low\" | \"medium\" | \"high\" }.",
+    'Return only JSON matching this shape: { consensus: string[], contradictions: string[], uniqueInsights: { branch: string, insight: string }[], blindSpots: string[], failures: { branch: string, reason: string }[], confidence: "low" | "medium" | "high" }.',
     ...(input.judge.prompt ? ["", "Judge guidance:", input.judge.prompt] : []),
     "",
     "Successful branches:",

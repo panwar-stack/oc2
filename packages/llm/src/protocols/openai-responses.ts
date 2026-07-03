@@ -306,36 +306,36 @@ const hostedToolItemID = (part: ToolResultPart) => {
 
 const lowerUserContent: (
   part: LLMRequest["messages"][number]["content"][number],
-) => Effect.Effect<OpenAIResponsesInputContent, LLMError> = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
-  part,
-) {
-  if (part.type === "text") return { type: "input_text" as const, text: part.text }
-  if (part.type === "media") {
-    const media = yield* ProviderShared.validateMedia(
-      "OpenAI Responses",
-      part,
-      new Set<string>(ProviderShared.IMAGE_MIMES),
-    )
-    return { type: "input_image" as const, image_url: media.dataUrl }
-  }
-  return yield* ProviderShared.unsupportedContent("OpenAI Responses", "user", ["text", "media"])
-})
+) => Effect.Effect<OpenAIResponsesInputContent, LLMError> = Effect.fn("OpenAIResponses.lowerUserContent")(
+  function* (part) {
+    if (part.type === "text") return { type: "input_text" as const, text: part.text }
+    if (part.type === "media") {
+      const media = yield* ProviderShared.validateMedia(
+        "OpenAI Responses",
+        part,
+        new Set<string>(ProviderShared.IMAGE_MIMES),
+      )
+      return { type: "input_image" as const, image_url: media.dataUrl }
+    }
+    return yield* ProviderShared.unsupportedContent("OpenAI Responses", "user", ["text", "media"])
+  },
+)
 
 // Tool results may carry structured text/images. Keep media as provider-native
 // content instead of JSON-stringifying base64 into a prompt string.
 const lowerToolResultContentItem: (
   item: ToolResultContentPart,
-) => Effect.Effect<OpenAIResponsesInputContent, LLMError> = Effect.fn(
-  "OpenAIResponses.lowerToolResultContentItem",
-)(function* (item) {
-  if (item.type === "text") return { type: "input_text" as const, text: item.text }
-  const media = yield* ProviderShared.validateMedia(
-    "OpenAI Responses",
-    item,
-    new Set<string>(ProviderShared.IMAGE_MIMES),
-  )
-  return { type: "input_image" as const, image_url: media.dataUrl }
-})
+) => Effect.Effect<OpenAIResponsesInputContent, LLMError> = Effect.fn("OpenAIResponses.lowerToolResultContentItem")(
+  function* (item) {
+    if (item.type === "text") return { type: "input_text" as const, text: item.text }
+    const media = yield* ProviderShared.validateMedia(
+      "OpenAI Responses",
+      item,
+      new Set<string>(ProviderShared.IMAGE_MIMES),
+    )
+    return { type: "input_image" as const, image_url: media.dataUrl }
+  },
+)
 
 const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")(function* (part: ToolResultPart) {
   // Text/json/error results are encoded as a plain string for backward

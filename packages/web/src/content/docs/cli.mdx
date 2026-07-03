@@ -246,15 +246,15 @@ While indexing, opencode shows foreground progress for repository resolution, co
 
 ##### Flags
 
-| Flag                                          | Description                                                                     |
-| --------------------------------------------- | ------------------------------------------------------------------------------- |
-| <nobr><code>{"--max-commits"}</code></nobr> | Maximum commits to index (default: `7000`)                                      |
-| <nobr><code>{"--since"}</code></nobr>        | Only index commits since this git date                                          |
-| <nobr><code>{"--base-commit"}</code></nobr>  | Exclusive cutoff commit                                                         |
-| <nobr><code>{"--cutoff-time"}</code></nobr>  | Exclusive ISO cutoff timestamp                                                  |
-| <nobr><code>{"--branch"}</code></nobr>       | Branch or revision to index                                                     |
-| <nobr><code>{"--github"}</code></nobr>       | Allow linked issue-number lookup from commit messages; use `--no-github` to disable. Indexing is offline-safe |
-| <nobr><code>{"--summaries"}</code></nobr>    | Number of top active files to summarize; use `0` to skip summaries              |
+| Flag                                        | Description                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| <nobr><code>{"--max-commits"}</code></nobr> | Maximum commits to index (default: `7000`)                                                                    |
+| <nobr><code>{"--since"}</code></nobr>       | Only index commits since this git date                                                                        |
+| <nobr><code>{"--base-commit"}</code></nobr> | Exclusive cutoff commit                                                                                       |
+| <nobr><code>{"--cutoff-time"}</code></nobr> | Exclusive ISO cutoff timestamp                                                                                |
+| <nobr><code>{"--branch"}</code></nobr>      | Branch or revision to index                                                                                   |
+| <nobr><code>{"--github"}</code></nobr>      | Allow linked issue-number lookup from commit messages; use `--no-github` to disable. Indexing is offline-safe |
+| <nobr><code>{"--summaries"}</code></nobr>   | Number of top active files to summarize; use `0` to skip summaries                                            |
 
 #### status
 
@@ -308,11 +308,11 @@ opencode memory eval --issues issues.json
 
 ##### Flags
 
-| Flag                                          | Description                                                        |
-| --------------------------------------------- | ------------------------------------------------------------------ |
+| Flag                                        | Description                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------ |
 | <nobr><code>{"--issues"}</code></nobr>      | Path to historical issues JSON                                     |
 | <nobr><code>{"--max-commits"}</code></nobr> | Maximum commits to index per issue (default: `7000`)               |
-| <nobr><code>{"--summaries"}</code></nobr>    | Number of top active files to summarize; use `0` to skip summaries |
+| <nobr><code>{"--summaries"}</code></nobr>   | Number of top active files to summarize; use `0` to skip summaries |
 
 ---
 

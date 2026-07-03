@@ -22,15 +22,19 @@ afterEach(async () => {
 })
 
 const it = testEffect(
-  Layer.mergeAll(BackgroundJob.defaultLayer, EventV2Bridge.defaultLayer, Session.defaultLayer, Database.defaultLayer, RuntimeFlags.layer({})),
+  Layer.mergeAll(
+    BackgroundJob.defaultLayer,
+    EventV2Bridge.defaultLayer,
+    Session.defaultLayer,
+    Database.defaultLayer,
+    RuntimeFlags.layer({}),
+  ),
 )
 
 type AssistantWithParts = Omit<SessionV1.WithParts, "info"> & { info: SessionV1.Assistant }
 
 const branches: BranchResult = {
-  successes: [
-    { index: 0, sessionID: SessionID.descending(), model: "test/branch-a", output: "Branch A output" },
-  ],
+  successes: [{ index: 0, sessionID: SessionID.descending(), model: "test/branch-a", output: "Branch A output" }],
   failures: [{ index: 1, model: "test/branch-b", reason: "failed" }],
 }
 
@@ -70,7 +74,10 @@ function errorReply(input: SessionPrompt.PromptInput, message: string): SessionV
   return { ...result, info: { ...result.info, error: { name: "UnknownError", data: { message } } } }
 }
 
-function stubOps(input: { onPrompt?: (input: SessionPrompt.PromptInput) => void; output: (input: SessionPrompt.PromptInput) => SessionV1.WithParts }): TaskPromptOps {
+function stubOps(input: {
+  onPrompt?: (input: SessionPrompt.PromptInput) => void
+  output: (input: SessionPrompt.PromptInput) => SessionV1.WithParts
+}): TaskPromptOps {
   return {
     cancel: () => Effect.void,
     resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
@@ -121,7 +128,10 @@ describe("compound synthesizer", () => {
         synthesizer: { model: "test/synth", variant: "synth-low" },
         branches,
         judge,
-        promptOps: stubOps({ onPrompt: (input) => prompts.push(input), output: (input) => reply(input, "final answer") }),
+        promptOps: stubOps({
+          onPrompt: (input) => prompts.push(input),
+          output: (input) => reply(input, "final answer"),
+        }),
       })
 
       expect(result.output).toBe("final answer")
@@ -143,7 +153,10 @@ describe("compound synthesizer", () => {
         synthesizer: { model: "test/synth", toolPolicy: "parent_without_teams" },
         branches,
         judge,
-        promptOps: stubOps({ onPrompt: (input) => prompts.push(input), output: (input) => reply(input, "final answer") }),
+        promptOps: stubOps({
+          onPrompt: (input) => prompts.push(input),
+          output: (input) => reply(input, "final answer"),
+        }),
       })
       const children = yield* sessions.children(parent.id)
 
@@ -190,7 +203,10 @@ describe("compound synthesizer", () => {
         prompt: "go",
         config: config({ branches: [{ model: "test/branch-a" }] }),
         promptOps: stubOps({
-          output: (input) => (String(input.model?.modelID) === "judge" ? errorReply(input, "judge failed") : reply(input, "branch output")),
+          output: (input) =>
+            String(input.model?.modelID) === "judge"
+              ? errorReply(input, "judge failed")
+              : reply(input, "branch output"),
         }),
       }).pipe(Effect.exit)
 

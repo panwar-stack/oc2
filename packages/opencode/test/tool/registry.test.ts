@@ -196,7 +196,12 @@ const teams = testEffect(
 )
 const memoryDefault = testEffect(Layer.mergeAll(registryLayer(), node, Agent.defaultLayer, Memory.defaultLayer))
 const memoryDisabled = testEffect(
-  Layer.mergeAll(registryLayer({ config: { memory: { enabled: false } } }), node, Agent.defaultLayer, Memory.defaultLayer),
+  Layer.mergeAll(
+    registryLayer({ config: { memory: { enabled: false } } }),
+    node,
+    Agent.defaultLayer,
+    Memory.defaultLayer,
+  ),
 )
 
 const teamToolIDs = [
@@ -355,61 +360,78 @@ describe("tool.registry", () => {
     }),
   )
 
-  memoryDisabled.instance("hides memory tools when memory config is disabled", () =>
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const memory = yield* Memory.Service
-      const current = yield* memory.currentRepository(test.directory)
-      const repository = yield* memory.ensureRepository({ reference: current.provider === "file" ? pathToFileURL(test.directory).href : current.identity })
-      yield* memory.upsertCommits(repository.id, [
-        {
-          hash: "disabled123",
-          message: "Index exists but memory is disabled",
-          author_time: Date.now(),
-          changed_files: ["src/memory.ts"],
-          diff: "diff --git a/src/memory.ts b/src/memory.ts",
-          token_text: "disabled memory index",
-        },
-      ])
-      const registry = yield* ToolRegistry.Service
-      const ids = yield* registry.ids()
+  memoryDisabled.instance(
+    "hides memory tools when memory config is disabled",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const memory = yield* Memory.Service
+        const current = yield* memory.currentRepository(test.directory)
+        const repository = yield* memory.ensureRepository({
+          reference: current.provider === "file" ? pathToFileURL(test.directory).href : current.identity,
+        })
+        yield* memory.upsertCommits(repository.id, [
+          {
+            hash: "disabled123",
+            message: "Index exists but memory is disabled",
+            author_time: Date.now(),
+            changed_files: ["src/memory.ts"],
+            diff: "diff --git a/src/memory.ts b/src/memory.ts",
+            token_text: "disabled memory index",
+          },
+        ])
+        const registry = yield* ToolRegistry.Service
+        const ids = yield* registry.ids()
 
-      expect(ids.filter((id) => id.startsWith("memory_"))).toEqual([])
-    }),
+        expect(ids.filter((id) => id.startsWith("memory_"))).toEqual([])
+      }),
     { git: true },
   )
 
-  memoryDefault.instance("hides memory tools when active repository has no index", () =>
-    Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
-      const ids = yield* registry.ids()
+  memoryDefault.instance(
+    "hides memory tools when active repository has no index",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* ToolRegistry.Service
+        const ids = yield* registry.ids()
 
-      expect(ids.filter((id) => id.startsWith("memory_"))).toEqual([])
-    }),
+        expect(ids.filter((id) => id.startsWith("memory_"))).toEqual([])
+      }),
     { git: true },
   )
 
-  memoryDefault.instance("shows memory tools by default when active repository is indexed", () =>
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const memory = yield* Memory.Service
-      const current = yield* memory.currentRepository(test.directory)
-      const repository = yield* memory.ensureRepository({ reference: current.provider === "file" ? pathToFileURL(test.directory).href : current.identity })
-      yield* memory.upsertCommits(repository.id, [
-        {
-          hash: "abc123",
-          message: "Fix repository memory lookup",
-          author_time: Date.now(),
-          changed_files: ["src/memory.ts"],
-          diff: "diff --git a/src/memory.ts b/src/memory.ts",
-          token_text: "repository memory lookup",
-        },
-      ])
-      const registry = yield* ToolRegistry.Service
-      const ids = yield* registry.ids()
+  memoryDefault.instance(
+    "shows memory tools by default when active repository is indexed",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const memory = yield* Memory.Service
+        const current = yield* memory.currentRepository(test.directory)
+        const repository = yield* memory.ensureRepository({
+          reference: current.provider === "file" ? pathToFileURL(test.directory).href : current.identity,
+        })
+        yield* memory.upsertCommits(repository.id, [
+          {
+            hash: "abc123",
+            message: "Fix repository memory lookup",
+            author_time: Date.now(),
+            changed_files: ["src/memory.ts"],
+            diff: "diff --git a/src/memory.ts b/src/memory.ts",
+            token_text: "repository memory lookup",
+          },
+        ])
+        const registry = yield* ToolRegistry.Service
+        const ids = yield* registry.ids()
 
-      expect(ids).toEqual(expect.arrayContaining(["memory_search_commit", "memory_examine_commit", "memory_search_summary", "memory_view_summary"]))
-    }),
+        expect(ids).toEqual(
+          expect.arrayContaining([
+            "memory_search_commit",
+            "memory_examine_commit",
+            "memory_search_summary",
+            "memory_view_summary",
+          ]),
+        )
+      }),
     { git: true },
   )
 

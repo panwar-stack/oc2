@@ -257,7 +257,9 @@ describe("local_fusion tool", () => {
       const tool = yield* Tool.init(info)
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      const exit = yield* tool.execute({ prompt: "go" }, context(parent.id, { promptOps: promptOps() })).pipe(Effect.exit)
+      const exit = yield* tool
+        .execute({ prompt: "go" }, context(parent.id, { promptOps: promptOps() }))
+        .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (exit._tag === "Failure") expect(errorMessage(exit.cause)).toContain("requires config or inline branches")
@@ -309,7 +311,10 @@ describe("local_fusion tool", () => {
         const parent = yield* sessions.create({ title: "parent" })
 
         for (const config of ["delegated-panel", "all-panel"]) {
-          const result = yield* tool.execute({ prompt: "Compare answers", config }, context(parent.id, { promptOps: promptOps() }))
+          const result = yield* tool.execute(
+            { prompt: "Compare answers", config },
+            context(parent.id, { promptOps: promptOps() }),
+          )
 
           expect(result.output).toBe("final fused answer")
         }

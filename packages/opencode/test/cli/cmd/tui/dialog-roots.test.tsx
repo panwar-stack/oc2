@@ -157,10 +157,7 @@ test("dialog roots renders with its own path formatter provider", async () => {
     )
   }
 
-  const app = await testRender(
-    () => <Harness />,
-    { width: 100, height: 20 },
-  )
+  const app = await testRender(() => <Harness />, { width: 100, height: 20 })
 
   try {
     await mounted

@@ -135,7 +135,11 @@ describe("layout workspace helpers", () => {
         {
           path: { directory: "/root" },
           session: [
-            session({ id: "root", directory: "/root", time: { created: 1, updated: 1, archived: undefined, processing: 0 } }),
+            session({
+              id: "root",
+              directory: "/root",
+              time: { created: 1, updated: 1, archived: undefined, processing: 0 },
+            }),
           ],
         },
         {

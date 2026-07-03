@@ -206,7 +206,13 @@ export namespace Timeline {
       assistantGroupIndex += 1
     })
 
-    if (isActive && status !== "idle" && fuguStatus && fuguStatus.phase !== "complete" && fuguStatus.phase !== "failed") {
+    if (
+      isActive &&
+      status !== "idle" &&
+      fuguStatus &&
+      fuguStatus.phase !== "complete" &&
+      fuguStatus.phase !== "failed"
+    ) {
       rows.push(
         new TimelineRow.FuguStatus({
           userMessageID: userMessage.id,

@@ -98,11 +98,15 @@ for (const violation of violations) {
 }
 
 const matchedBaseline = new Set(
-  violations.filter((violation) => violation.baseline).map((violation) => baselineKey(violation.source, violation.specifier)),
+  violations
+    .filter((violation) => violation.baseline)
+    .map((violation) => baselineKey(violation.source, violation.specifier)),
 )
 for (const [key, exception] of baseline) {
   if (matchedBaseline.has(key)) continue
-  console.warn(`::warning file=${exception.source}::package boundary baseline entry did not match an import: ${exception.import}`)
+  console.warn(
+    `::warning file=${exception.source}::package boundary baseline entry did not match an import: ${exception.import}`,
+  )
 }
 
 printBoundarySummary(violations)
@@ -165,7 +169,11 @@ async function parseImports(file: string) {
   const records: ImportRecord[] = []
 
   const visit = (node: ts.Node) => {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
       records.push(record(sourceFile, node.moduleSpecifier))
     }
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
@@ -230,7 +238,9 @@ function addFileEdge(source: string, target: string) {
 
 function printBoundarySummary(found: Violation[]) {
   const allowed = found.filter((violation) => violation.baseline).length
-  console.log(`Package boundary check: ${found.length - allowed} new violation(s), ${allowed} allowed existing violation(s).`)
+  console.log(
+    `Package boundary check: ${found.length - allowed} new violation(s), ${allowed} allowed existing violation(s).`,
+  )
 }
 
 function printGraphReport() {
@@ -330,11 +340,15 @@ function isImplementationFile(file: string) {
 }
 
 function warning(violation: Violation, message: string) {
-  console.warn(`::warning file=${violation.source},line=${violation.line}::${message}: ${violation.specifier} -> ${violation.target}`)
+  console.warn(
+    `::warning file=${violation.source},line=${violation.line}::${message}: ${violation.specifier} -> ${violation.target}`,
+  )
 }
 
 function error(violation: Violation, message: string) {
-  console.error(`::error file=${violation.source},line=${violation.line}::${message}: ${violation.specifier} -> ${violation.target}`)
+  console.error(
+    `::error file=${violation.source},line=${violation.line}::${message}: ${violation.specifier} -> ${violation.target}`,
+  )
 }
 
 function existsFile(file: string) {

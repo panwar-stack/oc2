@@ -75,9 +75,10 @@ describe("tool.assertExternalDirectory", () => {
       )
 
       const outside = yield* provideInstance(primary)(
-        assertExternalDirectoryEffect(evaluatingCtx(ruleset), path.join(path.dirname(tempDir), "outside", "scratch.txt")).pipe(
-          Effect.exit,
-        ),
+        assertExternalDirectoryEffect(
+          evaluatingCtx(ruleset),
+          path.join(path.dirname(tempDir), "outside", "scratch.txt"),
+        ).pipe(Effect.exit),
       )
       expect(outside._tag).toBe("Failure")
     }),
@@ -89,7 +90,10 @@ describe("tool.assertExternalDirectory", () => {
       const tempDir = yield* tmpdirScoped()
 
       expect(
-        Permission.disabled(["write", "edit", "apply_patch", "team_create"], scratchRules(primary, { type: "judge", tempDir })),
+        Permission.disabled(
+          ["write", "edit", "apply_patch", "team_create"],
+          scratchRules(primary, { type: "judge", tempDir }),
+        ),
       ).toEqual(new Set([]))
 
       expect(
@@ -117,12 +121,16 @@ describe("tool.assertExternalDirectory", () => {
       expect(Permission.evaluate("external_directory", path.join(judgeDir, "*"), judgeRules).action).toBe("deny")
       expect(
         (yield* provideInstance(primary)(
-          assertExternalDirectoryEffect(evaluatingCtx(branchRules), path.join(branchDir, "scratch.txt")).pipe(Effect.exit),
+          assertExternalDirectoryEffect(evaluatingCtx(branchRules), path.join(branchDir, "scratch.txt")).pipe(
+            Effect.exit,
+          ),
         ))._tag,
       ).toBe("Failure")
       expect(
         (yield* provideInstance(primary)(
-          assertExternalDirectoryEffect(evaluatingCtx(judgeRules), path.join(judgeDir, "scratch.txt")).pipe(Effect.exit),
+          assertExternalDirectoryEffect(evaluatingCtx(judgeRules), path.join(judgeDir, "scratch.txt")).pipe(
+            Effect.exit,
+          ),
         ))._tag,
       ).toBe("Failure")
     }),

@@ -11,7 +11,9 @@ export const Info = Schema.Struct({
     description: "Index repository memory automatically when a project starts (default: false)",
   }),
   max_commits: Schema.optional(PositiveInt).annotate({ description: "Maximum commits to index (default: 7000)" }),
-  summary_limit: Schema.optional(NonNegativeInt).annotate({ description: "Maximum file summaries to maintain (default: 200)" }),
+  summary_limit: Schema.optional(NonNegativeInt).annotate({
+    description: "Maximum file summaries to maintain (default: 200)",
+  }),
   search_commit_limit: Schema.optional(PositiveInt).annotate({
     description: "Default limit for memory_search_commit (default: 20)",
   }),

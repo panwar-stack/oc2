@@ -62,7 +62,12 @@ const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, Ev
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
 const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
 const collect = (input: LLM.StreamInput) =>
-  LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runCollect, Effect.map((events) => Array.from(events))))
+  LLM.Service.use((svc) =>
+    svc.stream(input).pipe(
+      Stream.runCollect,
+      Effect.map((events) => Array.from(events)),
+    ),
+  )
 
 // drainWith builds an isolated runtime so the custom layer fully owns LLM and
 // its transitive deps — `Effect.provide(layer)` over an existing runtime layers
@@ -789,10 +794,7 @@ function configModel(model: ModelsDev.Model): ConfigModel {
 const fuguFixture = { providerID: "vivgrid", modelID: "gemini-3.1-pro-preview" }
 const fuguTarget = `${fuguFixture.providerID}/${fuguFixture.modelID}`
 
-function fuguConfig(
-  fugu?: Partial<NonNullable<ConfigV1.Info["fugu"]>>,
-  model?: ConfigModel,
-): Partial<ConfigV1.Info> {
+function fuguConfig(fugu?: Partial<NonNullable<ConfigV1.Info["fugu"]>>, model?: ConfigModel): Partial<ConfigV1.Info> {
   return {
     enabled_providers: [fuguFixture.providerID],
     provider: {
@@ -802,7 +804,10 @@ function fuguConfig(
       },
     },
     fugu: {
-      branches: [{ model: fuguTarget, variant: "high" }, { model: fuguTarget, variant: "high" }],
+      branches: [
+        { model: fuguTarget, variant: "high" },
+        { model: fuguTarget, variant: "high" },
+      ],
       synthesizer: { model: fuguTarget, variant: "high" },
       ...fugu,
     },
@@ -1092,7 +1097,9 @@ describe("session.llm.stream", () => {
         })
 
         const branchStatusIndex = (branchIndex: number, status: string) =>
-          frames.findIndex((frame) => frame.branches.some((branch) => branch[0] === branchIndex && branch[1] === status))
+          frames.findIndex((frame) =>
+            frame.branches.some((branch) => branch[0] === branchIndex && branch[1] === status),
+          )
         const branch0Working = branchStatusIndex(0, "working")
         const branch0Complete = branchStatusIndex(0, "complete")
         const branch1Working = branchStatusIndex(1, "working")
@@ -1319,97 +1326,180 @@ describe("session.llm.stream", () => {
     { config: () => ({}) },
   )
 
-  it.instance("rejects empty fugu branches before provider requests", () => expectFuguFailure("at least one fugu.branches"), {
-    config: () => fuguConfig({ branches: [] }),
-  })
+  it.instance(
+    "rejects empty fugu branches before provider requests",
+    () => expectFuguFailure("at least one fugu.branches"),
+    {
+      config: () => fuguConfig({ branches: [] }),
+    },
+  )
 
-  it.instance("rejects missing fugu synthesizer before provider requests", () => expectFuguFailure("requires fugu.synthesizer"), {
-    config: () => fuguConfig({ synthesizer: undefined }),
-  })
+  it.instance(
+    "rejects missing fugu synthesizer before provider requests",
+    () => expectFuguFailure("requires fugu.synthesizer"),
+    {
+      config: () => fuguConfig({ synthesizer: undefined }),
+    },
+  )
 
-  it.instance("rejects missing fugu branch target model before provider requests", () => expectFuguFailure("target model is required"), {
-    config: () => fuguConfig({ branches: [{}] }),
-  })
+  it.instance(
+    "rejects missing fugu branch target model before provider requests",
+    () => expectFuguFailure("target model is required"),
+    {
+      config: () => fuguConfig({ branches: [{}] }),
+    },
+  )
 
-  it.instance("rejects missing fugu judge target model before provider requests", () => expectFuguFailure("target model is required"), {
-    config: () => fuguConfig({ judge: {} }),
-  })
+  it.instance(
+    "rejects missing fugu judge target model before provider requests",
+    () => expectFuguFailure("target model is required"),
+    {
+      config: () => fuguConfig({ judge: {} }),
+    },
+  )
 
-  it.instance("rejects missing fugu synthesizer target model before provider requests", () => expectFuguFailure("target model is required"), {
-    config: () => fuguConfig({ synthesizer: {} }),
-  })
+  it.instance(
+    "rejects missing fugu synthesizer target model before provider requests",
+    () => expectFuguFailure("target model is required"),
+    {
+      config: () => fuguConfig({ synthesizer: {} }),
+    },
+  )
 
-  it.instance("rejects empty fugu branch target model before provider requests", () => expectFuguFailure("target model is required"), {
-    config: () => fuguConfig({ branches: [{ model: "" }] }),
-  })
+  it.instance(
+    "rejects empty fugu branch target model before provider requests",
+    () => expectFuguFailure("target model is required"),
+    {
+      config: () => fuguConfig({ branches: [{ model: "" }] }),
+    },
+  )
 
-  it.instance("rejects fugu target model without provider component before provider requests", () => expectFuguFailure("must use provider/model"), {
-    config: () => fuguConfig({ branches: [{ model: "/claude" }] }),
-  })
+  it.instance(
+    "rejects fugu target model without provider component before provider requests",
+    () => expectFuguFailure("must use provider/model"),
+    {
+      config: () => fuguConfig({ branches: [{ model: "/claude" }] }),
+    },
+  )
 
-  it.instance("rejects fugu target model without model component before provider requests", () => expectFuguFailure("must use provider/model"), {
-    config: () => fuguConfig({ branches: [{ model: "anthropic/" }] }),
-  })
+  it.instance(
+    "rejects fugu target model without model component before provider requests",
+    () => expectFuguFailure("must use provider/model"),
+    {
+      config: () => fuguConfig({ branches: [{ model: "anthropic/" }] }),
+    },
+  )
 
-  it.instance("rejects fugu target model without provider/model separator before provider requests", () => expectFuguFailure("must use provider/model"), {
-    config: () => fuguConfig({ branches: [{ model: "anthropic" }] }),
-  })
+  it.instance(
+    "rejects fugu target model without provider/model separator before provider requests",
+    () => expectFuguFailure("must use provider/model"),
+    {
+      config: () => fuguConfig({ branches: [{ model: "anthropic" }] }),
+    },
+  )
 
-  it.instance("rejects unresolved fugu branch targets before provider requests", () => expectFuguFailure("could not be resolved"), {
-    config: () => fuguConfig({ branches: [{ model: "missing/model" }] }),
-  })
+  it.instance(
+    "rejects unresolved fugu branch targets before provider requests",
+    () => expectFuguFailure("could not be resolved"),
+    {
+      config: () => fuguConfig({ branches: [{ model: "missing/model" }] }),
+    },
+  )
 
-  it.instance("rejects unresolved fugu synthesizer targets before provider requests", () => expectFuguFailure("could not be resolved"), {
-    config: () => fuguConfig({ synthesizer: { model: "missing/model" } }),
-  })
+  it.instance(
+    "rejects unresolved fugu synthesizer targets before provider requests",
+    () => expectFuguFailure("could not be resolved"),
+    {
+      config: () => fuguConfig({ synthesizer: { model: "missing/model" } }),
+    },
+  )
 
-  it.instance("rejects unresolved fugu judge targets before provider requests", () => expectFuguFailure("could not be resolved"), {
-    config: () => fuguConfig({ judge: { model: "missing/model" } }),
-  })
+  it.instance(
+    "rejects unresolved fugu judge targets before provider requests",
+    () => expectFuguFailure("could not be resolved"),
+    {
+      config: () => fuguConfig({ judge: { model: "missing/model" } }),
+    },
+  )
 
-  it.instance("rejects invalid fugu target variants before provider requests", () => expectFuguFailure("does not support variant"), {
-    config: () => fuguConfig({ branches: [{ model: fuguTarget, variant: "missing" }] }),
-  })
+  it.instance(
+    "rejects invalid fugu target variants before provider requests",
+    () => expectFuguFailure("does not support variant"),
+    {
+      config: () => fuguConfig({ branches: [{ model: fuguTarget, variant: "missing" }] }),
+    },
+  )
 
-  it.instance("rejects invalid fugu judge variants before provider requests", () => expectFuguFailure("does not support variant"), {
-    config: () => fuguConfig({ judge: { model: fuguTarget, variant: "missing" } }),
-  })
+  it.instance(
+    "rejects invalid fugu judge variants before provider requests",
+    () => expectFuguFailure("does not support variant"),
+    {
+      config: () => fuguConfig({ judge: { model: fuguTarget, variant: "missing" } }),
+    },
+  )
 
-  it.instance("rejects invalid fugu synthesizer variants before provider requests", () => expectFuguFailure("does not support variant"), {
-    config: () => fuguConfig({ synthesizer: { model: fuguTarget, variant: "missing" } }),
-  })
+  it.instance(
+    "rejects invalid fugu synthesizer variants before provider requests",
+    () => expectFuguFailure("does not support variant"),
+    {
+      config: () => fuguConfig({ synthesizer: { model: fuguTarget, variant: "missing" } }),
+    },
+  )
 
-  it.instance("rejects missing required fugu target variants before provider requests", () => expectFuguFailure("requires variant high"), {
-    config: () =>
-      fuguConfig(
-        { branches: [{ model: fuguTarget }] },
-        { required_variant: "high", variants: { high: { reasoningEffort: "high" } } },
-      ),
-  })
+  it.instance(
+    "rejects missing required fugu target variants before provider requests",
+    () => expectFuguFailure("requires variant high"),
+    {
+      config: () =>
+        fuguConfig(
+          { branches: [{ model: fuguTarget }] },
+          { required_variant: "high", variants: { high: { reasoningEffort: "high" } } },
+        ),
+    },
+  )
 
-  it.instance("rejects invalid required fugu target variants before provider requests", () => expectFuguFailure("requires unavailable variant"), {
-    config: () =>
-      fuguConfig(
-        { branches: [{ model: fuguTarget }] },
-        { required_variant: "missing", variants: { high: { reasoningEffort: "high" } } },
-      ),
-  })
+  it.instance(
+    "rejects invalid required fugu target variants before provider requests",
+    () => expectFuguFailure("requires unavailable variant"),
+    {
+      config: () =>
+        fuguConfig(
+          { branches: [{ model: fuguTarget }] },
+          { required_variant: "missing", variants: { high: { reasoningEffort: "high" } } },
+        ),
+    },
+  )
 
-  it.instance("rejects mismatched required fugu target variants before provider requests", () => expectFuguFailure("requires variant high"), {
-    config: () =>
-      fuguConfig(
-        { branches: [{ model: fuguTarget, variant: "low" }] },
-        { required_variant: "high", variants: { high: { reasoningEffort: "high" }, low: { reasoningEffort: "low" } } },
-      ),
-  })
+  it.instance(
+    "rejects mismatched required fugu target variants before provider requests",
+    () => expectFuguFailure("requires variant high"),
+    {
+      config: () =>
+        fuguConfig(
+          { branches: [{ model: fuguTarget, variant: "low" }] },
+          {
+            required_variant: "high",
+            variants: { high: { reasoningEffort: "high" }, low: { reasoningEffort: "low" } },
+          },
+        ),
+    },
+  )
 
-  it.instance("rejects circular fugu branch targets before provider requests", () => expectFuguFailure("cannot resolve to fugu/fugu"), {
-    config: () => fuguConfig({ branches: [{ model: "fugu/fugu" }] }),
-  })
+  it.instance(
+    "rejects circular fugu branch targets before provider requests",
+    () => expectFuguFailure("cannot resolve to fugu/fugu"),
+    {
+      config: () => fuguConfig({ branches: [{ model: "fugu/fugu" }] }),
+    },
+  )
 
-  it.instance("rejects circular fugu judge targets before provider requests", () => expectFuguFailure("cannot resolve to fugu/fugu"), {
-    config: () => fuguConfig({ branches: [{ model: fuguTarget }], judge: { model: "fugu/fugu" } }),
-  })
+  it.instance(
+    "rejects circular fugu judge targets before provider requests",
+    () => expectFuguFailure("cannot resolve to fugu/fugu"),
+    {
+      config: () => fuguConfig({ branches: [{ model: fuguTarget }], judge: { model: "fugu/fugu" } }),
+    },
+  )
 
   it.instance(
     "rejects circular fugu synthesizer targets before provider requests",

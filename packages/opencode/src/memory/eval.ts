@@ -62,11 +62,7 @@ export const run = Effect.fn("MemoryEval.run")(function* (memory: Memory.Interfa
   const invalid = issues.find((issue) => !issue.cutoff_commit && !issue.cutoff_time)
   if (invalid) return yield* Effect.fail(new Error(`Issue ${invalid.id} must provide cutoff_commit or cutoff_time`))
 
-  const results = yield* Effect.forEach(
-    issues,
-    (issue) => evaluateIssue(memory, issue, options),
-    { concurrency: 1 },
-  )
+  const results = yield* Effect.forEach(issues, (issue) => evaluateIssue(memory, issue, options), { concurrency: 1 })
 
   return {
     total: results.length,
@@ -107,8 +103,16 @@ const evaluateIssue = Effect.fn("MemoryEval.evaluateIssue")(function* (
     summaries: options.summaries,
   })
   const searchLimit = options.searchLimit ?? 5
-  const commits = yield* memory.searchCommitRows({ repository_id: indexed.repository.id, query: issue.query, limit: searchLimit })
-  const summaries = yield* memory.searchSummaryRows({ repository_id: indexed.repository.id, query: issue.query, limit: searchLimit })
+  const commits = yield* memory.searchCommitRows({
+    repository_id: indexed.repository.id,
+    query: issue.query,
+    limit: searchLimit,
+  })
+  const summaries = yield* memory.searchSummaryRows({
+    repository_id: indexed.repository.id,
+    query: issue.query,
+    limit: searchLimit,
+  })
   const commit_files = unique(commits.flatMap((commit) => parseJsonArray(commit.changed_files)))
   const summary_files = unique(summaries.map((summary) => summary.path))
   const combined_files = unique([...commit_files, ...summary_files])

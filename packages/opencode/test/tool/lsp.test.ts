@@ -209,7 +209,10 @@ describe("tool.lsp", () => {
 
             lspRoots.length = 0
             const { items, next } = asks()
-            const result = yield* run({ operation: "goToDefinition", filePath: file, line: 1, character: 1 }, next).pipe(
+            const result = yield* run(
+              { operation: "goToDefinition", filePath: file, line: 1, character: 1 },
+              next,
+            ).pipe(
               Effect.provide(
                 Layer.mock(Session.Service)({
                   listRoots: () =>

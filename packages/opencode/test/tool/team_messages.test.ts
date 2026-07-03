@@ -136,7 +136,9 @@ const inheritedPermissionAfterApproval: Permission.Ruleset = [
   { permission: "external_directory", pattern: "/tmp/*", action: "deny" },
 ]
 
-const expectedPermission = (rules: Permission.Ruleset): { permission: string; pattern: string; action: Permission.Action }[] =>
+const expectedPermission = (
+  rules: Permission.Ruleset,
+): { permission: string; pattern: string; action: Permission.Action }[] =>
   rules.map((rule) => ({ permission: rule.permission, pattern: rule.pattern, action: rule.action }))
 
 const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.Assistant }) =>
@@ -350,7 +352,10 @@ describe("tool.team_plan_submit", () => {
           const tool = yield* TeamPlanSubmitTool
           const def = yield* tool.init()
 
-          const result = yield* def.execute({ plan: "I will inspect then patch." }, context({ lead: worker, assistant }))
+          const result = yield* def.execute(
+            { plan: "I will inspect then patch." },
+            context({ lead: worker, assistant }),
+          )
 
           expect(result.title).toBe("Plan Submitted")
           expect(result.output).toContain("Plan submitted")
@@ -687,7 +692,10 @@ describe("team message usage events", () => {
           const tool = yield* TeamPlanDecideTool
           const def = yield* tool.init()
 
-          const result = yield* def.execute({ member_name: member.name, decision: "reject" }, context({ lead, assistant }))
+          const result = yield* def.execute(
+            { member_name: member.name, decision: "reject" },
+            context({ lead, assistant }),
+          )
           const events = yield* team.getUsageEvents(info.id)
 
           expect(result.title).toBe("Plan Rejected")

@@ -161,13 +161,7 @@ function seekSequence(lines: string[], pattern: string[], startIndex: number, eo
   const trim = tryMatch(lines, pattern, startIndex, (a, b) => a.trim() === b.trim(), eof)
   if (trim !== -1) return trim
 
-  return tryMatch(
-    lines,
-    pattern,
-    startIndex,
-    (a, b) => normalizeUnicode(a.trim()) === normalizeUnicode(b.trim()),
-    eof,
-  )
+  return tryMatch(lines, pattern, startIndex, (a, b) => normalizeUnicode(a.trim()) === normalizeUnicode(b.trim()), eof)
 }
 
 function generateUnifiedDiff(oldContent: string, newContent: string): string {

@@ -257,7 +257,9 @@ export const layer = Layer.effect(
         system: [
           ...stableSystem.map((part, index) => {
             const stable = SystemPart.make(part)
-            return index === stableSystem.length - 1 ? { ...stable, cache: new CacheHint({ type: "ephemeral" }) } : stable
+            return index === stableSystem.length - 1
+              ? { ...stable, cache: new CacheHint({ type: "ephemeral" }) }
+              : stable
           }),
           ...(system.variableContext.length === 0 ? [] : [SystemPart.make(system.variableContext)]),
         ],

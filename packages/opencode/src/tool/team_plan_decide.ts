@@ -43,7 +43,11 @@ export const TeamPlanDecideTool = Tool.define(
           const target = sessionMatch ?? nameMatches[0]
           if (!target) return { title: "Plan Decide Failed", output: `No member '${params.member_name}'`, metadata: {} }
           if (!target.plan_mode) {
-            return { title: "Plan Decide Failed", output: `Member '${params.member_name}' is not in plan mode.`, metadata: {} }
+            return {
+              title: "Plan Decide Failed",
+              output: `Member '${params.member_name}' is not in plan mode.`,
+              metadata: {},
+            }
           }
 
           if (params.decision === "approve") {

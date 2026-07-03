@@ -111,14 +111,7 @@ Existing browser reuse through CDP:
   "mcp": {
     "browser_use": {
       "type": "local",
-      "command": [
-        "uvx",
-        "browser-use[cli]",
-        "--mcp",
-        "--headed",
-        "--cdp-url",
-        "http://localhost:9222"
-      ],
+      "command": ["uvx", "browser-use[cli]", "--mcp", "--headed", "--cdp-url", "http://localhost:9222"],
       "enabled": true,
       "timeout": 120000
     }

@@ -16,7 +16,13 @@ import { Session } from "@/session/session"
 import { Permission } from "@/permission"
 import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { disposeAllInstances, provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
+import {
+  disposeAllInstances,
+  provideInstance,
+  testInstanceStoreLayer,
+  TestInstance,
+  tmpdirScoped,
+} from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const ctx = {
@@ -168,14 +174,17 @@ describe("tool.write", () => {
 
         expect(
           (yield* provideInstance(primary)(
-            run({ filePath: branchFile, content: "branch" }, { ...permissionCtx(branchRules), sessionID: info.id }).pipe(
-              Effect.exit,
-            ),
+            run(
+              { filePath: branchFile, content: "branch" },
+              { ...permissionCtx(branchRules), sessionID: info.id },
+            ).pipe(Effect.exit),
           ))._tag,
         ).toBe("Failure")
         expect(
           (yield* provideInstance(primary)(
-            run({ filePath: judgeFile, content: "judge" }, { ...permissionCtx(judgeRules), sessionID: info.id }).pipe(Effect.exit),
+            run({ filePath: judgeFile, content: "judge" }, { ...permissionCtx(judgeRules), sessionID: info.id }).pipe(
+              Effect.exit,
+            ),
           ))._tag,
         ).toBe("Failure")
         expect((yield* Effect.promise(() => fs.stat(branchFile)).pipe(Effect.exit))._tag).toBe("Failure")

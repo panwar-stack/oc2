@@ -81,17 +81,19 @@ function DialogRootsContent(props: { sessionID: string }) {
       await refresh()
       const root = result.data
       if (root) {
-        await sdk.client.session.prompt({
-          sessionID: props.sessionID,
-          noReply: true,
-          parts: [
-            {
-              type: "text",
-              synthetic: true,
-              text: `<system-reminder>The session can now work in another directory: ${root.name ?? root.directory} at ${root.directory}.</system-reminder>`,
-            },
-          ],
-        }).catch(() => {})
+        await sdk.client.session
+          .prompt({
+            sessionID: props.sessionID,
+            noReply: true,
+            parts: [
+              {
+                type: "text",
+                synthetic: true,
+                text: `<system-reminder>The session can now work in another directory: ${root.name ?? root.directory} at ${root.directory}.</system-reminder>`,
+              },
+            ],
+          })
+          .catch(() => {})
       }
       toast.show({ message: "Root added", variant: "success" })
     } catch (error) {

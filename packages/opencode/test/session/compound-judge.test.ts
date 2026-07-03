@@ -24,7 +24,13 @@ afterEach(async () => {
 })
 
 const it = testEffect(
-  Layer.mergeAll(BackgroundJob.defaultLayer, EventV2Bridge.defaultLayer, Session.defaultLayer, Database.defaultLayer, RuntimeFlags.layer({})),
+  Layer.mergeAll(
+    BackgroundJob.defaultLayer,
+    EventV2Bridge.defaultLayer,
+    Session.defaultLayer,
+    Database.defaultLayer,
+    RuntimeFlags.layer({}),
+  ),
 )
 
 const branches: BranchResult = {
@@ -50,7 +56,9 @@ const judgeResult: SessionCompoundJudge.Result = {
 
 function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
   const id = MessageID.ascending()
-  const model = SessionCompoundConfig.parseModel(`${input.model?.providerID ?? "test"}/${input.model?.modelID ?? "judge"}`)
+  const model = SessionCompoundConfig.parseModel(
+    `${input.model?.providerID ?? "test"}/${input.model?.modelID ?? "judge"}`,
+  )
   return {
     info: {
       id,
@@ -104,7 +112,9 @@ describe("compound judge", () => {
 
   test("validates judge result shape", () => {
     expect(Schema.decodeUnknownSync(SessionCompoundJudge.Result)(judgeResult)).toEqual(judgeResult)
-    expect(() => Schema.decodeUnknownSync(SessionCompoundJudge.Result)({ ...judgeResult, confidence: "certain" })).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(SessionCompoundJudge.Result)({ ...judgeResult, confidence: "certain" }),
+    ).toThrow()
   })
 
   test("request prep honors wildcard tool filtering", async () => {
@@ -163,7 +173,11 @@ describe("compound judge", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      yield* sessions.addRoot({ sessionID: parent.id, directory: path.dirname(path.resolve(os.tmpdir())), name: "temp parent" })
+      yield* sessions.addRoot({
+        sessionID: parent.id,
+        directory: path.dirname(path.resolve(os.tmpdir())),
+        name: "temp parent",
+      })
       yield* sessions.addRoot({ sessionID: parent.id, directory: os.tmpdir(), name: "system temp" })
       const prompts: SessionPrompt.PromptInput[] = []
       yield* SessionCompoundJudge.run({
@@ -183,9 +197,10 @@ describe("compound judge", () => {
       expect(containsPath(path.resolve(os.tmpdir()), tempDir)).toBe(false)
       expect(containsPath(path.dirname(path.resolve(os.tmpdir())), tempDir)).toBe(false)
       expect(Permission.evaluate("edit", "package.json", childPermission).action).toBe("deny")
-      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
-        "allow",
-      )
+      expect(
+        Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission)
+          .action,
+      ).toBe("allow")
     }),
   )
 
@@ -209,9 +224,10 @@ describe("compound judge", () => {
       )
 
       expect(tempEditAllow).toBeDefined()
-      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
-        "deny",
-      )
+      expect(
+        Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission)
+          .action,
+      ).toBe("deny")
     }),
   )
 })

@@ -77,9 +77,12 @@ export function use<T>(fn: (db: Interface["db"]) => T | Effect.Effect<T, unknown
 
 export function transaction<T>(fn: (db: Interface["db"]) => T) {
   return use((db) =>
-    db.transaction(() => {
-      const result = fn(db)
-      return Effect.isEffect(result) ? result : Effect.succeed(result)
-    }, { behavior: "immediate" }),
+    db.transaction(
+      () => {
+        const result = fn(db)
+        return Effect.isEffect(result) ? result : Effect.succeed(result)
+      },
+      { behavior: "immediate" },
+    ),
   )
 }

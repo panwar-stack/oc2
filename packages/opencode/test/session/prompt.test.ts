@@ -1341,7 +1341,9 @@ it.live(
       Effect.fnUntraced(function* ({ dir, llm }) {
         const memory = yield* Memory.Service
         const current = yield* memory.currentRepository(dir)
-        const repository = yield* memory.ensureRepository({ reference: current.provider === "file" ? pathToFileURL(dir).href : current.identity })
+        const repository = yield* memory.ensureRepository({
+          reference: current.provider === "file" ? pathToFileURL(dir).href : current.identity,
+        })
         yield* Database.Service.use((database) =>
           database.db
             .insert(RepositoryMemoryCommitTable)

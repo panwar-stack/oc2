@@ -184,8 +184,18 @@ export const layer = Layer.effect(
 
     const shutdown = Effect.fn("Team.shutdown")(function* (teamID: string) {
       const now = Date.now()
-      yield* db.update(TeamTable).set({ status: "closed", time_updated: now }).where(eq(TeamTable.id, teamID)).run().pipe(Effect.orDie)
-      const allMembers = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all().pipe(Effect.orDie)
+      yield* db
+        .update(TeamTable)
+        .set({ status: "closed", time_updated: now })
+        .where(eq(TeamTable.id, teamID))
+        .run()
+        .pipe(Effect.orDie)
+      const allMembers = yield* db
+        .select()
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.team_id, teamID))
+        .all()
+        .pipe(Effect.orDie)
       yield* Effect.forEach(
         allMembers.filter((member) => member.status !== "completed" && member.status !== "cancelled"),
         (member) =>
@@ -303,7 +313,12 @@ export const layer = Layer.effect(
       if (update?.daemonLastActive !== undefined) setData.daemon_last_active = update.daemonLastActive
       if (update?.daemonError !== undefined) setData.daemon_error = update.daemonError
       yield* db.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run().pipe(Effect.orDie)
-      const row = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get().pipe(Effect.orDie)
+      const row = yield* db
+        .select()
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.id, memberID))
+        .get()
+        .pipe(Effect.orDie)
       if (!row) return Option.none()
       yield* events.publish(MemberUpdated, {
         memberID: row.id,
@@ -362,7 +377,12 @@ export const layer = Layer.effect(
         .where(eq(TeamMemberTable.id, memberID))
         .run()
         .pipe(Effect.orDie)
-      const row = yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get().pipe(Effect.orDie)
+      const row = yield* db
+        .select()
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.id, memberID))
+        .get()
+        .pipe(Effect.orDie)
       if (!row) return Option.none()
       yield* events.publish(MemberUpdated, {
         memberID: row.id,
@@ -394,28 +414,31 @@ export const layer = Layer.effect(
     })
 
     const getMembers = Effect.fn("Team.getMembers")(function* (teamID: string) {
-      return (yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, teamID)).all().pipe(Effect.orDie)).map(
-        (row) => ({
-          id: row.id,
-          team_id: row.team_id,
-          session_id: row.session_id,
-          name: row.name,
-          agent_type: row.agent_type,
-          model: row.model,
-          role_prompt: row.role_prompt,
-          status: row.status,
-          lifecycle: row.lifecycle,
-          daemon_state: row.daemon_state,
-          daemon_last_active: row.daemon_last_active,
-          daemon_error: row.daemon_error,
-          plan_mode: row.plan_mode,
-          work_mode: row.work_mode,
-          dependency_ids: row.dependency_ids,
-          result: row.result,
-          time_created: row.time_created,
-          time_updated: row.time_updated,
-        }),
-      )
+      return (yield* db
+        .select()
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.team_id, teamID))
+        .all()
+        .pipe(Effect.orDie)).map((row) => ({
+        id: row.id,
+        team_id: row.team_id,
+        session_id: row.session_id,
+        name: row.name,
+        agent_type: row.agent_type,
+        model: row.model,
+        role_prompt: row.role_prompt,
+        status: row.status,
+        lifecycle: row.lifecycle,
+        daemon_state: row.daemon_state,
+        daemon_last_active: row.daemon_last_active,
+        daemon_error: row.daemon_error,
+        plan_mode: row.plan_mode,
+        work_mode: row.work_mode,
+        dependency_ids: row.dependency_ids,
+        result: row.result,
+        time_created: row.time_created,
+        time_updated: row.time_updated,
+      }))
     })
 
     const getMemberBySession = Effect.fn("Team.getMemberBySession")(function* (sessionID: string) {
@@ -468,7 +491,8 @@ export const layer = Layer.effect(
       const dependencyIDs = yield* Effect.forEach(input.dependencyIDs ?? [], (dependencyID) =>
         Effect.gen(function* () {
           const resolved = yield* resolveTaskID(input.teamID, dependencyID)
-          if (Option.isNone(resolved)) return yield* Effect.fail(new Error(`Task dependency not found: ${dependencyID}`))
+          if (Option.isNone(resolved))
+            return yield* Effect.fail(new Error(`Task dependency not found: ${dependencyID}`))
           return resolved.value
         }),
       )
@@ -567,35 +591,35 @@ export const layer = Layer.effect(
       if (Option.isNone(resolved)) return Option.none()
       const now = Date.now()
       const result = yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-        const current = yield* tx
-          .select()
-          .from(TeamTaskTable)
-          .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
-          .get()
-        if (!current || current.status !== "pending") return null
-        if (current.dependency_ids) {
-          const deps = current.dependency_ids
-          const completed = (yield* tx
-            .select()
-            .from(TeamTaskTable)
-            .where(eq(TeamTaskTable.team_id, current.team_id))
-            .all())
-            .filter((t) => deps.includes(t.id) && t.status === "completed")
-          if (!deps.every((id) => completed.some((t) => t.id === id))) return null
-        }
-        yield* tx
-          .update(TeamTaskTable)
-          .set({ status: "in_progress", assignee, time_updated: now })
-          .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
-          .run()
-        return yield* tx
-          .select()
-          .from(TeamTaskTable)
-          .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
-          .get()
-          }),
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const current = yield* tx
+                .select()
+                .from(TeamTaskTable)
+                .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+                .get()
+              if (!current || current.status !== "pending") return null
+              if (current.dependency_ids) {
+                const deps = current.dependency_ids
+                const completed = (yield* tx
+                  .select()
+                  .from(TeamTaskTable)
+                  .where(eq(TeamTaskTable.team_id, current.team_id))
+                  .all()).filter((t) => deps.includes(t.id) && t.status === "completed")
+                if (!deps.every((id) => completed.some((t) => t.id === id))) return null
+              }
+              yield* tx
+                .update(TeamTaskTable)
+                .set({ status: "in_progress", assignee, time_updated: now })
+                .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+                .run()
+              return yield* tx
+                .select()
+                .from(TeamTaskTable)
+                .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+                .get()
+            }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
@@ -614,19 +638,22 @@ export const layer = Layer.effect(
     })
 
     const getTasks = Effect.fn("Team.getTasks")(function* (teamID: string) {
-      return (yield* db.select().from(TeamTaskTable).where(eq(TeamTaskTable.team_id, teamID)).all().pipe(Effect.orDie)).map(
-        (row) => ({
-          id: row.id,
-          team_id: row.team_id,
-          description: row.description,
-          status: row.status,
-          assignee: row.assignee,
-          dependency_ids: row.dependency_ids,
-          metadata: row.metadata,
-          time_created: row.time_created,
-          time_updated: row.time_updated,
-        }),
-      )
+      return (yield* db
+        .select()
+        .from(TeamTaskTable)
+        .where(eq(TeamTaskTable.team_id, teamID))
+        .all()
+        .pipe(Effect.orDie)).map((row) => ({
+        id: row.id,
+        team_id: row.team_id,
+        description: row.description,
+        status: row.status,
+        assignee: row.assignee,
+        dependency_ids: row.dependency_ids,
+        metadata: row.metadata,
+        time_created: row.time_created,
+        time_updated: row.time_updated,
+      }))
     })
 
     const resolveTaskID = Effect.fn("Team.resolveTaskID")(function* (teamID: string, taskID: string) {
@@ -647,7 +674,9 @@ export const layer = Layer.effect(
       const match = matches[0]
       if (matches.length === 1 && match) return Option.some(match.id)
       return yield* Effect.fail(
-        new Error(`Ambiguous task ID prefix "${taskID}". Matching tasks: ${matches.map((task) => task.id.slice(0, 8)).join(", ")}`),
+        new Error(
+          `Ambiguous task ID prefix "${taskID}". Matching tasks: ${matches.map((task) => task.id.slice(0, 8)).join(", ")}`,
+        ),
       )
     })
 
@@ -661,39 +690,40 @@ export const layer = Layer.effect(
       const now = Date.now()
       const recipients = [...new Set(input.recipients)]
       yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-        yield* tx
-          .insert(TeamMessageTable)
-          .values({
-          id,
-          team_id: input.teamID,
-          sender: input.sender,
-          recipients,
-          body: input.body,
-          delivery_status: "pending",
-          time_created: now,
-          time_updated: now,
-        })
-          .run()
-        yield* Effect.forEach(
-          recipients,
-          (recipient) =>
-            tx
-            .insert(TeamMessageRecipientTable)
-            .values({
-              id: crypto.randomUUID(),
-              message_id: id,
-              team_id: input.teamID,
-              recipient,
-              delivery_status: "pending",
-              time_created: now,
-              time_updated: now,
-            })
-              .run(),
-          { discard: true },
-        )
-          }),
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .insert(TeamMessageTable)
+                .values({
+                  id,
+                  team_id: input.teamID,
+                  sender: input.sender,
+                  recipients,
+                  body: input.body,
+                  delivery_status: "pending",
+                  time_created: now,
+                  time_updated: now,
+                })
+                .run()
+              yield* Effect.forEach(
+                recipients,
+                (recipient) =>
+                  tx
+                    .insert(TeamMessageRecipientTable)
+                    .values({
+                      id: crypto.randomUUID(),
+                      message_id: id,
+                      team_id: input.teamID,
+                      recipient,
+                      delivery_status: "pending",
+                      time_created: now,
+                      time_updated: now,
+                    })
+                    .run(),
+                { discard: true },
+              )
+            }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
@@ -711,18 +741,21 @@ export const layer = Layer.effect(
     })
 
     const getMessages = Effect.fn("Team.getMessages")(function* (teamID: string) {
-      return (yield* db.select().from(TeamMessageTable).where(eq(TeamMessageTable.team_id, teamID)).all().pipe(Effect.orDie)).map(
-        (row) => ({
-          id: row.id,
-          team_id: row.team_id,
-          sender: row.sender,
-          recipients: row.recipients,
-          body: row.body,
-          delivery_status: row.delivery_status,
-          time_created: row.time_created,
-          time_updated: row.time_updated,
-        }),
-      )
+      return (yield* db
+        .select()
+        .from(TeamMessageTable)
+        .where(eq(TeamMessageTable.team_id, teamID))
+        .all()
+        .pipe(Effect.orDie)).map((row) => ({
+        id: row.id,
+        team_id: row.team_id,
+        sender: row.sender,
+        recipients: row.recipients,
+        body: row.body,
+        delivery_status: row.delivery_status,
+        time_created: row.time_created,
+        time_updated: row.time_updated,
+      }))
     })
 
     const getPendingMessages = Effect.fn("Team.getPendingMessages")(function* (
@@ -769,60 +802,71 @@ export const layer = Layer.effect(
     ) {
       const now = Date.now()
       const rows = yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            const pending = yield* tx
-              .select({
-                recipient_id: TeamMessageRecipientTable.id,
-                id: TeamMessageTable.id,
-                team_id: TeamMessageTable.team_id,
-                sender: TeamMessageTable.sender,
-                recipients: TeamMessageTable.recipients,
-                body: TeamMessageTable.body,
-                delivery_status: TeamMessageRecipientTable.delivery_status,
-                time_created: TeamMessageTable.time_created,
-                time_updated: TeamMessageTable.time_updated,
-              })
-              .from(TeamMessageTable)
-              .innerJoin(TeamMessageRecipientTable, eq(TeamMessageRecipientTable.message_id, TeamMessageTable.id))
-              .where(
-                and(
-                  eq(TeamMessageRecipientTable.team_id, teamID),
-                  eq(TeamMessageRecipientTable.recipient, recipientSession),
-                  eq(TeamMessageRecipientTable.delivery_status, "pending"),
-                ),
-              )
-              .all()
-            yield* Effect.forEach(
-              pending,
-              (row) =>
-                tx
-                  .update(TeamMessageRecipientTable)
-                  .set({ delivery_status: "delivered", time_updated: now })
-                  .where(and(eq(TeamMessageRecipientTable.id, row.recipient_id), eq(TeamMessageRecipientTable.delivery_status, "pending")))
-                  .run(),
-              { discard: true },
-            )
-            yield* Effect.forEach(
-              [...new Set(pending.map((row) => row.id))],
-              (messageID) =>
-                Effect.gen(function* () {
-                  const remaining = yield* tx
-                    .select()
-                    .from(TeamMessageRecipientTable)
-                    .where(and(eq(TeamMessageRecipientTable.message_id, messageID), eq(TeamMessageRecipientTable.delivery_status, "pending")))
-                    .all()
-                  if (remaining.length > 0) return
-                  yield* tx
-                    .update(TeamMessageTable)
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const pending = yield* tx
+                .select({
+                  recipient_id: TeamMessageRecipientTable.id,
+                  id: TeamMessageTable.id,
+                  team_id: TeamMessageTable.team_id,
+                  sender: TeamMessageTable.sender,
+                  recipients: TeamMessageTable.recipients,
+                  body: TeamMessageTable.body,
+                  delivery_status: TeamMessageRecipientTable.delivery_status,
+                  time_created: TeamMessageTable.time_created,
+                  time_updated: TeamMessageTable.time_updated,
+                })
+                .from(TeamMessageTable)
+                .innerJoin(TeamMessageRecipientTable, eq(TeamMessageRecipientTable.message_id, TeamMessageTable.id))
+                .where(
+                  and(
+                    eq(TeamMessageRecipientTable.team_id, teamID),
+                    eq(TeamMessageRecipientTable.recipient, recipientSession),
+                    eq(TeamMessageRecipientTable.delivery_status, "pending"),
+                  ),
+                )
+                .all()
+              yield* Effect.forEach(
+                pending,
+                (row) =>
+                  tx
+                    .update(TeamMessageRecipientTable)
                     .set({ delivery_status: "delivered", time_updated: now })
-                    .where(eq(TeamMessageTable.id, messageID))
-                    .run()
-                }),
-              { discard: true },
-            )
-            return pending
-          }),
+                    .where(
+                      and(
+                        eq(TeamMessageRecipientTable.id, row.recipient_id),
+                        eq(TeamMessageRecipientTable.delivery_status, "pending"),
+                      ),
+                    )
+                    .run(),
+                { discard: true },
+              )
+              yield* Effect.forEach(
+                [...new Set(pending.map((row) => row.id))],
+                (messageID) =>
+                  Effect.gen(function* () {
+                    const remaining = yield* tx
+                      .select()
+                      .from(TeamMessageRecipientTable)
+                      .where(
+                        and(
+                          eq(TeamMessageRecipientTable.message_id, messageID),
+                          eq(TeamMessageRecipientTable.delivery_status, "pending"),
+                        ),
+                      )
+                      .all()
+                    if (remaining.length > 0) return
+                    yield* tx
+                      .update(TeamMessageTable)
+                      .set({ delivery_status: "delivered", time_updated: now })
+                      .where(eq(TeamMessageTable.id, messageID))
+                      .run()
+                  }),
+                { discard: true },
+              )
+              return pending
+            }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
@@ -848,7 +892,10 @@ export const layer = Layer.effect(
         .set({ delivery_status: "delivered", time_updated: now })
         .where(
           recipientSession
-            ? and(eq(TeamMessageRecipientTable.message_id, messageID), eq(TeamMessageRecipientTable.recipient, recipientSession))
+            ? and(
+                eq(TeamMessageRecipientTable.message_id, messageID),
+                eq(TeamMessageRecipientTable.recipient, recipientSession),
+              )
             : eq(TeamMessageRecipientTable.message_id, messageID),
         )
         .run()
@@ -856,7 +903,12 @@ export const layer = Layer.effect(
       const pending = yield* db
         .select()
         .from(TeamMessageRecipientTable)
-        .where(and(eq(TeamMessageRecipientTable.message_id, messageID), eq(TeamMessageRecipientTable.delivery_status, "pending")))
+        .where(
+          and(
+            eq(TeamMessageRecipientTable.message_id, messageID),
+            eq(TeamMessageRecipientTable.delivery_status, "pending"),
+          ),
+        )
         .all()
         .pipe(Effect.orDie)
       if (pending.length > 0) return

@@ -19,10 +19,22 @@ describe("Memory eval", () => {
       const tmp = yield* Effect.promise(() => tmpdir({ git: true }))
       yield* Effect.addFinalizer(() => Effect.promise(() => tmp[Symbol.asyncDispose]()))
       yield* Effect.promise(() =>
-        createCommit(tmp.path, "src/auth.ts", "export const loginRedirect = true\n", "fix login redirect", "2024-01-02T00:00:00Z"),
+        createCommit(
+          tmp.path,
+          "src/auth.ts",
+          "export const loginRedirect = true\n",
+          "fix login redirect",
+          "2024-01-02T00:00:00Z",
+        ),
       )
       yield* Effect.promise(() =>
-        createCommit(tmp.path, "src/future.ts", "export const futureLogin = true\n", "future login change", "2024-01-03T00:00:00Z"),
+        createCommit(
+          tmp.path,
+          "src/future.ts",
+          "export const futureLogin = true\n",
+          "future login change",
+          "2024-01-03T00:00:00Z",
+        ),
       )
       const issuesPath = path.join(tmp.path, "issues.json")
       yield* Effect.promise(() =>

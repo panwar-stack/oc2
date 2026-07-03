@@ -1,19 +1,16 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
 import { Timestamps } from "@opencode-ai/core/database/schema.sql"
 
-export const RepositoryMemoryRepositoryTable = sqliteTable(
-  "repository_memory_repository",
-  {
-    id: text().primaryKey(),
-    identity: text().notNull().unique(),
-    provider: text(),
-    owner: text(),
-    name: text(),
-    default_branch: text(),
-    base_commit: text(),
-    ...Timestamps,
-  },
-)
+export const RepositoryMemoryRepositoryTable = sqliteTable("repository_memory_repository", {
+  id: text().primaryKey(),
+  identity: text().notNull().unique(),
+  provider: text(),
+  owner: text(),
+  name: text(),
+  default_branch: text(),
+  base_commit: text(),
+  ...Timestamps,
+})
 
 export const RepositoryMemoryCommitTable = sqliteTable(
   "repository_memory_commit",
@@ -93,5 +90,7 @@ export const RepositoryMemoryRetrievalLogTable = sqliteTable(
     outcome: text(),
     ...Timestamps,
   },
-  (table) => [index("repository_memory_retrieval_log_repository_id_session_id_idx").on(table.repository_id, table.session_id)],
+  (table) => [
+    index("repository_memory_retrieval_log_repository_id_session_id_idx").on(table.repository_id, table.session_id),
+  ],
 )

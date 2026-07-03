@@ -129,7 +129,11 @@ const SearchCommitCommand = effectCmd({
     const current = yield* memory.currentRepository()
     const repository = yield* memory.getRepository(current.identity)
     if (!repository) return yield* fail(`No repository memory index found for ${current.identity}`)
-    const results = yield* memory.searchCommitRows({ repository_id: repository.id, query: args.query, limit: args.limit })
+    const results = yield* memory.searchCommitRows({
+      repository_id: repository.id,
+      query: args.query,
+      limit: args.limit,
+    })
     yield* memory.logRetrieval({
       repository_id: repository.id,
       tool: "memory_cli_search_commit",
@@ -171,7 +175,11 @@ const SearchSummaryCommand = effectCmd({
     const current = yield* memory.currentRepository()
     const repository = yield* memory.getRepository(current.identity)
     if (!repository) return yield* fail(`No repository memory index found for ${current.identity}`)
-    const results = yield* memory.searchSummaryRows({ repository_id: repository.id, query: args.query, limit: args.limit })
+    const results = yield* memory.searchSummaryRows({
+      repository_id: repository.id,
+      query: args.query,
+      limit: args.limit,
+    })
     yield* memory.logRetrieval({
       repository_id: repository.id,
       tool: "memory_cli_search_summary",
@@ -215,7 +223,11 @@ const ViewSummaryCommand = effectCmd({
     const current = yield* memory.currentRepository()
     const repository = yield* memory.getRepository(current.identity)
     if (!repository) return yield* fail(`No repository memory index found for ${current.identity}`)
-    const summary = yield* memory.getFileSummary({ repository_id: repository.id, path: args.path, worktree: current.worktree })
+    const summary = yield* memory.getFileSummary({
+      repository_id: repository.id,
+      path: args.path,
+      worktree: current.worktree,
+    })
     if (!summary) return yield* fail(`File summary not found: ${args.path}`)
     yield* memory.logRetrieval({
       repository_id: repository.id,
@@ -262,9 +274,9 @@ const ExamineCommitCommand = effectCmd({
     const current = yield* memory.currentRepository()
     const repository = yield* memory.getRepository(current.identity)
     if (!repository) return yield* fail(`No repository memory index found for ${current.identity}`)
-    const commit = yield* memory.getCommit({ repository_id: repository.id, hash: args.hash }).pipe(
-      Effect.catch((error: Error) => fail(error.message)),
-    )
+    const commit = yield* memory
+      .getCommit({ repository_id: repository.id, hash: args.hash })
+      .pipe(Effect.catch((error: Error) => fail(error.message)))
     if (!commit) return yield* fail(`Commit memory not found: ${args.hash}`)
     yield* memory.logRetrieval({
       repository_id: repository.id,

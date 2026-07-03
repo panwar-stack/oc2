@@ -9,7 +9,8 @@ import * as Tool from "./tool"
 const DEFAULT_DIFF_BYTES = 20_000
 
 const Repository = Schema.optional(Schema.String).annotate({
-  description: "Repository to search, as a git URL, host/path reference, GitHub owner/repo shorthand, or omitted for the active repository",
+  description:
+    "Repository to search, as a git URL, host/path reference, GitHub owner/repo shorthand, or omitted for the active repository",
 })
 
 export const SearchCommitParameters = Schema.Struct({
@@ -59,9 +60,18 @@ export const MemorySearchCommitTool = Tool.define(
             (query) => memory.searchCommitRows({ repository_id: repository.id, query, limit }),
           )
           const commits = dedupeRanked(rows.flat()).slice(0, limit)
-          yield* logRetrieval(memory, ctx, repository.id, "memory_search_commit", params.queries, commits.map((commit) => commit.hash))
+          yield* logRetrieval(
+            memory,
+            ctx,
+            repository.id,
+            "memory_search_commit",
+            params.queries,
+            commits.map((commit) => commit.hash),
+          )
           return {
-            title: commits.length ? `${commits.length} memory commit${commits.length === 1 ? "" : "s"}` : "No memory commits",
+            title: commits.length
+              ? `${commits.length} memory commit${commits.length === 1 ? "" : "s"}`
+              : "No memory commits",
             metadata: { repository: repository.identity, count: commits.length },
             output: [
               `Repository memory commit search: ${repository.identity}`,
@@ -71,12 +81,16 @@ export const MemorySearchCommitTool = Tool.define(
                   `${index + 1}. ${commit.hash} score=${formatScore(commit.score)} strong=${commit.strength === "strong"}`,
                   `Message: ${commit.message}`,
                   `Changed files: ${parseJsonArray(commit.changed_files).join(", ") || "none"}`,
-                  commit.issue_title ? `Linked issue: ${commit.issue_number ? `#${commit.issue_number} ` : ""}${commit.issue_title}` : undefined,
+                  commit.issue_title
+                    ? `Linked issue: ${commit.issue_number ? `#${commit.issue_number} ` : ""}${commit.issue_title}`
+                    : undefined,
                 ]
                   .filter(Boolean)
                   .join("\n"),
               ),
-              commits.length ? "Read current source before patching; these are historical localization hints." : "No matching commit memory found.",
+              commits.length
+                ? "Read current source before patching; these are historical localization hints."
+                : "No matching commit memory found.",
             ]
               .filter(Boolean)
               .join("\n\n"),
@@ -98,7 +112,8 @@ export const MemoryExamineCommitTool = Tool.define(
         Effect.gen(function* () {
           const repository = yield* resolveRepository(memory, params.repository)
           yield* askMemory(ctx, "memory_examine_commit", repository.identity, [params.hash])
-          const commit = yield* memory.getCommit({ repository_id: repository.id, hash: params.hash })
+          const commit = yield* memory
+            .getCommit({ repository_id: repository.id, hash: params.hash })
             .pipe(Effect.catch(Effect.die))
           if (!commit) return yield* Effect.die(new Error(`No repository memory commit found for hash: ${params.hash}`))
           yield* logRetrieval(memory, ctx, repository.id, "memory_examine_commit", [params.hash], [commit.hash])
@@ -115,7 +130,11 @@ export const MemoryExamineCommitTool = Tool.define(
               `Changed files: ${changed.join(", ") || "none"}`,
               `Tests touched: ${changed.filter(isTestPath).join(", ") || "none"}`,
               commit.issue_title || commit.issue_body
-                ? [`Linked issue: ${commit.issue_number ? `#${commit.issue_number}` : "unknown"}`, commit.issue_title, commit.issue_body]
+                ? [
+                    `Linked issue: ${commit.issue_number ? `#${commit.issue_number}` : "unknown"}`,
+                    commit.issue_title,
+                    commit.issue_body,
+                  ]
                     .filter(Boolean)
                     .join("\n")
                 : "Linked issue: none",
@@ -135,17 +154,31 @@ export const MemorySearchSummaryTool = Tool.define(
     const memory = yield* Memory.Service
 
     return {
-      description: "SearchSummary. Search cached high-activity file summaries by behavior, subsystem, error, or function.",
+      description:
+        "SearchSummary. Search cached high-activity file summaries by behavior, subsystem, error, or function.",
       parameters: SearchSummaryParameters,
       execute: (params: Schema.Schema.Type<typeof SearchSummaryParameters>, ctx) =>
         Effect.gen(function* () {
           const repository = yield* resolveRepository(memory, params.repository)
           yield* askMemory(ctx, "memory_search_summary", repository.identity, [params.query])
           const limit = params.limit ?? (yield* config.get()).memory?.search_summary_limit ?? DEFAULT_LIMITS.summaries
-          const summaries = yield* memory.searchSummaryRows({ repository_id: repository.id, query: params.query, limit })
-          yield* logRetrieval(memory, ctx, repository.id, "memory_search_summary", [params.query], summaries.map((summary) => summary.path))
+          const summaries = yield* memory.searchSummaryRows({
+            repository_id: repository.id,
+            query: params.query,
+            limit,
+          })
+          yield* logRetrieval(
+            memory,
+            ctx,
+            repository.id,
+            "memory_search_summary",
+            [params.query],
+            summaries.map((summary) => summary.path),
+          )
           return {
-            title: summaries.length ? `${summaries.length} memory summar${summaries.length === 1 ? "y" : "ies"}` : "No memory summaries",
+            title: summaries.length
+              ? `${summaries.length} memory summar${summaries.length === 1 ? "y" : "ies"}`
+              : "No memory summaries",
             metadata: { repository: repository.identity, count: summaries.length },
             output: [
               `Repository memory summary search: ${repository.identity}`,
@@ -157,7 +190,9 @@ export const MemorySearchSummaryTool = Tool.define(
                   `Important symbols: ${parseJsonArray(summary.important_symbols).join(", ") || "none"}`,
                 ].join("\n"),
               ),
-              summaries.length ? "Use summaries as localization hints and verify against current source." : "No matching file summaries found.",
+              summaries.length
+                ? "Use summaries as localization hints and verify against current source."
+                : "No matching file summaries found.",
             ]
               .filter(Boolean)
               .join("\n\n"),
@@ -188,7 +223,12 @@ export const MemoryViewSummaryTool = Tool.define(
           yield* logRetrieval(memory, ctx, repository.id, "memory_view_summary", [params.path], [summary.path])
           return {
             title: summary.path,
-            metadata: { repository: repository.identity, path: summary.path, stale: summary.stale, missing: summary.missing },
+            metadata: {
+              repository: repository.identity,
+              path: summary.path,
+              stale: summary.stale,
+              missing: summary.missing,
+            },
             output: [
               `Repository memory summary: ${summary.path}`,
               `Status: ${summary.missing ? "missing current file" : summary.stale ? "stale" : "current"}`,

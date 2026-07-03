@@ -39,8 +39,7 @@ function memberStatusColor(
   if (teamStatus?.status === "cancelled") return theme.error
   if (t === "retry") return theme.error
   if (t === "busy") return theme.success
-  if (["starting", "blocked", "active", "idle"].includes(teamStatus?.status ?? ""))
-    return theme.info
+  if (["starting", "blocked", "active", "idle"].includes(teamStatus?.status ?? "")) return theme.info
   return theme.textMuted
 }
 
@@ -275,7 +274,9 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                     <box {...SplitBorder} border={["top"]} borderColor={theme.border} paddingTop={1}>
                       <box
                         onMouseUp={() => {
-                          void sdk.client.team.shutdown({ teamID: info.id, sessionID: sessionID() }).then(() => dialog.clear())
+                          void sdk.client.team
+                            .shutdown({ teamID: info.id, sessionID: sessionID() })
+                            .then(() => dialog.clear())
                         }}
                       >
                         <text fg={theme.error}>Shutdown Team</text>

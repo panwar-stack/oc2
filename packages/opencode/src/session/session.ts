@@ -1309,9 +1309,7 @@ function listByProject(
           ? or(...primaryPathConditions, and(isNull(SessionTable.path), eq(SessionTable.directory, input.directory))!)!
           : or(...primaryPathConditions)!,
       )
-      rootConditions.push(
-        or(...rootPathConditions)!,
-      )
+      rootConditions.push(or(...rootPathConditions)!)
     }
   } else if (input.scope !== "project") {
     if (input.directory) {

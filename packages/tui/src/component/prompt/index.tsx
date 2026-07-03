@@ -277,7 +277,8 @@ export function Prompt(props: PromptProps) {
     )
     if (message?.role === "user") return message.model
     if (message) return { providerID: message.providerID, modelID: message.modelID, variant: message.variant }
-    if (session.model) return { providerID: session.model.providerID, modelID: session.model.id, variant: session.model.variant }
+    if (session.model)
+      return { providerID: session.model.providerID, modelID: session.model.id, variant: session.model.variant }
     return localDisplayModel
   })
 

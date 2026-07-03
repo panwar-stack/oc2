@@ -22,7 +22,13 @@ afterEach(async () => {
 })
 
 const it = testEffect(
-  Layer.mergeAll(BackgroundJob.defaultLayer, EventV2Bridge.defaultLayer, Session.defaultLayer, Database.defaultLayer, RuntimeFlags.layer({})),
+  Layer.mergeAll(
+    BackgroundJob.defaultLayer,
+    EventV2Bridge.defaultLayer,
+    Session.defaultLayer,
+    Database.defaultLayer,
+    RuntimeFlags.layer({}),
+  ),
 )
 
 type AssistantWithParts = Omit<SessionV1.WithParts, "info"> & { info: SessionV1.Assistant }
@@ -149,9 +155,12 @@ describe("session compound runner", () => {
             return reply(input, String(input.model?.modelID))
           }),
       }
-      const fiber = yield* SessionCompound.runBranches({ sessionID: parent.id, prompt: "go", config: config(), promptOps }).pipe(
-        Effect.forkIn(scope),
-      )
+      const fiber = yield* SessionCompound.runBranches({
+        sessionID: parent.id,
+        prompt: "go",
+        config: config(),
+        promptOps,
+      }).pipe(Effect.forkIn(scope))
 
       yield* Deferred.await(firstStarted)
       yield* Deferred.await(secondStarted)
@@ -550,8 +559,11 @@ describe("session compound runner", () => {
       })
       const children = yield* sessions.children(parent.id)
       const scratchPatterns = children
-        .map((child) =>
-          child.permission?.find((rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow")?.pattern,
+        .map(
+          (child) =>
+            child.permission?.find(
+              (rule) => rule.permission === "edit" && rule.pattern !== "*" && rule.action === "allow",
+            )?.pattern,
         )
         .filter((pattern) => pattern !== undefined)
 
@@ -628,15 +640,17 @@ describe("session compound runner", () => {
       )
       expect(tempEditAllow?.pattern).toContain("opencode-local-fusion")
       expect(Permission.evaluate("edit", "package.json", childPermission).action).toBe("deny")
-      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
-        "allow",
-      )
+      expect(
+        Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission)
+          .action,
+      ).toBe("allow")
       expect(children[0]?.title).toBe("Compound branch #1")
       expect(children[0]?.metadata?.logu).toBeUndefined()
       expect(
-        Permission.disabled(["write", "edit", "apply_patch", "team_create", "team_spawn", "local_fusion"], [
-          ...childPermission,
-        ]),
+        Permission.disabled(
+          ["write", "edit", "apply_patch", "team_create", "team_spawn", "local_fusion"],
+          [...childPermission],
+        ),
       ).toEqual(new Set(["team_create", "team_spawn", "local_fusion"]))
     }),
   )
@@ -661,9 +675,10 @@ describe("session compound runner", () => {
       )
 
       expect(tempEditAllow).toBeDefined()
-      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
-        "deny",
-      )
+      expect(
+        Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission)
+          .action,
+      ).toBe("deny")
     }),
   )
 
@@ -671,7 +686,11 @@ describe("session compound runner", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      yield* sessions.addRoot({ sessionID: parent.id, directory: path.dirname(path.resolve(os.tmpdir())), name: "temp parent" })
+      yield* sessions.addRoot({
+        sessionID: parent.id,
+        directory: path.dirname(path.resolve(os.tmpdir())),
+        name: "temp parent",
+      })
       yield* sessions.addRoot({ sessionID: parent.id, directory: os.tmpdir(), name: "system temp" })
       const prompts: SessionPrompt.PromptInput[] = []
       yield* SessionCompound.runBranches({
@@ -691,9 +710,10 @@ describe("session compound runner", () => {
       expect(containsPath(path.resolve(os.tmpdir()), tempDir)).toBe(false)
       expect(containsPath(path.dirname(path.resolve(os.tmpdir())), tempDir)).toBe(false)
       expect(Permission.evaluate("edit", "package.json", childPermission).action).toBe("deny")
-      expect(Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission).action).toBe(
-        "allow",
-      )
+      expect(
+        Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission)
+          .action,
+      ).toBe("allow")
     }),
   )
 

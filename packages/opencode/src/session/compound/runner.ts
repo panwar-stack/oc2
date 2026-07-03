@@ -167,9 +167,11 @@ const runBranch = Effect.fn("SessionCompound.runBranch")(function* (input: {
     () =>
       Effect.gen(function* () {
         const timeout = input.branch.timeout ?? input.config.limits.timeout
-        const result = yield* (timeout
-          ? promptBranch(input, child.id, child.permission ?? [], model, agent, role).pipe(Effect.timeoutOption(timeout))
-          : promptBranch(input, child.id, child.permission ?? [], model, agent, role).pipe(Effect.map(Option.some)))
+        const result = yield* timeout
+          ? promptBranch(input, child.id, child.permission ?? [], model, agent, role).pipe(
+              Effect.timeoutOption(timeout),
+            )
+          : promptBranch(input, child.id, child.permission ?? [], model, agent, role).pipe(Effect.map(Option.some))
         if (result._tag === "Some") {
           if (result.value.info.role === "assistant" && result.value.info.error) {
             return {
@@ -248,7 +250,9 @@ function promptBranch(
   role: Extract<SessionCompoundToolPolicy.CompoundRole, { type: "branch" }>,
 ) {
   return Effect.gen(function* () {
-    const parts = yield* input.promptOps.resolvePromptParts(branchPrompt(input.prompt, input.branch.prompt, role.tempDir))
+    const parts = yield* input.promptOps.resolvePromptParts(
+      branchPrompt(input.prompt, input.branch.prompt, role.tempDir),
+    )
     yield* interruptIfAborted(input.abort)
     const result = yield* input.promptOps.prompt({
       messageID: MessageID.ascending(),
@@ -259,7 +263,7 @@ function promptBranch(
       },
       ...(input.branch.variant ? { variant: input.branch.variant } : {}),
       agent,
-        tools: SessionCompoundToolPolicy.resolvePromptTools(input.branch.toolPolicy, permission, role),
+      tools: SessionCompoundToolPolicy.resolvePromptTools(input.branch.toolPolicy, permission, role),
       parts,
     })
     yield* interruptIfAborted(input.abort)

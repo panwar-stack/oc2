@@ -194,7 +194,10 @@ export function SessionRootsCommand() {
           })
           .then((result) => {
             if (result.error || !result.data?.id) {
-              toast.show({ message: errorMessage(result.error ?? new Error("Creating a session failed")), variant: "error" })
+              toast.show({
+                message: errorMessage(result.error ?? new Error("Creating a session failed")),
+                variant: "error",
+              })
               return
             }
             route.navigate({ type: "session", sessionID: result.data.id })
@@ -1047,7 +1050,9 @@ export function Session() {
           if (options === null) return
 
           const transcript = formatExportSession(
-            (await collectExportSessionFromClient(sdk.client, sessionData.id)) as Parameters<typeof formatExportSession>[0],
+            (await collectExportSessionFromClient(sdk.client, sessionData.id)) as Parameters<
+              typeof formatExportSession
+            >[0],
             {
               thinking: options.thinking,
               toolDetails: options.toolDetails,

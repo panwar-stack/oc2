@@ -85,7 +85,11 @@ describe("inference stat normalization", () => {
 
   test("aggregate query exposes cache write tokens separately", () => {
     process.env.SST_RESOURCE_App = "{}"
-    process.env.SST_RESOURCE_InferenceEvent = JSON.stringify({ catalog: "catalog", database: "database", table: "table" })
+    process.env.SST_RESOURCE_InferenceEvent = JSON.stringify({
+      catalog: "catalog",
+      database: "database",
+      table: "table",
+    })
     process.env.SST_RESOURCE_StatsSyncConfig = JSON.stringify({ dataset: "zen" })
 
     const query = buildStatsQuery(new Date("2026-01-01T00:00:00Z"), new Date("2026-01-31T00:00:00Z"), "model")
@@ -107,9 +111,7 @@ describe("inference stat normalization", () => {
 
     expect(toModelAggregate(row)).toMatchObject([{ cache_read_tokens: 10, cache_write_tokens: 7, total_tokens: 100 }])
     expect(toProviderAggregate(row)).toMatchObject([{ cache_read_tokens: 10, cache_write_tokens: 7 }])
-    expect(toGeoAggregate({ ...row, country: "US" })).toMatchObject([
-      { cache_read_tokens: 10, cache_write_tokens: 7 },
-    ])
+    expect(toGeoAggregate({ ...row, country: "US" })).toMatchObject([{ cache_read_tokens: 10, cache_write_tokens: 7 }])
   })
 })
 

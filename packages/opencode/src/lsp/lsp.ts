@@ -398,52 +398,60 @@ export const layer = Layer.effect(
     })
 
     const hover = Effect.fn("LSP.hover")(function* (input: LocInput, root?: FileRoot) {
-      return yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/hover", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
-          .catch(() => null),
+      return yield* run(
+        input.file,
+        (client) =>
+          client.connection
+            .sendRequest("textDocument/hover", {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            })
+            .catch(() => null),
         root,
       )
     })
 
     const definition = Effect.fn("LSP.definition")(function* (input: LocInput, root?: FileRoot) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/definition", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
-          .catch(() => null),
+      const results = yield* run(
+        input.file,
+        (client) =>
+          client.connection
+            .sendRequest("textDocument/definition", {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            })
+            .catch(() => null),
         root,
       )
       return results.flat().filter(Boolean)
     })
 
     const references = Effect.fn("LSP.references")(function* (input: LocInput, root?: FileRoot) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/references", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-            context: { includeDeclaration: true },
-          })
-          .catch(() => []),
+      const results = yield* run(
+        input.file,
+        (client) =>
+          client.connection
+            .sendRequest("textDocument/references", {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+              context: { includeDeclaration: true },
+            })
+            .catch(() => []),
         root,
       )
       return results.flat().filter(Boolean)
     })
 
     const implementation = Effect.fn("LSP.implementation")(function* (input: LocInput, root?: FileRoot) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/implementation", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
-          .catch(() => null),
+      const results = yield* run(
+        input.file,
+        (client) =>
+          client.connection
+            .sendRequest("textDocument/implementation", {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            })
+            .catch(() => null),
         root,
       )
       return results.flat().filter(Boolean)
@@ -451,8 +459,10 @@ export const layer = Layer.effect(
 
     const documentSymbol = Effect.fn("LSP.documentSymbol")(function* (uri: string, root?: FileRoot) {
       const file = fileURLToPath(uri)
-      const results = yield* run(file, (client) =>
-        client.connection.sendRequest("textDocument/documentSymbol", { textDocument: { uri } }).catch(() => []),
+      const results = yield* run(
+        file,
+        (client) =>
+          client.connection.sendRequest("textDocument/documentSymbol", { textDocument: { uri } }).catch(() => []),
         root,
       )
       return (results.flat() as (DocumentSymbol | Symbol)[]).filter(Boolean)
@@ -469,13 +479,15 @@ export const layer = Layer.effect(
     })
 
     const prepareCallHierarchy = Effect.fn("LSP.prepareCallHierarchy")(function* (input: LocInput, root?: FileRoot) {
-      const results = yield* run(input.file, (client) =>
-        client.connection
-          .sendRequest("textDocument/prepareCallHierarchy", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
-          .catch(() => []),
+      const results = yield* run(
+        input.file,
+        (client) =>
+          client.connection
+            .sendRequest("textDocument/prepareCallHierarchy", {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            })
+            .catch(() => []),
         root,
       )
       return results.flat().filter(Boolean)
@@ -486,16 +498,20 @@ export const layer = Layer.effect(
       direction: "callHierarchy/incomingCalls" | "callHierarchy/outgoingCalls",
       root?: FileRoot,
     ) {
-      const results = yield* run(input.file, async (client) => {
-        const items = await client.connection
-          .sendRequest<unknown[] | null>("textDocument/prepareCallHierarchy", {
-            textDocument: { uri: pathToFileURL(input.file).href },
-            position: { line: input.line, character: input.character },
-          })
-          .catch(() => [] as unknown[])
-        if (!items?.length) return []
-        return client.connection.sendRequest(direction, { item: items[0] }).catch(() => [])
-      }, root)
+      const results = yield* run(
+        input.file,
+        async (client) => {
+          const items = await client.connection
+            .sendRequest<unknown[] | null>("textDocument/prepareCallHierarchy", {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            })
+            .catch(() => [] as unknown[])
+          if (!items?.length) return []
+          return client.connection.sendRequest(direction, { item: items[0] }).catch(() => [])
+        },
+        root,
+      )
       return results.flat().filter(Boolean)
     })
 

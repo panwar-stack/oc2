@@ -138,7 +138,12 @@ export const build = Effect.fn("TeamEval.build")(function* (
       .where(eq(TeamMessageRecipientTable.team_id, teamID))
       .all()
       .pipe(Effect.orDie),
-    usageEvents: db.select().from(TeamUsageEventTable).where(eq(TeamUsageEventTable.team_id, teamID)).all().pipe(Effect.orDie),
+    usageEvents: db
+      .select()
+      .from(TeamUsageEventTable)
+      .where(eq(TeamUsageEventTable.team_id, teamID))
+      .all()
+      .pipe(Effect.orDie),
   })
 
   if (!rows.team) return yield* new NotFoundError({ teamID })
@@ -338,7 +343,11 @@ export function usageMetrics(
     broadcast_count: usageEvents.filter((event) => event.type === "broadcast_sent").length,
     final_report_generated: finalReportGenerated,
     shallow_usage:
-      members.length > 0 && tasks.length === 0 && dependencyCount === 0 && planApprovalCount === 0 && !finalReportGenerated,
+      members.length > 0 &&
+      tasks.length === 0 &&
+      dependencyCount === 0 &&
+      planApprovalCount === 0 &&
+      !finalReportGenerated,
   }
 }
 
@@ -408,18 +417,30 @@ function deterministicFindings(
             })
           : undefined,
         member.lifecycle === "daemon" && member.status === "completed"
-          ? finding("daemon_used_for_finite_task", "warning", nodeID("member", member.session_id), member.time_updated, {
-              message: `Daemon teammate ${member.name} completed like a finite task teammate.`,
-              suffix: "daemon-completed",
-              metadata: { session_id: member.session_id, member_id: member.id },
-            })
+          ? finding(
+              "daemon_used_for_finite_task",
+              "warning",
+              nodeID("member", member.session_id),
+              member.time_updated,
+              {
+                message: `Daemon teammate ${member.name} completed like a finite task teammate.`,
+                suffix: "daemon-completed",
+                metadata: { session_id: member.session_id, member_id: member.id },
+              },
+            )
           : undefined,
         member.lifecycle === "daemon" && daemonSentFinalResult(member, messages)
-          ? finding("daemon_used_for_finite_task", "warning", nodeID("member", member.session_id), member.time_updated, {
-              message: `Daemon teammate ${member.name} sent a final-result-shaped message like a finite task teammate.`,
-              suffix: "daemon-final-result-message",
-              metadata: { session_id: member.session_id, member_id: member.id },
-            })
+          ? finding(
+              "daemon_used_for_finite_task",
+              "warning",
+              nodeID("member", member.session_id),
+              member.time_updated,
+              {
+                message: `Daemon teammate ${member.name} sent a final-result-shaped message like a finite task teammate.`,
+                suffix: "daemon-final-result-message",
+                metadata: { session_id: member.session_id, member_id: member.id },
+              },
+            )
           : undefined,
         member.lifecycle === "daemon" && !daemonHadMailboxActivity(member, messages)
           ? finding("daemon_without_activity", "info", nodeID("member", member.session_id), member.time_updated, {
@@ -446,15 +467,21 @@ function deterministicFindings(
     ...Array.from(membersByName.entries()).flatMap(([name, duplicateMembers]) =>
       duplicateMembers.length > 1
         ? [
-            finding("member.ambiguous_name", "warning", nodeID("team", team.id), duplicateMembers[0]?.time_created ?? team.time_created, {
-              message: `Teammate name "${name}" is used by ${duplicateMembers.length} members; name-based resolution is ambiguous.`,
-              suffix: `ambiguous-name:${name}`,
-              metadata: {
-                name,
-                member_ids: duplicateMembers.map((member) => member.id),
-                session_ids: duplicateMembers.map((member) => member.session_id),
+            finding(
+              "member.ambiguous_name",
+              "warning",
+              nodeID("team", team.id),
+              duplicateMembers[0]?.time_created ?? team.time_created,
+              {
+                message: `Teammate name "${name}" is used by ${duplicateMembers.length} members; name-based resolution is ambiguous.`,
+                suffix: `ambiguous-name:${name}`,
+                metadata: {
+                  name,
+                  member_ids: duplicateMembers.map((member) => member.id),
+                  session_ids: duplicateMembers.map((member) => member.session_id),
+                },
               },
-            }),
+            ),
           ]
         : [],
     ),

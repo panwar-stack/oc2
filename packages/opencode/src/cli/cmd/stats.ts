@@ -200,7 +200,12 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
       cacheWrite: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.cache.write'), 0)), 0)`,
     })
     .from(MessageTable)
-    .where(and(inArray(MessageTable.session_id, sessionIDs), sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`))
+    .where(
+      and(
+        inArray(MessageTable.session_id, sessionIDs),
+        sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+      ),
+    )
     .groupBy(
       sql`json_extract(${MessageTable.data}, '$.providerID')`,
       sql`json_extract(${MessageTable.data}, '$.modelID')`,

@@ -129,7 +129,8 @@ const SandboxPathToken = Schema.String.check(
   Schema.isPattern(/^(workspace|systemRuntime|temporaryDirectory|workspace\/.+|home\/.+)$/),
 ).annotate({
   identifier: "SandboxPathToken",
-  description: "Sandbox filesystem token: workspace, systemRuntime, temporaryDirectory, workspace/<path>, or home/<path>",
+  description:
+    "Sandbox filesystem token: workspace, systemRuntime, temporaryDirectory, workspace/<path>, or home/<path>",
 })
 
 const SandboxProfile = Schema.Struct({
@@ -143,7 +144,10 @@ const SandboxProfile = Schema.Struct({
   network: Schema.optional(
     Schema.Union([
       Schema.Struct({ mode: Schema.Literal("none") }),
-      Schema.Struct({ mode: Schema.Literal("allowlist"), hosts: Schema.mutable(Schema.NonEmptyArray(Schema.NonEmptyString)) }),
+      Schema.Struct({
+        mode: Schema.Literal("allowlist"),
+        hosts: Schema.mutable(Schema.NonEmptyArray(Schema.NonEmptyString)),
+      }),
       Schema.Struct({ mode: Schema.Literal("full"), requiresApproval: Schema.optional(Schema.Boolean) }),
     ]),
   ),

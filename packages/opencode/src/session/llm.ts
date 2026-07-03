@@ -387,13 +387,16 @@ const live: Layer.Layer<
       if (result.type === "native" || result.type === "event-stream") return result.stream
 
       const state = LLMAISDK.adapterState()
-      return Stream.fromAsyncIterable(result.result.fullStream, (e) => (e instanceof Error ? e : new Error(String(e)))).pipe(
+      return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
+        e instanceof Error ? e : new Error(String(e)),
+      ).pipe(
         Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
         Stream.flatMap((events) => Stream.fromIterable(events)),
       )
     }
 
-    const executeProvider: LLMFugu.Execute = (input) => Stream.unwrap(runProvider(input).pipe(Effect.map(toEventStream)))
+    const executeProvider: LLMFugu.Execute = (input) =>
+      Stream.unwrap(runProvider(input).pipe(Effect.map(toEventStream)))
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
       return yield* runProvider(input)

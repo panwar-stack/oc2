@@ -220,7 +220,9 @@ function mockShellSpawner(
         const std = ChildProcess.isStandardCommand(command) ? command : undefined
         records.push({ command: std?.command ?? "", args: std?.args ?? [], options: std?.options })
         if (std?.command === "docker" && std.args[0] === "--version") {
-          return Effect.succeed(handle({ code: options?.dockerAvailable === false ? 1 : 0, stdout: "Docker version\n" }))
+          return Effect.succeed(
+            handle({ code: options?.dockerAvailable === false ? 1 : 0, stdout: "Docker version\n" }),
+          )
         }
         if (std?.command === "docker" && std.args[0] === "run") return Effect.succeed(handle(output))
         if (std?.command === process.execPath && std.args[0] === "--eval") return Effect.succeed(handle(output))
@@ -248,7 +250,9 @@ async function proxyRequest(script: string, input: { url: string; lookup: Record
         return {
           promises: {
             lookup: (host: string) =>
-              Promise.resolve((input.lookup[host] ?? []).map((address) => ({ address, family: address.includes(":") ? 6 : 4 }))),
+              Promise.resolve(
+                (input.lookup[host] ?? []).map((address) => ({ address, family: address.includes(":") ? 6 : 4 })),
+              ),
           },
         }
       }
@@ -434,7 +438,9 @@ describe("tool.shell sandbox", () => {
         () =>
           runIn(
             tmp,
-            run({ command: "echo sandbox", description: "Sandbox echo" }).pipe(Effect.provide(mockShellSpawner(records))),
+            run({ command: "echo sandbox", description: "Sandbox echo" }).pipe(
+              Effect.provide(mockShellSpawner(records)),
+            ),
           ),
         (prev) =>
           Effect.sync(() => {
@@ -474,10 +480,9 @@ describe("tool.shell sandbox", () => {
 
       const error = yield* runIn(
         tmp,
-        fail(
-          { command: "echo sandbox", description: "Sandbox echo" },
-          ctx,
-        ).pipe(Effect.provide(mockShellSpawner(records, { dockerAvailable: false }))),
+        fail({ command: "echo sandbox", description: "Sandbox echo" }, ctx).pipe(
+          Effect.provide(mockShellSpawner(records, { dockerAvailable: false })),
+        ),
       )
 
       expect(error.message).toBe("Sandbox is enabled but Docker is unavailable")
@@ -570,12 +575,19 @@ describe("tool.shell sandbox", () => {
     Effect.gen(function* () {
       const records: RecordedCommand[] = []
       const tmp = yield* tmpdirScoped({
-        config: { sandbox: { enabled: true, profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } } } },
+        config: {
+          sandbox: {
+            enabled: true,
+            profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } },
+          },
+        },
       })
 
       yield* runIn(
         tmp,
-        run({ command: "npm view bun", description: "Sandbox registry" }).pipe(Effect.provide(mockShellSpawner(records))),
+        run({ command: "npm view bun", description: "Sandbox registry" }).pipe(
+          Effect.provide(mockShellSpawner(records)),
+        ),
       )
 
       const orchestrator = records.find((record) => record.command === process.execPath && record.args[0] === "--eval")
@@ -597,7 +609,12 @@ describe("tool.shell sandbox", () => {
     Effect.gen(function* () {
       const records: RecordedCommand[] = []
       const tmp = yield* tmpdirScoped({
-        config: { sandbox: { enabled: true, profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } } } },
+        config: {
+          sandbox: {
+            enabled: true,
+            profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } },
+          },
+        },
       })
 
       yield* runIn(
@@ -633,7 +650,12 @@ describe("tool.shell sandbox", () => {
     Effect.gen(function* () {
       const records: RecordedCommand[] = []
       const tmp = yield* tmpdirScoped({
-        config: { sandbox: { enabled: true, profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } } } },
+        config: {
+          sandbox: {
+            enabled: true,
+            profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } },
+          },
+        },
       })
 
       yield* runIn(
@@ -658,7 +680,12 @@ describe("tool.shell sandbox", () => {
     Effect.gen(function* () {
       const records: RecordedCommand[] = []
       const tmp = yield* tmpdirScoped({
-        config: { sandbox: { enabled: true, profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } } } },
+        config: {
+          sandbox: {
+            enabled: true,
+            profiles: { workspace: { network: { mode: "allowlist", hosts: ["registry.npmjs.org"] } } },
+          },
+        },
       })
 
       yield* runIn(

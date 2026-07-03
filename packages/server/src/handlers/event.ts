@@ -34,27 +34,25 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
         return HttpServerResponse.stream(
           Stream.make(connected).pipe(
             Stream.concat(
-              events
-                .all()
-                .pipe(
-                  Stream.filter(
-                    (event) =>
-                      event.location?.directory === location.directory &&
-                      event.location.workspaceID === location.workspaceID,
-                  ),
-                  Stream.map((event) => ({
-                    ...event,
-                    ...(event.location
-                      ? {
-                          location: new Location.Info({
-                            directory: event.location.directory,
-                            workspaceID: event.location.workspaceID,
-                            project: location.project,
-                          }),
-                        }
-                      : {}),
-                  })),
+              events.all().pipe(
+                Stream.filter(
+                  (event) =>
+                    event.location?.directory === location.directory &&
+                    event.location.workspaceID === location.workspaceID,
                 ),
+                Stream.map((event) => ({
+                  ...event,
+                  ...(event.location
+                    ? {
+                        location: new Location.Info({
+                          directory: event.location.directory,
+                          workspaceID: event.location.workspaceID,
+                          project: location.project,
+                        }),
+                      }
+                    : {}),
+                })),
+              ),
             ),
             Stream.map(eventData),
             Stream.pipeThroughChannel(Sse.encode()),

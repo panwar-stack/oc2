@@ -168,7 +168,8 @@ export const TeamSpawnTool = Tool.define(
               : undefined
           if (params.variant) {
             const requestedModelExit = modelExit
-            if (!requestedModelExit) return yield* Effect.die(new Error("Model lookup did not run for requested variant"))
+            if (!requestedModelExit)
+              return yield* Effect.die(new Error("Model lookup did not run for requested variant"))
             if (Exit.isFailure(requestedModelExit)) {
               const error = Cause.squash(requestedModelExit.cause)
               const hint = Provider.ModelNotFoundError.isInstance(error)
@@ -534,9 +535,7 @@ export const TeamSpawnTool = Tool.define(
               .updateMemberStatus(
                 member.id,
                 "cancelled",
-                member.lifecycle === "daemon"
-                  ? { daemonState: "cancelled", daemonLastActive: Date.now() }
-                  : undefined,
+                member.lifecycle === "daemon" ? { daemonState: "cancelled", daemonLastActive: Date.now() } : undefined,
               )
               .pipe(Effect.ignore)
             yield* ops.cancel(SessionID.make(member.session_id)).pipe(Effect.ignore)

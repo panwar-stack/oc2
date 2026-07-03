@@ -68,7 +68,13 @@ type Metadata = {
 export const ReadTool = Tool.define<
   typeof Parameters,
   Metadata,
-  FSUtil.Service | Instruction.Service | LSP.Service | Reference.Service | Search.Service | Session.Service | Scope.Scope
+  | FSUtil.Service
+  | Instruction.Service
+  | LSP.Service
+  | Reference.Service
+  | Search.Service
+  | Session.Service
+  | Scope.Scope
 >(
   "read",
   Effect.gen(function* () {

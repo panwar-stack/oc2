@@ -115,7 +115,12 @@ function recordSame(a: Record<string, unknown> | undefined, b: Record<string, un
 function valueSame(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true
   if (Array.isArray(a) || Array.isArray(b)) {
-    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, index) => valueSame(item, b[index]))
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((item, index) => valueSame(item, b[index]))
+    )
   }
   if (!a || !b || typeof a !== "object" || typeof b !== "object") return false
 

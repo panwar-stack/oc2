@@ -118,9 +118,7 @@ function executionError(stderr: string, code: number) {
 
 function parse(stdout: string, stderr: string) {
   return decodeOutput(stdout).pipe(
-    Effect.mapError(() =>
-      new Error(`invalid opengrep output${stderr.trim() ? `: ${truncate(stderr.trim())}` : ""}`),
-    ),
+    Effect.mapError(() => new Error(`invalid opengrep output${stderr.trim() ? `: ${truncate(stderr.trim())}` : ""}`)),
   )
 }
 
@@ -154,100 +152,105 @@ function normalize(file: string) {
   return path.normalize(file.replace(/^\.[\\/]/, ""))
 }
 
-export const layer: Layer.Layer<Service, never, FSUtil.Service | ChildProcessSpawner | HttpClient.HttpClient> = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const fs = yield* FSUtil.Service
-    const http = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
-    const spawner = yield* ChildProcessSpawner
+export const layer: Layer.Layer<Service, never, FSUtil.Service | ChildProcessSpawner | HttpClient.HttpClient> =
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const http = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
+      const spawner = yield* ChildProcessSpawner
 
-    const locate = Effect.fnUntraced(function* () {
-      const binary = process.platform === "win32" ? "opengrep.exe" : "opengrep"
-      const system = yield* Effect.sync(() => which(binary))
-      if (system && (yield* fs.isFile(system).pipe(Effect.orDie))) return system
+      const locate = Effect.fnUntraced(function* () {
+        const binary = process.platform === "win32" ? "opengrep.exe" : "opengrep"
+        const system = yield* Effect.sync(() => which(binary))
+        if (system && (yield* fs.isFile(system).pipe(Effect.orDie))) return system
 
-      const target = path.join(Global.Path.bin, binary)
-      if (yield* fs.isFile(target).pipe(Effect.orDie)) return target
+        const target = path.join(Global.Path.bin, binary)
+        if (yield* fs.isFile(target).pipe(Effect.orDie)) return target
 
-      const platformKey = `${process.arch}-${process.platform}` as keyof typeof PLATFORM
-      const asset = PLATFORM[platformKey]
-      if (!asset) return yield* Effect.fail(new Error(`unsupported platform for opengrep: ${platformKey}`))
+        const platformKey = `${process.arch}-${process.platform}` as keyof typeof PLATFORM
+        const asset = PLATFORM[platformKey]
+        if (!asset) return yield* Effect.fail(new Error(`unsupported platform for opengrep: ${platformKey}`))
 
-      const url = `https://github.com/opengrep/opengrep/releases/download/v${VERSION}/${asset}`
-      log.info("downloading opengrep", { url })
-      yield* fs.ensureDir(Global.Path.bin).pipe(Effect.orDie)
+        const url = `https://github.com/opengrep/opengrep/releases/download/v${VERSION}/${asset}`
+        log.info("downloading opengrep", { url })
+        yield* fs.ensureDir(Global.Path.bin).pipe(Effect.orDie)
 
-      const bytes = yield* HttpClientRequest.get(url).pipe(
-        http.execute,
-        Effect.flatMap((response) => response.arrayBuffer),
-        Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
-      )
-      if (bytes.byteLength === 0) return yield* Effect.fail(new Error(`failed to download opengrep from ${url}`))
+        const bytes = yield* HttpClientRequest.get(url).pipe(
+          http.execute,
+          Effect.flatMap((response) => response.arrayBuffer),
+          Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
+        )
+        if (bytes.byteLength === 0) return yield* Effect.fail(new Error(`failed to download opengrep from ${url}`))
 
-      yield* fs.writeWithDirs(target, new Uint8Array(bytes))
-      if (process.platform !== "win32") yield* fs.chmod(target, 0o755)
-      return target
-    })
-    const filepath = yield* Effect.cached(locate())
-
-    const command = Effect.fnUntraced(function* (cwd: string, args: string[]) {
-      const binary = yield* locate().pipe(
-        Effect.mapError(() => new Error("opengrep is not installed or could not be downloaded")),
-      )
-      return ChildProcess.make(binary, args, {
-        cwd,
-        extendEnv: true,
-        stdin: "ignore",
+        yield* fs.writeWithDirs(target, new Uint8Array(bytes))
+        if (process.platform !== "win32") yield* fs.chmod(target, 0o755)
+        return target
       })
-    })
+      const filepath = yield* Effect.cached(locate())
 
-    const search: Interface["search"] = Effect.fn("Opengrep.search")(function* (input: SearchInput) {
-      const program = Effect.scoped(
-        Effect.gen(function* () {
-          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "opengrep-" })
-          const configPath = path.join(dir, "rule.json")
-          yield* fs.writeWithDirs(configPath, config(input))
+      const command = Effect.fnUntraced(function* (cwd: string, args: string[]) {
+        const binary = yield* locate().pipe(
+          Effect.mapError(() => new Error("opengrep is not installed or could not be downloaded")),
+        )
+        return ChildProcess.make(binary, args, {
+          cwd,
+          extendEnv: true,
+          stdin: "ignore",
+        })
+      })
 
-          const handle = yield* spawner.spawn(yield* command(input.cwd, searchArgs(input, configPath)))
-          const [stdout, stderr, code] = yield* Effect.all(
-            [
-              Stream.mkString(Stream.decodeText(handle.stdout)),
-              Stream.mkString(Stream.decodeText(handle.stderr)),
-              handle.exitCode,
-            ],
-            { concurrency: "unbounded" },
-          )
+      const search: Interface["search"] = Effect.fn("Opengrep.search")(function* (input: SearchInput) {
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const dir = yield* fs.makeTempDirectoryScoped({ prefix: "opengrep-" })
+            const configPath = path.join(dir, "rule.json")
+            yield* fs.writeWithDirs(configPath, config(input))
 
-          if (code !== 0 && code !== 1) return yield* Effect.fail(executionError(stderr, code))
-          if (code === 1 && stdout.trim() === "") return { items: [], total: 0, truncated: false }
+            const handle = yield* spawner.spawn(yield* command(input.cwd, searchArgs(input, configPath)))
+            const [stdout, stderr, code] = yield* Effect.all(
+              [
+                Stream.mkString(Stream.decodeText(handle.stdout)),
+                Stream.mkString(Stream.decodeText(handle.stderr)),
+                handle.exitCode,
+              ],
+              { concurrency: "unbounded" },
+            )
 
-          const output = yield* parse(stdout, stderr)
-          const limit = input.limit ?? 100
-          const items = output.results.map((item) => ({
-            file: normalize(item.path),
-            line: item.start.line,
-            column: item.start.col,
-            message: item.extra?.message,
-            match: truncateMatch(item.extra?.lines ?? ""),
-          }))
-          return {
-            items: items.slice(0, limit),
-            total: items.length,
-            truncated: items.length > limit,
-          }
-        }),
-      )
+            if (code !== 0 && code !== 1) return yield* Effect.fail(executionError(stderr, code))
+            if (code === 1 && stdout.trim() === "") return { items: [], total: 0, truncated: false }
 
-      return yield* raceAbort(program, input.signal)
-    })
+            const output = yield* parse(stdout, stderr)
+            const limit = input.limit ?? 100
+            const items = output.results.map((item) => ({
+              file: normalize(item.path),
+              line: item.start.line,
+              column: item.start.col,
+              message: item.extra?.message,
+              match: truncateMatch(item.extra?.lines ?? ""),
+            }))
+            return {
+              items: items.slice(0, limit),
+              total: items.length,
+              truncated: items.length > limit,
+            }
+          }),
+        )
 
-    return Service.of({
-      path: () => filepath,
-      available: () => filepath.pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false))),
-      search,
-    })
-  }),
-)
+        return yield* raceAbort(program, input.signal)
+      })
+
+      return Service.of({
+        path: () => filepath,
+        available: () =>
+          filepath.pipe(
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          ),
+        search,
+      })
+    }),
+  )
 
 export const defaultLayer = layer.pipe(
   Layer.provide(FetchHttpClient.layer),

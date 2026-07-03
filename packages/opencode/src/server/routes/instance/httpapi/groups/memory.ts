@@ -136,94 +136,94 @@ export const MemoryPaths = {
   clear: "/memory",
 } as const
 
-export const MemoryApi = HttpApi.make("memory")
-  .add(
-    HttpApiGroup.make("memory")
-      .add(
-        HttpApiEndpoint.post("index", MemoryPaths.index, {
-          query: WorkspaceRoutingQuery,
-          payload: Schema.UndefinedOr(IndexPayload),
-          success: described(IndexResponse, "Memory indexing job"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "memory.index",
-            summary: "Index repository memory",
-            description: "Start a background job to index local repository commits and file summaries.",
-          }),
-        ),
-        HttpApiEndpoint.get("status", MemoryPaths.status, {
-          query: WorkspaceRoutingQuery,
-          success: described(StatusResponse, "Repository memory status"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "memory.status",
-            summary: "Get repository memory status",
-            description: "Return commit, file activity, and summary counts for the active repository memory index.",
-          }),
-        ),
-        HttpApiEndpoint.post("searchCommit", MemoryPaths.searchCommit, {
-          query: WorkspaceRoutingQuery,
-          payload: SearchPayload,
-          success: described(SearchCommitResponse, "Commit memory search results"),
-          error: ApiNotFoundError,
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "memory.searchCommit",
-            summary: "Search commit memory",
-            description: "Search repository commit memory for historical localization hints.",
-          }),
-        ),
-        HttpApiEndpoint.get("commit", MemoryPaths.commit, {
-          params: CommitParams,
-          query: CommitQuery,
-          success: described(CommitResponse, "Commit memory record"),
-          error: [ApiNotFoundError, InvalidRequestError],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "memory.commit",
-            summary: "Examine commit memory",
-            description: "Inspect a historical commit memory record. Old diffs must be verified against current source before editing.",
-          }),
-        ),
-        HttpApiEndpoint.post("searchSummary", MemoryPaths.searchSummary, {
-          query: WorkspaceRoutingQuery,
-          payload: SearchPayload,
-          success: described(SearchSummaryResponse, "File summary search results"),
-          error: ApiNotFoundError,
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "memory.searchSummary",
-            summary: "Search file summary memory",
-            description: "Search cached high-activity file summaries for historical localization hints.",
-          }),
-        ),
-        HttpApiEndpoint.get("summary", MemoryPaths.summary, {
-          query: SummaryQuery,
-          success: described(SummaryResponse, "File summary memory record"),
-          error: ApiNotFoundError,
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "memory.summary",
-            summary: "View file summary memory",
-            description: "Show the cached repository-memory summary for a known file path.",
-          }),
-        ),
-        HttpApiEndpoint.delete("clear", MemoryPaths.clear, {
-          query: WorkspaceRoutingQuery,
-          success: described(ClearResponse, "Repository memory clear result"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "memory.clear",
-            summary: "Clear repository memory",
-            description: "Clear repository memory for the active repository.",
-          }),
-        ),
-      )
-      .annotateMerge(OpenApi.annotations({ title: "memory", description: "Repository memory HttpApi routes." }))
-      .middleware(InstanceContextMiddleware)
-      .middleware(WorkspaceRoutingMiddleware)
-      .middleware(Authorization),
-  )
+export const MemoryApi = HttpApi.make("memory").add(
+  HttpApiGroup.make("memory")
+    .add(
+      HttpApiEndpoint.post("index", MemoryPaths.index, {
+        query: WorkspaceRoutingQuery,
+        payload: Schema.UndefinedOr(IndexPayload),
+        success: described(IndexResponse, "Memory indexing job"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.index",
+          summary: "Index repository memory",
+          description: "Start a background job to index local repository commits and file summaries.",
+        }),
+      ),
+      HttpApiEndpoint.get("status", MemoryPaths.status, {
+        query: WorkspaceRoutingQuery,
+        success: described(StatusResponse, "Repository memory status"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.status",
+          summary: "Get repository memory status",
+          description: "Return commit, file activity, and summary counts for the active repository memory index.",
+        }),
+      ),
+      HttpApiEndpoint.post("searchCommit", MemoryPaths.searchCommit, {
+        query: WorkspaceRoutingQuery,
+        payload: SearchPayload,
+        success: described(SearchCommitResponse, "Commit memory search results"),
+        error: ApiNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.searchCommit",
+          summary: "Search commit memory",
+          description: "Search repository commit memory for historical localization hints.",
+        }),
+      ),
+      HttpApiEndpoint.get("commit", MemoryPaths.commit, {
+        params: CommitParams,
+        query: CommitQuery,
+        success: described(CommitResponse, "Commit memory record"),
+        error: [ApiNotFoundError, InvalidRequestError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.commit",
+          summary: "Examine commit memory",
+          description:
+            "Inspect a historical commit memory record. Old diffs must be verified against current source before editing.",
+        }),
+      ),
+      HttpApiEndpoint.post("searchSummary", MemoryPaths.searchSummary, {
+        query: WorkspaceRoutingQuery,
+        payload: SearchPayload,
+        success: described(SearchSummaryResponse, "File summary search results"),
+        error: ApiNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.searchSummary",
+          summary: "Search file summary memory",
+          description: "Search cached high-activity file summaries for historical localization hints.",
+        }),
+      ),
+      HttpApiEndpoint.get("summary", MemoryPaths.summary, {
+        query: SummaryQuery,
+        success: described(SummaryResponse, "File summary memory record"),
+        error: ApiNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.summary",
+          summary: "View file summary memory",
+          description: "Show the cached repository-memory summary for a known file path.",
+        }),
+      ),
+      HttpApiEndpoint.delete("clear", MemoryPaths.clear, {
+        query: WorkspaceRoutingQuery,
+        success: described(ClearResponse, "Repository memory clear result"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.clear",
+          summary: "Clear repository memory",
+          description: "Clear repository memory for the active repository.",
+        }),
+      ),
+    )
+    .annotateMerge(OpenApi.annotations({ title: "memory", description: "Repository memory HttpApi routes." }))
+    .middleware(InstanceContextMiddleware)
+    .middleware(WorkspaceRoutingMiddleware)
+    .middleware(Authorization),
+)
 
 export type IndexPayload = typeof IndexPayload.Type
 export type SearchPayload = typeof SearchPayload.Type

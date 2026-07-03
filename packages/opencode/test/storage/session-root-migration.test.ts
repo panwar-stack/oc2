@@ -25,8 +25,7 @@ function migrations() {
         ...readMigrations(path.join(import.meta.dirname, "../../migration")),
       ].map((entry) => [entry.name, entry]),
     ).values(),
-  )
-    .sort((a, b) => a.timestamp - b.timestamp)
+  ).sort((a, b) => a.timestamp - b.timestamp)
 }
 
 describe("session root migration", () => {

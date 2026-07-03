@@ -401,9 +401,10 @@ describe("tool.apply_patch freeform", () => {
         permissionCtx([{ permission: "edit", pattern: "*", action: "allow" }]),
       )
 
-      expect(Permission.evaluate("apply_patch", "edit-allowed.txt", [
-        { permission: "edit", pattern: "*", action: "allow" },
-      ]).action).toBe("allow")
+      expect(
+        Permission.evaluate("apply_patch", "edit-allowed.txt", [{ permission: "edit", pattern: "*", action: "allow" }])
+          .action,
+      ).toBe("allow")
       expect(yield* readText(target)).toBe("new\n")
     }),
   )

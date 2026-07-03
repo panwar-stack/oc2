@@ -58,11 +58,13 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       }
     })
 
-    const searchCommit = Effect.fn("MemoryHttpApi.searchCommit")(function* (ctx: {
-      payload: SearchPayload
-    }) {
+    const searchCommit = Effect.fn("MemoryHttpApi.searchCommit")(function* (ctx: { payload: SearchPayload }) {
       const repository = yield* resolveRepository(memory, yield* routeDirectory())
-      const commits = yield* memory.searchCommitRows({ repository_id: repository.id, query: ctx.payload.query, limit: ctx.payload.limit })
+      const commits = yield* memory.searchCommitRows({
+        repository_id: repository.id,
+        query: ctx.payload.query,
+        limit: ctx.payload.limit,
+      })
       const final_files = unique(commits.flatMap((commit) => parseJsonArray(commit.changed_files)))
       yield* memory.logRetrieval({
         repository_id: repository.id,
@@ -120,11 +122,13 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       }
     })
 
-    const searchSummary = Effect.fn("MemoryHttpApi.searchSummary")(function* (ctx: {
-      payload: SearchPayload
-    }) {
+    const searchSummary = Effect.fn("MemoryHttpApi.searchSummary")(function* (ctx: { payload: SearchPayload }) {
       const repository = yield* resolveRepository(memory, yield* routeDirectory())
-      const summaries = yield* memory.searchSummaryRows({ repository_id: repository.id, query: ctx.payload.query, limit: ctx.payload.limit })
+      const summaries = yield* memory.searchSummaryRows({
+        repository_id: repository.id,
+        query: ctx.payload.query,
+        limit: ctx.payload.limit,
+      })
       yield* memory.logRetrieval({
         repository_id: repository.id,
         tool: "memory_api_search_summary",
@@ -150,7 +154,11 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       const current = yield* memory.currentRepository(yield* routeDirectory())
       const repository = yield* memory.getRepository(current.identity)
       if (!repository) return yield* Effect.fail(notFound(`No repository memory index found for ${current.identity}`))
-      const row = yield* memory.getFileSummary({ repository_id: repository.id, path: ctx.query.path, worktree: current.worktree })
+      const row = yield* memory.getFileSummary({
+        repository_id: repository.id,
+        path: ctx.query.path,
+        worktree: current.worktree,
+      })
       if (!row) return yield* Effect.fail(notFound(`File summary not found: ${ctx.query.path}`))
       yield* memory.logRetrieval({
         repository_id: repository.id,
@@ -198,7 +206,10 @@ function resolveRepository(memory: Memory.Interface, directory: string | undefin
     const repository = yield* memory.getRepository(current.identity)
     if (!repository) {
       return yield* Effect.fail(
-        new ApiNotFoundError({ name: "NotFoundError", data: { message: `No repository memory index found for ${current.identity}` } }),
+        new ApiNotFoundError({
+          name: "NotFoundError",
+          data: { message: `No repository memory index found for ${current.identity}` },
+        }),
       )
     }
     return repository

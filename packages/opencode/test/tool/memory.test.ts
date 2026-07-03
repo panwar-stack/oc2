@@ -53,73 +53,84 @@ const it = testEffect(
 const registryIt = testEffect(Layer.mergeAll(ToolRegistry.defaultLayer, Memory.defaultLayer))
 
 describe("tool.memory", () => {
-  registryIt.instance("does not expose memory tools to wildcard permissions until the active repository is indexed", () =>
-    Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
-      const tools = yield* registry.tools({
-        providerID: ProviderID.make("test"),
-        modelID: ModelID.make("test-model"),
-        agent: wildcardAgent(),
-      })
+  registryIt.instance(
+    "does not expose memory tools to wildcard permissions until the active repository is indexed",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* ToolRegistry.Service
+        const tools = yield* registry.tools({
+          providerID: ProviderID.make("test"),
+          modelID: ModelID.make("test-model"),
+          agent: wildcardAgent(),
+        })
 
-      expect(tools.filter((tool) => tool.id.startsWith("memory_"))).toEqual([])
-    }),
+        expect(tools.filter((tool) => tool.id.startsWith("memory_"))).toEqual([])
+      }),
     { git: true },
   )
 
-  registryIt.instance("does not expose memory tools when memory is disabled even if the active repository is indexed", () =>
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const memory = yield* Memory.Service
-      const repository = yield* memory.ensureRepository({ reference: pathToFileURL(test.directory).href })
-      yield* memory.upsertCommits(repository.id, [
-        {
-          hash: "abc123",
-          message: "Index exists but memory is disabled",
-          author_time: Date.now(),
-          changed_files: ["src/tool/registry.ts"],
-          diff: "diff --git a/src/tool/registry.ts b/src/tool/registry.ts",
-          token_text: tokenText("disabled memory index"),
-        },
-      ])
-      const registry = yield* ToolRegistry.Service
-      const tools = yield* registry.tools({
-        providerID: ProviderID.make("test"),
-        modelID: ModelID.make("test-model"),
-        agent: wildcardAgent(),
-      })
+  registryIt.instance(
+    "does not expose memory tools when memory is disabled even if the active repository is indexed",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const memory = yield* Memory.Service
+        const repository = yield* memory.ensureRepository({ reference: pathToFileURL(test.directory).href })
+        yield* memory.upsertCommits(repository.id, [
+          {
+            hash: "abc123",
+            message: "Index exists but memory is disabled",
+            author_time: Date.now(),
+            changed_files: ["src/tool/registry.ts"],
+            diff: "diff --git a/src/tool/registry.ts b/src/tool/registry.ts",
+            token_text: tokenText("disabled memory index"),
+          },
+        ])
+        const registry = yield* ToolRegistry.Service
+        const tools = yield* registry.tools({
+          providerID: ProviderID.make("test"),
+          modelID: ModelID.make("test-model"),
+          agent: wildcardAgent(),
+        })
 
-      expect(tools.filter((tool) => tool.id.startsWith("memory_"))).toEqual([])
-    }),
+        expect(tools.filter((tool) => tool.id.startsWith("memory_"))).toEqual([])
+      }),
     { git: true, config: { memory: { enabled: false } } },
   )
 
-  registryIt.instance("exposes memory tools by default when the active repository is indexed", () =>
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const memory = yield* Memory.Service
-      const repository = yield* memory.ensureRepository({ reference: pathToFileURL(test.directory).href })
-      yield* memory.upsertCommits(repository.id, [
-        {
-          hash: "abc123",
-          message: "Fix memory registry gating",
-          author_time: Date.now(),
-          changed_files: ["src/tool/registry.ts"],
-          diff: "diff --git a/src/tool/registry.ts b/src/tool/registry.ts",
-          token_text: tokenText("memory registry gating"),
-        },
-      ])
-      const registry = yield* ToolRegistry.Service
-      const tools = yield* registry.tools({
-        providerID: ProviderID.make("test"),
-        modelID: ModelID.make("test-model"),
-        agent: wildcardAgent(),
-      })
+  registryIt.instance(
+    "exposes memory tools by default when the active repository is indexed",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const memory = yield* Memory.Service
+        const repository = yield* memory.ensureRepository({ reference: pathToFileURL(test.directory).href })
+        yield* memory.upsertCommits(repository.id, [
+          {
+            hash: "abc123",
+            message: "Fix memory registry gating",
+            author_time: Date.now(),
+            changed_files: ["src/tool/registry.ts"],
+            diff: "diff --git a/src/tool/registry.ts b/src/tool/registry.ts",
+            token_text: tokenText("memory registry gating"),
+          },
+        ])
+        const registry = yield* ToolRegistry.Service
+        const tools = yield* registry.tools({
+          providerID: ProviderID.make("test"),
+          modelID: ModelID.make("test-model"),
+          agent: wildcardAgent(),
+        })
 
-      expect(tools.map((tool) => tool.id)).toEqual(
-        expect.arrayContaining(["memory_search_commit", "memory_examine_commit", "memory_search_summary", "memory_view_summary"]),
-      )
-    }),
+        expect(tools.map((tool) => tool.id)).toEqual(
+          expect.arrayContaining([
+            "memory_search_commit",
+            "memory_examine_commit",
+            "memory_search_summary",
+            "memory_view_summary",
+          ]),
+        )
+      }),
     { git: true },
   )
 
@@ -166,7 +177,9 @@ describe("tool.memory", () => {
       yield* tool.execute({ queries: ["github logging"], repository: repository.identity }, context([], sessionID))
       Memory.clearRetrievalContext(sessionID)
 
-      const logs = yield* Database.Service.use((database) => database.db.select().from(memory.tables.retrievalLog).all())
+      const logs = yield* Database.Service.use((database) =>
+        database.db.select().from(memory.tables.retrievalLog).all(),
+      )
       const log = logs.find((row) => row.session_id === sessionID)
       expect(log?.session_id).toBe(sessionID)
       expect(log?.issue_identifier).toBe("github.com/opencode-ai/opencode#5")
@@ -190,7 +203,10 @@ describe("tool.memory", () => {
         },
       ])
       const tool = yield* Tool.init(yield* MemoryExamineCommitTool)
-      const output = yield* tool.execute({ hash: "def", repository: repository.identity, max_diff_bytes: 12 }, context())
+      const output = yield* tool.execute(
+        { hash: "def", repository: repository.identity, max_diff_bytes: 12 },
+        context(),
+      )
 
       expect(output.output).toContain("historical")
       expect(output.output).toContain("Old line numbers may not match current source")

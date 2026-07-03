@@ -234,7 +234,11 @@ describe("tool.team_report", () => {
         Effect.gen(function* () {
           const sessions = yield* Session.Service
           const team = yield* Team.Service
-          yield* team.create({ name: "empty-team", goal: "Exclude from rollup", leadSessionID: "ses_report_empty_lead" })
+          yield* team.create({
+            name: "empty-team",
+            goal: "Exclude from rollup",
+            leadSessionID: "ses_report_empty_lead",
+          })
           const shallowLead = yield* sessions.create({ title: "Shallow Lead" })
           const shallow = yield* team.create({
             name: "shallow-team",

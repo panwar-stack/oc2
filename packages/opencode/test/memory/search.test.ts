@@ -3,7 +3,9 @@ import { rankDocuments, tokenize, tokenText, DEFAULT_LIMITS } from "@/memory/sea
 
 describe("memory search", () => {
   test("tokenizer preserves identifiers and file paths while splitting parts", () => {
-    const tokens = tokenize("Fix parseRepositoryReference in src/util/repository-cache.ts for issue #123 TypeError bun test")
+    const tokens = tokenize(
+      "Fix parseRepositoryReference in src/util/repository-cache.ts for issue #123 TypeError bun test",
+    )
 
     expect(tokens).toContain("parserepositoryreference")
     expect(tokens).toContain("parse")
@@ -21,14 +23,11 @@ describe("memory search", () => {
   })
 
   test("ranks sparse documents deterministically with strong exact signals", () => {
-    const results = rankDocuments(
-      "parseRepositoryReference src/util/repository.ts",
-      [
-        { id: "b", token_text: tokenText("unrelated config parser") },
-        { id: "a", token_text: tokenText("parseRepositoryReference src/util/repository.ts repository identity") },
-        { id: "c", token_text: tokenText("repository reference parsing src/util/other.ts") },
-      ],
-    )
+    const results = rankDocuments("parseRepositoryReference src/util/repository.ts", [
+      { id: "b", token_text: tokenText("unrelated config parser") },
+      { id: "a", token_text: tokenText("parseRepositoryReference src/util/repository.ts repository identity") },
+      { id: "c", token_text: tokenText("repository reference parsing src/util/other.ts") },
+    ])
 
     expect(DEFAULT_LIMITS).toEqual({ commits: 20, summaries: 5 })
     expect(results.map((item) => item.id)).toEqual(["a", "c"])

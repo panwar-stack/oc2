@@ -14,6 +14,7 @@
     "dev:stats": "bun sst shell --stage=production -- bun run --cwd packages/stats/app dev",
     "dev:storybook": "bun --cwd packages/storybook storybook",
     "lint": "oxlint",
+    "check:generated": "bun run script/check-generated.ts",
     "check:packages": "bun run script/package-boundaries.ts",
     "report:packages": "bun run script/package-boundaries.ts --graph",
     "typecheck": "bun turbo typecheck",

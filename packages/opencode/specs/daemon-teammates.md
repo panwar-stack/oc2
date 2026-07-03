@@ -280,10 +280,10 @@ These should be independent wake/input mechanisms for daemon teammates, not part
 ## Open Questions
 
 - Should daemon teammates be allowed to satisfy `depends_on` dependencies?
-Default: no. Daemon teammates are lifecycle services, not finite producers. A dependent teammate should depend on a separate finite setup or handoff member.
+  Default: no. Daemon teammates are lifecycle services, not finite producers. A dependent teammate should depend on a separate finite setup or handoff member.
 - Should daemon teammates use a separate `daemon_state` field or add new `team_member.status` values?
-Default: use `daemon_state` to minimize status enum churn and preserve existing displays.
+  Default: use `daemon_state` to minimize status enum churn and preserve existing displays.
 - Should daemon teammates be restartable after process crash?
-Default: no in the first pass. Persist lifecycle state for observability, but do not promise daemon recovery until clustered/recovery semantics are designed.
+  Default: no in the first pass. Persist lifecycle state for observability, but do not promise daemon recovery until clustered/recovery semantics are designed.
 - Should the lifecycle option be named `lifecycle`, `mode`, or `kind`?
-Default: `lifecycle`, because it describes task-vs-daemon lifetime without conflicting with existing agent modes or plan mode.
+  Default: `lifecycle`, because it describes task-vs-daemon lifetime without conflicting with existing agent modes or plan mode.

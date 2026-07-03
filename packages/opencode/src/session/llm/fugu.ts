@@ -51,7 +51,7 @@ Ok to describe private reasoning that is relevant to the caller request, but do 
 
 Final output:
 Return only the final answer that should be shown to the caller.
-`;
+`
 const log = Log.create({ service: "fugu" })
 
 type Target = ConfigFugu.Branch | ConfigFugu.Judge | ConfigFugu.Synthesizer
@@ -172,7 +172,9 @@ export function run(
       return yield* Effect.fail(new Error("All fugu branches failed"))
     }
 
-    const judge = resolved.judge ? yield* collectJudge(input, resolved.judge, results, execute, updateJudgeStatus) : undefined
+    const judge = resolved.judge
+      ? yield* collectJudge(input, resolved.judge, results, execute, updateJudgeStatus)
+      : undefined
 
     yield* Effect.logInfo("fugu synthesizer selected").pipe(
       Effect.annotateLogs({
@@ -216,7 +218,10 @@ export function run(
           return updateSynthesizerStatus(failureStatus(event.message), "failed").pipe(
             Effect.andThen(
               Effect.logError("fugu synthesizer failed").pipe(
-                Effect.annotateLogs({ "fugu.synthesizer": targetLabel(resolved.synthesizer), "fugu.error": event.message }),
+                Effect.annotateLogs({
+                  "fugu.synthesizer": targetLabel(resolved.synthesizer),
+                  "fugu.error": event.message,
+                }),
               ),
             ),
           )
@@ -226,7 +231,9 @@ export function run(
       Stream.tapError((error) =>
         updateSynthesizerStatus(failureStatus(errorMessage(error)), "failed").pipe(
           Effect.andThen(
-            Effect.sync(() => logTargetOutput(input, resolved.synthesizer, { status: "error", error: errorMessage(error) })).pipe(
+            Effect.sync(() =>
+              logTargetOutput(input, resolved.synthesizer, { status: "error", error: errorMessage(error) }),
+            ).pipe(
               Effect.andThen(
                 Effect.logError("fugu synthesizer failed").pipe(
                   Effect.annotateLogs({
@@ -247,7 +254,9 @@ function validate(config: ConfigFugu.Info | undefined, provider: Provider.Interf
   return Effect.gen(function* () {
     if (!config) {
       return yield* Effect.fail(
-        new Error("Fugu configuration is missing; configure fugu.branches and fugu.synthesizer before selecting fugu/fugu"),
+        new Error(
+          "Fugu configuration is missing; configure fugu.branches and fugu.synthesizer before selecting fugu/fugu",
+        ),
       )
     }
     if (!config.branches || config.branches.length === 0) {
@@ -292,11 +301,13 @@ function resolveTarget(provider: Provider.Interface, role: ResolvedTarget["role"
     if (parsed.providerID === "fugu" && parsed.modelID === "fugu") {
       return yield* Effect.fail(new Error(`Fugu ${role} target cannot resolve to fugu/fugu`))
     }
-    const model = yield* provider.getModel(parsed.providerID, parsed.modelID).pipe(
-      Effect.catchTag("ProviderModelNotFoundError", () =>
-        Effect.fail(new Error(`Fugu ${role} target ${label} could not be resolved`)),
-      ),
-    )
+    const model = yield* provider
+      .getModel(parsed.providerID, parsed.modelID)
+      .pipe(
+        Effect.catchTag("ProviderModelNotFoundError", () =>
+          Effect.fail(new Error(`Fugu ${role} target ${label} could not be resolved`)),
+        ),
+      )
     if (model.required_variant && !model.variants?.[model.required_variant]) {
       return yield* Effect.fail(
         new Error(`Fugu ${role} target ${label} requires unavailable variant ${model.required_variant}`),
@@ -321,6 +332,7 @@ function collectBranch(
   execute: Execute,
   publishStatus: (branch: ResolvedTarget, status: Status["branches"][number]["status"]) => Effect.Effect<void>,
 ) {
+  log.info(`Branch ${branch.index ?? 0} messages: ${input.messages}`)
   return Effect.gen(function* () {
     yield* publishStatus(branch, "working")
     const tools = toolDefinitions(input.tools)
@@ -462,7 +474,9 @@ function synthesizerMessage(results: BranchResult[], judge?: JudgeResult): Model
           model: result.model,
           variant: result.variant,
           status: result.status,
-          ...(result.status === "success" ? { text: result.text, toolCalls: result.toolCalls } : { error: result.error }),
+          ...(result.status === "success"
+            ? { text: result.text, toolCalls: result.toolCalls }
+            : { error: result.error }),
         })),
         null,
         2,

@@ -40,10 +40,7 @@ Add role-aware compound permissions without adding a new public policy in the fi
 Internal role shape:
 
 ```ts
-type CompoundRole =
-  | { type: "branch"; index: number }
-  | { type: "judge" }
-  | { type: "synthesizer" }
+type CompoundRole = { type: "branch"; index: number } | { type: "judge" } | { type: "synthesizer" }
 ```
 
 For branch and judge roles with write-capable policy:

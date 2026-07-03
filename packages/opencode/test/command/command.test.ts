@@ -106,9 +106,7 @@ describe("command", () => {
           expect(yield* Effect.promise(() => Promise.resolve(init.template))).toContain(
             "Create or update `AGENTS.md` for this repository.",
           )
-          expect(yield* Effect.promise(() => Promise.resolve(init.template))).toContain(
-            "Run `opencode memory index`",
-          )
+          expect(yield* Effect.promise(() => Promise.resolve(init.template))).toContain("Run `opencode memory index`")
           expect(yield* Effect.promise(() => Promise.resolve(init.template))).toContain(
             "Think before coding - Don't assume.",
           )

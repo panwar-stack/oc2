@@ -78,7 +78,11 @@ describe("team HttpApi", () => {
     Effect.gen(function* () {
       const test = yield* TestInstance
       const team = yield* Team.Service
-      const info = yield* team.create({ name: "http-daemon-eval", goal: "Expose daemon eval", leadSessionID: "ses_http_daemon_eval_lead" })
+      const info = yield* team.create({
+        name: "http-daemon-eval",
+        goal: "Expose daemon eval",
+        leadSessionID: "ses_http_daemon_eval_lead",
+      })
       const daemon = yield* team.addMember({
         teamID: info.id,
         sessionID: "ses_http_daemon_eval_member",
@@ -98,14 +102,18 @@ describe("team HttpApi", () => {
 
       expect(response.status, JSON.stringify(body)).toBe(200)
       expect(body.findings).toContainEqual(expect.objectContaining({ category: "daemon_error" }))
-    })
+    }),
   )
 
   it.instance("returns authorized team resources", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const team = yield* Team.Service
-      const info = yield* team.create({ name: "http-resources", goal: "Expose resources", leadSessionID: "ses_http_lead" })
+      const info = yield* team.create({
+        name: "http-resources",
+        goal: "Expose resources",
+        leadSessionID: "ses_http_lead",
+      })
       const member = yield* team.addMember({
         teamID: info.id,
         sessionID: "ses_http_member",
@@ -168,7 +176,11 @@ describe("team HttpApi", () => {
     Effect.gen(function* () {
       const test = yield* TestInstance
       const team = yield* Team.Service
-      const info = yield* team.create({ name: "http-outsider", goal: "Protect resources", leadSessionID: "ses_owner_lead" })
+      const info = yield* team.create({
+        name: "http-outsider",
+        goal: "Protect resources",
+        leadSessionID: "ses_owner_lead",
+      })
       const member = yield* team.addMember({
         teamID: info.id,
         sessionID: "ses_owner_member",
@@ -213,7 +225,11 @@ describe("team HttpApi", () => {
     Effect.gen(function* () {
       const test = yield* TestInstance
       const team = yield* Team.Service
-      const info = yield* team.create({ name: "http-shutdown", goal: "Close cleanly", leadSessionID: "ses_shutdown_lead" })
+      const info = yield* team.create({
+        name: "http-shutdown",
+        goal: "Close cleanly",
+        leadSessionID: "ses_shutdown_lead",
+      })
       const member = yield* team.addMember({
         teamID: info.id,
         sessionID: "ses_shutdown_member",

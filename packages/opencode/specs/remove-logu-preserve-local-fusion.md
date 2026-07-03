@@ -69,12 +69,12 @@ local_fusion?: Record<string, {
 
 Tool policy behavior:
 
-| Policy | Branch | Judge | Synthesizer |
-| --- | --- | --- | --- |
-| `none` | No tools | No tools | No tools |
-| `readonly` | Read/search/web/LSP tools | Read/search/web/LSP tools | Read/search/web/LSP tools |
+| Policy                 | Branch                                                                        | Judge                                                                         | Synthesizer                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `none`                 | No tools                                                                      | No tools                                                                      | No tools                                                                         |
+| `readonly`             | Read/search/web/LSP tools                                                     | Read/search/web/LSP tools                                                     | Read/search/web/LSP tools                                                        |
 | `parent_without_teams` | Scratch-scoped write/edit, no `apply_patch`, no teams, no nested Local Fusion | Scratch-scoped write/edit, no `apply_patch`, no teams, no nested Local Fusion | Parent-style tools with `team_create`, `team_spawn`, and `local_fusion` disabled |
-| `all` | Scratch-scoped write/edit, no `apply_patch` | Scratch-scoped write/edit, no `apply_patch` | Unrestricted tool map subject to existing permissions |
+| `all`                  | Scratch-scoped write/edit, no `apply_patch`                                   | Scratch-scoped write/edit, no `apply_patch`                                   | Unrestricted tool map subject to existing permissions                            |
 
 ## Error Handling
 

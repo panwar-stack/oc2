@@ -499,13 +499,10 @@ describe("DatabaseMigration", () => {
 
         yield* DatabaseMigration.applyOnly(db, [sessionProcessingMigration])
 
-        expect((yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name)).toEqual([
-          "id",
-          "time_processing",
-        ])
-        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
-          { id: "20260511180000_session_processing" },
-        ])
+        expect((yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name)).toEqual(
+          ["id", "time_processing"],
+        )
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([{ id: "20260511180000_session_processing" }])
       }),
     )
   })

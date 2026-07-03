@@ -67,12 +67,19 @@ export function tokenText(input: string) {
   return tokenize(input).join(" ")
 }
 
-export function rankDocuments<T extends SparseDocument>(query: string, documents: readonly T[], limit = documents.length) {
+export function rankDocuments<T extends SparseDocument>(
+  query: string,
+  documents: readonly T[],
+  limit = documents.length,
+) {
   const queryTokens = countTokens(tokenize(query))
   const terms = [...queryTokens.keys()]
   if (!terms.length || !documents.length) return []
 
-  const tokenized = documents.map((document) => ({ document, counts: countTokens(document.token_text.split(/\s+/).filter(Boolean)) }))
+  const tokenized = documents.map((document) => ({
+    document,
+    counts: countTokens(document.token_text.split(/\s+/).filter(Boolean)),
+  }))
   const averageLength = tokenized.reduce((sum, item) => sum + countTotal(item.counts), 0) / tokenized.length
   const documentFrequency = new Map(
     terms.map((term) => [term, tokenized.filter((item) => item.counts.has(term)).length] as const),
@@ -130,9 +137,7 @@ export function rankDocuments<T extends SparseDocument>(query: string, documents
 function expandToken(input: string) {
   const token = input.toLowerCase()
   if (STOP_WORDS.has(token)) return []
-  return [token, ...splitToken(input)]
-    .map((item) => item.toLowerCase())
-    .filter((item) => item && !STOP_WORDS.has(item))
+  return [token, ...splitToken(input)].map((item) => item.toLowerCase()).filter((item) => item && !STOP_WORDS.has(item))
 }
 
 function exactSignalTokens(input: string) {

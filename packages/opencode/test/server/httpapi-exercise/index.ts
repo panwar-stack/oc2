@@ -373,7 +373,10 @@ const scenarios: Scenario[] = [
     .json(404, object, "status"),
   http.protected
     .get("/memory/summary", "memory.summary")
-    .at((ctx) => ({ path: `/memory/summary?${new URLSearchParams({ path: "src/missing.ts" })}`, headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: `/memory/summary?${new URLSearchParams({ path: "src/missing.ts" })}`,
+      headers: ctx.headers(),
+    }))
     .json(404, object, "status"),
   http.protected.delete("/memory", "memory.clear").mutating().json(200, object, "status"),
   http.protected
@@ -1533,7 +1536,10 @@ const scenarios: Scenario[] = [
     ),
   http.protected
     .get("/team", "team.get")
-    .at((ctx) => ({ path: `/team?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`, headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: `/team?${new URLSearchParams({ sessionID: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
     .status(400),
   http.protected
     .get("/team/{teamID}", "team.getById")

@@ -5,7 +5,13 @@ import fs from "fs/promises"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EditTool } from "../../src/tool/edit"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { disposeAllInstances, provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
+import {
+  disposeAllInstances,
+  provideInstance,
+  testInstanceStoreLayer,
+  TestInstance,
+  tmpdirScoped,
+} from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Format } from "../../src/format"
@@ -135,10 +141,7 @@ describe("tool.edit", () => {
       yield* put(scratchFile, "old scratch")
 
       const denied = yield* provideInstance(primary)(
-        run(
-          { filePath: workspaceFile, oldString: "old", newString: "new" },
-          permissionCtx(ruleset),
-        ).pipe(Effect.exit),
+        run({ filePath: workspaceFile, oldString: "old", newString: "new" }, permissionCtx(ruleset)).pipe(Effect.exit),
       )
       expect(denied._tag).toBe("Failure")
       expect(yield* load(workspaceFile)).toBe("old workspace")

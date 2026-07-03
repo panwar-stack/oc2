@@ -228,13 +228,13 @@ describe("tool.team_spawn", () => {
       {
         config: {
           experimental: { agent_teams: true },
-            agent: {
-              model_worker: {
-                model: "openai/gpt-4",
-                variant: "agent-high",
-              },
+          agent: {
+            model_worker: {
+              model: "openai/gpt-4",
+              variant: "agent-high",
             },
           },
+        },
       },
     ),
   )
@@ -411,7 +411,9 @@ describe("tool.team_spawn", () => {
           expect(prompt).toContain("You are a daemon teammate.")
           expect(prompt).toContain("Your assignment is long-lived and remains active until the team shuts down.")
           expect(prompt).toContain("Use team_get_messages at natural boundaries, not in a polling loop.")
-          expect(prompt).not.toContain("When your assigned work is complete, put the concrete result in your final answer")
+          expect(prompt).not.toContain(
+            "When your assigned work is complete, put the concrete result in your final answer",
+          )
           expect(member?.lifecycle).toBe("daemon")
           expect(member?.status).toBe("idle")
           expect(member?.daemon_state).toBe("idle")
@@ -841,9 +843,7 @@ describe("tool.team_spawn", () => {
           expect(result.title).toBe("Teammate Completed")
           expect(observedCompletionWakeStatuses).toContain("completed")
           expect(observedCompletionWakeStatuses).not.toContain("active")
-          expect((yield* team.getMembers(info.id)).find((member) => member.name === "worker")?.status).toBe(
-            "completed",
-          )
+          expect((yield* team.getMembers(info.id)).find((member) => member.name === "worker")?.status).toBe("completed")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

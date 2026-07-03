@@ -1,4 +1,4 @@
-Here are real OpenCode interactive terminal user interface mocks for the coaching layer. I treated coaching as a native terminal surface, not a separate help panel, because the product requirements document calls for contextual, actionable, concise, non blocking tips across before run, during run, and after run moments.  OpenCode already supports an interactive terminal interface, prompts, file references through `@`, slash commands, and model commands, so the mocks lean into those existing patterns. ([OpenCode][1])
+Here are real OpenCode interactive terminal user interface mocks for the coaching layer. I treated coaching as a native terminal surface, not a separate help panel, because the product requirements document calls for contextual, actionable, concise, non blocking tips across before run, during run, and after run moments. OpenCode already supports an interactive terminal interface, prompts, file references through `@`, slash commands, and model commands, so the mocks lean into those existing patterns. ([OpenCode][1])
 
 ## 1. Core terminal layout
 

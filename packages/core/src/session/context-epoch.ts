@@ -109,7 +109,12 @@ const prepareOnce = Effect.fnUntraced(function* (
   if (result._tag === "ReplacementReady") {
     const replacementSeq = stored.replacement_seq ?? (yield* SessionInput.latestSeq(db, sessionID))
     yield* replace(db, sessionID, agent, stored.revision, replacementSeq, result.generation)
-    return { baseline: result.generation.baseline, variableContext, baselineSeq: replacementSeq, revision: stored.revision + 1 }
+    return {
+      baseline: result.generation.baseline,
+      variableContext,
+      baselineSeq: replacementSeq,
+      revision: stored.revision + 1,
+    }
   }
 
   yield* events.publish(

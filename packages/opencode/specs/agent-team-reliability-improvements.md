@@ -202,10 +202,10 @@ Use a fresh read-only reviewer to verify report/eval findings are deterministic,
 ## Open Questions
 
 - Should cancelled task dependencies unblock dependent tasks?
-Default: no. Require `completed` dependencies only.
+  Default: no. Require `completed` dependencies only.
 - Should task `assignee` remain a free-form label or become a session/member reference?
-Default: keep free-form for creation, but require real session/member ownership for claim/update authorization.
+  Default: keep free-form for creation, but require real session/member ownership for claim/update authorization.
 - Should `team_plan_submit` record a usage event?
-Default: leave out of first pass unless report/eval needs it.
+  Default: leave out of first pass unless report/eval needs it.
 - Should HTTP team authorization be session-based or workspace-wide?
-Default: require the requester to be the lead session or a member session for that team.
+  Default: require the requester to be the lead session or a member session for that team.

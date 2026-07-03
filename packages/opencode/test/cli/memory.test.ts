@@ -13,10 +13,13 @@ describe("opencode memory CLI", () => {
         const hash = yield* Effect.promise(() => setupRepository(home))
         const env = { OPENCODE_DB: path.join(home, "memory.db") }
 
-        const indexed = yield* opencode.spawn(["memory", "index", "--max-commits", "10", "--no-github", "--summaries", "0"], {
-          env,
-          timeoutMs: 60_000,
-        })
+        const indexed = yield* opencode.spawn(
+          ["memory", "index", "--max-commits", "10", "--no-github", "--summaries", "0"],
+          {
+            env,
+            timeoutMs: 60_000,
+          },
+        )
         opencode.expectExit(indexed, 0, "memory index")
         expect(indexed.stdout).toContain("Repository: ")
         expect(indexed.stdout).toContain("Worktree: ")
@@ -34,7 +37,10 @@ describe("opencode memory CLI", () => {
         expect(status.stdout).toContain("Commits: 1")
         expect(status.stdout).toContain("File activity: 1")
 
-        const search = yield* opencode.spawn(["memory", "search", "commit", "login redirect"], { env, timeoutMs: 60_000 })
+        const search = yield* opencode.spawn(["memory", "search", "commit", "login redirect"], {
+          env,
+          timeoutMs: 60_000,
+        })
         opencode.expectExit(search, 0, "memory search commit")
         expect(search.stdout).toContain(hash)
         expect(search.stdout).toContain("Changed files: src/auth.ts")
@@ -67,11 +73,16 @@ describe("opencode memory CLI", () => {
         expect(evaluated.stdout).toContain("Commit memory: accuracy@1=1/1 1.000")
         expect(evaluated.stdout).toContain("Combined files: src/auth.ts")
 
-        yield* llm.text(JSON.stringify({ summary: "Login redirect file summary", important_symbols: ["loginRedirect"] }))
-        const summarized = yield* opencode.spawn(["memory", "index", "--max-commits", "10", "--no-github", "--summaries", "1"], {
-          env,
-          timeoutMs: 60_000,
-        })
+        yield* llm.text(
+          JSON.stringify({ summary: "Login redirect file summary", important_symbols: ["loginRedirect"] }),
+        )
+        const summarized = yield* opencode.spawn(
+          ["memory", "index", "--max-commits", "10", "--no-github", "--summaries", "1"],
+          {
+            env,
+            timeoutMs: 60_000,
+          },
+        )
         opencode.expectExit(summarized, 0, "memory index summaries")
         expect(summarized.stdout).toContain("Commits indexed: 1")
         expect(summarized.stdout).toContain("File activity records: 1")
@@ -79,12 +90,18 @@ describe("opencode memory CLI", () => {
         expect(summarized.stdout).not.toContain("Memory index complete")
         expect(summarized.stderr).toContain("Memory index complete")
 
-        const summarySearch = yield* opencode.spawn(["memory", "search", "summary", "redirect"], { env, timeoutMs: 60_000 })
+        const summarySearch = yield* opencode.spawn(["memory", "search", "summary", "redirect"], {
+          env,
+          timeoutMs: 60_000,
+        })
         opencode.expectExit(summarySearch, 0, "memory search summary")
         expect(summarySearch.stdout).toContain("src/auth.ts")
         expect(summarySearch.stdout).toContain("loginRedirect")
 
-        const summaryView = yield* opencode.spawn(["memory", "view", "summary", "src/auth.ts"], { env, timeoutMs: 60_000 })
+        const summaryView = yield* opencode.spawn(["memory", "view", "summary", "src/auth.ts"], {
+          env,
+          timeoutMs: 60_000,
+        })
         opencode.expectExit(summaryView, 0, "memory view summary")
         expect(summaryView.stdout).toContain("Status: current")
         expect(summaryView.stdout).toContain("Login redirect file summary")

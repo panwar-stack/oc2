@@ -355,12 +355,7 @@ export const layer: Layer.Layer<
                 ]
               : []),
           ],
-          memory: [
-            tool.memorySearchCommit,
-            tool.memoryExamineCommit,
-            tool.memorySearchSummary,
-            tool.memoryViewSummary,
-          ],
+          memory: [tool.memorySearchCommit, tool.memoryExamineCommit, tool.memorySearchSummary, tool.memoryViewSummary],
           available: [],
           task: tool.task,
           read: tool.read,
@@ -472,7 +467,11 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Search.defaultLayer),
     )
     .pipe(Layer.provide(Opengrep.defaultLayer), Layer.provide(Truncate.defaultLayer))
-    .pipe(Layer.provide(Database.defaultLayer), Layer.provide(Memory.defaultLayer), Layer.provide(RuntimeFlags.defaultLayer)),
+    .pipe(
+      Layer.provide(Database.defaultLayer),
+      Layer.provide(Memory.defaultLayer),
+      Layer.provide(RuntimeFlags.defaultLayer),
+    ),
 )
 
 function isZodType(value: unknown): value is z.ZodType {

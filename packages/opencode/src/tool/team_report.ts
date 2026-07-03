@@ -62,7 +62,11 @@ function severityRank(severity: TeamEvalFindingSeverity) {
   return 0
 }
 
-export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unknown>, Team.Service | Config.Service | Database.Service>(
+export const TeamReportTool = Tool.define<
+  typeof Parameters,
+  Record<string, unknown>,
+  Team.Service | Config.Service | Database.Service
+>(
   "team_report",
   Effect.gen(function* () {
     const team = yield* Team.Service
@@ -89,7 +93,12 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
             : undefined
           const latestTeamForLead = leadSessionID
             ? yield* Effect.gen(function* () {
-                const rows = yield* db.select().from(TeamTable).where(eq(TeamTable.lead_session_id, leadSessionID)).all().pipe(Effect.orDie)
+                const rows = yield* db
+                  .select()
+                  .from(TeamTable)
+                  .where(eq(TeamTable.lead_session_id, leadSessionID))
+                  .all()
+                  .pipe(Effect.orDie)
                 rows.sort((a, b) => b.time_updated - a.time_updated)
                 return rows[0]
               })
@@ -128,7 +137,12 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
           const teamSessionRows = yield* Effect.forEach(
             Array.from(new Set([teams.lead_session_id, ...members.map((member) => member.session_id)])),
             (sessionID) =>
-              db.select().from(SessionTable).where(eq(SessionTable.id, SessionID.make(sessionID))).get().pipe(Effect.orDie),
+              db
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, SessionID.make(sessionID)))
+                .get()
+                .pipe(Effect.orDie),
             { concurrency: "unbounded" },
           ).pipe(
             Effect.map((rows) => rows.filter((row): row is NonNullable<(typeof rows)[number]> => row !== undefined)),
@@ -137,15 +151,19 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
           const compareRows = yield* Effect.forEach(
             Array.from(new Set(params.compare_session_ids ?? [])),
             (sessionID) =>
-              db.select().from(SessionTable).where(eq(SessionTable.id, SessionID.make(sessionID))).get().pipe(Effect.orDie),
+              db
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, SessionID.make(sessionID)))
+                .get()
+                .pipe(Effect.orDie),
             { concurrency: "unbounded" },
           ).pipe(
             Effect.map((rows) => rows.filter((row): row is NonNullable<(typeof rows)[number]> => row !== undefined)),
           )
           const compareChildren = yield* Effect.forEach(
             compareRows,
-            (row) =>
-              db.select().from(SessionTable).where(eq(SessionTable.parent_id, row.id)).all().pipe(Effect.orDie),
+            (row) => db.select().from(SessionTable).where(eq(SessionTable.parent_id, row.id)).all().pipe(Effect.orDie),
             { concurrency: "unbounded" },
           )
           const compareChildCountBySession = new Map(
@@ -174,7 +192,8 @@ export const TeamReportTool = Tool.define<typeof Parameters, Record<string, unkn
             yield* team.createUsageEvent({
               teamID: teams.id,
               sessionID: ctx.sessionID,
-              memberID: Option.isSome(context) && context.value.team.id === teams.id ? context.value.member?.id : undefined,
+              memberID:
+                Option.isSome(context) && context.value.team.id === teams.id ? context.value.member?.id : undefined,
               type: "report_generated",
               metadata: { generated_at: Date.now() },
             })

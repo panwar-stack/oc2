@@ -95,7 +95,11 @@ const make = <R, E, RIn = never>(
     const args = instanceArgs(options, opts)
     return test(
       name,
-      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer as Layer.Layer<unknown, unknown, unknown>),
+      () =>
+        run(
+          body(value).pipe(withTmpdirInstance(args.instanceOptions)),
+          liveLayer as Layer.Layer<unknown, unknown, unknown>,
+        ),
       args.testOptions,
     )
   }
@@ -109,7 +113,11 @@ const make = <R, E, RIn = never>(
     const args = instanceArgs(options, opts)
     return test.only(
       name,
-      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer as Layer.Layer<unknown, unknown, unknown>),
+      () =>
+        run(
+          body(value).pipe(withTmpdirInstance(args.instanceOptions)),
+          liveLayer as Layer.Layer<unknown, unknown, unknown>,
+        ),
       args.testOptions,
     )
   }
@@ -123,7 +131,11 @@ const make = <R, E, RIn = never>(
     const args = instanceArgs(options, opts)
     return test.skip(
       name,
-      () => run(body(value).pipe(withTmpdirInstance(args.instanceOptions)), liveLayer as Layer.Layer<unknown, unknown, unknown>),
+      () =>
+        run(
+          body(value).pipe(withTmpdirInstance(args.instanceOptions)),
+          liveLayer as Layer.Layer<unknown, unknown, unknown>,
+        ),
       args.testOptions,
     )
   }

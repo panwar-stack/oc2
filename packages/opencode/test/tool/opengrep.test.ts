@@ -177,7 +177,9 @@ describe("file.opengrep", () => {
 
         const call = commandCalls[0]
         if (!call) throw new Error("opengrep was not spawned")
-        expect(call.command).toBe(path.join(test.directory, "bin", process.platform === "win32" ? "opengrep.exe" : "opengrep"))
+        expect(call.command).toBe(
+          path.join(test.directory, "bin", process.platform === "win32" ? "opengrep.exe" : "opengrep"),
+        )
         expect(call.args).toContain("--json")
         expect(call.args).toContain("--config")
         expect(call.args).toContain("--include")
@@ -214,7 +216,8 @@ describe("file.opengrep", () => {
       )
 
       expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("opengrep is not installed or could not be downloaded")
+      if (Exit.isFailure(exit))
+        expect(Cause.pretty(exit.cause)).toContain("opengrep is not installed or could not be downloaded")
     }),
   )
 
@@ -239,7 +242,8 @@ describe("file.opengrep", () => {
         const exit = yield* opengrep.search({ cwd: test.directory, pattern: "foo" }).pipe(Effect.exit)
 
         expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("opengrep is not installed or could not be downloaded")
+        if (Exit.isFailure(exit))
+          expect(Cause.pretty(exit.cause)).toContain("opengrep is not installed or could not be downloaded")
       }),
     ),
   )
@@ -252,9 +256,9 @@ describe("file.opengrep", () => {
   ).instance("reports invalid JSON concisely", () =>
     withOpengrepBinary(
       Effect.gen(function* () {
-        const exit = yield* (yield* Opengrep.Service).search({ cwd: (yield* TestInstance).directory, pattern: "foo" }).pipe(
-          Effect.exit,
-        )
+        const exit = yield* (yield* Opengrep.Service)
+          .search({ cwd: (yield* TestInstance).directory, pattern: "foo" })
+          .pipe(Effect.exit)
 
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("invalid opengrep output: parse details")

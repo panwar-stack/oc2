@@ -210,7 +210,8 @@ export function applyDirectoryEvent(input: {
         break
       }
       if (current && props.timestamp < current.timestamp) break
-      if (current && current.runID === props.runID && (current.phase === "complete" || current.phase === "failed")) break
+      if (current && current.runID === props.runID && (current.phase === "complete" || current.phase === "failed"))
+        break
       input.setStore("fugu_status", props.sessionID, reconcile(props))
       break
     }

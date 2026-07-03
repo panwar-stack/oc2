@@ -46,12 +46,14 @@ const leadModel = {
   ...(leadAssistant.variant ? { variant: leadAssistant.variant } : {}),
 }
 
-const childSession = yield* sessions.create({
-  parentID: ctx.sessionID,
-  title: `${params.name} (@${ag.name} teammate)`,
-  model: leadModel,
-  permission: permissionRules,
-})
+const childSession =
+  yield *
+  sessions.create({
+    parentID: ctx.sessionID,
+    title: `${params.name} (@${ag.name} teammate)`,
+    model: leadModel,
+    permission: permissionRules,
+  })
 ```
 
 This session-level handoff is mandatory even when the teammate agent has an explicit model that later wins for the first prompt. The child session should never be created in a state where `currentModel(childSession.id)` would fall through to provider default before the first teammate message exists.
@@ -85,29 +87,31 @@ Resolve the prompt variant with these rules:
 Expected prompt input shape when inheriting from the lead:
 
 ```ts
-yield* ops.prompt({
-  sessionID: member.session_id,
-  model: {
-    providerID: leadAssistant.providerID,
-    modelID: leadAssistant.modelID,
-  },
-  variant: leadAssistant.variant,
-  agent: nextAgent.name,
-  tools,
-  parts,
-})
+yield *
+  ops.prompt({
+    sessionID: member.session_id,
+    model: {
+      providerID: leadAssistant.providerID,
+      modelID: leadAssistant.modelID,
+    },
+    variant: leadAssistant.variant,
+    agent: nextAgent.name,
+    tools,
+    parts,
+  })
 ```
 
 Expected prompt input shape when the teammate agent has its own model:
 
 ```ts
-yield* ops.prompt({
-  sessionID: member.session_id,
-  model: nextAgent.model,
-  agent: nextAgent.name,
-  tools,
-  parts,
-})
+yield *
+  ops.prompt({
+    sessionID: member.session_id,
+    model: nextAgent.model,
+    agent: nextAgent.name,
+    tools,
+    parts,
+  })
 ```
 
 ### Team Metadata

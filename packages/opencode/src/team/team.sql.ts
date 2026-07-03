@@ -118,7 +118,10 @@ export const TeamUsageEventTable = sqliteTable(
     session_id: text(),
     member_id: text(),
     type: text({ enum: ["plan_approved", "plan_rejected", "broadcast_sent", "report_generated"] }).notNull(),
-    metadata: text({ mode: "json" }).$type<Record<string, unknown>>().notNull().default(sql`'{}'`),
+    metadata: text({ mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'`),
     time_created: integer().notNull(),
   },
   (table) => ({

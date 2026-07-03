@@ -106,7 +106,10 @@ describe("team", () => {
         })
 
         yield* team.shutdown(created.id)
-        yield* awaitWithTimeout(Deferred.await(receivedFinalStatuses), "shutdown member status events were not published")
+        yield* awaitWithTimeout(
+          Deferred.await(receivedFinalStatuses),
+          "shutdown member status events were not published",
+        )
         yield* Effect.sync(unsubscribe)
 
         expect(events).toContainEqual({ sessionID: completed.session_id, status: "completed" })
@@ -307,7 +310,9 @@ describe("team", () => {
         const readableTeam = yield* team.get(info.id)
 
         expect(events).toHaveLength(2)
-        expect(events.find((event) => event.id === first.id)).toEqual(expect.objectContaining({ id: first.id, metadata: {} }))
+        expect(events.find((event) => event.id === first.id)).toEqual(
+          expect.objectContaining({ id: first.id, metadata: {} }),
+        )
         expect(events.find((event) => event.id === second.id)).toEqual(
           expect.objectContaining({
             id: second.id,

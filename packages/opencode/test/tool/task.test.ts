@@ -314,8 +314,7 @@ describe("tool.task", () => {
             ready.resolve(input)
             return cancelled.promise
           }).pipe(Effect.as(reply(input, "cancelled"))),
-        wake: (sessionID) =>
-          Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, "looped")),
+        wake: (sessionID) => Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, "looped")),
       }
 
       const fiber = yield* def
@@ -571,7 +570,8 @@ describe("tool.task", () => {
             return reply(input, "background done")
           })
         },
-        wake: (sessionID) => Effect.succeed(reply({ sessionID, agent: "general", model: ref, parts: [] }, "background done")),
+        wake: (sessionID) =>
+          Effect.succeed(reply({ sessionID, agent: "general", model: ref, parts: [] }, "background done")),
       }
 
       const fiber = yield* def
