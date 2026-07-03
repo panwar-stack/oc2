@@ -1,5 +1,5 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
 import type * as Scope from "effect/Scope"
 import fs from "fs/promises"
@@ -9,6 +9,7 @@ import vm from "node:vm"
 import { Config } from "@/config/config"
 import { Shell } from "../../src/shell/shell"
 import { ShellTool } from "../../src/tool/shell"
+import { ShellPrompt } from "../../src/tool/shell/prompt"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
@@ -307,6 +308,38 @@ const mustTruncate = (result: {
 }
 
 describe("tool.shell", () => {
+  test("renders compressed deterministic safety guidance", () => {
+    const limits = { maxLines: 2000, maxBytes: 51200 }
+    const removedExamples = [
+      "cat <<'EOF'",
+      'gh pr create --title "the pr title"',
+      "mkdir /Users/name/My Documents (incorrect - will fail)",
+      "python /path/with spaces/script.py (incorrect - will fail)",
+      "New-Item -ItemType Directory -Path My Documents (incorrect - path is split)",
+      "path with spaces/script.ps1 (incorrect - path is split and not invoked)",
+      "mkdir My Documents (incorrect - path is split)",
+      "path with spaces\\script.bat (incorrect - path is split and not invoked correctly)",
+    ]
+
+    for (const name of ["bash", "pwsh", "powershell", "cmd"]) {
+      const rendered = ShellPrompt.render(name, "darwin", limits, 120000).description
+
+      expect(rendered).toContain("terminal operations only")
+      expect(rendered).toContain("workdir")
+      expect(rendered).toContain("quote file paths")
+      expect(rendered).toContain("output exceeds 2000 lines or 51200 bytes")
+      expect(rendered).toContain("specialized tools")
+      expect(rendered).toContain("independent and can run in parallel")
+      expect(rendered).toContain("commands depend on each other")
+      expect(rendered).toContain("Only commit, amend, push, or create PRs when explicitly requested")
+      expect(rendered).toContain("Use `gh` for GitHub tasks")
+      expect(ShellPrompt.render(name, "darwin", limits, 120000).description).toEqual(rendered)
+      for (const example of removedExamples) {
+        expect(rendered).not.toContain(example)
+      }
+    }
+  })
+
   it.live("runs with workdir inside a registered secondary root", () =>
     Effect.gen(function* () {
       const primary = yield* tmpdirScoped()
