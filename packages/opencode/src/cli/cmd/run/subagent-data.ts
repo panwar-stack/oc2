@@ -35,6 +35,7 @@ type DetailState = {
   sessionID: string
   data: SessionData
   frames: Frame[]
+  frameIndex: Map<string, number>
 }
 
 export type SubagentData = {
@@ -57,6 +58,7 @@ function createDetail(sessionID: string): DetailState {
       includeUserText: true,
     }),
     frames: [],
+    frameIndex: new Map(),
   }
 }
 
@@ -373,6 +375,7 @@ function limitFrames(detail: DetailState) {
   }
 
   detail.frames.splice(0, detail.frames.length - SUBAGENT_COMMIT_LIMIT)
+  detail.frameIndex = new Map(detail.frames.map((item, index) => [item.key, index]))
 }
 
 function mergeLiveCommit(current: StreamCommit, next: StreamCommit) {
@@ -402,8 +405,9 @@ function appendCommits(detail: DetailState, commits: StreamCommit[]) {
 
   for (const commit of commits.map(compactCommit)) {
     const key = frameKey(commit)
-    const index = detail.frames.findIndex((item) => item.key === key)
-    if (index === -1) {
+    const index = detail.frameIndex.get(key)
+    if (index === undefined) {
+      detail.frameIndex.set(key, detail.frames.length)
       detail.frames.push({
         key,
         commit,

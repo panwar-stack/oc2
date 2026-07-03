@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import path from "path"
 import { tool, type ModelMessage } from "ai"
-import { Cause, Effect, Exit, Fiber, Layer, Logger, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Ref, Stream } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
@@ -1292,6 +1292,7 @@ describe("session.llm.stream", () => {
           }),
         )
         const branchB = waitRequest("/chat/completions", new Response("branch failed", { status: 500 }))
+        const branchBRetry = waitRequest("/chat/completions", new Response("branch failed", { status: 500 }))
         const synth = waitRequest(
           "/chat/completions",
           new Response(createChatStream("partial final"), {
@@ -1303,6 +1304,7 @@ describe("session.llm.stream", () => {
         const events = yield* collect(fuguInput(fuguRuntimeModel()))
         yield* Effect.promise(() => branchA)
         yield* Effect.promise(() => branchB)
+        yield* Effect.promise(() => branchBRetry)
         const synthCapture = yield* Effect.promise(() => synth)
         const synthMessages = JSON.stringify(synthCapture.body.messages)
 
@@ -1598,6 +1600,114 @@ describe("session.llm.stream", () => {
         expect(statuses[statuses.length - 1]?.synthesizer.status).toBe("failed")
         expect(JSON.stringify(statuses)).not.toContain("branch 1")
         expect(JSON.stringify(statuses)).not.toContain("Hello from caller")
+      }),
+    { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "limits fugu branch execution concurrency to four",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* Provider.Service
+        const branchCount = 6
+        const activeBranches = yield* Ref.make(0)
+        const maxActiveBranches = yield* Ref.make(0)
+        const startedBranches = yield* Ref.make(0)
+        const firstBatchStarted = yield* Deferred.make<void>()
+        const releaseBranches = yield* Deferred.make<void>()
+
+        const fiber = yield* LLMFugu.run(
+          { ...fuguInput(fuguRuntimeModel()), abort: new AbortController().signal },
+          fuguConfig({
+            branches: Array.from({ length: branchCount }, () => ({ model: fuguTarget, variant: "high" })),
+          }).fugu,
+          provider,
+          (request) => {
+            if (!request.forbidImplicitTools) {
+              return Stream.make({ type: "text-delta", id: "synth", text: "final" })
+            }
+            return Stream.fromEffect(
+              Effect.gen(function* () {
+                const index = yield* Ref.modify(startedBranches, (count) => [count, count + 1] as const)
+                const active = yield* Ref.updateAndGet(activeBranches, (count) => count + 1)
+                yield* Ref.update(maxActiveBranches, (max) => Math.max(max, active))
+                if (index === 3) yield* Deferred.succeed(firstBatchStarted, undefined)
+                yield* Deferred.await(releaseBranches)
+                yield* Ref.update(activeBranches, (count) => count - 1)
+                return { type: "text-delta", id: `branch-${index}`, text: `branch ${index}` } satisfies LLMEventType
+              }),
+            )
+          },
+        ).pipe(
+          Effect.flatMap((stream) => Stream.runCollect(stream)),
+          Effect.forkScoped,
+        )
+
+        yield* Deferred.await(firstBatchStarted).pipe(Effect.timeout("1 second"))
+        expect(yield* Ref.get(startedBranches)).toBe(4)
+        expect(yield* Ref.get(activeBranches)).toBe(4)
+
+        yield* Deferred.succeed(releaseBranches, undefined)
+        const events = Array.from(yield* Fiber.join(fiber))
+
+        expect(visibleText(events)).toBe("final")
+        expect(yield* Ref.get(startedBranches)).toBe(branchCount)
+        expect(yield* Ref.get(maxActiveBranches)).toBe(4)
+      }),
+    { config: () => fuguConfig() },
+  )
+
+  it.instance(
+    "preserves fugu branch success and failure aggregation",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* Provider.Service
+        const branchCount = 5
+        const branchCalls = yield* Ref.make(0)
+        const synthesizerMessages = yield* Ref.make("")
+        const execute: LLMFugu.Execute = (request) => {
+          if (!request.forbidImplicitTools) {
+            return Stream.fromEffect(
+              Ref.set(synthesizerMessages, JSON.stringify(request.messages)).pipe(
+                Effect.as({ type: "text-delta", id: "synth", text: "aggregated final" } satisfies LLMEventType),
+              ),
+            )
+          }
+          return Stream.fromEffect(
+            Ref.modify(branchCalls, (count) => [count, count + 1] as const).pipe(
+              Effect.flatMap((index): Effect.Effect<LLMEventType, Error> => {
+                if (index === 1) {
+                  return Effect.succeed({ type: "provider-error", message: "branch provider failed" } satisfies LLMEventType)
+                }
+                if (index === 3) return Effect.fail(new Error("branch stream failed"))
+                return Effect.succeed({ type: "text-delta", id: `branch-${index}`, text: `branch ${index}` } satisfies LLMEventType)
+              }),
+            ),
+          )
+        }
+
+        const events = yield* LLMFugu.run(
+          { ...fuguInput(fuguRuntimeModel()), abort: new AbortController().signal },
+          fuguConfig({
+            branches: Array.from({ length: branchCount }, () => ({ model: fuguTarget, variant: "high" })),
+          }).fugu,
+          provider,
+          execute,
+        ).pipe(
+          Effect.flatMap((stream) => Stream.runCollect(stream)),
+          Effect.map((chunk) => Array.from(chunk)),
+        )
+
+        const messages = yield* Ref.get(synthesizerMessages)
+        expect(visibleText(events)).toBe("aggregated final")
+        expect(yield* Ref.get(branchCalls)).toBe(branchCount)
+        expect(messages).toContain("branch 0")
+        expect(messages).toContain("branch 2")
+        expect(messages).toContain("branch 4")
+        expect(messages).toContain("branch provider failed")
+        expect(messages).toContain("branch stream failed")
+        expect(messages).toContain('\\"status\\": \\"success\\"')
+        expect(messages).toContain('\\"status\\": \\"error\\"')
       }),
     { config: () => fuguConfig() },
   )

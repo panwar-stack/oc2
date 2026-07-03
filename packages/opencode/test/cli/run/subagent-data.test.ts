@@ -484,6 +484,115 @@ describe("run subagent data", () => {
     ])
   })
 
+  test("merges repeated same-frame updates without duplicates or reordering", () => {
+    const data = createSubagentData()
+
+    bootstrapSubagentData({
+      data,
+      messages: [taskMessage("child-1", "running")],
+      children: [{ id: "child-1" }],
+      permissions: [],
+      questions: [],
+    })
+
+    reduce(data, {
+      type: "message.updated",
+      properties: {
+        sessionID: "child-1",
+        info: { id: "msg-assistant-1", role: "assistant" },
+      },
+    })
+    reduce(data, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "txt-1",
+          messageID: "msg-assistant-1",
+          sessionID: "child-1",
+          type: "text",
+          text: "hello",
+        },
+      },
+    })
+    reduce(data, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "txt-2",
+          messageID: "msg-assistant-1",
+          sessionID: "child-1",
+          type: "text",
+          text: "middle",
+        },
+      },
+    })
+    reduce(data, {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "child-1",
+        messageID: "msg-assistant-1",
+        partID: "txt-1",
+        field: "text",
+        delta: " world",
+      },
+    })
+
+    expect(visible(snapshotSubagentData(data).details["child-1"]?.commits ?? [])).toEqual(["hello world", "middle"])
+  })
+
+  test("rebuilds the frame index after trimming old commits", () => {
+    const data = createSubagentData()
+
+    bootstrapSubagentData({
+      data,
+      messages: [taskMessage("child-1", "running")],
+      children: [{ id: "child-1" }],
+      permissions: [],
+      questions: [],
+    })
+
+    for (let index = 0; index < 85; index++) {
+      reduce(data, {
+        type: "message.updated",
+        properties: {
+          sessionID: "child-1",
+          info: { id: `msg-${index}`, role: "assistant" },
+        },
+      })
+      reduce(data, {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: `txt-${index}`,
+            messageID: `msg-${index}`,
+            sessionID: "child-1",
+            type: "text",
+            text: `chunk ${index}`,
+          },
+        },
+      })
+    }
+
+    expect(visible(snapshotSubagentData(data).details["child-1"]?.commits ?? [])).toEqual(
+      Array.from({ length: 80 }, (_, index) => `chunk ${index + 5}`),
+    )
+
+    reduce(data, {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "child-1",
+        messageID: "msg-70",
+        partID: "txt-70",
+        field: "text",
+        delta: " appended",
+      },
+    })
+
+    expect(visible(snapshotSubagentData(data).details["child-1"]?.commits ?? [])).toEqual(
+      Array.from({ length: 80 }, (_, index) => (index === 65 ? "chunk 70 appended" : `chunk ${index + 5}`)),
+    )
+  })
+
   test("marks a running tab cancelled when the child session aborts", () => {
     const data = createSubagentData()
 

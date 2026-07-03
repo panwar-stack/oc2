@@ -1233,8 +1233,14 @@ itFragmentFailure.live("session.processor effect tests flush partial v2 fragment
         const seen: string[] = []
         let text: string | undefined
         let reasoning: string | undefined
+        const textDeltas: string[] = []
+        const reasoningDeltas: string[] = []
         const off = yield* events.listen((event) => {
           seen.push(event.type)
+          if (event.type === SessionEvent.Text.Delta.type)
+            textDeltas.push((event.data as typeof SessionEvent.Text.Delta.data.Type).delta)
+          if (event.type === SessionEvent.Reasoning.Delta.type)
+            reasoningDeltas.push((event.data as typeof SessionEvent.Reasoning.Delta.data.Type).delta)
           if (event.type === SessionEvent.Text.Ended.type)
             text = (event.data as typeof SessionEvent.Text.Ended.data.Type).text
           if (event.type === SessionEvent.Reasoning.Ended.type)
@@ -1267,6 +1273,8 @@ itFragmentFailure.live("session.processor effect tests flush partial v2 fragment
         expect(failed).toBeGreaterThan(-1)
         expect(seen.indexOf(SessionEvent.Text.Ended.type)).toBeLessThan(failed)
         expect(seen.indexOf(SessionEvent.Reasoning.Ended.type)).toBeLessThan(failed)
+        expect(textDeltas).toEqual(["partial"])
+        expect(reasoningDeltas).toEqual(["thinking"])
         expect(text).toBe("partial")
         expect(reasoning).toBe("thinking")
       }),

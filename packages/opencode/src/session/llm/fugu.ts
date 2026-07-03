@@ -11,6 +11,8 @@ import { Effect, Stream } from "effect"
 import type { ModelMessage, Tool } from "ai"
 import type { StreamRequest } from "../llm"
 
+const FUGU_BRANCH_CONCURRENCY = 4
+
 const SYNTHESIZER_INSTRUCTION = `
 You are the final answer synthesizer for a proxy model.
 
@@ -160,7 +162,7 @@ export function run(
     const results = yield* Effect.forEach(
       resolved.branches,
       (branch) => collectBranch(input, branch, execute, updateBranchStatus),
-      { concurrency: "unbounded" },
+      { concurrency: FUGU_BRANCH_CONCURRENCY },
     )
     const successes = results.filter((result): result is BranchSuccess => result.status === "success")
     if (successes.length === 0) {
