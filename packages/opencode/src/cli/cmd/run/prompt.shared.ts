@@ -38,9 +38,125 @@ export function promptSame(a: RunPrompt, b: RunPrompt): boolean {
   return (
     a.mode === b.mode &&
     a.text === b.text &&
-    JSON.stringify(a.parts) === JSON.stringify(b.parts) &&
-    JSON.stringify(a.command) === JSON.stringify(b.command)
+    promptPartsSame(a.parts, b.parts) &&
+    promptCommandSame(a.command, b.command)
   )
+}
+
+function promptCommandSame(a: RunPrompt["command"], b: RunPrompt["command"]) {
+  if (!a || !b) return a === b
+  return a.name === b.name && a.arguments === b.arguments
+}
+
+function promptPartsSame(a: RunPrompt["parts"], b: RunPrompt["parts"]) {
+  return a.length === b.length && a.every((part, index) => promptPartSame(part, b[index]))
+}
+
+function promptPartSame(a: RunPrompt["parts"][number], b: RunPrompt["parts"][number]) {
+  if (a.type !== b.type) return false
+
+  switch (a.type) {
+    case "text":
+      return (
+        b.type === "text" &&
+        a.id === b.id &&
+        a.text === b.text &&
+        a.synthetic === b.synthetic &&
+        a.ignored === b.ignored &&
+        timeSame(a.time, b.time) &&
+        recordSame(a.metadata, b.metadata)
+      )
+    case "file":
+      return (
+        b.type === "file" &&
+        a.id === b.id &&
+        a.mime === b.mime &&
+        a.filename === b.filename &&
+        a.url === b.url &&
+        fileSourceSame(a.source, b.source)
+      )
+    case "agent":
+      return b.type === "agent" && a.id === b.id && a.name === b.name && sourceTextSame(a.source, b.source)
+    case "subtask":
+      return (
+        b.type === "subtask" &&
+        a.id === b.id &&
+        a.prompt === b.prompt &&
+        a.description === b.description &&
+        a.agent === b.agent &&
+        a.command === b.command &&
+        promptModelSame(a.model, b.model)
+      )
+  }
+}
+
+function promptModelSame(
+  a: Extract<RunPrompt["parts"][number], { type: "subtask" }>["model"],
+  b: Extract<RunPrompt["parts"][number], { type: "subtask" }>["model"],
+) {
+  if (!a || !b) return a === b
+  return a.providerID === b.providerID && a.modelID === b.modelID
+}
+
+function timeSame(
+  a: Extract<RunPrompt["parts"][number], { type: "text" }>["time"],
+  b: Extract<RunPrompt["parts"][number], { type: "text" }>["time"],
+) {
+  if (!a || !b) return a === b
+  return a.start === b.start && a.end === b.end
+}
+
+function recordSame(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined) {
+  if (!a || !b) return a === b
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((key) => valueSame(a[key], b[key]))
+}
+
+function valueSame(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, index) => valueSame(item, b[index]))
+  }
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false
+
+  const aRecord = a as Record<string, unknown>
+  const bRecord = b as Record<string, unknown>
+  const keys = Object.keys(aRecord)
+  return keys.length === Object.keys(bRecord).length && keys.every((key) => valueSame(aRecord[key], bRecord[key]))
+}
+
+function fileSourceSame(
+  a: Extract<RunPrompt["parts"][number], { type: "file" }>["source"],
+  b: Extract<RunPrompt["parts"][number], { type: "file" }>["source"],
+) {
+  if (!a || !b) return a === b
+  if (a.type !== b.type || !sourceTextSame(a.text, b.text)) return false
+
+  switch (a.type) {
+    case "file":
+      return b.type === "file" && a.path === b.path
+    case "resource":
+      return b.type === "resource" && a.clientName === b.clientName && a.uri === b.uri
+    case "symbol":
+      return (
+        b.type === "symbol" &&
+        a.path === b.path &&
+        a.name === b.name &&
+        a.kind === b.kind &&
+        a.range.start.line === b.range.start.line &&
+        a.range.start.character === b.range.start.character &&
+        a.range.end.line === b.range.end.line &&
+        a.range.end.character === b.range.end.character
+      )
+  }
+}
+
+function sourceTextSame(
+  a: { value: string; start: number; end: number } | undefined,
+  b: { value: string; start: number; end: number } | undefined,
+) {
+  if (!a || !b) return a === b
+  return a.value === b.value && a.start === b.start && a.end === b.end
 }
 
 export function isExitCommand(input: string): boolean {

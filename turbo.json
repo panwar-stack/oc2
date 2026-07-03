@@ -3,7 +3,10 @@
   "globalEnv": ["CI", "OPENCODE_DISABLE_SHARE"],
   "globalPassThroughEnv": ["CI", "OPENCODE_DISABLE_SHARE"],
   "tasks": {
-    "typecheck": {},
+    "typecheck": {
+      "inputs": ["$TURBO_DEFAULT$", "tsconfig.json", "tsconfig.*.json", "../../tsconfig.json"],
+      "outputs": []
+    },
     "build": {
       "dependsOn": [],
       "outputs": ["dist/**"]

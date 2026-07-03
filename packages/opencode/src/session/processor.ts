@@ -36,6 +36,15 @@ import { ToolOutput } from "@opencode-ai/core/tool-output"
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
 
+function stableInputKey(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableInputKey).join(",")}]`
+  if (!value || typeof value !== "object") return JSON.stringify(value)
+  return `{${Object.entries(value)
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableInputKey(item)}`)
+    .join(",")}}`
+}
+
 export type Result = "compact" | "stop" | "continue"
 
 export interface Handle {
@@ -526,6 +535,7 @@ export const layer = Layer.effect(
               Effect.provideService(Database.Service, database),
             )
             const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
+            const inputKey = stableInputKey(input)
 
             if (
               recentParts.length !== DOOM_LOOP_THRESHOLD ||
@@ -534,7 +544,7 @@ export const layer = Layer.effect(
                   part.type === "tool" &&
                   part.tool === value.name &&
                   part.state.status !== "pending" &&
-                  JSON.stringify(part.state.input) === JSON.stringify(input),
+                  stableInputKey(part.state.input) === inputKey,
               )
             ) {
               return
