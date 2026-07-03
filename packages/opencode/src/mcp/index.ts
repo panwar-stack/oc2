@@ -35,6 +35,9 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 
 const log = Log.create({ service: "mcp" })
 const DEFAULT_TIMEOUT = 30_000
+const MCP_INIT_CONCURRENCY = 4
+const MCP_LIST_CONCURRENCY = 4
+const MCP_CLOSE_CONCURRENCY = 4
 
 const TolerantListToolsResultSchema = ListToolsResultSchema.extend({
   tools: ToolSchema.omit({ outputSchema: true }).array(),
@@ -534,7 +537,7 @@ export const layer = Layer.effect(
           defs: {},
         }
 
-        yield* Effect.forEach(
+        const initialized = yield* Effect.forEach(
           Object.entries(config),
           ([key, mcp]) =>
             Effect.gen(function* () {
@@ -543,23 +546,23 @@ export const layer = Layer.effect(
                 return
               }
 
-              if (mcp.enabled === false) {
-                s.status[key] = { status: "disabled" }
-                return
-              }
+              if (mcp.enabled === false) return { key, mcp, result: DISABLED_RESULT }
 
-              const result = yield* create(key, mcp).pipe(Effect.catch(() => Effect.void))
+              const result = yield* create(key, mcp).pipe(Effect.catch(() => Effect.succeed(undefined)))
               if (!result) return
-
-              s.status[key] = result.status
-              if (result.mcpClient) {
-                s.clients[key] = result.mcpClient
-                s.defs[key] = result.defs!
-                watch(s, key, result.mcpClient, bridge, mcp.timeout)
-              }
+              return { key, mcp, result }
             }),
-          { concurrency: "unbounded" },
+          { concurrency: MCP_INIT_CONCURRENCY },
         )
+        for (const item of initialized) {
+          if (!item) continue
+          s.status[item.key] = item.result.status
+          if (item.result.mcpClient) {
+            s.clients[item.key] = item.result.mcpClient
+            s.defs[item.key] = item.result.defs!
+            watch(s, item.key, item.result.mcpClient, bridge, item.mcp.timeout)
+          }
+        }
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
@@ -578,7 +581,7 @@ export const layer = Layer.effect(
                   }
                   yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
                 }),
-              { concurrency: "unbounded" },
+              { concurrency: MCP_CLOSE_CONCURRENCY },
             )
             pendingOAuthTransports.clear()
           }),
@@ -670,7 +673,6 @@ export const layer = Layer.effect(
     })
 
     const tools = Effect.fn("MCP.tools")(function* () {
-      const result: Record<string, Tool> = {}
       const s = yield* InstanceState.get(state)
 
       const cfg = yield* cfgSvc.get()
@@ -681,7 +683,7 @@ export const layer = Layer.effect(
         ([clientName]) => s.status[clientName]?.status === "connected",
       )
 
-      yield* Effect.forEach(
+      const entries = yield* Effect.forEach(
         connectedClients,
         ([clientName, client]) =>
           Effect.gen(function* () {
@@ -691,17 +693,21 @@ export const layer = Layer.effect(
             const listed = s.defs[clientName]
             if (!listed) {
               log.warn("missing cached tools for connected server", { clientName })
-              return
+              return [] as [string, Tool][]
             }
 
             const timeout = entry?.timeout ?? defaultTimeout
-            for (const mcpTool of listed) {
-              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
-            }
+            return listed.map(
+              (mcpTool) =>
+                [sanitize(clientName) + "_" + sanitize(mcpTool.name), convertMcpTool(mcpTool, client, timeout)] as [
+                  string,
+                  Tool,
+                ],
+            )
           }),
-        { concurrency: "unbounded" },
+        { concurrency: MCP_LIST_CONCURRENCY },
       )
-      return result
+      return Object.fromEntries(entries.flat())
     })
 
     function collectFromConnected<T extends { name: string }>(
@@ -713,7 +719,7 @@ export const layer = Layer.effect(
         Object.entries(s.clients).filter(([name]) => s.status[name]?.status === "connected"),
         ([clientName, client]) =>
           fetchFromClient(clientName, client, listFn, label).pipe(Effect.map((items) => Object.entries(items ?? {}))),
-        { concurrency: "unbounded" },
+        { concurrency: MCP_LIST_CONCURRENCY },
       ).pipe(Effect.map((results) => Object.fromEntries<T & { client: string }>(results.flat())))
     }
 

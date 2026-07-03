@@ -89,6 +89,7 @@ const MEMORY_WORKFLOW_SYSTEM_PROMPT = [
 ].join("\n")
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
+const PROMPT_REFERENCE_CONCURRENCY = 8
 
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
@@ -202,20 +203,35 @@ export const layer = Layer.effect(
         { type: "text", text: template },
         ...(yield* resolveReferenceParts(template)),
       ]
-      const files = ConfigMarkdown.files(template)
       const seen = new Set<string>()
-      yield* Effect.forEach(
-        files,
-        Effect.fnUntraced(function* (match) {
-          const name = match[1]
-          if (!name) return
-          if (seen.has(name)) return
-          seen.add(name)
+      const candidates = ConfigMarkdown.files(template).flatMap((match) => {
+        const name = match[1]
+        if (!name) return []
+        if (seen.has(name)) return []
+        seen.add(name)
 
-          const slash = name.indexOf("/")
-          const alias = slash === -1 ? name : name.slice(0, slash)
-          if (yield* references.get(alias)) return
-
+        const slash = name.indexOf("/")
+        const alias = slash === -1 ? name : name.slice(0, slash)
+        return [{ name, alias }]
+      })
+      const seenAliases = new Set<string>()
+      const aliasesToCheck = candidates.flatMap(({ alias }) => {
+        if (seenAliases.has(alias)) return []
+        seenAliases.add(alias)
+        return [alias]
+      })
+      const referenceAliases = yield* Effect.forEach(
+        aliasesToCheck,
+        Effect.fnUntraced(function* (alias) {
+          if (!(yield* references.get(alias))) return
+          return alias
+        }),
+        { concurrency: PROMPT_REFERENCE_CONCURRENCY },
+      )
+      const aliases = new Set(referenceAliases.filter((alias): alias is string => alias !== undefined))
+      const resolved = yield* Effect.forEach(
+        candidates.filter((candidate) => !aliases.has(candidate.alias)),
+        Effect.fnUntraced(function* ({ name }) {
           const filepath = name.startsWith("~/")
             ? path.join(os.homedir(), name.slice(2))
             : path.resolve(ctx.worktree, name)
@@ -223,19 +239,22 @@ export const layer = Layer.effect(
           const info = yield* fsys.stat(filepath).pipe(Effect.option)
           if (Option.isNone(info)) {
             const found = yield* agents.get(name)
-            if (found) parts.push({ type: "agent", name: found.name })
+            if (found) return { type: "agent" as const, name: found.name }
             return
           }
           const stat = info.value
-          parts.push({
-            type: "file",
+          return {
+            type: "file" as const,
             url: pathToFileURL(filepath).href,
             filename: name,
             mime: stat.type === "Directory" ? "application/x-directory" : "text/plain",
-          })
+          }
         }),
-        { concurrency: "unbounded", discard: true },
+        { concurrency: PROMPT_REFERENCE_CONCURRENCY },
       )
+      for (const part of resolved) {
+        if (part) parts.push(part)
+      }
       return parts
     })
 
@@ -1060,9 +1079,9 @@ export const layer = Layer.effect(
         }
       }
 
-      const resolvedParts = yield* Effect.forEach(submittedParts, resolvePart, { concurrency: "unbounded" }).pipe(
-        Effect.map((x) => x.flat().map(assign)),
-      )
+      const resolvedParts = yield* Effect.forEach(submittedParts, resolvePart, {
+        concurrency: PROMPT_REFERENCE_CONCURRENCY,
+      }).pipe(Effect.map((x) => x.flat().map(assign)))
 
       yield* plugin.trigger(
         "chat.message",

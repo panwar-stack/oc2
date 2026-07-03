@@ -19,6 +19,7 @@ const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
 const MAX_BYTES = 50 * 1024
 const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 const SAMPLE_BYTES = 4096
+const READ_DIRECTORY_STAT_CONCURRENCY = 16
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
 
 class ReadStop extends Schema.TaggedErrorClass<ReadStop>()("ReadStop", {}) {}
@@ -116,7 +117,7 @@ export const ReadTool = Tool.define<
           if (target?.type === "Directory") return item.name + "/"
           return item.name
         }),
-        { concurrency: "unbounded" },
+        { concurrency: READ_DIRECTORY_STAT_CONCURRENCY },
       ).pipe(Effect.map((items: string[]) => items.sort((a, b) => a.localeCompare(b))))
     })
 
