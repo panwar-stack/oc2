@@ -17,6 +17,16 @@ import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import type { Session } from "./session"
 
+export const TOKEN_BUDGET_GUIDANCE = `Tokens are expensive. Use them deliberately.
+
+Keep reasoning, tool calls, and final responses focused. Avoid repetition, filler, needless summaries, and broad exploration that does not improve the result.
+
+Do not sacrifice correctness, safety, completeness, or reasoning quality to save tokens. Be concise, not shallow.
+
+Preserve prompt caching whenever possible. Keep stable prompt sections unchanged, avoid unnecessary reordering or reformatting, and do not restate large context unless it is needed for the task.
+
+Prefer the shortest response that fully satisfies the user request.`
+
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
     return [PROMPT_BEAST]
