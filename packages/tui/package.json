@@ -11,6 +11,7 @@
   },
   "exports": {
     ".": "./src/index.tsx",
+    "./testing": "./test/testing.tsx",
     "./builtins": "./src/feature-plugins/builtins.ts",
     "./config": "./src/config/index.tsx",
     "./context/args": "./src/context/args.tsx",

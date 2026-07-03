@@ -5,22 +5,30 @@ import { testRender, useRenderer } from "@opentui/solid"
 import { Global } from "@opencode-ai/core/global"
 import { onCleanup, onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
-import { createTuiResolvedConfig } from "../../../../../tui/test/fixture/tui-runtime"
-import { TestTuiContexts } from "../../../../../tui/test/fixture/tui-environment"
-import { ArgsProvider } from "../../../../../tui/src/context/args"
-import { KVProvider } from "../../../../../tui/src/context/kv"
-import { LocalProvider } from "../../../../../tui/src/context/local"
-import { ProjectProvider } from "../../../../../tui/src/context/project"
-import { RouteProvider } from "../../../../../tui/src/context/route"
-import { SDKProvider } from "../../../../../tui/src/context/sdk"
-import { SyncProvider } from "../../../../../tui/src/context/sync"
-import { ThemeProvider } from "../../../../../tui/src/context/theme"
-import { TuiConfigProvider } from "../../../../../tui/src/config"
-import { OpencodeKeymapProvider, registerOpencodeKeymap, useCommandSlashes } from "../../../../../tui/src/keymap"
-import { SessionRootsCommand } from "../../../../../tui/src/routes/session"
-import { DialogProvider } from "../../../../../tui/src/ui/dialog"
-import { ToastProvider } from "../../../../../tui/src/ui/toast"
-import { createEventSource, createFetch, directory, json, wait } from "../../../../../tui/test/cli/cmd/tui/sync-fixture"
+import {
+  ArgsProvider,
+  createEventSource,
+  createFetch,
+  createTuiResolvedConfig,
+  DialogProvider,
+  directory,
+  json,
+  KVProvider,
+  LocalProvider,
+  OpencodeKeymapProvider,
+  ProjectProvider,
+  registerOpencodeKeymap,
+  RouteProvider,
+  SDKProvider,
+  SessionRootsCommand,
+  SyncProvider,
+  TestTuiContexts,
+  ThemeProvider,
+  ToastProvider,
+  TuiConfigProvider,
+  useCommandSlashes,
+  wait,
+} from "@opencode-ai/tui/testing"
 
 const sessionID = "ses_roots_command"
 

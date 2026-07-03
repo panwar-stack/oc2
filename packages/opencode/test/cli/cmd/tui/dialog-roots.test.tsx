@@ -5,20 +5,27 @@ import { testRender, useRenderer } from "@opentui/solid"
 import { Global } from "@opencode-ai/core/global"
 import { onCleanup, onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
-import { createTuiResolvedConfig } from "../../../../../tui/test/fixture/tui-runtime"
-import { TestTuiContexts } from "../../../../../tui/test/fixture/tui-environment"
-import { ArgsProvider } from "../../../../../tui/src/context/args"
-import { KVProvider } from "../../../../../tui/src/context/kv"
-import { ProjectProvider } from "../../../../../tui/src/context/project"
-import { SDKProvider } from "../../../../../tui/src/context/sdk"
-import { SyncProvider, useSync } from "../../../../../tui/src/context/sync"
-import { ThemeProvider } from "../../../../../tui/src/context/theme"
-import { TuiConfigProvider } from "../../../../../tui/src/config"
-import { OpencodeKeymapProvider, registerOpencodeKeymap } from "../../../../../tui/src/keymap"
-import { DialogRoots } from "../../../../../tui/src/routes/session/dialog-roots"
-import { DialogProvider } from "../../../../../tui/src/ui/dialog"
-import { ToastProvider } from "../../../../../tui/src/ui/toast"
-import { createEventSource, directory, json, wait } from "../../../../../tui/test/cli/cmd/tui/sync-fixture"
+import {
+  ArgsProvider,
+  createEventSource,
+  createTuiResolvedConfig,
+  DialogProvider,
+  DialogRoots,
+  directory,
+  json,
+  KVProvider,
+  OpencodeKeymapProvider,
+  ProjectProvider,
+  registerOpencodeKeymap,
+  SDKProvider,
+  SyncProvider,
+  TestTuiContexts,
+  ThemeProvider,
+  ToastProvider,
+  TuiConfigProvider,
+  useSync,
+  wait,
+} from "@opencode-ai/tui/testing"
 
 const sessionID = "ses_dialog_roots"
 const session = {

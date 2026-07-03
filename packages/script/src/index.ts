@@ -2,6 +2,9 @@ import { $ } from "bun"
 import semver from "semver"
 import path from "path"
 
+export { bunCompileTargets, formatBunCompileTargetName, selectBunCompileTargets } from "./bun-target"
+export type { BunCompileTarget } from "./bun-target"
+
 const rootPkgPath = path.resolve(import.meta.dir, "../../../package.json")
 const rootPkg = await Bun.file(rootPkgPath).json()
 const expectedBunVersion = rootPkg.packageManager?.split("@")[1]

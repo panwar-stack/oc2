@@ -5,22 +5,6 @@ import { createBindingLookup } from "@opentui/keymap/extras"
 import { Global } from "@opencode-ai/core/global"
 import { onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
-import { ArgsProvider } from "../../../../../tui/src/context/args"
-import { KVProvider } from "../../../../../tui/src/context/kv"
-import { ProjectProvider } from "../../../../../tui/src/context/project"
-import { RouteProvider } from "../../../../../tui/src/context/route"
-import { SDKProvider } from "../../../../../tui/src/context/sdk"
-import { SyncProvider, useSync } from "../../../../../tui/src/context/sync"
-import { ThemeProvider } from "../../../../../tui/src/context/theme"
-import { TuiConfigProvider } from "../../../../../tui/src/config"
-import { LocalProvider } from "../../../../../tui/src/context/local"
-import { EditorContextProvider } from "../../../../../tui/src/context/editor"
-import { DialogProvider } from "../../../../../tui/src/ui/dialog"
-import { ToastProvider } from "../../../../../tui/src/ui/toast"
-import { PromptHistoryProvider } from "../../../../../tui/src/component/prompt/history"
-import { PromptStashProvider } from "../../../../../tui/src/component/prompt/stash"
-import { createEventSource, directory, json, wait, worktree } from "../../../../../tui/test/cli/cmd/tui/sync-fixture"
-import { TestTuiContexts } from "../../../../../tui/test/fixture/tui-environment"
 
 mock.module("../../../../../tui/src/keymap", () => ({
   useBindings: () => {},
@@ -48,6 +32,30 @@ mock.module("../../../../../tui/src/context/command-palette", () => ({
     visible: () => false,
   }),
 }))
+
+const {
+  ArgsProvider,
+  createEventSource,
+  DialogProvider,
+  directory,
+  EditorContextProvider,
+  json,
+  KVProvider,
+  LocalProvider,
+  ProjectProvider,
+  PromptHistoryProvider,
+  PromptStashProvider,
+  RouteProvider,
+  SDKProvider,
+  SyncProvider,
+  TestTuiContexts,
+  ThemeProvider,
+  ToastProvider,
+  TuiConfigProvider,
+  useSync,
+  wait,
+  worktree,
+} = await import("@opencode-ai/tui/testing")
 
 const sessionID = "ses_prompt_footer"
 const created = Date.now() - 62_000
