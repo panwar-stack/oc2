@@ -42,11 +42,27 @@ interface GitResult {
 
 type State = Omit<Interface, "init">
 
+export type DirtyCandidates = {
+  readonly all: string[]
+  readonly ignored: string[]
+  readonly blockedLarge: string[]
+  readonly staged: string[]
+}
+
+export type TrackDetailed = {
+  readonly hash: string | undefined
+  readonly candidates: DirtyCandidates
+}
+
+const emptyCandidates: DirtyCandidates = { all: [], ignored: [], blockedLarge: [], staged: [] }
+
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly cleanup: () => Effect.Effect<void>
   readonly track: () => Effect.Effect<string | undefined>
+  readonly trackDetailed: () => Effect.Effect<TrackDetailed>
   readonly patch: (hash: string) => Effect.Effect<Patch>
+  readonly patchPrepared: (hash: string, prepared: TrackDetailed) => Effect.Effect<Patch>
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
   readonly diff: (hash: string) => Effect.Effect<string>
@@ -213,27 +229,27 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               otherCode: other.code,
               otherStderr: other.stderr,
             })
-            return
+            return { ...emptyCandidates, all: ["."] }
           }
 
           const tracked = diff.text.split("\0").filter(Boolean)
           const untracked = other.text.split("\0").filter(Boolean)
           const all = Array.from(new Set([...tracked, ...untracked]))
-          if (!all.length) return
+          if (!all.length) return emptyCandidates
 
           // Resolve source-repo ignore rules against the exact candidate set.
           // --no-index keeps this pattern-based even when a path is already tracked.
           const ignored = yield* ignore(all)
+          const ignoredFiles = Array.from(ignored)
 
           // Remove newly-ignored files from snapshot index to prevent re-adding
-          if (ignored.size > 0) {
-            const ignoredFiles = Array.from(ignored)
+          if (ignoredFiles.length > 0) {
             log.info("removing gitignored files from snapshot", { count: ignoredFiles.length })
             yield* drop(ignoredFiles)
           }
 
           const allow = all.filter((item) => !ignored.has(item))
-          if (!allow.length) return
+          if (!allow.length) return { all, ignored: ignoredFiles, blockedLarge: [], staged: [] }
 
           const large = new Set(
             (yield* Effect.all(
@@ -252,10 +268,13 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               { concurrency: 8 },
             )).filter((item): item is string => Boolean(item)),
           )
-          const block = new Set(untracked.filter((item) => large.has(item)))
-          yield* sync(Array.from(block))
+          const blockedLarge = untracked.filter((item) => large.has(item))
+          const block = new Set(blockedLarge)
+          yield* sync(blockedLarge)
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
-          yield* stage(allow.filter((item) => !block.has(item)))
+          const staged = allow.filter((item) => !block.has(item))
+          yield* stage(staged)
+          return { all, ignored: ignoredFiles, blockedLarge, staged }
         })
 
         const cleanup = Effect.fnUntraced(function* () {
@@ -276,10 +295,10 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           )
         })
 
-        const track = Effect.fnUntraced(function* () {
+        const trackDetailed = Effect.fnUntraced(function* () {
           return yield* locked(
             Effect.gen(function* () {
-              if (!(yield* enabled())) return
+              if (!(yield* enabled())) return { hash: undefined, candidates: emptyCandidates }
               const existed = yield* exists(state.gitdir)
               yield* fs.ensureDir(state.gitdir).pipe(Effect.orDie)
               if (!existed) {
@@ -292,13 +311,18 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 yield* git(["--git-dir", state.gitdir, "config", "core.fsmonitor", "false"])
                 log.info("initialized")
               }
-              yield* add()
+              const candidates = yield* add()
               const result = yield* git(args(["write-tree"]), { cwd: state.directory })
               const hash = result.text.trim()
               log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
-              return hash
+              return { hash, candidates }
             }),
           )
+        })
+
+        const track = Effect.fnUntraced(function* () {
+          const prepared = yield* trackDetailed()
+          return prepared.hash
         })
 
         const patch = Effect.fnUntraced(function* (hash: string) {
@@ -313,6 +337,39 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               )
               if (result.code !== 0) {
                 log.warn("failed to get diff", { hash, exitCode: result.code })
+                return { hash, files: [] }
+              }
+              const files = result.text
+                .trim()
+                .split("\n")
+                .map((x) => x.trim())
+                .filter(Boolean)
+
+              // Hide ignored-file removals from the user-facing patch output.
+              const ignored = yield* ignore(files)
+
+              return {
+                hash,
+                files: files
+                  .filter((item) => !ignored.has(item))
+                  .map((x) => path.join(state.worktree, x).replaceAll("\\", "/")),
+              }
+            }),
+          )
+        })
+
+        const patchPrepared = Effect.fnUntraced(function* (hash: string, prepared: TrackDetailed) {
+          return yield* locked(
+            Effect.gen(function* () {
+              if (!prepared.hash) return { hash, files: [] }
+              const result = yield* git(
+                [...quote, ...args(["diff", "--no-ext-diff", "--name-only", hash, prepared.hash, "--", "."])],
+                {
+                  cwd: state.directory,
+                },
+              )
+              if (result.code !== 0) {
+                log.warn("failed to get prepared diff", { hash, prepared: prepared.hash, exitCode: result.code })
                 return { hash, files: [] }
               }
               const files = result.text
@@ -718,7 +775,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffFull }
+        return { cleanup, track, trackDetailed, patch, patchPrepared, restore, revert, diff, diffFull }
       }),
     )
 
@@ -732,8 +789,14 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
       track: Effect.fn("Snapshot.track")(function* () {
         return yield* InstanceState.useEffect(state, (s) => s.track())
       }),
+      trackDetailed: Effect.fn("Snapshot.trackDetailed")(function* () {
+        return yield* InstanceState.useEffect(state, (s) => s.trackDetailed())
+      }),
       patch: Effect.fn("Snapshot.patch")(function* (hash: string) {
         return yield* InstanceState.useEffect(state, (s) => s.patch(hash))
+      }),
+      patchPrepared: Effect.fn("Snapshot.patchPrepared")(function* (hash: string, prepared: TrackDetailed) {
+        return yield* InstanceState.useEffect(state, (s) => s.patchPrepared(hash, prepared))
       }),
       restore: Effect.fn("Snapshot.restore")(function* (snapshot: string) {
         return yield* InstanceState.useEffect(state, (s) => s.restore(snapshot))

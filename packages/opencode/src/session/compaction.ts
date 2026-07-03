@@ -55,6 +55,17 @@ type Tail = {
   id: MessageID
 }
 
+type EstimateOptions = {
+  stripMedia?: boolean
+  toolOutputMaxChars?: number
+}
+
+type EstimateInput = {
+  messages: SessionV1.WithParts[]
+  model: Provider.Model
+  options?: EstimateOptions
+}
+
 type CompletedCompaction = {
   userIndex: number
   assistantIndex: number
@@ -114,12 +125,33 @@ function turns(messages: SessionV1.WithParts[]) {
   return result
 }
 
+function estimateCacheKey(input: EstimateInput) {
+  return JSON.stringify({
+    messages: input.messages.map((message) => ({
+      id: message.info.id,
+      parts: message.parts.map((part) => part.id),
+    })),
+    model: {
+      providerID: input.model.providerID,
+      id: input.model.id,
+      npm: input.model.api.npm,
+      apiID: input.model.api.id ?? null,
+    },
+    options: input.options
+      ? {
+          stripMedia: input.options.stripMedia === true,
+          toolOutputMaxChars: input.options.toolOutputMaxChars ?? null,
+        }
+      : "default",
+  })
+}
+
 function splitTurn(input: {
   messages: SessionV1.WithParts[]
   turn: Turn
   model: Provider.Model
   budget: number
-  estimate: (input: { messages: SessionV1.WithParts[]; model: Provider.Model }) => Effect.Effect<number>
+  estimate: (input: EstimateInput) => Effect.Effect<number>
 }) {
   return Effect.gen(function* () {
     if (input.budget <= 0) return undefined
@@ -189,11 +221,8 @@ export const layer = Layer.effect(
       })
     })
 
-    const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
-      messages: SessionV1.WithParts[]
-      model: Provider.Model
-    }) {
-      const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
+    const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: EstimateInput) {
+      const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model, input.options)
       return Token.estimate(JSON.stringify(msgs))
     })
 
@@ -208,10 +237,23 @@ export const layer = Layer.effect(
       const all = turns(input.messages)
       if (!all.length) return { head: input.messages, tail_start_id: undefined }
       const recent = all.slice(-limit)
+      const estimates = new Map<string, number>()
+      const cachedEstimate = (input: EstimateInput) => {
+        const key = estimateCacheKey(input)
+        const cached = estimates.get(key)
+        if (cached !== undefined) return Effect.succeed(cached)
+        return estimate(input).pipe(
+          Effect.tap((tokens) =>
+            Effect.sync(() => {
+              estimates.set(key, tokens)
+            }),
+          ),
+        )
+      }
       const sizes = yield* Effect.forEach(
         recent,
         (turn) =>
-          estimate({
+          cachedEstimate({
             messages: input.messages.slice(turn.start, turn.end),
             model: input.model,
           }),
@@ -234,7 +276,7 @@ export const layer = Layer.effect(
           turn,
           model: input.model,
           budget: remaining,
-          estimate,
+          estimate: cachedEstimate,
         })
         if (split) keep = split
         else if (!keep) log.info("tail fallback", { budget, size, total })

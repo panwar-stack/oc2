@@ -89,6 +89,7 @@ interface ProcessorContext extends Input {
   toolcalls: Record<string, ToolCall>
   shouldBreak: boolean
   snapshot: string | undefined
+  toolMayHaveTouchedFiles: boolean
   blocked: boolean
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
@@ -99,6 +100,10 @@ interface ProcessorContext extends Input {
 }
 
 type StreamEvent = LLMEvent
+
+const fileReadOnlyTools = new Set(["glob", "grep", "lsp", "memory", "opengrep", "read", "webfetch", "websearch"])
+
+const toolMayTouchFiles = (name: string) => !fileReadOnlyTools.has(name)
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionProcessor") {}
 
@@ -132,6 +137,7 @@ export const layer = Layer.effect(
         toolcalls: {},
         shouldBreak: false,
         snapshot: initialSnapshot,
+        toolMayHaveTouchedFiles: false,
         blocked: false,
         needsCompaction: false,
         currentText: undefined,
@@ -486,6 +492,7 @@ export const layer = Layer.effect(
             }
             const toolCall = yield* ensureToolCall(value)
             const input = isRecord(value.input) ? value.input : { value: value.input }
+            ctx.toolMayHaveTouchedFiles = ctx.toolMayHaveTouchedFiles || toolMayTouchFiles(value.name)
             if (!toolCall.call.inputEnded) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -709,7 +716,8 @@ export const layer = Layer.effect(
           case "step-finish": {
             const duration = ctx.currentStepStarted === undefined ? 0 : Date.now() - ctx.currentStepStarted
             ctx.currentStepStarted = undefined
-            const completedSnapshot = yield* snapshot.track()
+            const completedPrepared = yield* snapshot.trackDetailed()
+            const completedSnapshot = completedPrepared.hash
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             const usage = Session.getUsage({
               model: ctx.model,
@@ -747,19 +755,24 @@ export const layer = Layer.effect(
             })
             yield* session.updateMessage(ctx.assistantMessage)
             if (ctx.snapshot) {
-              const patch = yield* snapshot.patch(ctx.snapshot)
-              if (patch.files.length) {
-                yield* session.updatePart({
-                  id: PartID.ascending(),
-                  messageID: ctx.assistantMessage.id,
-                  sessionID: ctx.sessionID,
-                  type: "patch",
-                  hash: patch.hash,
-                  files: patch.files,
-                })
+              if (!ctx.toolMayHaveTouchedFiles && completedPrepared.candidates.all.length === 0) {
+                ctx.snapshot = undefined
+              } else {
+                const patch = yield* snapshot.patchPrepared(ctx.snapshot, completedPrepared)
+                if (patch.files.length) {
+                  yield* session.updatePart({
+                    id: PartID.ascending(),
+                    messageID: ctx.assistantMessage.id,
+                    sessionID: ctx.sessionID,
+                    type: "patch",
+                    hash: patch.hash,
+                    files: patch.files,
+                  })
+                }
+                ctx.snapshot = undefined
               }
-              ctx.snapshot = undefined
             }
+            ctx.toolMayHaveTouchedFiles = false
             yield* summary
               .summarize({
                 sessionID: ctx.sessionID,
@@ -976,6 +989,7 @@ export const layer = Layer.effect(
         slog.info("process")
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+        ctx.toolMayHaveTouchedFiles = false
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {

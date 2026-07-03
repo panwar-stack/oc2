@@ -681,6 +681,62 @@ it.instance(
 )
 
 it.instance(
+  "trackDetailed reports clean candidates with no changes",
+  withTrackedSnapshot(({ snapshot, before }) =>
+    Effect.gen(function* () {
+      const prepared = yield* snapshot.trackDetailed()
+      expect(prepared.hash).toBe(before)
+      expect(prepared.candidates).toEqual({ all: [], ignored: [], blockedLarge: [], staged: [] })
+      expect((yield* snapshot.patchPrepared(before, prepared)).files).toEqual([])
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
+  "prepared patch matches existing patch files",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      yield* rm(`${tmp.path}/a.txt`)
+      yield* write(`${tmp.path}/new.txt`, "new content")
+      yield* write(`${tmp.path}/b.txt`, "modified content")
+      const prepared = yield* snapshot.trackDetailed()
+      expect(prepared.hash).toBeTruthy()
+      const preparedPatch = yield* snapshot.patchPrepared(before, prepared)
+      const existingPatch = yield* snapshot.patch(before)
+      expect([...preparedPatch.files].sort()).toEqual([...existingPatch.files].sort())
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
+  "prepared patch preserves ignored and large-file filtering",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      yield* write(`${tmp.path}/.gitignore`, "a.txt\n")
+      yield* write(`${tmp.path}/a.txt`, "ignored tracked content")
+      yield* write(`${tmp.path}/normal.txt`, "normal content")
+      yield* write(`${tmp.path}/huge.txt`, new Uint8Array(2 * 1024 * 1024 + 1))
+      const prepared = yield* snapshot.trackDetailed()
+      expect(prepared.candidates.all).toContain("a.txt")
+      expect(prepared.candidates.ignored).toContain("a.txt")
+      expect(prepared.candidates.blockedLarge).toContain("huge.txt")
+      expect(prepared.candidates.staged).toContain(".gitignore")
+      expect(prepared.candidates.staged).toContain("normal.txt")
+      expect(prepared.candidates.staged).not.toContain("a.txt")
+      expect(prepared.candidates.staged).not.toContain("huge.txt")
+      const patch = yield* snapshot.patchPrepared(before, prepared)
+      expect(patch.files).toContain(fwd(tmp.path, ".gitignore"))
+      expect(patch.files).toContain(fwd(tmp.path, "normal.txt"))
+      expect(patch.files).not.toContain(fwd(tmp.path, "a.txt"))
+      expect(patch.files).not.toContain(fwd(tmp.path, "huge.txt"))
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
   "diff function with various changes",
   withTrackedSnapshot(({ tmp, snapshot, before }) =>
     Effect.gen(function* () {
