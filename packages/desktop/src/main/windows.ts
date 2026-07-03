@@ -1,7 +1,7 @@
 import windowState from "electron-window-state"
 import { resolveThemeVariant } from "@opencode-ai/ui/theme/resolve"
 import type { DesktopTheme } from "@opencode-ai/ui/theme/types"
-import oc2ThemeJson from "../../../ui/src/theme/themes/oc-2.json"
+import oc2ThemeJson from "@opencode-ai/ui/theme/themes/oc-2.json"
 import { app, BrowserWindow, dialog, net, nativeImage, nativeTheme, protocol } from "electron"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
