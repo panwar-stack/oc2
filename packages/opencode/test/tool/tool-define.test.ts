@@ -1,5 +1,7 @@
-import { describe, expect } from "bun:test"
+import { afterEach, describe, expect, mock, spyOn } from "bun:test"
+import { Log } from "@opencode-ai/core/util/log"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { Agent } from "../../src/agent/agent"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
@@ -7,6 +9,10 @@ import { Truncate } from "@/tool/truncate"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.mergeAll(Truncate.defaultLayer, Agent.defaultLayer))
+
+afterEach(() => {
+  mock.restore()
+})
 
 const params = Schema.Struct({ input: Schema.String })
 
@@ -148,6 +154,74 @@ describe("Tool.define", () => {
       expect(args.message).toContain("qtest tool was called with invalid arguments")
       expect(args.message).toContain("Please rewrite the input")
       expect(args.message).toContain(`["questions"][0]["question"]`)
+    }),
+  )
+
+  it.effect("logs slow successful tool execution without input or output content", () =>
+    Effect.gen(function* () {
+      const logger = Log.create({ service: "tool" })
+      const info = spyOn(logger, "info").mockImplementation(() => {})
+      const warn = spyOn(logger, "warn").mockImplementation(() => {})
+      const infoTool = yield* Tool.define(
+        "slow-info-tool",
+        Effect.succeed({
+          description: "test tool",
+          parameters: params,
+          execute() {
+            return TestClock.adjust(5_001).pipe(
+              Effect.as({ title: "test", output: "secret output", metadata: { truncated: false } }),
+            )
+          },
+        }),
+      )
+      const ctx = { ...makeCtx(), callID: "call-info" }
+      const tool = yield* infoTool.init()
+
+      yield* tool.execute({ input: "secret input" }, ctx)
+
+      expect(info).toHaveBeenCalledTimes(1)
+      expect(warn).not.toHaveBeenCalled()
+      expect(info.mock.calls[0]?.[0]).toBe("tool.slow")
+      expect(info.mock.calls[0]?.[1]).toEqual({
+        toolName: "slow-info-tool",
+        toolCallID: "call-info",
+        sessionID: ctx.sessionID,
+        durationMs: 5_001,
+        status: "success",
+      })
+    }),
+  )
+
+  it.effect("warns for very slow failed tool execution", () =>
+    Effect.gen(function* () {
+      const logger = Log.create({ service: "tool" })
+      const info = spyOn(logger, "info").mockImplementation(() => {})
+      const warn = spyOn(logger, "warn").mockImplementation(() => {})
+      const warnTool = yield* Tool.define(
+        "slow-warn-tool",
+        Effect.succeed({
+          description: "test tool",
+          parameters: params,
+          execute() {
+            return TestClock.adjust(30_001).pipe(Effect.andThen(Effect.die("boom")))
+          },
+        }),
+      )
+      const ctx = { ...makeCtx(), callID: "call-warn" }
+      const tool = yield* warnTool.init()
+      const exit = yield* tool.execute({ input: "secret input" }, ctx).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(info).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toBe("tool.slow")
+      expect(warn.mock.calls[0]?.[1]).toEqual({
+        toolName: "slow-warn-tool",
+        toolCallID: "call-warn",
+        sessionID: ctx.sessionID,
+        durationMs: 30_001,
+        status: "error",
+      })
     }),
   )
 })

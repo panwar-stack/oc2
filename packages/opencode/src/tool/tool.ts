@@ -1,12 +1,17 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { Effect, Schema } from "effect"
+import { Clock, Effect, Exit, Schema } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Log } from "@opencode-ai/core/util/log"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type { MessageV2 } from "../session/message-v2"
 import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
 import * as Truncate from "./truncate"
 import { Agent } from "@/agent/agent"
+
+const log = Log.create({ service: "tool" })
+const slowToolInfoMs = 5_000
+const slowToolWarnMs = 30_000
 
 interface Metadata {
   [key: string]: any
@@ -118,34 +123,65 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
           ...(ctx.callID ? { "tool.call_id": ctx.callID } : {}),
         }
         return Effect.gen(function* () {
-          const decoded = yield* decode(args).pipe(
-            Effect.mapError(
-              (error) =>
-                new InvalidArgumentsError({
-                  tool: id,
-                  detail: toolInfo.formatValidationError ? toolInfo.formatValidationError(error) : String(error),
-                }),
-            ),
-          )
-          const result = yield* execute(decoded as Schema.Schema.Type<Parameters>, ctx)
-          if (result.metadata.truncated !== undefined) {
-            return result
-          }
-          const agent = yield* agents.get(ctx.agent)
-          const truncated = yield* truncate.output(result.output, {}, agent)
-          return {
-            ...result,
-            output: truncated.content,
-            metadata: {
-              ...result.metadata,
-              truncated: truncated.truncated,
-              ...(truncated.truncated && { outputPath: truncated.outputPath }),
-            },
-          }
+          const startedAt = yield* Clock.currentTimeMillis
+          const exit = yield* Effect.gen(function* () {
+            const decoded = yield* decode(args).pipe(
+              Effect.mapError(
+                (error) =>
+                  new InvalidArgumentsError({
+                    tool: id,
+                    detail: toolInfo.formatValidationError ? toolInfo.formatValidationError(error) : String(error),
+                  }),
+              ),
+            )
+            const result = yield* execute(decoded as Schema.Schema.Type<Parameters>, ctx)
+            if (result.metadata.truncated !== undefined) {
+              return result
+            }
+            const agent = yield* agents.get(ctx.agent)
+            const truncated = yield* truncate.output(result.output, {}, agent)
+            return {
+              ...result,
+              output: truncated.content,
+              metadata: {
+                ...result.metadata,
+                truncated: truncated.truncated,
+                ...(truncated.truncated && { outputPath: truncated.outputPath }),
+              },
+            }
+          }).pipe(Effect.exit)
+          const durationMs = (yield* Clock.currentTimeMillis) - startedAt
+          yield* logSlowTool({
+            toolName: id,
+            toolCallID: ctx.callID,
+            sessionID: ctx.sessionID,
+            durationMs,
+            status: Exit.isSuccess(exit) ? "success" : "error",
+          })
+          if (Exit.isSuccess(exit)) return exit.value
+          return yield* Effect.failCause(exit.cause)
         }).pipe(Effect.orDie, Effect.withSpan("Tool.execute", { attributes: attrs }))
       }
       return toolInfo
     })
+}
+
+function logSlowTool(input: {
+  toolName: string
+  toolCallID?: string
+  sessionID: SessionID
+  durationMs: number
+  status: "success" | "error"
+}) {
+  return Effect.sync(() => {
+    if (input.durationMs > slowToolWarnMs) {
+      log.warn("tool.slow", input)
+      return
+    }
+    if (input.durationMs > slowToolInfoMs) {
+      log.info("tool.slow", input)
+    }
+  })
 }
 
 export function define<
