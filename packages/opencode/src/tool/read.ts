@@ -1,4 +1,4 @@
-import { Effect, Option, Schema, Scope, Stream } from "effect"
+import { Clock, Effect, Exit, Option, Schema, Scope, Stream } from "effect"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import * as path from "path"
 import * as Tool from "./tool"
@@ -12,6 +12,7 @@ import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
+import { logSlowFilesystem } from "./filesystem-diagnostics"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -240,7 +241,7 @@ export const ReadTool = Tool.define<
       return nonPrintableCount / bytes.length > 0.3
     }
 
-    const run = Effect.fn("ReadTool.execute")(function* (
+    const execute = Effect.fn("ReadTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
       ctx: Tool.Context<Metadata>,
     ) {
@@ -383,6 +384,28 @@ export const ReadTool = Tool.define<
           },
         },
       }
+    })
+
+    const run = Effect.fn("ReadTool.timedExecute")(function* (
+      params: Schema.Schema.Type<typeof Parameters>,
+      ctx: Tool.Context<Metadata>,
+    ) {
+      const startedAt = yield* Clock.currentTimeMillis
+      const exit = yield* execute(params, ctx).pipe(Effect.exit)
+      const durationMs = (yield* Clock.currentTimeMillis) - startedAt
+      const metadata = Exit.isSuccess(exit) ? exit.value.metadata : undefined
+      const display = metadata?.display
+      yield* logSlowFilesystem({
+        toolName: "read",
+        sessionID: ctx.sessionID,
+        durationMs,
+        resultCount:
+          display?.type === "directory" ? display.totalEntries : display?.type === "file" ? display.totalLines : undefined,
+        truncated: metadata?.truncated,
+        status: Exit.isSuccess(exit) ? "success" : "error",
+      })
+      if (Exit.isSuccess(exit)) return exit.value
+      return yield* Effect.failCause(exit.cause)
     })
 
     return {
