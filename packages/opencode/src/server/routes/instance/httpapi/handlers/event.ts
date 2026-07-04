@@ -3,7 +3,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { EventV2 } from "@opencode-ai/core/event"
 import * as Log from "@opencode-ai/core/util/log"
-import { Effect, Queue } from "effect"
+import { Cause, Clock, Effect, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -11,6 +11,7 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { EventApi } from "../groups/event"
 
 const log = Log.create({ service: "server" })
+const queueDepthWarnThreshold = 1_000
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -32,7 +33,16 @@ function eventResponse(events: EventV2.Interface) {
     // Listener registration is eager, so events published after this point cannot
     // be lost while the HTTP body fiber is starting or emitting server.connected.
     const queue = yield* Queue.unbounded<EventV2.Payload>()
-    const unsubscribe = yield* events.listen((event) => Effect.sync(() => Queue.offerUnsafe(queue, event)))
+    let nextQueueDepthWarning = queueDepthWarnThreshold
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.gen(function* () {
+        Queue.offerUnsafe(queue, event)
+        const queueDepth = yield* Queue.size(queue)
+        if (queueDepth < nextQueueDepthWarning) return
+        log.warn("event.queue_depth", { queueDepth, status: "buffered" })
+        nextQueueDepthWarning = Math.max(nextQueueDepthWarning * 2, queueDepth + queueDepthWarnThreshold)
+      }),
+    )
     yield* Effect.addFinalizer(() => unsubscribe)
     const stream = Stream.fromQueue(queue).pipe(
       Stream.filter(
@@ -68,14 +78,30 @@ function eventResponse(events: EventV2.Interface) {
       Stream.map(() => ({ id: eventID(), type: "server.heartbeat", properties: {} })),
     )
 
-    log.info("event connected")
+    const startedAt = yield* Clock.currentTimeMillis
+    let status: "closed" | "error" = "closed"
+    log.debug("event.connected", { status: "connected" })
     return HttpServerResponse.stream(
       Stream.make({ id: eventID(), type: "server.connected", properties: {} }).pipe(
         Stream.concat(output.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,
-        Stream.ensuring(Effect.sync(() => log.info("event disconnected"))),
+        Stream.tapCause((cause) =>
+          Effect.sync(() => {
+            if (Cause.hasInterruptsOnly(cause)) return
+            status = "error"
+            log.warn("event.error", { status: "error" })
+          }),
+        ),
+        Stream.ensuring(
+          Effect.gen(function* () {
+            log.debug("event.disconnected", {
+              durationMs: (yield* Clock.currentTimeMillis) - startedAt,
+              status,
+            })
+          }),
+        ),
       ),
       {
         contentType: "text/event-stream",
