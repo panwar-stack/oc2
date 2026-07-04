@@ -4,8 +4,10 @@ import { Cause, Context, Deferred, Effect, Exit, Fiber, FiberSet, Layer, Scope }
 import { SessionRunner } from "./runner"
 import { logFailure } from "./logging"
 import { SessionSchema } from "./schema"
+import { Log } from "../util/log"
 
 export type Mode = "run" | "wake"
+const log = Log.create({ service: "session.run-coordinator" })
 
 /** Why one drain generation should run. Explicit runs dominate advisory wakes when demands coalesce. */
 type Demand = { readonly _tag: "run" } | { readonly _tag: "wake"; readonly seq?: number }
@@ -42,7 +44,11 @@ type Entry<A, E> = {
   readonly done: Deferred.Deferred<A, E>
   readonly settled: Deferred.Deferred<Exit.Exit<A, E>>
   current: Demand
+  currentQueuedAt: number
+  currentStartedAt?: number
+  currentWaitMs?: number
   pending?: Demand
+  pendingQueuedAt?: number
   explicitWaiter?: Deferred.Deferred<A, E>
   interruptSeq?: number
   owner?: Fiber.Fiber<void, never>
@@ -65,6 +71,7 @@ const maxSeq = (left: number | undefined, right: number | undefined) => {
 export const make = <Key, A, E>(options: {
   readonly drain: (key: Key, mode: Mode) => Effect.Effect<A, E>
   readonly onFailure?: (key: Key, cause: Cause.Cause<E>) => Effect.Effect<void>
+  readonly logKey?: (key: Key) => Record<string, unknown>
 }): Effect.Effect<Coordinator<Key, A, E>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const active = new Map<Key, Entry<A, E>>()
@@ -82,16 +89,27 @@ export const make = <Key, A, E>(options: {
       }),
     )
 
-    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<A, E>): Entry<A, E> => ({
+    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<A, E>, queuedAt = Date.now()): Entry<A, E> => ({
       done: Deferred.makeUnsafe<A, E>(),
       settled: Deferred.makeUnsafe<Exit.Exit<A, E>>(),
       current,
+      currentQueuedAt: queuedAt,
       explicitWaiter,
       stopping: false,
     })
 
     const start = (key: Key, entry: Entry<A, E>, demand: Demand, successor = false) => {
       const ready = Deferred.makeUnsafe<void>()
+      const startedAt = Date.now()
+      entry.currentStartedAt = startedAt
+      entry.currentWaitMs = startedAt - entry.currentQueuedAt
+      log.debug("drain.start", {
+        ...logFields(key),
+        mode: demand._tag,
+        waitMs: entry.currentWaitMs,
+        seq: demand._tag === "wake" ? demand.seq : undefined,
+        status: "started",
+      })
       const drain = Effect.suspend(() => options.drain(key, demand._tag))
       // Initial work retains immediate-start behavior but cannot run before ownership is published.
       // Observer-started successors yield once so synchronous drains cannot recurse on the JS stack.
@@ -110,7 +128,10 @@ export const make = <Key, A, E>(options: {
     }
 
     const settle = (key: Key, entry: Entry<A, E>, demand: Demand, exit: Exit.Exit<A, E>) => {
+      const durationMs = entry.currentStartedAt === undefined ? undefined : Date.now() - entry.currentStartedAt
+      const waitMs = entry.currentWaitMs
       if (closed) {
+        logDrainEnd(key, demand, exit, durationMs, waitMs)
         Deferred.doneUnsafe(entry.done, exit)
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
         return
@@ -124,6 +145,7 @@ export const make = <Key, A, E>(options: {
         entry.explicitWaiter = undefined
       }
       if (active.get(key) !== entry) {
+        logDrainEnd(key, demand, exit, durationMs, waitMs)
         Deferred.doneUnsafe(entry.done, exit)
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
         return
@@ -131,21 +153,27 @@ export const make = <Key, A, E>(options: {
       if (exit._tag === "Success" && !entry.stopping) {
         if (entry.pending !== undefined) {
           const pending = entry.pending
+          const pendingQueuedAt = entry.pendingQueuedAt
           entry.pending = undefined
+          entry.pendingQueuedAt = undefined
           entry.current = pending
+          entry.currentQueuedAt = pendingQueuedAt ?? Date.now()
+          logDrainEnd(key, demand, exit, durationMs, waitMs)
           start(key, entry, pending, true)
           return
         }
         active.delete(key)
+        logDrainEnd(key, demand, exit, durationMs, waitMs)
         Deferred.doneUnsafe(entry.done, exit)
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
         return
       }
 
-      const successor = entry.pending !== undefined ? makeEntry(entry.pending, entry.explicitWaiter) : undefined
+      const successor = entry.pending !== undefined ? makeEntry(entry.pending, entry.explicitWaiter, entry.pendingQueuedAt) : undefined
       if (successor === undefined) active.delete(key)
       else active.set(key, successor)
       if (successor !== undefined) start(key, successor, successor.current, true)
+      logDrainEnd(key, demand, exit, durationMs, waitMs)
       Deferred.doneUnsafe(entry.done, exit)
       Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
       if (
@@ -160,17 +188,29 @@ export const make = <Key, A, E>(options: {
 
     const wake = (key: Key, seq?: number) =>
       Effect.sync(() => {
-        if (closed) return
-        if (!isAfterInterrupt(key, seq)) return
+        if (closed) {
+          log.debug("wake.suppressed", { ...logFields(key), seq, status: "closed" })
+          return
+        }
+        if (!isAfterInterrupt(key, seq)) {
+          log.debug("wake.suppressed", { ...logFields(key), seq, status: "interrupted" })
+          return
+        }
         const entry = active.get(key)
         if (entry !== undefined) {
-          if (!acceptsWake(entry, seq)) return
+          if (!acceptsWake(entry, seq)) {
+            log.debug("wake.suppressed", { ...logFields(key), seq, status: "stopping" })
+            return
+          }
           entry.pending = coalesce(entry.pending, { _tag: "wake", seq })
+          entry.pendingQueuedAt ??= Date.now()
+          log.debug("wake.coalesced", { ...logFields(key), mode: entry.pending._tag, seq, status: "coalesced" })
           return
         }
 
         const next = makeEntry({ _tag: "wake", seq })
         active.set(key, next)
+        log.debug("wake.accepted", { ...logFields(key), mode: "wake", seq, status: "accepted" })
         start(key, next, next.current)
       })
 
@@ -207,12 +247,12 @@ export const make = <Key, A, E>(options: {
           return Effect.void
         if (entry.stopping) {
           entry.interruptSeq = maxSeq(entry.interruptSeq, seq)
-          suppressPendingAtOrBefore(entry, seq)
+          suppressPendingAtOrBefore(key, entry, seq)
           return Fiber.interrupt(entry.owner)
         }
         entry.stopping = true
         entry.interruptSeq = seq
-        suppressPendingAtOrBefore(entry, seq)
+        suppressPendingAtOrBefore(key, entry, seq)
         return Fiber.interrupt(entry.owner)
       })
 
@@ -228,6 +268,7 @@ export const make = <Key, A, E>(options: {
           }
           if (entry.current._tag === "wake") {
             entry.pending = coalesce(entry.pending, { _tag: "run" })
+            entry.pendingQueuedAt ??= Date.now()
             entry.explicitWaiter ??= Deferred.makeUnsafe<A, E>()
             return restore(awaitRun(entry.explicitWaiter))
           }
@@ -254,7 +295,7 @@ export const make = <Key, A, E>(options: {
       return latest === undefined || (seq !== undefined && seq > latest)
     }
 
-    function suppressPendingAtOrBefore(entry: Entry<A, E>, seq: number | undefined) {
+    function suppressPendingAtOrBefore(key: Key, entry: Entry<A, E>, seq: number | undefined) {
       if (
         entry.pending?._tag === "wake" &&
         seq !== undefined &&
@@ -262,7 +303,39 @@ export const make = <Key, A, E>(options: {
         entry.pending.seq > seq
       )
         return
+      if (entry.pending?._tag === "wake") {
+        log.debug("wake.suppressed", {
+          ...logFields(key),
+          status: "interrupted",
+          seq: entry.pending.seq,
+        })
+      }
       entry.pending = undefined
+      entry.pendingQueuedAt = undefined
+    }
+
+    function logFields(key: Key) {
+      return options.logKey?.(key) ?? {}
+    }
+
+    function logDrainEnd(
+      key: Key,
+      demand: Demand,
+      exit: Exit.Exit<A, E>,
+      durationMs: number | undefined,
+      waitMs: number | undefined,
+    ) {
+      const interrupted = exit._tag === "Failure" && Cause.hasInterruptsOnly(exit.cause)
+      const fields = {
+        ...logFields(key),
+        mode: demand._tag,
+        durationMs,
+        waitMs,
+        seq: demand._tag === "wake" ? demand.seq : undefined,
+        status: exit._tag === "Success" ? "success" : interrupted ? "interrupted" : "failure",
+      }
+      if (exit._tag === "Success" || interrupted) log.debug("drain.complete", fields)
+      else log.warn("drain.failed", fields)
     }
   })
 
@@ -277,6 +350,7 @@ export const layer = Layer.effect(
       make<SessionSchema.ID, void, SessionRunner.RunError>({
         drain: (sessionID, mode) => runner.run({ sessionID, force: mode === "run" }),
         onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
+        logKey: (sessionID) => ({ sessionID }),
       }),
     ),
     Effect.map(Service.of),
