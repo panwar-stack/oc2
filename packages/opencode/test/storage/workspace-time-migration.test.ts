@@ -2,27 +2,30 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
-import { existsSync, readFileSync, readdirSync } from "fs"
+import { readFileSync, readdirSync } from "fs"
 import path from "path"
 
 const target = "20260507164347_add_workspace_time"
 
-function migrations() {
-  return readdirSync(path.join(import.meta.dirname, "../../../core/migration"), { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isDirectory() &&
-        existsSync(path.join(import.meta.dirname, "../../../core/migration", entry.name, "migration.sql")),
-    )
+function readMigrations(folder: string) {
+  return readdirSync(folder, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
     .map((entry) => ({
       name: entry.name,
       timestamp: Number(entry.name.split("_")[0]),
-      sql: readFileSync(
-        path.join(import.meta.dirname, "../../../core/migration", entry.name, "migration.sql"),
-        "utf-8",
-      ),
+      sql: readFileSync(path.join(folder, entry.name, "migration.sql"), "utf-8"),
     }))
-    .sort((a, b) => a.timestamp - b.timestamp)
+}
+
+function migrations() {
+  return Array.from(
+    new Map(
+      [
+        ...readMigrations(path.join(import.meta.dirname, "../../../core/migration")),
+        ...readMigrations(path.join(import.meta.dirname, "../../migration")),
+      ].map((entry) => [entry.name, entry]),
+    ).values(),
+  ).sort((a, b) => a.timestamp - b.timestamp)
 }
 
 describe("workspace time migration", () => {

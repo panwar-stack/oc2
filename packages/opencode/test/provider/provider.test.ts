@@ -116,8 +116,8 @@ it.instance("includes virtual fugu provider without config", () =>
     expect(provider.options).toEqual({})
     expect(model).toBeDefined()
     expect(model.status).toBe("active")
-    expect(model.capabilities.toolcall).toBe(false)
-    expect(model.capabilities.input).toEqual({ text: true, audio: false, image: false, video: false, pdf: false })
+    expect(model.capabilities.toolcall).toBe(true)
+    expect(model.capabilities.input).toEqual({ text: true, audio: true, image: true, video: true, pdf: true })
     expect(model.capabilities.output).toEqual({ text: true, audio: false, image: false, video: false, pdf: false })
     expect(model.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
   }),

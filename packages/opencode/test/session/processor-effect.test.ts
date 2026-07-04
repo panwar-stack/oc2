@@ -380,8 +380,8 @@ it.live("session.processor effect tests persist and stream only fugu synthesizer
         const text = parts.find((part): part is SessionV1.TextPart => part.type === "text")
         const inputs = yield* llm.inputs
         const serializedInputs = inputs.map((input) => JSON.stringify(input))
-        const synthInput = serializedInputs.find((input) => input.includes("final response synthesizer"))
-        const branchInputs = serializedInputs.filter((input) => !input.includes("final response synthesizer"))
+        const synthInput = serializedInputs.find((input) => input.includes("final answer synthesizer"))
+        const branchInputs = serializedInputs.filter((input) => !input.includes("final answer synthesizer"))
         const visibleParts = JSON.stringify(parts)
         const streamedText = deltas.join("")
 
@@ -402,7 +402,7 @@ it.live("session.processor effect tests persist and stream only fugu synthesizer
           expect(input).toContain("prior assistant")
           expect(input).toContain("current fugu turn")
           expect(input).not.toContain("hidden branch")
-          expect(input).not.toContain("final response synthesizer")
+          expect(input).not.toContain("final answer synthesizer")
         }
 
         expect(synthInput).toContain("system instruction")
