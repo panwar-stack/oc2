@@ -24,6 +24,7 @@ import { SkillGuidance } from "../../skill/guidance"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { Hash } from "../../util/hash"
+import { Log } from "../../util/log"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
@@ -88,6 +89,7 @@ import { toLLMMessages } from "./to-llm-message"
 
 // QUESTION: Did this exist previously, or did we add this limit? Does it make sense?
 const MAX_STEPS = 25
+const log = Log.create({ service: "session.runner.llm" })
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -290,11 +292,29 @@ export const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
+      const startedAt = Date.now()
+      let ttftMs: number | undefined
+      let eventCount = 0
+      let finishReason: string | undefined
+      const streamFields = {
+        sessionID: session.id,
+        messageID: publisher.plannedAssistantMessageID(),
+        providerID: model.provider,
+        modelID: model.id,
+        attempt: 1,
+      }
       if (!(yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision)))
         return yield* Effect.die(rebuildPreparedTurn())
+      log.debug("stream.start", streamFields)
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
+            eventCount++
+            if (ttftMs === undefined) {
+              ttftMs = Date.now() - startedAt
+              log.info("stream.first", { ...streamFields, ttftMs })
+            }
+            if (event.type === "finish" || event.type === "step-finish") finishReason = event.reason
             if (overflowFailure || publisher.hasProviderError()) return
             if (LLMEvent.is.providerError(event)) {
               if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
@@ -343,10 +363,40 @@ export const layer = Layer.effect(
             !publisher.hasAssistantStarted() &&
             isContextOverflowFailure(overflowFailure ?? failure) &&
             (yield* restore(recoverOverflow({ sessionID: session.id, entries, model, request })))
-          )
+          ) {
+            log.warn("stream.error", {
+              ...streamFields,
+              durationMs: Date.now() - startedAt,
+              ttftMs,
+              error: errorText(overflowFailure?.message ?? failure),
+            })
             return yield* Effect.die(continueAfterOverflowCompaction)
+          }
           if (overflowFailure) yield* publish(overflowFailure)
           const llmFailure = failure instanceof LLMError ? failure : undefined
+          if (stream._tag === "Failure") {
+            log.warn("stream.error", {
+              ...streamFields,
+              durationMs: Date.now() - startedAt,
+              ttftMs,
+              error: errorText(Cause.squash(stream.cause)),
+            })
+          } else if (publisher.hasProviderError()) {
+            log.warn("stream.error", {
+              ...streamFields,
+              durationMs: Date.now() - startedAt,
+              ttftMs,
+              error: "provider error",
+            })
+          } else {
+            log.info("stream.complete", {
+              ...streamFields,
+              durationMs: Date.now() - startedAt,
+              ttftMs,
+              eventCount,
+              finishReason,
+            })
+          }
           if (llmFailure && !publisher.hasProviderError()) {
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
             yield* withPublication(
@@ -450,5 +500,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 export const defaultLayer = layer

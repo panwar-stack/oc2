@@ -990,6 +990,7 @@ export const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
         ctx.toolMayHaveTouchedFiles = false
+        let attempt = 1
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
@@ -998,7 +999,7 @@ export const layer = Layer.effect(
             ctx.currentStepStarted = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream({ ...streamInput, messageID: ctx.assistantMessage.id, attempt })
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
@@ -1023,6 +1024,7 @@ export const layer = Layer.effect(
                 provider: input.model.providerID,
                 parse,
                 set: (info) => {
+                  attempt = info.attempt + 1
                   // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
                   const event = mirrorAssistant
                     ? events.publish(SessionEvent.Retried, {

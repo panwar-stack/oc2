@@ -71,12 +71,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     }
   >()
   const timestamp = DateTime.now
-  let assistantMessageID: SessionMessage.ID | undefined
+  const assistantMessageID = SessionMessage.ID.create()
+  let assistantStarted = false
   let providerFailed = false
 
   const startAssistant = Effect.fnUntraced(function* () {
-    if (assistantMessageID !== undefined) return assistantMessageID
-    assistantMessageID = SessionMessage.ID.create()
+    if (assistantStarted) return assistantMessageID
+    assistantStarted = true
     yield* events.publish(SessionEvent.Step.Started, {
       ...input,
       assistantMessageID,
@@ -85,7 +86,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     return assistantMessageID
   })
   const currentAssistantMessageID = () =>
-    assistantMessageID === undefined
+    !assistantStarted
       ? Effect.die("Tool event before assistant step start")
       : Effect.succeed(assistantMessageID)
 
@@ -410,9 +411,10 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     publish,
     flush,
     failUnsettledTools,
-    hasAssistantStarted: () => assistantMessageID !== undefined,
+    hasAssistantStarted: () => assistantStarted,
     hasProviderError: () => providerFailed,
     startAssistant,
+    plannedAssistantMessageID: () => assistantMessageID,
     assistantMessageID: assistantMessageIDForTool,
   }
 }

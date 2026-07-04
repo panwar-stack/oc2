@@ -294,11 +294,13 @@ export const layer = Layer.effect(
         .stream({
           agent: ag,
           user: firstInfo,
+          messageID: firstInfo.id,
           system: [],
           small: true,
           tools: {},
           model: mdl,
           sessionID: input.session.id,
+          attempt: 1,
           retries: 2,
           messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
         })

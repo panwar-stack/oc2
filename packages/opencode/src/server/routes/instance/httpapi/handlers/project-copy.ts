@@ -61,22 +61,25 @@ export const projectCopyHandlers = HttpApiBuilder.group(InstanceHttpApi, "projec
         : ((yield* provider.getSmallModel(fallback.providerID)) ??
           (yield* provider.getModel(fallback.providerID, fallback.modelID)))
       const sessionID = SessionID.descending()
+      const messageID = MessageID.ascending()
       const result = yield* llm
         .stream({
           agent: titleAgent,
           user: {
-            id: MessageID.ascending(),
+            id: messageID,
             sessionID,
             role: "user",
             time: { created: Date.now() },
             agent: titleAgent.name,
             model: { providerID: model.providerID, modelID: model.id },
           },
+          messageID,
           system: [],
           small: true,
           tools: {},
           model,
           sessionID,
+          attempt: 1,
           retries: 2,
           messages: [
             {

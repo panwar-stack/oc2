@@ -3,7 +3,7 @@ import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Log } from "@opencode-ai/core/util/log"
-import { Context, DateTime, Effect, Layer } from "effect"
+import { Cause, Context, DateTime, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent as LLMEventType } from "@opencode-ai/llm"
@@ -37,6 +37,7 @@ export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
 export type StreamInput = {
   user: SessionV1.User
+  messageID?: string
   sessionID: string
   parentSessionID?: string
   model: Provider.Model
@@ -48,6 +49,7 @@ export type StreamInput = {
   tools: Record<string, Tool>
   promptOps?: TaskPromptOps
   retries?: number
+  attempt?: number
   toolChoice?: "auto" | "required" | "none"
   forbidImplicitTools?: boolean
 }
@@ -402,8 +404,20 @@ const live: Layer.Layer<
       return yield* runProvider(input)
     })
 
-    const stream: Interface["stream"] = (input) =>
-      Stream.scoped(
+    const stream: Interface["stream"] = (input) => {
+      const startedAt = Date.now()
+      let ttftMs: number | undefined
+      let eventCount = 0
+      let finishReason: string | undefined
+      let providerError: string | undefined
+      const fields = {
+        sessionID: input.sessionID,
+        messageID: input.messageID ?? input.user.id,
+        providerID: input.model.providerID,
+        modelID: input.model.id,
+        attempt: input.attempt ?? 1,
+      }
+      return Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
             const ctrl = yield* Effect.acquireRelease(
@@ -415,7 +429,49 @@ const live: Layer.Layer<
             return toEventStream(result)
           }),
         ),
+      ).pipe(
+        Stream.onStart(Effect.sync(() => log.debug("stream.start", fields))),
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            eventCount++
+            if (ttftMs === undefined) {
+              ttftMs = Date.now() - startedAt
+              log.info("stream.first", { ...fields, ttftMs })
+            }
+            if (event.type === "finish" || event.type === "step-finish") finishReason = event.reason
+            if (event.type === "provider-error") providerError = event.message
+          }),
+        ),
+        Stream.onEnd(
+          Effect.sync(() =>
+            providerError === undefined
+              ? log.info("stream.complete", {
+                  ...fields,
+                  durationMs: Date.now() - startedAt,
+                  ttftMs,
+                  eventCount,
+                  finishReason,
+                })
+              : log.warn("stream.error", {
+                  ...fields,
+                  durationMs: Date.now() - startedAt,
+                  ttftMs,
+                  error: providerError,
+                }),
+          ),
+        ),
+        Stream.onError((cause) =>
+          Effect.sync(() =>
+            log.warn("stream.error", {
+              ...fields,
+              durationMs: Date.now() - startedAt,
+              ttftMs,
+              error: errorText(Cause.squash(cause)),
+            }),
+          ),
+        ),
       )
+    }
 
     return Service.of({ stream })
   }),
@@ -437,5 +493,7 @@ export const defaultLayer = Layer.suspend(() =>
 )
 
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 export * as LLM from "./llm"
