@@ -3,6 +3,9 @@ import { Effect, Layer } from "effect"
 import { Auth } from "../../src/auth"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
+import { Global } from "@opencode-ai/core/global"
+import { tmpdirScoped } from "../fixture/fixture"
+import path from "path"
 
 const node = CrossSpawnSpawner.defaultLayer
 
@@ -72,6 +75,21 @@ describe("Auth", () => {
       yield* auth.remove("anthropic")
       const after = yield* auth.all()
       expect(after["anthropic"]).toBeUndefined()
+    }),
+  )
+
+  it.effect("reads auth.json from the selected data root", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const previous = Global.Path.data
+      Global.Path.data = dir
+      yield* Effect.addFinalizer(() => Effect.sync(() => (Global.Path.data = previous)))
+      yield* Effect.promise(() =>
+        Bun.write(path.join(dir, "auth.json"), JSON.stringify({ opencode: { type: "api", key: "test-key" } })),
+      )
+
+      const auth = yield* Auth.Service
+      expect(yield* auth.get("opencode")).toEqual({ type: "api", key: "test-key" })
     }),
   )
 })

@@ -1,5 +1,6 @@
 import path from "path"
 import fs from "fs/promises"
+import { existsSync } from "fs"
 import { xdgData, xdgCache, xdgConfig, xdgState } from "xdg-basedir"
 import os from "os"
 import { Context, Effect, Layer } from "effect"
@@ -7,30 +8,58 @@ import { Flock } from "./util/flock"
 import { Flag } from "./flag/flag"
 import { Naming } from "./naming"
 
-const app = Naming.legacyAppSlug
-const data = path.join(xdgData!, app)
-const cache = path.join(xdgCache!, app)
-const config = path.join(xdgConfig!, app)
-const state = path.join(xdgState!, app)
-const tmp = path.join(os.tmpdir(), app)
+function makePaths(app: string) {
+  const data = path.join(xdgData!, app)
+  const cache = path.join(xdgCache!, app)
+  return {
+    data,
+    bin: path.join(cache, "bin"),
+    log: path.join(data, "log"),
+    repos: path.join(data, "repos"),
+    cache,
+    config: path.join(xdgConfig!, app),
+    state: path.join(xdgState!, app),
+    tmp: path.join(os.tmpdir(), app),
+  }
+}
+
+export const CanonicalPath = makePaths(Naming.appSlug)
+export const LegacyPath = makePaths(Naming.legacyAppSlug)
+
+function adopt(canonical: string, legacy: string) {
+  if (existsSync(canonical)) return canonical
+  if (existsSync(legacy)) return legacy
+  return canonical
+}
+
+function adoptedPaths() {
+  const data = adopt(CanonicalPath.data, LegacyPath.data)
+  const cache = adopt(CanonicalPath.cache, LegacyPath.cache)
+  const config = adopt(CanonicalPath.config, LegacyPath.config)
+  const state = adopt(CanonicalPath.state, LegacyPath.state)
+  const tmp = adopt(CanonicalPath.tmp, LegacyPath.tmp)
+  return {
+    data,
+    bin: path.join(cache, "bin"),
+    log: path.join(data, "log"),
+    repos: path.join(data, "repos"),
+    cache,
+    config,
+    state,
+    tmp,
+  }
+}
 
 const paths = {
   get home() {
     return Naming.env("OPENCODE_TEST_HOME") ?? os.homedir()
   },
-  data,
-  bin: path.join(cache, "bin"),
-  log: path.join(data, "log"),
-  repos: path.join(data, "repos"),
-  cache,
-  config,
-  state,
-  tmp,
+  ...adoptedPaths(),
 }
 
 export const Path = paths
 
-Flock.setGlobal({ state })
+Flock.setGlobal({ state: Path.state })
 
 await Promise.all([
   fs.mkdir(Path.data, { recursive: true }),

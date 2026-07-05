@@ -8,6 +8,7 @@ import path from "path"
 import os from "os"
 import { Filesystem } from "@/util/filesystem"
 import { Process } from "@/util/process"
+import { Naming } from "@opencode-ai/core/naming"
 
 interface UninstallArgs {
   keepConfig: boolean
@@ -88,17 +89,30 @@ export const UninstallCommand = {
 }
 
 async function collectRemovalTargets(args: UninstallArgs, method: Installation.Method): Promise<RemovalTargets> {
-  const directories: RemovalTargets["directories"] = [
-    { path: Global.Path.data, label: "Data", keep: args.keepData },
-    { path: Global.Path.cache, label: "Cache", keep: false },
-    { path: Global.Path.config, label: "Config", keep: args.keepConfig },
-    { path: Global.Path.state, label: "State", keep: false },
-  ]
+  const directories = uniqueDirectories([
+    { path: Global.CanonicalPath.data, label: "Data", keep: args.keepData },
+    { path: Global.LegacyPath.data, label: "Legacy data", keep: args.keepData },
+    { path: Global.CanonicalPath.cache, label: "Cache", keep: false },
+    { path: Global.LegacyPath.cache, label: "Legacy cache", keep: false },
+    { path: Global.CanonicalPath.config, label: "Config", keep: args.keepConfig },
+    { path: Global.LegacyPath.config, label: "Legacy config", keep: args.keepConfig },
+    { path: Global.CanonicalPath.state, label: "State", keep: false },
+    { path: Global.LegacyPath.state, label: "Legacy state", keep: false },
+  ])
 
   const shellConfig = method === "curl" ? await getShellConfigFile() : null
   const binary = method === "curl" ? process.execPath : null
 
   return { directories, shellConfig, binary }
+}
+
+function uniqueDirectories(directories: RemovalTargets["directories"]) {
+  const seen = new Set<string>()
+  return directories.filter((directory) => {
+    if (seen.has(directory.path)) return false
+    seen.add(directory.path)
+    return true
+  })
 }
 
 async function showRemovalSummary(targets: RemovalTargets, method: Installation.Method) {
@@ -215,7 +229,7 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
     prompts.log.info(`  rm "${targets.binary}"`)
 
     const binDir = path.dirname(targets.binary)
-    if (binDir.includes(".opencode")) {
+    if (Naming.configDirs.some((dir) => binDir.includes(dir))) {
       prompts.log.info(`  rmdir "${binDir}" 2>/dev/null`)
     }
   }
@@ -266,7 +280,7 @@ async function getShellConfigFile(): Promise<string | null> {
     if (!exists) continue
 
     const content = await Filesystem.readText(file).catch(() => "")
-    if (content.includes("# opencode") || content.includes(".opencode/bin")) {
+    if (content.includes("# opencode") || content.includes("# oc2") || Naming.configDirs.some((dir) => content.includes(`${dir}/bin`))) {
       return file
     }
   }
@@ -284,21 +298,21 @@ async function cleanShellConfig(file: string) {
   for (const line of lines) {
     const trimmed = line.trim()
 
-    if (trimmed === "# opencode") {
+    if (trimmed === "# opencode" || trimmed === "# oc2") {
       skip = true
       continue
     }
 
     if (skip) {
       skip = false
-      if (trimmed.includes(".opencode/bin") || trimmed.includes("fish_add_path")) {
+      if (Naming.configDirs.some((dir) => trimmed.includes(`${dir}/bin`)) || trimmed.includes("fish_add_path")) {
         continue
       }
     }
 
     if (
-      (trimmed.startsWith("export PATH=") && trimmed.includes(".opencode/bin")) ||
-      (trimmed.startsWith("fish_add_path") && trimmed.includes(".opencode"))
+      (trimmed.startsWith("export PATH=") && Naming.configDirs.some((dir) => trimmed.includes(`${dir}/bin`))) ||
+      (trimmed.startsWith("fish_add_path") && Naming.configDirs.some((dir) => trimmed.includes(dir)))
     ) {
       continue
     }

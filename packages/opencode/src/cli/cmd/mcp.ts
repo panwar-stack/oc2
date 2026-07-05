@@ -21,6 +21,7 @@ import { Filesystem } from "@/util/filesystem"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Effect } from "effect"
+import { Naming } from "@opencode-ai/core/naming"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -402,11 +403,12 @@ export const McpLogoutCommand = effectCmd({
 })
 
 async function resolveConfigPath(baseDir: string, global = false) {
-  // Check for existing config files (prefer .jsonc over .json, check .opencode/ subdirectory too)
-  const candidates = [path.join(baseDir, "opencode.json"), path.join(baseDir, "opencode.jsonc")]
+  const candidates = Naming.configFileSearchTargets.map((file) => path.join(baseDir, file))
 
   if (!global) {
-    candidates.push(path.join(baseDir, ".opencode", "opencode.json"), path.join(baseDir, ".opencode", "opencode.jsonc"))
+    candidates.push(
+      ...Naming.configDirs.flatMap((dir) => Naming.configFileSearchTargets.map((file) => path.join(baseDir, dir, file))),
+    )
   }
 
   for (const candidate of candidates) {
@@ -415,8 +417,7 @@ async function resolveConfigPath(baseDir: string, global = false) {
     }
   }
 
-  // Default to opencode.json if none exist
-  return candidates[0]
+  return path.join(baseDir, "oc2.jsonc")
 }
 
 async function addMcpToConfig(name: string, mcpConfig: ConfigMCPV1.Info, configPath: string) {

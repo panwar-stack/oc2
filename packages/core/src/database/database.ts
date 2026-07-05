@@ -7,6 +7,7 @@ import { makeRuntime } from "../effect/runtime"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
 import { isAbsolute, join } from "path"
+import { existsSync } from "fs"
 import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
 import { Naming } from "../naming"
@@ -46,12 +47,15 @@ export function path() {
     if (Flag.OPENCODE_DB === ":memory:" || isAbsolute(Flag.OPENCODE_DB)) return Flag.OPENCODE_DB
     return join(Global.Path.data, Flag.OPENCODE_DB)
   }
-  if (
+  const suffix =
     ["latest", "beta", "prod"].includes(InstallationChannel) ||
     Naming.truthyEnv("OPENCODE_DISABLE_CHANNEL_DB")
-  )
-    return join(Global.Path.data, "opencode.db")
-  return join(Global.Path.data, `opencode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+      ? ""
+      : `-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}`
+  const next = join(Global.Path.data, `oc2${suffix}.db`)
+  const legacy = join(Global.LegacyPath.data, `opencode${suffix}.db`)
+  if (Global.Path.data === Global.LegacyPath.data && existsSync(legacy) && !existsSync(next)) return legacy
+  return next
 }
 
 export const defaultLayer = Layer.unwrap(
