@@ -21,10 +21,10 @@ if (!semver.satisfies(process.versions.bun, expectedBunVersionRange)) {
 }
 
 const env = {
-  OPENCODE_CHANNEL: process.env["OPENCODE_CHANNEL"],
-  OPENCODE_BUMP: process.env["OPENCODE_BUMP"],
-  OPENCODE_VERSION: process.env["OPENCODE_VERSION"],
-  OPENCODE_RELEASE: process.env["OPENCODE_RELEASE"],
+  OPENCODE_CHANNEL: process.env["OC2_CHANNEL"] ?? process.env["OPENCODE_CHANNEL"],
+  OPENCODE_BUMP: process.env["OC2_BUMP"] ?? process.env["OPENCODE_BUMP"],
+  OPENCODE_VERSION: process.env["OC2_VERSION"] ?? process.env["OPENCODE_VERSION"],
+  OPENCODE_RELEASE: process.env["OC2_RELEASE"] ?? process.env["OPENCODE_RELEASE"],
 }
 const CHANNEL = await (async () => {
   if (env.OPENCODE_CHANNEL) return env.OPENCODE_CHANNEL
@@ -37,12 +37,7 @@ const IS_PREVIEW = CHANNEL !== "latest"
 const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
   if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
-  const version = await fetch("https://registry.npmjs.org/opencode-ai/latest")
-    .then((res) => {
-      if (!res.ok) throw new Error(res.statusText)
-      return res.json()
-    })
-    .then((data: any) => data.version)
+  const version = await fetchLatestVersion("oc2-ai").catch(() => fetchLatestVersion("opencode-ai"))
   const [major, minor, patch] = version.split(".").map((x: string) => Number(x) || 0)
   const t = env.OPENCODE_BUMP?.toLowerCase()
   if (t === "major") return `${major + 1}.0.0`
@@ -77,4 +72,13 @@ export const Script = {
     return team
   },
 }
-console.log(`opencode script`, JSON.stringify(Script, null, 2))
+
+async function fetchLatestVersion(name: string) {
+  return await fetch(`https://registry.npmjs.org/${name}/latest`)
+    .then((res) => {
+      if (!res.ok) throw new Error(res.statusText)
+      return res.json()
+    })
+    .then((data: any) => data.version)
+}
+console.log(`oc2 script`, JSON.stringify(Script, null, 2))

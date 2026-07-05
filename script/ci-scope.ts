@@ -30,7 +30,7 @@ const sharedPackages = new Set([
   "@opencode-ai/effect-sqlite-node",
   "@opencode-ai/llm",
   "@opencode-ai/plugin",
-  "@opencode-ai/script",
+  "@oc2-ai/script",
   "@opencode-ai/sdk",
   "@opencode-ai/server",
   "@opencode-ai/ui",

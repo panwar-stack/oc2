@@ -14,7 +14,7 @@ process.chdir(dir)
 
 const generated = await import("./generate.ts")
 
-import { formatBunCompileTargetName, Script, selectBunCompileTargets } from "@opencode-ai/script"
+import { formatBunCompileTargetName, Script, selectBunCompileTargets } from "@oc2-ai/script"
 import pkg from "../package.json"
 
 const singleFlag = process.argv.includes("--single")
@@ -88,8 +88,8 @@ for (const item of targets) {
       autoloadTsconfig: true,
       autoloadPackageJson: true,
       target: name.replace(pkg.name, "bun") as any,
-      outfile: `dist/${name}/bin/opencode`,
-      execArgv: [`--user-agent=opencode/${Script.version}`, "--use-system-ca", "--"],
+      outfile: `dist/${name}/bin/oc2`,
+      execArgv: [`--user-agent=oc2/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
     files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
@@ -107,7 +107,7 @@ for (const item of targets) {
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
-    const binaryPath = `dist/${name}/bin/opencode`
+    const binaryPath = `dist/${name}/bin/oc2`
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
@@ -116,6 +116,15 @@ for (const item of targets) {
       console.error(`Smoke test failed for ${name}:`, e)
       process.exit(1)
     }
+  }
+
+  if (item.os === "win32") {
+    await $`cp dist/${name}/bin/oc2.exe dist/${name}/bin/opencode.exe`
+  } else {
+    await Bun.file(`dist/${name}/bin/opencode`).write(
+      ["#!/bin/sh", "exec \"$(dirname \"$0\")/oc2\" \"$@\"", ""].join("\n"),
+    )
+    await $`chmod 755 dist/${name}/bin/opencode`
   }
 
   await $`rm -rf ./dist/${name}/bin/tui`

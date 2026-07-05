@@ -86,7 +86,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("npm")
         expect(result).toBe("1.5.0")
-        expect(npmCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(npmCalls).toContain(`https://registry.npmjs.org/oc2-ai/${InstallationChannel}`)
       }),
     )
 
@@ -100,7 +100,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("bun")
         expect(result).toBe("1.6.0")
-        expect(bunCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(bunCalls).toContain(`https://registry.npmjs.org/oc2-ai/${InstallationChannel}`)
       }),
     )
 
@@ -114,7 +114,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("pnpm")
         expect(result).toBe("1.7.0")
-        expect(pnpmCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(pnpmCalls).toContain(`https://registry.npmjs.org/oc2-ai/${InstallationChannel}`)
       }),
     )
 
@@ -125,6 +125,24 @@ describe("installation", () => {
       }),
     )
 
+    const legacyScoopCalls: string[] = []
+    testEffect(
+      testLayer((request) => {
+        legacyScoopCalls.push(request.url)
+        if (request.url.endsWith("/oc2.json")) return new Response("missing", { status: 404 })
+        return jsonResponse({ version: "2.3.5" })
+      }),
+    ).effect("falls back to legacy scoop manifest versions", () =>
+      Effect.gen(function* () {
+        const result = yield* Installation.use.latest("scoop")
+        expect(result).toBe("2.3.5")
+        expect(legacyScoopCalls).toContain("https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/oc2.json")
+        expect(legacyScoopCalls).toContain(
+          "https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/opencode.json",
+        )
+      }),
+    )
+
     testEffect(testLayer(() => jsonResponse({ d: { results: [{ Version: "3.4.5" }] } }))).effect(
       "reads chocolatey feed versions",
       () =>
@@ -132,6 +150,22 @@ describe("installation", () => {
           const result = yield* Installation.use.latest("choco")
           expect(result).toBe("3.4.5")
         }),
+    )
+
+    const legacyChocoCalls: string[] = []
+    testEffect(
+      testLayer((request) => {
+        legacyChocoCalls.push(request.url)
+        if (request.url.includes("%27oc2%27")) return jsonResponse({ d: { results: [] } })
+        return jsonResponse({ d: { results: [{ Version: "3.4.6" }] } })
+      }),
+    ).effect("falls back to legacy chocolatey feed versions", () =>
+      Effect.gen(function* () {
+        const result = yield* Installation.use.latest("choco")
+        expect(result).toBe("3.4.6")
+        expect(legacyChocoCalls.some((url) => url.includes("%27oc2%27"))).toBe(true)
+        expect(legacyChocoCalls.some((url) => url.includes("%27opencode%27"))).toBe(true)
+      }),
     )
 
     testEffect(
@@ -188,6 +222,23 @@ describe("installation", () => {
         expect(error.message).toBe(error.stderr)
         expect(error.stderr).not.toContain("secret")
         expect(error.stderr).not.toContain("command output")
+      }),
+    )
+
+    const npmUpgradeCommands: string[][] = []
+    testEffect(
+      testLayer(
+        () => jsonResponse({}),
+        (cmd, args) => {
+          if (cmd === "npm" && args[0] === "list") return "opencode-ai@1.0.0"
+          if (cmd === "npm") npmUpgradeCommands.push([cmd, ...args])
+          return ""
+        },
+      ),
+    ).effect("upgrades legacy npm package when that is installed", () =>
+      Effect.gen(function* () {
+        yield* Installation.use.upgrade("npm", "9.9.9")
+        expect(npmUpgradeCommands).toContainEqual(["npm", "install", "-g", "opencode-ai@9.9.9"])
       }),
     )
 
