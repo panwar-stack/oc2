@@ -154,6 +154,7 @@ const live: Layer.Layer<
       //   systemPromptCount: prepared.system.length,
       // })
       yield* Effect.annotateCurrentSpan({
+        "gen_ai.system_instructions": systemPrompt,
         "system.prompt": systemPrompt,
         "system.prompt.count": prepared.system.length,
       })
@@ -261,6 +262,7 @@ const live: Layer.Layer<
               return (...args: Parameters<typeof target.startSpan>) => {
                 const span = target.startSpan(...args)
                 span.setAttribute("session.id", input.sessionID)
+                span.setAttribute("gen_ai.system_instructions", systemPrompt)
                 span.setAttribute("system.prompt", systemPrompt)
                 span.setAttribute("system.prompt.count", prepared.system.length)
                 return span
