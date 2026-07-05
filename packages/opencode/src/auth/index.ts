@@ -3,6 +3,7 @@ import { Effect, Layer, Record, Result, Schema, Context } from "effect"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Global } from "@opencode-ai/core/global"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Naming } from "@opencode-ai/core/naming"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
@@ -55,9 +56,10 @@ export const layer = Layer.effect(
     const decode = Schema.decodeUnknownOption(Info)
 
     const all = Effect.fn("Auth.all")(function* () {
-      if (process.env.OPENCODE_AUTH_CONTENT) {
+      const authContent = Naming.env("OPENCODE_AUTH_CONTENT")
+      if (authContent) {
         try {
-          return JSON.parse(process.env.OPENCODE_AUTH_CONTENT)
+          return JSON.parse(authContent)
         } catch (err) {}
       }
 

@@ -5,8 +5,9 @@ import os from "os"
 import { Context, Effect, Layer } from "effect"
 import { Flock } from "./util/flock"
 import { Flag } from "./flag/flag"
+import { Naming } from "./naming"
 
-const app = "opencode"
+const app = Naming.legacyAppSlug
 const data = path.join(xdgData!, app)
 const cache = path.join(xdgCache!, app)
 const config = path.join(xdgConfig!, app)
@@ -15,7 +16,7 @@ const tmp = path.join(os.tmpdir(), app)
 
 const paths = {
   get home() {
-    return process.env.OPENCODE_TEST_HOME ?? os.homedir()
+    return Naming.env("OPENCODE_TEST_HOME") ?? os.homedir()
   },
   data,
   bin: path.join(cache, "bin"),

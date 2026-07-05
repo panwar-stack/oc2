@@ -2,7 +2,7 @@ import os from "os"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import fuzzysort from "fuzzysort"
 import { Config } from "@/config/config"
-import { mapValues, mergeDeep, omit, pickBy, sortBy } from "remeda"
+import { mapValues, mergeDeep, omit, pickBy, sortBy, unique } from "remeda"
 import { NoSuchModelError, type Provider as SDK } from "ai"
 import { Log } from "@opencode-ai/core/util/log"
 import { Npm } from "@opencode-ai/core/npm"
@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { Naming } from "@opencode-ai/core/naming"
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
@@ -167,6 +168,33 @@ function selectBedrockMantleLanguageModel(sdk: BundledSDK, modelID: string) {
 }
 
 function custom(dep: CustomDep): Record<string, CustomLoader> {
+  const authIDs = (id: ProviderV2.ID) => (id === ProviderV2.ID.oc2 ? [ProviderV2.ID.oc2, ProviderV2.ID.opencode] : [id])
+  const managed = Effect.fnUntraced(function* (input: Info) {
+    const env = yield* dep.env()
+    const hasKey = iife(() => {
+      if (input.env.some((item) => env[item])) return true
+      return false
+    })
+    const providerConfig = (yield* dep.config()).provider
+    const ok =
+      hasKey ||
+      Boolean(yield* Effect.forEach(authIDs(input.id), dep.auth).pipe(Effect.map((items) => items.find(Boolean)))) ||
+      Boolean(providerConfig?.["opencode"]?.options?.apiKey) ||
+      Boolean(providerConfig?.["oc2"]?.options?.apiKey)
+
+    if (!ok) {
+      for (const [key, value] of Object.entries(input.models)) {
+        if (value.cost.input === 0) continue
+        delete input.models[key]
+      }
+    }
+
+    return {
+      autoload: Object.keys(input.models).length > 0,
+      options: ok ? {} : { apiKey: "public" },
+    }
+  })
+
   return {
     anthropic: () =>
       Effect.succeed({
@@ -177,29 +205,8 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           },
         },
       }),
-    opencode: Effect.fnUntraced(function* (input: Info) {
-      const env = yield* dep.env()
-      const hasKey = iife(() => {
-        if (input.env.some((item) => env[item])) return true
-        return false
-      })
-      const ok =
-        hasKey ||
-        Boolean(yield* dep.auth(input.id)) ||
-        Boolean((yield* dep.config()).provider?.["opencode"]?.options?.apiKey)
-
-      if (!ok) {
-        for (const [key, value] of Object.entries(input.models)) {
-          if (value.cost.input === 0) continue
-          delete input.models[key]
-        }
-      }
-
-      return {
-        autoload: Object.keys(input.models).length > 0,
-        options: ok ? {} : { apiKey: "public" },
-      }
-    }),
+    oc2: managed,
+    opencode: managed,
     openai: () =>
       Effect.succeed({
         autoload: false,
@@ -1263,6 +1270,24 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   }
 }
 
+function withCanonicalEnv(env: string[]) {
+  return unique(env.flatMap((item) => [Naming.canonicalEnv(item), item]))
+}
+
+function aliasProvider(provider: Info, id: ProviderV2.ID, name: string): Info {
+  const clone = structuredClone(provider) as Info
+  return {
+    ...clone,
+    id,
+    name,
+    env: withCanonicalEnv(clone.env),
+    models: mapValues(clone.models, (model) => ({
+      ...model,
+      providerID: id,
+    })),
+  }
+}
+
 const FUGU_PROVIDER_ID = ProviderV2.ID.make("fugu")
 const FUGU_MODEL_ID = ModelV2.ID.make("fugu")
 
@@ -1357,6 +1382,14 @@ export const layer = Layer.effect(
         const cfg = yield* config.get()
         const modelsDev = yield* modelsDevSvc.get()
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
+        if (catalog[ProviderV2.ID.opencode]) {
+          catalog[ProviderV2.ID.opencode] = aliasProvider(
+            catalog[ProviderV2.ID.opencode],
+            ProviderV2.ID.opencode,
+            catalog[ProviderV2.ID.opencode].name,
+          )
+          catalog[ProviderV2.ID.oc2] = aliasProvider(catalog[ProviderV2.ID.opencode], ProviderV2.ID.oc2, Naming.displayName)
+        }
         const database = mapValues(catalog, toPublicInfo)
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
@@ -1553,6 +1586,12 @@ export const layer = Layer.effect(
               source: "api",
               key: provider.key,
             })
+            if (providerID === ProviderV2.ID.opencode && database[ProviderV2.ID.oc2] && !auths[ProviderV2.ID.oc2]) {
+              mergeProvider(ProviderV2.ID.oc2, {
+                source: "api",
+                key: provider.key,
+              })
+            }
           }
         }
 
@@ -1970,7 +2009,7 @@ export const layer = Layer.effect(
         "gemini-2.5-flash",
         "gpt-5-nano",
       ]
-      const priority = providerID.startsWith("opencode")
+      const priority = providerID.startsWith("opencode") || providerID.startsWith("oc2")
         ? ["gpt-5-nano"]
         : providerID.startsWith("github-copilot")
           ? ["gpt-5-mini", "claude-haiku-4.5", ...defaultPriority]

@@ -22,6 +22,7 @@ import { ConfigVariable } from "@/config/variable"
 import { Npm } from "@opencode-ai/core/npm"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 import { TuiConfig } from "@opencode-ai/tui/config"
+import { Naming } from "@opencode-ai/core/naming"
 
 const log = Log.create({ service: "tui.config" })
 
@@ -216,10 +217,12 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   // 4. `.opencode` directories (and OPENCODE_CONFIG_DIR) discovered while
   // walking up the tree. Also returned below so callers can install plugin
   // dependencies from each location.
-  const dirs = unique(directories).filter((dir) => dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR)
+  const dirs = unique(directories).filter(
+    (dir) => Naming.configDirs.some((name) => dir.endsWith(name)) || dir === Flag.OPENCODE_CONFIG_DIR,
+  )
 
   for (const dir of dirs) {
-    if (!dir.endsWith(".opencode") && dir !== Flag.OPENCODE_CONFIG_DIR) continue
+    if (!Naming.configDirs.some((name) => dir.endsWith(name)) && dir !== Flag.OPENCODE_CONFIG_DIR) continue
     for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
       yield* mergeFile(acc, file)
     }

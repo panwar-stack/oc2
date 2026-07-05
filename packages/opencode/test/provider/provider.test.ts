@@ -71,8 +71,8 @@ const list = Provider.use.list()
 const fuguProviderID = ProviderV2.ID.make("fugu")
 const fuguModelID = ModelV2.ID.make("fugu")
 
-const paid = (providers: Record<string, { models: Record<string, { cost: { input: number } }> }>) => {
-  const item = providers[ProviderV2.ID.make("opencode")]
+const paid = (providers: Record<string, { models: Record<string, { cost: { input: number } }> }>, id = ProviderV2.ID.opencode) => {
+  const item = providers[id]
   expect(item).toBeDefined()
   return Object.values(item.models).filter((model) => model.cost.input > 0).length
 }
@@ -120,6 +120,20 @@ it.instance("includes virtual fugu provider without config", () =>
     expect(model.capabilities.input).toEqual({ text: true, audio: true, image: true, video: true, pdf: true })
     expect(model.capabilities.output).toEqual({ text: true, audio: false, image: false, video: false, pdf: false })
     expect(model.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
+  }),
+)
+
+it.instance("exposes oc2 as an alias without removing opencode", () =>
+  Effect.gen(function* () {
+    const providers = yield* list
+    const legacy = providers[ProviderV2.ID.opencode]
+    const canonical = providers[ProviderV2.ID.oc2]
+
+    expect(legacy).toBeDefined()
+    expect(canonical).toBeDefined()
+    expect(canonical.id).toBe(ProviderV2.ID.oc2)
+    expect(legacy.id).toBe(ProviderV2.ID.opencode)
+    expect(Object.values(canonical.models).every((model) => model.providerID === ProviderV2.ID.oc2)).toBe(true)
   }),
 )
 
@@ -1823,10 +1837,13 @@ it.effect("opencode loader keeps paid models when config apiKey is present", () 
         .pipe(Effect.provide(InstanceLayer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer))
 
     const none = paid(yield* listIn(noneDir))
-    const keyedCount = paid(yield* listIn(keyedDir))
+    const keyedProviders = yield* listIn(keyedDir)
+    const keyedCount = paid(keyedProviders)
+    const aliasKeyedCount = paid(keyedProviders, ProviderV2.ID.oc2)
 
     expect(none).toBe(0)
     expect(keyedCount).toBeGreaterThan(0)
+    expect(aliasKeyedCount).toBeGreaterThan(0)
   }).pipe(provideMultiInstance),
 )
 

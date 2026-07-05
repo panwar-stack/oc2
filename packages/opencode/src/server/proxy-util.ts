@@ -1,3 +1,5 @@
+import { Naming } from "@opencode-ai/core/naming"
+
 const hop = new Set([
   "connection",
   "keep-alive",
@@ -14,8 +16,8 @@ const hop = new Set([
 function sanitize(out: Headers) {
   for (const key of hop) out.delete(key)
   out.delete("accept-encoding")
-  out.delete("x-opencode-directory")
-  out.delete("x-opencode-workspace")
+  Naming.deleteHeaders(out, Naming.headers.directory)
+  Naming.deleteHeaders(out, Naming.headers.workspace)
 }
 
 export function headers(input: Request | HeadersInit | Record<string, string>, extra?: HeadersInit) {

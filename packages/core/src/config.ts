@@ -8,6 +8,7 @@ import { Global } from "./global"
 import { Location } from "./location"
 import { PermissionSchema } from "./permission/schema"
 import { Policy } from "./policy"
+import { Naming } from "./naming"
 import { AbsolutePath } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
@@ -146,7 +147,7 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const location = yield* Location.Service
     const policy = yield* Policy.Service
-    const names = ["config.json", "opencode.json", "opencode.jsonc"]
+    const names = [...Naming.globalConfigLoadOrder]
     const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
     const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
     const decodeV1Info = Schema.decodeUnknownOption(ConfigV1.Info, decodeOptions)
@@ -185,7 +186,7 @@ export const layer = Layer.effect(
       ? []
       : yield* fs
           .up({
-            targets: [".opencode", ...names.toReversed()],
+            targets: [".oc2", ".opencode", ...names.toReversed()],
             start: location.directory,
             stop: location.project.directory,
           })
@@ -193,13 +194,15 @@ export const layer = Layer.effect(
     const directories = [
       globalDirectory,
       ...discovered
-        .filter((item) => path.basename(item) === ".opencode")
+        .filter((item) => Naming.configDirs.some((name) => path.basename(item) === name))
         .toReversed()
         .map((directory) => AbsolutePath.make(directory)),
     ]
     // A config closer to the opened directory should win over one higher up.
     // Search starts nearby, so reverse the results before applying them.
-    const directPaths = discovered.filter((item) => path.basename(item) !== ".opencode").toReversed()
+    const directPaths = discovered
+      .filter((item) => !Naming.configDirs.some((name) => path.basename(item) === name))
+      .toReversed()
     const direct = yield* Effect.forEach(directPaths, loadFile).pipe(
       Effect.orDie,
       Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),

@@ -1134,7 +1134,7 @@ export function options(input: {
       result["textVerbosity"] = "low"
     }
 
-    if (input.model.providerID.startsWith("opencode")) {
+    if (input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("oc2")) {
       result["promptCacheKey"] = input.sessionID
       result["include"] = INCLUDE_ENCRYPTED_REASONING
       result["reasoningSummary"] = "auto"

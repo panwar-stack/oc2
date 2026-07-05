@@ -13,8 +13,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { CorsConfig, isAllowedRequestOrigin, type CorsOptions } from "@/server/cors"
 import {
   PTY_CONNECT_TICKET_QUERY,
-  PTY_CONNECT_TOKEN_HEADER,
-  PTY_CONNECT_TOKEN_HEADER_VALUE,
+  hasPtyConnectToken,
 } from "@/server/shared/pty-ticket"
 import { Effect, Layer, Option, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -126,7 +125,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
 
     const connectToken = Effect.fn("PtyHttpApi.connectToken")(function* (ctx: { params: { ptyID: PtyID } }) {
       const request = yield* HttpServerRequest.HttpServerRequest
-      if (request.headers[PTY_CONNECT_TOKEN_HEADER] !== PTY_CONNECT_TOKEN_HEADER_VALUE || !validOrigin(request, cors))
+      if (!hasPtyConnectToken(request.headers) || !validOrigin(request, cors))
         return yield* new ApiError.PtyForbiddenError({ message: "Invalid PTY connect token request" })
       yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
         Effect.catchTag("Pty.NotFoundError", (error) =>

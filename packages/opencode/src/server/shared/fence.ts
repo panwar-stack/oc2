@@ -4,9 +4,11 @@ import { EventSequenceTable } from "@opencode-ai/core/event/sql"
 import { Workspace } from "@/control-plane/workspace"
 import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import * as Log from "@opencode-ai/core/util/log"
+import { Naming } from "@opencode-ai/core/naming"
 import { Effect } from "effect"
 
-export const HEADER = "x-opencode-sync"
+export const HEADER = Naming.headers.sync[0]
+export const LEGACY_HEADER = Naming.headers.sync[1]
 export type State = Record<string, number>
 const log = Log.create({ service: "fence" })
 
@@ -34,7 +36,7 @@ export function diff(prev: State, next: State) {
 }
 
 export function parse(headers: Headers): State | undefined {
-  const raw = headers.get(HEADER)
+  const raw = Naming.header(headers, Naming.headers.sync)
   if (!raw) return
 
   let data

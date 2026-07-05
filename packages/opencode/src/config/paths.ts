@@ -6,6 +6,7 @@ import { Global } from "@opencode-ai/core/global"
 import { unique } from "remeda"
 import * as Effect from "effect/Effect"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Naming } from "@opencode-ai/core/naming"
 
 export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
   name: string,
@@ -14,7 +15,7 @@ export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
 ) {
   const afs = yield* FSUtil.Service
   return (yield* afs.up({
-    targets: [`${name}.jsonc`, `${name}.json`],
+    targets: name === Naming.legacyAppSlug ? [...Naming.configFileSearchTargets] : [`${name}.jsonc`, `${name}.json`],
     start: directory,
     stop: worktree,
   })).toReversed()
@@ -26,13 +27,13 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
     Global.Path.config,
     ...(!Flag.OPENCODE_DISABLE_PROJECT_CONFIG
       ? yield* afs.up({
-          targets: [".opencode"],
+          targets: [...Naming.configDirs].toReversed(),
           start: directory,
           stop: worktree,
         })
       : []),
     ...(yield* afs.up({
-      targets: [".opencode"],
+      targets: [...Naming.configDirs].toReversed(),
       start: Global.Path.home,
       stop: Global.Path.home,
     })),
@@ -41,5 +42,6 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
 })
 
 export function fileInDirectory(dir: string, name: string) {
+  if (name === Naming.legacyAppSlug) return Naming.configFileLoadOrder.map((file) => path.join(dir, file))
   return [path.join(dir, `${name}.json`), path.join(dir, `${name}.jsonc`)]
 }

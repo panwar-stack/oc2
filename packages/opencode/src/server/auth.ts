@@ -2,7 +2,10 @@ export * as ServerAuth from "./auth"
 
 import { ConfigService } from "@/effect/config-service"
 import { Flag } from "@opencode-ai/core/flag/flag"
+import { Naming } from "@opencode-ai/core/naming"
 import { Config as EffectConfig, Context, Option, Redacted } from "effect"
+
+const string = (name: string) => EffectConfig.string(Naming.canonicalEnv(name)).pipe(EffectConfig.orElse(() => EffectConfig.string(name)))
 
 export type Credentials = {
   password?: string
@@ -15,8 +18,8 @@ export type DecodedCredentials = {
 }
 
 export class Config extends ConfigService.Service<Config>()("@opencode/ServerAuthConfig", {
-  password: EffectConfig.string("OPENCODE_SERVER_PASSWORD").pipe(EffectConfig.option),
-  username: EffectConfig.string("OPENCODE_SERVER_USERNAME").pipe(EffectConfig.withDefault("opencode")),
+  password: string("OPENCODE_SERVER_PASSWORD").pipe(EffectConfig.option),
+  username: string("OPENCODE_SERVER_USERNAME").pipe(EffectConfig.withDefault("opencode")),
 }) {}
 
 export type Info = Context.Service.Shape<typeof Config>

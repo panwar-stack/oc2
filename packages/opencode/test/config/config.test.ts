@@ -350,7 +350,7 @@ it.effect("creates global jsonc config with schema when no global configs exist"
     Effect.gen(function* () {
       yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-      const content = yield* FSUtil.use.readFileString(path.join(dir, "opencode.jsonc"))
+      const content = yield* FSUtil.use.readFileString(path.join(dir, "oc2.jsonc"))
       expect(content).toContain('"$schema": "https://opencode.ai/config.json"')
     }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   ),
@@ -366,7 +366,7 @@ it.effect("does not create global config when OPENCODE_CONFIG_DIR is set", () =>
         Effect.gen(function* () {
           yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-          expect(yield* FSUtil.use.existsSafe(path.join(dir, "opencode.jsonc"))).toBe(false)
+          expect(yield* FSUtil.use.existsSafe(path.join(dir, "oc2.jsonc"))).toBe(false)
         }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
       ),
     )
@@ -381,6 +381,17 @@ it.instance(
     expect(config.username).toBe("testuser")
   }),
   { config: { model: "test/model", username: "testuser" } },
+)
+
+it.instance("prefers oc2 project config over legacy opencode project config", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, { username: "legacy" }, "opencode.json")
+    yield* writeConfigEffect(test.directory, { username: "canonical" }, "oc2.json")
+
+    const config = yield* Config.use.get()
+    expect(config.username).toBe("canonical")
+  }),
 )
 
 it.instance(

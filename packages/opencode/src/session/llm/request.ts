@@ -10,6 +10,7 @@ import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { Naming } from "@opencode-ai/core/naming"
 import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
@@ -167,7 +168,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     })
   }
 
-  const opencodeProjectID = input.model.providerID.startsWith("opencode")
+  const isManagedProvider = input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("oc2")
+  const opencodeProjectID = isManagedProvider
     ? (yield* InstanceState.context).project.id
     : undefined
 
@@ -178,12 +180,12 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     params,
     messageTransformOptions: options,
     headers: {
-      ...(input.model.providerID.startsWith("opencode")
+      ...(isManagedProvider
         ? {
-            ...(opencodeProjectID ? { "x-opencode-project": opencodeProjectID } : {}),
-            "x-opencode-session": input.sessionID,
-            "x-opencode-request": input.user.id,
-            "x-opencode-client": input.flags.client,
+            ...(opencodeProjectID ? { [Naming.headers.project[0]]: opencodeProjectID } : {}),
+            [Naming.headers.session[0]]: input.sessionID,
+            [Naming.headers.request[0]]: input.user.id,
+            [Naming.headers.client[0]]: input.flags.client,
             "User-Agent": USER_AGENT,
           }
         : {

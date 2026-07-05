@@ -1,5 +1,8 @@
+import { Naming } from "@opencode-ai/core/naming"
+
 export const PTY_CONNECT_TICKET_QUERY = "ticket"
-export const PTY_CONNECT_TOKEN_HEADER = "x-opencode-ticket"
+export const PTY_CONNECT_TOKEN_HEADER = Naming.headers.ticket[0]
+export const LEGACY_PTY_CONNECT_TOKEN_HEADER = Naming.headers.ticket[1]
 export const PTY_CONNECT_TOKEN_HEADER_VALUE = "1"
 
 const PTY_CONNECT_PATH = /^\/pty\/[^/]+\/connect$/
@@ -12,4 +15,8 @@ export function isPtyConnectPath(pathname: string) {
 
 export function hasPtyConnectTicketURL(url: URL) {
   return isPtyConnectPath(url.pathname) && !!url.searchParams.get(PTY_CONNECT_TICKET_QUERY)
+}
+
+export function hasPtyConnectToken(headers: Record<string, string | undefined>) {
+  return Naming.recordHeader(headers, Naming.headers.ticket) === PTY_CONNECT_TOKEN_HEADER_VALUE
 }
