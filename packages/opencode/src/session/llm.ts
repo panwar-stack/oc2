@@ -149,10 +149,10 @@ const live: Layer.Layer<
         isWorkflow,
       })
       const systemPrompt = prepared.system.join("\n")
-      l.info("system.prompt", {
-        systemPrompt,
-        systemPromptCount: prepared.system.length,
-      })
+      // l.info("system.prompt", {
+      //   systemPrompt,
+      //   systemPromptCount: prepared.system.length,
+      // })
       yield* Effect.annotateCurrentSpan({
         "system.prompt": systemPrompt,
         "system.prompt.count": prepared.system.length,
