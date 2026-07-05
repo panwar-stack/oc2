@@ -87,6 +87,45 @@ const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
     )
   })
 
+describe("session.llm.telemetry", () => {
+  test("includes system prompt in Langfuse-compatible input and metadata", () => {
+    const attrs = LLM.langfuseTelemetryAttributes({
+      sessionID: "ses_telemetry",
+      userID: "tester",
+      system: ["system guidance"],
+      messages: [{ role: "user", content: "hello" }],
+    })
+
+    const messages = [
+      { role: "system", content: "system guidance" },
+      { role: "user", content: "hello" },
+    ]
+
+    expect(JSON.parse(attrs["langfuse.observation.input"])).toEqual({ messages })
+    expect(JSON.parse(attrs["langfuse.trace.input"])).toEqual({ messages })
+    expect(JSON.parse(attrs["gen_ai.input.messages"])).toEqual(messages)
+    expect(attrs["langfuse.observation.metadata.system_prompt"]).toBe("system guidance")
+    expect(attrs["langfuse.trace.metadata.system_prompt"]).toBe("system guidance")
+  })
+
+  test("does not duplicate prepared system messages", () => {
+    const attrs = LLM.langfuseTelemetryAttributes({
+      sessionID: "ses_telemetry",
+      userID: "tester",
+      system: ["system guidance"],
+      messages: [
+        { role: "system", content: "system guidance" },
+        { role: "user", content: "hello" },
+      ],
+    })
+
+    expect(JSON.parse(attrs["gen_ai.input.messages"])).toEqual([
+      { role: "system", content: "system guidance" },
+      { role: "user", content: "hello" },
+    ])
+  })
+})
+
 function llmLayerWithExecutor(executor: Layer.Layer<RequestExecutor.Service>, flags: Partial<RuntimeFlags.Info> = {}) {
   return LLM.layer.pipe(
     Layer.provide(Auth.defaultLayer),

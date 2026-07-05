@@ -148,16 +148,17 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
-      const systemPrompt = prepared.system.join("\n")
+      const telemetryAttributes = langfuseTelemetryAttributes({
+        sessionID: input.sessionID,
+        userID: cfg.username ?? "unknown",
+        system: prepared.system,
+        messages: prepared.messages,
+      })
       // l.info("system.prompt", {
       //   systemPrompt,
       //   systemPromptCount: prepared.system.length,
       // })
-      yield* Effect.annotateCurrentSpan({
-        "gen_ai.system_instructions": systemPrompt,
-        "system.prompt": systemPrompt,
-        "system.prompt.count": prepared.system.length,
-      })
+      yield* Effect.annotateCurrentSpan(telemetryAttributes)
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
@@ -261,10 +262,7 @@ const live: Layer.Layer<
               if (prop !== "startSpan") return Reflect.get(target, prop, receiver)
               return (...args: Parameters<typeof target.startSpan>) => {
                 const span = target.startSpan(...args)
-                span.setAttribute("session.id", input.sessionID)
-                span.setAttribute("gen_ai.system_instructions", systemPrompt)
-                span.setAttribute("system.prompt", systemPrompt)
-                span.setAttribute("system.prompt.count", prepared.system.length)
+                for (const [name, value] of Object.entries(telemetryAttributes)) span.setAttribute(name, value)
                 return span
               }
             },
@@ -506,6 +504,37 @@ export const defaultLayer = Layer.suspend(() =>
 )
 
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
+
+export const langfuseTelemetryAttributes = (input: {
+  readonly sessionID: string
+  readonly userID: string
+  readonly system: readonly string[]
+  readonly messages: readonly ModelMessage[]
+}) => {
+  const system = input.system.filter((content) => content.length > 0)
+  const messages = [
+    ...system.map((content): ModelMessage => ({ role: "system", content })),
+    ...input.messages.filter(
+      (message) => message.role !== "system" || typeof message.content !== "string" || !system.includes(message.content),
+    ),
+  ]
+  const langfuseInput = JSON.stringify({ messages })
+  const systemPrompt = system.join("\n")
+
+  return {
+    "session.id": input.sessionID,
+    "langfuse.session.id": input.sessionID,
+    "langfuse.user.id": input.userID,
+    "gen_ai.input.messages": JSON.stringify(messages),
+    "langfuse.observation.input": langfuseInput,
+    "langfuse.trace.input": langfuseInput,
+    "langfuse.observation.metadata.system_prompt": systemPrompt,
+    "langfuse.trace.metadata.system_prompt": systemPrompt,
+    "gen_ai.system_instructions": systemPrompt,
+    "system.prompt": systemPrompt,
+    "system.prompt.count": system.length,
+  }
+}
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
