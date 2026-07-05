@@ -148,6 +148,15 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      const systemPrompt = prepared.system.join("\n")
+      l.info("system.prompt", {
+        systemPrompt,
+        systemPromptCount: prepared.system.length,
+      })
+      yield* Effect.annotateCurrentSpan({
+        "system.prompt": systemPrompt,
+        "system.prompt.count": prepared.system.length,
+      })
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
@@ -252,6 +261,8 @@ const live: Layer.Layer<
               return (...args: Parameters<typeof target.startSpan>) => {
                 const span = target.startSpan(...args)
                 span.setAttribute("session.id", input.sessionID)
+                span.setAttribute("system.prompt", systemPrompt)
+                span.setAttribute("system.prompt.count", prepared.system.length)
                 return span
               }
             },
