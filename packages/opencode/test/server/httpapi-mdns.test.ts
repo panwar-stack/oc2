@@ -7,13 +7,16 @@ import { disposeAllInstances } from "../fixture/fixture"
 
 void Log.init({ print: false })
 
-type Event = { kind: "publish"; port: number; name: string } | { kind: "unpublishAll" } | { kind: "destroy" }
+type Event =
+  | { kind: "publish"; port: number; name: string; host: string }
+  | { kind: "unpublishAll" }
+  | { kind: "destroy" }
 const events: Event[] = []
 
 void mock.module("bonjour-service", () => ({
   Bonjour: class {
-    publish(opts: { port: number; name: string }) {
-      events.push({ kind: "publish", port: opts.port, name: opts.name })
+    publish(opts: { port: number; name: string; host: string }) {
+      events.push({ kind: "publish", port: opts.port, name: opts.name, host: opts.host })
       return { on: () => {} }
     }
     unpublishAll() {
@@ -60,9 +63,10 @@ describe("HttpApi Server.listen mDNS", () => {
     const listener = await Server.listen({ hostname: "0.0.0.0", port: 0, mdns: true })
     try {
       const published = events.filter((e) => e.kind === "publish")
-      expect(published.length).toBe(1)
-      expect(published[0]!.port).toBe(listener.port)
-      expect(published[0]!.name).toBe(`opencode-${listener.port}`)
+      expect(published).toEqual([
+        { kind: "publish", port: listener.port, name: `oc2-${listener.port}`, host: "oc2.local" },
+        { kind: "publish", port: listener.port, name: `opencode-${listener.port}`, host: "opencode.local" },
+      ])
     } finally {
       await withTimeout(listener.stop(true), 10_000, "timed out stopping mdns listener")
     }
@@ -74,7 +78,7 @@ describe("HttpApi Server.listen mDNS", () => {
     Flag.OPENCODE_SERVER_PASSWORD = "mdns-secret"
     Flag.OPENCODE_SERVER_USERNAME = "opencode"
     const listener = await Server.listen({ hostname: "0.0.0.0", port: 0, mdns: true })
-    expect(events.filter((e) => e.kind === "publish").length).toBe(1)
+    expect(events.filter((e) => e.kind === "publish").length).toBe(2)
     // Plain (graceful) stop without close=true should still unpublish.
     await withTimeout(listener.stop(), 10_000, "timed out stopping graceful mdns listener")
     expect(events.some((e) => e.kind === "unpublishAll")).toBe(true)

@@ -11,7 +11,8 @@ const context = Context.empty() as Context.Context<unknown>
 
 function request(route: string, directory: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
-  headers.set("x-opencode-directory", directory)
+  if (!headers.has("x-oc2-directory") && !headers.has("x-opencode-directory"))
+    headers.set("x-opencode-directory", directory)
   return HttpApiApp.webHandler().handler(
     new Request(`http://localhost${route}`, {
       ...init,
@@ -65,6 +66,23 @@ describe("v2 location HttpApi", () => {
       expect(body.location.directory).toBe(tmp.path)
       expect(body.location.project.id).toBeTruthy()
     }
+  })
+
+  test("prefers canonical location headers and falls back to legacy headers", async () => {
+    await using canonical = await tmpdir({ git: true })
+    await using legacy = await tmpdir({ git: true })
+
+    const canonicalResponse = await request("/api/command", legacy.path, {
+      headers: { "x-oc2-directory": canonical.path, "x-opencode-directory": legacy.path },
+    })
+    expect(canonicalResponse.status).toBe(200)
+    expect(((await canonicalResponse.json()) as { location: { directory: string } }).location.directory).toBe(
+      canonical.path,
+    )
+
+    const legacyResponse = await request("/api/command", legacy.path)
+    expect(legacyResponse.status).toBe(200)
+    expect(((await legacyResponse.json()) as { location: { directory: string } }).location.directory).toBe(legacy.path)
   })
 
   test("streams native EventV2 payloads with resolved locations", async () => {

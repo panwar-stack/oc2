@@ -11,24 +11,29 @@ export function publish(port: number, domain?: string) {
   if (bonjour) unpublish()
 
   try {
-    const host = domain ?? "oc2.local"
-    const name = `oc2-${port}`
     bonjour = new Bonjour()
-    const service = bonjour.publish({
-      name,
-      type: "http",
-      host,
-      port,
-      txt: { path: "/" },
-    })
+    const published = [
+      { name: `oc2-${port}`, host: domain ?? "oc2.local" },
+      ...(domain ? [] : [{ name: `opencode-${port}`, host: "opencode.local" }]),
+    ]
 
-    service.on("up", () => {
-      log.info("mDNS service published", { name, port })
-    })
+    for (const entry of published) {
+      const service = bonjour.publish({
+        name: entry.name,
+        type: "http",
+        host: entry.host,
+        port,
+        txt: { path: "/" },
+      })
 
-    service.on("error", (err) => {
-      log.error("mDNS service error", { error: err })
-    })
+      service.on("up", () => {
+        log.info("mDNS service published", { name: entry.name, host: entry.host, port })
+      })
+
+      service.on("error", (err) => {
+        log.error("mDNS service error", { name: entry.name, host: entry.host, error: err })
+      })
+    }
 
     currentPort = port
   } catch (err) {
