@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode-ai/sdk",
+  "version": "1.16.2",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./server": "./src/server.ts",
+    "./v2": "./src/v2/index.ts",
+    "./v2/client": "./src/v2/client.ts",
+    "./v2/gen/client": "./src/v2/gen/client.ts",
+    "./v2/server": "./src/v2/server.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@oc2-ai/sdk": "workspace:*"
+  }
+}

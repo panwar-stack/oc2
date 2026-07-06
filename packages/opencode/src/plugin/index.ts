@@ -4,10 +4,10 @@ import type {
   Plugin as PluginInstance,
   PluginModule,
   WorkspaceAdapter as PluginWorkspaceAdapter,
-} from "@opencode-ai/plugin"
+} from "@oc2-ai/plugin"
 import { Config } from "@/config/config"
 import * as Log from "@opencode-ai/core/util/log"
-import { createOpencodeClient } from "@opencode-ai/sdk"
+import { createOpencodeClient } from "@oc2-ai/sdk"
 import { ServerAuth } from "@/server/auth"
 import { CodexAuthPlugin } from "./openai/codex"
 import { Session } from "@/session/session"

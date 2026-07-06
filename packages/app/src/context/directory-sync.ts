@@ -8,7 +8,7 @@ import {
   getSessionPrefetchPromise,
   setSessionPrefetch,
 } from "./global-sync/session-prefetch"
-import type { Message, Part } from "@opencode-ai/sdk/v2/client"
+import type { Message, Part } from "@oc2-ai/sdk/v2/client"
 import { SESSION_CACHE_LIMIT, dropSessionCaches, pickSessionCacheEvictions } from "./global-sync/session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
 import { createServerSdkContext, useServerSDK } from "./server-sdk"

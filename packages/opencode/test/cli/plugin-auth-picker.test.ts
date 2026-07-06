@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test"
 import { fetchWellKnownAuthProvider, resolvePluginProviders } from "../../src/cli/cmd/providers"
-import type { Hooks } from "@opencode-ai/plugin"
+import type { Hooks } from "@oc2-ai/plugin"
 
 function hookWithAuth(provider: string): Hooks {
   return {

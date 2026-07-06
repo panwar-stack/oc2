@@ -1,6 +1,6 @@
 import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
 import type { FuguStatus as LiveFuguStatus } from "@/context/global-sync/types"
-import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@opencode-ai/sdk/v2"
+import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@oc2-ai/sdk/v2"
 import { groupParts, PartGroup, renderable } from "@opencode-ai/ui/message-part"
 import { Data, Equal } from "effect"
 

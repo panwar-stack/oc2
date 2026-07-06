@@ -19,7 +19,7 @@ export type TuiOptions = {
   config?: Config
 }
 
-export async function createOpencodeServer(options?: ServerOptions) {
+export async function createOc2Server(options?: ServerOptions) {
   options = Object.assign(
     {
       hostname: "127.0.0.1",
@@ -32,10 +32,12 @@ export async function createOpencodeServer(options?: ServerOptions) {
   const args = [`serve`, `--hostname=${options.hostname}`, `--port=${options.port}`]
   if (options.config?.logLevel) args.push(`--log-level=${options.config.logLevel}`)
 
-  const proc = launch(`opencode`, args, {
+  const config = JSON.stringify(options.config ?? {})
+  const proc = launch(`oc2`, args, {
     env: {
       ...process.env,
-      OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config ?? {}),
+      OPENCODE_CONFIG_CONTENT: config,
+      OC2_CONFIG_CONTENT: config,
     },
   })
   let clear = () => {}
@@ -99,7 +101,9 @@ export async function createOpencodeServer(options?: ServerOptions) {
   }
 }
 
-export function createOpencodeTui(options?: TuiOptions) {
+export const createOpencodeServer = createOc2Server
+
+export function createOc2Tui(options?: TuiOptions) {
   const args = []
 
   if (options?.project) {
@@ -115,11 +119,13 @@ export function createOpencodeTui(options?: TuiOptions) {
     args.push(`--agent=${options.agent}`)
   }
 
-  const proc = launch(`opencode`, args, {
+  const config = JSON.stringify(options?.config ?? {})
+  const proc = launch(`oc2`, args, {
     stdio: "inherit",
     env: {
       ...process.env,
-      OPENCODE_CONFIG_CONTENT: JSON.stringify(options?.config ?? {}),
+      OPENCODE_CONFIG_CONTENT: config,
+      OC2_CONFIG_CONTENT: config,
     },
   })
 
@@ -132,3 +138,5 @@ export function createOpencodeTui(options?: TuiOptions) {
     },
   }
 }
+
+export const createOpencodeTui = createOc2Tui

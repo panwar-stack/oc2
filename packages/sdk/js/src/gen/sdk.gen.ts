@@ -1154,7 +1154,7 @@ class Event extends _HeyApiClient {
   }
 }
 
-export class OpencodeClient extends _HeyApiClient {
+export class Oc2Client extends _HeyApiClient {
   /**
    * Respond to a permission request
    */
@@ -1195,3 +1195,5 @@ export class OpencodeClient extends _HeyApiClient {
   auth = new Auth({ client: this._client })
   event = new Event({ client: this._client })
 }
+
+export { Oc2Client as OpencodeClient }

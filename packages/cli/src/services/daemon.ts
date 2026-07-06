@@ -1,6 +1,6 @@
 import { Global } from "@opencode-ai/core/global"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
-import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
+import { createOpencodeClient } from "@oc2-ai/sdk/v2/client"
 import { ServerAuth } from "@opencode-ai/server/auth"
 import { Context, Effect, FileSystem, Layer, Option, Schedule, Schema, Scope } from "effect"
 import { HttpServer } from "effect/unstable/http"

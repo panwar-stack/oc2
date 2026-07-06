@@ -1,4 +1,4 @@
-import type { Session } from "@opencode-ai/sdk/v2/client"
+import type { Session } from "@oc2-ai/sdk/v2/client"
 import { batch, createEffect, createMemo, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createStore } from "solid-js/store"

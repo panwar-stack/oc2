@@ -687,7 +687,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     function normalizeOidcBaseUrl(): string {
       const value = process.env["OIDC_BASE_URL"]
-      if (!value) return "https://api.opencode.ai"
+      if (!value) return "https://api.oc2.ai"
       return value.replace(/\/+$/, "")
     }
 
@@ -736,7 +736,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
       }
 
       const reviewContext = getReviewCommentContext()
-      const mentions = (process.env["MENTIONS"] || "/opencode,/oc")
+      const mentions = (process.env["MENTIONS"] || "/oc2,/opencode,/oc")
         .split(",")
         .map((m) => m.trim().toLowerCase())
         .filter(Boolean)
@@ -975,7 +975,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     async function getOidcToken() {
       try {
-        return await core.getIDToken("opencode-github-action")
+        return await core.getIDToken("oc2-github-action")
       } catch (error) {
         console.error("Failed to get OIDC token:", error instanceof Error ? error.message : error)
         throw new Error(

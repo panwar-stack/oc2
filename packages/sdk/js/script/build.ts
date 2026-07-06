@@ -27,7 +27,7 @@ await createClient({
     },
     {
       name: "@hey-api/sdk",
-      instance: "OpencodeClient",
+      instance: "Oc2Client",
       exportFromIndex: false,
       auth: false,
       paramsStructure: "flat",
@@ -57,6 +57,15 @@ if (sseTypesPatched === sseTypesSource) {
   throw new Error(`SseFn patch did not apply; @hey-api/openapi-ts output may have changed (${sseTypesPath})`)
 }
 await Bun.write(sseTypesPath, sseTypesPatched)
+
+for (const sdkPath of ["./src/gen/sdk.gen.ts", "./src/v2/gen/sdk.gen.ts"]) {
+  const sdkFile = Bun.file(sdkPath)
+  const sdkSource = await sdkFile.text()
+  const canonical = sdkSource.replace("export class OpencodeClient", "export class Oc2Client")
+  const alias = "export { Oc2Client as OpencodeClient }"
+  const patched = canonical.includes(alias) ? canonical : `${canonical}\n\n${alias}\n`
+  if (patched !== sdkSource) await Bun.write(sdkPath, patched)
+}
 
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`

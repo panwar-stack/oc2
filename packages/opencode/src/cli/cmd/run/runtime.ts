@@ -12,7 +12,7 @@
 //   3. starts the stream transport (SDK event subscription), lazily for fresh
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
-import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { createOpencodeClient } from "@oc2-ai/sdk/v2"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"

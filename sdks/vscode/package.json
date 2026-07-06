@@ -1,7 +1,7 @@
 {
   "name": "opencode",
-  "displayName": "opencode",
-  "description": "opencode for VS Code",
+  "displayName": "oc2",
+  "description": "oc2 for VS Code",
   "version": "1.16.2",
   "publisher": "sst-dev",
   "repository": {
@@ -26,7 +26,7 @@
     "commands": [
       {
         "command": "opencode.openTerminal",
-        "title": "Open opencode",
+        "title": "Open oc2",
         "icon": {
           "light": "images/button-dark.svg",
           "dark": "images/button-light.svg"
@@ -34,7 +34,7 @@
       },
       {
         "command": "opencode.openNewTerminal",
-        "title": "Open opencode in new tab",
+        "title": "Open oc2 in new tab",
         "icon": {
           "light": "images/button-dark.svg",
           "dark": "images/button-light.svg"
@@ -56,7 +56,7 @@
     "keybindings": [
       {
         "command": "opencode.openTerminal",
-        "title": "Run opencode",
+        "title": "Run oc2",
         "key": "cmd+escape",
         "mac": "cmd+escape",
         "win": "ctrl+escape",
@@ -64,7 +64,7 @@
       },
       {
         "command": "opencode.openNewTerminal",
-        "title": "Run opencode",
+        "title": "Run oc2",
         "key": "cmd+shift+escape",
         "mac": "cmd+shift+escape",
         "win": "ctrl+shift+escape",
@@ -72,7 +72,7 @@
       },
       {
         "command": "opencode.addFilepathToTerminal",
-        "title": "opencode: Insert At-Mentioned",
+        "title": "oc2: Insert At-Mentioned",
         "key": "cmd+alt+k",
         "mac": "cmd+alt+k",
         "win": "ctrl+alt+K",

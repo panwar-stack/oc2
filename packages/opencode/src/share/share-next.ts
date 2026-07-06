@@ -1,4 +1,4 @@
-import type * as SDK from "@opencode-ai/sdk/v2"
+import type * as SDK from "@oc2-ai/sdk/v2"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Effect, Exit, Layer, Option, Schema, Scope, Context, Stream } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"

@@ -1,4 +1,4 @@
-import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { createOpencodeClient } from "@oc2-ai/sdk/v2"
 import { RGBA, type CliRenderer } from "@opentui/core"
 import type { HostPluginApi } from "@opencode-ai/tui/plugin/slots"
 import { createTuiResolvedConfig } from "./tui-runtime"

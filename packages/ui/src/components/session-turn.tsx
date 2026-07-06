@@ -3,8 +3,8 @@ import {
   type SnapshotFileDiff,
   Message as MessageType,
   Part as PartType,
-} from "@opencode-ai/sdk/v2/client"
-import type { SessionStatus } from "@opencode-ai/sdk/v2"
+} from "@oc2-ai/sdk/v2/client"
+import type { SessionStatus } from "@oc2-ai/sdk/v2"
 import { useData } from "../context"
 import { useFileComponent } from "../context/file"
 

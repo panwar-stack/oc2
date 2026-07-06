@@ -402,7 +402,7 @@ class HeyApiRegistry<T> {
   get(key?: string): T {
     const instance = this.instances.get(key ?? this.defaultKey)
     if (!instance) {
-      throw new Error(`No SDK client found. Create one with "new OpencodeClient()" to fix this error.`)
+      throw new Error(`No SDK client found. Create one with "new Oc2Client()" to fix this error.`)
     }
     return instance
   }
@@ -6416,12 +6416,12 @@ export class V2 extends HeyApiClient {
   }
 }
 
-export class OpencodeClient extends HeyApiClient {
-  public static readonly __registry = new HeyApiRegistry<OpencodeClient>()
+export class Oc2Client extends HeyApiClient {
+  public static readonly __registry = new HeyApiRegistry<Oc2Client>()
 
   constructor(args?: { client?: Client; key?: string }) {
     super(args)
-    OpencodeClient.__registry.set(this, args?.key)
+    Oc2Client.__registry.set(this, args?.key)
   }
 
   private _auth?: Auth
@@ -6574,3 +6574,5 @@ export class OpencodeClient extends HeyApiClient {
     return (this._v2 ??= new V2({ client: this.client }))
   }
 }
+
+export { Oc2Client as OpencodeClient }

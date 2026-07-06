@@ -1,4 +1,4 @@
-import type { Config, OpencodeClient, Path, Project, ProviderAuthResponse, Todo } from "@opencode-ai/sdk/v2/client"
+import type { Config, OpencodeClient, Path, Project, ProviderAuthResponse, Todo } from "@oc2-ai/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { batch, getOwner, onCleanup, onMount, untrack } from "solid-js"

@@ -1,6 +1,6 @@
 /** @jsxImportSource solid-js */
 import { afterEach, describe, expect, mock, test } from "bun:test"
-import type { Provider } from "@opencode-ai/sdk/v2"
+import type { Provider } from "@oc2-ai/sdk/v2"
 import { createComponent, createRoot } from "solid-js"
 
 const storage = new Map<string, string>()

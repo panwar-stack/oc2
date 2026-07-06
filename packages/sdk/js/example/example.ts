@@ -1,8 +1,8 @@
-import { createOpencodeClient, createOpencodeServer } from "@opencode-ai/sdk"
+import { createOc2Client, createOc2Server } from "@oc2-ai/sdk"
 import { pathToFileURL } from "bun"
 
-const server = await createOpencodeServer()
-const client = createOpencodeClient({ baseUrl: server.url })
+const server = await createOc2Server()
+const client = createOc2Client({ baseUrl: server.url })
 
 const input = await Array.fromAsync(new Bun.Glob("packages/core/*.ts").scan())
 

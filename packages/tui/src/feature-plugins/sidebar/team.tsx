@@ -1,4 +1,4 @@
-import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@oc2-ai/plugin/tui"
 import { useSync } from "../../context/sync"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { Spinner } from "../../component/spinner"

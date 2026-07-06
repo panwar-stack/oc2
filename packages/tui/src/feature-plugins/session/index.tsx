@@ -1,4 +1,4 @@
-import type { TuiPlugin } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin } from "@oc2-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { SessionSwitcherDialog } from "./dialog"
 

@@ -1,4 +1,4 @@
-import type { FileContent } from "@opencode-ai/sdk/v2"
+import type { FileContent } from "@oc2-ai/sdk/v2"
 
 export type FileSelection = {
   startLine: number

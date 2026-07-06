@@ -19,7 +19,7 @@ import { Locale } from "../../util/locale"
 import type { PromptInfo } from "../../prompt/history"
 import { useFrecency } from "../../prompt/frecency"
 import { useBindings, useCommandSlashes, useOpencodeModeStack } from "../../keymap"
-import type { ReferenceDescriptor } from "@opencode-ai/sdk/v2"
+import type { ReferenceDescriptor } from "@oc2-ai/sdk/v2"
 import { displayCharAt, mentionTriggerIndex } from "../../prompt/display"
 
 function removeLineRange(input: string) {

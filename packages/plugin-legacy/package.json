@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode-ai/plugin",
+  "version": "1.16.2",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tool": "./src/tool.ts",
+    "./tui": "./src/tui.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@oc2-ai/plugin": "workspace:*"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.3.4",
+    "@opentui/keymap": ">=0.3.4",
+    "@opentui/solid": ">=0.3.4"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/keymap": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    }
+  }
+}

@@ -7,7 +7,7 @@ import type {
   Project,
   QuestionRequest,
   Session,
-} from "@opencode-ai/sdk/v2/client"
+} from "@oc2-ai/sdk/v2/client"
 import { createStore } from "solid-js/store"
 import type { State } from "./types"
 import { applyDirectoryEvent, applyGlobalEvent, cleanupDroppedSessionCaches } from "./event-reducer"

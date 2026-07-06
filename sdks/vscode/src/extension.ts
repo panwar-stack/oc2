@@ -3,7 +3,8 @@ export function deactivate() {}
 
 import * as vscode from "vscode"
 
-const TERMINAL_NAME = "opencode"
+const TERMINAL_NAME = "oc2"
+const LEGACY_TERMINAL_NAME = "opencode"
 
 export function activate(context: vscode.ExtensionContext) {
   const openNewTerminalDisposable = vscode.commands.registerCommand("opencode.openNewTerminal", async () => {
@@ -11,8 +12,10 @@ export function activate(context: vscode.ExtensionContext) {
   })
 
   const openTerminalDisposable = vscode.commands.registerCommand("opencode.openTerminal", async () => {
-    // An opencode terminal already exists => focus it
-    const existingTerminal = vscode.window.terminals.find((t) => t.name === TERMINAL_NAME)
+    // An oc2 terminal already exists => focus it
+    const existingTerminal = vscode.window.terminals.find(
+      (t) => t.name === TERMINAL_NAME || t.name === LEGACY_TERMINAL_NAME,
+    )
     if (existingTerminal) {
       existingTerminal.show()
       return
@@ -32,9 +35,9 @@ export function activate(context: vscode.ExtensionContext) {
       return
     }
 
-    if (terminal.name === TERMINAL_NAME) {
-      // @ts-ignore
-      const port = terminal.creationOptions.env?.["_EXTENSION_OPENCODE_PORT"]
+    if (terminal.name === TERMINAL_NAME || terminal.name === LEGACY_TERMINAL_NAME) {
+      const env = "env" in terminal.creationOptions ? terminal.creationOptions.env : undefined
+      const port = env?.["_EXTENSION_OC2_PORT"] ?? env?.["_EXTENSION_OPENCODE_PORT"]
       port ? await appendPrompt(parseInt(port), fileRef) : terminal.sendText(fileRef, false)
       terminal.show()
     }
@@ -56,13 +59,15 @@ export function activate(context: vscode.ExtensionContext) {
         preserveFocus: false,
       },
       env: {
+        _EXTENSION_OC2_PORT: port.toString(),
         _EXTENSION_OPENCODE_PORT: port.toString(),
+        OC2_CALLER: "vscode",
         OPENCODE_CALLER: "vscode",
       },
     })
 
     terminal.show()
-    terminal.sendText(`opencode --port ${port}`)
+    terminal.sendText(`oc2 --port ${port}`)
 
     const fileRef = getActiveFile()
     if (!fileRef) {

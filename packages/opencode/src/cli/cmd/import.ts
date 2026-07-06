@@ -1,4 +1,4 @@
-import type { Session as SDKSession, Message, Part } from "@opencode-ai/sdk/v2"
+import type { Session as SDKSession, Message, Part } from "@oc2-ai/sdk/v2"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Session } from "@/session/session"
 import { MessageV2 } from "../../session/message-v2"

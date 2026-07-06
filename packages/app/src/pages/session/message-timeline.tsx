@@ -47,7 +47,7 @@ import type {
   Part as PartType,
   ToolPart,
   UserMessage,
-} from "@opencode-ai/sdk/v2"
+} from "@oc2-ai/sdk/v2"
 import { showToast } from "@/utils/toast"
 import { Binary } from "@opencode-ai/core/util/binary"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"

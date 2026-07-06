@@ -49,8 +49,8 @@
   },
   "dependencies": {
     "@opencode-ai/core": "workspace:*",
-    "@opencode-ai/plugin": "workspace:*",
-    "@opencode-ai/sdk": "workspace:*",
+    "@oc2-ai/plugin": "workspace:*",
+    "@oc2-ai/sdk": "workspace:*",
     "@opencode-ai/ui": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",

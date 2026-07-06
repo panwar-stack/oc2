@@ -6,7 +6,7 @@ import { useConnected } from "../../component/use-connected"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
 import { Global } from "@opencode-ai/core/global"
-import type { Session, SessionRoot } from "@opencode-ai/sdk/v2"
+import type { Session, SessionRoot } from "@oc2-ai/sdk/v2"
 
 export function Footer() {
   const { theme } = useTheme()

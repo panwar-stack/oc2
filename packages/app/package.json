@@ -61,7 +61,7 @@
   "dependencies": {
     "@kobalte/core": "catalog:",
     "@opencode-ai/core": "workspace:*",
-    "@opencode-ai/sdk": "workspace:*",
+    "@oc2-ai/sdk": "workspace:*",
     "@opencode-ai/ui": "workspace:*",
     "@sentry/solid": "catalog:",
     "@shikijs/transformers": "3.9.2",

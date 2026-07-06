@@ -1,4 +1,4 @@
-import type { AuthOAuthResult, Hooks } from "@opencode-ai/plugin"
+import type { AuthOAuthResult, Hooks } from "@oc2-ai/plugin"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Auth } from "@/auth"
 import { InstanceState } from "@/effect/instance-state"

@@ -1,5 +1,5 @@
 import { createMemo, For, Show } from "solid-js"
-import type { EventSessionNextFuguStatus } from "@opencode-ai/sdk/v2"
+import type { EventSessionNextFuguStatus } from "@oc2-ai/sdk/v2"
 import { useTheme } from "../../context/theme"
 
 export function FuguStatusBlock(props: { status: EventSessionNextFuguStatus["properties"] }) {

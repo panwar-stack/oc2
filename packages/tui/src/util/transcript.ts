@@ -1,4 +1,4 @@
-import type { AssistantMessage, Part, Provider, UserMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, Part, Provider, UserMessage } from "@oc2-ai/sdk/v2"
 import { Locale } from "./locale"
 import * as Model from "./model"
 import type { ExportSession } from "./session-export"

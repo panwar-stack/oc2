@@ -1,5 +1,5 @@
 import { getFilename } from "@opencode-ai/core/util/path"
-import type { FileSystemBinaryContent, FileSystemTextContent } from "@opencode-ai/sdk/v2"
+import type { FileSystemBinaryContent, FileSystemTextContent } from "@oc2-ai/sdk/v2"
 
 export function serverAttachmentFile(path: string, data: FileSystemTextContent | FileSystemBinaryContent) {
   const content =

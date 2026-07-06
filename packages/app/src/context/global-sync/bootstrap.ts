@@ -8,7 +8,7 @@ import type {
   QuestionRequest,
   Session,
   Todo,
-} from "@opencode-ai/sdk/v2/client"
+} from "@oc2-ai/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { retry } from "@opencode-ai/core/util/retry"

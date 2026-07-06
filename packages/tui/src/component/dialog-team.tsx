@@ -1,4 +1,4 @@
-import type { Session } from "@opencode-ai/sdk/v2"
+import type { Session } from "@oc2-ai/sdk/v2"
 import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { useRouteData } from "../context/route"
 import { useSync } from "../context/sync"

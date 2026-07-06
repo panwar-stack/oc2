@@ -10,7 +10,7 @@ import {
   type TuiPluginStatus,
   type TuiSlotPlugin,
   type TuiTheme,
-} from "@opencode-ai/plugin/tui"
+} from "@oc2-ai/plugin/tui"
 import path from "path"
 import { fileURLToPath } from "url"
 import { TuiConfig } from "@/config/tui"

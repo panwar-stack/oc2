@@ -1,7 +1,7 @@
 import path from "path"
 import { createMemo } from "solid-js"
 import { TextAttributes } from "@opentui/core"
-import type { SessionRoot } from "@opencode-ai/sdk/v2"
+import type { SessionRoot } from "@oc2-ai/sdk/v2"
 import { errorMessage } from "../../util/error"
 import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogPrompt } from "../../ui/dialog-prompt"

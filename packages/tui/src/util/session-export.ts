@@ -1,4 +1,4 @@
-import type { OpencodeClient, Session as ClientSession } from "@opencode-ai/sdk/v2"
+import type { OpencodeClient, Session as ClientSession } from "@oc2-ai/sdk/v2"
 
 type ClientSessionMessage = NonNullable<Awaited<ReturnType<OpencodeClient["session"]["messages"]>>["data"]>[number]
 
