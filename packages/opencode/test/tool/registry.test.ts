@@ -625,8 +625,6 @@ describe("tool.registry", () => {
         const test = yield* TestInstance
         const opencode = path.join(test.directory, ".opencode")
         const customTools = path.join(opencode, "tools")
-        const plugin = path.join(opencode, "node_modules", "@opencode-ai", "plugin")
-        yield* Effect.promise(() => fs.mkdir(path.join(plugin, "dist"), { recursive: true }))
         yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
         yield* Effect.promise(() =>
           fs.cp(path.dirname(fileURLToPath(import.meta.resolve("zod"))), path.join(opencode, "node_modules", "zod"), {
@@ -634,53 +632,61 @@ describe("tool.registry", () => {
             recursive: true,
           }),
         )
-        yield* Effect.promise(() =>
-          Bun.write(
-            path.join(plugin, "package.json"),
-            JSON.stringify({ name: "@oc2-ai/plugin", type: "module", exports: { ".": "./dist/index.js" } }),
-          ),
-        )
-        yield* Effect.promise(() =>
-          Bun.write(
-            path.join(plugin, "dist", "index.js"),
-            [
-              "import { z } from 'zod'",
-              "export function tool(input) {",
-              "  return input",
-              "}",
-              "tool.schema = z",
-              "",
-            ].join("\n"),
-          ),
-        )
-        yield* Effect.promise(() =>
-          Bun.write(
-            path.join(customTools, "addition.ts"),
-            [
-              'import { tool } from "@oc2-ai/plugin"',
-              "export default tool({",
-              "  description: 'Use this tool to add two numbers and return their sum.',",
-              "  args: {",
-              "    left: tool.schema.number().describe('The first number to add'),",
-              "    right: tool.schema.number().describe('The second number to add'),",
-              "  },",
-              "  execute: async (args) => `${args.left} + ${args.right} = ${args.left + args.right}`,",
-              "})",
-              "",
-            ].join("\n"),
-          ),
-        )
+        for (const packageName of ["@oc2-ai/plugin", "@opencode-ai/plugin"]) {
+          const plugin = path.join(opencode, "node_modules", ...packageName.split("/"))
+          const toolName = packageName.includes("opencode") ? "addition-opencode" : "addition-oc2"
+          yield* Effect.promise(() => fs.mkdir(path.join(plugin, "dist"), { recursive: true }))
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(plugin, "package.json"),
+              JSON.stringify({ name: packageName, type: "module", exports: { ".": "./dist/index.js" } }),
+            ),
+          )
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(plugin, "dist", "index.js"),
+              [
+                "import { z } from 'zod'",
+                "export function tool(input) {",
+                "  return input",
+                "}",
+                "tool.schema = z",
+                "",
+              ].join("\n"),
+            ),
+          )
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(customTools, `${toolName}.ts`),
+              [
+                `import { tool } from ${JSON.stringify(packageName)}`,
+                "export default tool({",
+                "  description: 'Use this tool to add two numbers and return their sum.',",
+                "  args: {",
+                "    left: tool.schema.number().describe('The first number to add'),",
+                "    right: tool.schema.number().describe('The second number to add'),",
+                "  },",
+                "  execute: async (args) => `${args.left} + ${args.right} = ${args.left + args.right}`,",
+                "})",
+                "",
+              ].join("\n"),
+            ),
+          )
+        }
 
         const registry = yield* ToolRegistry.Service
-        const loaded = (yield* registry.all()).find((tool) => tool.id === "addition")
-        if (!loaded) throw new Error("custom addition tool was not loaded")
+        const tools = yield* registry.all()
 
-        expect(ToolJsonSchema.fromTool(loaded)).toMatchObject({
-          properties: {
-            left: { type: "number", description: "The first number to add" },
-            right: { type: "number", description: "The second number to add" },
-          },
-        })
+        for (const toolID of ["addition-oc2", "addition-opencode"]) {
+          const loaded = tools.find((tool) => tool.id === toolID)
+          if (!loaded) throw new Error(`custom ${toolID} tool was not loaded`)
+          expect(ToolJsonSchema.fromTool(loaded)).toMatchObject({
+            properties: {
+              left: { type: "number", description: "The first number to add" },
+              right: { type: "number", description: "The second number to add" },
+            },
+          })
+        }
       }),
     20_000,
   )

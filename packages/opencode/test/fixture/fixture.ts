@@ -74,11 +74,12 @@ async function stop(dir: string) {
 type TmpDirOptions<T> = {
   git?: boolean
   config?: Partial<Config.Info>
+  configName?: "oc2" | "opencode"
   init?: (dir: string) => Promise<T>
   dispose?: (dir: string) => Promise<T>
 }
 export async function tmpdir<T>(options?: TmpDirOptions<T>) {
-  const dirpath = sanitizePath(path.join(os.tmpdir(), "opencode-test-" + Math.random().toString(36).slice(2)))
+  const dirpath = sanitizePath(path.join(os.tmpdir(), "oc2-test-" + Math.random().toString(36).slice(2)))
   await fs.mkdir(dirpath, { recursive: true })
   if (options?.git) {
     await $`git init`.cwd(dirpath).quiet()
@@ -90,7 +91,7 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   }
   if (options?.config) {
     await Bun.write(
-      path.join(dirpath, "opencode.json"),
+      path.join(dirpath, `${options.configName ?? "oc2"}.json`),
       JSON.stringify({
         $schema: "https://opencode.ai/config.json",
         ...options.config,
@@ -118,11 +119,12 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
 export function tmpdirScoped<E = never, R = never>(options?: {
   git?: boolean
   config?: Partial<Config.Info> | (() => Partial<Config.Info>)
+  configName?: "oc2" | "opencode"
   init?: (directory: string) => Effect.Effect<void, E, R>
 }) {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    const dirpath = sanitizePath(path.join(os.tmpdir(), "opencode-test-" + Math.random().toString(36).slice(2)))
+    const dirpath = sanitizePath(path.join(os.tmpdir(), "oc2-test-" + Math.random().toString(36).slice(2)))
     yield* Effect.promise(() => fs.mkdir(dirpath, { recursive: true }))
     const dir = sanitizePath(yield* Effect.promise(() => fs.realpath(dirpath)))
 
@@ -149,7 +151,7 @@ export function tmpdirScoped<E = never, R = never>(options?: {
       const resolved = typeof options.config === "function" ? options.config() : options.config
       yield* Effect.promise(() =>
         fs.writeFile(
-          path.join(dir, "opencode.json"),
+          path.join(dir, `${options.configName ?? "oc2"}.json`),
           JSON.stringify({ $schema: "https://opencode.ai/config.json", ...resolved }),
         ),
       )
@@ -178,7 +180,11 @@ export const disposeAllInstancesEffect = InstanceStore.Service.use((store) => st
 
 export function provideTmpdirInstance<A, E, R>(
   self: (path: string) => Effect.Effect<A, E, R>,
-  options?: { git?: boolean; config?: Partial<ConfigV1.Info> | (() => Partial<ConfigV1.Info>) },
+  options?: {
+    git?: boolean
+    config?: Partial<ConfigV1.Info> | (() => Partial<ConfigV1.Info>)
+    configName?: "oc2" | "opencode"
+  },
 ) {
   return Effect.gen(function* () {
     const path = yield* tmpdirScoped(options)
@@ -198,6 +204,7 @@ export const withTmpdirInstance =
   <E2 = never, R2 = never>(options?: {
     git?: boolean
     config?: Partial<ConfigV1.Info> | (() => Partial<ConfigV1.Info>)
+    configName?: "oc2" | "opencode"
     init?: (directory: string) => Effect.Effect<void, E2, R2>
   }) =>
   <A, E, R>(self: Effect.Effect<A, E, R>) =>
@@ -208,7 +215,7 @@ export const withTmpdirInstance =
 
 export function provideTmpdirServer<A, E, R>(
   self: (input: { dir: string; llm: TestLLMServer["Service"] }) => Effect.Effect<A, E, R>,
-  options?: { git?: boolean; config?: (url: string) => Partial<ConfigV1.Info> },
+  options?: { git?: boolean; config?: (url: string) => Partial<ConfigV1.Info>; configName?: "oc2" | "opencode" },
 ): Effect.Effect<
   A,
   E | PlatformError.PlatformError,
@@ -219,6 +226,7 @@ export function provideTmpdirServer<A, E, R>(
     return yield* provideTmpdirInstance((dir) => self({ dir, llm }), {
       git: options?.git,
       config: options?.config?.(llm.url),
+      configName: options?.configName,
     })
   })
 }

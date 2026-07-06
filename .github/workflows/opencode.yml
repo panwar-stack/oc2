@@ -1,4 +1,4 @@
-name: opencode
+name: oc2
 
 on:
   issue_comment:
@@ -7,8 +7,10 @@ on:
     types: [created]
 
 jobs:
-  opencode:
+  oc2:
     if: |
+      contains(github.event.comment.body, ' /oc2') ||
+      startsWith(github.event.comment.body, '/oc2') ||
       contains(github.event.comment.body, ' /oc') ||
       startsWith(github.event.comment.body, '/oc') ||
       contains(github.event.comment.body, ' /opencode') ||
@@ -25,7 +27,7 @@ jobs:
 
       - uses: ./.github/actions/setup-bun
 
-      - name: Run opencode
+      - name: Run oc2
         uses: anomalyco/opencode/github@2c14fc5586fe0b88e5c04732d2e846769cc35671 # latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}

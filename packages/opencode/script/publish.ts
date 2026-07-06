@@ -83,9 +83,9 @@ await Promise.all(tasks)
 await publish("./dist/oc2-ai", "oc2-ai", version)
 await publish("./dist/opencode-ai", "opencode-ai", version)
 
-const image = "ghcr.io/anomalyco/opencode"
+const images = ["ghcr.io/anomalyco/oc2", "ghcr.io/anomalyco/opencode"]
 const platforms = "linux/amd64,linux/arm64"
-const tags = [`${image}:${version}`, `${image}:${Script.channel}`]
+const tags = images.flatMap((image) => [`${image}:${version}`, `${image}:${Script.channel}`])
 const tagFlags = tags.flatMap((t) => ["-t", t])
 
 // registries
