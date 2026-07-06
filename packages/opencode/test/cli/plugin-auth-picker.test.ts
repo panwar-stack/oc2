@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test"
-import { resolvePluginProviders } from "../../src/cli/cmd/providers"
+import { fetchWellKnownAuthProvider, resolvePluginProviders } from "../../src/cli/cmd/providers"
 import type { Hooks } from "@opencode-ai/plugin"
 
 function hookWithAuth(provider: string): Hooks {
@@ -116,5 +116,30 @@ describe("resolvePluginProviders", () => {
       providerNames: {},
     })
     expect(result).toEqual([])
+  })
+})
+
+describe("fetchWellKnownAuthProvider", () => {
+  test("tries oc2 well-known metadata first", async () => {
+    const calls: string[] = []
+    const wellknown = await fetchWellKnownAuthProvider("https://example.com/", async (url) => {
+      calls.push(String(url))
+      return Response.json({ auth: { command: ["echo", "token"], env: "TOKEN" } })
+    })
+
+    expect(calls).toEqual(["https://example.com/.well-known/oc2"])
+    expect(wellknown.auth.env).toBe("TOKEN")
+  })
+
+  test("falls back to legacy opencode well-known metadata", async () => {
+    const calls: string[] = []
+    const wellknown = await fetchWellKnownAuthProvider("https://example.com", async (url) => {
+      calls.push(String(url))
+      if (String(url).endsWith("/oc2")) return new Response("not found", { status: 404 })
+      return Response.json({ auth: { command: ["echo", "legacy"], env: "LEGACY_TOKEN" } })
+    })
+
+    expect(calls).toEqual(["https://example.com/.well-known/oc2", "https://example.com/.well-known/opencode"])
+    expect(wellknown.auth.env).toBe("LEGACY_TOKEN")
   })
 })

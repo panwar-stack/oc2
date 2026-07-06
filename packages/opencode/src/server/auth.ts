@@ -1,11 +1,13 @@
 export * as ServerAuth from "./auth"
 
-import { ConfigService } from "@/effect/config-service"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Naming } from "@opencode-ai/core/naming"
-import { Config as EffectConfig, Context, Option, Redacted } from "effect"
+import { Config as EffectConfig, Context, Effect, Layer, Option, Redacted } from "effect"
 
-const string = (name: string) => EffectConfig.string(Naming.canonicalEnv(name)).pipe(EffectConfig.orElse(() => EffectConfig.string(name)))
+const string = (name: string) =>
+  EffectConfig.string(Naming.canonicalEnv(name)).pipe(EffectConfig.orElse(() => EffectConfig.string(name)))
+const DEFAULT_USERNAME = Naming.appSlug
+const LEGACY_USERNAME = Naming.legacyAppSlug
 
 export type Credentials = {
   password?: string
@@ -17,12 +19,35 @@ export type DecodedCredentials = {
   readonly password: Redacted.Redacted
 }
 
-export class Config extends ConfigService.Service<Config>()("@opencode/ServerAuthConfig", {
-  password: string("OPENCODE_SERVER_PASSWORD").pipe(EffectConfig.option),
-  username: string("OPENCODE_SERVER_USERNAME").pipe(EffectConfig.withDefault("opencode")),
-}) {}
+export type Info = {
+  readonly password: Option.Option<string>
+  readonly username: string
+  readonly usernameConfigured?: boolean
+}
 
-export type Info = Context.Service.Shape<typeof Config>
+export class Config extends Context.Service<Config, Info>()("@opencode/ServerAuthConfig") {
+  static layer(input: Info) {
+    return Layer.succeed(this, this.of(input))
+  }
+
+  static get defaultLayer() {
+    return Layer.effect(
+      this,
+      Effect.gen(function* () {
+        return Config.of(
+          yield* EffectConfig.all({
+            password: string("OPENCODE_SERVER_PASSWORD").pipe(EffectConfig.option),
+            username: string("OPENCODE_SERVER_USERNAME").pipe(EffectConfig.withDefault(DEFAULT_USERNAME)),
+            usernameConfigured: string("OPENCODE_SERVER_USERNAME").pipe(
+              EffectConfig.option,
+              EffectConfig.map(Option.isSome),
+            ),
+          }),
+        )
+      }),
+    )
+  }
+}
 
 export function required(config: Info) {
   return Option.isSome(config.password) && config.password.value !== ""
@@ -31,7 +56,10 @@ export function required(config: Info) {
 export function authorized(credentials: DecodedCredentials, config: Info) {
   return (
     Option.isSome(config.password) &&
-    credentials.username === config.username &&
+    (credentials.username === config.username ||
+      (config.username === DEFAULT_USERNAME &&
+        config.usernameConfigured !== true &&
+        credentials.username === LEGACY_USERNAME)) &&
     Redacted.value(credentials.password) === config.password.value
   )
 }
@@ -40,7 +68,7 @@ export function header(credentials?: Credentials) {
   const password = credentials?.password ?? Flag.OPENCODE_SERVER_PASSWORD
   if (!password) return undefined
 
-  const username = credentials?.username ?? Flag.OPENCODE_SERVER_USERNAME ?? "opencode"
+  const username = credentials?.username ?? Flag.OPENCODE_SERVER_USERNAME ?? DEFAULT_USERNAME
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
 }
 

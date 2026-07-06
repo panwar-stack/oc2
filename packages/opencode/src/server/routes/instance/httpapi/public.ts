@@ -12,6 +12,7 @@ type OpenApiParameter = {
 type OpenApiOperation = {
   parameters?: OpenApiParameter[]
   responses?: Record<string, OpenApiResponse>
+  tags?: string[]
   requestBody?: {
     required?: boolean
     content?: Record<string, { schema?: OpenApiSchema }>
@@ -27,6 +28,7 @@ type OpenApiSpec = {
     securitySchemes?: Record<string, unknown>
   }
   paths?: Record<string, OpenApiPathItem>
+  tags?: Array<{ name: string; description?: string }>
 }
 
 type OpenApiSchema = {
@@ -107,6 +109,7 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
     for (const method of ["get", "post", "put", "delete", "patch"] as const) {
       const operation = item[method]
       if (!operation) continue
+      operation.tags = operation.tags?.map((tag) => (tag === "opencode HttpApi" ? "oc2 HttpApi" : tag))
       const isV2Api = isV2ApiPath(path)
       if (operation.requestBody) {
         // The legacy OpenAPI surface never marked request bodies as required.
@@ -170,6 +173,11 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       }
       const route = `${method.toUpperCase()} ${path}`
       for (const param of operation.parameters ?? []) normalizeParameter(param, route)
+    }
+  }
+  if (spec.tags) {
+    for (const tag of spec.tags) {
+      if (tag.name === "opencode HttpApi") tag.name = "oc2 HttpApi"
     }
   }
   deleteUnusedLegacyErrorComponents(spec)
@@ -528,9 +536,9 @@ function normalizeParameter(param: OpenApiParameter, route: string) {
 
 export const PublicApi = OpenCodeHttpApi.annotateMerge(
   OpenApi.annotations({
-    title: "opencode",
+    title: "oc2",
     version: "1.0.0",
-    description: "opencode api",
+    description: "oc2 api",
     transform: matchLegacyOpenApi,
   }),
 )

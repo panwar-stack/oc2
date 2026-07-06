@@ -29,7 +29,7 @@ export const Api = HttpApi.make("server")
   .add(QuestionGroup)
   .annotateMerge(
     OpenApi.annotations({
-      title: "opencode HttpApi",
+      title: "oc2 HttpApi",
       version: "0.0.1",
       description: "Experimental HttpApi surface for selected instance routes.",
     }),

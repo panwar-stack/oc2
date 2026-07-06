@@ -35,12 +35,12 @@ export const AttachCommand = cmd({
       .option("password", {
         alias: ["p"],
         type: "string",
-        describe: "basic auth password (defaults to OPENCODE_SERVER_PASSWORD)",
+        describe: "basic auth password (defaults to OC2_SERVER_PASSWORD, then OPENCODE_SERVER_PASSWORD)",
       })
       .option("username", {
         alias: ["u"],
         type: "string",
-        describe: "basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')",
+        describe: "basic auth username (defaults to OC2_SERVER_USERNAME, then OPENCODE_SERVER_USERNAME, or 'oc2')",
       }),
   handler: async (args) => {
     const { TuiConfig } = await import("@/config/tui")

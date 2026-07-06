@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "opencode",
+    "title": "oc2",
     "version": "1.0.0",
-    "description": "opencode api"
+    "description": "oc2 api"
   },
   "paths": {
     "/auth/{providerID}": {
@@ -11719,7 +11719,7 @@
     "/api/health": {
       "get": {
         "tags": [
-          "opencode HttpApi"
+          "oc2 HttpApi"
         ],
         "operationId": "v2.health.get",
         "parameters": [],
@@ -11781,7 +11781,7 @@
     "/api/agent": {
       "get": {
         "tags": [
-          "opencode HttpApi"
+          "oc2 HttpApi"
         ],
         "operationId": "v2.agent.list",
         "parameters": [
@@ -39202,11 +39202,11 @@
       "description": "Experimental HttpApi workspace routes."
     },
     {
-      "name": "opencode HttpApi",
+      "name": "oc2 HttpApi",
       "description": "Experimental HttpApi surface for selected instance routes."
     },
     {
-      "name": "opencode HttpApi",
+      "name": "oc2 HttpApi",
       "description": "Experimental HttpApi surface for selected instance routes."
     },
     {

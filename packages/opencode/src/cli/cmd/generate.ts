@@ -14,6 +14,7 @@ export const GenerateCommand = {
       for (const method of ["get", "post", "put", "delete", "patch"] as const) {
         const operation = item[method]
         if (!operation?.operationId) continue
+        operation.tags = operation.tags?.map((tag: string) => (tag === "opencode HttpApi" ? "oc2 HttpApi" : tag))
         operation["x-codeSamples"] = [
           {
             lang: "js",
@@ -28,6 +29,9 @@ export const GenerateCommand = {
           },
         ]
       }
+    }
+    for (const tag of (specs as { tags?: Array<{ name: string }> }).tags ?? []) {
+      if (tag.name === "opencode HttpApi") tag.name = "oc2 HttpApi"
     }
     const raw = JSON.stringify(specs, null, 2)
 

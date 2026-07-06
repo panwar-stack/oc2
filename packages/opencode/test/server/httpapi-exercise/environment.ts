@@ -1,4 +1,5 @@
 import { Flag } from "@opencode-ai/core/flag/flag"
+import { Naming } from "@opencode-ai/core/naming"
 import { Effect } from "effect"
 import path from "path"
 
@@ -12,7 +13,7 @@ process.env.XDG_STATE_HOME = path.join(exerciseGlobalRoot, "state")
 process.env.XDG_CACHE_HOME = path.join(exerciseGlobalRoot, "cache")
 process.env.OPENCODE_DISABLE_SHARE = "true"
 export const exerciseConfigDirectory = path.join(exerciseGlobalRoot, "config", "opencode")
-export const exerciseDataDirectory = path.join(exerciseGlobalRoot, "data", "opencode")
+export const exerciseDataDirectory = path.join(exerciseGlobalRoot, "data", Naming.appSlug)
 
 const preserveExerciseDatabase = !!process.env.OPENCODE_HTTPAPI_EXERCISE_DB
 export const exerciseDatabasePath =

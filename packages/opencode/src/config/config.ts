@@ -421,9 +421,18 @@ export const layer = Layer.effect(
           if (value.type === "wellknown") {
             const url = key.replace(/\/+$/, "")
             authEnv[value.key] = value.token
-            const wellknownURL = `${url}/.well-known/opencode`
-            log.debug("fetching remote config", { url: wellknownURL })
-            const wellknown = yield* fetchRemoteJson(wellknownURL, undefined, ConfigV1.WellKnown)
+            let wellknownURL = ""
+            const wellknown = yield* Effect.gen(function* () {
+              for (const candidate of [`${url}${Naming.wellKnownPath}`, `${url}${Naming.legacyWellKnownPath}`]) {
+                log.debug("fetching remote config", { url: candidate })
+                const fetched = yield* fetchRemoteJson(candidate, undefined, ConfigV1.WellKnown).pipe(Effect.exit)
+                if (Exit.isSuccess(fetched)) {
+                  wellknownURL = candidate
+                  return fetched.value
+                }
+              }
+              return yield* Effect.die(new Error(`failed to fetch remote config from ${url}`))
+            })
             const remote = yield* Effect.promise(() =>
               substituteWellKnownRemoteConfig({
                 value: wellknown.remote_config,
@@ -468,7 +477,9 @@ export const layer = Layer.effect(
         }
 
         if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
-          for (const file of yield* ConfigPaths.files(Naming.legacyAppSlug, ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
+          for (const file of yield* ConfigPaths.files(Naming.legacyAppSlug, ctx.directory, ctx.worktree).pipe(
+            Effect.orDie,
+          )) {
             yield* merge(file, yield* loadFile(file, authEnv), "local")
           }
         }
@@ -532,7 +543,10 @@ export const layer = Layer.effect(
         }
 
         if (Flag.OPENCODE_CONFIG_CONTENT) {
-          const source = Naming.env("OPENCODE_CONFIG_CONTENT") === process.env.OC2_CONFIG_CONTENT ? "OC2_CONFIG_CONTENT" : "OPENCODE_CONFIG_CONTENT"
+          const source =
+            Naming.env("OPENCODE_CONFIG_CONTENT") === process.env.OC2_CONFIG_CONTENT
+              ? "OC2_CONFIG_CONTENT"
+              : "OPENCODE_CONFIG_CONTENT"
           const next = yield* loadConfig(Flag.OPENCODE_CONFIG_CONTENT, {
             dir: ctx.directory,
             source,

@@ -1,6 +1,12 @@
 export * as ServerAuth from "./auth"
 
+import { Naming } from "@opencode-ai/core/naming"
 import { Config as EffectConfig, Context, Effect, Layer, Option, Redacted } from "effect"
+
+const string = (name: string) =>
+  EffectConfig.string(Naming.canonicalEnv(name)).pipe(EffectConfig.orElse(() => EffectConfig.string(name)))
+const DEFAULT_USERNAME = Naming.appSlug
+const LEGACY_USERNAME = Naming.legacyAppSlug
 
 export type Credentials = {
   password?: string
@@ -15,6 +21,7 @@ export type DecodedCredentials = {
 export type Info = {
   readonly password: Option.Option<string>
   readonly username: string
+  readonly usernameConfigured?: boolean
 }
 
 export class Config extends Context.Service<Config, Info>()("@opencode/ServerAuthConfig") {
@@ -28,8 +35,12 @@ export class Config extends Context.Service<Config, Info>()("@opencode/ServerAut
       Effect.gen(function* () {
         return Config.of(
           yield* EffectConfig.all({
-            password: EffectConfig.string("OPENCODE_SERVER_PASSWORD").pipe(EffectConfig.option),
-            username: EffectConfig.string("OPENCODE_SERVER_USERNAME").pipe(EffectConfig.withDefault("opencode")),
+            password: string("OPENCODE_SERVER_PASSWORD").pipe(EffectConfig.option),
+            username: string("OPENCODE_SERVER_USERNAME").pipe(EffectConfig.withDefault(DEFAULT_USERNAME)),
+            usernameConfigured: string("OPENCODE_SERVER_USERNAME").pipe(
+              EffectConfig.option,
+              EffectConfig.map(Option.isSome),
+            ),
           }),
         )
       }),
@@ -44,16 +55,19 @@ export function required(config: Info) {
 export function authorized(credentials: DecodedCredentials, config: Info) {
   return (
     Option.isSome(config.password) &&
-    credentials.username === config.username &&
+    (credentials.username === config.username ||
+      (config.username === DEFAULT_USERNAME &&
+        config.usernameConfigured !== true &&
+        credentials.username === LEGACY_USERNAME)) &&
     Redacted.value(credentials.password) === config.password.value
   )
 }
 
 export function header(credentials?: Credentials) {
-  const password = credentials?.password ?? process.env.OPENCODE_SERVER_PASSWORD
+  const password = credentials?.password ?? Naming.env("OPENCODE_SERVER_PASSWORD")
   if (!password) return undefined
 
-  return `Basic ${Buffer.from(`${credentials?.username ?? process.env.OPENCODE_SERVER_USERNAME ?? "opencode"}:${password}`).toString("base64")}`
+  return `Basic ${Buffer.from(`${credentials?.username ?? Naming.env("OPENCODE_SERVER_USERNAME") ?? DEFAULT_USERNAME}:${password}`).toString("base64")}`
 }
 
 export function headers(credentials?: Credentials) {

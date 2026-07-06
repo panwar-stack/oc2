@@ -18,6 +18,8 @@ import { text } from "node:stream/consumers"
 import { Effect, Option } from "effect"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
+type WellKnownAuthProvider = { auth: { command: string[]; env: string } }
+type WellKnownFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 const promptValue = <Value>(value: Option.Option<Value>) => {
   if (Option.isNone(value)) return Effect.die(new UI.CancelledError())
@@ -235,6 +237,19 @@ export function resolvePluginProviders(input: {
   return result
 }
 
+export async function fetchWellKnownAuthProvider(
+  url: string,
+  fetcher: WellKnownFetch = fetch,
+): Promise<WellKnownAuthProvider> {
+  const base = url.replace(/\/+$/, "")
+  for (const path of [".well-known/oc2", ".well-known/opencode"]) {
+    const response = await fetcher(`${base}/${path}`)
+    if (response.ok) return response.json() as Promise<WellKnownAuthProvider>
+    if (response.status !== 404) throw new Error(`${base}/${path} returned ${response.status}`)
+  }
+  throw new Error(`no oc2 or opencode well-known metadata found at ${base}`)
+}
+
 export const ProvidersCommand = cmd({
   command: "providers",
   aliases: ["auth"],
@@ -321,11 +336,9 @@ export const ProvidersLoginCommand = effectCmd({
     yield* Prompt.intro("Add credential")
     if (args.url) {
       const url = args.url.replace(/\/+$/, "")
-      const wellknown = (yield* cliTry(`Failed to load auth provider metadata from ${url}: `, () =>
-        fetch(`${url}/.well-known/opencode`).then((x) => x.json()),
-      )) as {
-        auth: { command: string[]; env: string }
-      }
+      const wellknown = yield* cliTry(`Failed to load auth provider metadata from ${url}: `, () =>
+        fetchWellKnownAuthProvider(url),
+      )
       yield* Prompt.log.info(`Running \`${wellknown.auth.command.join(" ")}\``)
       const abort = new AbortController()
       const proc = Process.spawn(wellknown.auth.command, { stdout: "pipe", stderr: "inherit", abort: abort.signal })
