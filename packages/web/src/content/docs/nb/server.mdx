@@ -1,19 +1,19 @@
 ---
 title: Tjener
-description: Samhandle med OpenCode-tjener over HTTP.
+description: Samhandle med OC2-tjener over HTTP.
 ---
 
 import config from "../../../../config.mjs"
 export const typesUrl = `${config.github}/blob/dev/packages/sdk/js/src/gen/types.gen.ts`
 
-Kommandoen `opencode serve` kjører en hodeløs HTTP-server som eksponerer et OpenAPI-endepunkt som en OpenCode-klient kan bruke.
+Kommandoen `oc2 serve` kjører en hodeløs HTTP-server som eksponerer et OpenAPI-endepunkt som en OC2-klient kan bruke.
 
 ---
 
 ### Bruk
 
 ```bash
-opencode serve [--port <number>] [--hostname <string>] [--cors <origin>]
+oc2 serve [--port <number>] [--hostname <string>] [--cors <origin>]
 ```
 
 #### Alternativer
@@ -23,41 +23,41 @@ opencode serve [--port <number>] [--hostname <string>] [--cors <origin>]
 | `--port`        | Port å lytte på                               | `4096`           |
 | `--hostname`    | Vertsnavn å lytte på                          | `127.0.0.1`      |
 | `--mdns`        | Aktiver mDNS-oppdagelse                       | `false`          |
-| `--mdns-domain` | Egendefinert domenenavn for mDNS-tjeneste     | `opencode.local` |
+| `--mdns-domain` | Egendefinert domenenavn for mDNS-tjeneste     | `oc2.local` |
 | `--cors`        | Ytterligere nettleseropprinnelse som tillates | `[]`             |
 
 `--cors` kan angis flere ganger:
 
 ```bash
-opencode serve --cors http://localhost:5173 --cors https://app.example.com
+oc2 serve --cors http://localhost:5173 --cors https://app.example.com
 ```
 
 ---
 
 ### Autentisering
 
-Sett `OPENCODE_SERVER_PASSWORD` for å beskytte serveren med HTTP grunnleggende autentisering. Brukernavnet er satt til `opencode` som standard, eller sett `OPENCODE_SERVER_USERNAME` for å overstyre det. Dette gjelder både `opencode serve` og `opencode web`.
+Sett `OC2_SERVER_PASSWORD` for å beskytte serveren med HTTP grunnleggende autentisering. Brukernavnet er satt til `oc2` som standard, eller sett `OC2_SERVER_USERNAME` for å overstyre det. Dette gjelder både `oc2 serve` og `oc2 web`.
 
 ```bash
-OPENCODE_SERVER_PASSWORD=your-password opencode serve
+OC2_SERVER_PASSWORD=your-password oc2 serve
 ```
 
 ---
 
 ### Slik fungerer det
 
-Når du kjører `opencode` starter den en TUI og en server. Der TUI er
+Når du kjører `oc2` starter den en TUI og en server. Der TUI er
 klient som snakker med serveren. Serveren viser en OpenAPI 3.1-spesifikasjon
 endepunkt. Dette endepunktet brukes også til å generere en [SDK](/docs/sdk).
 
 :::tip
-Bruk OpenCode-serveren til å samhandle med OpenCode programmatisk.
+Bruk OC2-serveren til å samhandle med OC2 programmatisk.
 :::
 
-Denne arkitekturen lar OpenCode støtte flere klienter og lar deg samhandle med OpenCode programmatisk.
+Denne arkitekturen lar OC2 støtte flere klienter og lar deg samhandle med OC2 programmatisk.
 
-Du kan kjøre `opencode serve` for å starte en frittstående server. Hvis du har
-OpenCode TUI kjører, vil `opencode serve` starte en ny server.
+Du kan kjøre `oc2 serve` for å starte en frittstående server. Hvis du har
+OC2 TUI kjører, vil `oc2 serve` starte en ny server.
 
 ---
 
@@ -65,7 +65,7 @@ OpenCode TUI kjører, vil `opencode serve` starte en ny server.
 
 Når du starter TUI, tildeler den tilfeldig en port og vertsnavn. Du kan i stedet sende inn `--hostname` og `--port` [flagg](/docs/cli). Bruk deretter denne til å koble til serveren.
 
-[`/tui`](#tui) endepunktet kan brukes til å kjøre TUI gjennom serveren. Du kan for eksempel forhåndsutfylle eller kjøre en forespørsel. Dette oppsettet brukes av OpenCode [IDE](/docs/ide) plugins.
+[`/tui`](#tui) endepunktet kan brukes til å kjøre TUI gjennom serveren. Du kan for eksempel forhåndsutfylle eller kjøre en forespørsel. Dette oppsettet brukes av OC2 [IDE](/docs/ide) plugins.
 
 ---
 
@@ -83,7 +83,7 @@ For eksempel `http://localhost:4096/doc`. Bruk spesifikasjonen til å generere k
 
 ## APIer
 
-opencode-serveren viser følgende APIer.
+oc2-serveren viser følgende APIer.
 
 ---
 

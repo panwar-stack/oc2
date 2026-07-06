@@ -3,7 +3,7 @@ title: Memory
 description: Use repository memory to search historical commits and file summaries.
 ---
 
-Repository memory indexes local git history and high-activity file summaries so OpenCode can find historical localization hints before reading source.
+Repository memory indexes local git history and high-activity file summaries so OC2 can find historical localization hints before reading source.
 
 Memory is historical. Treat commit diffs and cached summaries as clues, then verify every result against the current working tree before editing.
 
@@ -15,7 +15,7 @@ Repository memory is enabled by default. Agent tools are only exposed when an in
 
 Disable repository memory in config:
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
   "memory": {
     "enabled": false
@@ -26,26 +26,26 @@ Disable repository memory in config:
 You can create or refresh the index from a git worktree:
 
 ```bash
-opencode memory index
+oc2 memory index
 ```
 
 The CLI displays foreground progress while indexing, including commit crawl, file activity, and optional summary phases.
 
-Indexing uses local git history and works without GitHub credentials. When GitHub lookup is enabled, OpenCode can record linked issue numbers found in commit messages.
+Indexing uses local git history and works without GitHub credentials. When GitHub lookup is enabled, OC2 can record linked issue numbers found in commit messages.
 
 ---
 
 ## CLI
 
 ```bash
-opencode memory index [--max-commits 7000] [--summaries 200] [--since <date>] [--base-commit <hash>] [--cutoff-time <iso>] [--branch <name>] [--no-github]
-opencode memory status
-opencode memory search commit <query> [--limit 20]
-opencode memory examine commit <hash> [--max-diff-bytes 50000]
-opencode memory search summary <query> [--limit 5]
-opencode memory view summary <path>
-opencode memory clear [--repository <identity>]
-opencode memory eval --issues <path> [--max-commits 7000] [--summaries 200]
+oc2 memory index [--max-commits 7000] [--summaries 200] [--since <date>] [--base-commit <hash>] [--cutoff-time <iso>] [--branch <name>] [--no-github]
+oc2 memory status
+oc2 memory search commit <query> [--limit 20]
+oc2 memory examine commit <hash> [--max-diff-bytes 50000]
+oc2 memory search summary <query> [--limit 5]
+oc2 memory view summary <path>
+oc2 memory clear [--repository <identity>]
+oc2 memory eval --issues <path> [--max-commits 7000] [--summaries 200]
 ```
 
 ### Index options
@@ -60,13 +60,13 @@ opencode memory eval --issues <path> [--max-commits 7000] [--summaries 200]
 | `--branch`      | Branch or revision to index.                                                           |
 | `--no-github`   | Disable linked issue-number lookup from commit messages.                               |
 
-Summary generation uses your configured OpenCode model/provider. If summaries cannot be generated, commit memory and file activity can still be indexed and used.
+Summary generation uses your configured OC2 model/provider. If summaries cannot be generated, commit memory and file activity can still be indexed and used.
 
 ---
 
 ## Config
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
   "memory": {
     "max_commits": 7000,
@@ -89,7 +89,7 @@ Summary generation uses your configured OpenCode model/provider. If summaries ca
 
 ## Agent Tools
 
-When repository memory is not disabled and the active repository has an index, OpenCode can expose these read-only tools to agents:
+When repository memory is not disabled and the active repository has an index, OC2 can expose these read-only tools to agents:
 
 | Tool                    | Description                                                                                 |
 | ----------------------- | ------------------------------------------------------------------------------------------- |

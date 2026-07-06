@@ -1,17 +1,17 @@
 ---
 title: GitHub
-description: Use OpenCode in GitHub issues and pull-requests.
+description: Use OC2 in GitHub issues and pull-requests.
 ---
 
-OpenCode integrates with your GitHub workflow. Mention `/opencode` or `/oc` in your comment, and OpenCode will execute tasks within your GitHub Actions runner.
+OC2 integrates with your GitHub workflow. Mention `/oc2` or `/oc` in your comment, and OC2 will execute tasks within your GitHub Actions runner.
 
 ---
 
 ## Features
 
-- **Triage issues**: Ask OpenCode to look into an issue and explain it to you.
-- **Fix and implement**: Ask OpenCode to fix an issue or implement a feature. And it will work in a new branch and submits a PR with all the changes.
-- **Secure**: OpenCode runs inside your GitHub's runners.
+- **Triage issues**: Ask OC2 to look into an issue and explain it to you.
+- **Fix and implement**: Ask OC2 to fix an issue or implement a feature. And it will work in a new branch and submits a PR with all the changes.
+- **Secure**: OC2 runs inside your GitHub's runners.
 
 ---
 
@@ -20,7 +20,7 @@ OpenCode integrates with your GitHub workflow. Mention `/opencode` or `/oc` in y
 Run the following command in a project that is in a GitHub repo:
 
 ```bash
-opencode github install
+oc2 github install
 ```
 
 This will walk you through installing the GitHub app, creating the workflow, and setting up secrets.
@@ -33,14 +33,14 @@ Or you can set it up manually.
 
 1. **Install the GitHub app**
 
-   Head over to [**github.com/apps/opencode-agent**](https://github.com/apps/opencode-agent). Make sure it's installed on the target repository.
+   Head over to [**github.com/apps/oc2-agent**](https://github.com/apps/oc2-agent). Make sure it's installed on the target repository.
 
 2. **Add the workflow**
 
-   Add the following workflow file to `.github/workflows/opencode.yml` in your repo. Make sure to set the appropriate `model` and required API keys in `env`.
+   Add the following workflow file to `.github/workflows/oc2.yml` in your repo. Make sure to set the appropriate `model` and required API keys in `env`.
 
-   ```yml title=".github/workflows/opencode.yml" {24,26}
-   name: opencode
+   ```yml title=".github/workflows/oc2.yml" {24,26}
+   name: oc2
 
    on:
      issue_comment:
@@ -49,10 +49,10 @@ Or you can set it up manually.
        types: [created]
 
    jobs:
-     opencode:
+     oc2:
        if: |
          contains(github.event.comment.body, '/oc') ||
-         contains(github.event.comment.body, '/opencode')
+         contains(github.event.comment.body, '/oc2')
        runs-on: ubuntu-latest
        permissions:
          id-token: write
@@ -63,7 +63,7 @@ Or you can set it up manually.
               fetch-depth: 1
               persist-credentials: false
 
-          - name: Run OpenCode
+          - name: Run OC2
            uses: anomalyco/opencode/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -81,14 +81,14 @@ Or you can set it up manually.
 
 ## Configuration
 
-- `model`: The model to use with OpenCode. Takes the format of `provider/model`. This is **required**.
+- `model`: The model to use with OC2. Takes the format of `provider/model`. This is **required**.
 - `agent`: The agent to use. Must be a primary agent. Falls back to `default_agent` from config or `"build"` if not found.
-- `share`: Whether to share the OpenCode session. Defaults to **true** for public repositories.
-- `memory`: Repository memory can be used during GitHub runs when it is not disabled in `opencode.json` and an index already exists for the repository. OpenCode does not index repository memory on every action run by default. Memory results are historical hints and must be verified against the checked-out source.
-- `prompt`: Optional custom prompt to override the default behavior. Use this to customize how OpenCode processes requests.
-- `token`: Optional GitHub access token for performing operations such as creating comments, committing changes, and opening pull requests. By default, OpenCode uses the installation access token from the OpenCode GitHub App, so commits, comments, and pull requests appear as coming from the app.
+- `share`: Whether to share the OC2 session. Defaults to **true** for public repositories.
+- `memory`: Repository memory can be used during GitHub runs when it is not disabled in `oc2.json` and an index already exists for the repository. OC2 does not index repository memory on every action run by default. Memory results are historical hints and must be verified against the checked-out source.
+- `prompt`: Optional custom prompt to override the default behavior. Use this to customize how OC2 processes requests.
+- `token`: Optional GitHub access token for performing operations such as creating comments, committing changes, and opening pull requests. By default, OC2 uses the installation access token from the OC2 GitHub App, so commits, comments, and pull requests appear as coming from the app.
 
-  Alternatively, you can use the GitHub Action runner's [built-in `GITHUB_TOKEN`](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token) without installing the OpenCode GitHub App. Just make sure to grant the required permissions in your workflow:
+  Alternatively, you can use the GitHub Action runner's [built-in `GITHUB_TOKEN`](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token) without installing the OC2 GitHub App. Just make sure to grant the required permissions in your workflow:
 
   ```yaml
   permissions:
@@ -104,30 +104,30 @@ Or you can set it up manually.
 
 ## Supported Events
 
-OpenCode can be triggered by the following GitHub events:
+OC2 can be triggered by the following GitHub events:
 
 | Event Type                    | Triggered By                           | Details                                                                                                           |
 | ----------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `issue_comment`               | Comment on an issue or PR              | Mention `/opencode` or `/oc` in your comment. OpenCode reads context and can create branches, open PRs, or reply. |
-| `pull_request_review_comment` | Comment on specific code lines in a PR | Mention `/opencode` or `/oc` while reviewing code. OpenCode receives file path, line numbers, and diff context.   |
-| `issues`                      | Issue opened or edited                 | Automatically trigger OpenCode when issues are created or modified. Requires `prompt` input.                      |
-| `pull_request`                | PR opened or updated                   | Automatically trigger OpenCode when PRs are opened, synchronized, or reopened. Useful for automated reviews.      |
-| `schedule`                    | Cron-based schedule                    | Run OpenCode on a schedule. Requires `prompt` input. Output goes to logs and PRs (no issue to comment on).        |
-| `workflow_dispatch`           | Manual trigger from GitHub UI          | Trigger OpenCode on demand via Actions tab. Requires `prompt` input. Output goes to logs and PRs.                 |
+| `issue_comment`               | Comment on an issue or PR              | Mention `/oc2` or `/oc` in your comment. OC2 reads context and can create branches, open PRs, or reply. |
+| `pull_request_review_comment` | Comment on specific code lines in a PR | Mention `/oc2` or `/oc` while reviewing code. OC2 receives file path, line numbers, and diff context.   |
+| `issues`                      | Issue opened or edited                 | Automatically trigger OC2 when issues are created or modified. Requires `prompt` input.                      |
+| `pull_request`                | PR opened or updated                   | Automatically trigger OC2 when PRs are opened, synchronized, or reopened. Useful for automated reviews.      |
+| `schedule`                    | Cron-based schedule                    | Run OC2 on a schedule. Requires `prompt` input. Output goes to logs and PRs (no issue to comment on).        |
+| `workflow_dispatch`           | Manual trigger from GitHub UI          | Trigger OC2 on demand via Actions tab. Requires `prompt` input. Output goes to logs and PRs.                 |
 
 ### Schedule Example
 
-Run OpenCode on a schedule to perform automated tasks:
+Run OC2 on a schedule to perform automated tasks:
 
-```yaml title=".github/workflows/opencode-scheduled.yml"
-name: Scheduled OpenCode Task
+```yaml title=".github/workflows/oc2-scheduled.yml"
+name: Scheduled OC2 Task
 
 on:
   schedule:
     - cron: "0 9 * * 1" # Every Monday at 9am UTC
 
 jobs:
-  opencode:
+  oc2:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -140,7 +140,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run OpenCode
+      - name: Run OC2
         uses: anomalyco/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -151,7 +151,7 @@ jobs:
             If you find issues worth addressing, open an issue to track them.
 ```
 
-For scheduled events, the `prompt` input is **required** since there's no comment to extract instructions from. Scheduled workflows run without a user context to permission-check, so the workflow must grant `contents: write` and `pull-requests: write` if you expect OpenCode to create branches or PRs.
+For scheduled events, the `prompt` input is **required** since there's no comment to extract instructions from. Scheduled workflows run without a user context to permission-check, so the workflow must grant `contents: write` and `pull-requests: write` if you expect OC2 to create branches or PRs.
 
 ---
 
@@ -159,8 +159,8 @@ For scheduled events, the `prompt` input is **required** since there's no commen
 
 Automatically review PRs when they are opened or updated:
 
-```yaml title=".github/workflows/opencode-review.yml"
-name: opencode-review
+```yaml title=".github/workflows/oc2-review.yml"
+name: oc2-review
 
 on:
   pull_request:
@@ -192,7 +192,7 @@ jobs:
             - Suggest improvements
 ```
 
-For `pull_request` events, if no `prompt` is provided, OpenCode defaults to reviewing the pull request.
+For `pull_request` events, if no `prompt` is provided, OC2 defaults to reviewing the pull request.
 
 ---
 
@@ -200,7 +200,7 @@ For `pull_request` events, if no `prompt` is provided, OpenCode defaults to revi
 
 Automatically triage new issues. This example filters to accounts older than 30 days to reduce spam:
 
-```yaml title=".github/workflows/opencode-triage.yml"
+```yaml title=".github/workflows/oc2-triage.yml"
 name: Issue Triage
 
 on:
@@ -253,9 +253,9 @@ For `issues` events, the `prompt` input is **required** since there's no comment
 
 ## Custom prompts
 
-Override the default prompt to customize OpenCode's behavior for your workflow.
+Override the default prompt to customize OC2's behavior for your workflow.
 
-```yaml title=".github/workflows/opencode.yml"
+```yaml title=".github/workflows/oc2.yml"
 - uses: anomalyco/opencode/github@latest
   with:
     model: anthropic/claude-sonnet-4-5
@@ -272,27 +272,27 @@ This is useful for enforcing specific review criteria, coding standards, or focu
 
 ## Examples
 
-Here are some examples of how you can use OpenCode in GitHub.
+Here are some examples of how you can use OC2 in GitHub.
 
 - **Explain an issue**
 
   Add this comment in a GitHub issue.
 
   ```
-  /opencode explain this issue
+  /oc2 explain this issue
   ```
 
-  OpenCode will read the entire thread, including all comments, and reply with a clear explanation.
+  OC2 will read the entire thread, including all comments, and reply with a clear explanation.
 
 - **Fix an issue**
 
   In a GitHub issue, say:
 
   ```
-  /opencode fix this
+  /oc2 fix this
   ```
 
-  And OpenCode will create a new branch, implement the changes, and open a PR with the changes.
+  And OC2 will create a new branch, implement the changes, and open a PR with the changes.
 
 - **Review PRs and make changes**
 
@@ -302,18 +302,18 @@ Here are some examples of how you can use OpenCode in GitHub.
   Delete the attachment from S3 when the note is removed /oc
   ```
 
-  OpenCode will implement the requested change and commit it to the same PR.
+  OC2 will implement the requested change and commit it to the same PR.
 
 - **Review specific code lines**
 
-  Leave a comment directly on code lines in the PR's "Files" tab. OpenCode automatically detects the file, line numbers, and diff context to provide precise responses.
+  Leave a comment directly on code lines in the PR's "Files" tab. OC2 automatically detects the file, line numbers, and diff context to provide precise responses.
 
   ```
   [Comment on specific lines in Files tab]
   /oc add error handling here
   ```
 
-  When commenting on specific lines, OpenCode receives:
+  When commenting on specific lines, OC2 receives:
   - The exact file being reviewed
   - The specific lines of code
   - The surrounding diff context

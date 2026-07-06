@@ -1,21 +1,21 @@
 ---
 title: Fugu
-description: Run one OpenCode turn through multiple private model branches and synthesize a single final answer.
+description: Run one OC2 turn through multiple private model branches and synthesize a single final answer.
 ---
 
-Fugu is a virtual model for compound model runs. Select `fugu/fugu` like any other model and OpenCode fans the request out to configured branch models, optionally asks a judge model to evaluate the candidates, then streams one final answer from a synthesizer model.
+Fugu is a virtual model for compound model runs. Select `fugu/fugu` like any other model and OC2 fans the request out to configured branch models, optionally asks a judge model to evaluate the candidates, then streams one final answer from a synthesizer model.
 
-Use it when a task benefits from independent model perspectives but you still want one normal OpenCode response, one normal tool-execution path, and one session history.
+Use it when a task benefits from independent model perspectives but you still want one normal OC2 response, one normal tool-execution path, and one session history.
 
 ---
 
 ## Configure
 
-Add a top-level `fugu` block to `opencode.json`.
+Add a top-level `fugu` block to `oc2.json`.
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://oc2.ai/config.json",
   "fugu": {
     "branches": [
       { "model": "anthropic/claude-sonnet-4-5", "variant": "default" },
@@ -34,7 +34,7 @@ Add a top-level `fugu` block to `opencode.json`.
 Branch, judge, and synthesizer targets must use `provider/model`, resolve to normal models, and cannot point back to `fugu/fugu`. If a target model requires a variant, include the supported `variant` in the target config.
 
 :::caution[Request-time validation]
-The generated config schema is permissive so OpenCode can start with an incomplete `fugu` block. Strict validation runs only when `fugu/fugu` is selected.
+The generated config schema is permissive so OC2 can start with an incomplete `fugu` block. Strict validation runs only when `fugu/fugu` is selected.
 :::
 
 ---
@@ -44,16 +44,16 @@ The generated config schema is permissive so OpenCode can start with an incomple
 Select the virtual model from the CLI.
 
 ```bash frame="none"
-opencode --model fugu/fugu
+oc2 --model fugu/fugu
 # or
-opencode -m fugu/fugu
+oc2 -m fugu/fugu
 ```
 
 You can also make it the default model in config.
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://oc2.ai/config.json",
   "model": "fugu/fugu"
 }
 ```
@@ -68,7 +68,7 @@ Fugu does not have its own API key or provider settings. The real providers used
 
 Fugu is implemented as a virtual provider/model pair: provider `fugu`, model `fugu`. It is visible in model selection, but it is not a provider SDK and it does not send requests to a Fugu service.
 
-Instead, OpenCode intercepts `fugu/fugu` before normal provider language-model loading. The Fugu runtime validates the configured targets, resolves each target through the existing provider/model registry, then builds normal model requests for the branch, judge, and synthesizer stages.
+Instead, OC2 intercepts `fugu/fugu` before normal provider language-model loading. The Fugu runtime validates the configured targets, resolves each target through the existing provider/model registry, then builds normal model requests for the branch, judge, and synthesizer stages.
 
 This keeps Fugu additive:
 
@@ -83,7 +83,7 @@ This keeps Fugu additive:
 
 Each Fugu turn follows the same shape.
 
-1. OpenCode receives a normal model stream request for `fugu/fugu`.
+1. OC2 receives a normal model stream request for `fugu/fugu`.
 2. The Fugu runtime validates `fugu.branches`, optional `fugu.judge`, and `fugu.synthesizer`.
 3. Branch models run concurrently with the original conversation context.
 4. If a judge is configured, it evaluates the private branch results.
@@ -98,7 +98,7 @@ If at least one branch succeeds, Fugu can continue to synthesis. If every branch
 
 ## Status
 
-While a Fugu turn runs, OpenCode emits live `session.next.fugu.status` events. The app and TUI use these events to show progress through branching, judging, synthesis, completion, or failure.
+While a Fugu turn runs, OC2 emits live `session.next.fugu.status` events. The app and TUI use these events to show progress through branching, judging, synthesis, completion, or failure.
 
 Status events are intentionally small and live-only. They show orchestration progress, but they do not expose branch text, judge guidance, target model IDs, variants, prompts, provider keys, raw errors, or private tool-call suggestions.
 

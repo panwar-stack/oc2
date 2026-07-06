@@ -1,16 +1,16 @@
 <p align="center">
-  <a href="https://opencode.ai">
+  <a href="https://oc2.ai">
     <picture>
       <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
       <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
+      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OC2 logo">
     </picture>
   </a>
 </p>
 <p align="center">The open source AI coding agent.</p>
 <p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
+  <a href="https://oc2.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
+  <a href="https://www.npmjs.com/package/oc2"><img alt="npm" src="https://img.shields.io/npm/v/oc2?style=flat-square" /></a>
   <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
 
@@ -39,7 +39,7 @@
   <a href="README.vi.md">Tiếng Việt</a>
 </p>
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+[![OC2 Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://oc2.ai)
 
 ---
 
@@ -47,59 +47,61 @@
 
 ```bash
 # YOLO
-curl -fsSL https://opencode.ai/install | bash
+curl -fsSL https://oc2.ai/install | bash
 
 # Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
+npm i -g oc2@latest        # or bun/pnpm/yarn
+scoop install oc2             # Windows
+choco install oc2             # Windows
+brew install anomalyco/tap/oc2 # macOS and Linux (recommended, always up to date)
+brew install oc2              # macOS and Linux (official brew formula, updated less)
+sudo pacman -S oc2            # Arch Linux (Stable)
+paru -S oc2-bin               # Arch Linux (Latest from AUR)
+mise use -g oc2               # Any OS
+nix run nixpkgs#oc2           # or github:anomalyco/opencode for latest dev branch
 ```
+
+Legacy `opencode` commands, config files, env vars, and install URLs remain supported as migration aliases. Prefer `oc2` names for new installs and documentation.
 
 > [!TIP]
 > Remove versions older than 0.1.x before installing.
 
 ### Desktop App (BETA)
 
-OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
+OC2 is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [oc2.ai/download](https://oc2.ai/download).
 
 | Platform              | Download                           |
 | --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe` |
+| macOS (Apple Silicon) | `oc2-desktop-mac-arm64.dmg`   |
+| macOS (Intel)         | `oc2-desktop-mac-x64.dmg`     |
+| Windows               | `oc2-desktop-windows-x64.exe` |
 | Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
 
 ```bash
 # macOS (Homebrew)
-brew install --cask opencode-desktop
+brew install --cask oc2-desktop
 # Windows (Scoop)
-scoop bucket add extras; scoop install extras/opencode-desktop
+scoop bucket add extras; scoop install extras/oc2-desktop
 ```
 
 #### Installation Directory
 
 The install script respects the following priority order for the installation path:
 
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
+1. `$OC2_INSTALL_DIR` - Custom installation directory
 2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
 3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
-4. `$HOME/.opencode/bin` - Default fallback
+4. `$HOME/.oc2/bin` - Default fallback
 
 ```bash
 # Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
+OC2_INSTALL_DIR=/usr/local/bin curl -fsSL https://oc2.ai/install | bash
+XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://oc2.ai/install | bash
 ```
 
 ### Agents
 
-OpenCode includes two built-in agents you can switch between with the `Tab` key.
+OC2 includes two built-in agents you can switch between with the `Tab` key.
 
 - **build** - Default, full-access agent for development work
 - **plan** - Read-only agent for analysis and code exploration
@@ -112,7 +114,7 @@ This is used internally and can be invoked using `@general` in messages.
 
 Subagents are specialized agent types that a primary agent can invoke for a task. Teammates are different: they are background child sessions in an agent team, each with its own name, agent type, role prompt, dependencies, mailbox messages, and optional plan approval. A teammate can run a subagent type, but "teammate" is the team coordination role, not an agent mode.
 
-Learn more about [agents](https://opencode.ai/docs/agents).
+Learn more about [agents](https://oc2.ai/docs/agents).
 
 ### Feature Highlights
 
@@ -120,7 +122,7 @@ Learn more about [agents](https://opencode.ai/docs/agents).
 
 Agent teams let one lead session coordinate multiple background teammate sessions for work that can be split across specialists.
 
-- Enable with `"experimental": { "agent_teams": true }` in `opencode.json`
+- Enable with `"experimental": { "agent_teams": true }` in `oc2.json`
 - Spawn teammates with their own agent type, model, role prompt, dependencies, and optional plan approval
 - Coordinate through mailbox messages, broadcasts, shared task lists, and automatic dependency unblocking
 - Use the TUI team panel to inspect teammate status, pending questions, shared tasks, messages, and shutdown controls
@@ -129,11 +131,11 @@ Agent teams let one lead session coordinate multiple background teammate session
 
 Subagents cannot create nested agent teams, and team tools stay scoped to lead and teammate sessions.
 
-Learn more in the [agent teams docs](https://opencode.ai/docs/agent-teams).
+Learn more in the [agent teams docs](https://oc2.ai/docs/agent-teams).
 
 #### Local Fusion
 
-`local_fusion` runs local compound model orchestration from a normal OpenCode session. It fans one prompt out to inline configured branch models, judges the branch outputs, and synthesizes one final answer without using a remote compound-model provider.
+`local_fusion` runs local compound model orchestration from a normal OC2 session. It fans one prompt out to inline configured branch models, judges the branch outputs, and synthesizes one final answer without using a remote compound-model provider.
 
 - Configure branches, judge, and synthesizer inline in the tool input
 - Branches default to read/search-only tools, with `toolPolicy: "none"` available per branch
@@ -142,37 +144,37 @@ Learn more in the [agent teams docs](https://opencode.ai/docs/agent-teams).
 
 Named compound configs and `model: "compound/..."` routing are not included in this first version.
 
-Learn more in the [tools docs](https://opencode.ai/docs/tools#local_fusion).
+Learn more in the [tools docs](https://oc2.ai/docs/tools#local_fusion).
 
 #### Session Export
 
-`opencode export` now includes child sessions recursively, so exported JSON captures subagent and teammate work along with the lead session.
+`oc2 export` now includes child sessions recursively, so exported JSON captures subagent and teammate work along with the lead session.
 
 #### Repository Memory
 
-Repository memory indexes local git history and high-activity file summaries so agents can use historical localization hints before reading source. It is enabled by default, but tools require an index from `opencode memory index`. Disable it with `"memory": { "enabled": false }`. Memory is historical, so agents must verify every hint against current source before editing.
+Repository memory indexes local git history and high-activity file summaries so agents can use historical localization hints before reading source. It is enabled by default, but tools require an index from `oc2 memory index`. Disable it with `"memory": { "enabled": false }`. Memory is historical, so agents must verify every hint against current source before editing.
 
-Learn more in the [memory docs](https://opencode.ai/docs/memory).
+Learn more in the [memory docs](https://oc2.ai/docs/memory).
 
 ### Documentation
 
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
+For more info on how to configure OC2, [**head over to our docs**](https://oc2.ai/docs).
 
 ### Contributing
 
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
+If you're interested in contributing to OC2, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
 
 Useful contributor helpers:
 
-- `bun run dev:build` builds the OpenCode package with the single-binary build shortcut
+- `bun run dev:build` builds the OC2 package with the single-binary build shortcut
 - `/clarify` narrows underspecified requests before planning or implementation
 - `/spec-planner` drafts repo-style implementation specs with verification slices
 - `/init` runs guided `AGENTS.md` setup and adds the repo's required coding principles
 - `/team-report` runs the team report tool for the active or most recent team session
 
-### Building on OpenCode
+### Building on OC2
 
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
+If you are working on a project that's related to OC2 and is using "oc2" as part of its name, for example "oc2-dashboard" or "oc2-mobile", please add a note to your README to clarify that it is not built by the OC2 team and is not affiliated with us in any way.
 
 ---
 

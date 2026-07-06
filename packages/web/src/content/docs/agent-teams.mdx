@@ -1,6 +1,6 @@
 ---
 title: Agent Teams
-description: Coordinate multiple OpenCode agents from one lead session.
+description: Coordinate multiple OC2 agents from one lead session.
 ---
 
 Agent teams let one lead session coordinate multiple background teammate sessions. Each teammate can use its own agent type, prompt, dependencies, mailbox messages, and optional plan approval.
@@ -13,11 +13,11 @@ Agent teams are experimental. The config, tools, and workflow may change.
 
 ## Enable
 
-Turn on agent teams in your OpenCode config.
+Turn on agent teams in your OC2 config.
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://oc2.ai/config.json",
   "experimental": {
     "agent_teams": true
   }
@@ -30,7 +30,7 @@ After enabling this option, the team tools become available to the lead agent an
 
 ## Quickstart
 
-Ask OpenCode to create a team when a task has independent pieces of work.
+Ask OC2 to create a team when a task has independent pieces of work.
 
 ```txt frame="none"
 Create an agent team for this refactor. Have one teammate inspect the auth flow,
@@ -159,7 +159,7 @@ Approving a plan is only valid for a teammate that is currently in plan mode. Ap
 
 ## Tools
 
-These tools are used by OpenCode agents when agent teams are enabled.
+These tools are used by OC2 agents when agent teams are enabled.
 
 | Tool                | Purpose                                                                                 |
 | ------------------- | --------------------------------------------------------------------------------------- |
@@ -204,7 +204,7 @@ Regular child-session navigation still works for teammate sessions:
 
 ## HTTP API
 
-The OpenCode server exposes read and shutdown endpoints for agent teams.
+The OC2 server exposes read and shutdown endpoints for agent teams.
 
 | Method | Path                        | Description                                     |
 | ------ | --------------------------- | ----------------------------------------------- |
@@ -223,7 +223,7 @@ See [Server](/docs/server#team) for the full server API list.
 
 ### Agent teams are not enabled
 
-Add `"experimental": { "agent_teams": true }` to `opencode.json`, then restart OpenCode so the config is reloaded.
+Add `"experimental": { "agent_teams": true }` to `oc2.json`, then restart OC2 so the config is reloaded.
 
 ### No active team
 

@@ -13,11 +13,11 @@ That makes Local Fusion useful for code reviews, architecture tradeoffs, migrati
 
 ## Configure
 
-Add a named `local_fusion` config to `opencode.json`.
+Add a named `local_fusion` config to `oc2.json`.
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://oc2.ai/config.json",
   "local_fusion": {
     "review-panel": {
       "branches": [
@@ -60,7 +60,7 @@ Each branch can use a different model, variant, agent, prompt, tool policy, and 
 
 Use this as a quick reference for named configs under `local_fusion`.
 
-```jsonc title="opencode.jsonc"
+```jsonc title="oc2.jsonc"
 {
   "local_fusion": {
     "config-name": {
@@ -101,9 +101,9 @@ Use this as a quick reference for named configs under `local_fusion`.
 
 Use read-only branches when you want independent review without allowing branch stages to write anything.
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://oc2.ai/config.json",
   "local_fusion": {
     "safe-review": {
       "branches": [
@@ -148,9 +148,9 @@ Use read-only branches when you want independent review without allowing branch 
 
 Use `all` or `parent_without_teams` on branches or the judge when they need temporary notes. Write-capable branch and judge stages are isolated to a per-stage temporary scratch directory outside all session roots.
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://oc2.ai/config.json",
   "local_fusion": {
     "scratch-research": {
       "branches": [
@@ -183,15 +183,15 @@ Use `all` or `parent_without_teams` on branches or the judge when they need temp
 }
 ```
 
-Scratch files are temporary-only artifacts, not workspace changes. Branch and judge stages can use `write` and `edit` only inside their assigned scratch directory; `apply_patch` and workspace edits are unavailable. OpenCode places scratch directories outside all session roots. It starts from the system temp directory and falls back to a sibling temp base if the default scratch root would be inside a session root. Scratch directory retention is unspecified and not a cleanup guarantee.
+Scratch files are temporary-only artifacts, not workspace changes. Branch and judge stages can use `write` and `edit` only inside their assigned scratch directory; `apply_patch` and workspace edits are unavailable. OC2 places scratch directories outside all session roots. It starts from the system temp directory and falls back to a sibling temp base if the default scratch root would be inside a session root. Scratch directory retention is unspecified and not a cleanup guarantee.
 
 ### Implementation Mode
 
 Use a write-capable synthesizer when Local Fusion should apply final workspace edits after branches and the judge finish. Keep branches focused on research and let only the synthesizer edit the workspace.
 
-```json title="opencode.json"
+```json title="oc2.json"
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://oc2.ai/config.json",
   "local_fusion": {
     "implementation-panel": {
       "branches": [
@@ -283,7 +283,7 @@ You can also set `toolPolicy` on inline `local_fusion` tool calls:
 - Invalid inline config fails before branches start.
 - If every branch fails, the tool fails with branch failure summaries.
 - If at least one branch succeeds, judge and synthesizer still run with the successful outputs and explicit failure summaries.
-- Judge failure fails the tool; OpenCode does not silently synthesize from raw branch outputs.
+- Judge failure fails the tool; OC2 does not silently synthesize from raw branch outputs.
 - Synthesizer failure fails the tool.
 - Branch timeouts are recorded as branch failures, and the run continues if another branch succeeds.
 
@@ -305,4 +305,4 @@ The first argument, `review-panel`, selects the named config. Everything after i
 
 Use Local Fusion when the cost of a shallow answer is higher than the cost of extra model calls. It is strongest when branches have different instructions, because each branch can pressure-test the problem from a different angle before the judge and synthesizer collapse the results into one answer.
 
-For routine edits or small questions, a single model response is usually faster. For high-risk changes, Local Fusion gives you a lightweight review panel inside the same OpenCode workflow.
+For routine edits or small questions, a single model response is usually faster. For high-risk changes, Local Fusion gives you a lightweight review panel inside the same OC2 workflow.
