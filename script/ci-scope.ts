@@ -35,7 +35,7 @@ const sharedPackages = new Set([
   "@opencode-ai/server",
   "@opencode-ai/ui",
 ])
-const e2ePackages = new Set(["@opencode-ai/app", "@opencode-ai/desktop", "@opencode-ai/ui"])
+const e2ePackages = new Set(["@opencode-ai/app", "@oc2-ai/desktop", "@opencode-ai/ui"])
 const httpApiPackages = new Set(["opencode", "@opencode-ai/core", "@opencode-ai/sdk", "@opencode-ai/server"])
 
 const args = process.argv.slice(2)

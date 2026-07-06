@@ -2,28 +2,28 @@ import type { APIEvent } from "@solidjs/start"
 import type { DownloadPlatform } from "../types"
 
 const prodAssetNames: Record<string, string> = {
-  "darwin-aarch64-dmg": "opencode-desktop-mac-arm64.dmg",
-  "darwin-x64-dmg": "opencode-desktop-mac-x64.dmg",
-  "windows-x64-nsis": "opencode-desktop-win-x64.exe",
-  "linux-x64-deb": "opencode-desktop-linux-amd64.deb",
-  "linux-x64-appimage": "opencode-desktop-linux-x86_64.AppImage",
-  "linux-x64-rpm": "opencode-desktop-linux-x86_64.rpm",
+  "darwin-aarch64-dmg": "oc2-desktop-mac-arm64.dmg",
+  "darwin-x64-dmg": "oc2-desktop-mac-x64.dmg",
+  "windows-x64-nsis": "oc2-desktop-win-x64.exe",
+  "linux-x64-deb": "oc2-desktop-linux-amd64.deb",
+  "linux-x64-appimage": "oc2-desktop-linux-x86_64.AppImage",
+  "linux-x64-rpm": "oc2-desktop-linux-x86_64.rpm",
 } satisfies Record<DownloadPlatform, string>
 
 const betaAssetNames: Record<string, string> = {
-  "darwin-aarch64-dmg": "opencode-desktop-mac-arm64.dmg",
-  "darwin-x64-dmg": "opencode-desktop-mac-x64.dmg",
-  "windows-x64-nsis": "opencode-desktop-win-x64.exe",
-  "linux-x64-deb": "opencode-desktop-linux-amd64.deb",
-  "linux-x64-appimage": "opencode-desktop-linux-x86_64.AppImage",
-  "linux-x64-rpm": "opencode-desktop-linux-x86_64.rpm",
+  "darwin-aarch64-dmg": "oc2-desktop-mac-arm64.dmg",
+  "darwin-x64-dmg": "oc2-desktop-mac-x64.dmg",
+  "windows-x64-nsis": "oc2-desktop-win-x64.exe",
+  "linux-x64-deb": "oc2-desktop-linux-amd64.deb",
+  "linux-x64-appimage": "oc2-desktop-linux-x86_64.AppImage",
+  "linux-x64-rpm": "oc2-desktop-linux-x86_64.rpm",
 } satisfies Record<DownloadPlatform, string>
 
 // Doing this on the server lets us preserve the original name for platforms we don't care to rename for
 const downloadNames: Record<string, string> = {
-  "darwin-aarch64-dmg": "OpenCode Desktop.dmg",
-  "darwin-x64-dmg": "OpenCode Desktop.dmg",
-  "windows-x64-nsis": "OpenCode Desktop Installer.exe",
+  "darwin-aarch64-dmg": "OC2 Desktop.dmg",
+  "darwin-x64-dmg": "OC2 Desktop.dmg",
+  "windows-x64-nsis": "OC2 Desktop Installer.exe",
 } satisfies { [K in DownloadPlatform]?: string }
 
 export async function GET({ params: { platform, channel } }: APIEvent) {

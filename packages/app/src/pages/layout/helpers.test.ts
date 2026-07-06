@@ -38,6 +38,7 @@ const session = (input: Partial<Session> & Pick<Session, "id" | "directory">) =>
 
 describe("layout deep links", () => {
   test("parses open-project deep links", () => {
+    expect(parseDeepLink("oc2://open-project?directory=/tmp/demo")).toBe("/tmp/demo")
     expect(parseDeepLink("opencode://open-project?directory=/tmp/demo")).toBe("/tmp/demo")
   })
 
@@ -69,7 +70,7 @@ describe("layout deep links", () => {
 
   test("collects only valid open-project directories", () => {
     const result = collectOpenProjectDeepLinks([
-      "opencode://open-project?directory=/a",
+      "oc2://open-project?directory=/a",
       "opencode://other?directory=/b",
       "opencode://open-project?directory=/c",
     ])
@@ -77,6 +78,7 @@ describe("layout deep links", () => {
   })
 
   test("parses new-session deep links with optional prompt", () => {
+    expect(parseNewSessionDeepLink("oc2://new-session?directory=/tmp/demo")).toEqual({ directory: "/tmp/demo" })
     expect(parseNewSessionDeepLink("opencode://new-session?directory=/tmp/demo")).toEqual({ directory: "/tmp/demo" })
     expect(parseNewSessionDeepLink("opencode://new-session?directory=/tmp/demo&prompt=hello%20world")).toEqual({
       directory: "/tmp/demo",

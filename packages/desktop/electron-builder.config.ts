@@ -27,7 +27,7 @@ const channel = (() => {
 })()
 
 const getBase = (): Configuration => ({
-  artifactName: "opencode-desktop-${os}-${arch}.${ext}",
+  artifactName: "oc2-desktop-${os}-${arch}.${ext}",
   directories: {
     output: "dist",
     buildResources: "resources",
@@ -54,8 +54,8 @@ const getBase = (): Configuration => ({
     sign: true,
   },
   protocols: {
-    name: "OpenCode",
-    schemes: ["opencode"],
+    name: "OC2",
+    schemes: ["oc2", "opencode"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
@@ -74,6 +74,7 @@ const getBase = (): Configuration => ({
   linux: {
     icon: `resources/icons`,
     category: "Development",
+    executableName: "opencode",
     target: ["AppImage", "deb", "rpm"],
   },
 })
@@ -86,7 +87,8 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.opencode.desktop.dev",
-        productName: "OpenCode Dev",
+        productName: "OC2 Dev",
+        deb: { packageName: "opencode-dev" },
         rpm: { packageName: "opencode-dev" },
       }
     }
@@ -94,9 +96,10 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.opencode.desktop.beta",
-        productName: "OpenCode Beta",
-        protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
+        productName: "OC2 Beta",
+        protocols: { name: "OC2 Beta", schemes: ["oc2", "opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
+        deb: { packageName: "opencode-beta" },
         rpm: { packageName: "opencode-beta" },
       }
     }
@@ -104,9 +107,10 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.opencode.desktop",
-        productName: "OpenCode",
-        protocols: { name: "OpenCode", schemes: ["opencode"] },
+        productName: "OC2",
+        protocols: { name: "OC2", schemes: ["oc2", "opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
+        deb: { packageName: "opencode" },
         rpm: { packageName: "opencode" },
       }
     }
