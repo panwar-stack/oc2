@@ -28,9 +28,9 @@ npm install @oc2-ai/sdk
 Crea un'istanza di oc2:
 
 ```javascript
-import { createOpencode } from "@oc2-ai/sdk"
+import { createOc2 } from "@oc2-ai/sdk"
 
-const { client } = await createOpencode()
+const { client } = await createOc2()
 ```
 
 Questo avvia sia un server sia un client
@@ -52,9 +52,9 @@ Questo avvia sia un server sia un client
 Puoi passare un oggetto di configurazione per personalizzare il comportamento. L'istanza legge comunque `oc2.json`, ma puoi sovrascrivere o aggiungere configurazione inline:
 
 ```javascript
-import { createOpencode } from "@oc2-ai/sdk"
+import { createOc2 } from "@oc2-ai/sdk"
 
-const oc2 = await createOpencode({
+const oc2 = await createOc2({
   hostname: "127.0.0.1",
   port: 4096,
   config: {
@@ -72,12 +72,14 @@ oc2.server.close()
 Se hai gia un'istanza di oc2 in esecuzione, puoi creare un client per collegarti:
 
 ```javascript
-import { createOpencodeClient } from "@oc2-ai/sdk"
+import { createOc2Client } from "@oc2-ai/sdk"
 
-const client = createOpencodeClient({
+const client = createOc2Client({
   baseUrl: "http://localhost:4096",
 })
 ```
+
+The legacy `createOpencode` and `createOpencodeClient` exports remain available for compatibility.
 
 #### Opzioni
 

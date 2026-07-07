@@ -28,9 +28,9 @@ npm install @oc2-ai/sdk
 أنشئ مثيلا من oc2:
 
 ```javascript
-import { createOpencode } from "@oc2-ai/sdk"
+import { createOc2 } from "@oc2-ai/sdk"
 
-const { client } = await createOpencode()
+const { client } = await createOc2()
 ```
 
 هذا يشغّل خادما وعميلا معا.
@@ -52,9 +52,9 @@ const { client } = await createOpencode()
 يمكنك تمرير كائن إعدادات لتخصيص السلوك. سيستمر المثيل في التقاط `oc2.json` لديك، لكن يمكنك تجاوز الإعدادات أو إضافة إعدادات مباشرة:
 
 ```javascript
-import { createOpencode } from "@oc2-ai/sdk"
+import { createOc2 } from "@oc2-ai/sdk"
 
-const oc2 = await createOpencode({
+const oc2 = await createOc2({
   hostname: "127.0.0.1",
   port: 4096,
   config: {
@@ -72,12 +72,14 @@ oc2.server.close()
 إذا كان لديك مثيل oc2 يعمل بالفعل، يمكنك إنشاء مثيل عميل للاتصال به:
 
 ```javascript
-import { createOpencodeClient } from "@oc2-ai/sdk"
+import { createOc2Client } from "@oc2-ai/sdk"
 
-const client = createOpencodeClient({
+const client = createOc2Client({
   baseUrl: "http://localhost:4096",
 })
 ```
+
+The legacy `createOpencode` and `createOpencodeClient` exports remain available for compatibility.
 
 #### الخيارات
 

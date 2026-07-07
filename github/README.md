@@ -60,7 +60,7 @@ This will walk you through installing the GitHub app, creating the workflow, and
 
 ### Manual Setup
 
-1. Install the GitHub app https://github.com/apps/opencode-agent. Make sure it is installed on the target repository.
+1. Install the GitHub app https://github.com/apps/oc2-agent. Make sure it is installed on the target repository.
 2. Add the following workflow file to `.github/workflows/oc2.yml` in your repo. Set the appropriate `model` and required API keys in `env`.
 
    ```yml
@@ -122,7 +122,7 @@ To test locally:
      GITHUB_RUN_ID=dummy \
      MOCK_TOKEN=github_pat_1234567890 \
      MOCK_EVENT='{"eventName":"issue_comment",...}' \
-      bun /path/to/opencode/github/index.ts
+      bun /path/to/oc2/github/index.ts
    ```
 
    - `MODEL`: The model used by oc2. Same as the `MODEL` defined in the GitHub workflow.
@@ -130,7 +130,7 @@ To test locally:
    - `GITHUB_RUN_ID`: Dummy value to emulate GitHub action environment.
    - `MOCK_TOKEN`: A GitHub personal access token. This token is used to verify you have `admin` or `write` access to the test repo. Generate a token [here](https://github.com/settings/personal-access-tokens).
    - `MOCK_EVENT`: Mock GitHub event payload (see templates below).
-   - `/path/to/opencode`: Path to your cloned repository. `bun /path/to/opencode/github/index.ts` runs your local version of `oc2`.
+   - `/path/to/oc2`: Path to your cloned repository. `bun /path/to/oc2/github/index.ts` runs your local version of `oc2`.
 
 ### Issue comment event
 

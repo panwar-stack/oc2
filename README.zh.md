@@ -10,7 +10,7 @@
 <p align="center">开源的 AI Coding Agent。</p>
 <p align="center">
   <a href="https://oc2.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/oc2"><img alt="npm" src="https://img.shields.io/npm/v/oc2?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/oc2-ai"><img alt="npm" src="https://img.shields.io/npm/v/oc2-ai?style=flat-square" /></a>
   <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
 
@@ -50,7 +50,7 @@
 curl -fsSL https://oc2.ai/install | bash
 
 # 软件包管理器
-npm i -g oc2@latest        # 也可使用 bun/pnpm/yarn
+npm i -g oc2-ai@latest        # 也可使用 bun/pnpm/yarn
 scoop install oc2             # Windows
 choco install oc2             # Windows
 brew install anomalyco/tap/oc2 # macOS 和 Linux（推荐，始终保持最新）

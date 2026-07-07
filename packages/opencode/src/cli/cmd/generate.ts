@@ -19,7 +19,7 @@ export const GenerateCommand = {
           {
             lang: "js",
             source: [
-              `import { createOc2Client } from "@oc2-ai/sdk`,
+              `import { createOc2Client } from "@oc2-ai/sdk"`,
               ``,
               `const client = createOc2Client()`,
               `await client.${operation.operationId}({`,

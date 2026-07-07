@@ -10,7 +10,7 @@
 <p align="center">오픈 소스 AI 코딩 에이전트.</p>
 <p align="center">
   <a href="https://oc2.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/oc2"><img alt="npm" src="https://img.shields.io/npm/v/oc2?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/oc2-ai"><img alt="npm" src="https://img.shields.io/npm/v/oc2-ai?style=flat-square" /></a>
   <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
 
@@ -50,7 +50,7 @@
 curl -fsSL https://oc2.ai/install | bash
 
 # 패키지 매니저
-npm i -g oc2@latest        # bun/pnpm/yarn 도 가능
+npm i -g oc2-ai@latest        # bun/pnpm/yarn 도 가능
 scoop install oc2             # Windows
 choco install oc2             # Windows
 brew install anomalyco/tap/oc2 # macOS 및 Linux (권장, 항상 최신)
