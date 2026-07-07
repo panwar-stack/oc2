@@ -21,7 +21,7 @@ async function signWindows(configuration: { path: string }) {
 }
 
 const channel = (() => {
-  const raw = process.env.OPENCODE_CHANNEL
+  const raw = process.env.OC2_CHANNEL ?? process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
   return "dev"
 })()
@@ -74,7 +74,7 @@ const getBase = (): Configuration => ({
   linux: {
     icon: `resources/icons`,
     category: "Development",
-    executableName: "opencode",
+    executableName: "oc2",
     target: ["AppImage", "deb", "rpm"],
   },
 })
@@ -88,8 +88,8 @@ function getConfig() {
         ...base,
         appId: "ai.opencode.desktop.dev",
         productName: "OC2 Dev",
-        deb: { packageName: "opencode-dev" },
-        rpm: { packageName: "opencode-dev" },
+        deb: { packageName: "oc2-dev" },
+        rpm: { packageName: "oc2-dev" },
       }
     }
     case "beta": {
@@ -99,8 +99,8 @@ function getConfig() {
         productName: "OC2 Beta",
         protocols: { name: "OC2 Beta", schemes: ["oc2", "opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
-        deb: { packageName: "opencode-beta" },
-        rpm: { packageName: "opencode-beta" },
+        deb: { packageName: "oc2-beta" },
+        rpm: { packageName: "oc2-beta" },
       }
     }
     case "prod": {
@@ -110,8 +110,8 @@ function getConfig() {
         productName: "OC2",
         protocols: { name: "OC2", schemes: ["oc2", "opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
-        deb: { packageName: "opencode" },
-        rpm: { packageName: "opencode" },
+        deb: { packageName: "oc2" },
+        rpm: { packageName: "oc2" },
       }
     }
   }

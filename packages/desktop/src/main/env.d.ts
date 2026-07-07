@@ -1,4 +1,5 @@
 interface ImportMetaEnv {
+  readonly OC2_CHANNEL: string
   readonly OPENCODE_CHANNEL: string
 }
 

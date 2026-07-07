@@ -18,17 +18,21 @@ export async function spawnWslSidecar(
   opts: { onLine?: (line: WslCommandLine) => void; healthTimeoutMs?: number } = {},
 ): Promise<WslSidecar> {
   const opencode = await resolveWslOpencode(distro)
-  if (!opencode) throw new Error(`OpenCode is not installed in ${distro}`)
+  if (!opencode) throw new Error(`OC2 is not installed in ${distro}`)
 
   const port = await allocatePort()
   const password = randomUUID()
-  const username = "opencode"
+  const username = "oc2"
   const script = [
     "set -euo pipefail",
     'cd "$HOME" || cd /',
     'PATH=$(awk -v RS=: -v ORS=: \'$0 !~ /^\\/mnt\\//\' <<<"$PATH" | sed "s/:$//")',
     "export PATH",
     "export WSLENV=",
+    "export OC2_EXPERIMENTAL_DISABLE_FILEWATCHER=true",
+    "export OC2_CLIENT=desktop",
+    `export OC2_SERVER_USERNAME=${shellEscape(username)}`,
+    `export OC2_SERVER_PASSWORD=${shellEscape(password)}`,
     "export OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=true",
     "export OPENCODE_CLIENT=desktop",
     `export OPENCODE_SERVER_USERNAME=${shellEscape(username)}`,

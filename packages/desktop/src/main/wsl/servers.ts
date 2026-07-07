@@ -152,7 +152,7 @@ export function createWslServersController(
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
-        logger?.error("wsl opencode check failed", { id, distro, message })
+        logger?.error("wsl oc2 check failed", { id, distro, message })
       })
   }
 
@@ -166,7 +166,7 @@ export function createWslServersController(
           })
           .catch((error) => {
             const message = error instanceof Error ? error.message : String(error)
-            logger?.error("wsl opencode check failed", {
+            logger?.error("wsl oc2 check failed", {
               id: item.config.id,
               distro: item.config.distro,
               message,
@@ -344,7 +344,7 @@ export function createWslServersController(
       await runJob({ kind: "install-opencode", distro: name, startedAt: Date.now() }, async (abort) => {
         const result = await installWslOpencode(appVersion, name, { signal: abort.signal })
         if (result.code !== 0) {
-          throw new Error(summarize(result.stderr || result.stdout) || "OpenCode installation failed")
+          throw new Error(summarize(result.stderr || result.stdout) || "OC2 installation failed")
         }
         await refreshOpencodeCheck(name, { signal: abort.signal })
         expectOpencodeVersion(state.opencodeChecks[name]?.version ?? null, appVersion, name)
@@ -457,7 +457,7 @@ function opencodeCheck(
       version: null,
       expectedVersion,
       matchesDesktop: null,
-      error: "opencode is not installed in this distro",
+      error: "oc2 is not installed in this distro",
     }
   }
   if (!version) {
@@ -467,7 +467,7 @@ function opencodeCheck(
       version: null,
       expectedVersion,
       matchesDesktop: null,
-      error: "opencode is installed but could not run",
+      error: "oc2 is installed but could not run",
     }
   }
   return {
