@@ -93,7 +93,7 @@
       // PR 3 keeps deprecated env, config file, data directory, and header support.
       "path": "packages/core/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 585,
+      "count": 529,
       "reason": "compatibility",
       "owner": "core",
     },
@@ -101,7 +101,7 @@
       // PR 3 rewrites canonical CLI/config/server wording while preserving legacy behavior.
       "path": "packages/opencode/src/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 616,
+      "count": 576,
       "reason": "migration",
       "owner": "core",
     },
@@ -141,7 +141,7 @@
       // Legacy CLI/config/server behavior remains covered by tests until canonical defaults are updated.
       "path": "packages/opencode/test/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 1439,
+      "count": 1433,
       "reason": "test-fixture",
       "owner": "core",
     },

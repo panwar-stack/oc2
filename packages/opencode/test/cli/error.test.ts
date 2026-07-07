@@ -74,7 +74,7 @@ describe("cli.error", () => {
       "Model not found: anthropic/claude-sonet-4",
       "Did you mean: claude-sonnet-4",
       "Try: `oc2 models` to list available models",
-      "Or check your config (opencode.json) provider/model names",
+      "Or check your config (oc2.json) provider/model names",
     ].join("\n")
 
     expect(FormatError({ name: "ProviderModelNotFoundError", data })).toBe(expected)

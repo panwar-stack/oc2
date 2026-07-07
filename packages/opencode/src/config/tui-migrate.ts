@@ -11,7 +11,7 @@ import * as ConfigPaths from "@/config/paths"
 
 const log = Log.create({ service: "tui.migrate" })
 
-const TUI_SCHEMA_URL = "https://opencode.ai/tui.json"
+const TUI_SCHEMA_URL = "https://oc2.ai/tui.json"
 
 const decodeTheme = Schema.decodeUnknownOption(Schema.String)
 const decodeRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))
@@ -25,13 +25,13 @@ interface MigrateInput {
 }
 
 /**
- * Migrates tui-specific keys (theme, keybinds, tui) from opencode.json files
+ * Migrates tui-specific keys (theme, keybinds, tui) from oc2.json/opencode.json files
  * into dedicated tui.json files. Migration is performed per-directory and
  * skips only locations where a tui.json already exists.
  */
 export async function migrateTuiConfig(input: MigrateInput) {
-  const opencode = await opencodeFiles(input)
-  for (const file of opencode) {
+  const configFiles = await configFilesWithLegacyTui(input)
+  for (const file of configFiles) {
     const source = await Filesystem.readText(file).catch((error) => {
       log.warn("failed to read config for tui migration", { path: file, error })
       return undefined
@@ -134,12 +134,16 @@ async function backupAndStripLegacy(file: string, source: string) {
     })
 }
 
-async function opencodeFiles(input: { directories: string[]; cwd: string }) {
+async function configFilesWithLegacyTui(input: { directories: string[]; cwd: string }) {
   const files = [
+    ...ConfigPaths.fileInDirectory(Global.Path.config, "oc2"),
     ...ConfigPaths.fileInDirectory(Global.Path.config, "opencode"),
-    ...(await Filesystem.findUp(["opencode.json", "opencode.jsonc"], input.cwd, undefined, { rootFirst: true })),
+    ...(await Filesystem.findUp(["oc2.json", "oc2.jsonc", "opencode.json", "opencode.jsonc"], input.cwd, undefined, {
+      rootFirst: true,
+    })),
   ]
   for (const dir of unique(input.directories)) {
+    files.push(...ConfigPaths.fileInDirectory(dir, "oc2"))
     files.push(...ConfigPaths.fileInDirectory(dir, "opencode"))
   }
   if (Flag.OPENCODE_CONFIG) files.push(Flag.OPENCODE_CONFIG)

@@ -66,7 +66,7 @@ export const InstanceApi = HttpApi.make("instance")
           OpenApi.annotations({
             identifier: "instance.dispose",
             summary: "Dispose instance",
-            description: "Clean up and dispose the current OpenCode instance, releasing all resources.",
+            description: "Clean up and dispose the current OC2 instance, releasing all resources.",
           }),
         ),
         HttpApiEndpoint.get("path", InstancePaths.path, {
@@ -77,7 +77,7 @@ export const InstanceApi = HttpApi.make("instance")
             identifier: "path.get",
             summary: "Get paths",
             description:
-              "Retrieve the current working directory and related path information for the OpenCode instance.",
+              "Retrieve the current working directory and related path information for the OC2 instance.",
           }),
         ),
         HttpApiEndpoint.get("vcs", InstancePaths.vcs, {
@@ -199,7 +199,7 @@ export const InstanceApi = HttpApi.make("instance")
   )
   .annotateMerge(
     OpenApi.annotations({
-      title: "opencode experimental HttpApi",
+      title: "oc2 experimental HttpApi",
       version: "0.0.1",
       description: "Experimental HttpApi surface for selected instance routes.",
     }),

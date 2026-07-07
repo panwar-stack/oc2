@@ -27,7 +27,7 @@ export const Plugin = PluginV2.define({
           skill: new SkillV2.Info({
             name: "customize-opencode",
             description:
-              "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.",
+              "Use ONLY when the user is editing or creating OC2's own configuration: oc2.json, oc2.jsonc, files under .oc2/, or files under ~/.config/oc2/. Also use when creating or fixing OC2 agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring OC2 itself.",
             location: AbsolutePath.make("/builtin/customize-opencode.md"),
             content: CustomizeOpencodeContent,
           }),

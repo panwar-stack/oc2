@@ -111,7 +111,7 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       const data = ConfigParse.jsonc(expanded, configFilepath)
       if (!isRecord(data)) return {} as Info
       // Flatten a nested "tui" key so users who wrote `{ "tui": { ... } }` inside tui.json
-      // (mirroring the old opencode.json shape) still get their settings applied.
+      // (mirroring the old oc2.json shape) still get their settings applied.
       const normalized = dropUnknownKeybinds(normalize(data), configFilepath)
       const parsed = ConfigParse.schema(Info, normalized, configFilepath)
       const validated = parsed.attention?.sounds
@@ -185,8 +185,8 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       acc.plugin_origins = plugins
     })
 
-  // Every config dir we may read from: global config dir, any `.opencode`
-  // folders between cwd and home, and OPENCODE_CONFIG_DIR.
+  // Every config dir we may read from: global config dir, any `.oc2`/`.opencode`
+  // folders between cwd and home, and OC2_CONFIG_DIR/OPENCODE_CONFIG_DIR.
   const directories = yield* ConfigPaths.directories(ctx.directory)
   yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
 
@@ -202,7 +202,7 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* mergeFile(acc, file)
   }
 
-  // 2. Explicit OPENCODE_TUI_CONFIG override, if set.
+  // 2. Explicit OC2_TUI_CONFIG/OPENCODE_TUI_CONFIG override, if set.
   if (Flag.OPENCODE_TUI_CONFIG) {
     const configFile = Flag.OPENCODE_TUI_CONFIG
     yield* mergeFile(acc, configFile)
@@ -214,7 +214,7 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* mergeFile(acc, file)
   }
 
-  // 4. `.opencode` directories (and OPENCODE_CONFIG_DIR) discovered while
+  // 4. `.oc2`/`.opencode` directories (and OC2_CONFIG_DIR/OPENCODE_CONFIG_DIR) discovered while
   // walking up the tree. Also returned below so callers can install plugin
   // dependencies from each location.
   const dirs = unique(directories).filter(

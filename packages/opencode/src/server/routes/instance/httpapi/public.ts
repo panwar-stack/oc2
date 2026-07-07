@@ -78,7 +78,7 @@ const QueryParameterSchemas: Record<string, OpenApiSchema> = {
 
 const LegacyComponentDescriptions: Record<string, string> = {
   LogLevel: "Log level",
-  ServerConfig: "Server configuration for opencode serve and web commands",
+  ServerConfig: "Server configuration for oc2 serve and web commands",
   LayoutConfig: "@deprecated Always uses stretch layout.",
 }
 
