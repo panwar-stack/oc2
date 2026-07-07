@@ -61,7 +61,7 @@ mise use -g oc2               # Any OS
 nix run nixpkgs#oc2           # or github:anomalyco/opencode for latest dev branch
 ```
 
-Legacy `opencode` commands, config files, env vars, and install URLs remain supported as migration aliases. Prefer `oc2` names for new installs and documentation.
+Legacy commands, config files, env vars, and install URLs remain supported as migration aliases. Prefer `oc2` names for new installs and documentation.
 
 > [!TIP]
 > Remove versions older than 0.1.x before installing.

@@ -5,7 +5,7 @@
       // PR 5 migrates internal workspace package scopes.
       "path": "**",
       "pattern": "@opencode-ai/",
-      "count": 3104,
+      "count": 3103,
       "reason": "migration",
       "owner": "core",
     },
@@ -29,7 +29,7 @@
       // PR 2 rewrites public README/doc copy.
       "path": "README*.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 1,
+      "count": 0,
       "reason": "migration",
       "owner": "docs",
     },
@@ -77,7 +77,7 @@
       // PR 2 rewrites package-local docs.
       "path": "packages/*/README.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 7,
+      "count": 3,
       "reason": "migration",
       "owner": "docs",
     },
@@ -85,7 +85,7 @@
       // PR 2 rewrites VS Code docs while PR 6 keeps command IDs compatible.
       "path": "sdks/vscode/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 23,
+      "count": 12,
       "reason": "migration",
       "owner": "vscode",
     },
