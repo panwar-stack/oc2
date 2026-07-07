@@ -17,6 +17,19 @@ const generated = await import("./generate.ts")
 import { formatBunCompileTargetName, Script, selectBunCompileTargets } from "@oc2-ai/script"
 import pkg from "../package.json"
 
+const packageMetadata = {
+  description: "The AI coding agent built for the terminal.",
+  license: pkg.license,
+  homepage: "https://oc2.ai/docs",
+  repository: {
+    type: "git",
+    url: "git+https://github.com/anomalyco/opencode.git",
+  },
+  bugs: {
+    url: "https://github.com/anomalyco/opencode/issues",
+  },
+}
+
 const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
@@ -133,6 +146,7 @@ for (const item of targets) {
       {
         name,
         version: Script.version,
+        ...packageMetadata,
         preferUnplugged: true,
         os: [item.os],
         cpu: [item.arch],
