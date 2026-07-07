@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { Naming } from "@opencode-ai/core/naming"
 import * as fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -93,7 +94,7 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
     await Bun.write(
       path.join(dirpath, `${options.configName ?? "oc2"}.json`),
       JSON.stringify({
-        $schema: "https://opencode.ai/config.json",
+        $schema: Naming.configSchemaURL,
         ...options.config,
       }),
     )
@@ -152,7 +153,7 @@ export function tmpdirScoped<E = never, R = never>(options?: {
       yield* Effect.promise(() =>
         fs.writeFile(
           path.join(dir, `${options.configName ?? "oc2"}.json`),
-          JSON.stringify({ $schema: "https://opencode.ai/config.json", ...resolved }),
+          JSON.stringify({ $schema: Naming.configSchemaURL, ...resolved }),
         ),
       )
     }

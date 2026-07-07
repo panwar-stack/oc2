@@ -13,7 +13,7 @@ export const configFileSearchTargets = ["oc2.jsonc", "oc2.json", "opencode.jsonc
 export const globalConfigFiles = ["oc2.jsonc", "oc2.json", "opencode.jsonc", "opencode.json", "config.json"] as const
 export const globalConfigLoadOrder = ["config.json", "opencode.json", "opencode.jsonc", "oc2.json", "oc2.jsonc"] as const
 
-export const configSchemaURL = "https://opencode.ai/config.json"
+export const configSchemaURL = "https://oc2.ai/config.json"
 export const wellKnownPath = "/.well-known/oc2"
 export const legacyWellKnownPath = "/.well-known/opencode"
 

@@ -453,7 +453,7 @@ export const layer = Layer.effect(
                 })
               : {}
             const remoteConfig = mergeConfig(isRecord(wellknown.config) ? wellknown.config : {}, fetchedConfig)
-            if (!remoteConfig.$schema) remoteConfig.$schema = "https://opencode.ai/config.json"
+            if (!remoteConfig.$schema) remoteConfig.$schema = Naming.configSchemaURL
             const source = wellknownURL
             const next = yield* loadConfig(
               JSON.stringify(remoteConfig),
