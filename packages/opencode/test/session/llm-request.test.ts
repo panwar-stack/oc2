@@ -1,5 +1,7 @@
 import { describe, expect } from "bun:test"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { Naming } from "@opencode-ai/core/naming"
+import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Effect } from "effect"
@@ -11,6 +13,7 @@ import type { Provider } from "@/provider/provider"
 import { prepare } from "@/session/llm/request"
 import { MessageID, SessionID } from "@/session/schema"
 import { SystemPrompt } from "@/session/system"
+import { InstanceRef } from "@/effect/instance-ref"
 import { testEffect } from "../lib/effect"
 
 const model: Provider.Model = {
@@ -103,6 +106,46 @@ describe("session.llm.request", () => {
 
       expect(prepared.system).toEqual([expectedSystem])
       expect(prepared.messages[0]).toEqual({ role: "system", content: expectedSystem })
+    }),
+  )
+
+  it.effect("sends canonical oc2 headers for managed providers", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const prepared = yield* prepare({
+        user,
+        sessionID,
+        model: { ...model, providerID: ProviderV2.ID.oc2 },
+        agent,
+        system: [],
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {},
+        provider: { ...provider, id: ProviderV2.ID.oc2 },
+        auth: undefined,
+        plugin,
+        flags,
+        isWorkflow: false,
+      }).pipe(
+        Effect.provideService(InstanceRef, {
+          directory: "/tmp/oc2-request-test",
+          worktree: "/tmp/oc2-request-test",
+          project: {
+            id: ProjectV2.ID.make("proj_request"),
+            worktree: "/tmp/oc2-request-test",
+            time: { created: 0, updated: 0 },
+            sandboxes: [],
+          },
+        }),
+      )
+
+      expect(prepared.headers).toMatchObject({
+        [Naming.headers.project[0]]: ProjectV2.ID.make("proj_request"),
+        [Naming.headers.session[0]]: sessionID,
+        [Naming.headers.request[0]]: user.id,
+        [Naming.headers.client[0]]: flags.client,
+      })
+      expect(Object.hasOwn(prepared.headers, Naming.headers.project[1])).toBe(false)
+      expect(Object.hasOwn(prepared.headers, "x-session-affinity")).toBe(false)
     }),
   )
 })
