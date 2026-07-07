@@ -276,9 +276,13 @@ describe("installation", () => {
       }),
     )
 
+    const curlUpgradeCalls: string[] = []
     testEffect(
       testLayer(
-        () => new Response("install script", { status: 200 }),
+        (request) => {
+          curlUpgradeCalls.push(request.url)
+          return new Response("install script", { status: 200 })
+        },
         (cmd, args) => {
           if (cmd === "bash" && args[0] === "--version") return { code: 1, stderr: "missing" }
           if (cmd === "bash") return { code: 1, stderr: "should not execute installer with bash" }
@@ -289,6 +293,7 @@ describe("installation", () => {
     ).effect("falls back to sh when bash is unavailable during curl upgrade", () =>
       Effect.gen(function* () {
         yield* Installation.use.upgrade("curl", "9.9.9")
+        expect(curlUpgradeCalls).toContain("https://oc2.ai/install")
       }),
     )
   })

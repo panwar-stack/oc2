@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-APP=opencode
+APP=oc2
 
 MUTED='\033[0;2m'
 RED='\033[0;31m'
@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 
 usage() {
     cat <<EOF
-OpenCode Installer
+OC2 Installer
 
 Usage: install.sh [options]
 
@@ -20,9 +20,9 @@ Options:
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
 Examples:
-    curl -fsSL https://opencode.ai/install | bash
-    curl -fsSL https://opencode.ai/install | bash -s -- --version 1.0.180
-    ./install --binary /path/to/opencode
+    curl -fsSL https://oc2.ai/install | bash
+    curl -fsSL https://oc2.ai/install | bash -s -- --version 1.0.180
+    ./install --binary /path/to/oc2
 EOF
 }
 
@@ -65,7 +65,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-INSTALL_DIR=$HOME/.opencode/bin
+DEFAULT_INSTALL_DIR=$HOME/.oc2/bin
+LEGACY_INSTALL_DIR=$HOME/.opencode/bin
+INSTALL_DIR=$DEFAULT_INSTALL_DIR
+
+if [ -e "$LEGACY_INSTALL_DIR/opencode" ] || [ -e "$LEGACY_INSTALL_DIR/opencode.exe" ]; then
+    INSTALL_DIR=$LEGACY_INSTALL_DIR
+fi
+
 mkdir -p "$INSTALL_DIR"
 
 # If --binary is provided, skip all download/detection logic
@@ -219,19 +226,42 @@ print_message() {
 }
 
 check_version() {
-    if command -v opencode >/dev/null 2>&1; then
-        opencode_path=$(which opencode)
-
-        ## Check the installed version
-        installed_version=$(opencode --version 2>/dev/null || echo "")
-
-        if [[ "$installed_version" != "$specific_version" ]]; then
-            print_message info "${MUTED}Installed version: ${NC}$installed_version."
-        else
-            print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
-            exit 0
-        fi
+    if [ -x "$INSTALL_DIR/oc2" ]; then
+        oc2_path="$INSTALL_DIR/oc2"
+    elif [ -x "$INSTALL_DIR/oc2.exe" ]; then
+        oc2_path="$INSTALL_DIR/oc2.exe"
+    elif command -v oc2 >/dev/null 2>&1; then
+        oc2_path=$(which oc2)
+    else
+        return 0
     fi
+
+    ## Check the installed version
+    installed_version=$("$oc2_path" --version 2>/dev/null || echo "")
+
+    if [[ "$installed_version" != "$specific_version" ]]; then
+        print_message info "${MUTED}Installed version: ${NC}$installed_version."
+    else
+        if [[ "$oc2_path" == "$INSTALL_DIR"/* ]] && [ ! -e "$INSTALL_DIR/opencode" ] && [ ! -e "$INSTALL_DIR/opencode.exe" ]; then
+            install_opencode_shim
+        fi
+        print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
+        exit 0
+    fi
+}
+
+install_opencode_shim() {
+    if [ -f "${INSTALL_DIR}/oc2.exe" ]; then
+        cp "${INSTALL_DIR}/oc2.exe" "${INSTALL_DIR}/opencode.exe"
+        chmod 755 "${INSTALL_DIR}/opencode.exe"
+        return 0
+    fi
+
+    cat > "${INSTALL_DIR}/opencode" <<'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/oc2" "$@"
+EOF
+    chmod 755 "${INSTALL_DIR}/opencode"
 }
 
 unbuffered_sed() {
@@ -275,7 +305,7 @@ download_with_progress() {
     fi
 
     local tmp_dir=${TMPDIR:-/tmp}
-    local basename="${tmp_dir}/opencode_install_$$"
+    local basename="${tmp_dir}/oc2_install_$$"
     local tracefile="${basename}.trace"
 
     rm -f "$tracefile"
@@ -325,8 +355,8 @@ download_with_progress() {
 }
 
 download_and_install() {
-    print_message info "\n${MUTED}Installing ${NC}opencode ${MUTED}version: ${NC}$specific_version"
-    local tmp_dir="${TMPDIR:-/tmp}/opencode_install_$$"
+    print_message info "\n${MUTED}Installing ${NC}oc2 ${MUTED}version: ${NC}$specific_version"
+    local tmp_dir="${TMPDIR:-/tmp}/oc2_install_$$"
     mkdir -p "$tmp_dir"
 
     if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
@@ -340,15 +370,27 @@ download_and_install() {
         unzip -q "$tmp_dir/$filename" -d "$tmp_dir"
     fi
 
-    mv "$tmp_dir/opencode" "$INSTALL_DIR"
-    chmod 755 "${INSTALL_DIR}/opencode"
+    if [ -f "$tmp_dir/oc2.exe" ]; then
+        mv "$tmp_dir/oc2.exe" "$INSTALL_DIR"
+        chmod 755 "${INSTALL_DIR}/oc2.exe"
+    else
+        mv "$tmp_dir/oc2" "$INSTALL_DIR"
+        chmod 755 "${INSTALL_DIR}/oc2"
+    fi
+    install_opencode_shim
     rm -rf "$tmp_dir"
 }
 
 install_from_binary() {
-    print_message info "\n${MUTED}Installing ${NC}opencode ${MUTED}from: ${NC}$binary_path"
-    cp "$binary_path" "${INSTALL_DIR}/opencode"
-    chmod 755 "${INSTALL_DIR}/opencode"
+    print_message info "\n${MUTED}Installing ${NC}oc2 ${MUTED}from: ${NC}$binary_path"
+    if [[ "$binary_path" == *.exe ]]; then
+        cp "$binary_path" "${INSTALL_DIR}/oc2.exe"
+        chmod 755 "${INSTALL_DIR}/oc2.exe"
+    else
+        cp "$binary_path" "${INSTALL_DIR}/oc2"
+        chmod 755 "${INSTALL_DIR}/oc2"
+    fi
+    install_opencode_shim
 }
 
 if [ -n "$binary_path" ]; then
@@ -366,9 +408,9 @@ add_to_path() {
     if grep -Fxq "$command" "$config_file"; then
         print_message info "Command already exists in $config_file, skipping write."
     elif [[ -w $config_file ]]; then
-        echo -e "\n# opencode" >> "$config_file"
+        echo -e "\n# oc2" >> "$config_file"
         echo "$command" >> "$config_file"
-        print_message info "${MUTED}Successfully added ${NC}opencode ${MUTED}to \$PATH in ${NC}$config_file"
+        print_message info "${MUTED}Successfully added ${NC}oc2 ${MUTED}to \$PATH in ${NC}$config_file"
     else
         print_message warning "Manually add the directory to $config_file (or similar):"
         print_message info "  $command"
@@ -444,17 +486,14 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
 fi
 
 echo -e ""
-echo -e "${MUTED}                    ${NC}             ▄     "
-echo -e "${MUTED}█▀▀█ █▀▀█ █▀▀█ █▀▀▄ ${NC}█▀▀▀ █▀▀█ █▀▀█ █▀▀█"
-echo -e "${MUTED}█░░█ █░░█ █▀▀▀ █░░█ ${NC}█░░░ █░░█ █░░█ █▀▀▀"
-echo -e "${MUTED}▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ${NC}▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"
+echo -e "${ORANGE}OC2${NC}"
 echo -e ""
 echo -e ""
-echo -e "${MUTED}OpenCode includes free models, to start:${NC}"
+echo -e "${MUTED}OC2 includes free models, to start:${NC}"
 echo -e ""
 echo -e "cd <project>  ${MUTED}# Open directory${NC}"
-echo -e "opencode      ${MUTED}# Run command${NC}"
+echo -e "oc2           ${MUTED}# Run command${NC}"
 echo -e ""
-echo -e "${MUTED}For more information visit ${NC}https://opencode.ai/docs"
+echo -e "${MUTED}For more information visit ${NC}https://oc2.ai/docs"
 echo -e ""
 echo -e ""
