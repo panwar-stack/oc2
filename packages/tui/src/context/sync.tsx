@@ -233,6 +233,11 @@ export const {
       streamingPartBuffers.delete(streamingPartKey(sessionID, messageID, partID))
     }
 
+    function flushStreamingSession(sessionID: string) {
+      const buffers = [...streamingPartBuffers.values()].filter((buffer) => buffer.sessionID === sessionID)
+      for (const buffer of buffers) flushStreamingPart(buffer.sessionID, buffer.messageID, buffer.partID)
+    }
+
     function dropStreamingMessage(messageID: string) {
       for (const [key, buffer] of streamingPartBuffers) {
         if (buffer.messageID === messageID) streamingPartBuffers.delete(key)
@@ -809,6 +814,7 @@ export const {
               sdk.client.session.diff({ sessionID }),
             ])
             if (tracker.cancelled) return
+            flushStreamingSession(sessionID)
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)

@@ -49,6 +49,16 @@ function latestReasoning(assistant: SessionMessageAssistant | undefined, reasoni
   )
 }
 
+function assistantContentText(
+  messages: SessionMessage[],
+  assistantMessageID: string,
+  type: "text" | "reasoning",
+  contentID: string,
+) {
+  const assistant = ownedAssistant(messages, assistantMessageID)
+  return type === "text" ? latestText(assistant, contentID)?.text : latestReasoning(assistant, contentID)?.text
+}
+
 function prepend(messages: SessionMessage[], message: SessionMessage) {
   if (messages.some((item) => item.id === message.id)) return
   messages.unshift(message)
@@ -177,6 +187,46 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       }
     }
 
+    function replayPendingAfterHydration(
+      sessionID: string,
+      pending: Event[],
+      liveMessages: SessionMessage[],
+      baseMessages: SessionMessage[],
+    ) {
+      const replayedText = new Map<string, string>()
+      for (const event of pending) {
+        if (event.type !== "session.next.text.delta" && event.type !== "session.next.reasoning.delta") {
+          apply(event)
+          continue
+        }
+
+        const type = event.type === "session.next.text.delta" ? "text" : "reasoning"
+        const contentID = event.type === "session.next.text.delta" ? event.properties.textID : event.properties.reasoningID
+        const key = streamingContentKey(event.properties.sessionID, event.properties.assistantMessageID, type, contentID)
+        const liveText = assistantContentText(liveMessages, event.properties.assistantMessageID, type, contentID)
+        const currentText =
+          replayedText.get(key) ??
+          assistantContentText(baseMessages, event.properties.assistantMessageID, type, contentID) ??
+          assistantContentText(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID, type, contentID)
+
+        if (liveText === undefined || currentText === undefined) {
+          apply(event)
+          continue
+        }
+
+        const delta = liveText.startsWith(currentText) ? liveText.slice(currentText.length) : event.properties.delta
+        if (!delta) continue
+
+        replayedText.set(key, currentText + delta)
+        if (event.type === "session.next.text.delta") {
+          apply({ ...event, properties: { ...event.properties, delta } })
+          continue
+        }
+        apply({ ...event, properties: { ...event.properties, delta } })
+      }
+      flushStreamingSession(sessionID)
+    }
+
     async function hydrate(sessionID: string) {
       const pending: Event[] = []
       flushStreamingSession(sessionID)
@@ -186,14 +236,16 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         const response = await sdk.client.v2.session.messages({ sessionID })
         const messages = response.data?.data ?? []
         const snapshotIDs = new Set(messages.map((message) => message.id))
-        dropStreamingSession(sessionID)
+        flushStreamingSession(sessionID)
+        const live = JSON.parse(JSON.stringify(store.messages[sessionID] ?? [])) as SessionMessage[]
+        const merged = [...messages, ...before.filter((message) => !snapshotIDs.has(message.id))]
         setStore(
           "messages",
           sessionID,
-          reconcile([...messages, ...before.filter((message) => !snapshotIDs.has(message.id))]),
+          reconcile(merged),
         )
         buffering.delete(sessionID)
-        for (const event of pending) apply(event)
+        replayPendingAfterHydration(sessionID, pending, live, merged)
       } catch (error) {
         buffering.delete(sessionID)
         throw error

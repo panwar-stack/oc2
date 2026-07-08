@@ -27,6 +27,305 @@ function emitTwice(events: ReturnType<typeof createEventSource>, payload: Event)
   events.emit(event)
 }
 
+async function mountSyncV2(calls = createFetch()) {
+  const events = createEventSource()
+  let sync!: ReturnType<typeof useSyncV2>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useSyncV2()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <SyncProviderV2>
+            <Probe />
+          </SyncProviderV2>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+  await mounted
+  return { app, events, sync }
+}
+
+test("sync v2 flushes buffered text deltas before step end", async () => {
+  const { app, events, sync } = await mountSyncV2()
+
+  try {
+    emitTwice(events, {
+      id: "evt_step_text_flush",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_text_flush_start",
+      type: "session.next.text.started",
+      properties: { sessionID: "session-1", assistantMessageID: "msg_assistant_1", timestamp: 2, textID: "text-1" },
+    })
+    emitTwice(events, {
+      id: "evt_text_flush_delta_1",
+      type: "session.next.text.delta",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 2,
+        textID: "text-1",
+        delta: "hel",
+      },
+    })
+    emitTwice(events, {
+      id: "evt_text_flush_delta_2",
+      type: "session.next.text.delta",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 2,
+        textID: "text-1",
+        delta: "lo",
+      },
+    })
+    emitTwice(events, {
+      id: "evt_step_text_done",
+      type: "session.next.step.ended",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 3,
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    })
+
+    await wait(() => {
+      const assistant = sync.session.message.fromSession("session-1")[0]
+      return assistant?.type === "assistant" && assistant.time.completed === 3
+    })
+    const assistant = sync.session.message.fromSession("session-1")[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.time.completed).toBe(3)
+    expect(assistant.content[0]).toMatchObject({ type: "text", id: "text-1", text: "hello" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sync v2 flushes buffered reasoning before step failure", async () => {
+  const { app, events, sync } = await mountSyncV2()
+
+  try {
+    emitTwice(events, {
+      id: "evt_step_reasoning_flush",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_reasoning_flush_start",
+      type: "session.next.reasoning.started",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 2,
+        reasoningID: "reasoning-1",
+        providerMetadata: {},
+      },
+    })
+    emitTwice(events, {
+      id: "evt_reasoning_flush_delta",
+      type: "session.next.reasoning.delta",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 2,
+        reasoningID: "reasoning-1",
+        delta: "why",
+      },
+    })
+    emitTwice(events, {
+      id: "evt_step_reasoning_failed",
+      type: "session.next.step.failed",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 3,
+        error: { type: "unknown", message: "boom" },
+      },
+    })
+
+    await wait(() => {
+      const assistant = sync.session.message.fromSession("session-1")[0]
+      return assistant?.type === "assistant" && assistant.finish === "error"
+    })
+    const assistant = sync.session.message.fromSession("session-1")[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.finish).toBe("error")
+    expect(assistant.content[0]).toMatchObject({ type: "reasoning", id: "reasoning-1", text: "why" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sync v2 does not duplicate buffered deltas replayed after hydration", async () => {
+  const response = Promise.withResolvers<Response>()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/session-1/message") return response.promise
+    return undefined
+  })
+  const { app, events, sync } = await mountSyncV2(calls)
+
+  try {
+    emitTwice(events, {
+      id: "evt_step_hydrate_delta",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_text_hydrate_start",
+      type: "session.next.text.started",
+      properties: { sessionID: "session-1", assistantMessageID: "msg_assistant_1", timestamp: 2, textID: "text-1" },
+    })
+    await wait(() => {
+      const assistant = sync.session.message.fromSession("session-1")[0]
+      return assistant?.type === "assistant" && assistant.content[0]?.type === "text"
+    })
+    const hydration = sync.session.message.sync("session-1")
+    emitTwice(events, {
+      id: "evt_text_hydrate_delta",
+      type: "session.next.text.delta",
+      properties: {
+        sessionID: "session-1",
+        assistantMessageID: "msg_assistant_1",
+        timestamp: 3,
+        textID: "text-1",
+        delta: "hi",
+      },
+    })
+    response.resolve(
+      json({
+        data: [
+          {
+            id: "msg_assistant_1",
+            type: "assistant",
+            agent: "build",
+            model: { id: "model", providerID: "provider" },
+            content: [{ type: "text", id: "text-1", text: "" }],
+            time: { created: 1 },
+          },
+        ],
+      }),
+    )
+    await hydration
+    await wait(() => {
+      const assistant = sync.session.message.fromSession("session-1")[0]
+      return assistant?.type === "assistant" && assistant.content[0]?.type === "text" && assistant.content[0].text === "hi"
+    })
+    await Bun.sleep(80)
+    const assistant = sync.session.message.fromSession("session-1")[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.content[0]).toMatchObject({ type: "text", id: "text-1", text: "hi" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sync v2 skips pending delta replay when the snapshot already contains it", async () => {
+  const sessionID = "session-fresh-delta"
+  const assistantMessageID = "msg_assistant_fresh_delta"
+  const textID = "text-fresh-delta"
+  const response = Promise.withResolvers<Response>()
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/message`) return response.promise
+    return undefined
+  })
+  const { app, events, sync } = await mountSyncV2(calls)
+
+  try {
+    emitTwice(events, {
+      id: "evt_step_hydrate_fresh_delta",
+      type: "session.next.step.started",
+      properties: {
+        sessionID,
+        assistantMessageID,
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_text_hydrate_fresh_start",
+      type: "session.next.text.started",
+      properties: { sessionID, assistantMessageID, timestamp: 2, textID },
+    })
+    await wait(() => {
+      const assistant = sync.session.message.fromSession(sessionID)[0]
+      return assistant?.type === "assistant" && assistant.content[0]?.type === "text"
+    })
+    const hydration = sync.session.message.sync(sessionID)
+    emitTwice(events, {
+      id: "evt_text_hydrate_fresh_delta",
+      type: "session.next.text.delta",
+      properties: {
+        sessionID,
+        assistantMessageID,
+        timestamp: 3,
+        textID,
+        delta: "hi",
+      },
+    })
+    response.resolve(
+      json({
+        data: [
+          {
+            id: assistantMessageID,
+            type: "assistant",
+            agent: "build",
+            model: { id: "model", providerID: "provider" },
+            content: [{ type: "text", id: textID, text: "hi" }],
+            time: { created: 1 },
+          },
+        ],
+      }),
+    )
+    await hydration
+    await Bun.sleep(80)
+    const assistant = sync.session.message.fromSession(sessionID)[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.content[0]).toMatchObject({ type: "text", id: textID, text: "hi" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("sync v2 settles pending tools when a live failure arrives", async () => {
   const events = createEventSource()
   const calls = createFetch()

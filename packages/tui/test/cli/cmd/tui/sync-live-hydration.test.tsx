@@ -176,6 +176,55 @@ test("hydration does not clear text streamed before it starts", async () => {
   }
 })
 
+test("legacy hydration flushes pending text buffers before returning", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+  let resolveMessages!: (response: Response) => void
+  const messages = new Promise<Response>((resolve) => {
+    resolveMessages = resolve
+  })
+  let requested = false
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) {
+      requested = true
+      return messages
+    }
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmp.path)
+
+  try {
+    emit(global({ id: "evt_message_pending", type: "message.updated", properties: { sessionID, info: assistant } }))
+    emit(
+      global({
+        id: "evt_part_pending",
+        type: "message.part.updated",
+        properties: { sessionID, time: 1, part: { id: partID, sessionID, messageID, type: "text", text: "" } },
+      }),
+    )
+    await wait(() => sync.data.part[messageID]?.[0]?.type === "text")
+    const hydrate = sync.session.sync(sessionID)
+    await wait(() => requested)
+    emit(
+      global({
+        id: "evt_delta_pending",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: "streamed" },
+      }),
+    )
+    resolveMessages(json([{ info: assistant, parts: [{ id: partID, sessionID, messageID, type: "text", text: "" }] }]))
+    await hydrate
+
+    expect(sync.data.part[messageID][0]).toMatchObject({ text: "streamed" })
+    await Bun.sleep(80)
+    expect(sync.data.part[messageID][0]).toMatchObject({ text: "streamed" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("live messages merged during hydration retain the 100 message window", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
@@ -256,6 +305,90 @@ test("a message removed during hydration does not regain stale parts", async () 
 
     expect(sync.data.message[sessionID]).toEqual([])
     expect(sync.data.part[messageID]).toBeUndefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("legacy sync buffers text deltas and flushes accumulated content", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmp.path)
+
+  try {
+    emit(global({ id: "evt_message_stream", type: "message.updated", properties: { sessionID, info: assistant } }))
+    emit(
+      global({
+        id: "evt_part_stream",
+        type: "message.part.updated",
+        properties: { sessionID, time: 1, part: { id: partID, sessionID, messageID, type: "text", text: "" } },
+      }),
+    )
+    await wait(() => sync.data.part[messageID]?.[0]?.type === "text")
+    emit(
+      global({
+        id: "evt_delta_stream_1",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: "hello " },
+      }),
+    )
+    emit(
+      global({
+        id: "evt_delta_stream_2",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: "world" },
+      }),
+    )
+
+    await wait(() => sync.data.part[messageID]?.[0]?.type === "text" && sync.data.part[messageID][0].text === "hello world")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("legacy sync flushes buffered deltas before final part reconciliation", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmp.path)
+
+  try {
+    emit(global({ id: "evt_message_final", type: "message.updated", properties: { sessionID, info: assistant } }))
+    emit(
+      global({
+        id: "evt_part_final_start",
+        type: "message.part.updated",
+        properties: { sessionID, time: 1, part: { id: partID, sessionID, messageID, type: "text", text: "" } },
+      }),
+    )
+    await wait(() => sync.data.part[messageID]?.[0]?.type === "text")
+    emit(
+      global({
+        id: "evt_delta_final",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: "streamed" },
+      }),
+    )
+    emit(
+      global({
+        id: "evt_part_final_done",
+        type: "message.part.updated",
+        properties: { sessionID, time: 2, part: { id: partID, sessionID, messageID, type: "text", text: "final content" } },
+      }),
+    )
+
+    await wait(() => sync.data.part[messageID]?.[0]?.type === "text" && sync.data.part[messageID][0].text === "final content")
   } finally {
     app.renderer.destroy()
   }
