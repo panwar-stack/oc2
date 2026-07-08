@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://oc2.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
   <a href="https://www.npmjs.com/package/oc2-ai"><img alt="npm" src="https://img.shields.io/npm/v/oc2-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
+  <a href="https://github.com/panwar-stack/oc2/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
 
 <p align="center">
@@ -66,7 +66,7 @@ nix run nixpkgs#oc2           # ou github:anomalyco/opencode pour la branche dev
 
 ### Application de bureau (BETA)
 
-OC2 est aussi disponible en application de bureau. Téléchargez-la directement depuis la [page des releases](https://github.com/anomalyco/opencode/releases) ou [oc2.ai/download](https://oc2.ai/download).
+OC2 est aussi disponible en application de bureau. Téléchargez-la directement depuis la [page des releases](https://github.com/panwar-stack/oc2/releases) ou [oc2.ai/download](https://oc2.ai/download).
 
 | Plateforme            | Téléchargement                     |
 | --------------------- | ---------------------------------- |

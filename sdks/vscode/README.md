@@ -15,7 +15,7 @@ This extension requires the [oc2 CLI](https://oc2.ai) to be installed on your sy
 
 ## Support
 
-This is an early release. If you encounter issues or have feedback, please create an issue at https://github.com/anomalyco/opencode/issues.
+This is an early release. If you encounter issues or have feedback, please create an issue at https://github.com/panwar-stack/oc2/issues.
 
 ## Development
 

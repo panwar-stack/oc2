@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://oc2.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
   <a href="https://www.npmjs.com/package/oc2-ai"><img alt="npm" src="https://img.shields.io/npm/v/oc2-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
+  <a href="https://github.com/panwar-stack/oc2/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
 
 <p align="center">
@@ -66,7 +66,7 @@ nix run nixpkgs#oc2           # 또는 github:anomalyco/opencode 로 최신 dev 
 
 ### 데스크톱 앱 (BETA)
 
-OC2 는 데스크톱 앱으로도 제공됩니다. [releases page](https://github.com/anomalyco/opencode/releases) 에서 직접 다운로드하거나 [oc2.ai/download](https://oc2.ai/download) 를 이용하세요.
+OC2 는 데스크톱 앱으로도 제공됩니다. [releases page](https://github.com/panwar-stack/oc2/releases) 에서 직접 다운로드하거나 [oc2.ai/download](https://oc2.ai/download) 를 이용하세요.
 
 | 플랫폼                | 다운로드                           |
 | --------------------- | ---------------------------------- |

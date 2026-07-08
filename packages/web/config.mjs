@@ -5,7 +5,7 @@ export default {
   console: stage === "production" ? "https://opencode.ai/auth" : `https://${stage}.opencode.ai/auth`,
   email: "contact@anoma.ly",
   socialCard: "https://social-cards.sst.dev",
-  github: "https://github.com/anomalyco/opencode",
+  github: "https://github.com/panwar-stack/oc2",
   discord: "https://opencode.ai/discord",
   headerLinks: [
     { name: "app.header.home", url: "/" },

@@ -8,7 +8,7 @@ The implementation strategy is incremental: first define the allowed compatibili
 
 ## Current State
 
-- Root `package.json` is already named `oc2`, but repository URL still points to `https://github.com/anomalyco/opencode`.
+- Root `package.json` is already named `oc2`, but repository URL still points to `https://github.com/panwar-stack/oc2`.
 - `packages/opencode/package.json` is named `oc2`, but still publishes both `bin.oc2` and `bin.opencode`.
 - `packages/core/package.json` is still named `@opencode-ai/core` and exposes `bin.opencode`.
 - Many workspace packages still depend on `@opencode-ai/*`, including `packages/opencode/package.json`, `packages/app/package.json`, `packages/desktop/package.json`, and `packages/web/package.json`.
@@ -16,7 +16,7 @@ The implementation strategy is incremental: first define the allowed compatibili
 - Docs and README surfaces still contain OpenCode/opencode references, including `README.md`, localized `README.*.md`, `sdks/vscode/README.md`, `packages/desktop/README.md`, and `packages/slack/README.md`.
 - GitHub automation still contains legacy names in `.github/workflows/*`, including `/opencode`, `OPENCODE_*`, and `opencode` command references.
 - `github/action.yml` is mostly rebranded to `oc2`, but still fetches releases from `anomalyco/opencode` and keeps `/opencode` as a trigger.
-- `install` now installs `oc2`, but still downloads from `github.com/anomalyco/opencode`.
+- `install` now installs `oc2`, but still downloads from `github.com/panwar-stack/oc2`.
 - Desktop metadata is partially rebranded in `packages/desktop/package.json`, but app IDs/updater paths and localized strings still reference OpenCode/opencode in desktop sources.
 - App/web/console user-facing copy still includes OpenCode/opencode references in files such as `packages/opencode/src/session/prompt/*.txt`, `packages/app/src/pages/*.tsx`, `packages/web/src/components/Lander.astro`, and console email/auth files.
 - Server/config code supports both OC2 and OPENCODE forms, including `.oc2`/`.opencode`, `oc2.json`/`opencode.json`, `OC2_*`/`OPENCODE_*`, and `x-oc2-*`/`x-opencode-*`.

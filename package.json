@@ -121,7 +121,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/anomalyco/opencode"
+    "url": "https://github.com/panwar-stack/oc2"
   },
   "license": "MIT",
   "prettier": {

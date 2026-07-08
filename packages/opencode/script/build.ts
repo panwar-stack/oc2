@@ -23,10 +23,10 @@ const packageMetadata = {
   homepage: "https://oc2.ai/docs",
   repository: {
     type: "git",
-    url: "git+https://github.com/anomalyco/opencode.git",
+    url: "git+https://github.com/panwar-stack/oc2.git",
   },
   bugs: {
-    url: "https://github.com/anomalyco/opencode/issues",
+    url: "https://github.com/panwar-stack/oc2/issues",
   },
 }
 
