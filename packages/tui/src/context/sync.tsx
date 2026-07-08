@@ -151,7 +151,8 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
-    const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    let sessionListGeneration = 0
+    const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string>; cancelled: boolean }>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
@@ -264,7 +265,15 @@ export const {
           break
 
         case "session.deleted": {
-          const result = search(store.session, event.properties.info.id, (s) => s.id)
+          const sessionID = event.properties.info.id
+          const result = search(store.session, sessionID, (s) => s.id)
+          const messages = store.message[sessionID] ?? []
+          const tracker = hydratingSessions.get(sessionID)
+          fullSyncedSessions.delete(sessionID)
+          syncingSessions.delete(sessionID)
+          if (tracker) tracker.cancelled = true
+          hydratingSessions.delete(sessionID)
+          sessionListGeneration++
           if (result.found) {
             setStore(
               "session",
@@ -273,12 +282,25 @@ export const {
               }),
             )
           }
-          setStore(
-            "session_root",
-            produce((draft) => {
-              delete draft[event.properties.info.id]
-            }),
-          )
+          batch(() => {
+            setStore(
+              produce((draft) => {
+                delete draft.permission[sessionID]
+                delete draft.question[sessionID]
+                delete draft.session_status[sessionID]
+                delete draft.fugu_status[sessionID]
+                delete draft.team_member_status[sessionID]
+                delete draft.session_diff[sessionID]
+                delete draft.todo[sessionID]
+                delete draft.message[sessionID]
+                for (const message of messages) delete draft.part[message.id]
+                for (const [messageID, parts] of Object.entries(draft.part)) {
+                  if (parts.some((part) => part.sessionID === sessionID)) delete draft.part[messageID]
+                }
+                delete draft.session_root[sessionID]
+              }),
+            )
+          })
           break
         }
         case "session.updated": {
@@ -399,16 +421,23 @@ export const {
         case "message.removed": {
           touchMessage(event.properties.sessionID, event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
-          const result = search(messages, event.properties.messageID, (m) => m.id)
-          if (result.found) {
+          const result = messages ? search(messages, event.properties.messageID, (m) => m.id) : undefined
+          batch(() => {
+            if (result?.found) {
+              setStore(
+                "message",
+                event.properties.sessionID,
+                produce((draft) => {
+                  draft.splice(result.index, 1)
+                }),
+              )
+            }
             setStore(
-              "message",
-              event.properties.sessionID,
               produce((draft) => {
-                draft.splice(result.index, 1)
+                delete draft.part[event.properties.messageID]
               }),
             )
-          }
+          })
           break
         }
         case "message.part.updated": {
@@ -455,6 +484,7 @@ export const {
         case "message.part.removed": {
           touchPart(event.properties.sessionID, event.properties.partID)
           const parts = store.part[event.properties.messageID]
+          if (!parts) break
           const result = search(parts, event.properties.partID, (p) => p.id)
           if (result.found) {
             setStore(
@@ -489,6 +519,7 @@ export const {
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
+      const listGeneration = sessionListGeneration
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
 
@@ -548,7 +579,9 @@ export const {
               setStore("console_state", reconcile(consoleState))
               setStore("agent", reconcile(agents))
               setStore("config", reconcile(config))
-              if (sessions !== undefined) setStore("session", reconcile(sessions))
+              if (sessions !== undefined && listGeneration === sessionListGeneration) {
+                setStore("session", reconcile(sessions))
+              }
             })
           })
         })
@@ -556,7 +589,13 @@ export const {
           if (store.status !== "complete") setStore("status", "partial")
           // non-blocking
           void Promise.all([
-            ...(args.continue ? [] : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
+            ...(args.continue
+              ? []
+              : [
+                  sessionListPromise.then((sessions) => {
+                    if (listGeneration === sessionListGeneration) setStore("session", reconcile(sessions))
+                  }),
+                ]),
             consoleStatePromise.then((consoleState) => setStore("console_state", reconcile(consoleState))),
             sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
             sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
@@ -616,7 +655,9 @@ export const {
           return sessionListQuery()
         },
         async refresh() {
+          const listGeneration = sessionListGeneration
           const list = await listSessions()
+          if (listGeneration !== sessionListGeneration) return
           setStore("session", reconcile(list))
         },
         async refreshRoots(sessionID: string) {
@@ -648,7 +689,7 @@ export const {
           if (fullSyncedSessions.has(sessionID)) return
           const syncing = syncingSessions.get(sessionID)
           if (syncing) return syncing
-          const tracker = { messages: new Set<string>(), parts: new Set<string>() }
+          const tracker = { messages: new Set<string>(), parts: new Set<string>(), cancelled: false }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
             const [session, roots, messages, todo, diff] = await Promise.all([
@@ -658,6 +699,7 @@ export const {
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
+            if (tracker.cancelled) return
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
@@ -713,8 +755,8 @@ export const {
             )
             fullSyncedSessions.add(sessionID)
           })().finally(() => {
-            syncingSessions.delete(sessionID)
-            hydratingSessions.delete(sessionID)
+            if (syncingSessions.get(sessionID) === task) syncingSessions.delete(sessionID)
+            if (hydratingSessions.get(sessionID) === tracker) hydratingSessions.delete(sessionID)
           })
           syncingSessions.set(sessionID, task)
           return task

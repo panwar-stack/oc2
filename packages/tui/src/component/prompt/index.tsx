@@ -236,7 +236,7 @@ export function Prompt(props: PromptProps) {
   let promptPartTypeId = 0
   const event = useEvent()
 
-  event.on("tui.prompt.append", (evt, { workspace }) => {
+  const unsubscribePromptAppend = event.on("tui.prompt.append", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
     if (!input || input.isDestroyed) return
     input.insertText(evt.properties.text)
@@ -248,6 +248,7 @@ export function Prompt(props: PromptProps) {
       renderer.requestRender()
     }, 0)
   })
+  onCleanup(unsubscribePromptAppend)
 
   createEffect(() => {
     if (!input || input.isDestroyed) return

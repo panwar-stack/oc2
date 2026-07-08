@@ -16,6 +16,7 @@ type Sdk = ReturnType<typeof useSDK>
 type Sync = ReturnType<typeof useSync>
 
 const messageCache = new Map<string, Promise<WithParts[]>>()
+const MESSAGE_CACHE_LIMIT = 100
 
 function cacheKey(sessionID: string, version: number) {
   return `${sessionID}:${version}`
@@ -23,14 +24,18 @@ function cacheKey(sessionID: string, version: number) {
 
 function hydrateFromSync(sync: Sync, sessionID: string): WithParts[] | undefined {
   const infos = sync.data.message[sessionID]
-  if (!infos || infos.length === 0) return undefined
+  if (!infos) return undefined
   return infos.map((info) => ({ info, parts: sync.data.part[info.id] ?? [] }))
 }
 
 function loadMessages(sdk: Sdk, sessionID: string, version: number): Promise<WithParts[]> {
   const key = cacheKey(sessionID, version)
   const cached = messageCache.get(key)
-  if (cached) return cached
+  if (cached) {
+    messageCache.delete(key)
+    messageCache.set(key, cached)
+    return cached
+  }
 
   const promise = sdk.client.session
     .messages({ sessionID, limit: 50 })
@@ -43,6 +48,10 @@ function loadMessages(sdk: Sdk, sessionID: string, version: number): Promise<Wit
       throw error
     })
   messageCache.set(key, promise)
+  if (messageCache.size > MESSAGE_CACHE_LIMIT) {
+    const oldest = messageCache.keys().next().value
+    if (oldest) messageCache.delete(oldest)
+  }
   return promise
 }
 
