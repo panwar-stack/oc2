@@ -10,6 +10,7 @@ import type {
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
+import { onCleanup } from "solid-js"
 
 function activeAssistant(messages: SessionMessage[]) {
   const index = messages.findIndex((message) => message.type === "assistant" && !message.time.completed)
@@ -53,6 +54,8 @@ function prepend(messages: SessionMessage[], message: SessionMessage) {
   messages.unshift(message)
 }
 
+const STREAMING_FLUSH_MS = 33
+
 export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext({
   name: "SyncV2",
   init: () => {
@@ -69,7 +72,6 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     const applied = new Set<string>()
     const buffering = new Map<string, Event[]>()
     const syncing = new Map<string, Promise<void>>()
-
     function duplicate(id: string) {
       if (applied.has(id)) return true
       applied.add(id)
@@ -88,14 +90,103 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       )
     }
 
+    type StreamingContentBuffer = {
+      sessionID: string
+      assistantMessageID: string
+      contentID: string
+      type: "text" | "reasoning"
+      text: string
+    }
+
+    const streamingContentBuffers = new Map<string, StreamingContentBuffer>()
+    let streamingContentFlushTimer: ReturnType<typeof setTimeout> | undefined
+
+    function streamingContentKey(
+      sessionID: string,
+      assistantMessageID: string,
+      type: "text" | "reasoning",
+      contentID: string,
+    ) {
+      return `${sessionID}:${assistantMessageID}:${type}:${contentID}`
+    }
+
+    function scheduleStreamingContentFlush() {
+      if (streamingContentFlushTimer) return
+      streamingContentFlushTimer = setTimeout(flushStreamingContentBuffers, STREAMING_FLUSH_MS)
+    }
+
+    function flushStreamingContent(buffer: StreamingContentBuffer) {
+      update(buffer.sessionID, (draft) => {
+        const assistant = ownedAssistant(draft, buffer.assistantMessageID)
+        const match =
+          buffer.type === "text"
+            ? latestText(assistant, buffer.contentID)
+            : latestReasoning(assistant, buffer.contentID)
+        if (match) match.text += buffer.text
+      })
+    }
+
+    function flushStreamingContentBuffers() {
+      if (streamingContentFlushTimer) {
+        clearTimeout(streamingContentFlushTimer)
+        streamingContentFlushTimer = undefined
+      }
+      const buffers = [...streamingContentBuffers.values()]
+      streamingContentBuffers.clear()
+      for (const buffer of buffers) flushStreamingContent(buffer)
+    }
+
+    function flushStreamingContentItem(
+      sessionID: string,
+      assistantMessageID: string,
+      type: "text" | "reasoning",
+      contentID: string,
+    ) {
+      const key = streamingContentKey(sessionID, assistantMessageID, type, contentID)
+      const buffer = streamingContentBuffers.get(key)
+      if (!buffer) return
+      streamingContentBuffers.delete(key)
+      flushStreamingContent(buffer)
+    }
+
+    function flushStreamingAssistant(sessionID: string, assistantMessageID: string) {
+      const buffers = [...streamingContentBuffers.values()].filter(
+        (buffer) => buffer.sessionID === sessionID && buffer.assistantMessageID === assistantMessageID,
+      )
+      for (const buffer of buffers) {
+        streamingContentBuffers.delete(
+          streamingContentKey(buffer.sessionID, buffer.assistantMessageID, buffer.type, buffer.contentID),
+        )
+        flushStreamingContent(buffer)
+      }
+    }
+
+    function flushStreamingSession(sessionID: string) {
+      const buffers = [...streamingContentBuffers.values()].filter((buffer) => buffer.sessionID === sessionID)
+      for (const buffer of buffers) {
+        streamingContentBuffers.delete(
+          streamingContentKey(buffer.sessionID, buffer.assistantMessageID, buffer.type, buffer.contentID),
+        )
+        flushStreamingContent(buffer)
+      }
+    }
+
+    function dropStreamingSession(sessionID: string) {
+      for (const [key, buffer] of streamingContentBuffers) {
+        if (buffer.sessionID === sessionID) streamingContentBuffers.delete(key)
+      }
+    }
+
     async function hydrate(sessionID: string) {
       const pending: Event[] = []
+      flushStreamingSession(sessionID)
       const before = JSON.parse(JSON.stringify(store.messages[sessionID] ?? [])) as SessionMessage[]
       buffering.set(sessionID, pending)
       try {
         const response = await sdk.client.v2.session.messages({ sessionID })
         const messages = response.data?.data ?? []
         const snapshotIDs = new Set(messages.map((message) => message.id))
+        dropStreamingSession(sessionID)
         setStore(
           "messages",
           sessionID,
@@ -226,6 +317,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           })
           break
         case "session.next.step.ended":
+          flushStreamingAssistant(event.properties.sessionID, event.properties.assistantMessageID)
           update(event.properties.sessionID, (draft) => {
             const currentAssistant = ownedAssistant(draft, event.properties.assistantMessageID)
             if (!currentAssistant) return
@@ -238,6 +330,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           })
           break
         case "session.next.step.failed":
+          flushStreamingAssistant(event.properties.sessionID, event.properties.assistantMessageID)
           update(event.properties.sessionID, (draft) => {
             const currentAssistant = ownedAssistant(draft, event.properties.assistantMessageID)
             if (!currentAssistant) return
@@ -256,15 +349,38 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           })
           break
         case "session.next.text.delta":
-          update(event.properties.sessionID, (draft) => {
-            const match = latestText(
-              ownedAssistant(draft, event.properties.assistantMessageID),
+          if (
+            latestText(
+              ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
               event.properties.textID,
             )
-            if (match) match.text += event.properties.delta
-          })
+          ) {
+            const key = streamingContentKey(
+              event.properties.sessionID,
+              event.properties.assistantMessageID,
+              "text",
+              event.properties.textID,
+            )
+            const buffer = streamingContentBuffers.get(key)
+            if (buffer) buffer.text += event.properties.delta
+            else
+              streamingContentBuffers.set(key, {
+                sessionID: event.properties.sessionID,
+                assistantMessageID: event.properties.assistantMessageID,
+                contentID: event.properties.textID,
+                type: "text",
+                text: event.properties.delta,
+              })
+            scheduleStreamingContentFlush()
+          }
           break
         case "session.next.text.ended":
+          flushStreamingContentItem(
+            event.properties.sessionID,
+            event.properties.assistantMessageID,
+            "text",
+            event.properties.textID,
+          )
           update(event.properties.sessionID, (draft) => {
             const match = latestText(
               ownedAssistant(draft, event.properties.assistantMessageID),
@@ -381,15 +497,38 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           })
           break
         case "session.next.reasoning.delta":
-          update(event.properties.sessionID, (draft) => {
-            const match = latestReasoning(
-              ownedAssistant(draft, event.properties.assistantMessageID),
+          if (
+            latestReasoning(
+              ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
               event.properties.reasoningID,
             )
-            if (match) match.text += event.properties.delta
-          })
+          ) {
+            const key = streamingContentKey(
+              event.properties.sessionID,
+              event.properties.assistantMessageID,
+              "reasoning",
+              event.properties.reasoningID,
+            )
+            const buffer = streamingContentBuffers.get(key)
+            if (buffer) buffer.text += event.properties.delta
+            else
+              streamingContentBuffers.set(key, {
+                sessionID: event.properties.sessionID,
+                assistantMessageID: event.properties.assistantMessageID,
+                contentID: event.properties.reasoningID,
+                type: "reasoning",
+                text: event.properties.delta,
+              })
+            scheduleStreamingContentFlush()
+          }
           break
         case "session.next.reasoning.ended":
+          flushStreamingContentItem(
+            event.properties.sessionID,
+            event.properties.assistantMessageID,
+            "reasoning",
+            event.properties.reasoningID,
+          )
           update(event.properties.sessionID, (draft) => {
             const match = latestReasoning(
               ownedAssistant(draft, event.properties.assistantMessageID),
@@ -423,9 +562,15 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
 
     event.subscribe((event) => {
       if (duplicate(event.id)) return
+      if (event.type === "session.deleted") dropStreamingSession(event.properties.info.id)
       if ("sessionID" in event.properties && typeof event.properties.sessionID === "string")
         buffering.get(event.properties.sessionID)?.push(event)
       apply(event)
+    })
+
+    onCleanup(() => {
+      if (streamingContentFlushTimer) clearTimeout(streamingContentFlushTimer)
+      streamingContentBuffers.clear()
     })
 
     const result = {

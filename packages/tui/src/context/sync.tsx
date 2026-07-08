@@ -30,7 +30,7 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useRenderer } from "@opentui/solid"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, onCleanup, onMount } from "solid-js"
 import path from "path"
 import { aggregateFailures } from "./aggregate-failures"
 import { useKV } from "./kv"
@@ -39,6 +39,15 @@ import { destroyRenderer } from "../util/renderer"
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
   switchableOrgCount: 0,
+}
+
+const STREAMING_FLUSH_MS = 33
+
+type StreamingPartBuffer = {
+  sessionID: string
+  messageID: string
+  partID: string
+  text: string
 }
 
 function search<T>(items: T[], target: string, key: (item: T) => string) {
@@ -160,6 +169,82 @@ export const {
       hydratingSessions.get(sessionID)?.parts.add(partID)
     }
 
+    const streamingPartBuffers = new Map<string, StreamingPartBuffer>()
+    let streamingPartFlushTimer: ReturnType<typeof setTimeout> | undefined
+
+    function streamingPartKey(sessionID: string, messageID: string, partID: string) {
+      return `${sessionID}:${messageID}:${partID}`
+    }
+
+    function scheduleStreamingPartFlush() {
+      if (streamingPartFlushTimer) return
+      streamingPartFlushTimer = setTimeout(flushStreamingPartBuffers, STREAMING_FLUSH_MS)
+    }
+
+    function flushStreamingPartBuffers() {
+      if (streamingPartFlushTimer) {
+        clearTimeout(streamingPartFlushTimer)
+        streamingPartFlushTimer = undefined
+      }
+      const buffers = [...streamingPartBuffers.values()]
+      streamingPartBuffers.clear()
+      for (const buffer of buffers) {
+        const parts = store.part[buffer.messageID]
+        if (!parts) continue
+        const result = search(parts, buffer.partID, (part) => part.id)
+        if (!result.found) continue
+        const part = parts[result.index]
+        if (part.type !== "text" && part.type !== "reasoning") continue
+        setStore(
+          "part",
+          buffer.messageID,
+          produce((draft) => {
+            const part = draft.find((item) => item.id === buffer.partID)
+            if (part?.type !== "text" && part?.type !== "reasoning") return
+            part.text += buffer.text
+          }),
+        )
+      }
+    }
+
+    function flushStreamingPart(sessionID: string, messageID: string, partID: string) {
+      const key = streamingPartKey(sessionID, messageID, partID)
+      const buffer = streamingPartBuffers.get(key)
+      if (!buffer) return
+      streamingPartBuffers.delete(key)
+      const parts = store.part[messageID]
+      if (!parts) return
+      const result = search(parts, partID, (part) => part.id)
+      if (!result.found) return
+      const part = parts[result.index]
+      if (part.type !== "text" && part.type !== "reasoning") return
+      setStore(
+        "part",
+        messageID,
+        produce((draft) => {
+          const part = draft.find((item) => item.id === partID)
+          if (part?.type !== "text" && part?.type !== "reasoning") return
+          part.text += buffer.text
+        }),
+      )
+    }
+
+    function dropStreamingPart(sessionID: string, messageID: string, partID: string) {
+      streamingPartBuffers.delete(streamingPartKey(sessionID, messageID, partID))
+    }
+
+    function dropStreamingMessage(messageID: string) {
+      for (const [key, buffer] of streamingPartBuffers) {
+        if (buffer.messageID === messageID) streamingPartBuffers.delete(key)
+      }
+    }
+
+    function dropStreamingSession(sessionID: string) {
+      for (const [key, buffer] of streamingPartBuffers) {
+        if (buffer.sessionID === sessionID) streamingPartBuffers.delete(key)
+      }
+    }
+
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
       if (!project.data.instance.path.worktree || !project.data.instance.path.directory) return { scope: "project" }
@@ -269,6 +354,7 @@ export const {
           const result = search(store.session, sessionID, (s) => s.id)
           const messages = store.message[sessionID] ?? []
           const tracker = hydratingSessions.get(sessionID)
+          dropStreamingSession(sessionID)
           fullSyncedSessions.delete(sessionID)
           syncingSessions.delete(sessionID)
           if (tracker) tracker.cancelled = true
@@ -420,6 +506,7 @@ export const {
         }
         case "message.removed": {
           touchMessage(event.properties.sessionID, event.properties.messageID)
+          dropStreamingMessage(event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
           const result = messages ? search(messages, event.properties.messageID, (m) => m.id) : undefined
           batch(() => {
@@ -442,6 +529,7 @@ export const {
         }
         case "message.part.updated": {
           touchPart(event.properties.part.sessionID, event.properties.part.id)
+          flushStreamingPart(event.properties.part.sessionID, event.properties.part.messageID, event.properties.part.id)
           const parts = store.part[event.properties.part.messageID]
           if (!parts) {
             setStore("part", event.properties.part.messageID, [event.properties.part])
@@ -467,22 +555,38 @@ export const {
           if (!parts) break
           const result = search(parts, event.properties.partID, (p) => p.id)
           if (!result.found) break
+          const part = parts[result.index]
           touchPart(event.properties.sessionID, event.properties.partID)
-          setStore(
-            "part",
-            event.properties.messageID,
-            produce((draft) => {
-              const part = draft[result.index]
-              const field = event.properties.field as keyof typeof part
-              const existing = part[field] as string | undefined
-              ;(part[field] as string) = (existing ?? "") + event.properties.delta
-            }),
-          )
+          if (event.properties.field !== "text" || (part.type !== "text" && part.type !== "reasoning")) {
+            setStore(
+              "part",
+              event.properties.messageID,
+              produce((draft) => {
+                const part = draft[result.index]
+                const field = event.properties.field as keyof typeof part
+                const existing = part[field] as string | undefined
+                ;(part[field] as string) = (existing ?? "") + event.properties.delta
+              }),
+            )
+            break
+          }
+          const key = streamingPartKey(event.properties.sessionID, event.properties.messageID, event.properties.partID)
+          const buffer = streamingPartBuffers.get(key)
+          if (buffer) buffer.text += event.properties.delta
+          else
+            streamingPartBuffers.set(key, {
+              sessionID: event.properties.sessionID,
+              messageID: event.properties.messageID,
+              partID: event.properties.partID,
+              text: event.properties.delta,
+            })
+          scheduleStreamingPartFlush()
           break
         }
 
         case "message.part.removed": {
           touchPart(event.properties.sessionID, event.properties.partID)
+          dropStreamingPart(event.properties.sessionID, event.properties.messageID, event.properties.partID)
           const parts = store.part[event.properties.messageID]
           if (!parts) break
           const result = search(parts, event.properties.partID, (p) => p.id)
@@ -630,6 +734,11 @@ export const {
 
     onMount(() => {
       void bootstrap()
+    })
+
+    onCleanup(() => {
+      if (streamingPartFlushTimer) clearTimeout(streamingPartFlushTimer)
+      streamingPartBuffers.clear()
     })
 
     const result = {
