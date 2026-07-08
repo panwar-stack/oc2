@@ -1729,7 +1729,7 @@ export type GlobalEvent = {
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR"
 
 /**
- * Server configuration for opencode serve and web commands
+ * Server configuration for oc2 serve and web commands
  */
 export type ServerConfig = {
   port?: number

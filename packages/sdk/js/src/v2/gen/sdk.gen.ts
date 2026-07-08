@@ -690,7 +690,7 @@ export class Console extends HeyApiClient {
   /**
    * Switch active Console org
    *
-   * Persist a new active Console account/org selection for the current local OpenCode state.
+   * Persist a new active Console account/org selection for the current local OC2 state.
    */
   public switchOrg<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -1929,7 +1929,7 @@ export class Instance extends HeyApiClient {
   /**
    * Dispose instance
    *
-   * Clean up and dispose the current OpenCode instance, releasing all resources.
+   * Clean up and dispose the current OC2 instance, releasing all resources.
    */
   public dispose<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -1961,7 +1961,7 @@ export class Path extends HeyApiClient {
   /**
    * Get paths
    *
-   * Retrieve the current working directory and related path information for the OpenCode instance.
+   * Retrieve the current working directory and related path information for the OC2 instance.
    */
   public get<ThrowOnError extends boolean = false>(
     parameters?: {

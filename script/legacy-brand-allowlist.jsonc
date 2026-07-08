@@ -69,7 +69,7 @@
       // PR 2 rewrites public website docs and examples.
       "path": "packages/web/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 1586,
+      "count": 1577,
       "reason": "migration",
       "owner": "docs",
     },
@@ -101,7 +101,7 @@
       // PR 3 rewrites canonical CLI/config/server wording while preserving legacy behavior.
       "path": "packages/opencode/src/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 576,
+      "count": 534,
       "reason": "migration",
       "owner": "core",
     },
@@ -141,7 +141,7 @@
       // Legacy CLI/config/server behavior remains covered by tests until canonical defaults are updated.
       "path": "packages/opencode/test/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 1433,
+      "count": 1432,
       "reason": "test-fixture",
       "owner": "core",
     },
@@ -149,7 +149,7 @@
       // PR 4 rewrites app and shell copy.
       "path": "packages/app/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 373,
+      "count": 351,
       "reason": "migration",
       "owner": "app",
     },
@@ -157,7 +157,7 @@
       // PR 4 rewrites console email/auth and public copy.
       "path": "packages/console/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 144,
+      "count": 136,
       "reason": "migration",
       "owner": "app",
     },
@@ -165,7 +165,7 @@
       // Generated SDK output is regenerated in PR 4 from canonical source changes.
       "path": "packages/sdk/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 24,
+      "count": 20,
       "reason": "migration",
       "owner": "core",
     },
@@ -269,7 +269,7 @@
       // Remaining package-local docs, scripts, manifests, and fixtures are migrated by later package-specific slices.
       "path": "packages/*/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 143,
+      "count": 139,
       "reason": "migration",
       "owner": "core",
     },
