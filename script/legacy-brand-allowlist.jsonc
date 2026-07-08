@@ -181,7 +181,7 @@
       // PR 7 rewrites desktop copy while keeping identity/updater compatibility decisions explicit.
       "path": "packages/desktop/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 174,
+      "count": 128,
       "reason": "migration",
       "owner": "desktop",
     },
@@ -189,7 +189,7 @@
       // PR 7 updates workflows while keeping deprecated triggers/secrets where needed.
       "path": ".github/**",
       "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
-      "count": 167,
+      "count": 129,
       "reason": "migration",
       "owner": "release",
     },
