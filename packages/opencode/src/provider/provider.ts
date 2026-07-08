@@ -1274,14 +1274,19 @@ function withCanonicalEnv(env: string[]) {
   return unique(env.flatMap((item) => [Naming.canonicalEnv(item), item]))
 }
 
-function aliasProvider(provider: Info, id: ProviderV2.ID, name: string): Info {
+function aliasProvider(
+  provider: Info,
+  id: ProviderV2.ID,
+  name: string,
+  includeModel: (model: Model) => boolean = () => true,
+): Info {
   const clone = structuredClone(provider) as Info
   return {
     ...clone,
     id,
     name,
     env: withCanonicalEnv(clone.env),
-    models: mapValues(clone.models, (model) => ({
+    models: mapValues(pickBy(clone.models, includeModel), (model) => ({
       ...model,
       providerID: id,
     })),
@@ -1388,7 +1393,12 @@ export const layer = Layer.effect(
             ProviderV2.ID.opencode,
             catalog[ProviderV2.ID.opencode].name,
           )
-          catalog[ProviderV2.ID.oc2] = aliasProvider(catalog[ProviderV2.ID.opencode], ProviderV2.ID.oc2, Naming.displayName)
+          catalog[ProviderV2.ID.oc2] = aliasProvider(
+            catalog[ProviderV2.ID.opencode],
+            ProviderV2.ID.oc2,
+            Naming.displayName,
+            (model) => model.cost.input > 0,
+          )
         }
         const database = mapValues(catalog, toPublicInfo)
 

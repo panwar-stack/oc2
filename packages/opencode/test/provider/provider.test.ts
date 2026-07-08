@@ -123,7 +123,8 @@ it.instance("includes virtual fugu provider without config", () =>
   }),
 )
 
-it.instance("exposes oc2 as an alias without removing opencode", () =>
+it.instance(
+  "exposes oc2 paid alias without duplicating opencode-only free models",
   Effect.gen(function* () {
     const providers = yield* list
     const legacy = providers[ProviderV2.ID.opencode]
@@ -131,10 +132,20 @@ it.instance("exposes oc2 as an alias without removing opencode", () =>
 
     expect(legacy).toBeDefined()
     expect(canonical).toBeDefined()
+    if (!legacy || !canonical) throw new Error("missing opencode or oc2 provider")
+
+    const freeModel = Object.entries(legacy.models).find(([, model]) => model.cost.input === 0)
+
     expect(canonical.id).toBe(ProviderV2.ID.oc2)
     expect(legacy.id).toBe(ProviderV2.ID.opencode)
+    expect(freeModel).toBeDefined()
+    if (!freeModel) throw new Error("missing opencode free model")
+
+    expect(canonical.models[freeModel[0]]).toBeUndefined()
+    expect(Object.values(canonical.models).every((model) => model.cost.input > 0)).toBe(true)
     expect(Object.values(canonical.models).every((model) => model.providerID === ProviderV2.ID.oc2)).toBe(true)
   }),
+  { config: { provider: { opencode: { options: { apiKey: "test-key" } } } } },
 )
 
 it.instance(
@@ -1840,10 +1851,20 @@ it.effect("opencode loader keeps paid models when config apiKey is present", () 
     const keyedProviders = yield* listIn(keyedDir)
     const keyedCount = paid(keyedProviders)
     const aliasKeyedCount = paid(keyedProviders, ProviderV2.ID.oc2)
+    const aliasPaidModel = Object.values(keyedProviders[ProviderV2.ID.oc2].models).find((model) => model.cost.input > 0)
+    const freeModel = Object.entries(keyedProviders[ProviderV2.ID.opencode].models).find(([, model]) => model.cost.input === 0)
 
     expect(none).toBe(0)
     expect(keyedCount).toBeGreaterThan(0)
     expect(aliasKeyedCount).toBeGreaterThan(0)
+    expect(aliasPaidModel).toBeDefined()
+    if (!aliasPaidModel) throw new Error("missing oc2 paid model")
+
+    expect(aliasPaidModel.providerID).toBe(ProviderV2.ID.oc2)
+    expect(freeModel).toBeDefined()
+    if (!freeModel) throw new Error("missing opencode free model")
+
+    expect(keyedProviders[ProviderV2.ID.oc2].models[freeModel[0]]).toBeUndefined()
   }).pipe(provideMultiInstance),
 )
 
