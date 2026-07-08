@@ -59,12 +59,99 @@ function assistantContentText(
   return type === "text" ? latestText(assistant, contentID)?.text : latestReasoning(assistant, contentID)?.text
 }
 
+function assistantToolPendingInput(messages: SessionMessage[], assistantMessageID: string, callID: string) {
+  const tool = latestTool(ownedAssistant(messages, assistantMessageID), callID)
+  return tool?.state.status === "pending" ? tool.state.input : undefined
+}
+
+function assistantContentKey(item: SessionMessageAssistant["content"][number]) {
+  switch (item.type) {
+    case "text":
+      return `text:${item.id}`
+    case "reasoning":
+      return `reasoning:${item.id}`
+    case "tool":
+      return `tool:${item.id}`
+  }
+}
+
+function toolStateRank(state: SessionMessageAssistantTool["state"]) {
+  switch (state.status) {
+    case "pending":
+      return 0
+    case "running":
+      return 1
+    case "completed":
+    case "error":
+      return 2
+  }
+}
+
+function mergeAssistantToolSnapshot(
+  item: SessionMessageAssistantTool,
+  current: SessionMessageAssistant["content"][number] | undefined,
+) {
+  if (current?.type !== "tool") return item
+  if (
+    item.state.status === "pending" &&
+    current.state.status === "pending" &&
+    current.state.input.startsWith(item.state.input)
+  )
+    return current
+  if (item.state.status === "pending" && current.state.status === "pending") return item
+  return toolStateRank(current.state) >= toolStateRank(item.state) ? current : item
+}
+
+function mergeAssistantSnapshot(message: SessionMessage, live: SessionMessage | undefined) {
+  if (message.type !== "assistant" || live?.type !== "assistant") return message
+
+  const liveContent = new Map(live.content.map((item) => [assistantContentKey(item), item]))
+  const mergedKeys = new Set<string>()
+  const content = message.content.map((item) => {
+    const key = assistantContentKey(item)
+    mergedKeys.add(key)
+    const current = liveContent.get(key)
+    if (item.type === "text" && current?.type === "text" && current.text.startsWith(item.text))
+      return { ...item, text: current.text }
+    if (item.type === "reasoning" && current?.type === "reasoning" && current.text.startsWith(item.text))
+      return {
+        ...item,
+        text: current.text,
+        providerMetadata: item.providerMetadata ?? current.providerMetadata,
+      }
+    if (item.type === "tool") return mergeAssistantToolSnapshot(item, current)
+    return item
+  })
+
+  const merged = {
+    ...message,
+    content: [...content, ...live.content.filter((item) => !mergedKeys.has(assistantContentKey(item)))],
+  }
+
+  const liveCompleted = live.time.completed
+  if (liveCompleted === undefined) return merged
+
+  const snapshotCompleted = message.time.completed
+  if (snapshotCompleted !== undefined && snapshotCompleted > liveCompleted) return merged
+
+  const liveIsNewer = snapshotCompleted === undefined || liveCompleted > snapshotCompleted
+  if (liveIsNewer) merged.time.completed = liveCompleted
+  if (live.finish !== undefined && (liveIsNewer || merged.finish === undefined)) merged.finish = live.finish
+  if (live.cost !== undefined && (liveIsNewer || merged.cost === undefined)) merged.cost = live.cost
+  if (live.tokens !== undefined && (liveIsNewer || merged.tokens === undefined)) merged.tokens = live.tokens
+  if (live.error !== undefined && (liveIsNewer || merged.error === undefined)) merged.error = live.error
+  if (live.snapshot?.end !== undefined && (liveIsNewer || merged.snapshot?.end === undefined))
+    merged.snapshot = { ...merged.snapshot, end: live.snapshot.end }
+  return merged
+}
+
 function prepend(messages: SessionMessage[], message: SessionMessage) {
   if (messages.some((item) => item.id === message.id)) return
   messages.unshift(message)
 }
 
 const STREAMING_FLUSH_MS = 33
+const SDK_EVENT_BATCH_FLUSH_MS = 20
 
 export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext({
   name: "SyncV2",
@@ -194,9 +281,77 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       baseMessages: SessionMessage[],
     ) {
       const replayedText = new Map<string, string>()
+      const replayedToolInput = new Map<string, string>()
       for (const event of pending) {
-        if (event.type !== "session.next.text.delta" && event.type !== "session.next.reasoning.delta") {
+        if (event.type === "session.next.tool.called") {
+          const currentTool = latestTool(
+            ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
+            event.properties.callID,
+          )
+          if (currentTool && currentTool.state.status !== "pending") continue
           apply(event)
+          continue
+        }
+
+        if (event.type === "session.next.tool.progress") {
+          const currentTool = latestTool(
+            ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
+            event.properties.callID,
+          )
+          if (currentTool?.state.status !== "running") continue
+
+          const liveTool = latestTool(
+            ownedAssistant(liveMessages, event.properties.assistantMessageID),
+            event.properties.callID,
+          )
+          if (
+            liveTool?.state.status === "running" &&
+            (JSON.stringify(liveTool.state.structured) !== JSON.stringify(event.properties.structured) ||
+              JSON.stringify(liveTool.state.content) !== JSON.stringify(event.properties.content))
+          )
+            continue
+
+          apply(event)
+          continue
+        }
+
+        if (
+          event.type !== "session.next.text.delta" &&
+          event.type !== "session.next.reasoning.delta" &&
+          event.type !== "session.next.tool.input.delta"
+        ) {
+          apply(event)
+          continue
+        }
+
+        if (event.type === "session.next.tool.input.delta") {
+          const key = `${event.properties.sessionID}:${event.properties.assistantMessageID}:tool:${event.properties.callID}`
+          const liveInput = assistantToolPendingInput(
+            liveMessages,
+            event.properties.assistantMessageID,
+            event.properties.callID,
+          )
+          const currentInput =
+            replayedToolInput.get(key) ??
+            assistantToolPendingInput(baseMessages, event.properties.assistantMessageID, event.properties.callID) ??
+            assistantToolPendingInput(
+              store.messages[event.properties.sessionID] ?? [],
+              event.properties.assistantMessageID,
+              event.properties.callID,
+            )
+
+          if (liveInput === undefined || currentInput === undefined) {
+            apply(event)
+            continue
+          }
+
+          if (currentInput.startsWith(liveInput)) continue
+
+          const delta = liveInput.startsWith(currentInput) ? liveInput.slice(currentInput.length) : event.properties.delta
+          if (!delta) continue
+
+          replayedToolInput.set(key, currentInput + delta)
+          apply({ ...event, properties: { ...event.properties, delta } })
           continue
         }
 
@@ -213,6 +368,8 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           apply(event)
           continue
         }
+
+        if (currentText.startsWith(liveText)) continue
 
         const delta = liveText.startsWith(currentText) ? liveText.slice(currentText.length) : event.properties.delta
         if (!delta) continue
@@ -234,11 +391,18 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       buffering.set(sessionID, pending)
       try {
         const response = await sdk.client.v2.session.messages({ sessionID })
+        // SDKProvider batches live events briefly; keep buffering open long enough
+        // for queued pre-snapshot events to reach the hydration replay path.
+        await new Promise((resolve) => setTimeout(resolve, SDK_EVENT_BATCH_FLUSH_MS))
         const messages = response.data?.data ?? []
         const snapshotIDs = new Set(messages.map((message) => message.id))
         flushStreamingSession(sessionID)
         const live = JSON.parse(JSON.stringify(store.messages[sessionID] ?? [])) as SessionMessage[]
-        const merged = [...messages, ...before.filter((message) => !snapshotIDs.has(message.id))]
+        const liveByID = new Map(live.map((message) => [message.id, message]))
+        const merged = [
+          ...messages.map((message) => mergeAssistantSnapshot(message, liveByID.get(message.id))),
+          ...before.filter((message) => !snapshotIDs.has(message.id)),
+        ]
         setStore(
           "messages",
           sessionID,
@@ -393,7 +557,9 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           break
         case "session.next.text.started":
           update(event.properties.sessionID, (draft) => {
-            ownedAssistant(draft, event.properties.assistantMessageID)?.content.push({
+            const assistant = ownedAssistant(draft, event.properties.assistantMessageID)
+            if (!assistant || latestText(assistant, event.properties.textID)) return
+            assistant.content.push({
               type: "text",
               id: event.properties.textID,
               text: "",
@@ -443,7 +609,9 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           break
         case "session.next.tool.input.started":
           update(event.properties.sessionID, (draft) => {
-            ownedAssistant(draft, event.properties.assistantMessageID)?.content.push({
+            const assistant = ownedAssistant(draft, event.properties.assistantMessageID)
+            if (!assistant || latestTool(assistant, event.properties.callID)) return
+            assistant.content.push({
               type: "tool",
               id: event.properties.callID,
               name: event.properties.name,
@@ -540,7 +708,9 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           break
         case "session.next.reasoning.started":
           update(event.properties.sessionID, (draft) => {
-            ownedAssistant(draft, event.properties.assistantMessageID)?.content.push({
+            const assistant = ownedAssistant(draft, event.properties.assistantMessageID)
+            if (!assistant || latestReasoning(assistant, event.properties.reasoningID)) return
+            assistant.content.push({
               type: "reasoning",
               id: event.properties.reasoningID,
               text: "",
@@ -612,7 +782,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       }
     }
 
-    event.subscribe((event) => {
+    const unsubscribe = event.subscribe((event) => {
       if (duplicate(event.id)) return
       if (event.type === "session.deleted") dropStreamingSession(event.properties.info.id)
       if ("sessionID" in event.properties && typeof event.properties.sessionID === "string")
@@ -621,6 +791,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     })
 
     onCleanup(() => {
+      unsubscribe()
       if (streamingContentFlushTimer) clearTimeout(streamingContentFlushTimer)
       streamingContentBuffers.clear()
     })
