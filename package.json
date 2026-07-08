@@ -8,7 +8,6 @@
   "scripts": {
     "dev": "bun run --cwd packages/opencode --conditions=browser src/index.ts",
     "dev:build": "./packages/opencode/script/build.ts --single",
-    "dev:desktop": "bun --cwd packages/desktop dev",
     "dev:web": "bun --cwd packages/app dev",
     "dev:console": "ulimit -n 10240 2>/dev/null; bun run --cwd packages/console/app dev",
     "dev:stats": "bun sst shell --stage=production -- bun run --cwd packages/stats/app dev",
@@ -135,8 +134,7 @@
     "tree-sitter",
     "tree-sitter-bash",
     "tree-sitter-powershell",
-    "web-tree-sitter",
-    "electron"
+    "web-tree-sitter"
   ],
   "overrides": {
     "@opentui/core": "catalog:",
