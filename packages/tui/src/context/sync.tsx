@@ -42,6 +42,7 @@ const emptyConsoleState: ConsoleState = {
 }
 
 const STREAMING_FLUSH_MS = 33
+const EVENT_BATCH_FLUSH_MS = 16
 
 type StreamingPartBuffer = {
   sessionID: string
@@ -813,6 +814,9 @@ export const {
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
+            // SDK event delivery batches live events for this window. Let queued deltas reach
+            // the streaming buffers before hydration decides what live state to preserve.
+            await new Promise((resolve) => setTimeout(resolve, EVENT_BATCH_FLUSH_MS))
             if (tracker.cancelled) return
             flushStreamingSession(sessionID)
             setStore(
