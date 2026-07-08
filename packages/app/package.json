@@ -60,7 +60,7 @@
   },
   "dependencies": {
     "@kobalte/core": "catalog:",
-    "@opencode-ai/core": "workspace:*",
+    "@oc2-ai/core": "workspace:*",
     "@oc2-ai/sdk": "workspace:*",
     "@opencode-ai/ui": "workspace:*",
     "@sentry/solid": "catalog:",

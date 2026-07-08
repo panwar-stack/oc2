@@ -1,6 +1,6 @@
 export * as ReadTool from "./read"
 
-import { ToolFailure } from "@opencode-ai/llm"
+import { ToolFailure } from "@oc2-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { FileSystem } from "../filesystem"
 import { Image } from "../image"

@@ -7,7 +7,7 @@ import { Session } from "@/session/session"
 import { Team } from "@/team/team"
 import type { TaskPromptOps } from "./task"
 import { ToolJsonSchema } from "./json-schema"
-import { Log } from "@opencode-ai/core/util/log"
+import { Log } from "@oc2-ai/core/util/log"
 
 const log = Log.create({ service: "local_fusion" })
 

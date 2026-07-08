@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { Tool } from "@opencode-ai/core/public"
+import { Tool } from "@oc2-ai/core/public"
 import { Effect } from "effect"
 
 describe("public Tool API", () => {

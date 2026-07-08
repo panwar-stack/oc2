@@ -1,5 +1,5 @@
-import { Flag } from "@opencode-ai/core/flag/flag"
-import { Naming } from "@opencode-ai/core/naming"
+import { Flag } from "@oc2-ai/core/flag/flag"
+import { Naming } from "@oc2-ai/core/naming"
 import { Effect } from "effect"
 import path from "path"
 

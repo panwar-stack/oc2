@@ -4,7 +4,7 @@
 
 Make prompt caching more reliable by ensuring cacheable request prefixes are stable, long enough, consistently ordered, and measurable. The first pass should fix concrete audit gaps without changing provider semantics that already work.
 
-Implementation should focus on V2/core request construction, `@opencode-ai/llm` provider lowering, deterministic tool ordering, cache diagnostics, and historical cache-write stats.
+Implementation should focus on V2/core request construction, `@oc2-ai/llm` provider lowering, deterministic tool ordering, cache diagnostics, and historical cache-write stats.
 
 ## Current State
 

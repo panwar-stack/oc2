@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn } from "bun:test"
-import { Log } from "@opencode-ai/core/util/log"
+import { Log } from "@oc2-ai/core/util/log"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { Agent } from "../../src/agent/agent"

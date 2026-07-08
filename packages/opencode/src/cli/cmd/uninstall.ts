@@ -2,13 +2,13 @@ import type { Argv } from "yargs"
 import { UI } from "../ui"
 import * as prompts from "@clack/prompts"
 import { Installation } from "../../installation"
-import { Global } from "@opencode-ai/core/global"
+import { Global } from "@oc2-ai/core/global"
 import fs from "fs/promises"
 import path from "path"
 import os from "os"
 import { Filesystem } from "@/util/filesystem"
 import { Process } from "@/util/process"
-import { Naming } from "@opencode-ai/core/naming"
+import { Naming } from "@oc2-ai/core/naming"
 
 interface UninstallArgs {
   keepConfig: boolean

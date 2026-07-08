@@ -1,6 +1,6 @@
-import { SessionV2 } from "@opencode-ai/core/session"
-import { LocationServiceMap } from "@opencode-ai/core/location-layer"
-import { PermissionSaved } from "@opencode-ai/core/permission/saved"
+import { SessionV2 } from "@oc2-ai/core/session"
+import { LocationServiceMap } from "@oc2-ai/core/location-layer"
+import { PermissionSaved } from "@oc2-ai/core/permission/saved"
 import { Layer } from "effect"
 import { layer as locationLayer } from "./groups/location"
 import { sessionLocationLayer } from "./middleware/session-location"
@@ -16,7 +16,7 @@ import { EventHandler } from "./handlers/event"
 import { AgentHandler } from "./handlers/agent"
 import { HealthHandler } from "./handlers/health"
 import { QuestionHandler } from "./handlers/question"
-import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
+import * as SessionExecutionLocal from "@oc2-ai/core/session/execution/local"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,

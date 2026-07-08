@@ -7,7 +7,7 @@ import { Session } from "@/session/session"
 import { Team } from "@/team/team"
 import { TeamCreateTool } from "@/tool/team_create"
 import { Truncate } from "@/tool/truncate"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 

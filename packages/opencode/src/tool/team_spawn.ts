@@ -11,7 +11,7 @@ import { wakeTeamSession } from "./team_wake"
 import { EffectBridge } from "@/effect/bridge"
 import { SessionID } from "@/session/schema"
 import { Cause, Effect, Exit, Schema, Scope, Option } from "effect"
-import { Database } from "@opencode-ai/core/database/database"
+import { Database } from "@oc2-ai/core/database/database"
 
 const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "Name for this teammate" }),

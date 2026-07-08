@@ -10,7 +10,7 @@ import * as Option from "effect/Option"
 import { Auth } from "@/auth"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
-import { Database } from "@opencode-ai/core/database/database"
+import { Database } from "@oc2-ai/core/database/database"
 import {
   RepositoryMemoryCommitTable,
   RepositoryMemoryFileActivityTable,

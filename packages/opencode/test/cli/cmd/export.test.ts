@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Effect, Layer } from "effect"
 import { collect } from "@/cli/cmd/export"
 import { Session } from "@/session/session"

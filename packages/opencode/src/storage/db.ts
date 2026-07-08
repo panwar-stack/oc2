@@ -1,4 +1,4 @@
-import { Database as CoreDatabase } from "@opencode-ai/core/database/database"
+import { Database as CoreDatabase } from "@oc2-ai/core/database/database"
 
 export type TxOrDb = CoreDatabase.Interface["db"]
 

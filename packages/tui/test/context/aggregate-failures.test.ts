@@ -4,7 +4,7 @@
  * sibling endpoint's failure as an unhandled rejection.
  */
 import { describe, expect, test } from "bun:test"
-import { aggregateFailures } from "@opencode-ai/tui/context/aggregate-failures"
+import { aggregateFailures } from "@oc2-ai/tui/context/aggregate-failures"
 
 describe("aggregateFailures", () => {
   test("returns null when every result is fulfilled", () => {

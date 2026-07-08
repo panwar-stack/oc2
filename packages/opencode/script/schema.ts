@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
 import { Config } from "@/config/config"
-import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
-import { TuiConfig } from "@opencode-ai/tui/config"
+import { ConfigV1 } from "@oc2-ai/core/v1/config/config"
+import { TuiConfig } from "@oc2-ai/tui/config"
 import { Schema } from "effect"
 
 type JsonSchema = Record<string, unknown>

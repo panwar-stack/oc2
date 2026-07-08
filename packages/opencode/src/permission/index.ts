@@ -1,12 +1,12 @@
-import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
+import { ConfigPermissionV1 } from "@oc2-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
-import * as Log from "@opencode-ai/core/util/log"
-import { Wildcard } from "@opencode-ai/core/util/wildcard"
+import * as Log from "@oc2-ai/core/util/log"
+import { Wildcard } from "@oc2-ai/core/util/wildcard"
 import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventV2 } from "@opencode-ai/core/event"
+import { EventV2 } from "@oc2-ai/core/event"
 
 const log = Log.create({ service: "permission" })
 

@@ -2,7 +2,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { createBindingLookup } from "@opentui/keymap/extras"
-import { Global } from "@opencode-ai/core/global"
+import { Global } from "@oc2-ai/core/global"
 import { onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
 
@@ -55,7 +55,7 @@ const {
   useSync,
   wait,
   worktree,
-} = await import("@opencode-ai/tui/testing")
+} = await import("@oc2-ai/tui/testing")
 
 const sessionID = "ses_prompt_footer"
 const created = Date.now() - 62_000

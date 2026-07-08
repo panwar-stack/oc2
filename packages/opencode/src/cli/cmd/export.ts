@@ -1,5 +1,5 @@
 import { Session } from "@/session/session"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { SessionID } from "../../session/schema"
 import { effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"

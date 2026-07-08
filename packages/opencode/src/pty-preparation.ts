@@ -4,7 +4,7 @@ import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { Plugin } from "@/plugin"
 import { Shell } from "@/shell/shell"
-import { Pty } from "@opencode-ai/core/pty"
+import { Pty } from "@oc2-ai/core/pty"
 import { Effect } from "effect"
 
 export const prepareCreate = Effect.fn("PtyPreparation.prepareCreate")(function* (input: Pty.CreateInput) {

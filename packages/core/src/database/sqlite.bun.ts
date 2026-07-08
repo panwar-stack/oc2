@@ -24,7 +24,7 @@ const slowQueryInfoMs = 250
 const slowQueryWarnMs = 1_000
 const lockWaitWarnMs = 500
 
-const TypeId = "~@opencode-ai/core/database/SqliteBun" as const
+const TypeId = "~@oc2-ai/core/database/SqliteBun" as const
 type TypeId = typeof TypeId
 
 interface SqliteClient extends Client.SqlClient {

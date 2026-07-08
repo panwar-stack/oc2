@@ -1,6 +1,6 @@
 export * as ApplyPatchTool from "./apply-patch"
 
-import { ToolFailure, toolText } from "@opencode-ai/llm"
+import { ToolFailure, toolText } from "@oc2-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"

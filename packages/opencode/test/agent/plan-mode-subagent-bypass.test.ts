@@ -1,4 +1,4 @@
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 /**
  * Reproducer for opencode issue #26514:
  *

@@ -4,7 +4,7 @@ import os from "os"
 import path from "path"
 import { Effect } from "effect"
 import { Fff } from "#fff"
-import { Search } from "@opencode-ai/core/filesystem/search"
+import { Search } from "@oc2-ai/core/filesystem/search"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Search.defaultLayer)

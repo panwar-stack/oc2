@@ -1,5 +1,5 @@
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
+import { ModelV2 } from "@oc2-ai/core/model"
 
 export const ProviderID = ProviderV2.ID
 export type ProviderID = ProviderV2.ID

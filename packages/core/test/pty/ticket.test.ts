@@ -1,8 +1,8 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { PtyID } from "@opencode-ai/core/pty/schema"
-import { PtyTicket } from "@opencode-ai/core/pty/ticket"
-import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { PtyID } from "@oc2-ai/core/pty/schema"
+import { PtyTicket } from "@oc2-ai/core/pty/ticket"
+import { WorkspaceV2 } from "@oc2-ai/core/workspace"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(PtyTicket.layer)

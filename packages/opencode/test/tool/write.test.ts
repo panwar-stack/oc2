@@ -1,11 +1,11 @@
 import { afterEach, describe, expect } from "bun:test"
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { Effect, Layer } from "effect"
 import path from "path"
 import fs from "fs/promises"
 import { WriteTool } from "../../src/tool/write"
 import { LSP } from "@/lsp/lsp"
-import { FSUtil } from "@opencode-ai/core/fs-util"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Format } from "../../src/format"
 import { Truncate } from "@/tool/truncate"
@@ -15,7 +15,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { Session } from "@/session/session"
 import { Permission } from "@/permission"
 import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import {
   disposeAllInstances,
   provideInstance,

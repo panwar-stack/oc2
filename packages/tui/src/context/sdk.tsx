@@ -1,6 +1,6 @@
 import { createOpencodeClient } from "@oc2-ai/sdk/v2"
 import type { GlobalEvent } from "@oc2-ai/sdk/v2"
-import { Flag } from "@opencode-ai/core/flag/flag"
+import { Flag } from "@oc2-ai/core/flag/flag"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
 

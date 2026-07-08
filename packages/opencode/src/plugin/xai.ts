@@ -1,8 +1,8 @@
 import type { Hooks, PluginInput } from "@oc2-ai/plugin"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@oc2-ai/core/util/log"
 import { OAUTH_DUMMY_KEY } from "../auth"
 import { createServer } from "http"
-import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { InstallationVersion } from "@oc2-ai/core/installation/version"
 
 const log = Log.create({ service: "plugin.xai" })
 

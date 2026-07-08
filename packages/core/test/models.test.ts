@@ -1,15 +1,15 @@
 import { describe, expect, beforeAll, beforeEach, afterAll } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { Flag } from "@opencode-ai/core/flag/flag"
-import { Global } from "@opencode-ai/core/global"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
-import { EventV2 } from "@opencode-ai/core/event"
+import { FSUtil } from "@oc2-ai/core/fs-util"
+import { Flag } from "@oc2-ai/core/flag/flag"
+import { Global } from "@oc2-ai/core/global"
+import { ModelsDev } from "@oc2-ai/core/models-dev"
+import { EventV2 } from "@oc2-ai/core/event"
 import { it } from "./lib/effect"
 import { readFile, rm, writeFile, utimes, mkdir } from "fs/promises"
 import path from "path"
-import { Hash } from "@opencode-ai/core/util/hash"
+import { Hash } from "@oc2-ai/core/util/hash"
 
 // test/preload.ts pins OPENCODE_MODELS_PATH to a fixture so other tests can
 // resolve providers without network. These tests need to drive the on-disk

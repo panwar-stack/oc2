@@ -1,6 +1,6 @@
 export * as GrepTool from "./grep"
 
-import { ToolFailure, toolText } from "@opencode-ai/llm"
+import { ToolFailure, toolText } from "@oc2-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { FileSystem } from "../filesystem"
 import { LocationSearch } from "../location-search"

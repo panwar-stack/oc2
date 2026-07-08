@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createOpencodeClient } from "@oc2-ai/sdk/v2"
 import { Server } from "../../src/server/server"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@oc2-ai/core/util/log"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 

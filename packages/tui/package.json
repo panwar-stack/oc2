@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@opencode-ai/tui",
+  "name": "@oc2-ai/tui",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -48,7 +48,7 @@
     "./component/spinner": "./src/component/spinner.tsx"
   },
   "dependencies": {
-    "@opencode-ai/core": "workspace:*",
+    "@oc2-ai/core": "workspace:*",
     "@oc2-ai/plugin": "workspace:*",
     "@oc2-ai/sdk": "workspace:*",
     "@opencode-ai/ui": "workspace:*",

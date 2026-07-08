@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import * as path from "path"
-import { FSUtil } from "@opencode-ai/core/fs-util"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { deriveNewContentsFromChunks } from "./apply"
 import { parsePatch } from "./parser"
 

@@ -4,9 +4,9 @@
 
 Default new endpoints to `packages/opencode/src/server/routes/instance/httpapi/{groups,handlers}` when they depend on opencode app/runtime services, instance state, workspace routing, PTY/TUI/UI behavior, MCP, config, project control, or legacy public API shaping.
 
-Use `packages/server/src/{groups,handlers}` only for endpoints that belong to the reusable `@opencode-ai/server` API surface: core-backed, standalone-mountable, and not dependent on `@/` opencode app imports.
+Use `packages/server/src/{groups,handlers}` only for endpoints that belong to the reusable `@oc2-ai/server` API surface: core-backed, standalone-mountable, and not dependent on `@/` opencode app imports.
 
-When a domain exists in both places, choose by dependency ownership and lifecycle rather than domain name. `server.ts` mounts both the local `RootHttpApi`/`InstanceHttpApi` routes and `@opencode-ai/server` `Api`/`handlers`; do not duplicate an endpoint in both trees.
+When a domain exists in both places, choose by dependency ownership and lifecycle rather than domain name. `server.ts` mounts both the local `RootHttpApi`/`InstanceHttpApi` routes and `@oc2-ai/server` `Api`/`handlers`; do not duplicate an endpoint in both trees.
 
 ## Handler Patterns
 

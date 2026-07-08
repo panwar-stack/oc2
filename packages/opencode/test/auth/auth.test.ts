@@ -1,9 +1,9 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Auth } from "../../src/auth"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
-import { Global } from "@opencode-ai/core/global"
+import { Global } from "@oc2-ai/core/global"
 import { tmpdirScoped } from "../fixture/fixture"
 import path from "path"
 

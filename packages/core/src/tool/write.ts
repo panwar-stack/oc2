@@ -7,7 +7,7 @@
  */
 export * as WriteTool from "./write"
 
-import { ToolFailure, toolText } from "@opencode-ai/llm"
+import { ToolFailure, toolText } from "@oc2-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { FileMutation } from "../file-mutation"
 import { LocationMutation } from "../location-mutation"

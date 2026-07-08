@@ -11,8 +11,8 @@ import type {
   SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk"
 import type { OpencodeClient } from "@oc2-ai/sdk/v2"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
+import { ModelV2 } from "@oc2-ai/core/model"
 import { Effect } from "effect"
 import * as ACPService from "@/acp/service"
 import * as ACPError from "@/acp/error"

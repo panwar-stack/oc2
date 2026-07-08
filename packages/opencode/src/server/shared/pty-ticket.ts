@@ -1,4 +1,4 @@
-import { Naming } from "@opencode-ai/core/naming"
+import { Naming } from "@oc2-ai/core/naming"
 
 export const PTY_CONNECT_TICKET_QUERY = "ticket"
 export const PTY_CONNECT_TOKEN_HEADER = Naming.headers.ticket[0]

@@ -1,6 +1,6 @@
 import type { Session } from "@oc2-ai/sdk/v2/client"
 import { createSimpleContext } from "@opencode-ai/ui/context"
-import { base64Encode } from "@opencode-ai/core/util/encode"
+import { base64Encode } from "@oc2-ai/core/util/encode"
 import { createStore, produce } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
 import { ServerConnection, useServer } from "./server"

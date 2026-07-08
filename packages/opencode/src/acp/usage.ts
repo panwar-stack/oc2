@@ -1,10 +1,10 @@
 import type { AgentSideConnection, Usage } from "@agentclientprotocol/sdk"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@oc2-ai/core/util/log"
 import type { AssistantMessage as OpenCodeAssistantMessage, Message } from "@oc2-ai/sdk/v2"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
+import { ModelV2 } from "@oc2-ai/core/model"
 import { Provider } from "@/provider/provider"
 import { Context, Effect, Layer, SynchronizedRef } from "effect"
 

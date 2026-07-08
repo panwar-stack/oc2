@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import { Global } from "@opencode-ai/core/global"
+import { Global } from "@oc2-ai/core/global"
 import { tmpdir } from "../../../fixture/fixture"
 import { json, mount, wait } from "./sync-fixture"
 import type { GlobalEvent } from "@oc2-ai/sdk/v2"

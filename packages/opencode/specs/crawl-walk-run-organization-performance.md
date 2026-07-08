@@ -9,7 +9,7 @@ The strategy is intentionally incremental. Each phase must produce useful improv
 ## Current State
 
 - HTTP API code exists in both `packages/server/src/groups`, `packages/server/src/handlers`, `packages/opencode/src/server/routes/instance/httpapi/groups`, and `packages/opencode/src/server/routes/instance/httpapi/handlers` with repeated domains such as `session`, `provider`, `permission`, `question`, and `config`.
-- `packages/opencode/src/server/routes/instance/httpapi/server.ts` imports both local instance HTTP API handlers and `@opencode-ai/server` API/handlers, so endpoint ownership is not obvious from paths alone.
+- `packages/opencode/src/server/routes/instance/httpapi/server.ts` imports both local instance HTTP API handlers and `@oc2-ai/server` API/handlers, so endpoint ownership is not obvious from paths alone.
 - `packages/desktop/src/renderer/i18n/index.ts` imports app dictionaries through `../../../../app/src/i18n/*`.
 - `packages/desktop/src/main/windows.ts` imports `../../../ui/src/theme/themes/oc-2.json` while also using `@opencode-ai/ui` package exports.
 - Several implementation-heavy files are named `index.ts`, including `packages/opencode/src/mcp/index.ts`, `packages/opencode/src/snapshot/index.ts`, `packages/opencode/src/patch/index.ts`, and `packages/opencode/src/worktree/index.ts`.
@@ -201,7 +201,7 @@ A read-only reviewer checks that extracted modules are cohesive, no new broad ba
 
 - Move shared Bun compile target definitions from `packages/opencode/script/build.ts` and `packages/cli/script/build.ts` into a shared script module under `packages/script` or another existing tooling package.
 - Preserve the existing target matrix exactly before adding or removing targets.
-- Add a stable TUI testing export such as `@opencode-ai/tui/testing` if package exports support it, or a package-local testing utility consumed by `packages/opencode/test/cli/cmd/tui/*.test.tsx`.
+- Add a stable TUI testing export such as `@oc2-ai/tui/testing` if package exports support it, or a package-local testing utility consumed by `packages/opencode/test/cli/cmd/tui/*.test.tsx`.
 - Replace deep test imports from `packages/tui/src` and `packages/tui/test` with the stable testing surface.
 
 Verification:
@@ -238,7 +238,7 @@ The run phase adds durable guardrails, deeper performance changes, and repo-wide
 
 - Add a lint or script check that flags imports crossing package roots through deep relative paths such as `../../../../other-package/src`.
 - Allow explicit temporary exceptions for existing violations, with comments linking to cleanup tasks.
-- Add a dependency graph report that tracks circulars, high fan-in implementation files, and intentional high-layer edges such as `@opencode-ai/core` to `@opencode-ai/llm`.
+- Add a dependency graph report that tracks circulars, high fan-in implementation files, and intentional high-layer edges such as `@oc2-ai/core` to `@oc2-ai/llm`.
 - Run the guardrail in CI as warning-only first if existing violations are not fully cleaned up.
 
 Verification:

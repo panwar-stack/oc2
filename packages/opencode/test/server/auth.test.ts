@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { ConfigProvider, Effect, Layer, Option, Redacted } from "effect"
-import { Flag } from "@opencode-ai/core/flag/flag"
+import { Flag } from "@oc2-ai/core/flag/flag"
 import { ServerAuth } from "../../src/server/auth"
 
 const original = {

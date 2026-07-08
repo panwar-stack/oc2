@@ -1,6 +1,6 @@
 export * as ConfigMemory from "./memory"
 
-import { NonNegativeInt, PositiveInt } from "@opencode-ai/core/schema"
+import { NonNegativeInt, PositiveInt } from "@oc2-ai/core/schema"
 import { Schema } from "effect"
 
 export const Info = Schema.Struct({

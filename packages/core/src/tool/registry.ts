@@ -1,6 +1,6 @@
 export * as ToolRegistry from "./registry"
 
-import { ToolOutput, type ToolCall, type ToolDefinition, type ToolSettlement } from "@opencode-ai/llm"
+import { ToolOutput, type ToolCall, type ToolDefinition, type ToolSettlement } from "@oc2-ai/llm"
 import { Context, Effect, Layer, Scope } from "effect"
 import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"

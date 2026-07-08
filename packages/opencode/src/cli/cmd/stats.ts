@@ -1,9 +1,9 @@
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
-import { Database } from "@opencode-ai/core/database/database"
-import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { Database } from "@oc2-ai/core/database/database"
+import { MessageTable, PartTable, SessionTable } from "@oc2-ai/core/session/sql"
 import { Project } from "@/project/project"
-import { ProjectV2 } from "@opencode-ai/core/project"
+import { ProjectV2 } from "@oc2-ai/core/project"
 import { InstanceRef } from "@/effect/instance-ref"
 import { and, eq, gte, inArray, sql, type SQL } from "drizzle-orm"
 

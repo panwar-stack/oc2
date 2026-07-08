@@ -1,6 +1,6 @@
 import { Effect } from "effect"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import * as Log from "@opencode-ai/core/util/log"
+import { FSUtil } from "@oc2-ai/core/fs-util"
+import * as Log from "@oc2-ai/core/util/log"
 import * as Bom from "../util/bom"
 import { parsePatch } from "./parser"
 import type { AffectedPaths, Hunk, UpdateFileChunk } from "."

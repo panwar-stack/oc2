@@ -1,6 +1,6 @@
 import path from "path"
 import { Effect } from "effect"
-import { FSUtil } from "@opencode-ai/core/fs-util"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { Session } from "@/session/session"
 import type * as Tool from "./tool"

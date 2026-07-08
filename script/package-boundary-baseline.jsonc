@@ -9,7 +9,7 @@
       "reason": "existing opencode CLI/TUI test reaches TUI internals",
     },
     {
-      // TODO(PR-8 cleanup): replace with @opencode-ai/tui/builtins.
+      // TODO(PR-8 cleanup): replace with @oc2-ai/tui/builtins.
       "source": "packages/opencode/test/cli/tui/plugin-team.test.ts",
       "import": "../../../../tui/src/feature-plugins/builtins",
       "target": "packages/tui/src/feature-plugins/builtins.ts",

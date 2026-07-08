@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Log } from "@opencode-ai/core/util/log"
+import { Log } from "@oc2-ai/core/util/log"
 import { Effect, Layer } from "effect"
 import { resetDatabase } from "../fixture/db"
 import { TestInstance } from "../fixture/fixture"

@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm"
 import { text, integer, sqliteTable, uniqueIndex, index } from "drizzle-orm/sqlite-core"
-import { Timestamps } from "@opencode-ai/core/database/schema.sql"
+import { Timestamps } from "@oc2-ai/core/database/schema.sql"
 
 export const TeamTable = sqliteTable(
   "team",

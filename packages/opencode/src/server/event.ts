@@ -1,4 +1,4 @@
-import { EventV2 } from "@opencode-ai/core/event"
+import { EventV2 } from "@oc2-ai/core/event"
 import { Schema } from "effect"
 
 export const Event = {

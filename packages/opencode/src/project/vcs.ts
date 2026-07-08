@@ -1,11 +1,11 @@
 import { Effect, Layer, Context, Schema, Stream, Scope } from "effect"
 import { formatPatch, structuredPatch } from "diff"
 import { InstanceState } from "@/effect/instance-state"
-import { Watcher } from "@opencode-ai/core/filesystem/watcher"
+import { Watcher } from "@oc2-ai/core/filesystem/watcher"
 import { Git } from "@/git"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@oc2-ai/core/util/log"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventV2 } from "@opencode-ai/core/event"
+import { EventV2 } from "@oc2-ai/core/event"
 
 const log = Log.create({ service: "vcs" })
 const PATCH_CONTEXT_LINES = 2_147_483_647

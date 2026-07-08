@@ -25,18 +25,18 @@ const generatedPrefixes = [
   "script/generate.ts",
 ]
 const sharedPackages = new Set([
-  "@opencode-ai/core",
-  "@opencode-ai/effect-drizzle-sqlite",
-  "@opencode-ai/effect-sqlite-node",
-  "@opencode-ai/llm",
-  "@opencode-ai/plugin",
+  "@oc2-ai/core",
+  "@oc2-ai/effect-drizzle-sqlite",
+  "@oc2-ai/effect-sqlite-node",
+  "@oc2-ai/llm",
+  "@oc2-ai/plugin",
   "@oc2-ai/script",
-  "@opencode-ai/sdk",
-  "@opencode-ai/server",
+  "@oc2-ai/sdk",
+  "@oc2-ai/server",
   "@opencode-ai/ui",
 ])
 const e2ePackages = new Set(["@opencode-ai/app", "@oc2-ai/desktop", "@opencode-ai/ui"])
-const httpApiPackages = new Set(["opencode", "@opencode-ai/core", "@opencode-ai/sdk", "@opencode-ai/server"])
+const httpApiPackages = new Set(["opencode", "@oc2-ai/core", "@oc2-ai/sdk", "@oc2-ai/server"])
 
 const args = process.argv.slice(2)
 const event = option("event") ?? process.env.GITHUB_EVENT_NAME ?? "pull_request"
@@ -112,7 +112,7 @@ async function workspacePackages() {
 
 function packageForFile(file: string, packages: WorkspacePackage[]) {
   if (file === "packages/sdk/openapi.json" || file.startsWith("packages/sdk/"))
-    return packages.find((pkg) => pkg.name === "@opencode-ai/sdk")
+    return packages.find((pkg) => pkg.name === "@oc2-ai/sdk")
   return packages.find((pkg) => file === pkg.root || file.startsWith(`${pkg.root}/`))
 }
 

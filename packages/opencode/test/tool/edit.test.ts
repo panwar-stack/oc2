@@ -1,10 +1,10 @@
 import { afterEach, describe, expect } from "bun:test"
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import path from "path"
 import fs from "fs/promises"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EditTool } from "../../src/tool/edit"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import {
   disposeAllInstances,
   provideInstance,
@@ -13,7 +13,7 @@ import {
   tmpdirScoped,
 } from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
-import { FSUtil } from "@opencode-ai/core/fs-util"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Format } from "../../src/format"
 import { Agent } from "../../src/agent/agent"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
@@ -24,7 +24,7 @@ import { Permission } from "@/permission"
 import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
-import { Watcher } from "@opencode-ai/core/filesystem/watcher"
+import { Watcher } from "@oc2-ai/core/filesystem/watcher"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-edit-session"),

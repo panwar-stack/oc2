@@ -1,5 +1,5 @@
-import { run as runTui, type TuiInput } from "@opencode-ai/tui"
-import { Global } from "@opencode-ai/core/global"
+import { run as runTui, type TuiInput } from "@oc2-ai/tui"
+import { Global } from "@oc2-ai/core/global"
 import { Effect } from "effect"
 
 export function run(input: TuiInput) {

@@ -1,6 +1,6 @@
 export * as SessionCompoundSynthesizer from "./synthesizer"
 
-import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Effect, Exit } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { Session } from "@/session/session"

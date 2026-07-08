@@ -5,7 +5,7 @@ import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/use-connected"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
-import { Global } from "@opencode-ai/core/global"
+import { Global } from "@oc2-ai/core/global"
 import type { Session, SessionRoot } from "@oc2-ai/sdk/v2"
 
 export function Footer() {

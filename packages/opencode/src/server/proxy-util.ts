@@ -1,4 +1,4 @@
-import { Naming } from "@opencode-ai/core/naming"
+import { Naming } from "@oc2-ai/core/naming"
 
 const hop = new Set([
   "connection",

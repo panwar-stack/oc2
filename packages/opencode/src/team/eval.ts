@@ -1,4 +1,4 @@
-import { Database } from "@opencode-ai/core/database/database"
+import { Database } from "@oc2-ai/core/database/database"
 import { Effect, Schema } from "effect"
 import { eq } from "drizzle-orm"
 import {

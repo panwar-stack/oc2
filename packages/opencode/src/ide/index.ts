@@ -1,7 +1,7 @@
-import { EventV2 } from "@opencode-ai/core/event"
+import { EventV2 } from "@oc2-ai/core/event"
 import { Schema } from "effect"
-import { NamedError } from "@opencode-ai/core/util/error"
-import * as Log from "@opencode-ai/core/util/log"
+import { NamedError } from "@oc2-ai/core/util/error"
+import * as Log from "@oc2-ai/core/util/log"
 import { Process } from "@/util/process"
 
 const SUPPORTED_IDES = [

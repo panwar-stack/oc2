@@ -1,4 +1,4 @@
-import { BackgroundJob as CoreBackgroundJob } from "@opencode-ai/core/background-job"
+import { BackgroundJob as CoreBackgroundJob } from "@oc2-ai/core/background-job"
 import { InstanceState } from "@/effect/instance-state"
 import { Effect, Layer } from "effect"
 
@@ -11,7 +11,7 @@ export {
   type Status,
   type WaitInput,
   type WaitResult,
-} from "@opencode-ai/core/background-job"
+} from "@oc2-ai/core/background-job"
 
 /** Keeps the legacy service instance-scoped while sharing the core registry engine. */
 export const layer = Layer.effect(

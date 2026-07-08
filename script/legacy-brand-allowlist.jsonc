@@ -5,7 +5,7 @@
       // PR 5 migrates internal workspace package scopes.
       "path": "**",
       "pattern": "@opencode-ai/",
-      "count": 3103,
+      "count": 621,
       "reason": "migration",
       "owner": "core",
     },

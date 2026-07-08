@@ -1,4 +1,4 @@
-import type { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import type { PermissionV1 } from "@oc2-ai/core/v1/permission"
 // CLI entry point for `opencode run`.
 //
 // Handles three modes:

@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { testRender, useRenderer } from "@opentui/solid"
-import { Global } from "@opencode-ai/core/global"
+import { Global } from "@oc2-ai/core/global"
 import { onCleanup, onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
 import {
@@ -28,7 +28,7 @@ import {
   TuiConfigProvider,
   useCommandSlashes,
   wait,
-} from "@opencode-ai/tui/testing"
+} from "@oc2-ai/tui/testing"
 
 const sessionID = "ses_roots_command"
 

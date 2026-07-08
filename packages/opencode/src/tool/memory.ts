@@ -2,7 +2,7 @@ import { Config } from "@/config/config"
 import { ConfigMemory } from "@/config/memory"
 import { Memory } from "@/memory/memory"
 import { DEFAULT_LIMITS } from "@/memory/search"
-import { NonNegativeInt, PositiveInt } from "@opencode-ai/core/schema"
+import { NonNegativeInt, PositiveInt } from "@oc2-ai/core/schema"
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 

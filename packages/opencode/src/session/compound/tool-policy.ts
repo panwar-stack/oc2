@@ -1,6 +1,6 @@
 export * as SessionCompoundToolPolicy from "./tool-policy"
 
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { Permission } from "@/permission"
 import { SessionCompoundConfig } from "./config"
 import os from "os"

@@ -1,4 +1,4 @@
-import { getFilename } from "@opencode-ai/core/util/path"
+import { getFilename } from "@oc2-ai/core/util/path"
 import { pathKey } from "@/utils/path-key"
 
 type WorkspaceNamingStore = {

@@ -1,7 +1,7 @@
 import type { Hooks, PluginInput } from "@oc2-ai/plugin"
 import type { Model } from "@oc2-ai/sdk/v2"
-import * as Log from "@opencode-ai/core/util/log"
-import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import * as Log from "@oc2-ai/core/util/log"
+import { InstallationVersion } from "@oc2-ai/core/installation/version"
 import { createServer } from "http"
 import open from "open"
 

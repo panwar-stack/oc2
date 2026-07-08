@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Database } from "@opencode-ai/core/database/database"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { Database } from "@oc2-ai/core/database/database"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import os from "os"
 import path from "path"

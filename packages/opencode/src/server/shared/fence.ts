@@ -1,10 +1,10 @@
-import { Database } from "@opencode-ai/core/database/database"
+import { Database } from "@oc2-ai/core/database/database"
 import { inArray } from "drizzle-orm"
-import { EventSequenceTable } from "@opencode-ai/core/event/sql"
+import { EventSequenceTable } from "@oc2-ai/core/event/sql"
 import { Workspace } from "@/control-plane/workspace"
-import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import * as Log from "@opencode-ai/core/util/log"
-import { Naming } from "@opencode-ai/core/naming"
+import type { WorkspaceV2 } from "@oc2-ai/core/workspace"
+import * as Log from "@oc2-ai/core/util/log"
+import { Naming } from "@oc2-ai/core/naming"
 import { Effect } from "effect"
 
 export const HEADER = Naming.headers.sync[0]

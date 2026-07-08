@@ -1,8 +1,8 @@
 import path from "path"
 import { Effect } from "effect"
-import * as EffectLogger from "@opencode-ai/core/effect/logger"
+import * as EffectLogger from "@oc2-ai/core/effect/logger"
 import type * as Tool from "./tool"
-import { FSUtil } from "@opencode-ai/core/fs-util"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
 

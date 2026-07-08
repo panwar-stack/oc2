@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { Log } from "@opencode-ai/core/util/log"
+import { Log } from "@oc2-ai/core/util/log"
 import type { SessionID } from "@/session/schema"
 
 const log = Log.create({ service: "tool.filesystem" })

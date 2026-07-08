@@ -1,1 +1,1 @@
-export { SessionTable } from "@opencode-ai/core/session/sql"
+export { SessionTable } from "@oc2-ai/core/session/sql"

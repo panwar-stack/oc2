@@ -13,7 +13,7 @@
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
 import { createOpencodeClient } from "@oc2-ai/sdk/v2"
-import { Flag } from "@opencode-ai/core/flag/flag"
+import { Flag } from "@oc2-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
 import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"

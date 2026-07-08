@@ -1,6 +1,6 @@
 import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { ConfigService } from "@/effect/config-service"
-import { Naming } from "@opencode-ai/core/naming"
+import { Naming } from "@oc2-ai/core/naming"
 
 const fallback = <A>(name: string, config: (name: string) => Config.Config<A>) =>
   config(Naming.canonicalEnv(name)).pipe(Config.orElse(() => config(name)))

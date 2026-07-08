@@ -4,7 +4,7 @@ import { Team } from "@/team/team"
 import { Config } from "@/config/config"
 // Used to inspect stored tool parts when guarding against repeated empty mailbox polls.
 import { MessageV2 } from "@/session/message-v2"
-import { Database } from "@opencode-ai/core/database/database"
+import { Database } from "@oc2-ai/core/database/database"
 import { Effect, Option, Schema } from "effect"
 
 const Parameters = Schema.Struct({})

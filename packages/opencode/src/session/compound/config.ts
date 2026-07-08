@@ -1,6 +1,6 @@
 export * as SessionCompoundConfig from "./config"
 
-import { ConfigLocalFusion } from "@opencode-ai/core/config/local-fusion"
+import { ConfigLocalFusion } from "@oc2-ai/core/config/local-fusion"
 import { Schema } from "effect"
 import { Provider } from "@/provider/provider"
 

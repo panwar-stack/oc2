@@ -1,6 +1,6 @@
 export * as SessionCompoundJudge from "./judge"
 
-import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Cause, Effect, Exit, Option, Schema } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { Session } from "@/session/session"

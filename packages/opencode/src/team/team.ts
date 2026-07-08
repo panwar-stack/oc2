@@ -1,9 +1,9 @@
-import { Database } from "@opencode-ai/core/database/database"
+import { Database } from "@oc2-ai/core/database/database"
 import { SessionID } from "@/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
-import { EventV2 } from "@opencode-ai/core/event"
+import { EventV2 } from "@oc2-ai/core/event"
 import { Context, Effect, Layer, Schema, Option } from "effect"
 import { eq, and, asc } from "drizzle-orm"
 import {

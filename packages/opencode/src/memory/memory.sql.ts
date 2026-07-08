@@ -1,5 +1,5 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
-import { Timestamps } from "@opencode-ai/core/database/schema.sql"
+import { Timestamps } from "@oc2-ai/core/database/schema.sql"
 
 export const RepositoryMemoryRepositoryTable = sqliteTable("repository_memory_repository", {
   id: text().primaryKey(),

@@ -1,12 +1,12 @@
 export * as ConfigPaths from "./paths"
 
 import path from "path"
-import { Flag } from "@opencode-ai/core/flag/flag"
-import { Global } from "@opencode-ai/core/global"
+import { Flag } from "@oc2-ai/core/flag/flag"
+import { Global } from "@oc2-ai/core/global"
 import { unique } from "remeda"
 import * as Effect from "effect/Effect"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { Naming } from "@opencode-ai/core/naming"
+import { FSUtil } from "@oc2-ai/core/fs-util"
+import { Naming } from "@oc2-ai/core/naming"
 
 export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
   name: string,

@@ -2,13 +2,13 @@
 // so direct EventV2 consumers can isolate directory/workspace streams.
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { GlobalBus } from "@/bus/global"
-import { EventV2 } from "@opencode-ai/core/event"
-import { Location } from "@opencode-ai/core/location"
-import { Project } from "@opencode-ai/core/project"
-import { AbsolutePath } from "@opencode-ai/core/schema"
-import "@opencode-ai/core/account"
-import "@opencode-ai/core/catalog"
-import "@opencode-ai/core/session/event"
+import { EventV2 } from "@oc2-ai/core/event"
+import { Location } from "@oc2-ai/core/location"
+import { Project } from "@oc2-ai/core/project"
+import { AbsolutePath } from "@oc2-ai/core/schema"
+import "@oc2-ai/core/account"
+import "@oc2-ai/core/catalog"
+import "@oc2-ai/core/session/event"
 import { Context, Effect, Layer } from "effect"
 
 type LegacyBusEvent<D extends EventV2.Definition = EventV2.Definition> = {

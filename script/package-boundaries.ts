@@ -9,7 +9,7 @@ const includeGraph = args.has("--graph")
 const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts", ".cts"]
 const scanRoots = ["src", "test", "tests", ".storybook", "script", "scripts"]
 const internalRoots = new Set(["src", "test", "tests", "script", "scripts", "gen", "generated", "dist", "out"])
-const allowedHighLayerEdges = new Set(["@opencode-ai/core -> @opencode-ai/llm"])
+const allowedHighLayerEdges = new Set(["@oc2-ai/core -> @oc2-ai/llm"])
 
 type WorkspacePackage = {
   name: string
@@ -332,7 +332,7 @@ function stronglyConnectedComponents(edges: string[]) {
 }
 
 function isHighLayerEdge(edge: string) {
-  return edge.startsWith("@opencode-ai/core -> ")
+  return edge.startsWith("@oc2-ai/core -> ")
 }
 
 function isImplementationFile(file: string) {

@@ -1,14 +1,14 @@
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { serviceUse } from "@opencode-ai/core/effect/service-use"
-import { Log } from "@opencode-ai/core/util/log"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { serviceUse } from "@oc2-ai/core/effect/service-use"
+import { Log } from "@oc2-ai/core/util/log"
 import { Cause, Context, DateTime, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
-import type { LLMEvent as LLMEventType } from "@opencode-ai/llm"
-import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
-import type { LLMClientService } from "@opencode-ai/llm/route"
+import type { LLMEvent as LLMEventType } from "@oc2-ai/llm"
+import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
+import type { LLMClientService } from "@oc2-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
 import { Config } from "@/config/config"
@@ -17,8 +17,8 @@ import type { MessageV2 } from "./message-v2"
 import { Plugin } from "@/plugin"
 import { Permission } from "@/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventV2 } from "@opencode-ai/core/event"
-import { SessionEvent } from "@opencode-ai/core/session/event"
+import { EventV2 } from "@oc2-ai/core/event"
+import { SessionEvent } from "@oc2-ai/core/session/event"
 import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
@@ -269,7 +269,7 @@ const live: Layer.Layer<
           })
         : undefined
 
-      // Runtime seam: native is an opt-in adapter over @opencode-ai/llm. It
+      // Runtime seam: native is an opt-in adapter over @oc2-ai/llm. It
       // either returns a ready LLMEvent stream or a concrete fallback reason.
       if (flags.experimentalNativeLlm) {
         const native = LLMNativeRuntime.stream({

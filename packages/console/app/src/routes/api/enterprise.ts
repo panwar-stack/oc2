@@ -1,5 +1,5 @@
 import type { APIEvent } from "@solidjs/start/server"
-import { AWS } from "@opencode-ai/console-core/aws.js"
+import { AWS } from "@oc2-ai/console-core/aws.js"
 import { Resource } from "@opencode-ai/console-resource"
 import { i18n } from "~/i18n"
 import { localeFromRequest } from "~/lib/language"

@@ -1,5 +1,5 @@
-import { AgentV2 } from "@opencode-ai/core/agent"
-import { PluginBoot } from "@opencode-ai/core/plugin/boot"
+import { AgentV2 } from "@oc2-ai/core/agent"
+import { PluginBoot } from "@oc2-ai/core/plugin/boot"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"

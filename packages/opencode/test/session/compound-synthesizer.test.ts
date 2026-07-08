@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Database } from "@opencode-ai/core/database/database"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { Database } from "@oc2-ai/core/database/database"
 import { Effect, Exit, Layer } from "effect"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"

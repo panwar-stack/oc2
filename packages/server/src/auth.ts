@@ -1,6 +1,6 @@
 export * as ServerAuth from "./auth"
 
-import { Naming } from "@opencode-ai/core/naming"
+import { Naming } from "@oc2-ai/core/naming"
 import { Config as EffectConfig, Context, Effect, Layer, Option, Redacted } from "effect"
 
 const string = (name: string) =>

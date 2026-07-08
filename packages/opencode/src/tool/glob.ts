@@ -1,6 +1,6 @@
 import { Clock, Effect, Exit, Schema } from "effect"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { Search } from "@opencode-ai/core/filesystem/search"
+import { FSUtil } from "@oc2-ai/core/fs-util"
+import { Search } from "@oc2-ai/core/filesystem/search"
 import { assertExternalDirectoryWithSession } from "./external-directory"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"

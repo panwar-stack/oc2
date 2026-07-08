@@ -4,22 +4,22 @@ import { type rpc } from "../tui/worker"
 import path from "path"
 import { fileURLToPath } from "url"
 import { UI } from "@/cli/ui"
-import * as Log from "@opencode-ai/core/util/log"
-import { errorMessage } from "@opencode-ai/tui/util/error"
+import * as Log from "@oc2-ai/core/util/log"
+import { errorMessage } from "@oc2-ai/tui/util/error"
 import { withTimeout } from "@/util/timeout"
 import { withNetworkOptions, resolveNetworkOptionsNoConfig } from "@/cli/network"
 import { Filesystem } from "@/util/filesystem"
 import type { GlobalEvent } from "@oc2-ai/sdk/v2"
-import type { EventSource } from "@opencode-ai/tui/context/sdk"
+import type { EventSource } from "@oc2-ai/tui/context/sdk"
 import { writeHeapSnapshot } from "v8"
 import {
   OPENCODE_PROCESS_ROLE,
   OPENCODE_RUN_ID,
   ensureRunID,
   sanitizedProcessEnv,
-} from "@opencode-ai/core/util/opencode-process"
+} from "@oc2-ai/core/util/opencode-process"
 import { validateSession } from "../tui/validate-session"
-import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
+import { win32InstallCtrlCGuard } from "@oc2-ai/tui/terminal-win32"
 
 declare global {
   const OPENCODE_WORKER_PATH: string

@@ -1,9 +1,9 @@
 import path from "path"
 import { Effect, Layer, Record, Result, Schema, Context } from "effect"
-import { NonNegativeInt } from "@opencode-ai/core/schema"
-import { Global } from "@opencode-ai/core/global"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { Naming } from "@opencode-ai/core/naming"
+import { NonNegativeInt } from "@oc2-ai/core/schema"
+import { Global } from "@oc2-ai/core/global"
+import { FSUtil } from "@oc2-ai/core/fs-util"
+import { Naming } from "@oc2-ai/core/naming"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
