@@ -100,6 +100,9 @@ const GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT = "go_upsell_account_rate_limit_
 const GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW = "go_upsell_account_rate_limit_dont_show"
 const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
 const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go"])
+const TIMELINE_VIRTUALIZE_AFTER = 120
+const TIMELINE_OVERSCAN = 40
+const TIMELINE_ROW_ESTIMATED_HEIGHT = 8
 
 type RetryAction = Extract<SessionStatus, { type: "retry" }>["action"]
 
@@ -468,6 +471,8 @@ export function Session() {
 
   let seeded = false
   let scroll: ScrollBoxRenderable
+  const [timelineScrollTop, setTimelineScrollTop] = createSignal(0)
+  const [timelineTargetIndex, setTimelineTargetIndex] = createSignal<number>()
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -501,35 +506,86 @@ export function Session() {
   })
   onCleanup(unsubscribeSessionStatus)
 
+  function hasNavigableText(message: UserMessage | AssistantMessage) {
+    const parts = sync.data.part[message.id]
+    if (!parts || !Array.isArray(parts)) return false
+    return parts.some((part) => part && part.type === "text" && !part.synthetic && !part.ignored)
+  }
+
+  function scrollToMessageID(messageID: string | undefined) {
+    if (!messageID) return
+    const child = scroll.getChildren().find((child) => child.id === messageID)
+    if (child) {
+      scroll.scrollBy(child.y - scroll.y - 1)
+      setTimelineScrollTop(scroll.scrollTop)
+      return
+    }
+
+    const index = messages().findIndex((message) => message.id === messageID)
+    if (index === -1) return
+    setTimelineTargetIndex(index)
+    scroll.scrollTo(Math.max(0, index * TIMELINE_ROW_ESTIMATED_HEIGHT))
+    setTimelineScrollTop(scroll.scrollTop)
+    requestAnimationFrame(() => {
+      const next = scroll.getChildren().find((child) => child.id === messageID)
+      if (next) scroll.scrollBy(next.y - scroll.y - 1)
+      setTimelineTargetIndex(undefined)
+      setTimelineScrollTop(scroll.scrollTop)
+    })
+  }
+
+  function scrollTimelineBy(amount: number) {
+    scroll.scrollBy(amount)
+    setTimelineScrollTop(scroll.scrollTop)
+  }
+
+  function scrollTimelineTo(position: number) {
+    scroll.scrollTo(position)
+    setTimelineScrollTop(scroll.scrollTop)
+  }
+
+  let timelineScrollSyncFrame: number | undefined
+  const syncTimelineScrollTop = () => {
+    if (scroll && !scroll.isDestroyed) setTimelineScrollTop(scroll.scrollTop)
+  }
+  const startTimelineScrollSync = () => {
+    if (timelineScrollSyncFrame !== undefined) return
+    const tick = () => {
+      syncTimelineScrollTop()
+      timelineScrollSyncFrame = requestAnimationFrame(tick)
+    }
+    timelineScrollSyncFrame = requestAnimationFrame(tick)
+  }
+  const stopTimelineScrollSync = () => {
+    if (timelineScrollSyncFrame === undefined) return
+    cancelAnimationFrame(timelineScrollSyncFrame)
+    timelineScrollSyncFrame = undefined
+    syncTimelineScrollTop()
+  }
+  onCleanup(stopTimelineScrollSync)
+
+  function currentTimelineMessageIndex() {
+    const ids = new Map(messages().map((message, index) => [message.id, index]))
+    const rendered = scroll
+      .getChildren()
+      .flatMap((child) => {
+        if (!child.id) return []
+        const index = ids.get(child.id)
+        return index === undefined ? [] : [{ index, y: child.y }]
+      })
+      .sort((left, right) => left.y - right.y)
+    return rendered.findLast((child) => child.y <= scroll.y + 10)?.index ?? Math.max(0, Math.floor(scroll.scrollTop / TIMELINE_ROW_ESTIMATED_HEIGHT))
+  }
+
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
-    const children = scroll.getChildren()
     const messagesList = messages()
-    const scrollTop = scroll.y
-
-    // Get visible messages sorted by position, filtering for valid non-synthetic, non-ignored content
-    const visibleMessages = children
-      .filter((c) => {
-        if (!c.id) return false
-        const message = messagesList.find((m) => m.id === c.id)
-        if (!message) return false
-
-        // Check if message has valid non-synthetic, non-ignored text parts
-        const parts = sync.data.part[message.id]
-        if (!parts || !Array.isArray(parts)) return false
-
-        return parts.some((part) => part && part.type === "text" && !part.synthetic && !part.ignored)
-      })
-      .sort((a, b) => a.y - b.y)
-
-    if (visibleMessages.length === 0) return null
+    const currentIndex = currentTimelineMessageIndex()
 
     if (direction === "next") {
-      // Find first message below current position
-      return visibleMessages.find((c) => c.y > scrollTop + 10)?.id ?? null
+      return messagesList.slice(currentIndex + 1).find(hasNavigableText)?.id ?? null
     }
-    // Find last message above current position
-    return [...visibleMessages].reverse().find((c) => c.y < scrollTop - 10)?.id ?? null
+    return messagesList.slice(0, currentIndex).findLast(hasNavigableText)?.id ?? null
   }
 
   // Helper: Scroll to message in direction or fallback to page scroll
@@ -537,13 +593,12 @@ export function Session() {
     const targetID = findNextVisibleMessage(direction)
 
     if (!targetID) {
-      scroll.scrollBy(direction === "next" ? scroll.height : -scroll.height)
+      scrollTimelineBy(direction === "next" ? scroll.height : -scroll.height)
       dialog.clear()
       return
     }
 
-    const child = scroll.getChildren().find((c) => c.id === targetID)
-    if (child) scroll.scrollBy(child.y - scroll.y - 1)
+    scrollToMessageID(targetID)
     dialog.clear()
   }
 
@@ -551,6 +606,7 @@ export function Session() {
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed) return
       scroll.scrollTo(scroll.scrollHeight)
+      setTimelineScrollTop(scroll.scrollTop)
     }, 50)
   }
 
@@ -652,10 +708,7 @@ export function Session() {
         dialog.replace(() => (
           <DialogTimeline
             onMove={(messageID) => {
-              const child = scroll.getChildren().find((child) => {
-                return child.id === messageID
-              })
-              if (child) scroll.scrollBy(child.y - scroll.y - 1)
+              scrollToMessageID(messageID)
             }}
             sessionID={route.sessionID}
             setPrompt={(promptInfo) => prompt?.set(promptInfo)}
@@ -674,11 +727,7 @@ export function Session() {
         dialog.replace(() => (
           <DialogForkFromTimeline
             onMove={(messageID) => {
-              if (!messageID) return
-              const child = scroll.getChildren().find((child) => {
-                return child.id === messageID
-              })
-              if (child) scroll.scrollBy(child.y - scroll.y - 1)
+              scrollToMessageID(messageID)
             }}
             sessionID={route.sessionID}
           />
@@ -881,8 +930,8 @@ export function Session() {
       value: "session.page.up",
       category: "Session",
       hidden: true,
-      run: () => {
-        scroll.scrollBy(-scroll.height / 2)
+        run: () => {
+        scrollTimelineBy(-scroll.height / 2)
         dialog.clear()
       },
     },
@@ -892,7 +941,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(scroll.height / 2)
+        scrollTimelineBy(scroll.height / 2)
         dialog.clear()
       },
     },
@@ -902,7 +951,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-1)
+        scrollTimelineBy(-1)
         dialog.clear()
       },
     },
@@ -912,7 +961,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(1)
+        scrollTimelineBy(1)
         dialog.clear()
       },
     },
@@ -922,7 +971,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-scroll.height / 4)
+        scrollTimelineBy(-scroll.height / 4)
         dialog.clear()
       },
     },
@@ -932,7 +981,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(scroll.height / 4)
+        scrollTimelineBy(scroll.height / 4)
         dialog.clear()
       },
     },
@@ -942,7 +991,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollTo(0)
+        scrollTimelineTo(0)
         dialog.clear()
       },
     },
@@ -952,7 +1001,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollTo(scroll.scrollHeight)
+        scrollTimelineTo(scroll.scrollHeight)
         dialog.clear()
       },
     },
@@ -978,10 +1027,7 @@ export function Session() {
           )
 
           if (hasValidTextPart) {
-            const child = scroll.getChildren().find((child) => {
-              return child.id === message.id
-            })
-            if (child) scroll.scrollBy(child.y - scroll.y - 1)
+            scrollToMessageID(message.id)
             break
           }
         }
@@ -1340,6 +1386,63 @@ export function Session() {
     }
   })
 
+  type TimelineRow =
+    | { type: "spacer"; key: string; height: number }
+    | { type: "message"; key: string; message: UserMessage | AssistantMessage; index: number }
+
+  const timelineRows = createMemo(() => {
+    const revertedMessageID = revert()?.messageID
+    const list = revertedMessageID
+      ? messages().filter((message) => message.id <= revertedMessageID)
+      : messages()
+    if (list.length <= TIMELINE_VIRTUALIZE_AFTER) {
+      return list.map((message, index) => ({ type: "message", key: message.id, message, index }) satisfies TimelineRow)
+    }
+
+    const viewportHeight = scroll?.viewport.height || scroll?.height || dimensions().height
+    const start = Math.max(0, Math.floor(timelineScrollTop() / TIMELINE_ROW_ESTIMATED_HEIGHT) - TIMELINE_OVERSCAN)
+    const end = Math.min(
+      list.length,
+      start + Math.ceil(viewportHeight / TIMELINE_ROW_ESTIMATED_HEIGHT) + TIMELINE_OVERSCAN * 2,
+    )
+    const rendered = new Set<number>()
+    for (let index = start; index < end; index++) rendered.add(index)
+    const forcedMessageIDs = new Set([
+      messageIndex().pendingAssistantID,
+      activeUserMessageID(),
+      lastAssistant()?.id,
+    ])
+    for (const [index, message] of list.entries()) {
+      if (forcedMessageIDs.has(message.id)) rendered.add(index)
+    }
+    const target = timelineTargetIndex()
+    if (target !== undefined) {
+      for (
+        let index = Math.max(0, target - TIMELINE_OVERSCAN);
+        index < Math.min(list.length, target + TIMELINE_OVERSCAN);
+        index++
+      ) {
+        rendered.add(index)
+      }
+    }
+
+    const rows: TimelineRow[] = []
+    let spacer = 0
+    for (const [index, message] of list.entries()) {
+      if (!rendered.has(index)) {
+        spacer += TIMELINE_ROW_ESTIMATED_HEIGHT
+        continue
+      }
+      if (spacer > 0) {
+        rows.push({ type: "spacer", key: `spacer:${index}:${spacer}`, height: spacer })
+        spacer = 0
+      }
+      rows.push({ type: "message", key: message.id, message, index })
+    }
+    if (spacer > 0) rows.push({ type: "spacer", key: `spacer:end:${spacer}`, height: spacer })
+    return rows
+  })
+
   // snap to bottom when session changes
   createEffect(on(() => route.sessionID, toBottom))
 
@@ -1369,6 +1472,8 @@ export function Session() {
             <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
+                onMouseOver={startTimelineScrollSync}
+                onMouseOut={stopTimelineScrollSync}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
@@ -1386,10 +1491,13 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
-                <For each={messages()}>
-                  {(message, index) => (
+                <For each={timelineRows()}>
+                  {(row) => (
                     <Switch>
-                      <Match when={message.id === revert()?.messageID}>
+                      <Match when={row.type === "spacer"}>
+                        <box height={row.type === "spacer" ? row.height : 0} flexShrink={0} />
+                      </Match>
+                      <Match when={row.type === "message" && row.message.id === revert()?.messageID}>
                         {(function () {
                           const redoShortcut = useCommandShortcut("session.redo")
                           const [hover, setHover] = createSignal(false)
@@ -1449,40 +1557,40 @@ export function Session() {
                           )
                         })()}
                       </Match>
-                      <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
+                      <Match when={row.type === "message" && revert()?.messageID && row.message.id >= revert()!.messageID}>
                         <></>
                       </Match>
-                      <Match when={message.role === "user"}>
+                      <Match when={row.type === "message" && row.message.role === "user"}>
                         <>
                           <UserMessage
-                            index={index()}
+                            index={row.type === "message" ? row.index : 0}
                             onMouseUp={() => {
                               if (renderer.getSelection()?.getSelectedText()) return
                               dialog.replace(() => (
                                 <DialogMessage
-                                  messageID={message.id}
+                                  messageID={row.type === "message" ? row.message.id : ""}
                                   sessionID={route.sessionID}
                                   setPrompt={(promptInfo) => prompt?.set(promptInfo)}
                                 />
                               ))
                             }}
-                            message={message as UserMessage}
-                            parts={sync.data.part[message.id] ?? []}
+                            message={row.type === "message" ? (row.message as UserMessage) : (undefined as never)}
+                            parts={sync.data.part[row.type === "message" ? row.message.id : ""] ?? []}
                             pending={pending()}
                           />
-                          <Show when={message.id === activeUserMessageID() && fuguStatus()}>
+                          <Show when={row.type === "message" && row.message.id === activeUserMessageID() && fuguStatus()}>
                             {(status) => <FuguStatusBlock status={status()} />}
                           </Show>
                         </>
                       </Match>
-                      <Match when={message.role === "assistant"}>
+                      <Match when={row.type === "message" && row.message.role === "assistant"}>
                         <AssistantMessage
-                          last={lastAssistant()?.id === message.id}
-                          message={message as AssistantMessage}
+                          last={row.type === "message" && lastAssistant()?.id === row.message.id}
+                          message={row.type === "message" ? (row.message as AssistantMessage) : (undefined as never)}
                           parentUserCreatedAt={messageIndex().userCreatedAtByID.get(
-                            (message as AssistantMessage).parentID,
+                            row.type === "message" ? (row.message as AssistantMessage).parentID : "",
                           )}
-                          parts={sync.data.part[message.id] ?? []}
+                          parts={sync.data.part[row.type === "message" ? row.message.id : ""] ?? []}
                         />
                       </Match>
                     </Switch>

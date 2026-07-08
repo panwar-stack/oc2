@@ -43,10 +43,12 @@ const WORKING_TREE_DIFF_CONTEXT_LINES = 12
 const KV_SHOW_FILE_TREE = "diff_viewer_show_file_tree"
 const KV_SINGLE_PATCH = "diff_viewer_single_patch"
 const KV_VIEW = "diff_viewer_view"
+const PATCH_RENDER_RADIUS = 2
 type DiffMode = "git" | "last-turn"
 type DiffViewerFocus = "patches" | "files"
 type DiffView = "split" | "unified"
 type SelectedHunk = { readonly fileIndex: number; readonly hunkIndex: number; readonly scrollTop: number }
+type PendingHunk = { readonly fileIndex: number; readonly hunkIndex: number }
 
 type DiffFile = {
   readonly file: string
@@ -146,8 +148,9 @@ function DiffViewer(props: { api: TuiPluginApi }) {
   const [selectedFileIndex, setSelectedFileIndex] = createSignal<number | undefined>()
   const [reviewedFileNames, setReviewedFileNames] = createSignal<ReadonlySet<string>>(new Set())
   const patchScrollAcceleration = createMemo(() => getScrollAcceleration(props.api.tuiConfig))
+  const allFileRows = createMemo(() => flattenFileTree(fileTree()))
   const fileRows = createMemo(() => flattenFileTree(fileTree(), expandedFileNodes()))
-  const patchFileIndexes = createMemo(() => orderedPatchFileIndexes(flattenFileTree(fileTree())))
+  const patchFileIndexes = createMemo(() => orderedPatchFileIndexes(allFileRows()))
   const focusRunner = (input: Record<DiffViewerFocus, () => void>) => () => input[focus()]()
   const switchFocusShortcut = useCommandShortcut("diff.switch_focus")
   const nextHunkShortcut = useCommandShortcut("diff.next_hunk")
@@ -164,10 +167,37 @@ function DiffViewer(props: { api: TuiPluginApi }) {
   const patchNodeByFileIndex = new Map<number, BoxRenderable>()
   const diffNodeByFileIndex = new Map<number, DiffRenderable>()
   const [selectedHunk, setSelectedHunk] = createSignal<SelectedHunk | undefined>()
+  const [pendingHunk, setPendingHunk] = createSignal<PendingHunk | undefined>()
   const [pendingPatchScrollFileIndex, setPendingPatchScrollFileIndex] = createSignal<number | undefined>()
   const [patchFillerHeight, setPatchFillerHeight] = createSignal(0)
+  const [patchScrollTop, setPatchScrollTop] = createSignal(0)
+  let patchScrollFrame: number | undefined
 
   onCleanup(() => props.api.ui.dialog.clear())
+
+  onCleanup(() => {
+    if (patchScrollFrame !== undefined) cancelAnimationFrame(patchScrollFrame)
+  })
+
+  const syncPatchScrollTop = () => {
+    if (scroll && !scroll.isDestroyed) setPatchScrollTop(scroll.scrollTop)
+  }
+
+  const startPatchScrollSync = () => {
+    if (patchScrollFrame !== undefined) return
+    const tick = () => {
+      syncPatchScrollTop()
+      patchScrollFrame = requestAnimationFrame(tick)
+    }
+    patchScrollFrame = requestAnimationFrame(tick)
+  }
+
+  const stopPatchScrollSync = () => {
+    if (patchScrollFrame === undefined) return
+    cancelAnimationFrame(patchScrollFrame)
+    patchScrollFrame = undefined
+    syncPatchScrollTop()
+  }
 
   createEffect(() => {
     setExpandedFileNodes(allExpandedFileTreeDirectories(fileTree()))
@@ -211,6 +241,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
       const contentY = scroll.scrollTop + scrollDelta
       const offset = contentY === 0 ? 0 : 1
       scroll.scrollBy(scrollDelta + offset)
+      setPatchScrollTop(scroll.scrollTop)
     })
   }
 
@@ -246,7 +277,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
 
   const currentPatchFileIndex = () => {
     if (!scroll) return undefined
-    const viewportContentY = scroll.scrollTop + 1
+    const viewportContentY = patchScrollTop() + 1
     const entries = patchFileIndexes()
       .map((fileIndex) => ({
         fileIndex,
@@ -255,7 +286,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
       .filter((entry): entry is { fileIndex: number; node: BoxRenderable } => Boolean(entry.node))
       .map((entry) => ({
         ...entry,
-        contentY: scroll!.scrollTop + entry.node.y - scroll!.viewport.y,
+        contentY: patchScrollTop() + entry.node.y - scroll!.viewport.y,
       }))
       .sort((left, right) => left.contentY - right.contentY)
     return entries.findLast((entry) => entry.contentY <= viewportContentY)?.fileIndex ?? entries[0]?.fileIndex
@@ -278,10 +309,14 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     if (!patchScroll) return
     const hunks = visiblePatchFiles()
       .flatMap((entry) => {
+        if (!entry.file.patch) return []
         const node = diffNodeByFileIndex.get(entry.fileIndex)
-        if (!node || node.isDestroyed) return []
-        const contentY = patchScroll.scrollTop + node.y - patchScroll.viewport.y
-        return node.diff
+        const patchNode = patchNodeByFileIndex.get(entry.fileIndex)
+        if (!patchNode) return []
+        const contentY = node && !node.isDestroyed
+          ? patchScroll.scrollTop + node.y - patchScroll.viewport.y
+          : patchScroll.scrollTop + patchNode.y - patchScroll.viewport.y + 2
+        return entry.file.patch
           .split("\n")
           .flatMap((line, row) => (line.startsWith("@@") ? [row] : []))
           .map((row, hunkIndex) => ({
@@ -303,8 +338,15 @@ function DiffViewer(props: { api: TuiPluginApi }) {
           ? hunks.find((hunk) => hunk.contentY > patchScroll.scrollTop)
           : hunks.findLast((hunk) => hunk.contentY < patchScroll.scrollTop)
     if (!next) return
+    const targetNode = diffNodeByFileIndex.get(next.fileIndex)
     selectPatchFile(next.fileIndex)
-    patchScroll.scrollTo(next.contentY)
+    if (targetNode && !targetNode.isDestroyed) {
+      patchScroll.scrollTo(next.contentY)
+      setPatchScrollTop(patchScroll.scrollTop)
+    } else {
+      setPendingHunk({ fileIndex: next.fileIndex, hunkIndex: next.hunkIndex })
+      scrollToPatchFileIndexAfterRender(next.fileIndex)
+    }
     setSelectedHunk({ fileIndex: next.fileIndex, hunkIndex: next.hunkIndex, scrollTop: patchScroll.scrollTop })
   }
 
@@ -326,6 +368,36 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     const file = fileIndex === undefined ? undefined : files()[fileIndex]
     return file && fileIndex !== undefined ? [{ file, fileIndex }] : []
   })
+
+  const renderedPatchFileIndexes = createMemo(() => {
+    const result = new Set<number>()
+    if (singlePatch()) {
+      for (const entry of visiblePatchFiles()) result.add(entry.fileIndex)
+      return result
+    }
+
+    const ordered = patchFileIndexes()
+    const anchor =
+      pendingPatchScrollFileIndex() ?? selectedFileIndex() ?? activePatchFileIndex() ?? currentPatchFileIndex() ?? ordered[0]
+    const anchorIndex = anchor === undefined ? -1 : ordered.indexOf(anchor)
+    if (anchorIndex !== -1) {
+      for (
+        let index = Math.max(0, anchorIndex - PATCH_RENDER_RADIUS);
+        index <= Math.min(ordered.length - 1, anchorIndex + PATCH_RENDER_RADIUS);
+        index++
+      ) {
+        const fileIndex = ordered[index]
+        if (fileIndex !== undefined) result.add(fileIndex)
+      }
+    }
+
+    for (const fileIndex of [pendingPatchScrollFileIndex(), selectedFileIndex(), activePatchFileIndex(), currentPatchFileIndex()]) {
+      if (fileIndex !== undefined) result.add(fileIndex)
+    }
+    return result
+  })
+
+  const shouldRenderPatchFile = (fileIndex: number) => renderedPatchFileIndexes().has(fileIndex)
 
   const ensureHighlightedPatchFile = () => {
     const fileIndex = currentPatchFileIndex() ?? activePatchFileIndex() ?? firstPatchFileIndex()
@@ -349,7 +421,11 @@ function DiffViewer(props: { api: TuiPluginApi }) {
   const scrollSinglePatchToTop = () => {
     requestAnimationFrame(() => {
       scroll?.scrollTo(0)
-      requestAnimationFrame(() => scroll?.scrollTo(0))
+      if (scroll) setPatchScrollTop(scroll.scrollTop)
+      requestAnimationFrame(() => {
+        scroll?.scrollTo(0)
+        if (scroll) setPatchScrollTop(scroll.scrollTop)
+      })
     })
   }
 
@@ -383,10 +459,31 @@ function DiffViewer(props: { api: TuiPluginApi }) {
     })
   }
 
+  const scrollPendingHunk = () => {
+    const pending = pendingHunk()
+    if (!pending || !scroll) return
+    const node = diffNodeByFileIndex.get(pending.fileIndex)
+    if (!node || node.isDestroyed) return
+    const hunkRow = node.diff
+      .split("\n")
+      .flatMap((line, row) => (line.startsWith("@@") ? [row] : []))[pending.hunkIndex]
+    if (hunkRow === undefined) return
+    const contentY = scroll.scrollTop + node.y - scroll.viewport.y + hunkRow
+    scroll.scrollTo(contentY)
+    setPatchScrollTop(scroll.scrollTop)
+    setSelectedHunk({ fileIndex: pending.fileIndex, hunkIndex: pending.hunkIndex, scrollTop: scroll.scrollTop })
+    setPendingHunk(undefined)
+  }
+
   createEffect(() => {
     visiblePatchFiles()
+    renderedPatchFileIndexes()
     dimensions()
     view()
+    for (const fileIndex of diffNodeByFileIndex.keys()) {
+      if (!shouldRenderPatchFile(fileIndex)) diffNodeByFileIndex.delete(fileIndex)
+    }
+    scrollPendingHunk()
     measurePatchFiller()
   })
 
@@ -450,6 +547,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
         patches() {
           clearFileTreePatchState()
           scroll?.scrollBy(1)
+          if (scroll) setPatchScrollTop(scroll.scrollTop)
         },
       }),
     },
@@ -464,6 +562,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
         patches() {
           clearFileTreePatchState()
           scroll?.scrollBy(-1)
+          if (scroll) setPatchScrollTop(scroll.scrollTop)
         },
       }),
     },
@@ -477,7 +576,10 @@ function DiffViewer(props: { api: TuiPluginApi }) {
         },
         patches() {
           clearFileTreePatchState()
-          if (scroll) scroll.scrollBy(scroll.height)
+          if (scroll) {
+            scroll.scrollBy(scroll.height)
+            setPatchScrollTop(scroll.scrollTop)
+          }
         },
       }),
     },
@@ -491,7 +593,10 @@ function DiffViewer(props: { api: TuiPluginApi }) {
         },
         patches() {
           clearFileTreePatchState()
-          if (scroll) scroll.scrollBy(-scroll.height)
+          if (scroll) {
+            scroll.scrollBy(-scroll.height)
+            setPatchScrollTop(scroll.scrollTop)
+          }
         },
       }),
     },
@@ -768,6 +873,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                 <Show when={showFileTree()}>
                   <DiffViewerFileTree
                     files={files()}
+                    rows={fileRows()}
                     loading={diff.loading}
                     error={diff.error}
                     theme={theme()}
@@ -786,6 +892,8 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                   <scrollbox
                     id="diff-viewer-patches"
                     ref={(element: ScrollBoxRenderable) => (scroll = element)}
+                    onMouseOver={startPatchScrollSync}
+                    onMouseOut={stopPatchScrollSync}
                     flexGrow={1}
                     minHeight={0}
                     scrollAcceleration={patchScrollAcceleration()}
@@ -822,31 +930,43 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                               fallback={<text fg={theme().textMuted}>No patch available for this file.</text>}
                             >
                               {(patch) => (
-                                <box border={patchLeftBorder()} borderColor={theme().border}>
-                                  <diff
-                                    id={`diff-viewer-patch-${entry.fileIndex}`}
-                                    ref={(element: DiffRenderable) => diffNodeByFileIndex.set(entry.fileIndex, element)}
-                                    diff={patch()}
-                                    view={view()}
-                                    filetype={reviewed() ? PLAIN_TEXT_FILETYPE : filetype(entry.file.file)}
-                                    syntaxStyle={themeState.syntax()}
-                                    showLineNumbers={true}
-                                    width="100%"
-                                    wrapMode="char"
-                                    fg={reviewed() ? theme().textMuted : theme().text}
-                                    addedBg={reviewed() ? theme().backgroundElement : theme().diffAddedBg}
-                                    removedBg={reviewed() ? theme().backgroundElement : theme().diffRemovedBg}
-                                    addedSignColor={reviewed() ? theme().textMuted : theme().diffHighlightAdded}
-                                    removedSignColor={reviewed() ? theme().textMuted : theme().diffHighlightRemoved}
-                                    lineNumberFg={theme().diffLineNumber}
-                                    addedLineNumberBg={
-                                      reviewed() ? theme().backgroundElement : theme().diffAddedLineNumberBg
-                                    }
-                                    removedLineNumberBg={
-                                      reviewed() ? theme().backgroundElement : theme().diffRemovedLineNumberBg
-                                    }
-                                  />
-                                </box>
+                                <Show
+                                  when={shouldRenderPatchFile(entry.fileIndex)}
+                                  fallback={
+                                    <box border={patchLeftBorder()} borderColor={theme().border} paddingLeft={1}>
+                                      <text fg={theme().textMuted}>Patch not rendered; select file to render.</text>
+                                    </box>
+                                  }
+                                >
+                                  <box border={patchLeftBorder()} borderColor={theme().border}>
+                                    <diff
+                                      id={`diff-viewer-patch-${entry.fileIndex}`}
+                                      ref={(element: DiffRenderable) => {
+                                        diffNodeByFileIndex.set(entry.fileIndex, element)
+                                        requestAnimationFrame(scrollPendingHunk)
+                                      }}
+                                      diff={patch()}
+                                      view={view()}
+                                      filetype={reviewed() ? PLAIN_TEXT_FILETYPE : filetype(entry.file.file)}
+                                      syntaxStyle={themeState.syntax()}
+                                      showLineNumbers={true}
+                                      width="100%"
+                                      wrapMode="char"
+                                      fg={reviewed() ? theme().textMuted : theme().text}
+                                      addedBg={reviewed() ? theme().backgroundElement : theme().diffAddedBg}
+                                      removedBg={reviewed() ? theme().backgroundElement : theme().diffRemovedBg}
+                                      addedSignColor={reviewed() ? theme().textMuted : theme().diffHighlightAdded}
+                                      removedSignColor={reviewed() ? theme().textMuted : theme().diffHighlightRemoved}
+                                      lineNumberFg={theme().diffLineNumber}
+                                      addedLineNumberBg={
+                                        reviewed() ? theme().backgroundElement : theme().diffAddedLineNumberBg
+                                      }
+                                      removedLineNumberBg={
+                                        reviewed() ? theme().backgroundElement : theme().diffRemovedLineNumberBg
+                                      }
+                                    />
+                                  </box>
+                                </Show>
                               )}
                             </Show>
                           </box>

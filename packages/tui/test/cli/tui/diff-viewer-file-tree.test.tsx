@@ -12,6 +12,8 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import {
   allExpandedFileTreeDirectories,
   buildFileTree,
+  flattenFileTree,
+  type FileTreeItem,
 } from "../../../src/feature-plugins/system/diff-viewer-file-tree-utils"
 
 const theme = {
@@ -28,18 +30,20 @@ const theme = {
 
 describe("DiffViewerFileTree", () => {
   test.skip("renders sorted hierarchical file rows", async () => {
+    const files = [
+      { file: "z-file.ts" },
+      { file: "b/file.ts" },
+      { file: "a/zeta.ts" },
+      { file: "b/alpha.ts" },
+      { file: "a/alpha.ts" },
+    ]
     const app = await testRender(
       () =>
         withTheme(() => (
           <DiffViewerFileTree
             width={32}
-            files={[
-              { file: "z-file.ts" },
-              { file: "b/file.ts" },
-              { file: "a/zeta.ts" },
-              { file: "b/alpha.ts" },
-              { file: "a/alpha.ts" },
-            ]}
+            files={files}
+            rows={rowsFor(files)}
             loading={false}
             error={undefined}
             theme={theme}
@@ -68,13 +72,13 @@ describe("DiffViewerFileTree", () => {
 
   test("keeps loading and error quiet while rendering an empty settled state", async () => {
     const loading = await renderFrame(() => (
-      <DiffViewerFileTree width={32} files={[]} loading={true} error={undefined} theme={theme} />
+      <DiffViewerFileTree width={32} files={[]} rows={[]} loading={true} error={undefined} theme={theme} />
     ))
     const failed = await renderFrame(() => (
-      <DiffViewerFileTree width={32} files={[]} loading={false} error={new Error("nope")} theme={theme} />
+      <DiffViewerFileTree width={32} files={[]} rows={[]} loading={false} error={new Error("nope")} theme={theme} />
     ))
     const empty = await renderFrame(() => (
-      <DiffViewerFileTree width={32} files={[]} loading={false} error={undefined} theme={theme} />
+      <DiffViewerFileTree width={32} files={[]} rows={[]} loading={false} error={undefined} theme={theme} />
     ))
 
     expect(loading).not.toContain("Loading diff...")
@@ -93,6 +97,7 @@ describe("DiffViewerFileTree", () => {
         <DiffViewerFileTree
           width={32}
           files={files}
+          rows={rowsFor(files)}
           loading={false}
           error={undefined}
           theme={theme}
@@ -103,7 +108,7 @@ describe("DiffViewerFileTree", () => {
     )
     const unfocused = visibleLines(
       await renderFrame(() => (
-        <DiffViewerFileTree width={32} files={files} loading={false} error={undefined} theme={theme} />
+        <DiffViewerFileTree width={32} files={files} rows={rowsFor(files)} loading={false} error={undefined} theme={theme} />
       )),
     )
 
@@ -126,6 +131,7 @@ describe("DiffViewerFileTree", () => {
           <DiffViewerFileTree
             width={32}
             files={files}
+            rows={rowsFor(files, collapsed)}
             loading={false}
             error={undefined}
             theme={theme}
@@ -140,6 +146,7 @@ describe("DiffViewerFileTree", () => {
         await renderFrame(() => (
           <DiffViewerFileTree
             files={files}
+            rows={rowsFor(files, allExpandedFileTreeDirectories(tree))}
             width={32}
             loading={false}
             error={undefined}
@@ -151,6 +158,10 @@ describe("DiffViewerFileTree", () => {
     ).toEqual(["▾ src/config", "│  └─ tui.ts                 ?"])
   })
 })
+
+function rowsFor(files: readonly FileTreeItem[], expandedNodes?: ReadonlySet<number>) {
+  return flattenFileTree(buildFileTree(files), expandedNodes)
+}
 
 async function renderFrame(component: () => JSX.Element) {
   const app = await testRender(() => withTheme(component), { width: 40, height: 10 })

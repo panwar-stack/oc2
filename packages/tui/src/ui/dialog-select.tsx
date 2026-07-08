@@ -9,7 +9,7 @@ import {
 import type { Binding } from "@opentui/keymap"
 import { useTheme, selectedForeground } from "../context/theme"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
-import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTerminalDimensions } from "@opentui/solid"
 import * as fuzzysort from "fuzzysort"
@@ -178,6 +178,26 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   const flatten = createMemo(() => props.flat && store.filter.length > 0)
 
+  type RenderRow =
+    | {
+        type: "header"
+        key: string
+        category: string
+        categoryView: JSX.Element | undefined
+        top: number
+        height: number
+        paddingTop: number
+      }
+    | {
+        type: "option"
+        key: string
+        option: DialogSelectOption<T>
+        category: string
+        flatIndex: number
+        top: number
+        height: number
+      }
+
   const grouped = createMemo<[string, DialogSelectOption<T>[]][]>(() => {
     if (flatten()) return [["", filtered()]]
     const result = pipe(
@@ -196,18 +216,65 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     )
   })
 
-  const rows = createMemo(() => {
-    const headers = grouped().reduce((acc, [category], i) => {
-      if (!category) return acc
-      return acc + (i > 0 ? 2 : 1)
-    }, 0)
-    return flat().reduce((acc, option) => acc + 1 + (option.details?.length ?? 0), headers)
+  const renderRows = createMemo(() => {
+    const result: RenderRow[] = []
+    let top = 0
+    let flatIndex = 0
+    for (const [groupIndex, [category, options]] of grouped().entries()) {
+      if (category) {
+        const paddingTop = groupIndex > 0 ? 1 : 0
+        result.push({
+          type: "header",
+          key: `header:${category}:${groupIndex}`,
+          category,
+          categoryView: options[0]?.categoryView,
+          top,
+          height: paddingTop + 1,
+          paddingTop,
+        })
+        top += paddingTop + 1
+      }
+      for (const option of options) {
+        const height = 1 + (option.details?.length ?? 0)
+        result.push({
+          type: "option",
+          key: `option:${flatIndex}`,
+          option,
+          category,
+          flatIndex,
+          top,
+          height,
+        })
+        top += height
+        flatIndex++
+      }
+    }
+    return { rows: result, height: top }
+  })
+
+  const rows = createMemo(() => renderRows().height)
+  const optionRows = createMemo(() => {
+    const result = new Map<number, Extract<RenderRow, { type: "option" }>>()
+    for (const row of renderRows().rows) {
+      if (row.type === "option") result.set(row.flatIndex, row)
+    }
+    return result
   })
 
   const dimensions = useTerminalDimensions()
   const height = createMemo(() => Math.min(rows(), Math.floor(dimensions().height / 2) - 6))
 
   const selected = createMemo(() => flat()[store.selected])
+  const [scrollTop, setScrollTop] = createSignal(0)
+  const virtualRows = createMemo(() => {
+    const overscan = 8
+    const start = Math.max(0, scrollTop() - overscan)
+    const end = scrollTop() + height() + overscan
+    const visible = renderRows().rows.filter((row) => row.top + row.height >= start && row.top <= end)
+    const topSpacer = visible[0]?.top ?? 0
+    const bottomSpacer = Math.max(0, rows() - topSpacer - visible.reduce((sum, row) => sum + row.height, 0))
+    return { rows: visible, topSpacer, bottomSpacer }
+  })
 
   createEffect(
     on([() => store.filter, () => props.current], ([filter, current]) => {
@@ -236,28 +303,23 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   function moveTo(next: number, center = false) {
     setFocusedAction(undefined)
     setStore("selected", next)
-    const option = selected()
+    const option = flat()[next]
     if (option) props.onMove?.(option)
     if (!scroll) return
-    const target = scroll.getChildren().find((child: { id?: string }) => {
-      return child.id === JSON.stringify(selected()?.value)
-    })
+    const target = optionRows().get(next)
     if (!target) return
-    const y = target.y - scroll.y
+    const viewportHeight = scroll.viewport.height || scroll.height || height()
     if (center) {
-      const centerOffset = Math.floor(scroll.height / 2)
-      scroll.scrollBy(y - centerOffset)
+      scroll.scrollTo(Math.max(0, target.top - Math.floor(viewportHeight / 2)))
     } else {
-      if (y >= scroll.height) {
-        scroll.scrollBy(y - scroll.height + 1)
+      if (target.top < scroll.scrollTop) {
+        scroll.scrollTo(target.top)
       }
-      if (y < 0) {
-        scroll.scrollBy(y)
-        if (isDeepEqual(flat()[0].value, selected()?.value)) {
-          scroll.scrollTo(0)
-        }
+      if (target.top >= scroll.scrollTop + viewportHeight) {
+        scroll.scrollTo(target.top - viewportHeight + 1)
       }
     }
+    setScrollTop(scroll.scrollTop)
   }
 
   function submit() {
@@ -402,6 +464,25 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   let scroll: ScrollBoxRenderable | undefined
+  let scrollSyncFrame: number | undefined
+  const syncScrollTop = () => {
+    if (scroll && !scroll.isDestroyed) setScrollTop(scroll.scrollTop)
+  }
+  const startScrollSync = () => {
+    if (scrollSyncFrame !== undefined) return
+    const tick = () => {
+      syncScrollTop()
+      scrollSyncFrame = requestAnimationFrame(tick)
+    }
+    scrollSyncFrame = requestAnimationFrame(tick)
+  }
+  const stopScrollSync = () => {
+    if (scrollSyncFrame === undefined) return
+    cancelAnimationFrame(scrollSyncFrame)
+    scrollSyncFrame = undefined
+    syncScrollTop()
+  }
+  onCleanup(stopScrollSync)
   const ref: DialogSelectRef<T> = {
     get filter() {
       return store.filter
@@ -533,27 +614,36 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
             scrollbarOptions={{ visible: false }}
             scrollAcceleration={scrollAcceleration()}
             ref={(r: ScrollBoxRenderable) => (scroll = r)}
+            onMouseOver={startScrollSync}
+            onMouseOut={stopScrollSync}
             maxHeight={height()}
           >
-            <For each={grouped()}>
-              {([category, options], index) => (
-                <>
-                  <Show when={category}>
-                    <box paddingTop={index() > 0 ? 1 : 0} paddingLeft={3}>
+            <Show when={virtualRows().topSpacer > 0}>
+              <box height={virtualRows().topSpacer} flexShrink={0} />
+            </Show>
+            <For each={virtualRows().rows}>
+              {(row) => (
+                <Show
+                  when={row.type === "option" ? row : undefined}
+                  fallback={
+                    <box paddingTop={row.type === "header" ? row.paddingTop : 0} paddingLeft={3} flexShrink={0}>
                       <Show
-                        when={options[0]?.categoryView}
+                        when={row.type === "header" ? row.categoryView : undefined}
                         fallback={
                           <text fg={theme.accent} attributes={TextAttributes.BOLD}>
-                            {category}
+                            {row.type === "header" ? row.category : ""}
                           </text>
                         }
                       >
-                        {options[0]?.categoryView}
+                        {row.type === "header" ? row.categoryView : undefined}
                       </Show>
                     </box>
-                  </Show>
-                  <For each={options}>
-                    {(option) => {
+                  }
+                >
+                  {(optionRow) => {
+                    const option = optionRow().option
+                    const category = optionRow().category
+                    const flatIndex = optionRow().flatIndex
                       const active = createMemo(() => !props.locked && isDeepEqual(option.value, selected()?.value))
                       const current = createMemo(() => isDeepEqual(option.value, props.current))
                       return (
@@ -574,15 +664,11 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                           onMouseOver={() => {
                             if (props.locked) return
                             if (store.input !== "mouse") return
-                            const index = flat().findIndex((x) => isDeepEqual(x.value, option.value))
-                            if (index === -1) return
-                            moveTo(index)
+                            moveTo(flatIndex)
                           }}
                           onMouseDown={() => {
                             if (props.locked) return
-                            const index = flat().findIndex((x) => isDeepEqual(x.value, option.value))
-                            if (index === -1) return
-                            moveTo(index)
+                            moveTo(flatIndex)
                           }}
                         >
                           <box
@@ -628,10 +714,12 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                         </box>
                       )
                     }}
-                  </For>
-                </>
+                </Show>
               )}
             </For>
+            <Show when={virtualRows().bottomSpacer > 0}>
+              <box height={virtualRows().bottomSpacer} flexShrink={0} />
+            </Show>
           </scrollbox>
         </Show>
       </box>

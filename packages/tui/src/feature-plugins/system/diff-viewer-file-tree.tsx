@@ -2,8 +2,8 @@
 import type { ColorInput, RGBA, ScrollBoxRenderable } from "@opentui/core"
 import { Locale } from "../../util/locale"
 import { tint } from "../../context/theme"
-import { createEffect, createMemo, For, Match, Switch } from "solid-js"
-import { buildFileTree, flattenFileTree, type FileTreeItem, type FileTreeRow } from "./diff-viewer-file-tree-utils"
+import { createEffect, For, Match, Switch } from "solid-js"
+import { type FileTreeItem, type FileTreeRow } from "./diff-viewer-file-tree-utils"
 import { Panel } from "./diff-viewer-ui"
 
 const FILE_TREE_STATUS_WIDTH = 2
@@ -23,6 +23,7 @@ export type DiffViewerFileTreeTheme = {
 export type DiffViewerFileTreeProps = {
   readonly width: number
   readonly files: readonly FileTreeItem[]
+  readonly rows: readonly FileTreeRow[]
   readonly loading: boolean
   readonly error: unknown
   readonly theme: DiffViewerFileTreeTheme
@@ -35,14 +36,12 @@ export type DiffViewerFileTreeProps = {
 }
 
 export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
-  const tree = createMemo(() => buildFileTree(props.files))
-  const rows = createMemo(() => flattenFileTree(tree(), props.expandedNodes))
   let scroll: ScrollBoxRenderable | undefined
 
   createEffect(() => {
     const node = props.highlightedNode
     if (node === undefined) return
-    const selectedIndex = rows().findIndex((row) => row.id === node)
+    const selectedIndex = props.rows.findIndex((row) => row.id === node)
     if (selectedIndex === -1) return
     const scrollSelectedIntoView = () => scrollFileTreeRowIntoView(scroll, selectedIndex)
     scrollSelectedIntoView()
@@ -66,7 +65,7 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
             <text fg={props.theme.text}>No files</text>
           </Match>
           <Match when={props.files.length > 0}>
-            <For each={rows()}>
+            <For each={props.rows}>
               {(row, index) => {
                 const highlighted = () => props.focused && props.highlightedNode === row.id
                 const selected = () => row.fileIndex !== undefined && props.selectedFileIndex === row.fileIndex
@@ -74,7 +73,7 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
                   const file = row.fileIndex === undefined ? undefined : props.files[row.fileIndex]?.file
                   return file !== undefined && (props.reviewedFileNames?.has(file) ?? false)
                 }
-                const prefix = () => fileTreeRowPrefix(rows(), index(), row, props.expandedNodes)
+                const prefix = () => fileTreeRowPrefix(props.rows, index(), row, props.expandedNodes)
                 const status = () => fileTreeRowStatus(row, props.files, reviewed())
                 const name = () =>
                   Locale.truncate(row.name, Math.max(1, props.width - FILE_TREE_STATUS_WIDTH - prefix().length))
