@@ -251,13 +251,74 @@ export function Session() {
     setEpilogue(sessionEpilogue({ title, sessionID: session()?.id }))
   })
   onCleanup(() => setEpilogue())
+  const sessionIndex = createMemo(() => {
+    const childSessionsByParentID = new Map<string | undefined, typeof sync.data.session>()
+    const sessionsByID = new Map<string, (typeof sync.data.session)[number]>()
+    for (const item of sync.data.session) {
+      sessionsByID.set(item.id, item)
+      const children = childSessionsByParentID.get(item.parentID)
+      if (children) {
+        children.push(item)
+        continue
+      }
+      childSessionsByParentID.set(item.parentID, [item])
+    }
+    return { childSessionsByParentID, sessionsByID }
+  })
   const children = createMemo(() => {
-    const parentID = session()?.parentID ?? session()?.id
-    return sync.data.session
-      .filter((x) => x.parentID === parentID || x.id === parentID)
+    const current = session()
+    const parentID = current?.parentID ?? current?.id
+    const index = sessionIndex()
+    return [
+      parentID === undefined ? undefined : index.sessionsByID.get(parentID),
+      ...(index.childSessionsByParentID.get(parentID) ?? []),
+    ]
+      .filter((item) => item !== undefined)
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const messageIndex = createMemo(() => {
+    const list = messages()
+    const userMessageIDs = new Set<string>()
+    const userCreatedAtByID = new Map<string, number>()
+    const userMessages: UserMessage[] = []
+    let completedAssistantID: string | undefined
+    let lastAssistant: AssistantMessage | undefined
+    let lastUserID: string | undefined
+
+    for (const message of list) {
+      if (message.role === "user") {
+        userMessageIDs.add(message.id)
+        userCreatedAtByID.set(message.id, message.time.created)
+        userMessages.push(message)
+        lastUserID = message.id
+        continue
+      }
+      if (message.role !== "assistant") continue
+      lastAssistant = message
+      if (message.time.completed) completedAssistantID = message.id
+    }
+
+    let pendingAssistant: AssistantMessage | undefined
+    for (let i = list.length - 1; i >= 0; i--) {
+      const message = list[i]
+      if (message?.role !== "assistant") continue
+      if (message.time.completed) continue
+      if (completedAssistantID && message.id <= completedAssistantID) continue
+      pendingAssistant = message
+      break
+    }
+
+    return {
+      userMessageIDs,
+      userCreatedAtByID,
+      userMessages,
+      pendingAssistant,
+      pendingAssistantID: pendingAssistant?.id,
+      lastAssistant,
+      lastUserID,
+    }
+  })
   const foregroundTasks = createMemo(() =>
     messages().flatMap((message) =>
       (sync.data.part[message.id] ?? []).filter(
@@ -269,14 +330,7 @@ export function Session() {
       ),
     ),
   )
-  const userMessageIDs = createMemo(
-    () =>
-      new Set(
-        messages()
-          .filter((message) => message.role === "user")
-          .map((message) => message.id),
-      ),
-  )
+  const userMessageIDs = createMemo(() => messageIndex().userMessageIDs)
   const teamsEnabled = createMemo(() => sync.data.config.experimental?.agent_teams === true)
 
   const [teamInfo] = createResource(
@@ -308,17 +362,13 @@ export function Session() {
   })
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
-  const pending = createMemo(() => {
-    const completed = messages().findLast((x) => x.role === "assistant" && x.time.completed)?.id
-    return messages().findLast((x) => x.role === "assistant" && !x.time.completed && (!completed || x.id > completed))
-      ?.id
-  })
+  const pending = createMemo(() => messageIndex().pendingAssistantID)
 
   const activeUserMessageID = createMemo(() => {
-    const assistant = messages().find((x): x is AssistantMessage => x.role === "assistant" && x.id === pending())
-    if (assistant?.role === "assistant" && assistant.parentID) return assistant.parentID
+    const assistant = messageIndex().pendingAssistant
+    if (assistant?.parentID) return assistant.parentID
     if (sync.data.session_status[route.sessionID]?.type === "idle") return
-    return messages().findLast((x) => x.role === "user")?.id
+    return messageIndex().lastUserID
   })
 
   const fuguStatus = createMemo(() => {
@@ -326,9 +376,7 @@ export function Session() {
     return sync.data.fugu_status[route.sessionID]
   })
 
-  const lastAssistant = createMemo(() => {
-    return messages().findLast((x) => x.role === "assistant")
-  })
+  const lastAssistant = createMemo(() => messageIndex().lastAssistant)
 
   const dimensions = useTerminalDimensions()
   const [sidebar, setSidebar] = kv.signal<"auto" | "hide">("sidebar", "auto")
@@ -1277,7 +1325,7 @@ export function Session() {
   const revertRevertedMessages = createMemo(() => {
     const messageID = revertMessageID()
     if (!messageID) return []
-    return messages().filter((x) => x.id >= messageID && x.role === "user")
+    return messageIndex().userMessages.filter((x) => x.id >= messageID)
   })
 
   const revert = createMemo(() => {
@@ -1431,6 +1479,9 @@ export function Session() {
                         <AssistantMessage
                           last={lastAssistant()?.id === message.id}
                           message={message as AssistantMessage}
+                          parentUserCreatedAt={messageIndex().userCreatedAtByID.get(
+                            (message as AssistantMessage).parentID,
+                          )}
                           parts={sync.data.part[message.id] ?? []}
                         />
                       </Match>
@@ -1622,12 +1673,15 @@ function UserMessage(props: {
   )
 }
 
-function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {
+function AssistantMessage(props: {
+  message: AssistantMessage
+  parts: Part[]
+  last: boolean
+  parentUserCreatedAt?: number
+}) {
   const ctx = use()
   const local = useLocal()
   const { theme } = useTheme()
-  const sync = useSync()
-  const messages = createMemo(() => sync.data.message[props.message.sessionID] ?? [])
   const model = createMemo(() => Model.name(ctx.providers(), props.message.providerID, props.message.modelID))
 
   const final = createMemo(() => {
@@ -1637,9 +1691,8 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const duration = createMemo(() => {
     if (!final()) return 0
     if (!props.message.time.completed) return 0
-    const user = messages().find((x) => x.role === "user" && x.id === props.message.parentID)
-    if (!user || !user.time) return 0
-    return props.message.time.completed - user.time.created
+    if (props.parentUserCreatedAt === undefined) return 0
+    return props.message.time.completed - props.parentUserCreatedAt
   })
 
   const childShortcut = useCommandShortcut("session.child.first")
