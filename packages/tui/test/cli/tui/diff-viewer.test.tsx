@@ -98,6 +98,40 @@ test("brackets navigate diff hunks", async () => {
   }
 })
 
+test("offscreen patch placeholders preserve scroll extent", async () => {
+  const viewer = await renderDiffViewer(
+    Array.from({ length: 8 }, (_, fileIndex) => ({
+      file: `src/file-${fileIndex}.ts`,
+      additions: 30,
+      deletions: 30,
+      status: "modified",
+      patch: [
+        `--- a/src/file-${fileIndex}.ts`,
+        `+++ b/src/file-${fileIndex}.ts`,
+        "@@ -1,30 +1,30 @@",
+        ...Array.from({ length: 30 }, (_, lineIndex) => `-const old${fileIndex}_${lineIndex} = true`),
+        ...Array.from({ length: 30 }, (_, lineIndex) => `+const new${fileIndex}_${lineIndex} = true`),
+      ].join("\n"),
+    })),
+    12,
+  )
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("src/file-0.ts"))
+    await viewer.app.waitFor(() => Boolean(findRenderable(viewer.app.renderer.root, "diff-viewer-patches")))
+    await viewer.app.flush()
+    const scroll = findRenderable(viewer.app.renderer.root, "diff-viewer-patches") as ScrollBoxRenderable
+
+    for (let index = 0; index < 7; index++) {
+      viewer.commands.get("diff.next_file")!.run?.({} as never)
+      await viewer.app.renderOnce()
+    }
+
+    expect(scroll.scrollTop).toBeGreaterThan(300)
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
 async function renderDiffViewer(vcsDiff: unknown[], height = 20) {
   const commands = new Map<
     string,

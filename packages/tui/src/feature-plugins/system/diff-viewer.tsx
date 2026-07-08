@@ -933,7 +933,12 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                                 <Show
                                   when={shouldRenderPatchFile(entry.fileIndex)}
                                   fallback={
-                                    <box border={patchLeftBorder()} borderColor={theme().border} paddingLeft={1}>
+                                    <box
+                                      border={patchLeftBorder()}
+                                      borderColor={theme().border}
+                                      paddingLeft={1}
+                                      height={Math.max(1, patch().split("\n").length)}
+                                    >
                                       <text fg={theme().textMuted}>Patch not rendered; select file to render.</text>
                                     </box>
                                   }
