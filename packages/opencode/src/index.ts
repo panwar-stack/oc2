@@ -44,7 +44,18 @@ const commandLoaders: CommandLoader[] = [
   { names: ["memory"], load: async () => (await import("./cli/cmd/memory")).MemoryCommand },
 ]
 
-const globalOptionsWithValues = new Set(["--log-level"])
+const optionsWithValues = new Set([
+  "--agent",
+  "--cors",
+  "--hostname",
+  "--log-level",
+  "--mdns-domain",
+  "--model",
+  "--port",
+  "--prompt",
+  "--session",
+])
+const shortOptionsWithValues = new Set(["m", "s"])
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -78,10 +89,18 @@ function selectedCommandName() {
     if (arg === "--") return
     if (arg.startsWith("--")) {
       const [option] = arg.split("=", 1)
-      if (globalOptionsWithValues.has(option) && !arg.includes("=")) index++
+      if (optionsWithValues.has(option) && !arg.includes("=") && !args[index + 1]?.startsWith("-")) {
+        index++
+      }
       continue
     }
-    if (arg.startsWith("-")) continue
+    if (arg.startsWith("-")) {
+      const short = arg.slice(1)
+      if (short.length === 1 && shortOptionsWithValues.has(short) && !args[index + 1]?.startsWith("-")) {
+        index++
+      }
+      continue
+    }
     return arg
   }
 }

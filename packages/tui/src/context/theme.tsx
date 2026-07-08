@@ -119,8 +119,9 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         draft.mode = mode
         draft.lock = lock
         const active = config.theme ?? kv.get("theme", "opencode")
-        draft.active = typeof active === "string" ? active : "opencode"
-        draft.ready = false
+        const nextActive = typeof active === "string" ? active : "opencode"
+        draft.active = nextActive
+        draft.ready = hasTheme(nextActive)
       }),
     )
 
@@ -173,14 +174,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     }
 
     onMount(() => {
-      if (config.theme || !hasTheme(store.active)) {
-        void Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]).finally(() => {
-          setStore("ready", true)
-        })
+      if (!hasTheme(store.active)) {
+        const ready = store.active === "system" ? resolveSystemTheme(store.mode) : syncCustomThemes()
+        void ready.finally(() => setStore("ready", true))
+        if (store.active !== "system") void resolveSystemTheme(store.mode)
         return
       }
 
-      void resolveSystemTheme(store.mode).finally(() => setStore("ready", true))
+      void resolveSystemTheme(store.mode)
       void renderer
         .idle()
         .catch(() => {})

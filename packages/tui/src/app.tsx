@@ -1024,8 +1024,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     const skipped = kv.get("skipped_version")
     if (skipped && !isVersionGreater(version, skipped)) return
 
-    const { DialogConfirm } = await import("./ui/dialog-confirm")
-    const choice = await DialogConfirm.show(
+    const confirmDialog = await import("./ui/dialog-confirm").catch((error) => {
+      toast.error(error)
+      return
+    })
+    if (!confirmDialog) return
+    const choice = await confirmDialog.DialogConfirm.show(
       dialog,
       `Update Available`,
       `A new release v${version} is available. Would you like to update now?`,
@@ -1057,8 +1061,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       return
     }
 
-    const { DialogAlert } = await import("./ui/dialog-alert")
-    await DialogAlert.show(
+    const alertDialog = await import("./ui/dialog-alert").catch((error) => {
+      toast.error(error)
+      return
+    })
+    if (!alertDialog) return
+    await alertDialog.DialogAlert.show(
       dialog,
       "Update Complete",
       `Successfully updated to OC2 v${result.data.version}. Please restart the application.`,
