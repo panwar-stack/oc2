@@ -1,40 +1,50 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
-import { RunCommand } from "./cli/cmd/run"
-import { GenerateCommand } from "./cli/cmd/generate"
 import * as Log from "@oc2-ai/core/util/log"
-import { ConsoleCommand } from "./cli/cmd/account"
-import { ProvidersCommand } from "./cli/cmd/providers"
-import { AgentCommand } from "./cli/cmd/agent"
-import { UpgradeCommand } from "./cli/cmd/upgrade"
-import { UninstallCommand } from "./cli/cmd/uninstall"
-import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { InstallationVersion } from "@oc2-ai/core/installation/version"
 import { NamedError } from "@oc2-ai/core/util/error"
 import { FormatError } from "./cli/error"
-import { ServeCommand } from "./cli/cmd/serve"
-import { DebugCommand } from "./cli/cmd/debug"
-import { StatsCommand } from "./cli/cmd/stats"
-import { McpCommand } from "./cli/cmd/mcp"
-import { GithubCommand } from "./cli/cmd/github"
-import { ExportCommand } from "./cli/cmd/export"
-import { ImportCommand } from "./cli/cmd/import"
-import { AttachCommand } from "./cli/cmd/attach"
-import { TuiThreadCommand } from "./cli/cmd/tui"
-import { AcpCommand } from "./cli/cmd/acp"
 import { EOL } from "os"
-import { WebCommand } from "./cli/cmd/web"
-import { PrCommand } from "./cli/cmd/pr"
-import { SessionCommand } from "./cli/cmd/session"
-import { DbCommand } from "./cli/cmd/db"
-import { MemoryCommand } from "./cli/cmd/memory"
 import { errorMessage } from "./util/error"
-import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@oc2-ai/core/util/opencode-process"
 import { isRecord } from "@/util/record"
+
+type CommandLoader = {
+  readonly names: readonly string[]
+  load(): Promise<unknown>
+}
+
+const commandLoaders: CommandLoader[] = [
+  { names: ["acp"], load: async () => (await import("./cli/cmd/acp")).AcpCommand },
+  { names: ["mcp"], load: async () => (await import("./cli/cmd/mcp")).McpCommand },
+  { names: [], load: async () => (await import("./cli/cmd/tui")).TuiThreadCommand },
+  { names: ["attach"], load: async () => (await import("./cli/cmd/attach")).AttachCommand },
+  { names: ["run"], load: async () => (await import("./cli/cmd/run")).RunCommand },
+  { names: ["generate"], load: async () => (await import("./cli/cmd/generate")).GenerateCommand },
+  { names: ["debug"], load: async () => (await import("./cli/cmd/debug")).DebugCommand },
+  { names: ["console"], load: async () => (await import("./cli/cmd/account")).ConsoleCommand },
+  { names: ["providers", "auth"], load: async () => (await import("./cli/cmd/providers")).ProvidersCommand },
+  { names: ["agent"], load: async () => (await import("./cli/cmd/agent")).AgentCommand },
+  { names: ["upgrade"], load: async () => (await import("./cli/cmd/upgrade")).UpgradeCommand },
+  { names: ["uninstall"], load: async () => (await import("./cli/cmd/uninstall")).UninstallCommand },
+  { names: ["serve"], load: async () => (await import("./cli/cmd/serve")).ServeCommand },
+  { names: ["web"], load: async () => (await import("./cli/cmd/web")).WebCommand },
+  { names: ["models"], load: async () => (await import("./cli/cmd/models")).ModelsCommand },
+  { names: ["stats"], load: async () => (await import("./cli/cmd/stats")).StatsCommand },
+  { names: ["export"], load: async () => (await import("./cli/cmd/export")).ExportCommand },
+  { names: ["import"], load: async () => (await import("./cli/cmd/import")).ImportCommand },
+  { names: ["github"], load: async () => (await import("./cli/cmd/github")).GithubCommand },
+  { names: ["pr"], load: async () => (await import("./cli/cmd/pr")).PrCommand },
+  { names: ["session"], load: async () => (await import("./cli/cmd/session")).SessionCommand },
+  { names: ["plugin", "plug"], load: async () => (await import("./cli/cmd/plug")).PluginCommand },
+  { names: ["db"], load: async () => (await import("./cli/cmd/db")).DbCommand },
+  { names: ["memory"], load: async () => (await import("./cli/cmd/memory")).MemoryCommand },
+]
+
+const globalOptionsWithValues = new Set(["--log-level"])
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -50,7 +60,31 @@ process.on("uncaughtException", (e) => {
   })
 })
 
-const args = hideBin(process.argv)
+const args: string[] = hideBin(process.argv)
+
+async function loadCommands() {
+  const selected = selectedCommandName()
+  if (selected === "completion" || args.includes("-h") || args.includes("--help") || args.includes("--get-yargs-completions")) {
+    return Promise.all(commandLoaders.map((loader) => loader.load()))
+  }
+
+  const matched = selected ? commandLoaders.find((loader) => loader.names.includes(selected)) : undefined
+  return [await (matched ?? commandLoaders.find((loader) => loader.names.length === 0)!).load()]
+}
+
+function selectedCommandName() {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (arg === "--") return
+    if (arg.startsWith("--")) {
+      const [option] = arg.split("=", 1)
+      if (globalOptionsWithValues.has(option) && !arg.includes("=")) index++
+      continue
+    }
+    if (arg.startsWith("-")) continue
+    return arg
+  }
+}
 
 function show(out: string) {
   const text = out.trimStart()
@@ -61,6 +95,8 @@ function show(out: string) {
   }
   process.stderr.write(out)
 }
+
+const commands = await loadCommands()
 
 const cli = yargs(args)
   .parserConfiguration({ "populate--": true })
@@ -113,30 +149,10 @@ const cli = yargs(args)
   })
   .usage("")
   .completion("completion", "generate shell completion script")
-  .command(AcpCommand)
-  .command(McpCommand)
-  .command(TuiThreadCommand)
-  .command(AttachCommand)
-  .command(RunCommand)
-  .command(GenerateCommand)
-  .command(DebugCommand)
-  .command(ConsoleCommand)
-  .command(ProvidersCommand)
-  .command(AgentCommand)
-  .command(UpgradeCommand)
-  .command(UninstallCommand)
-  .command(ServeCommand)
-  .command(WebCommand)
-  .command(ModelsCommand)
-  .command(StatsCommand)
-  .command(ExportCommand)
-  .command(ImportCommand)
-  .command(GithubCommand)
-  .command(PrCommand)
-  .command(SessionCommand)
-  .command(PluginCommand)
-  .command(DbCommand)
-  .command(MemoryCommand)
+const registerCommand = cli.command as (command: unknown) => unknown
+for (const command of commands) registerCommand.call(cli, command)
+
+cli
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||

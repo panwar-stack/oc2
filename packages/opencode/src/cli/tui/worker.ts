@@ -1,18 +1,15 @@
 import { Installation } from "@/installation"
-import { Server } from "@/server/server"
 import * as Log from "@oc2-ai/core/util/log"
-import { InstanceRuntime } from "@/project/instance-runtime"
 import { Rpc } from "@/util/rpc"
-import { upgrade } from "@/cli/upgrade"
-import { Config } from "@/config/config"
 import { GlobalBus } from "@/bus/global"
-import { ServerAuth } from "@/server/auth"
 import { writeHeapSnapshot } from "node:v8"
 import { Heap } from "@/cli/heap"
-import { AppRuntime } from "@/effect/app-runtime"
 import { ensureProcessMetadata } from "@oc2-ai/core/util/opencode-process"
-import { Effect } from "effect"
-import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+
+type ServerHandle = {
+  readonly url: URL
+  stop(force?: boolean): Promise<void>
+}
 
 ensureProcessMetadata("worker")
 
@@ -44,10 +41,11 @@ GlobalBus.on("event", (event) => {
   Rpc.emit("global.event", event)
 })
 
-let server: Awaited<ReturnType<typeof Server.listen>> | undefined
+let server: ServerHandle | undefined
 
 export const rpc = {
   async fetch(input: { url: string; method: string; headers: Record<string, string>; body?: string }) {
+    const [{ Server }, { ServerAuth }] = await Promise.all([import("@/server/server"), import("@/server/auth")])
     const headers = { ...input.headers }
     const auth = ServerAuth.header()
     if (auth && !headers["authorization"] && !headers["Authorization"]) {
@@ -71,15 +69,23 @@ export const rpc = {
     return result
   },
   async server(input: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
+    const { Server } = await import("@/server/server")
     if (server) await server.stop(true)
     server = await Server.listen(input)
     return { url: server.url.toString() }
   },
   async checkUpgrade(input: { directory: string }) {
+    const [{ InstanceRuntime }, { upgrade }] = await Promise.all([import("@/project/instance-runtime"), import("@/cli/upgrade")])
     await InstanceRuntime.load({ directory: input.directory })
     await upgrade().catch(() => {})
   },
   async reload() {
+    const [{ AppRuntime }, { Config }, { Effect }, { disposeAllInstancesAndEmitGlobalDisposed }] = await Promise.all([
+      import("@/effect/app-runtime"),
+      import("@/config/config"),
+      import("effect"),
+      import("@/server/global-lifecycle"),
+    ])
     await AppRuntime.runPromise(
       Effect.gen(function* () {
         const cfg = yield* Config.Service
@@ -91,6 +97,7 @@ export const rpc = {
   async shutdown() {
     Log.Default.info("worker shutting down")
 
+    const { InstanceRuntime } = await import("@/project/instance-runtime")
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)
   },

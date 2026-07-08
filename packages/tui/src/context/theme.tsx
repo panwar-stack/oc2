@@ -143,12 +143,6 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         .catch(() => setStore("active", "opencode"))
     }
 
-    onMount(() => {
-      void Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]).finally(() => {
-        setStore("ready", true)
-      })
-    })
-
     let systemThemeSignature: string | undefined
     let systemThemeMode: "dark" | "light" | undefined
     let hasResolvedSystemTheme = false
@@ -177,6 +171,21 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
           if (store.active === "system") setStore("active", "opencode")
         })
     }
+
+    onMount(() => {
+      if (config.theme || !hasTheme(store.active)) {
+        void Promise.allSettled([resolveSystemTheme(store.mode), syncCustomThemes()]).finally(() => {
+          setStore("ready", true)
+        })
+        return
+      }
+
+      void resolveSystemTheme(store.mode).finally(() => setStore("ready", true))
+      void renderer
+        .idle()
+        .catch(() => {})
+        .then(syncCustomThemes)
+    })
 
     let systemRefreshRunning = false
     let systemRefreshQueued = false
