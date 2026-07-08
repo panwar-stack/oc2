@@ -44,7 +44,6 @@ import { ServerConnection, ServerProvider, serverName, useServer } from "@/conte
 import { SettingsProvider, useSettings } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
 import { TabsProvider } from "@/context/tabs"
-import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
@@ -74,7 +73,6 @@ declare global {
     }
     api?: {
       setTitlebar?: (theme: { mode: "light" | "dark" }) => Promise<void>
-      exportDebugLogs?: () => Promise<string>
     }
   }
 }
@@ -170,13 +168,11 @@ export function AppBaseProviders(props: ParentProps<{ locale?: Locale }>) {
               }}
             >
               <QueryProvider>
-                <WslServersProvider>
-                  <DialogProvider>
-                    <MarkedProvider>
-                      <FileComponentProvider component={File}>{props.children}</FileComponentProvider>
-                    </MarkedProvider>
-                  </DialogProvider>
-                </WslServersProvider>
+                <DialogProvider>
+                  <MarkedProvider>
+                    <FileComponentProvider component={File}>{props.children}</FileComponentProvider>
+                  </MarkedProvider>
+                </DialogProvider>
               </QueryProvider>
             </ErrorBoundary>
           </UiI18nBridge>

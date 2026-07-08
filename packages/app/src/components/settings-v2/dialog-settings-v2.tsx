@@ -23,7 +23,6 @@ export const DialogSettings: Component = () => {
             <div class="flex flex-col gap-3 w-full">
               <div class="flex flex-col gap-3">
                 <div class="flex flex-col gap-1.5">
-                  <TabsV2.SectionTitle>{language.t("settings.section.desktop")}</TabsV2.SectionTitle>
                   <div class="flex flex-col gap-1.5 w-full">
                     <TabsV2.Trigger value="general">
                       <Icon name="sliders" />
@@ -56,7 +55,6 @@ export const DialogSettings: Component = () => {
               </div>
             </div>
             <div class="settings-v2-nav-footer">
-              <span>{language.t("app.name.desktop")}</span>
               <span>v{platform.version}</span>
             </div>
           </div>

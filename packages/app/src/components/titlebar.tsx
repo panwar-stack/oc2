@@ -17,16 +17,13 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Button } from "@opencode-ai/ui/button"
 import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
-import { useTheme } from "@opencode-ai/ui/theme/context"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 
 import { getProjectAvatarVariant, LayoutRoute, useLayout, type LocalProject } from "@/context/layout"
-import { usePlatform } from "@/context/platform"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
-import { WindowsAppMenu } from "./windows-app-menu"
 import { applyPath, backPath, forwardPath } from "./titlebar-history"
 import { useServerSync } from "@/context/server-sync"
 import { base64Encode } from "@oc2-ai/core/util/encode"
@@ -40,59 +37,27 @@ import { decode64 } from "@/utils/base64"
 import { ServerConnection, useServer } from "@/context/server"
 import { tabHref, useTabs, type Tab } from "@/context/tabs"
 
-type TauriDesktopWindow = {
-  startDragging?: () => Promise<void>
-  toggleMaximize?: () => Promise<void>
-}
-
-type TauriThemeWindow = {
-  setTheme?: (theme?: "light" | "dark" | null) => Promise<void>
-}
-
-type TauriApi = {
-  window?: {
-    getCurrentWindow?: () => TauriDesktopWindow
-  }
-  webviewWindow?: {
-    getCurrentWebviewWindow?: () => TauriThemeWindow
-  }
-}
-
-const tauriApi = () => (window as unknown as { __TAURI__?: TauriApi }).__TAURI__
-const currentDesktopWindow = () => tauriApi()?.window?.getCurrentWindow?.()
-const currentThemeWindow = () => tauriApi()?.webviewWindow?.getCurrentWebviewWindow?.()
 const legacyTitlebarHeight = 40
 const v2TitlebarHeight = 36
-const minTitlebarZoom = 0.25
 const windowsControlsBaseWidth = 138 // 3 native Windows caption buttons at 46px each.
 
-export type TitlebarUpdate = {
-  version: () => string | undefined
-  installing: () => boolean
-  install: () => void
-}
-
-export function Titlebar(props: { update?: TitlebarUpdate }) {
+export function Titlebar() {
   const layout = useLayout()
-  const platform = usePlatform()
   const command = useCommand()
   const language = useLanguage()
   const settings = useSettings()
-  const theme = useTheme()
   const server = useServer()
   const navigate = useNavigate()
   const location = useLocation()
   const params = useParams()
   const useV2Titlebar = createMemo(() => settings.general.newLayoutDesigns())
 
-  const mac = createMemo(() => platform.platform === "desktop" && platform.os === "macos")
-  const windows = createMemo(() => platform.platform === "desktop" && platform.os === "windows")
-  const electronWindows = createMemo(() => windows() && !tauriApi())
-  const linux = createMemo(() => platform.platform === "desktop" && platform.os === "linux")
-  const web = createMemo(() => platform.platform === "web")
-  const zoom = () => platform.webviewZoom?.() ?? 1
-  const titlebarZoom = () => (windows() ? Math.max(zoom(), minTitlebarZoom) : zoom())
-  const counterZoom = () => (windows() && titlebarZoom() < 1 ? 1 / titlebarZoom() : 1)
+  const mac = () => false
+  const windows = () => false
+  const web = () => true
+  const zoom = () => 1
+  const titlebarZoom = () => 1
+  const counterZoom = () => 1
   const minHeight = () => {
     const height = useV2Titlebar() ? v2TitlebarHeight : legacyTitlebarHeight
     if (mac()) return `${height / zoom()}px`
@@ -129,22 +94,6 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   const canForward = createMemo(() => history.index < history.stack.length - 1)
   const hasProjects = createMemo(() => layout.projects.list().length > 0)
   const nav = createMemo(() => (useV2Titlebar() ? settings.general.showNavigation() : true))
-  const updateState = createMemo<TitlebarUpdatePillState>(() => {
-    const installing = props.update?.installing() ?? false
-    const version = props.update?.version()
-    return {
-      visible: version !== undefined || installing,
-      installing,
-      label: "Update",
-      ariaLabel: language.t("toast.update.action.installRestart"),
-      title: version ? `Update ${version}` : undefined,
-      onInstall: () => props.update?.install(),
-    }
-  })
-  const v2RightState = createMemo<TitlebarV2RightState>(() => ({
-    update: updateState(),
-  }))
-
   const back = () => {
     const next = backPath(history)
     if (!next) return
@@ -176,56 +125,6 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
     },
   ])
 
-  const getWin = () => {
-    if (platform.platform !== "desktop") return
-    return currentDesktopWindow()
-  }
-
-  createEffect(() => {
-    if (platform.platform !== "desktop") return
-
-    const scheme = theme.colorScheme()
-    const value = scheme === "system" ? null : scheme
-
-    const win = currentThemeWindow()
-    if (!win?.setTheme) return
-
-    void win.setTheme(value).catch(() => undefined)
-  })
-
-  const interactive = (target: EventTarget | null) => {
-    if (!(target instanceof Element)) return false
-
-    const selector =
-      "button, a, input, textarea, select, option, [role='button'], [role='menuitem'], [contenteditable='true'], [contenteditable='']"
-
-    return !!target.closest(selector)
-  }
-
-  const drag = (e: MouseEvent) => {
-    if (platform.platform !== "desktop") return
-    if (e.buttons !== 1) return
-    if (interactive(e.target)) return
-
-    const win = getWin()
-    if (!win?.startDragging) return
-
-    e.preventDefault()
-    void win.startDragging().catch(() => undefined)
-  }
-
-  const maximize = (e: MouseEvent) => {
-    if (platform.platform !== "desktop") return
-    if (interactive(e.target)) return
-    if (e.target instanceof Element && e.target.closest("[data-tauri-decorum-tb]")) return
-
-    const win = getWin()
-    if (!win?.toggleMaximize) return
-
-    e.preventDefault()
-    void win.toggleMaximize().catch(() => undefined)
-  }
-
   return (
     <header
       classList={{
@@ -236,15 +135,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
       style={{
         "min-height": minHeight(),
         "padding-left": mac() ? `${84 / zoom()}px` : 0,
-        width: electronWindows() ? `env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()}))` : undefined,
-        "max-width": electronWindows()
-          ? `env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()}))`
-          : undefined,
-        "align-self": electronWindows() ? "flex-start" : undefined,
       }}
-      data-tauri-drag-region
-      onMouseDown={drag}
-      onDblClick={maximize}
     >
       <Switch>
         <Match when={useV2Titlebar()}>
@@ -421,9 +312,6 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                 }}
               >
                 <ChannelIndicator />
-                <Show when={windows() || linux()}>
-                  <WindowsAppMenu command={command} platform={platform} variant="v2" />
-                </Show>
                 <IconButtonV2
                   variant="ghost-muted"
                   size="large"
@@ -512,10 +400,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                   />
                 </Show>
                 <div class="flex-1" />
-                <TitlebarV2Right state={v2RightState()} />
-                <Show when={windows() && !electronWindows()}>
-                  <div data-tauri-decorum-tb class="flex flex-row" />
-                </Show>
+                <TitlebarV2Right />
               </div>
             )
           }}
@@ -531,9 +416,6 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                 "pl-2": !mac(),
               }}
             >
-              <Show when={windows() || linux()}>
-                <WindowsAppMenu command={command} platform={platform} />
-              </Show>
               <Show when={mac()}>
                 {/*<div class="h-full shrink-0" style={{ width: `${72 / zoom()}px` }} />*/}
                 <div class="xl:hidden w-10 shrink-0 flex items-center justify-center">
@@ -663,13 +545,10 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                 "flex items-center min-w-0 justify-end": true,
                 "pr-2": !windows(),
               }}
-              data-tauri-drag-region
-              onMouseDown={drag}
             >
               <div id="opencode-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end" />
               <Show when={windows()}>
-                {!tauriApi() && <div class="shrink-0" style={{ width: windowsControlsWidth() }} />}
-                <div data-tauri-decorum-tb class="flex flex-row" />
+                <div class="shrink-0" style={{ width: windowsControlsWidth() }} />
               </Show>
             </div>
           </div>
@@ -679,55 +558,10 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   )
 }
 
-type TitlebarUpdatePillState = {
-  visible: boolean
-  installing: boolean
-  label: string
-  ariaLabel: string
-  title?: string
-  onInstall: () => void
-}
-
-type TitlebarV2RightState = {
-  update: TitlebarUpdatePillState
-}
-
-function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
+function TitlebarV2Right() {
   return (
     <div class="relative z-20 flex shrink-0 items-center justify-end gap-0 overflow-visible">
-      <Show when={props.state.update.visible}>
-        <TitlebarUpdateIconButton state={props.state.update} />
-      </Show>
       <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
-    </div>
-  )
-}
-
-function TitlebarUpdateIconButton(props: { state: TitlebarUpdatePillState }) {
-  return (
-    <div class="relative isolate mr-3 size-5 shrink-0">
-      <button
-        type="button"
-        class="group absolute right-0 top-0 z-10 flex h-5 w-5 items-center justify-end overflow-hidden rounded-full bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent transition-[width,background-color] duration-150 ease-out hover:z-30 hover:w-[68px] hover:bg-[color-mix(in_srgb,var(--v2-icon-icon-accent)_20%,var(--v2-background-bg-deep))] focus-visible:z-30 focus-visible:w-[68px] focus-visible:bg-[color-mix(in_srgb,var(--v2-icon-icon-accent)_20%,var(--v2-background-bg-deep))] focus-visible:outline-none disabled:opacity-60 motion-reduce:transition-none"
-        onClick={props.state.onInstall}
-        disabled={props.state.installing}
-        aria-busy={props.state.installing}
-        aria-label={props.state.ariaLabel}
-      >
-        <span class="shrink-0 ml-[8px] mr-px text-[11px] text-v2-text-text-accent [font-weight:530] opacity-0 translate-x-2 motion-safe:transition-all duration-150 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-focus-visible:opacity-100 group-focus-visible:translate-x-0 motion-reduce:translate-x-0">
-          Update
-        </span>
-        <span class="flex size-5 shrink-0 items-center justify-center">
-          <Show
-            when={!props.state.installing}
-            fallback={<span data-slot="titlebar-update-loader" aria-hidden="true" />}
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <path d="M7 11V3M3.5 7.63128L7 11L10.5 7.63128" stroke="currentColor" />
-            </svg>
-          </Show>
-        </span>
-      </button>
     </div>
   )
 }

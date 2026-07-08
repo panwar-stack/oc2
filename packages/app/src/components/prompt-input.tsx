@@ -467,12 +467,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
   }
 
-  const escBlur = () => platform.platform === "desktop" && platform.os === "macos"
+  const escBlur = () => false
 
   const pick = () => {
     if (server.isLocal()) {
       pickAttachmentFiles({
-        picker: platform.openAttachmentPickerDialog,
         directory: () => sdk.directory,
         fallback: () => fileInputRef?.click(),
         onFile: addAttachment,
@@ -1118,7 +1117,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       setCursorPosition(editorRef, promptLength(prompt.current()))
     },
     addPart,
-    readClipboardImage: platform.readClipboardImage,
   })
 
   const fileAttachmentInput = () => (

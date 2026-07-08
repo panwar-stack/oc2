@@ -1,19 +1,15 @@
-import { Component, Show, createMemo, createResource, onMount } from "solid-js"
-import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
-import { Icon } from "@opencode-ai/ui/icon"
+import { Component, createMemo, createResource, onMount } from "solid-js"
 import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
-import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useParams } from "@solidjs/router"
 import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
-import { usePlatform, type DisplayBackend } from "@/context/platform"
+import { usePlatform } from "@/context/platform"
 import { useServerSync } from "@/context/server-sync"
 import { useServerSDK } from "@/context/server-sdk"
-import { useUpdaterAction } from "../updater-action"
 import {
   monoDefault,
   monoFontFamily,
@@ -92,9 +88,6 @@ export const SettingsGeneralV2: Component = () => {
   const params = useParams()
   const settings = useSettings()
 
-  const updater = useUpdaterAction()
-
-  const linux = createMemo(() => platform.platform === "desktop" && platform.os === "linux")
   const dir = createMemo(() => decode64(params.dir))
   const accepting = createMemo(() => {
     const value = dir()
@@ -120,8 +113,6 @@ export const SettingsGeneralV2: Component = () => {
 
     permission.disableAutoAccept(params.id, value)
   }
-  const desktop = createMemo(() => platform.platform === "desktop")
-
   const themeOptions = createMemo<ThemeOption[]>(() => theme.ids().map((id) => ({ id, name: theme.name(id) })))
 
   const serverSync = useServerSync()
@@ -134,18 +125,6 @@ export const SettingsGeneralV2: Component = () => {
         .then((res) => res.data ?? [])
         .catch(() => [] as ShellOption[]),
     { initialValue: [] as ShellOption[] },
-  )
-
-  const [displayBackend, { refetch: refetchDisplayBackend }] = createResource(
-    () => (linux() && platform.getDisplayBackend ? true : false),
-    () => Promise.resolve(platform.getDisplayBackend?.() ?? null).catch(() => null as DisplayBackend | null),
-    { initialValue: null as DisplayBackend | null },
-  )
-
-  const [pinchZoom, { mutate: setPinchZoom }] = createResource(
-    () => (desktop() && platform.getPinchZoomEnabled ? true : false),
-    () => Promise.resolve(platform.getPinchZoomEnabled?.() ?? false).catch(() => false),
-    { initialValue: false },
   )
 
   onMount(() => {
@@ -185,21 +164,6 @@ export const SettingsGeneralV2: Component = () => {
 
     return options
   })
-
-  const onDisplayBackendChange = (checked: boolean) => {
-    const update = platform.setDisplayBackend?.(checked ? "wayland" : "auto")
-    if (!update) return
-    void update.finally(() => {
-      void refetchDisplayBackend()
-    })
-  }
-
-  const onPinchZoomChange = (checked: boolean) => {
-    setPinchZoom(checked)
-    const update = platform.setPinchZoomEnabled?.(checked)
-    if (!update) return
-    void update.catch(() => setPinchZoom(!checked))
-  }
 
   const colorSchemeOptions = createMemo((): { value: ColorScheme; label: string }[] => [
     { value: "system", label: language.t("theme.scheme.system") },
@@ -359,86 +323,6 @@ export const SettingsGeneralV2: Component = () => {
                   dialog.show(() => <module.DialogSettings />)
                 })
               }}
-            />
-          </div>
-        </SettingsRowV2>
-      </SettingsListV2>
-    </div>
-  )
-
-  const AdvancedSection = () => (
-    <div class="settings-v2-section">
-      <h3 class="settings-v2-section-title">{language.t("settings.general.section.advanced")}</h3>
-
-      <SettingsListV2>
-        <SettingsRowV2
-          title={language.t("settings.general.row.showFileTree.title")}
-          description={language.t("settings.general.row.showFileTree.description")}
-        >
-          <div data-action="settings-show-file-tree">
-            <Switch
-              checked={settings.general.showFileTree()}
-              onChange={(checked) => settings.general.setShowFileTree(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showNavigation.title")}
-          description={language.t("settings.general.row.showNavigation.description")}
-        >
-          <div data-action="settings-show-navigation">
-            <Switch
-              checked={settings.general.showNavigation()}
-              onChange={(checked) => settings.general.setShowNavigation(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showSearch.title")}
-          description={language.t("settings.general.row.showSearch.description")}
-        >
-          <div data-action="settings-show-search">
-            <Switch
-              checked={settings.general.showSearch()}
-              onChange={(checked) => settings.general.setShowSearch(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showTerminal.title")}
-          description={language.t("settings.general.row.showTerminal.description")}
-        >
-          <div data-action="settings-show-terminal">
-            <Switch
-              checked={settings.general.showTerminal()}
-              onChange={(checked) => settings.general.setShowTerminal(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showStatus.title")}
-          description={language.t("settings.general.row.showStatus.description")}
-        >
-          <div data-action="settings-show-status">
-            <Switch
-              checked={settings.general.showStatus()}
-              onChange={(checked) => settings.general.setShowStatus(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showCustomAgents.title")}
-          description={language.t("settings.general.row.showCustomAgents.description")}
-        >
-          <div data-action="settings-show-custom-agents">
-            <Switch
-              checked={settings.general.showCustomAgents()}
-              onChange={(checked) => settings.general.setShowCustomAgents(checked)}
             />
           </div>
         </SettingsRowV2>
@@ -697,55 +581,8 @@ export const SettingsGeneralV2: Component = () => {
           </div>
         </SettingsRowV2>
 
-        <SettingsRowV2
-          title={language.t("settings.updates.row.check.title")}
-          description={language.t("settings.updates.row.check.description")}
-        >
-          <ButtonV2 size="normal" variant="neutral" disabled={!updater.action().run} onClick={updater.run}>
-            {language.t(updater.action().label)}
-          </ButtonV2>
-        </SettingsRowV2>
       </SettingsListV2>
     </div>
-  )
-
-  const DisplaySection = () => (
-    <Show when={desktop()}>
-      <div class="settings-v2-section">
-        <h3 class="settings-v2-section-title">{language.t("settings.general.section.display")}</h3>
-
-        <SettingsListV2>
-          <SettingsRowV2
-            title={language.t("settings.general.row.pinchZoom.title")}
-            description={language.t("settings.general.row.pinchZoom.description")}
-          >
-            <div data-action="settings-pinch-zoom">
-              <Switch checked={pinchZoom.latest} onChange={onPinchZoomChange} />
-            </div>
-          </SettingsRowV2>
-
-          <Show when={linux()}>
-            <SettingsRowV2
-              title={
-                <div class="flex items-center gap-2">
-                  <span>{language.t("settings.general.row.wayland.title")}</span>
-                  <Tooltip value={language.t("settings.general.row.wayland.tooltip")} placement="top">
-                    <span class="text-text-weak">
-                      <Icon name="help" size="small" />
-                    </span>
-                  </Tooltip>
-                </div>
-              }
-              description={language.t("settings.general.row.wayland.description")}
-            >
-              <div data-action="settings-wayland">
-                <Switch checked={displayBackend.latest === "wayland"} onChange={onDisplayBackendChange} />
-              </div>
-            </SettingsRowV2>
-          </Show>
-        </SettingsListV2>
-      </div>
-    </Show>
   )
 
   return (
@@ -764,12 +601,6 @@ export const SettingsGeneralV2: Component = () => {
         <SoundsSection />
 
         <UpdatesSection />
-
-        <DisplaySection />
-
-        <Show when={desktop()}>
-          <AdvancedSection />
-        </Show>
       </div>
     </>
   )

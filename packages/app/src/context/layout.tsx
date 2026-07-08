@@ -6,7 +6,6 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { useServerSync } from "./server-sync"
 import { useServerSDK } from "./server-sdk"
 import { ServerConnection, useServer } from "./server"
-import { usePlatform } from "./platform"
 import { Project } from "@oc2-ai/sdk/v2"
 import { Persist, persisted, removePersisted } from "@/utils/persist"
 import { decode64 } from "@/utils/base64"
@@ -142,7 +141,6 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     const serverSdk = useServerSDK()
     const serverSync = useServerSync()
     const server = useServer()
-    const platform = usePlatform()
     const location = useLocation()
     const route = createMemo(() => {
       const value = currentRoute(location.pathname)
@@ -302,11 +300,11 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           const target = session
             ? Persist.serverSession(scope, dir, session, entry.key)
             : Persist.serverWorkspace(scope, dir, entry.key)
-          void removePersisted(target, platform)
+          void removePersisted(target)
 
           if (scope !== ServerScope.local) continue
           const legacyKey = `${dir}/${entry.legacy}${session ? "/" + session : ""}.${entry.version}`
-          void removePersisted({ key: legacyKey }, platform)
+          void removePersisted({ key: legacyKey })
         }
       }
     }

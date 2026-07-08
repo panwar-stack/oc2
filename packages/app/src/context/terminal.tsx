@@ -3,7 +3,6 @@ import { createSimpleContext } from "@opencode-ai/ui/context"
 import { batch, createEffect, createMemo, createRoot, on, onCleanup } from "solid-js"
 import { useParams } from "@solidjs/router"
 import { useSDK } from "./sdk"
-import type { Platform } from "./platform"
 import { useServer } from "./server"
 import { defaultTitle, titleNumber } from "./terminal-title"
 import { Persist, persisted, removePersisted } from "@/utils/persist"
@@ -119,7 +118,6 @@ function terminalPersistTarget(scope: ServerScopeValue, dir: string, legacy?: st
 export function clearWorkspaceTerminals(
   dir: string,
   sessionIDs?: string[],
-  platform?: Platform,
   scope: ServerScopeValue = ServerScope.local,
 ) {
   const key = getWorkspaceTerminalCacheKey(dir, scope)
@@ -128,7 +126,7 @@ export function clearWorkspaceTerminals(
     entry?.value.clear()
   }
 
-  void removePersisted(terminalPersistTarget(scope, dir), platform)
+  void removePersisted(terminalPersistTarget(scope, dir))
 
   if (scope !== ServerScope.local) return
   const legacy = new Set(getLegacyTerminalStorageKeys(dir))
@@ -138,7 +136,7 @@ export function clearWorkspaceTerminals(
     }
   }
   for (const key of legacy) {
-    void removePersisted({ key }, platform)
+    void removePersisted({ key })
   }
 }
 

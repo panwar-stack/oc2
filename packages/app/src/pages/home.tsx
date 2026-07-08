@@ -360,7 +360,7 @@ function HomeDesign() {
           clearNotifications={clearNotifications}
           unseenCount={unseenCount}
           openSettings={openSettings}
-          openHelp={() => platform.openLink("https://oc2.ai/desktop-feedback")}
+          openHelp={() => platform.openLink("https://oc2.ai/discord")}
           language={language}
         />
 

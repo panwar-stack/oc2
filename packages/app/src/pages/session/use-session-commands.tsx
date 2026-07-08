@@ -7,10 +7,8 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useLocal } from "@/context/local"
 import { usePermission } from "@/context/permission"
-import { usePlatform } from "@/context/platform"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
-import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { showToast } from "@/utils/toast"
@@ -41,10 +39,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const language = useLanguage()
   const local = useLocal()
   const permission = usePermission()
-  const platform = usePlatform()
   const prompt = usePrompt()
   const sdk = useSDK()
-  const settings = useSettings()
   const sync = useSync()
   const terminal = useTerminal()
   const layout = useLayout()
@@ -70,8 +66,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   })
   const activeFileTab = tabState.activeFileTab
   const closableTab = tabState.closableTab
-  const desktopV2 = () => platform.platform === "desktop" && settings.general.newLayoutDesigns()
-  const shown = () => (desktopV2() ? settings.general.showFileTree() : true)
+  const shown = () => true
 
   const messages = () => {
     const id = params.id
@@ -547,7 +542,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       description: language.t("command.agent.cycle.description"),
       keybind: "mod+.",
       slash: "agent",
-      disabled: desktopV2() && !settings.general.showCustomAgents(),
+      disabled: false,
       onSelect: () => local.agent.move(1),
     }),
     agentCommand({
@@ -555,7 +550,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.agent.cycle.reverse"),
       description: language.t("command.agent.cycle.reverse.description"),
       keybind: "shift+mod+.",
-      disabled: desktopV2() && !settings.general.showCustomAgents(),
+      disabled: false,
       onSelect: () => local.agent.move(-1),
     }),
   ]

@@ -1,7 +1,6 @@
-import { ServerConnection } from "@/context/server"
 import type { Platform } from "@/context/platform"
+import type { ServerConnection } from "@/context/server"
 
-export function directoryPickerKind(platform: Platform["platform"], server: ServerConnection.Any) {
-  if (platform === "desktop" && ServerConnection.local(server)) return "native" as const
+export function directoryPickerKind(_platform: Platform["platform"], _server: ServerConnection.Any) {
   return "server" as const
 }

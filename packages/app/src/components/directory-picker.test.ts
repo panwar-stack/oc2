@@ -13,9 +13,8 @@ const remote = {
 } as const
 
 describe("directoryPickerKind", () => {
-  test("uses the native picker only for local desktop projects", () => {
-    expect(directoryPickerKind("desktop", local)).toBe("native")
-    expect(directoryPickerKind("desktop", remote)).toBe("server")
+  test("uses the server picker for retained web app projects", () => {
     expect(directoryPickerKind("web", local)).toBe("server")
+    expect(directoryPickerKind("web", remote)).toBe("server")
   })
 })
