@@ -82,11 +82,19 @@
       "owner": "docs",
     },
     {
-      // PR 2 rewrites VS Code docs while PR 6 keeps command IDs compatible.
-      "path": "sdks/vscode/**",
-      "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 12,
-      "reason": "migration",
+      // VS Code Marketplace extension identity stays stable until an approved migration exists.
+      "path": "sdks/vscode/package.json",
+      "pattern": "\"name\": \"opencode\"",
+      "count": 1,
+      "reason": "compatibility",
+      "owner": "vscode",
+    },
+    {
+      // VS Code command IDs remain stable for existing keybindings and user muscle memory.
+      "path": "sdks/vscode/package.json",
+      "pattern": "opencode\\.(openTerminal|openNewTerminal|addFilepathToTerminal)",
+      "count": 7,
+      "reason": "compatibility",
       "owner": "vscode",
     },
     {
@@ -290,9 +298,25 @@
       "owner": "docs",
     },
     {
-      // VS Code source keeps deprecated extension env names and command compatibility until PR 6.
+      // VS Code command IDs remain stable for existing keybindings and extension callers.
       "path": "sdks/vscode/src/**",
-      "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
+      "pattern": "opencode\\.(openTerminal|openNewTerminal|addFilepathToTerminal)",
+      "count": 3,
+      "reason": "compatibility",
+      "owner": "vscode",
+    },
+    {
+      // Existing terminal sessions named opencode can still be focused after the rebrand.
+      "path": "sdks/vscode/src/**",
+      "pattern": "LEGACY_TERMINAL_NAME = \"opencode\"",
+      "count": 1,
+      "reason": "compatibility",
+      "owner": "vscode",
+    },
+    {
+      // Deprecated extension env names remain for CLI compatibility during the transition.
+      "path": "sdks/vscode/src/**",
+      "pattern": "_EXTENSION_OPENCODE_PORT|OPENCODE_CALLER",
       "count": 3,
       "reason": "compatibility",
       "owner": "vscode",
