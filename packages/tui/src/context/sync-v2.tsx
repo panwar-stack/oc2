@@ -152,6 +152,26 @@ function prepend(messages: SessionMessage[], message: SessionMessage) {
 
 const STREAMING_FLUSH_MS = 33
 const SDK_EVENT_BATCH_FLUSH_MS = 20
+const MESSAGE_HISTORY_LIMIT = 100
+
+function messageCreated(message: SessionMessage) {
+  return message.time.created
+}
+
+function isActiveMessage(message: SessionMessage) {
+  return (message.type === "assistant" || message.type === "shell") && message.time.completed === undefined
+}
+
+function pruneMessages(messages: SessionMessage[]) {
+  if (messages.length <= MESSAGE_HISTORY_LIMIT) return messages
+  const keep = new Set(
+    messages
+      .toSorted((left, right) => messageCreated(right) - messageCreated(left))
+      .slice(0, MESSAGE_HISTORY_LIMIT)
+      .map((message) => message.id),
+  )
+  return messages.filter((message) => keep.has(message.id) || isActiveMessage(message))
+}
 
 export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext({
   name: "SyncV2",
@@ -169,6 +189,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     const applied = new Set<string>()
     const buffering = new Map<string, Event[]>()
     const syncing = new Map<string, Promise<void>>()
+    const deletedSessions = new Set<string>()
     function duplicate(id: string) {
       if (applied.has(id)) return true
       applied.add(id)
@@ -182,7 +203,9 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       setStore(
         "messages",
         produce((draft) => {
-          fn((draft[sessionID] ??= []))
+          const messages = (draft[sessionID] ??= [])
+          fn(messages)
+          draft[sessionID] = pruneMessages(messages)
         }),
       )
     }
@@ -272,6 +295,19 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       for (const [key, buffer] of streamingContentBuffers) {
         if (buffer.sessionID === sessionID) streamingContentBuffers.delete(key)
       }
+    }
+
+    function deleteSession(sessionID: string) {
+      deletedSessions.add(sessionID)
+      dropStreamingSession(sessionID)
+      buffering.delete(sessionID)
+      syncing.delete(sessionID)
+      setStore(
+        "messages",
+        produce((draft) => {
+          delete draft[sessionID]
+        }),
+      )
     }
 
     function replayPendingAfterHydration(
@@ -385,24 +421,27 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     }
 
     async function hydrate(sessionID: string) {
+      if (deletedSessions.has(sessionID)) return
       const pending: Event[] = []
       flushStreamingSession(sessionID)
       const before = JSON.parse(JSON.stringify(store.messages[sessionID] ?? [])) as SessionMessage[]
       buffering.set(sessionID, pending)
       try {
         const response = await sdk.client.v2.session.messages({ sessionID })
+        if (deletedSessions.has(sessionID)) return
         // SDKProvider batches live events briefly; keep buffering open long enough
         // for queued pre-snapshot events to reach the hydration replay path.
         await new Promise((resolve) => setTimeout(resolve, SDK_EVENT_BATCH_FLUSH_MS))
+        if (deletedSessions.has(sessionID)) return
         const messages = response.data?.data ?? []
         const snapshotIDs = new Set(messages.map((message) => message.id))
         flushStreamingSession(sessionID)
         const live = JSON.parse(JSON.stringify(store.messages[sessionID] ?? [])) as SessionMessage[]
         const liveByID = new Map(live.map((message) => [message.id, message]))
-        const merged = [
+        const merged = pruneMessages([
           ...messages.map((message) => mergeAssistantSnapshot(message, liveByID.get(message.id))),
           ...before.filter((message) => !snapshotIDs.has(message.id)),
-        ]
+        ])
         setStore(
           "messages",
           sessionID,
@@ -784,7 +823,16 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
 
     const unsubscribe = event.subscribe((event) => {
       if (duplicate(event.id)) return
-      if (event.type === "session.deleted") dropStreamingSession(event.properties.info.id)
+      if (event.type === "session.deleted") {
+        deleteSession(event.properties.info.id)
+        return
+      }
+      if (
+        "sessionID" in event.properties &&
+        typeof event.properties.sessionID === "string" &&
+        deletedSessions.has(event.properties.sessionID)
+      )
+        return
       if ("sessionID" in event.properties && typeof event.properties.sessionID === "string")
         buffering.get(event.properties.sessionID)?.push(event)
       apply(event)
