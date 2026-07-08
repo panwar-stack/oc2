@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
+import * as EffectLogger from "@oc2-ai/core/effect/logger"
 import {
   AddRootPayload,
   CommandPayload,
@@ -40,6 +41,8 @@ import {
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 import type { SessionRootID } from "@/session/schema"
+
+const log = EffectLogger.create({ service: "session.http" })
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -183,19 +186,28 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
-      return yield* shareSvc.create(ctx.payload)
+      const started = Date.now()
+      yield* log.info("create", { status: "started", hasPayload: ctx.payload !== undefined })
+      const result = yield* shareSvc.create(ctx.payload)
+      yield* log.info("create", { status: "completed", sessionID: result.id, duration: Date.now() - started })
+      return result
     })
 
     const createRaw = Effect.fn("SessionHttpApi.createRaw")(function* (ctx: {
       request: HttpServerRequest.HttpServerRequest
     }) {
+      const started = Date.now()
+      yield* log.info("createRaw", { status: "started" })
       const body = yield* Effect.orDie(ctx.request.text)
+      yield* log.info("createRaw", { status: "body-read", bytes: body.length, duration: Date.now() - started })
       if (body.trim().length === 0) return yield* create({})
 
       const json = yield* tryParseJson(body)
+      yield* log.info("createRaw", { status: "json-parsed", duration: Date.now() - started })
       const decoded = yield* Schema.decodeUnknownEffect(Session.CreateInput)(json).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
+      yield* log.info("createRaw", { status: "payload-decoded", duration: Date.now() - started })
       const payload = decoded
         ? {
             ...decoded,

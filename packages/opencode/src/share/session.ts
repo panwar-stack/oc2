@@ -4,6 +4,9 @@ import { Effect, Layer, Scope, Context } from "effect"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
+import * as EffectLogger from "@oc2-ai/core/effect/logger"
+
+const log = EffectLogger.create({ service: "session.share" })
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
@@ -36,11 +39,22 @@ export const layer = Layer.effect(
     })
 
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
+      const started = Date.now()
+      yield* log.info("create", { status: "started", hasInput: input !== undefined })
       const result = yield* session.create(input)
-      if (result.parentID) return result
+      yield* log.info("create", { status: "session-created", sessionID: result.id, duration: Date.now() - started })
+      if (result.parentID) {
+        yield* log.info("create", { status: "completed", sessionID: result.id, skippedShare: "child-session" })
+        return result
+      }
       const conf = yield* cfg.get()
-      if (!(flags.autoShare || conf.share === "auto")) return result
+      yield* log.info("create", { status: "config-loaded", sessionID: result.id, share: conf.share })
+      if (!(flags.autoShare || conf.share === "auto")) {
+        yield* log.info("create", { status: "completed", sessionID: result.id, skippedShare: "disabled" })
+        return result
+      }
       yield* share(result.id).pipe(Effect.ignore, Effect.forkIn(scope))
+      yield* log.info("create", { status: "completed", sessionID: result.id, autoShare: true })
       return result
     })
 

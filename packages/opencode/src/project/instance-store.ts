@@ -8,6 +8,9 @@ import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
+import * as EffectLogger from "@oc2-ai/core/effect/logger"
+
+const log = EffectLogger.create({ service: "instance.store" })
 
 export interface LoadInput {
   directory: string
@@ -42,6 +45,8 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
 
     const boot = (input: LoadInput & { directory: string }) =>
       Effect.gen(function* () {
+        const started = Date.now()
+        yield* log.info("startup stage", { directory: input.directory, stage: "boot", status: "started" })
         const ctx: InstanceContext =
           input.project && input.worktree
             ? {
@@ -56,7 +61,21 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
                   project: result.project,
                 })),
               )
+        yield* log.info("startup stage", {
+          directory: input.directory,
+          projectID: ctx.project.id,
+          stage: "project.resolve",
+          status: "completed",
+          duration: Date.now() - started,
+        })
         yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
+        yield* log.info("startup stage", {
+          directory: input.directory,
+          projectID: ctx.project.id,
+          stage: "boot",
+          status: "completed",
+          duration: Date.now() - started,
+        })
         return ctx
       }).pipe(Effect.withSpan("InstanceStore.boot"))
 
@@ -69,9 +88,17 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
 
     const completeLoad = (directory: string, input: LoadInput, entry: Entry) =>
       Effect.gen(function* () {
+        const started = Date.now()
+        yield* log.info("startup stage", { directory, stage: "load", status: "started" })
         const exit = yield* Effect.exit(boot({ ...input, directory }))
         if (Exit.isFailure(exit)) yield* removeEntry(directory, entry)
         yield* Deferred.done(entry.deferred, exit).pipe(Effect.asVoid)
+        yield* log.info("startup stage", {
+          directory,
+          stage: "load",
+          status: Exit.isFailure(exit) ? "failed" : "completed",
+          duration: Date.now() - started,
+        })
       })
 
     const emitDisposed = (input: { directory: string; project?: string }) =>

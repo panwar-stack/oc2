@@ -999,9 +999,13 @@ export const layer: Layer.Layer<
       permission?: PermissionV1.Ruleset
       workspaceID?: WorkspaceV2.ID
     }) {
+      const started = Date.now()
+      log.info("create", { status: "started", hasInput: input !== undefined })
       const ctx = yield* InstanceState.context
+      log.info("create", { status: "context-resolved", directory: ctx.directory, duration: Date.now() - started })
       const workspace = yield* InstanceState.workspaceID
-      return yield* createNext({
+      log.info("create", { status: "workspace-resolved", workspaceID: workspace, duration: Date.now() - started })
+      const result = yield* createNext({
         parentID: input?.parentID,
         directory: ctx.directory,
         path: sessionPath(ctx.worktree, ctx.directory),
@@ -1012,6 +1016,8 @@ export const layer: Layer.Layer<
         permission: input?.permission,
         workspaceID: input?.workspaceID ?? workspace,
       })
+      log.info("create", { status: "completed", sessionID: result.id, duration: Date.now() - started })
+      return result
     })
 
     const fork = Effect.fn("Session.fork")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
