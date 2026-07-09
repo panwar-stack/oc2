@@ -41,13 +41,6 @@ mock.module("@/context/server-sync", () => ({
   }),
 }))
 
-mock.module("@/utils/persist", () => ({
-  Persist: {
-    global: () => "model",
-  },
-  persisted: (_persist: unknown, store: [unknown, unknown]) => [store[0], store[1], undefined, true],
-}))
-
 mock.module("@opencode-ai/ui/context", () => ({
   createSimpleContext: (input: { init: (props?: unknown) => unknown }) => {
     let value: unknown

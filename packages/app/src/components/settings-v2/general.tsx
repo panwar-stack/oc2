@@ -171,13 +171,6 @@ export const SettingsGeneralV2: Component = () => {
     { value: "dark", label: language.t("theme.scheme.dark") },
   ])
 
-  const languageOptions = createMemo(() =>
-    language.locales.map((locale) => ({
-      value: locale,
-      label: language.label(locale),
-    })),
-  )
-
   const noneSound = { id: "none", label: "sound.option.none" } as const
   const soundOptions = [noneSound, ...SOUND_OPTIONS]
   const mono = () => monoInput(settings.appearance.font())
@@ -214,23 +207,6 @@ export const SettingsGeneralV2: Component = () => {
   const GeneralSection = () => (
     <div class="settings-v2-section">
       <SettingsListV2>
-        <SettingsRowV2
-          title={language.t("settings.general.row.language.title")}
-          description={language.t("settings.general.row.language.description")}
-        >
-          <SelectV2
-            appearance="inline"
-            data-action="settings-language"
-            options={languageOptions()}
-            placement="bottom-end"
-            gutter={6}
-            current={languageOptions().find((o) => o.value === language.locale())}
-            value={(o) => o.value}
-            label={(o) => o.label}
-            onSelect={(option) => option && language.setLocale(option.value)}
-          />
-        </SettingsRowV2>
-
         <SettingsRowV2
           title={language.t("command.permissions.autoaccept.enable")}
           description={language.t("toast.permissions.autoaccept.on.description")}

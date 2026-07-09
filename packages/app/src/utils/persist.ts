@@ -487,13 +487,24 @@ export function persisted<T>(
   const [state, setState, init] = makePersisted(store, { name: config.key, storage })
 
   const isAsync = init instanceof Promise
+  if (!isAsync) {
+    return [
+      state,
+      setState,
+      init,
+      Object.assign(() => true, {
+        promise: undefined,
+      }),
+    ]
+  }
+
   const [ready] = createResource(
     () => init,
     async (initValue) => {
-      if (initValue instanceof Promise) await initValue
+      await initValue
       return true
     },
-    { initialValue: !isAsync },
+    { initialValue: false },
   )
 
   return [
