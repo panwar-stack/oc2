@@ -16,7 +16,7 @@
       "reason": "existing test imports TUI builtins before boundary guardrail",
     },
     {
-      // TODO(PR-8 cleanup): expose Platform through @opencode-ai/app or keep the mock type storybook-local.
+      // TODO(PR-8 cleanup): expose Platform through @oc2-ai/app or keep the mock type storybook-local.
       "source": "packages/storybook/.storybook/mocks/app/context/platform.ts",
       "import": "../../../../../app/src/context/platform",
       "target": "packages/app/src/context/platform.tsx",

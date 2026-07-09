@@ -1,6 +1,6 @@
 import { batch, createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
-import { createSimpleContext } from "@opencode-ai/ui/context"
+import { createSimpleContext } from "@oc2-ai/ui/context"
 import { showToast } from "@/utils/toast"
 import { useParams } from "@solidjs/router"
 import { getFilename } from "@oc2-ai/core/util/path"

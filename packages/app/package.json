@@ -1,5 +1,5 @@
 {
-  "name": "@opencode-ai/app",
+  "name": "@oc2-ai/app",
   "version": "1.16.2",
   "description": "",
   "type": "module",
@@ -44,7 +44,7 @@
     "@kobalte/core": "catalog:",
     "@oc2-ai/core": "workspace:*",
     "@oc2-ai/sdk": "workspace:*",
-    "@opencode-ai/ui": "workspace:*",
+    "@oc2-ai/ui": "workspace:*",
     "@sentry/solid": "catalog:",
     "@shikijs/transformers": "3.9.2",
     "@solid-primitives/active-element": "2.1.3",

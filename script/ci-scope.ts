@@ -33,10 +33,10 @@ const sharedPackages = new Set([
   "@oc2-ai/script",
   "@oc2-ai/sdk",
   "@oc2-ai/server",
-  "@opencode-ai/ui",
+  "@oc2-ai/ui",
 ])
-const e2ePackages = new Set(["@opencode-ai/app", "@opencode-ai/ui"])
-const httpApiPackages = new Set(["opencode", "@oc2-ai/core", "@oc2-ai/sdk", "@oc2-ai/server"])
+const e2ePackages = new Set(["@oc2-ai/app", "@oc2-ai/ui"])
+const httpApiPackages = new Set(["oc2", "@oc2-ai/core", "@oc2-ai/sdk", "@oc2-ai/server"])
 
 const args = process.argv.slice(2)
 const event = option("event") ?? process.env.GITHUB_EVENT_NAME ?? "pull_request"

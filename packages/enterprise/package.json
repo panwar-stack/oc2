@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@oc2-ai/core": "workspace:*",
-    "@opencode-ai/ui": "workspace:*",
+    "@oc2-ai/ui": "workspace:*",
     "aws4fetch": "^1.0.20",
     "@pierre/diffs": "catalog:",
     "@solidjs/router": "catalog:",

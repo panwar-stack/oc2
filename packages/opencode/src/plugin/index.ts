@@ -32,6 +32,9 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@oc2-ai/core/installation/version"
 
 const log = Log.create({ service: "plugin" })
+// Third-party auth plugins still publish old plugin peer types until their packages re-scope.
+const GitlabAuthPluginCompat = GitlabAuthPlugin as unknown as PluginInstance
+const PoeAuthPluginCompat = PoeAuthPlugin as unknown as PluginInstance
 
 type State = {
   hooks: Hooks[]
@@ -71,8 +74,8 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
         experimentalWebSockets: experimentalWebSocketsEnabled({ enabled: flags.experimentalWebSockets }),
       }),
     CopilotAuthPlugin,
-    GitlabAuthPlugin,
-    PoeAuthPlugin,
+    GitlabAuthPluginCompat,
+    PoeAuthPluginCompat,
     CloudflareWorkersAuthPlugin,
     CloudflareAIGatewayAuthPlugin,
     AzureAuthPlugin,

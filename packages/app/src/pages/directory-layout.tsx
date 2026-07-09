@@ -1,4 +1,4 @@
-import { DataProvider } from "@opencode-ai/ui/context"
+import { DataProvider } from "@oc2-ai/ui/context"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@oc2-ai/core/util/encode"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"

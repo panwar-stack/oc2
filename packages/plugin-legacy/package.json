@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@opencode-ai/plugin",
+  "name": "@oc2-ai/plugin-legacy",
   "version": "1.16.2",
   "type": "module",
   "license": "MIT",

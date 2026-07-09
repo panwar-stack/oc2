@@ -2,16 +2,6 @@
   "version": 2,
   "entries": [
     {
-      // PR 2 migrates internal workspace package scopes.
-      "path": "**",
-      "pattern": "@opencode-ai/",
-      "count": 541,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "core",
-      "removalSlice": "PR 2",
-    },
-    {
       // Repository and release asset URLs stay on the current GitHub repository until a repo migration exists.
       "path": "**",
       "pattern": "github\\.com/anomalyco/opencode|anomalyco/opencode",
@@ -314,7 +304,7 @@
       // Historical specs intentionally mention legacy names while documenting migrations.
       "path": "specs/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 529,
+      "count": 545,
       "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
@@ -324,7 +314,7 @@
       // Package-local specs intentionally mention legacy names while documenting in-flight design and migration work.
       "path": "packages/*/specs/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 1048,
+      "count": 1057,
       "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
@@ -334,7 +324,7 @@
       // Internal repo automation still invokes legacy package paths and binaries until release/package slices migrate them.
       "path": "script/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 58,
+      "count": 57,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -474,7 +464,7 @@
       // Turbo task and env names follow package/env compatibility until later migration slices.
       "path": "turbo.json",
       "pattern": "opencode|OPENCODE_",
-      "count": 4,
+      "count": 2,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",

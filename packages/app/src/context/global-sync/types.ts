@@ -16,7 +16,7 @@ import type {
   Todo,
   VcsInfo,
 } from "@oc2-ai/sdk/v2/client"
-import { NormalizedProviderListResponse } from "@opencode-ai/ui/context"
+import { NormalizedProviderListResponse } from "@oc2-ai/ui/context"
 import type { Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"
 

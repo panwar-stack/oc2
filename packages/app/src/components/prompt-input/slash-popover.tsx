@@ -1,6 +1,6 @@
 import { Component, For, Match, Show, Switch } from "solid-js"
-import { FileIcon } from "@opencode-ai/ui/file-icon"
-import { Icon } from "@opencode-ai/ui/icon"
+import { FileIcon } from "@oc2-ai/ui/file-icon"
+import { Icon } from "@oc2-ai/ui/icon"
 import { getDirectory, getFilename } from "@oc2-ai/core/util/path"
 
 export type AtOption =

@@ -34,7 +34,7 @@
     "@babel/core": "7.28.4",
     "@octokit/webhooks-types": "7.6.1",
     "@oc2-ai/core": "workspace:*",
-    "@opencode-ai/http-recorder": "workspace:*",
+    "@oc2-ai/http-recorder": "workspace:*",
     "@oc2-ai/script": "workspace:*",
     "@standard-schema/spec": "1.0.0",
     "@tsconfig/bun": "catalog:",

@@ -1,4 +1,4 @@
-import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { useDialog } from "@oc2-ai/ui/context/dialog"
 import { ServerConnection } from "@/context/server"
 import { DialogSelectDirectory } from "./dialog-select-directory"
 

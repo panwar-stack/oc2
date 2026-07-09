@@ -14,7 +14,7 @@
   "dependencies": {
     "@ibm/plex": "6.4.1",
     "@oc2-ai/stats-core": "workspace:*",
-    "@opencode-ai/ui": "workspace:*",
+    "@oc2-ai/ui": "workspace:*",
     "@solidjs/meta": "catalog:",
     "@solidjs/router": "catalog:",
     "@solidjs/start": "catalog:",

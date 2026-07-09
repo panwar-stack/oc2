@@ -1,11 +1,11 @@
-import { TextField } from "@opencode-ai/ui/text-field"
+import { TextField } from "@oc2-ai/ui/text-field"
 import * as Sentry from "@sentry/solid"
-import { Logo } from "@opencode-ai/ui/logo"
-import { Button } from "@opencode-ai/ui/button"
+import { Logo } from "@oc2-ai/ui/logo"
+import { Button } from "@oc2-ai/ui/button"
 import { Component, createSignal, Show } from "solid-js"
 import { usePlatform } from "@/context/platform"
 import { useLanguage } from "@/context/language"
-import { Icon } from "@opencode-ai/ui/icon"
+import { Icon } from "@oc2-ai/ui/icon"
 import { errorDescriptionKey } from "./error-description"
 
 export type InitError = {

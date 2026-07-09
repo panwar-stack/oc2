@@ -632,7 +632,7 @@ describe("tool.registry", () => {
             recursive: true,
           }),
         )
-        for (const packageName of ["@oc2-ai/plugin", "@opencode-ai/plugin"]) {
+        for (const packageName of ["@oc2-ai/plugin", "@oc2-ai/plugin"]) {
           const plugin = path.join(opencode, "node_modules", ...packageName.split("/"))
           const toolName = packageName.includes("opencode") ? "addition-opencode" : "addition-oc2"
           yield* Effect.promise(() => fs.mkdir(path.join(plugin, "dist"), { recursive: true }))

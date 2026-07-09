@@ -6,7 +6,7 @@ import { BillingTable, LiteTable, PaymentTable } from "@oc2-ai/console-core/sche
 import { Identifier } from "@oc2-ai/console-core/identifier.js"
 import { centsToMicroCents } from "@oc2-ai/console-core/util/price.js"
 import { Actor } from "@oc2-ai/console-core/actor.js"
-import { Resource } from "@opencode-ai/console-resource"
+import { Resource } from "@oc2-ai/console-resource"
 import { LiteData } from "@oc2-ai/console-core/lite.js"
 import { BlackData } from "@oc2-ai/console-core/black.js"
 import { Referral } from "@oc2-ai/console-core/referral.js"

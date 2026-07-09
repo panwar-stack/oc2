@@ -70,7 +70,7 @@ beforeAll(async () => {
     },
   }))
 
-  mock.module("@opencode-ai/ui/toast", () => ({
+  mock.module("@oc2-ai/ui/toast", () => ({
     showToast: () => 0,
   }))
 

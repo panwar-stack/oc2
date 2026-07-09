@@ -41,7 +41,7 @@ mock.module("@/context/server-sync", () => ({
   }),
 }))
 
-mock.module("@opencode-ai/ui/context", () => ({
+mock.module("@oc2-ai/ui/context", () => ({
   createSimpleContext: (input: { init: (props?: unknown) => unknown }) => {
     let value: unknown
     return {

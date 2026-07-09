@@ -1,7 +1,7 @@
 import { createEffect } from "solid-js"
-import { createSimpleContext } from "@opencode-ai/ui/context"
+import { createSimpleContext } from "@oc2-ai/ui/context"
 import { dict as en } from "@/i18n/en"
-import { dict as uiEn } from "@opencode-ai/ui/i18n/en"
+import { dict as uiEn } from "@oc2-ai/ui/i18n/en"
 
 export type Locale = "en"
 

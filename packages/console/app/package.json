@@ -1,5 +1,5 @@
 {
-  "name": "@opencode-ai/console-app",
+  "name": "@oc2-ai/console-app",
   "version": "1.16.2",
   "type": "module",
   "license": "MIT",
@@ -18,8 +18,8 @@
     "@openauthjs/openauth": "catalog:",
     "@oc2-ai/console-core": "workspace:*",
     "@oc2-ai/console-mail": "workspace:*",
-    "@opencode-ai/console-resource": "workspace:*",
-    "@opencode-ai/ui": "workspace:*",
+    "@oc2-ai/console-resource": "workspace:*",
+    "@oc2-ai/ui": "workspace:*",
     "@smithy/eventstream-codec": "4.2.7",
     "@smithy/util-utf8": "4.2.0",
     "@solidjs/meta": "catalog:",

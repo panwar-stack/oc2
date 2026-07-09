@@ -51,7 +51,7 @@
     "@oc2-ai/core": "workspace:*",
     "@oc2-ai/plugin": "workspace:*",
     "@oc2-ai/sdk": "workspace:*",
-    "@opencode-ai/ui": "workspace:*",
+    "@oc2-ai/ui": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",
     "@opentui/solid": "catalog:",
