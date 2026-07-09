@@ -5,7 +5,7 @@
       // Repository and release asset URLs stay on the current GitHub repository until a repo migration exists.
       "path": "**",
       "pattern": "github\\.com/anomalyco/opencode|anomalyco/opencode",
-      "count": 44,
+      "count": 13,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -34,7 +34,7 @@
       // Root contributor/security/context docs are public docs and migrate with docs copy.
       "path": "*.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 43,
+      "count": 42,
       "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
@@ -84,7 +84,7 @@
       // Nix package names, env vars, binary paths, and homepage migrate with retained release surfaces.
       "path": "nix/**",
       "pattern": "OpenCode|opencode|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai",
-      "count": 20,
+      "count": 19,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -124,7 +124,7 @@
       // PR 3 rewrites public website docs and examples.
       "path": "packages/web/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 121,
+      "count": 120,
       "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
@@ -164,7 +164,7 @@
       // PR 4 keeps deprecated env, config file, data directory, and header support.
       "path": "packages/core/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 529,
+      "count": 523,
       "kind": "temporary",
       "reason": "compatibility",
       "owner": "core",
@@ -174,7 +174,7 @@
       // PR 4 rewrites canonical CLI/config/server wording while preserving legacy behavior.
       "path": "packages/opencode/src/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 534,
+      "count": 518,
       "kind": "temporary",
       "reason": "migration",
       "owner": "core",
@@ -194,7 +194,7 @@
       // PR 4 covers TUI-facing CLI copy, legacy keymap/provider IDs, and theme defaults.
       "path": "packages/tui/src/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 117,
+      "count": 81,
       "kind": "temporary",
       "reason": "migration",
       "owner": "core",
@@ -224,7 +224,7 @@
       // Legacy CLI/config/server behavior remains covered by tests until canonical defaults are updated.
       "path": "packages/opencode/test/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 1438,
+      "count": 1437,
       "kind": "temporary",
       "reason": "test-fixture",
       "owner": "core",
@@ -234,7 +234,7 @@
       // PR 4 rewrites app and shell copy.
       "path": "packages/app/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 208,
+      "count": 207,
       "kind": "temporary",
       "reason": "migration",
       "owner": "app",
@@ -244,7 +244,7 @@
       // PR 4 rewrites console email/auth and public copy.
       "path": "packages/console/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 89,
+      "count": 60,
       "kind": "temporary",
       "reason": "migration",
       "owner": "app",
@@ -274,7 +274,7 @@
       // PR 6 updates workflows while keeping deprecated triggers/secrets where needed.
       "path": ".github/**",
       "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
-      "count": 111,
+      "count": 104,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -324,7 +324,7 @@
       // Internal repo automation still invokes legacy package paths and binaries until release/package slices migrate them.
       "path": "script/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 57,
+      "count": 55,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -334,7 +334,7 @@
       // Release script package keeps deprecated env and package fallbacks until package metadata/release slices migrate them.
       "path": "packages/script/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 20,
+      "count": 19,
       "kind": "temporary",
       "reason": "compatibility",
       "owner": "release",
@@ -364,7 +364,7 @@
       // Stats app/domain copy and historical provider dimensions migrate with web/app public copy.
       "path": "packages/stats/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 68,
+      "count": 58,
       "kind": "temporary",
       "reason": "migration",
       "owner": "app",
@@ -384,7 +384,7 @@
       // Remaining package-local docs, scripts, manifests, and fixtures are migrated by later package-specific slices.
       "path": "packages/*/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 151,
+      "count": 145,
       "kind": "temporary",
       "reason": "migration",
       "owner": "core",
@@ -394,7 +394,7 @@
       // Historical local patch tooling references the legacy repository and install paths.
       "path": "patches/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 48,
+      "count": 47,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",

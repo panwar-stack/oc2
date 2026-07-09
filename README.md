@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://oc2.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
   <a href="https://www.npmjs.com/package/oc2-ai"><img alt="npm" src="https://img.shields.io/npm/v/oc2-ai?style=flat-square" /></a>
-  <a href="https://github.com/panwar-stack/oc2/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
+  <a href="https://github.com/panwar-stack/oc2/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/panwar-stack/oc2/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
 
 [![OC2 Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://oc2.ai)
@@ -28,12 +28,12 @@ curl -fsSL https://oc2.ai/install | bash
 npm i -g oc2-ai@latest        # or bun/pnpm/yarn
 scoop install oc2             # Windows
 choco install oc2             # Windows
-brew install anomalyco/tap/oc2 # macOS and Linux (recommended, always up to date)
+brew install panwar-stack/tap/oc2 # macOS and Linux (recommended, always up to date)
 brew install oc2              # macOS and Linux (official brew formula, updated less)
 sudo pacman -S oc2            # Arch Linux (Stable)
 paru -S oc2-bin               # Arch Linux (Latest from AUR)
 mise use -g oc2               # Any OS
-nix run nixpkgs#oc2           # or github:anomalyco/opencode for latest dev branch
+nix run nixpkgs#oc2           # or github:panwar-stack/oc2 for latest dev branch
 ```
 
 Legacy commands, config files, env vars, and install URLs remain supported as migration aliases. Prefer `oc2` names for new installs and documentation.

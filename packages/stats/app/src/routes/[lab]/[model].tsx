@@ -32,7 +32,7 @@ import {
   type ThemePreference,
 } from "../stats-shell"
 
-const statsModelFallbackUrl = "https://stats.opencode.ai"
+const statsModelFallbackUrl = "https://stats.oc2.ai"
 const modelHeaderLinks: readonly HeaderLink[] = [
   { href: "#overview", label: "Overview" },
   { href: "#usage", label: "Usage" },

@@ -66,7 +66,7 @@ const CMD_FILES = new Set([
 ])
 const FLAGS = new Set(["-destination", "-literalpath", "-path"])
 const SWITCHES = new Set(["-confirm", "-debug", "-force", "-nonewline", "-recurse", "-verbose", "-whatif"])
-const SANDBOX_IMAGE = "ghcr.io/anomalyco/build/bun-node:24.04"
+const SANDBOX_IMAGE = "ghcr.io/panwar-stack/build/bun-node:24.04"
 const SANDBOX_PROXY_PORT = 3128
 
 type Part = {

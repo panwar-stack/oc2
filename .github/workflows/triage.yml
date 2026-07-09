@@ -20,7 +20,7 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Install oc2
-        run: curl -fsSL https://opencode.ai/install | bash
+        run: curl -fsSL https://oc2.ai/install | bash
 
       - name: Triage issue
         env:

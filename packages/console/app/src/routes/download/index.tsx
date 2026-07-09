@@ -118,28 +118,28 @@ export default function Download() {
             <div data-component="section-content">
               <button
                 data-component="cli-row"
-                onClick={handleCopyClick("curl -fsSL https://opencode.ai/install | bash")}
+                onClick={handleCopyClick("curl -fsSL https://oc2.ai/install | bash")}
               >
                 <code>
-                  curl -fsSL https://<strong>opencode.ai/install</strong> | bash
+                  curl -fsSL https://<strong>oc2.ai/install</strong> | bash
                 </code>
                 <CopyStatus />
               </button>
-              <button data-component="cli-row" onClick={handleCopyClick("npm i -g opencode-ai")}>
+              <button data-component="cli-row" onClick={handleCopyClick("npm i -g oc2-ai")}>
                 <code>
-                  npm i -g <strong>opencode-ai</strong>
+                  npm i -g <strong>oc2-ai</strong>
                 </code>
                 <CopyStatus />
               </button>
-              <button data-component="cli-row" onClick={handleCopyClick("bun add -g opencode-ai")}>
+              <button data-component="cli-row" onClick={handleCopyClick("bun add -g oc2-ai")}>
                 <code>
-                  bun add -g <strong>opencode-ai</strong>
+                  bun add -g <strong>oc2-ai</strong>
                 </code>
                 <CopyStatus />
               </button>
-              <button data-component="cli-row" onClick={handleCopyClick("brew install anomalyco/tap/opencode")}>
+              <button data-component="cli-row" onClick={handleCopyClick("brew install panwar-stack/tap/oc2")}>
                 <code>
-                  brew install <strong>anomalyco/tap/opencode</strong>
+                  brew install <strong>panwar-stack/tap/oc2</strong>
                 </code>
                 <CopyStatus />
               </button>

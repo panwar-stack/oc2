@@ -15,7 +15,7 @@ export const headerLinks = [
 ] as const
 export const githubLink = {
   href: "https://github.com/panwar-stack/oc2",
-  apiHref: "https://api.github.com/repos/anomalyco/opencode",
+  apiHref: "https://api.github.com/repos/panwar-stack/oc2",
   label: "GitHub",
   fallbackStars: "150K",
   ariaLabel: "Star OpenCode on GitHub",
@@ -127,7 +127,7 @@ export function Header(props: { githubStars: string; links?: readonly HeaderLink
             <strong>{githubLink.label}</strong>
             <span>[{props.githubStars}]</span>
           </a>
-          <a data-slot="header-button" data-variant="contrast" href="https://opencode.ai/">
+          <a data-slot="header-button" data-variant="contrast" href="https://oc2.ai/">
             <strong>Try OpenCode</strong>
           </a>
           <button
@@ -235,12 +235,12 @@ export function Footer(props: {
     { href: "#geo-breakdown", label: "Geo Breakdown" },
   ]
   const legal = [
-    { href: "https://opencode.ai/legal/terms-of-service", label: "Terms of service" },
-    { href: "https://opencode.ai/legal/privacy-policy", label: "Privacy policy" },
+    { href: "https://oc2.ai/legal/terms-of-service", label: "Terms of service" },
+    { href: "https://oc2.ai/legal/privacy-policy", label: "Privacy policy" },
   ]
   const connect = [
     { href: "mailto:hello@opencode.ai", label: "Contact us" },
-    { href: "https://opencode.ai/discord", label: "Community" },
+    { href: "https://oc2.ai/discord", label: "Community" },
     { href: "https://x.com/opencode", label: "X" },
     githubLink,
     { href: "https://www.youtube.com/@anomaly-co", label: "YouTube" },
@@ -250,7 +250,7 @@ export function Footer(props: {
     <footer data-component="footer">
       <SectionBridge label="GEO BREAKDOWN" href="#geo-breakdown" />
       <div data-slot="footer-grid">
-        <a data-slot="footer-mark" href="https://opencode.ai" aria-label="OpenCode home">
+        <a data-slot="footer-mark" href="https://oc2.ai" aria-label="OpenCode home">
           <OpenCodeMark />
         </a>
         <FooterColumn title="Model Stats" links={modelStats} />

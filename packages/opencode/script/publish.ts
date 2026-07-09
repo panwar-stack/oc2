@@ -87,16 +87,14 @@ async function writeWrapperPackage(name: string) {
 }
 
 await writeWrapperPackage("oc2-ai")
-await writeWrapperPackage("opencode-ai")
 
 const tasks = Object.entries(binaries).map(async ([name]) => {
   await publish(`./dist/${name}`, name, binaries[name])
 })
 await Promise.all(tasks)
 await publish("./dist/oc2-ai", "oc2-ai", version)
-await publish("./dist/opencode-ai", "opencode-ai", version)
 
-const images = ["ghcr.io/anomalyco/oc2", "ghcr.io/anomalyco/opencode"]
+const images = ["ghcr.io/panwar-stack/oc2"]
 const platforms = "linux/amd64,linux/arm64"
 const tags = images.flatMap((image) => [`${image}:${version}`, `${image}:${Script.channel}`])
 const tagFlags = tags.flatMap((t) => ["-t", t])
@@ -224,7 +222,7 @@ if (!Script.preview) {
     console.error("GITHUB_TOKEN is required to update homebrew tap")
     process.exit(1)
   }
-  const tap = `https://x-access-token:${token}@github.com/anomalyco/homebrew-tap.git`
+  const tap = `https://x-access-token:${token}@github.com/panwar-stack/homebrew-tap.git`
   await $`rm -rf ./dist/homebrew-tap`
   await $`git clone ${tap} ./dist/homebrew-tap`
   await Bun.file("./dist/homebrew-tap/oc2.rb").write(homebrewFormula)

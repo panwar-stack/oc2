@@ -28,7 +28,7 @@ import {
   type ThemePreference,
 } from "../stats-shell"
 
-const statsLabFallbackUrl = "https://stats.opencode.ai"
+const statsLabFallbackUrl = "https://stats.oc2.ai"
 const labHeaderLinks: readonly HeaderLink[] = [
   { href: "#overview", label: "Overview" },
   { href: "#usage", label: "Usage" },

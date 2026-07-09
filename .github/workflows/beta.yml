@@ -28,7 +28,7 @@ jobs:
           opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
 
       - name: Install oc2
-        run: bun i -g opencode-ai
+        run: bun i -g oc2-ai
 
       - name: Sync beta branch
         env:

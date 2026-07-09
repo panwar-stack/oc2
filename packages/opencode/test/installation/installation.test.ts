@@ -172,7 +172,7 @@ describe("installation", () => {
       testLayer(
         () => jsonResponse({ versions: { stable: "2.0.0" } }),
         (cmd, args) => {
-          if (cmd === "brew" && args.includes("--formula") && args.includes("anomalyco/tap/oc2")) return ""
+          if (cmd === "brew" && args.includes("--formula") && args.includes("panwar-stack/tap/oc2")) return ""
           if (cmd === "brew" && args.includes("--formula") && args.includes("oc2")) return "oc2"
           return ""
         },
@@ -191,7 +191,7 @@ describe("installation", () => {
       testLayer(
         () => jsonResponse({}), // HTTP not used for tap formula
         (cmd, args) => {
-          if (cmd === "brew" && args.includes("anomalyco/tap/oc2") && args.includes("--formula")) return "oc2"
+          if (cmd === "brew" && args.includes("panwar-stack/tap/oc2") && args.includes("--formula")) return "oc2"
           if (cmd === "brew" && args.includes("--json=v2")) return brewInfoJson
           return ""
         },
@@ -249,10 +249,10 @@ describe("installation", () => {
           return ""
         },
       ),
-    ).effect("upgrades legacy npm package when that is installed", () =>
+    ).effect("upgrades legacy npm package through the oc2 package", () =>
       Effect.gen(function* () {
         yield* Installation.use.upgrade("npm", "9.9.9")
-        expect(npmUpgradeCommands).toContainEqual(["npm", "install", "-g", "opencode-ai@9.9.9"])
+        expect(npmUpgradeCommands).toContainEqual(["npm", "install", "-g", "oc2-ai@9.9.9"])
       }),
     )
 

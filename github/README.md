@@ -89,7 +89,7 @@ This will walk you through installing the GitHub app, creating the workflow, and
              persist-credentials: false
 
          - name: Run oc2
-           uses: anomalyco/opencode/github@latest
+           uses: panwar-stack/oc2/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

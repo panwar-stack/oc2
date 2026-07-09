@@ -320,7 +320,7 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
         s.stop("Installed GitHub app")
 
         async function getInstallation() {
-          return await fetch(`https://api.opencode.ai/get_github_app_installation?owner=${app.owner}&repo=${app.repo}`)
+          return await fetch(`https://api.oc2.ai/get_github_app_installation?owner=${app.owner}&repo=${app.repo}`)
             .then((res) => res.json())
             .then((data) => data.installation)
         }
@@ -362,7 +362,7 @@ jobs:
           persist-credentials: false
 
       - name: Run oc2
-        uses: anomalyco/opencode/github@latest${envStr}
+        uses: panwar-stack/oc2/github@latest${envStr}
         with:
           model: ${provider}/${model}`,
         )
@@ -426,7 +426,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         ? (payload as IssueCommentEvent | IssuesEvent).issue.number
         : (payload as PullRequestEvent | PullRequestReviewCommentEvent).pull_request.number
     const runUrl = `/${owner}/${repo}/actions/runs/${runId}`
-    const shareBaseUrl = isMock ? "https://dev.opencode.ai" : "https://opencode.ai"
+    const shareBaseUrl = isMock ? "https://dev.opencode.ai" : "https://oc2.ai"
 
     let appToken: string
     let octoRest: Octokit

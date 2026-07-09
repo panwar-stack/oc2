@@ -144,12 +144,10 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
     )
 
     const getBrewFormula = Effect.fnUntraced(function* () {
-      const oc2TapFormula = yield* text(["brew", "list", "--formula", "anomalyco/tap/oc2"])
-      if (oc2TapFormula.includes("oc2")) return "anomalyco/tap/oc2"
+      const oc2TapFormula = yield* text(["brew", "list", "--formula", "panwar-stack/tap/oc2"])
+      if (oc2TapFormula.includes("oc2")) return "panwar-stack/tap/oc2"
       const oc2CoreFormula = yield* text(["brew", "list", "--formula", "oc2"])
       if (oc2CoreFormula.includes("oc2")) return "oc2"
-      const tapFormula = yield* text(["brew", "list", "--formula", "anomalyco/tap/opencode"])
-      if (tapFormula.includes("opencode")) return "anomalyco/tap/opencode"
       const coreFormula = yield* text(["brew", "list", "--formula", "opencode"])
       if (coreFormula.includes("opencode")) return "opencode"
       return "oc2"
@@ -322,7 +320,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         }
 
         const response = yield* httpOk.execute(
-          HttpClientRequest.get("https://api.github.com/repos/anomalyco/opencode/releases/latest").pipe(
+          HttpClientRequest.get("https://api.github.com/repos/panwar-stack/oc2/releases/latest").pipe(
             HttpClientRequest.acceptJson,
           ),
         )
@@ -336,39 +334,24 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
             upgradeResult = yield* upgradeCurl(target)
             break
           case "npm":
-            upgradeResult = yield* run([
-              "npm",
-              "install",
-              "-g",
-              `${(yield* installedPackage("npm", ["oc2-ai", "opencode-ai"])) ?? "oc2-ai"}@${target}`,
-            ])
+            upgradeResult = yield* run(["npm", "install", "-g", `oc2-ai@${target}`])
             break
           case "pnpm":
-            upgradeResult = yield* run([
-              "pnpm",
-              "install",
-              "-g",
-              `${(yield* installedPackage("pnpm", ["oc2-ai", "opencode-ai"])) ?? "oc2-ai"}@${target}`,
-            ])
+            upgradeResult = yield* run(["pnpm", "install", "-g", `oc2-ai@${target}`])
             break
           case "bun":
-            upgradeResult = yield* run([
-              "bun",
-              "install",
-              "-g",
-              `${(yield* installedPackage("bun", ["oc2-ai", "opencode-ai"])) ?? "oc2-ai"}@${target}`,
-            ])
+            upgradeResult = yield* run(["bun", "install", "-g", `oc2-ai@${target}`])
             break
           case "brew": {
             const formula = yield* getBrewFormula()
             const env = { HOMEBREW_NO_AUTO_UPDATE: "1" }
             if (formula.includes("/")) {
-              const tap = yield* run(["brew", "tap", "anomalyco/tap"], { env })
+              const tap = yield* run(["brew", "tap", "panwar-stack/tap"], { env })
               if (tap.code !== 0) {
                 upgradeResult = tap
                 break
               }
-              const repo = yield* text(["brew", "--repo", "anomalyco/tap"])
+              const repo = yield* text(["brew", "--repo", "panwar-stack/tap"])
               const dir = repo.trim()
               if (dir) {
                 const pull = yield* run(["git", "pull", "--ff-only"], { cwd: dir, env })
