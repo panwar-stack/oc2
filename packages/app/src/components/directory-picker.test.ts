@@ -2,14 +2,12 @@ import { describe, expect, test } from "bun:test"
 import { directoryPickerKind } from "./directory-picker-policy"
 
 const local = {
-  type: "sidecar",
-  variant: "base",
+  type: "http",
   http: { url: "http://localhost:4096" },
 } as const
 const remote = {
-  type: "ssh",
-  host: "example.test",
-  http: { url: "http://localhost:4096" },
+  type: "http",
+  http: { url: "https://example.test" },
 } as const
 
 describe("directoryPickerKind", () => {

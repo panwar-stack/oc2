@@ -28,8 +28,8 @@ describe("getWorkspaceTerminalCacheKey", () => {
   })
 
   test("can include a server scope", () => {
-    expect(String(getWorkspaceTerminalCacheKey("/repo", "ssh:debian" as ServerScope))).toBe(
-      "ssh:debian\u0000/repo\u0000__workspace__",
+    expect(String(getWorkspaceTerminalCacheKey("/repo", "https://debian.example" as ServerScope))).toBe(
+      "https://debian.example\u0000/repo\u0000__workspace__",
     )
   })
 })

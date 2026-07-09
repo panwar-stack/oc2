@@ -61,38 +61,22 @@ describe("resolveServerList", () => {
   })
 })
 
-test("treats WSL sidecars as remote server connections", () => {
-  expect(
-    ServerConnection.local({
-      type: "sidecar",
-      variant: "wsl",
-      distro: "Debian",
-      http: { url: "http://127.0.0.1:4097" },
-    }),
-  ).toBe(false)
-  expect(ServerConnection.local({ type: "sidecar", variant: "base", http: { url: "http://127.0.0.1:4096" } })).toBe(
-    true,
-  )
+test("detects loopback HTTP server connections as local", () => {
   expect(ServerConnection.local({ type: "http", http: { url: "http://localhost:4096" } })).toBe(true)
   expect(ServerConnection.local({ type: "http", http: { url: "https://server.example.test" } })).toBe(false)
 })
 
-test("active server removal falls back across built-in and persisted servers", () => {
-  const local = { type: "sidecar", variant: "base", http: { url: "http://127.0.0.1:4096" } } as const
-  const debian = {
-    type: "sidecar",
-    variant: "wsl",
-    distro: "Debian",
-    http: { url: "http://127.0.0.1:4097" },
-  } as const
+test("active server removal falls back across HTTP servers", () => {
+  const local = { type: "http", http: { url: "http://127.0.0.1:4096" } } as const
+  const remote = { type: "http", http: { url: "https://debian.example" } } as const
 
   expect(
     nextServerAfterRemoval(
-      [local, debian],
-      ServerConnection.Key.make("wsl:Debian"),
-      ServerConnection.Key.make("sidecar"),
+      [local, remote],
+      ServerConnection.Key.make("https://debian.example"),
+      ServerConnection.Key.make("http://127.0.0.1:4096"),
     ),
-  ).toBe(ServerConnection.Key.make("sidecar"))
+  ).toBe(ServerConnection.Key.make("http://127.0.0.1:4096"))
 })
 
 describe("createServerProjects", () => {

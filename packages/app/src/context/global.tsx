@@ -128,8 +128,7 @@ function createServerCtx(
 
   const projectsList = createMemo(() => projects.list().map(enrich))
 
-  const isLocal =
-    (conn?.type === "sidecar" && conn.variant === "base") || (conn?.type === "http" && isLocalHost(conn.http.url))
+  const isLocal = !!conn && isLocalHost(conn.http.url)
 
   return {
     queryClient,

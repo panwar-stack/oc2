@@ -39,7 +39,6 @@ import { tabHref, useTabs, type Tab } from "@/context/tabs"
 
 const legacyTitlebarHeight = 40
 const v2TitlebarHeight = 36
-const windowsControlsBaseWidth = 138 // 3 native Windows caption buttons at 46px each.
 
 export function Titlebar() {
   const layout = useLayout()
@@ -51,20 +50,6 @@ export function Titlebar() {
   const location = useLocation()
   const params = useParams()
   const useV2Titlebar = createMemo(() => settings.general.newLayoutDesigns())
-
-  const mac = () => false
-  const windows = () => false
-  const web = () => true
-  const zoom = () => 1
-  const titlebarZoom = () => 1
-  const counterZoom = () => 1
-  const minHeight = () => {
-    const height = useV2Titlebar() ? v2TitlebarHeight : legacyTitlebarHeight
-    if (mac()) return `${height / zoom()}px`
-    if (windows()) return `${height / Math.min(titlebarZoom(), 1)}px`
-    return undefined
-  }
-  const windowsControlsWidth = () => `${windowsControlsBaseWidth / Math.max(titlebarZoom(), 1)}px`
 
   const [history, setHistory] = createStore({
     stack: [] as string[],
@@ -132,10 +117,7 @@ export function Titlebar() {
         "h-9 bg-v2-background-bg-deep overflow-visible": useV2Titlebar(),
         "h-10 bg-background-base overflow-hidden": !useV2Titlebar(),
       }}
-      style={{
-        "min-height": minHeight(),
-        "padding-left": mac() ? `${84 / zoom()}px` : 0,
-      }}
+      style={{ "min-height": `${useV2Titlebar() ? v2TitlebarHeight : legacyTitlebarHeight}px` }}
     >
       <Switch>
         <Match when={useV2Titlebar()}>
@@ -304,13 +286,7 @@ export function Titlebar() {
             }
 
             return (
-              <div
-                class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 pr-3 pt-2"
-                classList={{
-                  "pl-2": mac(),
-                  "pl-4": !mac(),
-                }}
-              >
+              <div class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 pr-3 pt-2 pl-4">
                 <ChannelIndicator />
                 <IconButtonV2
                   variant="ghost-muted"
@@ -323,7 +299,7 @@ export function Titlebar() {
                 />
 
                 <div
-                  class="flex min-w-0 flex-row items-center gap-1.5 overflow-x-auto no-scrollbar [app-region:no-drag]"
+                  class="flex min-w-0 flex-row items-center gap-1.5 overflow-x-auto no-scrollbar"
                   ref={tabScrollRef}
                 >
                   <div class="flex min-w-0 flex-row items-center gap-1.5">
@@ -406,44 +382,26 @@ export function Titlebar() {
           }}
         </Match>
         <Match when>
-          <div
-            class="grid h-full min-h-full w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center"
-            style={{ zoom: counterZoom() }}
-          >
+          <div class="grid h-full min-h-full w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center">
             <div
               classList={{
                 "flex items-center min-w-0": true,
-                "pl-2": !mac(),
+                "pl-2": true,
               }}
             >
-              <Show when={mac()}>
-                {/*<div class="h-full shrink-0" style={{ width: `${72 / zoom()}px` }} />*/}
-                <div class="xl:hidden w-10 shrink-0 flex items-center justify-center">
-                  <IconButton
-                    icon="menu"
-                    variant="ghost"
-                    class="titlebar-icon rounded-md"
-                    onClick={layout.mobileSidebar.toggle}
-                    aria-label={language.t("sidebar.menu.toggle")}
-                    aria-expanded={layout.mobileSidebar.opened()}
-                  />
-                </div>
-              </Show>
-              <Show when={!mac()}>
-                <div class="xl:hidden w-[48px] shrink-0 flex items-center justify-center">
-                  <IconButton
-                    icon="menu"
-                    variant="ghost"
-                    class="titlebar-icon rounded-md"
-                    onClick={layout.mobileSidebar.toggle}
-                    aria-label={language.t("sidebar.menu.toggle")}
-                    aria-expanded={layout.mobileSidebar.opened()}
-                  />
-                </div>
-              </Show>
+              <div class="xl:hidden w-[48px] shrink-0 flex items-center justify-center">
+                <IconButton
+                  icon="menu"
+                  variant="ghost"
+                  class="titlebar-icon rounded-md"
+                  onClick={layout.mobileSidebar.toggle}
+                  aria-label={language.t("sidebar.menu.toggle")}
+                  aria-expanded={layout.mobileSidebar.opened()}
+                />
+              </div>
               <div class="flex items-center gap-1 shrink-0">
                 <TooltipKeybind
-                  class={web() ? "hidden xl:flex shrink-0 ml-14" : "hidden xl:flex shrink-0 ml-2"}
+                  class="hidden xl:flex shrink-0 ml-14"
                   placement="bottom"
                   title={language.t("command.sidebar.toggle")}
                   keybind={command.keybind("sidebar.toggle")}
@@ -543,13 +501,10 @@ export function Titlebar() {
             <div
               classList={{
                 "flex items-center min-w-0 justify-end": true,
-                "pr-2": !windows(),
+                "pr-2": true,
               }}
             >
               <div id="opencode-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end" />
-              <Show when={windows()}>
-                <div class="shrink-0" style={{ width: windowsControlsWidth() }} />
-              </Show>
             </div>
           </div>
         </Match>

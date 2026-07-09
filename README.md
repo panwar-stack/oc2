@@ -14,31 +14,6 @@
   <a href="https://github.com/panwar-stack/oc2/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
-
 [![OC2 Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://oc2.ai)
 
 ---
@@ -65,24 +40,6 @@ Legacy commands, config files, env vars, and install URLs remain supported as mi
 
 > [!TIP]
 > Remove versions older than 0.1.x before installing.
-
-### Desktop App (BETA)
-
-OC2 is also available as a desktop application. Download directly from the [releases page](https://github.com/panwar-stack/oc2/releases) or [oc2.ai/download](https://oc2.ai/download).
-
-| Platform              | Download                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `oc2-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `oc2-desktop-mac-x64.dmg`     |
-| Windows               | `oc2-desktop-windows-x64.exe` |
-| Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
-
-```bash
-# macOS (Homebrew)
-brew install --cask oc2-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/oc2-desktop
-```
 
 #### Installation Directory
 

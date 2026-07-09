@@ -15,7 +15,6 @@ export const ServerRowMenu: Component<{
 }> = (props) => {
   const language = useLanguage()
   const key = ServerConnection.key(props.server)
-  const builtin = ServerConnection.builtin(props.server)
   const isDefault = () => props.controller.defaultKey() === key
 
   return (
@@ -32,8 +31,7 @@ export const ServerRowMenu: Component<{
           <MenuV2.Group>
             <MenuV2.GroupLabel>{language.t("settings.section.server")}</MenuV2.GroupLabel>
             <MenuV2.Item
-              disabled={builtin || props.server.type !== "http"}
-              onSelect={() => props.onEdit(props.server as ServerConnection.Http)}
+              onSelect={() => props.onEdit(props.server)}
             >
               {language.t("dialog.server.menu.edit")}
             </MenuV2.Item>
@@ -48,7 +46,7 @@ export const ServerRowMenu: Component<{
               </MenuV2.Item>
             </Show>
             <MenuV2.Separator />
-            <MenuV2.Item disabled={builtin} onSelect={() => props.controller.handleRemove(key)}>
+            <MenuV2.Item onSelect={() => props.controller.handleRemove(key)}>
               {language.t("dialog.server.menu.delete")}
             </MenuV2.Item>
           </MenuV2.Group>
