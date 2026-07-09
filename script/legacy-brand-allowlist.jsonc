@@ -101,10 +101,10 @@
       "removalSlice": "PR 8",
     },
     {
-      // Root package scripts still reference package paths, AWS SSO names, and the current external repository.
+      // Root package metadata still references legacy package paths until package slices migrate them.
       "path": "package.json",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 3,
+      "count": 2,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -244,7 +244,7 @@
       // PR 6 updates workflows while keeping deprecated triggers/secrets where needed.
       "path": ".github/**",
       "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
-      "count": 53,
+      "count": 36,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -274,7 +274,7 @@
       // Historical specs intentionally mention legacy names while documenting migrations.
       "path": "specs/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 545,
+      "count": 541,
       "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
@@ -294,7 +294,7 @@
       // Internal repo automation still invokes legacy package paths and binaries until release/package slices migrate them.
       "path": "script/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 51,
+      "count": 17,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
