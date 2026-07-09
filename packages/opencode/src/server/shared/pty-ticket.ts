@@ -1,8 +1,7 @@
 import { Naming } from "@oc2-ai/core/naming"
 
 export const PTY_CONNECT_TICKET_QUERY = "ticket"
-export const PTY_CONNECT_TOKEN_HEADER = Naming.headers.ticket[0]
-export const LEGACY_PTY_CONNECT_TOKEN_HEADER = Naming.headers.ticket[1]
+export const PTY_CONNECT_TOKEN_HEADER = Naming.headers.ticket
 export const PTY_CONNECT_TOKEN_HEADER_VALUE = "1"
 
 const PTY_CONNECT_PATH = /^\/pty\/[^/]+\/connect$/

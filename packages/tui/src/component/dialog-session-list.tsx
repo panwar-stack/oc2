@@ -173,7 +173,7 @@ export function DialogSessionList() {
       const workspace = x.workspaceID ? project.workspace.get(x.workspaceID) : undefined
 
       let footer: JSX.Element | string = ""
-      if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
+      if (Flag.OC2_EXPERIMENTAL_WORKSPACES) {
         if (x.workspaceID) {
           footer = workspace ? (
             <WorkspaceLabel

@@ -185,12 +185,12 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       acc.plugin_origins = plugins
     })
 
-  // Every config dir we may read from: global config dir, any `.oc2`/`.opencode`
-  // folders between cwd and home, and OC2_CONFIG_DIR/OPENCODE_CONFIG_DIR.
+  // Every config dir we may read from: global config dir, any `.oc2`
+  // folders between cwd and home, and OC2_CONFIG_DIR.
   const directories = yield* ConfigPaths.directories(ctx.directory)
   yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
 
-  const projectFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
+  const projectFiles = Flag.OC2_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
 
   const acc: Acc = {
     result: {},
@@ -202,9 +202,9 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* mergeFile(acc, file)
   }
 
-  // 2. Explicit OC2_TUI_CONFIG/OPENCODE_TUI_CONFIG override, if set.
-  if (Flag.OPENCODE_TUI_CONFIG) {
-    const configFile = Flag.OPENCODE_TUI_CONFIG
+  // 2. Explicit OC2_TUI_CONFIG override, if set.
+  if (Flag.OC2_TUI_CONFIG) {
+    const configFile = Flag.OC2_TUI_CONFIG
     yield* mergeFile(acc, configFile)
     log.debug("loaded custom tui config", { path: configFile })
   }
@@ -214,15 +214,15 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* mergeFile(acc, file)
   }
 
-  // 4. `.oc2`/`.opencode` directories (and OC2_CONFIG_DIR/OPENCODE_CONFIG_DIR) discovered while
+  // 4. `.oc2` directories (and OC2_CONFIG_DIR) discovered while
   // walking up the tree. Also returned below so callers can install plugin
   // dependencies from each location.
   const dirs = unique(directories).filter(
-    (dir) => Naming.configDirs.some((name) => dir.endsWith(name)) || dir === Flag.OPENCODE_CONFIG_DIR,
+    (dir) => Naming.configDirs.some((name) => dir.endsWith(name)) || dir === Flag.OC2_CONFIG_DIR,
   )
 
   for (const dir of dirs) {
-    if (!Naming.configDirs.some((name) => dir.endsWith(name)) && dir !== Flag.OPENCODE_CONFIG_DIR) continue
+    if (!Naming.configDirs.some((name) => dir.endsWith(name)) && dir !== Flag.OC2_CONFIG_DIR) continue
     for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
       yield* mergeFile(acc, file)
     }

@@ -91,13 +91,9 @@ export const UninstallCommand = {
 async function collectRemovalTargets(args: UninstallArgs, method: Installation.Method): Promise<RemovalTargets> {
   const directories = uniqueDirectories([
     { path: Global.CanonicalPath.data, label: "Data", keep: args.keepData },
-    { path: Global.LegacyPath.data, label: "Legacy data", keep: args.keepData },
     { path: Global.CanonicalPath.cache, label: "Cache", keep: false },
-    { path: Global.LegacyPath.cache, label: "Legacy cache", keep: false },
     { path: Global.CanonicalPath.config, label: "Config", keep: args.keepConfig },
-    { path: Global.LegacyPath.config, label: "Legacy config", keep: args.keepConfig },
     { path: Global.CanonicalPath.state, label: "State", keep: false },
-    { path: Global.LegacyPath.state, label: "Legacy state", keep: false },
   ])
 
   const shellConfig = method === "curl" ? await getShellConfigFile() : null

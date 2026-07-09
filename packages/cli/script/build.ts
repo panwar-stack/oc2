@@ -53,11 +53,11 @@ for (const item of targets) {
       windows: {},
     },
     define: {
-      OPENCODE_VERSION: `'${Script.version}'`,
-      OPENCODE_CLI_NAME: `'${binary}'`,
-      OPENCODE_MODELS_DEV: modelsData,
-      OPENCODE_CHANNEL: `'${Script.channel}'`,
-      OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "undefined",
+      OC2_VERSION: `'${Script.version}'`,
+      OC2_CLI_NAME: `'${binary}'`,
+      OC2_MODELS_DEV: modelsData,
+      OC2_CHANNEL: `'${Script.channel}'`,
+      OC2_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "undefined",
       OTUI_TREE_SITTER_WORKER_PATH:
         (item.os === "win32" ? '"B:/~BUN/root/' : '"/$bunfs/root/') +
         path.relative(dir, parserWorker).replaceAll("\\", "/") +

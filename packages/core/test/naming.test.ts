@@ -13,20 +13,16 @@ function withEnv(key: string, value: string | undefined, fn: () => void) {
   }
 }
 
-describe("Naming env compatibility", () => {
-  test("prefers OC2 env vars over OPENCODE fallbacks", () => {
+describe("Naming env", () => {
+  test("reads OC2 env vars", () => {
     withEnv("OC2_CONFIG", "new", () => {
-      withEnv("OPENCODE_CONFIG", "old", () => {
-        expect(Naming.env("OPENCODE_CONFIG")).toBe("new")
-      })
+      expect(Naming.env("OC2_CONFIG")).toBe("new")
     })
   })
 
-  test("falls back to OPENCODE env vars", () => {
+  test("returns undefined for unset OC2 env vars", () => {
     withEnv("OC2_CONFIG", undefined, () => {
-      withEnv("OPENCODE_CONFIG", "old", () => {
-        expect(Naming.env("OPENCODE_CONFIG")).toBe("old")
-      })
+      expect(Naming.env("OC2_CONFIG")).toBeUndefined()
     })
   })
 })

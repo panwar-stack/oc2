@@ -320,7 +320,7 @@ const ensureDir = Effect.fn("test.ensureDir")(function* (dir: string) {
 
 const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
   yield* writeText(
-    path.join(dir, "opencode.json"),
+    path.join(dir, "oc2.json"),
     JSON.stringify({ $schema: "https://opencode.ai/config.json", ...config }),
   )
 })
@@ -1103,7 +1103,7 @@ it.live("injects team orchestration guidance for primary lead sessions when agen
             body.includes("Current teammate model: test/test-model") &&
             body.includes("The current teammate model exposes no teammate variants") &&
             body.includes("Omit team_spawn.variant for default behavior") &&
-            body.includes("Lead checklist") &&
+            body.includes("Lead role") &&
             body.includes("run a final team report"),
         ),
       ).toBe(true)

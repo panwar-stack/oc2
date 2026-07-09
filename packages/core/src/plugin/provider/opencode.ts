@@ -9,11 +9,11 @@ export const OpencodePlugin = PluginV2.define({
     let hasKey = false
     return {
       "catalog.transform": Effect.fn(function* (evt) {
-        for (const providerID of [ProviderV2.ID.opencode, ProviderV2.ID.oc2]) {
+        for (const providerID of [ProviderV2.ID.oc2]) {
           const item = evt.provider.get(providerID)
           if (!item) continue
           hasKey = Boolean(
-            Naming.env("OPENCODE_API_KEY") ||
+            Naming.env("OC2_API_KEY") ||
               item.provider.env.some((env) => Naming.env(env)) ||
               item.provider.request.body.apiKey ||
               (item.provider.enabled && item.provider.enabled.via === "account"),

@@ -1046,7 +1046,7 @@ export function options(input: {
 
   if (
     input.model.providerID === "baseten" ||
-    (input.model.providerID === "opencode" && ["kimi-k2-thinking", "glm-4.6"].includes(input.model.api.id))
+    (input.model.providerID === "oc2" && ["kimi-k2-thinking", "glm-4.6"].includes(input.model.api.id))
   ) {
     result["chat_template_args"] = { enable_thinking: true }
   }
@@ -1134,7 +1134,7 @@ export function options(input: {
       result["textVerbosity"] = "low"
     }
 
-    if (input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("oc2")) {
+    if (input.model.providerID.startsWith("oc2")) {
       result["promptCacheKey"] = input.sessionID
       result["include"] = INCLUDE_ENCRYPTED_REASONING
       result["reasoningSummary"] = "auto"

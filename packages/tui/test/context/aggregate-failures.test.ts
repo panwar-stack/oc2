@@ -45,7 +45,7 @@ describe("aggregateFailures", () => {
     const configError = {
       name: "ConfigInvalidError",
       data: {
-        path: "/tmp/opencode.json",
+        path: "/tmp/oc2.json",
         issues: [{ message: "Expected object", path: ["provider", "anthropic", "options"] }],
       },
     }
@@ -63,7 +63,7 @@ describe("aggregateFailures", () => {
       },
     ])
 
-    expect(err!.message).toContain("config.get: Configuration is invalid at /tmp/opencode.json")
+    expect(err!.message).toContain("config.get: Configuration is invalid at /tmp/oc2.json")
     expect(err!.message).toContain("Expected object provider.anthropic.options")
   })
 

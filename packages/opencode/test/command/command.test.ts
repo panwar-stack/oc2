@@ -58,7 +58,7 @@ describe("command", () => {
           )
           expect(implementSpecPr.hints).toEqual(["$1", "$2"])
           expect(yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))).toContain(
-            "Implement only the work required for PR `#$2`",
+            "If PR #$2 is provided, implement only that pull request from $1. commit.",
           )
 
           const learn = yield* command.get("learn")

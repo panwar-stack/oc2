@@ -1,7 +1,7 @@
 <!--
   Built-in skill. Name and description are registered in code at
   packages/core/src/plugin/skill.ts
-  and CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION). The body below becomes the
+  and CUSTOMIZE_OC2_SKILL_DESCRIPTION). The body below becomes the
   skill's content.
 -->
 
@@ -50,7 +50,7 @@ already-loaded config until then.
 Configs from each scope are deep-merged. Project overrides global. Unknown
 top-level keys in `oc2.json` are rejected with `ConfigInvalidError`.
 
-Legacy `.opencode`, `opencode.json`, `~/.config/opencode`, and `OPENCODE_*`
+Legacy `.oc2`, `oc2.json`, `~/.config/opencode`, and `OC2_*`
 forms remain supported as deprecated compatibility aliases. Prefer OC2 names for
 new config.
 

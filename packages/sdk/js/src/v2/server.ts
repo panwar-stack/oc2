@@ -36,7 +36,6 @@ export async function createOc2Server(options?: ServerOptions) {
   const proc = launch(`oc2`, args, {
     env: {
       ...process.env,
-      OPENCODE_CONFIG_CONTENT: config,
       OC2_CONFIG_CONTENT: config,
     },
   })
@@ -55,7 +54,7 @@ export async function createOc2Server(options?: ServerOptions) {
       output += chunk.toString()
       const lines = output.split("\n")
       for (const line of lines) {
-        if (line.startsWith("opencode server listening")) {
+        if (line.startsWith("oc2 server listening")) {
           const match = line.match(/on\s+(https?:\/\/[^\s]+)/)
           if (!match) {
             clear()
@@ -124,7 +123,6 @@ export function createOc2Tui(options?: TuiOptions) {
     stdio: "inherit",
     env: {
       ...process.env,
-      OPENCODE_CONFIG_CONTENT: config,
       OC2_CONFIG_CONTENT: config,
     },
   })

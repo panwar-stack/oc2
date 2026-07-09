@@ -447,7 +447,7 @@ async function waitForProxy() {
       proxy,
       "node",
       "-e",
-      "require('net').connect(Number(process.env.OPENCODE_PROXY_PORT),'127.0.0.1',()=>process.exit(0)).on('error',()=>process.exit(1))",
+      "require('net').connect(Number(process.env.OC2_PROXY_PORT),'127.0.0.1',()=>process.exit(0)).on('error',()=>process.exit(1))",
     ], { check: false })
     if (code === 0) return
     await Bun.sleep(50)
@@ -466,9 +466,9 @@ try {
     "--network",
     "bridge",
     "--env",
-    "OPENCODE_ALLOWLIST_JSON=" + JSON.stringify(spec.hosts),
+    "OC2_ALLOWLIST_JSON=" + JSON.stringify(spec.hosts),
     "--env",
-    "OPENCODE_PROXY_PORT=" + String(spec.proxyPort),
+    "OC2_PROXY_PORT=" + String(spec.proxyPort),
     spec.image,
     "node",
     "-e",
@@ -524,7 +524,7 @@ const SANDBOX_PROXY_SCRIPT = String.raw`
 const http = require("http")
 const net = require("net")
 const dns = require("dns").promises
-const allowed = new Set(JSON.parse(process.env.OPENCODE_ALLOWLIST_JSON).map((host) => host.toLowerCase().replace(/\.$/, "")))
+const allowed = new Set(JSON.parse(process.env.OC2_ALLOWLIST_JSON).map((host) => host.toLowerCase().replace(/\.$/, "")))
 
 function ipv4Value(address) {
   return address.split(".").reduce((total, part) => total * 256 + Number(part), 0) >>> 0
@@ -613,7 +613,7 @@ server.on("connect", async (req, socket, head) => {
   }
 })
 
-server.listen(Number(process.env.OPENCODE_PROXY_PORT), "0.0.0.0")
+server.listen(Number(process.env.OC2_PROXY_PORT), "0.0.0.0")
 `
 
 function sandboxTokenPath(token: string, workspace: string) {

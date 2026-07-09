@@ -26,11 +26,11 @@ function rewrite(request: Request, values: { directory?: string; workspace?: str
   let changed = false
 
   for (const [name, key] of [
-    [["x-oc2-directory", "x-opencode-directory"], "directory"],
-    [["x-oc2-workspace", "x-opencode-workspace"], "workspace"],
+    ["x-oc2-directory", "directory"],
+    ["x-oc2-workspace", "workspace"],
   ] as const) {
     const value = pick(
-      request.headers.get(name[0]) ?? request.headers.get(name[1]),
+      request.headers.get(name),
       key === "directory" ? values.directory : values.workspace,
       key === "directory" ? encodeURIComponent : undefined,
     )
@@ -47,9 +47,7 @@ function rewrite(request: Request, values: { directory?: string; workspace?: str
 
   const next = new Request(url, request)
   next.headers.delete("x-oc2-directory")
-  next.headers.delete("x-opencode-directory")
   next.headers.delete("x-oc2-workspace")
-  next.headers.delete("x-opencode-workspace")
   return next
 }
 

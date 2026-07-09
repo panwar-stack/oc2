@@ -1,5 +1,5 @@
 {
-  "$schema": "https://opencode.ai/theme.json",
+  "$schema": "https://oc2.ai/theme.json",
   "defs": {
     "nord0": "#2E3440",
     "nord1": "#3B4252",
@@ -20,8 +20,8 @@
   },
   "theme": {
     "primary": {
-      "dark": "nord10",
-      "light": "nord9"
+      "dark": "nord8",
+      "light": "nord10"
     },
     "secondary": {
       "dark": "nord9",
@@ -48,11 +48,11 @@
       "light": "nord10"
     },
     "text": {
-      "dark": "nord6",
+      "dark": "nord4",
       "light": "nord0"
     },
     "textMuted": {
-      "dark": "#8B95A7",
+      "dark": "nord3",
       "light": "nord1"
     },
     "background": {
@@ -64,7 +64,7 @@
       "light": "nord5"
     },
     "backgroundElement": {
-      "dark": "nord2",
+      "dark": "nord1",
       "light": "nord4"
     },
     "border": {
@@ -88,11 +88,11 @@
       "light": "nord11"
     },
     "diffContext": {
-      "dark": "#8B95A7",
+      "dark": "nord3",
       "light": "nord3"
     },
     "diffHunkHeader": {
-      "dark": "#8B95A7",
+      "dark": "nord3",
       "light": "nord3"
     },
     "diffHighlightAdded": {
@@ -104,28 +104,28 @@
       "light": "nord11"
     },
     "diffAddedBg": {
-      "dark": "#36413C",
-      "light": "#E6EBE7"
+      "dark": "#3B4252",
+      "light": "#E5E9F0"
     },
     "diffRemovedBg": {
-      "dark": "#43393D",
-      "light": "#ECE6E8"
+      "dark": "#3B4252",
+      "light": "#E5E9F0"
     },
     "diffContextBg": {
       "dark": "nord1",
       "light": "nord5"
     },
     "diffLineNumber": {
-      "dark": "nord2",
-      "light": "nord4"
+      "dark": "#abafb7",
+      "light": "textMuted"
     },
     "diffAddedLineNumberBg": {
-      "dark": "#303A35",
-      "light": "#DDE4DF"
+      "dark": "#3B4252",
+      "light": "#E5E9F0"
     },
     "diffRemovedLineNumberBg": {
-      "dark": "#3C3336",
-      "light": "#E4DDE0"
+      "dark": "#3B4252",
+      "light": "#E5E9F0"
     },
     "markdownText": {
       "dark": "nord4",
@@ -148,7 +148,7 @@
       "light": "nord14"
     },
     "markdownBlockQuote": {
-      "dark": "#8B95A7",
+      "dark": "nord3",
       "light": "nord3"
     },
     "markdownEmph": {
@@ -160,7 +160,7 @@
       "light": "nord13"
     },
     "markdownHorizontalRule": {
-      "dark": "#8B95A7",
+      "dark": "nord3",
       "light": "nord3"
     },
     "markdownListItem": {
@@ -184,7 +184,7 @@
       "light": "nord0"
     },
     "syntaxComment": {
-      "dark": "#8B95A7",
+      "dark": "nord3",
       "light": "nord3"
     },
     "syntaxKeyword": {

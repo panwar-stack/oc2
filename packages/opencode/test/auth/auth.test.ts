@@ -85,11 +85,11 @@ describe("Auth", () => {
       Global.Path.data = dir
       yield* Effect.addFinalizer(() => Effect.sync(() => (Global.Path.data = previous)))
       yield* Effect.promise(() =>
-        Bun.write(path.join(dir, "auth.json"), JSON.stringify({ opencode: { type: "api", key: "test-key" } })),
+        Bun.write(path.join(dir, "auth.json"), JSON.stringify({ oc2: { type: "api", key: "test-key" } })),
       )
 
       const auth = yield* Auth.Service
-      expect(yield* auth.get("opencode")).toEqual({ type: "api", key: "test-key" })
+      expect(yield* auth.get("oc2")).toEqual({ type: "api", key: "test-key" })
     }),
   )
 })

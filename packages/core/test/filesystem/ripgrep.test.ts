@@ -65,14 +65,14 @@ describe("file.ripgrep", () => {
       const dir = yield* tmpdir((dir) =>
         Effect.gen(function* () {
           yield* write(path.join(dir, "visible.txt"), "hello")
-          yield* mkdir(path.join(dir, ".opencode"))
-          yield* write(path.join(dir, ".opencode", "thing.json"), "{}")
+          yield* mkdir(path.join(dir, ".oc2"))
+          yield* write(path.join(dir, ".oc2", "thing.json"), "{}")
         }),
       )
 
       const files = yield* collectFiles({ cwd: dir })
       expect(files.includes("visible.txt")).toBe(true)
-      expect(files.includes(path.join(".opencode", "thing.json"))).toBe(true)
+      expect(files.includes(path.join(".oc2", "thing.json"))).toBe(true)
     }),
   )
 
@@ -81,14 +81,14 @@ describe("file.ripgrep", () => {
       const dir = yield* tmpdir((dir) =>
         Effect.gen(function* () {
           yield* write(path.join(dir, "visible.txt"), "hello")
-          yield* mkdir(path.join(dir, ".opencode"))
-          yield* write(path.join(dir, ".opencode", "thing.json"), "{}")
+          yield* mkdir(path.join(dir, ".oc2"))
+          yield* write(path.join(dir, ".oc2", "thing.json"), "{}")
         }),
       )
 
       const files = yield* collectFiles({ cwd: dir, hidden: false })
       expect(files.includes("visible.txt")).toBe(true)
-      expect(files.includes(path.join(".opencode", "thing.json"))).toBe(false)
+      expect(files.includes(path.join(".oc2", "thing.json"))).toBe(false)
     }),
   )
 

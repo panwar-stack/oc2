@@ -7,8 +7,7 @@ import { Global } from "@oc2-ai/core/global"
 describe("global paths", () => {
   test("tmp path is under the system temp directory", () => {
     expect(Global.CanonicalPath.tmp).toBe(path.join(os.tmpdir(), "oc2"))
-    expect(Global.LegacyPath.tmp).toBe(path.join(os.tmpdir(), "opencode"))
-    expect([Global.CanonicalPath.tmp, Global.LegacyPath.tmp]).toContain(Global.Path.tmp)
+    expect(Global.Path.tmp).toBe(Global.CanonicalPath.tmp)
     expect(Global.make().tmp).toBe(Global.Path.tmp)
   })
 

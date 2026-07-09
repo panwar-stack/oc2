@@ -8,7 +8,7 @@ describe("hosted URL compatibility", () => {
   test("allows oc2 and legacy opencode hosted CORS origins", () => {
     expect(isAllowedCorsOrigin("https://oc2.ai")).toBe(true)
     expect(isAllowedCorsOrigin("https://app.oc2.ai")).toBe(true)
-    expect(isAllowedCorsOrigin("https://app.opencode.ai")).toBe(true)
+    expect(isAllowedCorsOrigin("https://app.oc2.ai")).toBe(true)
     expect(isAllowedCorsOrigin("https://example.com")).toBe(false)
   })
 

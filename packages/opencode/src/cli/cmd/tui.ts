@@ -13,8 +13,8 @@ import type { GlobalEvent } from "@oc2-ai/sdk/v2"
 import type { EventSource } from "@oc2-ai/tui/context/sdk"
 import { writeHeapSnapshot } from "v8"
 import {
-  OPENCODE_PROCESS_ROLE,
-  OPENCODE_RUN_ID,
+  OC2_PROCESS_ROLE,
+  OC2_RUN_ID,
   ensureRunID,
   sanitizedProcessEnv,
 } from "@oc2-ai/core/util/opencode-process"
@@ -22,7 +22,7 @@ import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@oc2-ai/tui/terminal-win32"
 
 declare global {
-  const OPENCODE_WORKER_PATH: string
+  const OC2_WORKER_PATH: string
 }
 
 type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
@@ -56,7 +56,7 @@ function createEventSource(client: RpcClient): EventSource {
 }
 
 async function target() {
-  if (typeof OPENCODE_WORKER_PATH !== "undefined") return OPENCODE_WORKER_PATH
+  if (typeof OC2_WORKER_PATH !== "undefined") return OC2_WORKER_PATH
   const dist = new URL("./cli/tui/worker.js", import.meta.url)
   if (await Filesystem.exists(fileURLToPath(dist))) return dist
   return new URL("../tui/worker.ts", import.meta.url)
@@ -133,8 +133,8 @@ export const TuiThreadCommand = cmd({
       }
       const cwd = Filesystem.resolve(process.cwd())
       const env = sanitizedProcessEnv({
-        [OPENCODE_PROCESS_ROLE]: "worker",
-        [OPENCODE_RUN_ID]: ensureRunID(),
+        [OC2_PROCESS_ROLE]: "worker",
+        [OC2_RUN_ID]: ensureRunID(),
       })
 
       const worker = new Worker(file, {

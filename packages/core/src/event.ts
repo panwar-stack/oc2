@@ -132,7 +132,10 @@ export function define<const Type extends string, Fields extends Schema.Struct.F
 }
 
 export function definitions() {
-  return registry.values().toArray()
+  return registry
+    .values()
+    .toArray()
+    .sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : 0))
 }
 
 export interface PublishOptions {

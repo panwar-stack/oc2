@@ -61,7 +61,6 @@ async function writeWrapperPackage(name: string) {
     "",
   ].join("\n")
   await Bun.file(`./dist/${name}/bin/oc2.exe`).write(fallback)
-  await Bun.file(`./dist/${name}/bin/opencode.exe`).write(fallback)
   await Bun.file(`./dist/${name}/package.json`).write(
     JSON.stringify(
       {
@@ -69,7 +68,6 @@ async function writeWrapperPackage(name: string) {
         ...packageMetadata,
         bin: {
           oc2: "./bin/oc2.exe",
-          opencode: "./bin/opencode.exe",
         },
         scripts: {
           postinstall: "node ./postinstall.mjs",
@@ -124,8 +122,8 @@ if (!Script.preview) {
     "url='https://oc2.ai/docs'",
     "arch=('aarch64' 'x86_64')",
     "license=('MIT')",
-    "provides=('oc2' 'opencode')",
-    "conflicts=('oc2' 'opencode')",
+    "provides=('oc2')",
+    "conflicts=('oc2')",
     "depends=('ripgrep')",
     "",
     `source_aarch64=("\${pkgname}_\${pkgver}_aarch64.tar.gz::https://github.com/panwar-stack/oc2/releases/download/v\${pkgver}\${_subver}/oc2-linux-arm64.tar.gz")`,
@@ -136,7 +134,6 @@ if (!Script.preview) {
     "",
     "package() {",
     '  install -Dm755 ./oc2 "${pkgdir}/usr/bin/oc2"',
-    '  install -Dm755 ./opencode "${pkgdir}/usr/bin/opencode"',
     "}",
     "",
   ].join("\n")
@@ -180,7 +177,6 @@ if (!Script.preview) {
     "",
     "      def install",
     '        bin.install "oc2"',
-    '        bin.install "opencode"',
     "      end",
     "    end",
     "    if Hardware::CPU.arm?",
@@ -189,7 +185,6 @@ if (!Script.preview) {
     "",
     "      def install",
     '        bin.install "oc2"',
-    '        bin.install "opencode"',
     "      end",
     "    end",
     "  end",
@@ -200,7 +195,6 @@ if (!Script.preview) {
     `      sha256 "${x64Sha}"`,
     "      def install",
     '        bin.install "oc2"',
-    '        bin.install "opencode"',
     "      end",
     "    end",
     "    if Hardware::CPU.arm? and Hardware::CPU.is_64_bit?",
@@ -208,7 +202,6 @@ if (!Script.preview) {
     `      sha256 "${arm64Sha}"`,
     "      def install",
     '        bin.install "oc2"',
-    '        bin.install "opencode"',
     "      end",
     "    end",
     "  end",

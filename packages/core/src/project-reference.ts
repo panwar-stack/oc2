@@ -62,7 +62,7 @@ type Materializer = {
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    if (!Flag.OPENCODE_EXPERIMENTAL_REFERENCES) return Service.of(inert)
+    if (!Flag.OC2_EXPERIMENTAL_REFERENCES) return Service.of(inert)
 
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service

@@ -270,7 +270,7 @@ export const layer = Layer.effect(
           const record = state.get().providers.get(providerID)
           if (!record) return Option.none<ModelV2.Info>()
 
-          if (providerID === ProviderV2.ID.opencode || providerID === ProviderV2.ID.oc2) {
+          if (providerID === ProviderV2.ID.oc2) {
             const gpt5Nano = record.models.get(ModelV2.ID.make("gpt-5-nano"))
             if (gpt5Nano?.enabled && gpt5Nano.status === "active") return Option.some(resolve(gpt5Nano))
           }

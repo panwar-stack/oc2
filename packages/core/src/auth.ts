@@ -148,12 +148,12 @@ export const layer = Layer.effect(
 
     const parseAuthContent = () => {
       try {
-        return JSON.parse(Naming.env("OPENCODE_AUTH_CONTENT") ?? "")
+        return JSON.parse(Naming.env("OC2_AUTH_CONTENT") ?? "")
       } catch {}
     }
 
     const load: () => Effect.Effect<Writable, Error> = Effect.fnUntraced(function* () {
-      if (Naming.env("OPENCODE_AUTH_CONTENT")) {
+      if (Naming.env("OC2_AUTH_CONTENT")) {
         const raw = parseAuthContent()
         if (raw && typeof raw === "object") {
           if ("version" in raw && raw.version === 2) return raw as Writable

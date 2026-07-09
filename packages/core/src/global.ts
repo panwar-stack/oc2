@@ -1,6 +1,5 @@
 import path from "path"
 import fs from "fs/promises"
-import { existsSync } from "fs"
 import { xdgData, xdgCache, xdgConfig, xdgState } from "xdg-basedir"
 import os from "os"
 import { Context, Effect, Layer } from "effect"
@@ -24,37 +23,12 @@ function makePaths(app: string) {
 }
 
 export const CanonicalPath = makePaths(Naming.appSlug)
-export const LegacyPath = makePaths(Naming.legacyAppSlug)
-
-function adopt(canonical: string, legacy: string) {
-  if (existsSync(canonical)) return canonical
-  if (existsSync(legacy)) return legacy
-  return canonical
-}
-
-function adoptedPaths() {
-  const data = adopt(CanonicalPath.data, LegacyPath.data)
-  const cache = adopt(CanonicalPath.cache, LegacyPath.cache)
-  const config = adopt(CanonicalPath.config, LegacyPath.config)
-  const state = adopt(CanonicalPath.state, LegacyPath.state)
-  const tmp = adopt(CanonicalPath.tmp, LegacyPath.tmp)
-  return {
-    data,
-    bin: path.join(cache, "bin"),
-    log: path.join(data, "log"),
-    repos: path.join(data, "repos"),
-    cache,
-    config,
-    state,
-    tmp,
-  }
-}
 
 const paths = {
   get home() {
-    return Naming.env("OPENCODE_TEST_HOME") ?? os.homedir()
+    return Naming.env("OC2_TEST_HOME") ?? os.homedir()
   },
-  ...adoptedPaths(),
+  ...CanonicalPath,
 }
 
 export const Path = paths
@@ -90,7 +64,7 @@ export function make(input: Partial<Interface> = {}): Interface {
     home: Path.home,
     data: Path.data,
     cache: Path.cache,
-    config: Flag.OPENCODE_CONFIG_DIR ?? Path.config,
+    config: Flag.OC2_CONFIG_DIR ?? Path.config,
     state: Path.state,
     tmp: Path.tmp,
     bin: Path.bin,

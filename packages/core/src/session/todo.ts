@@ -13,7 +13,7 @@ export const Info = Schema.Struct({
     description: "Current status of the task: pending, in_progress, completed, cancelled",
   }),
   priority: Schema.String.annotate({ description: "Priority level of the task: high, medium, low" }),
-}).annotate({ identifier: "SessionTodo.Info" })
+}).annotate({ identifier: "Todo" })
 export type Info = typeof Info.Type
 
 export const Event = {

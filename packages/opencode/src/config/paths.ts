@@ -15,7 +15,7 @@ export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
 ) {
   const afs = yield* FSUtil.Service
   return (yield* afs.up({
-    targets: name === Naming.legacyAppSlug ? [...Naming.configFileSearchTargets] : [`${name}.jsonc`, `${name}.json`],
+    targets: name === Naming.appSlug ? [...Naming.configFileSearchTargets] : [`${name}.jsonc`, `${name}.json`],
     start: directory,
     stop: worktree,
   })).toReversed()
@@ -25,7 +25,7 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
   const afs = yield* FSUtil.Service
   return unique([
     Global.Path.config,
-    ...(!Flag.OPENCODE_DISABLE_PROJECT_CONFIG
+    ...(!Flag.OC2_DISABLE_PROJECT_CONFIG
       ? yield* afs.up({
           targets: [...Naming.configDirs].toReversed(),
           start: directory,
@@ -37,11 +37,11 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
       start: Global.Path.home,
       stop: Global.Path.home,
     })),
-    ...(Flag.OPENCODE_CONFIG_DIR ? [Flag.OPENCODE_CONFIG_DIR] : []),
+    ...(Flag.OC2_CONFIG_DIR ? [Flag.OC2_CONFIG_DIR] : []),
   ])
 })
 
 export function fileInDirectory(dir: string, name: string) {
-  if (name === Naming.legacyAppSlug) return Naming.configFileLoadOrder.map((file) => path.join(dir, file))
+  if (name === Naming.appSlug) return Naming.configFileLoadOrder.map((file) => path.join(dir, file))
   return [path.join(dir, `${name}.json`), path.join(dir, `${name}.jsonc`)]
 }

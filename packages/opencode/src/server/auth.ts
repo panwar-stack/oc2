@@ -4,10 +4,8 @@ import { Flag } from "@oc2-ai/core/flag/flag"
 import { Naming } from "@oc2-ai/core/naming"
 import { Config as EffectConfig, Context, Effect, Layer, Option, Redacted } from "effect"
 
-const string = (name: string) =>
-  EffectConfig.string(Naming.canonicalEnv(name)).pipe(EffectConfig.orElse(() => EffectConfig.string(name)))
+const string = (name: string) => EffectConfig.string(name)
 const DEFAULT_USERNAME = Naming.appSlug
-const LEGACY_USERNAME = Naming.legacyAppSlug
 
 export type Credentials = {
   password?: string
@@ -36,9 +34,9 @@ export class Config extends Context.Service<Config, Info>()("@opencode/ServerAut
       Effect.gen(function* () {
         return Config.of(
           yield* EffectConfig.all({
-            password: string("OPENCODE_SERVER_PASSWORD").pipe(EffectConfig.option),
-            username: string("OPENCODE_SERVER_USERNAME").pipe(EffectConfig.withDefault(DEFAULT_USERNAME)),
-            usernameConfigured: string("OPENCODE_SERVER_USERNAME").pipe(
+            password: string("OC2_SERVER_PASSWORD").pipe(EffectConfig.option),
+            username: string("OC2_SERVER_USERNAME").pipe(EffectConfig.withDefault(DEFAULT_USERNAME)),
+            usernameConfigured: string("OC2_SERVER_USERNAME").pipe(
               EffectConfig.option,
               EffectConfig.map(Option.isSome),
             ),
@@ -56,19 +54,16 @@ export function required(config: Info) {
 export function authorized(credentials: DecodedCredentials, config: Info) {
   return (
     Option.isSome(config.password) &&
-    (credentials.username === config.username ||
-      (config.username === DEFAULT_USERNAME &&
-        config.usernameConfigured !== true &&
-        credentials.username === LEGACY_USERNAME)) &&
+    credentials.username === config.username &&
     Redacted.value(credentials.password) === config.password.value
   )
 }
 
 export function header(credentials?: Credentials) {
-  const password = credentials?.password ?? Flag.OPENCODE_SERVER_PASSWORD
+  const password = credentials?.password ?? Flag.OC2_SERVER_PASSWORD
   if (!password) return undefined
 
-  const username = credentials?.username ?? Flag.OPENCODE_SERVER_USERNAME ?? DEFAULT_USERNAME
+  const username = credentials?.username ?? Flag.OC2_SERVER_USERNAME ?? DEFAULT_USERNAME
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
 }
 

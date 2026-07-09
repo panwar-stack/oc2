@@ -4,7 +4,7 @@ import { ProviderError } from "@/provider/error"
 import { isRecord } from "@/util/record"
 import { OpenAIWebSocket } from "./ws"
 
-export const TITLE_HEADER = "x-opencode-title"
+export const TITLE_HEADER = "x-oc2-title"
 
 const log = Log.create({ service: "plugin.openai.ws" })
 

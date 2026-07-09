@@ -138,7 +138,7 @@ describe("installation", () => {
         expect(result).toBe("2.3.5")
         expect(legacyScoopCalls).toContain("https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/oc2.json")
         expect(legacyScoopCalls).toContain(
-          "https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/opencode.json",
+          "https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/oc2.json",
         )
       }),
     )

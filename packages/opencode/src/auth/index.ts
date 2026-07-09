@@ -58,7 +58,7 @@ export const layer = Layer.effect(
     const decode = Schema.decodeUnknownOption(Info)
 
     const all = Effect.fn("Auth.all")(function* () {
-      const authContent = Naming.env("OPENCODE_AUTH_CONTENT")
+      const authContent = Naming.env("OC2_AUTH_CONTENT")
       if (authContent) {
         try {
           return JSON.parse(authContent)

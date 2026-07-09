@@ -5,7 +5,7 @@ export async function statsProxy(evt: APIEvent) {
   const req = evt.request.clone()
   const targetUrl = new URL(req.url)
   targetUrl.protocol = "https:"
-  targetUrl.hostname = Resource.App.stage === "production" ? "stats.oc2.ai" : "stats.dev.opencode.ai"
+  targetUrl.hostname = Resource.App.stage === "production" ? "stats.oc2.ai" : "stats.dev.oc2.ai"
   targetUrl.port = ""
 
   if (targetUrl.pathname.startsWith("/stats/_build/") || targetUrl.pathname === "/stats/banner.png") {

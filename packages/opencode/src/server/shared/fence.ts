@@ -7,8 +7,7 @@ import * as Log from "@oc2-ai/core/util/log"
 import { Naming } from "@oc2-ai/core/naming"
 import { Effect } from "effect"
 
-export const HEADER = Naming.headers.sync[0]
-export const LEGACY_HEADER = Naming.headers.sync[1]
+export const HEADER = Naming.headers.sync
 export type State = Record<string, number>
 const log = Log.create({ service: "fence" })
 

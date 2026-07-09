@@ -68,15 +68,15 @@ describe("ProxyUtil", () => {
     test("strips opencode-specific headers", () => {
       const req = new Request("http://localhost", {
         headers: {
-          "x-opencode-directory": "/home/user/project",
-          "x-opencode-workspace": "ws_123",
+          "x-oc2-directory": "/home/user/project",
+          "x-oc2-workspace": "ws_123",
           "accept-encoding": "gzip",
           "x-custom": "keep",
         },
       })
       const result = ProxyUtil.headers(req)
-      expect(result.get("x-opencode-directory")).toBeNull()
-      expect(result.get("x-opencode-workspace")).toBeNull()
+      expect(result.get("x-oc2-directory")).toBeNull()
+      expect(result.get("x-oc2-workspace")).toBeNull()
       expect(result.get("accept-encoding")).toBeNull()
       expect(result.get("x-custom")).toBe("keep")
     })

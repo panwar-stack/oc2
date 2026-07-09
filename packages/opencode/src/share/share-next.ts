@@ -20,7 +20,7 @@ import { ModelV2 } from "@oc2-ai/core/model"
 import { EventV2 } from "@oc2-ai/core/event"
 
 const log = Log.create({ service: "share-next" })
-const disabled = process.env["OPENCODE_DISABLE_SHARE"] === "true" || process.env["OPENCODE_DISABLE_SHARE"] === "1"
+const disabled = process.env["OC2_DISABLE_SHARE"] === "true" || process.env["OC2_DISABLE_SHARE"] === "1"
 
 export type Api = {
   create: string

@@ -59,7 +59,7 @@ jobs:
       - name: Check for duplicate PRs
         if: steps.team-check.outputs.is_team != 'true'
         env:
-          OC2_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OC2_API_KEY: ${{ secrets.OC2_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |

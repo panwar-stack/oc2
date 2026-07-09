@@ -34,7 +34,7 @@ describe("tool.skill", () => {
   it.instance("execute returns skill content block with files", () =>
     Effect.gen(function* () {
       const dir = (yield* TestInstance).directory
-      const skill = path.join(dir, ".opencode", "skill", "tool-skill")
+      const skill = path.join(dir, ".oc2", "skill", "tool-skill")
       yield* Effect.promise(() =>
         Bun.write(
           path.join(skill, "SKILL.md"),
@@ -51,11 +51,11 @@ Use this skill.
       )
       yield* Effect.promise(() => Bun.write(path.join(skill, "scripts", "demo.txt"), "demo"))
 
-      const home = process.env.OPENCODE_TEST_HOME
-      process.env.OPENCODE_TEST_HOME = dir
+      const home = process.env.OC2_TEST_HOME
+      process.env.OC2_TEST_HOME = dir
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          process.env.OPENCODE_TEST_HOME = home
+          process.env.OC2_TEST_HOME = home
         }),
       )
 
@@ -97,11 +97,11 @@ Use this skill.
   it.instance("execute preserves not found message", () =>
     Effect.gen(function* () {
       const dir = (yield* TestInstance).directory
-      const home = process.env.OPENCODE_TEST_HOME
-      process.env.OPENCODE_TEST_HOME = dir
+      const home = process.env.OC2_TEST_HOME
+      process.env.OC2_TEST_HOME = dir
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          process.env.OPENCODE_TEST_HOME = home
+          process.env.OC2_TEST_HOME = home
         }),
       )
 

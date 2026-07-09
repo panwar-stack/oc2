@@ -71,7 +71,7 @@ const list = Provider.use.list()
 const fuguProviderID = ProviderV2.ID.make("fugu")
 const fuguModelID = ModelV2.ID.make("fugu")
 
-const paid = (providers: Record<string, { models: Record<string, { cost: { input: number } }> }>, id = ProviderV2.ID.opencode) => {
+const paid = (providers: Record<string, { models: Record<string, { cost: { input: number } }> }>, id = ProviderV2.ID.oc2) => {
   const item = providers[id]
   expect(item).toBeDefined()
   return Object.values(item.models).filter((model) => model.cost.input > 0).length
@@ -124,28 +124,24 @@ it.instance("includes virtual fugu provider without config", () =>
 )
 
 it.instance(
-  "exposes oc2 paid alias without duplicating opencode-only free models",
+  "exposes oc2 paid models when oc2 config apiKey is present",
   Effect.gen(function* () {
     const providers = yield* list
-    const legacy = providers[ProviderV2.ID.opencode]
-    const canonical = providers[ProviderV2.ID.oc2]
+    const oc2 = providers[ProviderV2.ID.oc2]
 
-    expect(legacy).toBeDefined()
-    expect(canonical).toBeDefined()
-    if (!legacy || !canonical) throw new Error("missing opencode or oc2 provider")
+    expect(oc2).toBeDefined()
+    if (!oc2) throw new Error("missing oc2 provider")
 
-    const freeModel = Object.entries(legacy.models).find(([, model]) => model.cost.input === 0)
+    const freeModel = Object.entries(oc2.models).find(([, model]) => model.cost.input === 0)
 
-    expect(canonical.id).toBe(ProviderV2.ID.oc2)
-    expect(legacy.id).toBe(ProviderV2.ID.opencode)
+    expect(oc2.id).toBe(ProviderV2.ID.oc2)
     expect(freeModel).toBeDefined()
-    if (!freeModel) throw new Error("missing opencode free model")
+    if (!freeModel) throw new Error("missing oc2 free model")
 
-    expect(canonical.models[freeModel[0]]).toBeUndefined()
-    expect(Object.values(canonical.models).every((model) => model.cost.input > 0)).toBe(true)
-    expect(Object.values(canonical.models).every((model) => model.providerID === ProviderV2.ID.oc2)).toBe(true)
+    expect(Object.values(oc2.models).some((model) => model.cost.input > 0)).toBe(true)
+    expect(Object.values(oc2.models).every((model) => model.providerID === ProviderV2.ID.oc2)).toBe(true)
   }),
-  { config: { provider: { opencode: { options: { apiKey: "test-key" } } } } },
+  { config: { provider: { oc2: { options: { apiKey: "test-key" } } } } },
 )
 
 it.instance(
@@ -1127,9 +1123,9 @@ it.instance("ModelNotFoundError for provider includes suggestions", () =>
 
 it.instance("ModelNotFoundError suggests catalog models for unloaded providers", () =>
   Effect.gen(function* () {
-    yield* remove("OPENCODE_API_KEY")
+    yield* remove("OC2_API_KEY")
     const error = yield* Provider.use
-      .getModel(ProviderV2.ID.opencode, ModelV2.ID.make("claude-haiku-fake-model"))
+      .getModel(ProviderV2.ID.oc2, ModelV2.ID.make("claude-haiku-fake-model"))
       .pipe(Effect.flip)
     if (!Provider.ModelNotFoundError.isInstance(error)) throw error
     expect(error.suggestions ?? []).toContain("claude-haiku-4-5")
@@ -1216,7 +1212,7 @@ it.instance(
   Effect.gen(function* () {
     const providers = yield* list
     expect(providers[ProviderV2.ID.make("nvidia")].options.headers).toEqual({
-      "HTTP-Referer": "https://opencode.ai/",
+      "HTTP-Referer": "https://oc2.ai/",
       "X-Title": "opencode",
       "X-BILLING-INVOKE-ORIGIN": "OpenCode",
     })
@@ -1229,7 +1225,7 @@ it.instance(
   Effect.gen(function* () {
     const providers = yield* list
     expect(providers[ProviderV2.ID.make("nvidia")].options.headers).toEqual({
-      "HTTP-Referer": "https://opencode.ai/",
+      "HTTP-Referer": "https://oc2.ai/",
       "X-Title": "opencode",
       "X-BILLING-INVOKE-ORIGIN": "OpenCode",
     })
@@ -1747,7 +1743,7 @@ const provideMultiInstance = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
 it.effect("plugin config providers persist after instance dispose", () =>
   Effect.gen(function* () {
     const dir = yield* tmpdirScoped()
-    const configDir = path.join(dir, ".opencode")
+    const configDir = path.join(dir, ".oc2")
     const root = path.join(configDir, "plugin")
     yield* Effect.promise(() => mkdir(root, { recursive: true }))
     yield* Effect.promise(() => markPluginDependenciesReady(configDir))
@@ -1804,7 +1800,7 @@ it.instance(
   "plugin config enabled and disabled providers are honored",
   Effect.gen(function* () {
     const instance = yield* TestInstance
-    const configDir = path.join(instance.directory, ".opencode")
+    const configDir = path.join(instance.directory, ".oc2")
     const root = path.join(configDir, "plugin")
     yield* Effect.promise(() => mkdir(root, { recursive: true }))
     yield* Effect.promise(() => markPluginDependenciesReady(configDir))
@@ -1834,11 +1830,11 @@ it.instance(
   }),
 )
 
-it.effect("opencode loader keeps paid models when config apiKey is present", () =>
+it.effect("oc2 loader keeps paid models when config apiKey is present", () =>
   Effect.gen(function* () {
     const noneDir = yield* tmpdirScoped()
     const keyedDir = yield* tmpdirScoped({
-      config: { provider: { opencode: { options: { apiKey: "test-key" } } } },
+      config: { provider: { oc2: { options: { apiKey: "test-key" } } } },
     })
 
     const listIn = (directory: string) =>
@@ -1850,25 +1846,21 @@ it.effect("opencode loader keeps paid models when config apiKey is present", () 
     const none = paid(yield* listIn(noneDir))
     const keyedProviders = yield* listIn(keyedDir)
     const keyedCount = paid(keyedProviders)
-    const aliasKeyedCount = paid(keyedProviders, ProviderV2.ID.oc2)
-    const aliasPaidModel = Object.values(keyedProviders[ProviderV2.ID.oc2].models).find((model) => model.cost.input > 0)
-    const freeModel = Object.entries(keyedProviders[ProviderV2.ID.opencode].models).find(([, model]) => model.cost.input === 0)
+    const paidModel = Object.values(keyedProviders[ProviderV2.ID.oc2].models).find((model) => model.cost.input > 0)
+    const freeModel = Object.entries(keyedProviders[ProviderV2.ID.oc2].models).find(([, model]) => model.cost.input === 0)
 
     expect(none).toBe(0)
     expect(keyedCount).toBeGreaterThan(0)
-    expect(aliasKeyedCount).toBeGreaterThan(0)
-    expect(aliasPaidModel).toBeDefined()
-    if (!aliasPaidModel) throw new Error("missing oc2 paid model")
+    expect(paidModel).toBeDefined()
+    if (!paidModel) throw new Error("missing oc2 paid model")
 
-    expect(aliasPaidModel.providerID).toBe(ProviderV2.ID.oc2)
+    expect(paidModel.providerID).toBe(ProviderV2.ID.oc2)
     expect(freeModel).toBeDefined()
-    if (!freeModel) throw new Error("missing opencode free model")
-
-    expect(keyedProviders[ProviderV2.ID.oc2].models[freeModel[0]]).toBeUndefined()
+    if (!freeModel) throw new Error("missing oc2 free model")
   }).pipe(provideMultiInstance),
 )
 
-it.effect("opencode loader keeps paid models when auth exists", () =>
+it.effect("oc2 loader keeps paid models when auth exists", () =>
   Effect.gen(function* () {
     const noneDir = yield* tmpdirScoped()
     const keyedDir = yield* tmpdirScoped()
@@ -1885,7 +1877,7 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
     const original = yield* Effect.promise(() => Filesystem.readText(authPath).catch(() => undefined))
 
     yield* Effect.acquireRelease(
-      Effect.promise(() => Filesystem.write(authPath, JSON.stringify({ opencode: { type: "api", key: "test-key" } }))),
+      Effect.promise(() => Filesystem.write(authPath, JSON.stringify({ oc2: { type: "api", key: "test-key" } }))),
       () =>
         Effect.promise(async () => {
           if (original !== undefined) await Filesystem.write(authPath, original)

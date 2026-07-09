@@ -103,7 +103,7 @@ export const TaskTool = Tool.define(
       const notifyParent = ctx.extra?.notify !== false
       if (params.background === true && !flags.experimentalBackgroundSubagents) {
         return yield* Effect.fail(
-          new Error("Background subagents require OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
+          new Error("Background subagents require OC2_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
         )
       }
 

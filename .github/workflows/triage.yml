@@ -24,7 +24,7 @@ jobs:
 
       - name: Triage issue
         env:
-          OC2_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OC2_API_KEY: ${{ secrets.OC2_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}

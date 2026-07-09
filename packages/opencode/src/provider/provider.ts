@@ -168,7 +168,6 @@ function selectBedrockMantleLanguageModel(sdk: BundledSDK, modelID: string) {
 }
 
 function custom(dep: CustomDep): Record<string, CustomLoader> {
-  const authIDs = (id: ProviderV2.ID) => (id === ProviderV2.ID.oc2 ? [ProviderV2.ID.oc2, ProviderV2.ID.opencode] : [id])
   const managed = Effect.fnUntraced(function* (input: Info) {
     const env = yield* dep.env()
     const hasKey = iife(() => {
@@ -178,8 +177,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
     const providerConfig = (yield* dep.config()).provider
     const ok =
       hasKey ||
-      Boolean(yield* Effect.forEach(authIDs(input.id), dep.auth).pipe(Effect.map((items) => items.find(Boolean)))) ||
-      Boolean(providerConfig?.["opencode"]?.options?.apiKey) ||
+      Boolean(yield* dep.auth(input.id)) ||
       Boolean(providerConfig?.["oc2"]?.options?.apiKey)
 
     if (!ok) {
@@ -204,9 +202,8 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
             "anthropic-beta": "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
           },
         },
-      }),
+    }),
     oc2: managed,
-    opencode: managed,
     openai: () =>
       Effect.succeed({
         autoload: false,
@@ -370,7 +367,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           }
 
           // Region resolution precedence (highest to lowest):
-          // 1. options.region from opencode.json provider config
+          // 1. options.region from oc2.json provider config
           // 2. defaultRegion from AWS_REGION environment variable
           // 3. Default "us-east-1" (baked into defaultRegion)
           const region = options?.region ?? defaultRegion
@@ -1270,10 +1267,6 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   }
 }
 
-function withCanonicalEnv(env: string[]) {
-  return unique(env.flatMap((item) => [Naming.canonicalEnv(item), item]))
-}
-
 function aliasProvider(
   provider: Info,
   id: ProviderV2.ID,
@@ -1285,7 +1278,7 @@ function aliasProvider(
     ...clone,
     id,
     name,
-    env: withCanonicalEnv(clone.env),
+    env: unique(clone.env),
     models: mapValues(pickBy(clone.models, includeModel), (model) => ({
       ...model,
       providerID: id,
@@ -1387,17 +1380,11 @@ export const layer = Layer.effect(
         const cfg = yield* config.get()
         const modelsDev = yield* modelsDevSvc.get()
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
-        if (catalog[ProviderV2.ID.opencode]) {
-          catalog[ProviderV2.ID.opencode] = aliasProvider(
-            catalog[ProviderV2.ID.opencode],
-            ProviderV2.ID.opencode,
-            catalog[ProviderV2.ID.opencode].name,
-          )
+        if (catalog[ProviderV2.ID.oc2]) {
           catalog[ProviderV2.ID.oc2] = aliasProvider(
-            catalog[ProviderV2.ID.opencode],
+            catalog[ProviderV2.ID.oc2],
             ProviderV2.ID.oc2,
             Naming.displayName,
-            (model) => model.cost.input > 0,
           )
         }
         const database = mapValues(catalog, toPublicInfo)
@@ -1596,12 +1583,6 @@ export const layer = Layer.effect(
               source: "api",
               key: provider.key,
             })
-            if (providerID === ProviderV2.ID.opencode && database[ProviderV2.ID.oc2] && !auths[ProviderV2.ID.oc2]) {
-              mergeProvider(ProviderV2.ID.oc2, {
-                source: "api",
-                key: provider.key,
-              })
-            }
           }
         }
 
@@ -2019,7 +2000,7 @@ export const layer = Layer.effect(
         "gemini-2.5-flash",
         "gpt-5-nano",
       ]
-      const priority = providerID.startsWith("opencode") || providerID.startsWith("oc2")
+      const priority = providerID.startsWith("oc2")
         ? ["gpt-5-nano"]
         : providerID.startsWith("github-copilot")
           ? ["gpt-5-mini", "claude-haiku-4.5", ...defaultPriority]

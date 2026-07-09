@@ -11,7 +11,7 @@ describe("opencode memory CLI", () => {
     ({ home, llm, opencode }) =>
       Effect.gen(function* () {
         const hash = yield* Effect.promise(() => setupRepository(home))
-        const env = { OPENCODE_DB: path.join(home, "memory.db") }
+        const env = { OC2_DB: path.join(home, "memory.db") }
 
         const indexed = yield* opencode.spawn(
           ["memory", "index", "--max-commits", "10", "--no-github", "--summaries", "0"],

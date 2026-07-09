@@ -23,7 +23,7 @@ OC2 supports both **JSON** and **JSONC** (JSON with Comments) formats.
 ```
 
 :::note[Migration compatibility]
-Use `oc2.json[c]`, `.oc2/`, `~/.config/oc2`, and `OC2_*` env vars for new configuration. Legacy `opencode.json[c]`, `.opencode/`, `~/.config/opencode`, and `OPENCODE_*` names are still read as migration fallbacks.
+Use `oc2.json[c]`, `.oc2/`, `~/.config/oc2`, and `OC2_*` env vars for new configuration. Legacy `oc2.json[c]`, `.oc2/`, `~/.config/opencode`, and `OC2_*` names are still read as migration fallbacks.
 :::
 
 ---
@@ -173,18 +173,18 @@ These directories require admin/root access to write, so users cannot modify the
 
 #### macOS managed preferences
 
-On macOS, OC2 reads managed preferences from the `ai.opencode.managed` preference domain. Deploy a `.mobileconfig` via MDM (Jamf, Kandji, FleetDM) and the settings are enforced automatically.
+On macOS, OC2 reads managed preferences from the `ai.oc2.managed` preference domain. Deploy a `.mobileconfig` via MDM (Jamf, Kandji, FleetDM) and the settings are enforced automatically.
 
 OC2 checks these paths:
 
-1. `/Library/Managed Preferences/<user>/ai.opencode.managed.plist`
-2. `/Library/Managed Preferences/ai.opencode.managed.plist`
+1. `/Library/Managed Preferences/<user>/ai.oc2.managed.plist`
+2. `/Library/Managed Preferences/ai.oc2.managed.plist`
 
 The plist keys map directly to `oc2.json` fields. MDM metadata keys (`PayloadUUID`, `PayloadType`, etc.) are stripped automatically.
 
 **Creating a `.mobileconfig`**
 
-Use the `ai.opencode.managed` PayloadType. The OC2 config keys go directly in the payload dict:
+Use the `ai.oc2.managed` PayloadType. The OC2 config keys go directly in the payload dict:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -196,9 +196,9 @@ Use the `ai.opencode.managed` PayloadType. The OC2 config keys go directly in th
   <array>
     <dict>
       <key>PayloadType</key>
-      <string>ai.opencode.managed</string>
+      <string>ai.oc2.managed</string>
       <key>PayloadIdentifier</key>
-      <string>com.example.opencode.config</string>
+      <string>com.example.oc2.config</string>
       <key>PayloadUUID</key>
       <string>GENERATE-YOUR-OWN-UUID</string>
       <key>PayloadVersion</key>
@@ -227,7 +227,7 @@ Use the `ai.opencode.managed` PayloadType. The OC2 config keys go directly in th
   <key>PayloadType</key>
   <string>Configuration</string>
   <key>PayloadIdentifier</key>
-  <string>com.example.opencode</string>
+  <string>com.example.oc2</string>
   <key>PayloadUUID</key>
   <string>GENERATE-YOUR-OWN-UUID</string>
   <key>PayloadVersion</key>

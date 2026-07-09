@@ -168,8 +168,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     })
   }
 
-  const isManagedProvider = input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("oc2")
-  const opencodeProjectID = isManagedProvider
+  const isManagedProvider = input.model.providerID.startsWith("oc2")
+  const oc2ProjectID = isManagedProvider
     ? (yield* InstanceState.context).project.id
     : undefined
 
@@ -182,10 +182,10 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     headers: {
       ...(isManagedProvider
         ? {
-            ...(opencodeProjectID ? { [Naming.headers.project[0]]: opencodeProjectID } : {}),
-            [Naming.headers.session[0]]: input.sessionID,
-            [Naming.headers.request[0]]: input.user.id,
-            [Naming.headers.client[0]]: input.flags.client,
+            ...(oc2ProjectID ? { [Naming.headers.project]: oc2ProjectID } : {}),
+            [Naming.headers.session]: input.sessionID,
+            [Naming.headers.request]: input.user.id,
+            [Naming.headers.client]: input.flags.client,
             "User-Agent": USER_AGENT,
           }
         : {

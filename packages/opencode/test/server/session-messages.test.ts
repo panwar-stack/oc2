@@ -30,15 +30,15 @@ const withoutWatcher = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
   if (process.platform !== "win32") return effect
   return Effect.acquireUseRelease(
     Effect.sync(() => {
-      const previous = process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER
-      process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER = "true"
+      const previous = process.env.OC2_EXPERIMENTAL_DISABLE_FILEWATCHER
+      process.env.OC2_EXPERIMENTAL_DISABLE_FILEWATCHER = "true"
       return previous
     }),
     () => effect,
     (previous) =>
       Effect.sync(() => {
-        if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER
-        else process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER = previous
+        if (previous === undefined) delete process.env.OC2_EXPERIMENTAL_DISABLE_FILEWATCHER
+        else process.env.OC2_EXPERIMENTAL_DISABLE_FILEWATCHER = previous
       }),
   )
 }

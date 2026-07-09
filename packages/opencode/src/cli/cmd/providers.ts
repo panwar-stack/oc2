@@ -242,11 +242,10 @@ export async function fetchWellKnownAuthProvider(
   fetcher: WellKnownFetch = fetch,
 ): Promise<WellKnownAuthProvider> {
   const base = url.replace(/\/+$/, "")
-  for (const path of [".well-known/oc2", ".well-known/opencode"]) {
-    const response = await fetcher(`${base}/${path}`)
-    if (response.ok) return response.json() as Promise<WellKnownAuthProvider>
-    if (response.status !== 404) throw new Error(`${base}/${path} returned ${response.status}`)
-  }
+  const path = ".well-known/oc2"
+  const response = await fetcher(`${base}/${path}`)
+  if (response.ok) return response.json() as Promise<WellKnownAuthProvider>
+  if (response.status !== 404) throw new Error(`${base}/${path} returned ${response.status}`)
   throw new Error(`no OC2 well-known metadata found at ${base}`)
 }
 

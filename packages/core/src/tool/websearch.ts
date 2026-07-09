@@ -68,11 +68,11 @@ export class ConfigService extends Context.Service<ConfigService, Config>()("@op
 
 /** Isolates the retained product environment contract from the generic tool implementation. */
 export const defaultConfigLayer = Layer.sync(ConfigService, () => {
-  const provider = Naming.env("OPENCODE_WEBSEARCH_PROVIDER")
+  const provider = Naming.env("OC2_WEBSEARCH_PROVIDER")
   return ConfigService.of({
     provider: provider === "exa" || provider === "parallel" ? provider : undefined,
-    enableExa: truthy("OPENCODE_EXPERIMENTAL") || truthy("OPENCODE_ENABLE_EXA") || truthy("OPENCODE_EXPERIMENTAL_EXA"),
-    enableParallel: truthy("OPENCODE_ENABLE_PARALLEL") || truthy("OPENCODE_EXPERIMENTAL_PARALLEL"),
+    enableExa: truthy("OC2_EXPERIMENTAL") || truthy("OC2_ENABLE_EXA") || truthy("OC2_EXPERIMENTAL_EXA"),
+    enableParallel: truthy("OC2_ENABLE_PARALLEL") || truthy("OC2_EXPERIMENTAL_PARALLEL"),
     exaApiKey: process.env.EXA_API_KEY,
     parallelApiKey: process.env.PARALLEL_API_KEY,
   })

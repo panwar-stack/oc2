@@ -131,15 +131,15 @@ describe("fetchWellKnownAuthProvider", () => {
     expect(wellknown.auth.env).toBe("TOKEN")
   })
 
-  test("falls back to legacy opencode well-known metadata", async () => {
+  test("does not fall back to legacy opencode well-known metadata", async () => {
     const calls: string[] = []
-    const wellknown = await fetchWellKnownAuthProvider("https://example.com", async (url) => {
-      calls.push(String(url))
-      if (String(url).endsWith("/oc2")) return new Response("not found", { status: 404 })
-      return Response.json({ auth: { command: ["echo", "legacy"], env: "LEGACY_TOKEN" } })
-    })
+    await expect(
+      fetchWellKnownAuthProvider("https://example.com", async (url) => {
+        calls.push(String(url))
+        return new Response("not found", { status: 404 })
+      }),
+    ).rejects.toThrow("no OC2 well-known metadata found at https://example.com")
 
-    expect(calls).toEqual(["https://example.com/.well-known/oc2", "https://example.com/.well-known/opencode"])
-    expect(wellknown.auth.env).toBe("LEGACY_TOKEN")
+    expect(calls).toEqual(["https://example.com/.well-known/oc2"])
   })
 })

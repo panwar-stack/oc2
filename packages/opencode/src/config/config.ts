@@ -312,7 +312,7 @@ export const layer = Layer.effect(
       let result: Info = {}
       // Seed the default global config with the schema for editor completion, but avoid writing when the user
       // explicitly routes config through env-provided paths or content.
-      if (!Flag.OPENCODE_CONFIG && !Flag.OPENCODE_CONFIG_DIR && !Flag.OPENCODE_CONFIG_CONTENT) {
+      if (!Flag.OC2_CONFIG && !Flag.OC2_CONFIG_DIR && !Flag.OC2_CONFIG_CONTENT) {
         const file = globalConfigFile()
         if (!existsSync(file)) {
           yield* fs
@@ -386,7 +386,7 @@ export const layer = Layer.effect(
 
         const pluginScopeForSource = Effect.fnUntraced(function* (source: string) {
           if (source.startsWith("http://") || source.startsWith("https://")) return "global"
-          if (source === "OC2_CONFIG_CONTENT" || source === "OPENCODE_CONFIG_CONTENT") return "local"
+          if (source === "OC2_CONFIG_CONTENT") return "local"
           if (containsPath(source, ctx)) return "local"
           return "global"
         })
@@ -423,15 +423,9 @@ export const layer = Layer.effect(
             authEnv[value.key] = value.token
             let wellknownURL = ""
             const wellknown = yield* Effect.gen(function* () {
-              for (const candidate of [`${url}${Naming.wellKnownPath}`, `${url}${Naming.legacyWellKnownPath}`]) {
-                log.debug("fetching remote config", { url: candidate })
-                const fetched = yield* fetchRemoteJson(candidate, undefined, ConfigV1.WellKnown).pipe(Effect.exit)
-                if (Exit.isSuccess(fetched)) {
-                  wellknownURL = candidate
-                  return fetched.value
-                }
-              }
-              return yield* Effect.die(new Error(`failed to fetch remote config from ${url}`))
+              wellknownURL = `${url}${Naming.wellKnownPath}`
+              log.debug("fetching remote config", { url: wellknownURL })
+              return yield* fetchRemoteJson(wellknownURL, undefined, ConfigV1.WellKnown)
             })
             const remote = yield* Effect.promise(() =>
               substituteWellKnownRemoteConfig({
@@ -471,13 +465,13 @@ export const layer = Layer.effect(
         const global = Object.keys(authEnv).length ? yield* loadGlobal(authEnv) : yield* getGlobal()
         yield* merge(Global.Path.config, global, "global")
 
-        if (Flag.OPENCODE_CONFIG) {
-          yield* merge(Flag.OPENCODE_CONFIG, yield* loadFile(Flag.OPENCODE_CONFIG, authEnv))
-          log.debug("loaded custom config", { path: Flag.OPENCODE_CONFIG })
+        if (Flag.OC2_CONFIG) {
+          yield* merge(Flag.OC2_CONFIG, yield* loadFile(Flag.OC2_CONFIG, authEnv))
+          log.debug("loaded custom config", { path: Flag.OC2_CONFIG })
         }
 
-        if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
-          for (const file of yield* ConfigPaths.files(Naming.legacyAppSlug, ctx.directory, ctx.worktree).pipe(
+        if (!Flag.OC2_DISABLE_PROJECT_CONFIG) {
+          for (const file of yield* ConfigPaths.files(Naming.appSlug, ctx.directory, ctx.worktree).pipe(
             Effect.orDie,
           )) {
             yield* merge(file, yield* loadFile(file, authEnv), "local")
@@ -490,14 +484,14 @@ export const layer = Layer.effect(
 
         const directories = yield* ConfigPaths.directories(ctx.directory, ctx.worktree)
 
-        if (Flag.OPENCODE_CONFIG_DIR) {
-          log.debug("loading config from OPENCODE_CONFIG_DIR", { path: Flag.OPENCODE_CONFIG_DIR })
+        if (Flag.OC2_CONFIG_DIR) {
+          log.debug("loading config from OC2_CONFIG_DIR", { path: Flag.OC2_CONFIG_DIR })
         }
 
         const deps: Fiber.Fiber<void>[] = []
 
         for (const dir of directories) {
-          if (Naming.configDirs.some((name) => dir.endsWith(name)) || dir === Flag.OPENCODE_CONFIG_DIR) {
+          if (Naming.configDirs.some((name) => dir.endsWith(name)) || dir === Flag.OC2_CONFIG_DIR) {
             for (const file of Naming.configFileLoadOrder) {
               const source = path.join(dir, file)
               log.debug(`loading config from ${source}`)
@@ -536,18 +530,15 @@ export const layer = Layer.effect(
           result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.loadMode(dir)))
-          // Auto-discovered plugins under `.opencode/plugin(s)` are already local files, so ConfigPlugin.load
+          // Auto-discovered plugins under `.oc2/plugin(s)` are already local files, so ConfigPlugin.load
           // returns normalized Specs and we only need to attach origin metadata here.
           const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
           yield* mergePluginOrigins(dir, list)
         }
 
-        if (Flag.OPENCODE_CONFIG_CONTENT) {
-          const source =
-            Naming.env("OPENCODE_CONFIG_CONTENT") === process.env.OC2_CONFIG_CONTENT
-              ? "OC2_CONFIG_CONTENT"
-              : "OPENCODE_CONFIG_CONTENT"
-          const next = yield* loadConfig(Flag.OPENCODE_CONFIG_CONTENT, {
+        if (Flag.OC2_CONFIG_CONTENT) {
+          const source = "OC2_CONFIG_CONTENT"
+          const next = yield* loadConfig(Flag.OC2_CONFIG_CONTENT, {
             dir: ctx.directory,
             source,
           })
@@ -568,8 +559,8 @@ export const layer = Layer.effect(
               { concurrency: 2 },
             )
             if (Option.isSome(tokenOpt)) {
-              process.env["OPENCODE_CONSOLE_TOKEN"] = tokenOpt.value
-              yield* env.set("OPENCODE_CONSOLE_TOKEN", tokenOpt.value)
+              process.env["OC2_CONSOLE_TOKEN"] = tokenOpt.value
+              yield* env.set("OC2_CONSOLE_TOKEN", tokenOpt.value)
             }
 
             if (Option.isSome(configOpt)) {
@@ -623,11 +614,11 @@ export const layer = Layer.effect(
           })
         }
 
-        if (Flag.OPENCODE_PERMISSION) {
+        if (Flag.OC2_PERMISSION) {
           try {
-            result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENCODE_PERMISSION))
+            result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OC2_PERMISSION))
           } catch (err) {
-            log.warn("OPENCODE_PERMISSION contains invalid JSON, skipping", { err })
+            log.warn("OC2_PERMISSION contains invalid JSON, skipping", { err })
           }
         }
 
@@ -657,10 +648,10 @@ export const layer = Layer.effect(
           result.share = "auto"
         }
 
-        if (Flag.OPENCODE_DISABLE_AUTOCOMPACT) {
+        if (Flag.OC2_DISABLE_AUTOCOMPACT) {
           result.compaction = { ...result.compaction, auto: false }
         }
-        if (Flag.OPENCODE_DISABLE_PRUNE) {
+        if (Flag.OC2_DISABLE_PRUNE) {
           result.compaction = { ...result.compaction, prune: false }
         }
 

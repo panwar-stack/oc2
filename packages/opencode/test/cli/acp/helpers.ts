@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import type { InitializeResponse, NewSessionResponse, SessionConfigOption } from "@agentclientprotocol/sdk"
-import { Effect } from "effect"
+import { Effect, Scope } from "effect"
 import type { CliFixture } from "../../lib/cli-process"
 import { testProviderConfig } from "../../lib/test-provider"
 import {
@@ -11,7 +11,10 @@ import {
   type AcpClient,
 } from "./acp-test-client"
 
-export function createAcpClient(input: Pick<CliFixture, "opencode">, env?: Record<string, string>) {
+export function createAcpClient(
+  input: Pick<CliFixture, "opencode">,
+  env?: Record<string, string>,
+): Effect.Effect<AcpClient, Error, Scope.Scope> {
   return Effect.gen(function* () {
     return createJsonRpcAcpClient(yield* input.opencode.acp(env ? { env } : undefined))
   })

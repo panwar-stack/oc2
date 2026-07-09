@@ -24,9 +24,9 @@ const archMap = {
 
 const platform = platformMap[os.platform()] ?? os.platform()
 const arch = archMap[os.arch()] ?? os.arch()
-const bases = [`oc2-${platform}-${arch}`, `opencode-${platform}-${arch}`]
-const sourceBinaries = platform === "windows" ? ["oc2.exe", "opencode.exe"] : ["oc2", "opencode"]
-const targetBinaries = [path.join(__dirname, "bin", "oc2.exe"), path.join(__dirname, "bin", "opencode.exe")]
+const bases = [`oc2-${platform}-${arch}`]
+const sourceBinaries = platform === "windows" ? ["oc2.exe"] : ["oc2"]
+const targetBinary = path.join(__dirname, "bin", "oc2.exe")
 
 function supportsAvx2() {
   if (arch !== "x64") return false
@@ -141,8 +141,7 @@ function installPackage(name) {
     )
     if (result.status !== 0) return
     const packageDir = path.join(temp, "node_modules", name)
-    copyBinary(resolvePackageBinary(packageDir), targetBinaries[0])
-    copyBinary(targetBinaries[0], targetBinaries[1])
+    copyBinary(resolvePackageBinary(packageDir), targetBinary)
     return true
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })
@@ -170,7 +169,7 @@ function copyBinary(source, target) {
 }
 
 function verifyBinary() {
-  const result = childProcess.spawnSync(targetBinaries[0], ["--version"], {
+  const result = childProcess.spawnSync(targetBinary, ["--version"], {
     encoding: "utf8",
     stdio: "ignore",
     windowsHide: true,
@@ -181,8 +180,7 @@ function verifyBinary() {
 function main() {
   for (const name of packageNames()) {
     try {
-      copyBinary(resolveBinary(name), targetBinaries[0])
-      copyBinary(targetBinaries[0], targetBinaries[1])
+      copyBinary(resolveBinary(name), targetBinary)
       if (verifyBinary()) return
     } catch {
       if (installPackage(name) && verifyBinary()) return

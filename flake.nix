@@ -1,5 +1,5 @@
 {
-  description = "OpenCode development flake";
+  description = "OC2 development flake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -39,7 +39,7 @@
             };
           in
           {
-            opencode = final.callPackage ./nix/opencode.nix {
+            oc2 = final.callPackage ./nix/oc2.nix {
               inherit node_modules;
             };
           };
@@ -53,8 +53,8 @@
           };
         in
         rec {
-          default = opencode;
-          opencode = pkgs.callPackage ./nix/opencode.nix {
+          default = oc2;
+          oc2 = pkgs.callPackage ./nix/oc2.nix {
             inherit node_modules;
           };
           # Updater derivation with fakeHash - build fails and reveals correct hash

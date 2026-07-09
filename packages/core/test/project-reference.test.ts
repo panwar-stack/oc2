@@ -19,16 +19,16 @@ import { it } from "./lib/effect"
 describe("ProjectReference", () => {
   it.live("uses the broad experimental flag unless references are explicitly configured", () =>
     withEnv(
-      { OPENCODE_EXPERIMENTAL: "true", OPENCODE_EXPERIMENTAL_REFERENCES: undefined },
+      { OC2_EXPERIMENTAL: "true", OC2_EXPERIMENTAL_REFERENCES: undefined },
       Effect.sync(() => {
-        expect(Flag.OPENCODE_EXPERIMENTAL_REFERENCES).toBe(true)
+        expect(Flag.OC2_EXPERIMENTAL_REFERENCES).toBe(true)
       }),
     ).pipe(
       Effect.flatMap(() =>
         withEnv(
-          { OPENCODE_EXPERIMENTAL: "true", OPENCODE_EXPERIMENTAL_REFERENCES: "false" },
+          { OC2_EXPERIMENTAL: "true", OC2_EXPERIMENTAL_REFERENCES: "false" },
           Effect.sync(() => {
-            expect(Flag.OPENCODE_EXPERIMENTAL_REFERENCES).toBe(false)
+            expect(Flag.OC2_EXPERIMENTAL_REFERENCES).toBe(false)
           }),
         ),
       ),
@@ -270,11 +270,11 @@ function withTmp<A, E, R>(body: (tmp: Awaited<ReturnType<typeof tmpdir>>) => Eff
 }
 
 function withReferences<A, E, R>(body: Effect.Effect<A, E, R>) {
-  return withEnv({ OPENCODE_EXPERIMENTAL_REFERENCES: "true" }, body)
+  return withEnv({ OC2_EXPERIMENTAL_REFERENCES: "true" }, body)
 }
 
 function withoutReferences<A, E, R>(body: Effect.Effect<A, E, R>) {
-  return withEnv({ OPENCODE_EXPERIMENTAL: undefined, OPENCODE_EXPERIMENTAL_REFERENCES: undefined }, body)
+  return withEnv({ OC2_EXPERIMENTAL: undefined, OC2_EXPERIMENTAL_REFERENCES: undefined }, body)
 }
 
 function withEnv<A, E, R>(env: Record<string, string | undefined>, body: Effect.Effect<A, E, R>) {

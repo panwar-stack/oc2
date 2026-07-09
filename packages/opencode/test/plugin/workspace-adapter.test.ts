@@ -97,7 +97,7 @@ describe("plugin.workspace", () => {
 
       yield* Effect.promise(() =>
         Bun.write(
-          path.join(dir, "opencode.json"),
+          path.join(dir, "oc2.json"),
           JSON.stringify(
             {
               $schema: "https://opencode.ai/config.json",

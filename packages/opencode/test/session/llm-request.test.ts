@@ -139,12 +139,12 @@ describe("session.llm.request", () => {
       )
 
       expect(prepared.headers).toMatchObject({
-        [Naming.headers.project[0]]: ProjectV2.ID.make("proj_request"),
-        [Naming.headers.session[0]]: sessionID,
-        [Naming.headers.request[0]]: user.id,
-        [Naming.headers.client[0]]: flags.client,
+        [Naming.headers.project]: ProjectV2.ID.make("proj_request"),
+        [Naming.headers.session]: sessionID,
+        [Naming.headers.request]: user.id,
+        [Naming.headers.client]: flags.client,
       })
-      expect(Object.hasOwn(prepared.headers, Naming.headers.project[1])).toBe(false)
+      expect(Object.hasOwn(prepared.headers, Naming.headers.project)).toBe(true)
       expect(Object.hasOwn(prepared.headers, "x-session-affinity")).toBe(false)
     }),
   )

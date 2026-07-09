@@ -47,48 +47,31 @@ describe("sqlite logging", () => {
   })
 })
 
-describe("database path compatibility", () => {
+describe("database path", () => {
   test("uses oc2 database names for fresh selected data roots", async () => {
     await withDatabaseRoots(async ({ next }) => {
       expect(Database.path()).toBe(path.join(next, "oc2.db"))
     })
   })
 
-  test("uses legacy opencode database when adopting an old-only data root", async () => {
-    await withDatabaseRoots(async ({ legacy }) => {
-      const legacyDB = path.join(legacy, "opencode.db")
-      await fs.writeFile(legacyDB, "")
-      ;(Global.Path as { data: string }).data = legacy
-      expect(Database.path()).toBe(legacyDB)
-    })
-  })
 })
 
-async function withDatabaseRoots(fn: (roots: { next: string; legacy: string }) => Promise<void>) {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-db-test-"))
+async function withDatabaseRoots(fn: (roots: { next: string }) => Promise<void>) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "oc2-db-test-"))
   const previous = {
     pathData: Global.Path.data,
-    legacyData: Global.LegacyPath.data,
-    disableChannel: process.env.OPENCODE_DISABLE_CHANNEL_DB,
-    oc2DisableChannel: process.env.OC2_DISABLE_CHANNEL_DB,
+    disableChannel: process.env.OC2_DISABLE_CHANNEL_DB,
   }
   const next = path.join(tmp, "oc2")
-  const legacy = path.join(tmp, "opencode")
   await fs.mkdir(next, { recursive: true })
-  await fs.mkdir(legacy, { recursive: true })
-  process.env.OPENCODE_DISABLE_CHANNEL_DB = "1"
-  delete process.env.OC2_DISABLE_CHANNEL_DB
+  process.env.OC2_DISABLE_CHANNEL_DB = "1"
   ;(Global.Path as { data: string }).data = next
-  ;(Global.LegacyPath as { data: string }).data = legacy
   try {
-    await fn({ next, legacy })
+    await fn({ next })
   } finally {
     ;(Global.Path as { data: string }).data = previous.pathData
-    ;(Global.LegacyPath as { data: string }).data = previous.legacyData
-    if (previous.disableChannel === undefined) delete process.env.OPENCODE_DISABLE_CHANNEL_DB
-    else process.env.OPENCODE_DISABLE_CHANNEL_DB = previous.disableChannel
-    if (previous.oc2DisableChannel === undefined) delete process.env.OC2_DISABLE_CHANNEL_DB
-    else process.env.OC2_DISABLE_CHANNEL_DB = previous.oc2DisableChannel
+    if (previous.disableChannel === undefined) delete process.env.OC2_DISABLE_CHANNEL_DB
+    else process.env.OC2_DISABLE_CHANNEL_DB = previous.disableChannel
     await fs.rm(tmp, { recursive: true, force: true })
   }
 }

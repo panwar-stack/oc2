@@ -66,12 +66,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 DEFAULT_INSTALL_DIR=$HOME/.oc2/bin
-LEGACY_INSTALL_DIR=$HOME/.opencode/bin
 INSTALL_DIR=$DEFAULT_INSTALL_DIR
-
-if [ -e "$LEGACY_INSTALL_DIR/opencode" ] || [ -e "$LEGACY_INSTALL_DIR/opencode.exe" ]; then
-    INSTALL_DIR=$LEGACY_INSTALL_DIR
-fi
 
 mkdir -p "$INSTALL_DIR"
 
@@ -242,26 +237,9 @@ check_version() {
     if [[ "$installed_version" != "$specific_version" ]]; then
         print_message info "${MUTED}Installed version: ${NC}$installed_version."
     else
-        if [[ "$oc2_path" == "$INSTALL_DIR"/* ]] && [ ! -e "$INSTALL_DIR/opencode" ] && [ ! -e "$INSTALL_DIR/opencode.exe" ]; then
-            install_opencode_shim
-        fi
         print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
         exit 0
     fi
-}
-
-install_opencode_shim() {
-    if [ -f "${INSTALL_DIR}/oc2.exe" ]; then
-        cp "${INSTALL_DIR}/oc2.exe" "${INSTALL_DIR}/opencode.exe"
-        chmod 755 "${INSTALL_DIR}/opencode.exe"
-        return 0
-    fi
-
-    cat > "${INSTALL_DIR}/opencode" <<'EOF'
-#!/bin/sh
-exec "$(dirname "$0")/oc2" "$@"
-EOF
-    chmod 755 "${INSTALL_DIR}/opencode"
 }
 
 unbuffered_sed() {
@@ -377,7 +355,6 @@ download_and_install() {
         mv "$tmp_dir/oc2" "$INSTALL_DIR"
         chmod 755 "${INSTALL_DIR}/oc2"
     fi
-    install_opencode_shim
     rm -rf "$tmp_dir"
 }
 
@@ -390,7 +367,6 @@ install_from_binary() {
         cp "$binary_path" "${INSTALL_DIR}/oc2"
         chmod 755 "${INSTALL_DIR}/oc2"
     fi
-    install_opencode_shim
 }
 
 if [ -n "$binary_path" ]; then

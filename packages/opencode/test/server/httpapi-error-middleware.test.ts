@@ -56,7 +56,7 @@ describe("HttpApi error middleware", () => {
   it.live("does not expose config defects from generic middleware", () =>
     Effect.gen(function* () {
       const configError = new ConfigErrorV1.InvalidError({
-        path: "/tmp/opencode.json",
+        path: "/tmp/oc2.json",
         issues: [{ message: "Expected object", path: ["provider", "anthropic", "options"] }],
       })
 
@@ -72,7 +72,7 @@ describe("HttpApi error middleware", () => {
 
       expect(response.status).toBe(500)
       expectUnknownErrorBody(body)
-      expect(serialized).not.toContain("/tmp/opencode.json")
+      expect(serialized).not.toContain("/tmp/oc2.json")
       expect(serialized).not.toContain("provider")
       expect(serialized).not.toContain("anthropic")
     }),

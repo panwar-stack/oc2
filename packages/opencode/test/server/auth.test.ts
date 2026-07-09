@@ -4,13 +4,13 @@ import { Flag } from "@oc2-ai/core/flag/flag"
 import { ServerAuth } from "../../src/server/auth"
 
 const original = {
-  OPENCODE_SERVER_PASSWORD: Flag.OPENCODE_SERVER_PASSWORD,
-  OPENCODE_SERVER_USERNAME: Flag.OPENCODE_SERVER_USERNAME,
+  OC2_SERVER_PASSWORD: Flag.OC2_SERVER_PASSWORD,
+  OC2_SERVER_USERNAME: Flag.OC2_SERVER_USERNAME,
 }
 
 afterEach(() => {
-  Flag.OPENCODE_SERVER_PASSWORD = original.OPENCODE_SERVER_PASSWORD
-  Flag.OPENCODE_SERVER_USERNAME = original.OPENCODE_SERVER_USERNAME
+  Flag.OC2_SERVER_PASSWORD = original.OC2_SERVER_PASSWORD
+  Flag.OC2_SERVER_USERNAME = original.OC2_SERVER_USERNAME
 })
 
 const fromConfig = (input: Record<string, unknown>) =>
@@ -20,16 +20,16 @@ const readConfig = ServerAuth.Config.useSync((config) => config)
 
 describe("ServerAuth", () => {
   test("does not emit auth headers without a password", () => {
-    Flag.OPENCODE_SERVER_PASSWORD = undefined
-    Flag.OPENCODE_SERVER_USERNAME = "alice"
+    Flag.OC2_SERVER_PASSWORD = undefined
+    Flag.OC2_SERVER_USERNAME = "alice"
 
     expect(ServerAuth.header()).toBeUndefined()
     expect(ServerAuth.headers()).toBeUndefined()
   })
 
   test("defaults emitted auth headers to the oc2 username", () => {
-    Flag.OPENCODE_SERVER_PASSWORD = "secret"
-    Flag.OPENCODE_SERVER_USERNAME = undefined
+    Flag.OC2_SERVER_PASSWORD = "secret"
+    Flag.OC2_SERVER_USERNAME = undefined
 
     expect(ServerAuth.headers()).toEqual({
       Authorization: `Basic ${Buffer.from("oc2:secret").toString("base64")}`,
@@ -37,8 +37,8 @@ describe("ServerAuth", () => {
   })
 
   test("uses the configured username", () => {
-    Flag.OPENCODE_SERVER_PASSWORD = "secret"
-    Flag.OPENCODE_SERVER_USERNAME = "alice"
+    Flag.OC2_SERVER_PASSWORD = "secret"
+    Flag.OC2_SERVER_USERNAME = "alice"
 
     expect(ServerAuth.headers()).toEqual({
       Authorization: `Basic ${Buffer.from("alice:secret").toString("base64")}`,
@@ -46,8 +46,8 @@ describe("ServerAuth", () => {
   })
 
   test("prefers explicit credentials", () => {
-    Flag.OPENCODE_SERVER_PASSWORD = "secret"
-    Flag.OPENCODE_SERVER_USERNAME = "alice"
+    Flag.OC2_SERVER_PASSWORD = "secret"
+    Flag.OC2_SERVER_USERNAME = "alice"
 
     expect(ServerAuth.headers({ password: "cli-secret", username: "bob" })).toEqual({
       Authorization: `Basic ${Buffer.from("bob:cli-secret").toString("base64")}`,
@@ -62,11 +62,11 @@ describe("ServerAuth", () => {
     expect(ServerAuth.authorized({ username: "opencode", password: Redacted.make("secret") }, config)).toBe(false)
   })
 
-  test("accepts the legacy username only for the unconfigured default username", () => {
+  test("requires the OC2 default username exactly", () => {
     const config = { password: Option.some("secret"), username: "oc2", usernameConfigured: false }
 
     expect(ServerAuth.authorized({ username: "oc2", password: Redacted.make("secret") }, config)).toBe(true)
-    expect(ServerAuth.authorized({ username: "opencode", password: Redacted.make("secret") }, config)).toBe(true)
+    expect(ServerAuth.authorized({ username: "opencode", password: Redacted.make("secret") }, config)).toBe(false)
   })
 
   test("keeps explicitly configured default username exact", () => {
@@ -76,15 +76,13 @@ describe("ServerAuth", () => {
     expect(ServerAuth.authorized({ username: "opencode", password: Redacted.make("secret") }, config)).toBe(false)
   })
 
-  test("prefers OC2_SERVER config over OPENCODE_SERVER fallback", async () => {
+  test("reads OC2_SERVER config", async () => {
     const config = await Effect.runPromise(
       readConfig.pipe(
         Effect.provide(
           fromConfig({
             OC2_SERVER_PASSWORD: "new-secret",
-            OPENCODE_SERVER_PASSWORD: "old-secret",
             OC2_SERVER_USERNAME: "new-user",
-            OPENCODE_SERVER_USERNAME: "old-user",
           }),
         ),
       ),

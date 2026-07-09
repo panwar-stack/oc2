@@ -42,7 +42,7 @@ describe("team HttpApi", () => {
       yield* team.createUsageEvent({ teamID: info.id, type: "report_generated" })
 
       const response = yield* request(withSession(`${TeamPaths.root}/${info.id}/eval`, info.lead_session_id), {
-        headers: { "x-opencode-directory": test.directory },
+        headers: { "x-oc2-directory": test.directory },
       })
       const body = yield* responseJson(response)
 
@@ -96,7 +96,7 @@ describe("team HttpApi", () => {
       yield* team.updateMemberStatus(daemon.id, "cancelled", { daemonState: "error", daemonError: "boom" })
 
       const response = yield* request(withSession(`${TeamPaths.root}/${info.id}/eval`, info.lead_session_id), {
-        headers: { "x-opencode-directory": test.directory },
+        headers: { "x-oc2-directory": test.directory },
       })
       const body = yield* responseJson(response)
 
@@ -137,16 +137,16 @@ describe("team HttpApi", () => {
       })
 
       const teamResponse = yield* request(withSession(`${TeamPaths.root}/${info.id}`, info.lead_session_id), {
-        headers: { "x-opencode-directory": test.directory },
+        headers: { "x-oc2-directory": test.directory },
       })
       const tasksResponse = yield* request(withSession(`${TeamPaths.root}/${info.id}/tasks`, info.lead_session_id), {
-        headers: { "x-opencode-directory": test.directory },
+        headers: { "x-oc2-directory": test.directory },
       })
       const messagesResponse = yield* request(withSession(`${TeamPaths.root}/${info.id}/messages`, member.session_id), {
-        headers: { "x-opencode-directory": test.directory },
+        headers: { "x-oc2-directory": test.directory },
       })
       const evalResponse = yield* request(withSession(`${TeamPaths.root}/${info.id}/eval`, member.session_id), {
-        headers: { "x-opencode-directory": test.directory },
+        headers: { "x-oc2-directory": test.directory },
       })
       const teamBody = yield* responseJson(teamResponse)
       const tasksBody = yield* responseJson(tasksResponse)
@@ -193,20 +193,20 @@ describe("team HttpApi", () => {
       const responses = yield* Effect.forEach(
         [
           request(withSession(`${TeamPaths.root}/${info.id}`, "ses_outsider"), {
-            headers: { "x-opencode-directory": test.directory },
+            headers: { "x-oc2-directory": test.directory },
           }),
           request(withSession(`${TeamPaths.root}/${info.id}/tasks`, "ses_outsider"), {
-            headers: { "x-opencode-directory": test.directory },
+            headers: { "x-oc2-directory": test.directory },
           }),
           request(withSession(`${TeamPaths.root}/${info.id}/messages`, "ses_outsider"), {
-            headers: { "x-opencode-directory": test.directory },
+            headers: { "x-oc2-directory": test.directory },
           }),
           request(withSession(`${TeamPaths.root}/${info.id}/eval`, "ses_outsider"), {
-            headers: { "x-opencode-directory": test.directory },
+            headers: { "x-oc2-directory": test.directory },
           }),
           request(withSession(`${TeamPaths.root}/${info.id}/shutdown`, "ses_outsider"), {
             method: "POST",
-            headers: { "x-opencode-directory": test.directory },
+            headers: { "x-oc2-directory": test.directory },
           }),
         ],
         (effect) => effect,
@@ -241,7 +241,7 @@ describe("team HttpApi", () => {
 
       const response = yield* request(withSession(`${TeamPaths.root}/${info.id}/shutdown`, info.lead_session_id), {
         method: "POST",
-        headers: { "x-opencode-directory": test.directory },
+        headers: { "x-oc2-directory": test.directory },
       })
       const body = yield* responseJson(response)
       const after = yield* team.get(info.id)

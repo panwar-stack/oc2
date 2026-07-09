@@ -185,7 +185,7 @@ export default function StatsHome() {
 function getStatsHomeUrl(base: string, requestUrl: string) {
   const url = new URL(base, requestUrl)
   if (url.hostname === "stats.oc2.ai") return "https://oc2.ai/stats/"
-  if (url.hostname === "stats.dev.opencode.ai") return "https://dev.opencode.ai/stats/"
+  if (url.hostname === "stats.dev.oc2.ai") return "https://dev.oc2.ai/stats/"
   return url.toString()
 }
 

@@ -24,7 +24,7 @@ jobs:
 
       - name: Check duplicates and compliance
         env:
-          OC2_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OC2_API_KEY: ${{ secrets.OC2_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OC2_PERMISSION: |
             {
@@ -136,7 +136,7 @@ jobs:
 
       - name: Recheck compliance
         env:
-          OC2_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OC2_API_KEY: ${{ secrets.OC2_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OC2_PERMISSION: |
             {

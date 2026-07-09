@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OPENCODE_BIN="${OPENCODE_BIN:-/Users/srpanwar/Documents/workspace/brain/opencode/packages/opencode/dist/opencode-darwin-x64/bin/opencode}"
+OC2_BIN="${OC2_BIN:-/Users/srpanwar/Documents/workspace/brain/opencode/packages/opencode/dist/opencode-darwin-x64/bin/opencode}"
 START="# >>> opencode alias >>>"
 END="# <<< opencode alias <<<"
 
@@ -25,7 +25,7 @@ install_alias() {
 
   {
     printf '%s\n' "$START"
-    printf 'alias opencode=%q\n' "$OPENCODE_BIN"
+    printf 'alias opencode=%q\n' "$OC2_BIN"
     printf '%s\n' "$END"
   } >> "$tmp"
 

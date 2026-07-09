@@ -11,24 +11,24 @@ import { readFile, rm, writeFile, utimes, mkdir } from "fs/promises"
 import path from "path"
 import { Hash } from "@oc2-ai/core/util/hash"
 
-// test/preload.ts pins OPENCODE_MODELS_PATH to a fixture so other tests can
+// test/preload.ts pins OC2_MODELS_PATH to a fixture so other tests can
 // resolve providers without network. These tests need to drive the on-disk
 // cache themselves and silence the eager refresh fork. Save/restore around
 // the suite — never leak the mutation to subsequent test files in the same
 // bun process.
-const ORIGINAL_MODELS_PATH = Flag.OPENCODE_MODELS_PATH
-const ORIGINAL_DISABLE_FETCH = Flag.OPENCODE_DISABLE_MODELS_FETCH
-const ORIGINAL_MODELS_URL = Flag.OPENCODE_MODELS_URL
+const ORIGINAL_MODELS_PATH = Flag.OC2_MODELS_PATH
+const ORIGINAL_DISABLE_FETCH = Flag.OC2_DISABLE_MODELS_FETCH
+const ORIGINAL_MODELS_URL = Flag.OC2_MODELS_URL
 const MODELS_SOURCE = "https://models.test"
 beforeAll(() => {
-  Flag.OPENCODE_MODELS_PATH = undefined
-  Flag.OPENCODE_DISABLE_MODELS_FETCH = true
-  Flag.OPENCODE_MODELS_URL = MODELS_SOURCE
+  Flag.OC2_MODELS_PATH = undefined
+  Flag.OC2_DISABLE_MODELS_FETCH = true
+  Flag.OC2_MODELS_URL = MODELS_SOURCE
 })
 afterAll(() => {
-  Flag.OPENCODE_MODELS_PATH = ORIGINAL_MODELS_PATH
-  Flag.OPENCODE_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
-  Flag.OPENCODE_MODELS_URL = ORIGINAL_MODELS_URL
+  Flag.OC2_MODELS_PATH = ORIGINAL_MODELS_PATH
+  Flag.OC2_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
+  Flag.OC2_MODELS_URL = ORIGINAL_MODELS_URL
 })
 
 const cacheFile = path.join(Global.Path.cache, `models-${Hash.fast(MODELS_SOURCE)}.json`)
@@ -164,7 +164,7 @@ describe("ModelsDev Service", () => {
       const state = yield* Ref.make({ ...initialState, body: JSON.stringify(fixture2) })
       const result = yield* Effect.acquireUseRelease(
         Effect.sync(() => {
-          Flag.OPENCODE_DISABLE_MODELS_FETCH = false
+          Flag.OC2_DISABLE_MODELS_FETCH = false
         }),
         () =>
           provided(
@@ -173,7 +173,7 @@ describe("ModelsDev Service", () => {
           ),
         () =>
           Effect.sync(() => {
-            Flag.OPENCODE_DISABLE_MODELS_FETCH = true
+            Flag.OC2_DISABLE_MODELS_FETCH = true
           }),
       )
       expect(result).toEqual(fixture2)

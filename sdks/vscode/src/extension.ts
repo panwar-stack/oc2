@@ -37,7 +37,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     if (terminal.name === TERMINAL_NAME || terminal.name === LEGACY_TERMINAL_NAME) {
       const env = "env" in terminal.creationOptions ? terminal.creationOptions.env : undefined
-      const port = env?.["_EXTENSION_OC2_PORT"] ?? env?.["_EXTENSION_OPENCODE_PORT"]
+      const port = env?.["_EXTENSION_OC2_PORT"] ?? env?.["_EXTENSION_OC2_PORT"]
       port ? await appendPrompt(parseInt(port), fileRef) : terminal.sendText(fileRef, false)
       terminal.show()
     }
@@ -60,9 +60,9 @@ export function activate(context: vscode.ExtensionContext) {
       },
       env: {
         _EXTENSION_OC2_PORT: port.toString(),
-        _EXTENSION_OPENCODE_PORT: port.toString(),
+        _EXTENSION_OC2_PORT: port.toString(),
         OC2_CALLER: "vscode",
-        OPENCODE_CALLER: "vscode",
+        OC2_CALLER: "vscode",
       },
     })
 

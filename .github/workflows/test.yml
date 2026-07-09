@@ -73,7 +73,7 @@ jobs:
         timeout-minutes: 20
         run: bun turbo test:ci --log-order=stream --log-prefix=task ${{ steps.scope.outputs.turbo_filter }}
         env:
-          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
+          OC2_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
       - name: Run HttpApi exerciser gates
         if: runner.os == 'Linux' && steps.scope.outputs.run_httpapi == 'true'

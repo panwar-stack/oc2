@@ -245,7 +245,7 @@ async function proxyRequest(script: string, input: { url: string; lookup: Record
   }
   const server: { request?: (req: unknown, res: unknown) => Promise<void> | void } = {}
   const context = vm.createContext({
-    process: { env: { OPENCODE_ALLOWLIST_JSON: JSON.stringify(["registry.npmjs.org"]), OPENCODE_PROXY_PORT: "3128" } },
+    process: { env: { OC2_ALLOWLIST_JSON: JSON.stringify(["registry.npmjs.org"]), OC2_PROXY_PORT: "3128" } },
     require: (name: string) => {
       if (name === "dns") {
         return {
@@ -464,8 +464,8 @@ describe("tool.shell sandbox", () => {
 
       const result = yield* Effect.acquireUseRelease(
         Effect.sync(() => {
-          const prev = process.env.OPENCODE_DOCKER_TEST
-          process.env.OPENCODE_DOCKER_TEST = "forwarded"
+          const prev = process.env.OC2_DOCKER_TEST
+          process.env.OC2_DOCKER_TEST = "forwarded"
           return prev
         }),
         () =>
@@ -477,8 +477,8 @@ describe("tool.shell sandbox", () => {
           ),
         (prev) =>
           Effect.sync(() => {
-            if (prev === undefined) delete process.env.OPENCODE_DOCKER_TEST
-            else process.env.OPENCODE_DOCKER_TEST = prev
+            if (prev === undefined) delete process.env.OC2_DOCKER_TEST
+            else process.env.OC2_DOCKER_TEST = prev
           }),
       )
 
@@ -492,8 +492,8 @@ describe("tool.shell sandbox", () => {
       expect(dockerRun!.args).toContain("--workdir")
       expect(dockerRun!.args).toContain(tmp)
       expect(dockerRun!.args).toContain("--env")
-      expect(dockerRun!.args).toContain("OPENCODE_DOCKER_TEST")
-      expect(dockerRun!.args).toContain("ghcr.io/anomalyco/build/bun-node:24.04")
+      expect(dockerRun!.args).toContain("OC2_DOCKER_TEST")
+      expect(dockerRun!.args).toContain("ghcr.io/panwar-stack/build/bun-node:24.04")
       expect(dockerRun!.args.slice(-3)).toEqual(["/bin/bash", "-lc", "echo sandbox"])
       expect(dockerRun!.args).toContain(`type=bind,source=${tmp},target=${tmp}`)
       expect(dockerRun!.args).toContain(`type=bind,source=${os.tmpdir()},target=${os.tmpdir()}`)
@@ -1303,7 +1303,7 @@ describe("tool.shell permissions", () => {
           item,
           Effect.acquireUseRelease(
             Effect.sync(() => {
-              const key = "OPENCODE_TEST_MISSING"
+              const key = "OC2_TEST_MISSING"
               const prev = process.env[key]
               delete process.env[key]
               return { key, prev }
