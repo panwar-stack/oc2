@@ -15,7 +15,7 @@
       // Third-party auth plugin package name is outside this repository's brand migration.
       "path": "**",
       "pattern": "opencode-gitlab-auth",
-      "count": 5,
+      "count": 3,
       "kind": "external",
       "reason": "third-party",
       "owner": "core",
@@ -111,20 +111,10 @@
       "removalSlice": "PR 7",
     },
     {
-      // PR 3 rewrites public website docs and examples.
-      "path": "packages/web/**",
-      "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 104,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "docs",
-      "removalSlice": "PR 3",
-    },
-    {
       // PR 3 rewrites package-local docs.
       "path": "packages/*/README.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 3,
+      "count": 2,
       "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
@@ -211,16 +201,6 @@
       "removalSlice": "PR 4",
     },
     {
-      // PR 4 rewrites console email/auth and public copy.
-      "path": "packages/console/**",
-      "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 46,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "app",
-      "removalSlice": "PR 4",
-    },
-    {
       // SDK scripts, runtime comments, and v1 generated docs retain legacy references until SDK docs migrate.
       "path": "packages/sdk/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
@@ -244,7 +224,7 @@
       // PR 6 updates workflows while keeping deprecated triggers/secrets where needed.
       "path": ".github/**",
       "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
-      "count": 36,
+      "count": 35,
       "kind": "temporary",
       "reason": "migration",
       "owner": "release",
@@ -331,16 +311,6 @@
       "removalSlice": "PR 3",
     },
     {
-      // Stats app/domain copy and historical provider dimensions migrate with web/app public copy.
-      "path": "packages/stats/**",
-      "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 56,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "app",
-      "removalSlice": "PR 8",
-    },
-    {
       // Storybook addon IDs and fixtures migrate with UI package branding.
       "path": "packages/storybook/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
@@ -354,7 +324,7 @@
       // Remaining package-local docs, scripts, manifests, and fixtures are migrated by later package-specific slices.
       "path": "packages/*/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 80,
+      "count": 73,
       "kind": "temporary",
       "reason": "migration",
       "owner": "core",
@@ -379,26 +349,6 @@
       "reason": "migration",
       "owner": "docs",
       "removalSlice": "PR 8",
-    },
-    {
-      // Infrastructure stack names and env passthroughs are migrated only with release safety review.
-      "path": "sst.config.ts",
-      "pattern": "opencode|OPENCODE_",
-      "count": 3,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "release",
-      "removalSlice": "PR 3",
-    },
-    {
-      // Infrastructure names, hosted domains, and OPENCODE_* secrets require release-safety review before migration.
-      "path": "infra/**",
-      "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 14,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "release",
-      "removalSlice": "PR 3",
     },
     {
       // Turbo task and env names follow package/env compatibility until later migration slices.

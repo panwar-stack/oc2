@@ -9,8 +9,6 @@
     "dev": "bun run --cwd packages/opencode --conditions=browser src/index.ts",
     "dev:build": "./packages/opencode/script/build.ts --single",
     "dev:web": "bun --cwd packages/app dev",
-    "dev:console": "ulimit -n 10240 2>/dev/null; bun run --cwd packages/console/app dev",
-    "dev:stats": "bun sst shell --stage=production -- bun run --cwd packages/stats/app dev",
     "dev:storybook": "bun --cwd packages/storybook storybook",
     "lint": "oxlint",
     "check:brand": "bun run script/check-brand.ts",
@@ -26,9 +24,7 @@
   "workspaces": {
     "packages": [
       "packages/*",
-      "packages/console/*",
       "github",
-      "packages/stats/*",
       "packages/sdk/js",
       "packages/slack"
     ],
@@ -40,7 +36,6 @@
       "@types/bun": "1.3.13",
       "@types/cross-spawn": "6.0.6",
       "@octokit/rest": "22.0.0",
-      "@hono/standard-validator": "0.2.0",
       "@hono/zod-validator": "0.4.2",
       "@opentui/core": "0.3.4",
       "@opentui/keymap": "0.3.4",
@@ -52,7 +47,6 @@
       "@types/semver": "7.7.1",
       "@tsconfig/node22": "22.0.2",
       "@tsconfig/bun": "1.0.9",
-      "@cloudflare/workers-types": "4.20251008.0",
       "@openauthjs/openauth": "0.0.0-20250322224806",
       "@pierre/diffs": "1.1.0-beta.18",
       "opentui-spinner": "0.0.6",
@@ -65,8 +59,6 @@
       "effect": "4.0.0-beta.74",
       "ai": "6.0.168",
       "cross-spawn": "7.0.6",
-      "hono": "4.10.7",
-      "hono-openapi": "1.1.2",
       "fuzzysort": "3.1.0",
       "luxon": "3.6.1",
       "marked": "17.0.1",
@@ -78,7 +70,6 @@
       "@typescript/native-preview": "7.0.0-dev.20251207.1",
       "zod": "4.1.8",
       "remeda": "2.26.0",
-      "sst": "4.13.1",
       "shiki": "3.20.0",
       "solid-list": "0.3.0",
       "tailwindcss": "4.1.11",
@@ -86,7 +77,6 @@
       "vite": "7.1.4",
       "@solidjs/meta": "0.29.4",
       "@solidjs/router": "0.15.4",
-      "@solidjs/start": "https://pkg.pr.new/@solidjs/start@dfb2020",
       "@sentry/solid": "10.36.0",
       "@sentry/vite-plugin": "4.6.0",
       "solid-js": "1.9.10",
@@ -95,7 +85,6 @@
     }
   },
   "devDependencies": {
-    "@actions/artifact": "5.0.1",
     "@tsconfig/bun": "catalog:",
     "@types/mime-types": "3.0.1",
     "@typescript/native-preview": "catalog:",
@@ -105,11 +94,9 @@
     "oxlint-tsgolint": "0.21.0",
     "prettier": "3.6.2",
     "semver": "^7.6.0",
-    "sst": "catalog:",
     "turbo": "2.8.13"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "3.933.0",
     "@oc2-ai/plugin": "workspace:*",
     "@oc2-ai/script": "workspace:*",
     "@oc2-ai/sdk": "workspace:*",

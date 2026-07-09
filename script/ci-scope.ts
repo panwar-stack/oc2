@@ -96,8 +96,6 @@ async function changedFiles() {
 async function workspacePackages() {
   const paths = [
     ...new Bun.Glob("packages/*/package.json").scanSync(),
-    ...new Bun.Glob("packages/console/*/package.json").scanSync(),
-    ...new Bun.Glob("packages/stats/*/package.json").scanSync(),
     "packages/sdk/js/package.json",
   ]
   const packages = await Promise.all(
@@ -120,8 +118,7 @@ function isDocsOnly(file: string) {
   return (
     file.endsWith(".md") ||
     file.startsWith("docs/") ||
-    file.startsWith("packages/docs/") ||
-    (file.endsWith(".mdx") && file.startsWith("packages/web/src/content/docs/"))
+    file.startsWith("packages/docs/")
   )
 }
 
