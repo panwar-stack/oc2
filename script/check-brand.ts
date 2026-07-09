@@ -31,8 +31,13 @@ const includedExtensions = new Set([
   ".md",
   ".mdx",
   ".mjs",
+  ".nix",
+  ".patch",
+  ".ps1",
   ".sh",
   ".sql",
+  ".snap",
+  ".svg",
   ".toml",
   ".ts",
   ".tsx",
@@ -40,7 +45,7 @@ const includedExtensions = new Set([
   ".yaml",
   ".yml",
 ])
-const includedNames = new Set(["Dockerfile", "install"])
+const includedNames = new Set([".dockerignore", ".gitignore", "Dockerfile", "LICENSE", "install", "oc2", "run-workspace-server"])
 const excludedPaths = new Set(["script/check-brand.ts", "script/legacy-brand-allowlist.jsonc"])
 const excludedPathParts = new Set([
   ".sst",
@@ -57,15 +62,23 @@ const excludedPathParts = new Set([
   "ts-dist",
 ])
 const excludedNames = new Set(["bun.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"])
-const reasons = new Set(["compatibility", "migration", "external-repo", "third-party", "test-fixture"])
+const kinds = new Set(["temporary", "external", "historical-fixture"])
+const temporaryReasons = new Set(["compatibility", "migration", "test-fixture"])
+const externalReasons = new Set(["external-repo", "third-party"])
+const historicalFixtureReasons = new Set(["test-fixture"])
 const owners = new Set(["core", "desktop", "app", "docs", "release", "vscode"])
+
+type AllowlistKind = "temporary" | "external" | "historical-fixture"
+type AllowlistReason = "compatibility" | "migration" | "external-repo" | "third-party" | "test-fixture"
 
 type LegacyBrandAllowlistEntry = {
   path: string
   pattern: string
   count: number
-  reason: "compatibility" | "migration" | "external-repo" | "third-party" | "test-fixture"
+  kind: AllowlistKind
+  reason: AllowlistReason
   owner: "core" | "desktop" | "app" | "docs" | "release" | "vscode"
+  removalSlice?: string
   note?: string
 }
 
@@ -83,18 +96,21 @@ type Match = {
 
 const allowlist = await loadAllowlist()
 const matchedAllowlistCounts = new Map<number, number>()
+const matchedKindCounts = new Map<AllowlistKind, number>()
 const violations: Match[] = []
 let scannedFiles = 0
 let matchedOccurrences = 0
 
 for (const file of await trackedFiles()) {
   if (!shouldScan(file)) continue
-  scannedFiles++
   const fileAllowlist = allowlist
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => entry.pathPattern.test(file))
 
-  const text = await Bun.file(path.join(root, file)).text()
+  const source = Bun.file(path.join(root, file))
+  if (!(await source.exists())) continue
+  scannedFiles++
+  const text = await source.text()
   if (text.includes("\u0000")) continue
 
   const lines = text.split("\n")
@@ -119,6 +135,8 @@ for (const file of await trackedFiles()) {
       }
 
       matchedAllowlistCounts.set(allowlistIndex, (matchedAllowlistCounts.get(allowlistIndex) ?? 0) + 1)
+      const kind = allowlist[allowlistIndex]!.kind
+      matchedKindCounts.set(kind, (matchedKindCounts.get(kind) ?? 0) + 1)
     }
   }
 }
@@ -140,7 +158,7 @@ for (const { entry, actual } of countErrors) {
 }
 
 console.log(
-  `Brand check scanned ${scannedFiles} tracked files and found ${matchedOccurrences} legacy-brand occurrence(s) covered by ${matchedAllowlistCounts.size} allowlist entr${matchedAllowlistCounts.size === 1 ? "y" : "ies"}.`,
+  `Brand check scanned ${scannedFiles} tracked files and found ${matchedOccurrences} legacy-brand occurrence(s) covered by ${matchedAllowlistCounts.size} allowlist entr${matchedAllowlistCounts.size === 1 ? "y" : "ies"} (${kindSummary()}).`,
 )
 
 if (violations.length > 0 || countErrors.length > 0) process.exitCode = 1
@@ -152,21 +170,47 @@ async function loadAllowlist() {
     throw new Error(`Invalid legacy brand allowlist: ${message}`)
   }
 
-  const entries = (parsed.config.entries ?? []) as LegacyBrandAllowlistEntry[]
-  return entries.map((entry, index): CompiledAllowlistEntry => {
-    if (!entry.path) throw new Error(`Legacy brand allowlist entry ${index + 1} is missing path`)
-    if (!entry.pattern) throw new Error(`Legacy brand allowlist entry ${index + 1} is missing pattern`)
-    if (!Number.isInteger(entry.count) || entry.count < 0)
+  const config = parsed.config as { version?: unknown; entries?: unknown }
+  if (config.version !== 2) throw new Error("Legacy brand allowlist must use version 2")
+  if (!Array.isArray(config.entries)) throw new Error("Legacy brand allowlist entries must be an array")
+
+  return config.entries.map((raw, index): CompiledAllowlistEntry => {
+    const entry = raw as Partial<LegacyBrandAllowlistEntry>
+    if (typeof entry.path !== "string" || entry.path.length === 0)
+      throw new Error(`Legacy brand allowlist entry ${index + 1} is missing path`)
+    if (typeof entry.pattern !== "string" || entry.pattern.length === 0)
+      throw new Error(`Legacy brand allowlist entry ${index + 1} is missing pattern`)
+    if (typeof entry.count !== "number" || !Number.isInteger(entry.count) || entry.count < 0)
       throw new Error(`Legacy brand allowlist entry ${index + 1} has invalid count`)
-    if (!reasons.has(entry.reason)) throw new Error(`Legacy brand allowlist entry ${index + 1} has invalid reason`)
-    if (!owners.has(entry.owner)) throw new Error(`Legacy brand allowlist entry ${index + 1} has invalid owner`)
+    if (typeof entry.kind !== "string" || !kinds.has(entry.kind))
+      throw new Error(`Legacy brand allowlist entry ${index + 1} has invalid kind`)
+    if (typeof entry.reason !== "string" || !reasonAllowedForKind(entry.kind, entry.reason as AllowlistReason))
+      throw new Error(`Legacy brand allowlist entry ${index + 1} has invalid reason for ${entry.kind} entry`)
+    if (typeof entry.owner !== "string" || !owners.has(entry.owner))
+      throw new Error(`Legacy brand allowlist entry ${index + 1} has invalid owner`)
+    if (entry.kind === "temporary" && !/^PR [1-9][0-9]*$/.test(entry.removalSlice ?? ""))
+      throw new Error(`Legacy brand allowlist entry ${index + 1} must include removalSlice like \"PR 4\"`)
+    if (entry.kind !== "temporary" && entry.removalSlice)
+      throw new Error(`Legacy brand allowlist entry ${index + 1} has removalSlice but is not temporary`)
+
+    const compiled = entry as LegacyBrandAllowlistEntry
 
     return {
-      ...entry,
-      pathPattern: globToRegExp(entry.path),
-      linePattern: new RegExp(entry.pattern, "g"),
+      ...compiled,
+      pathPattern: globToRegExp(compiled.path),
+      linePattern: new RegExp(compiled.pattern, "g"),
     }
   })
+}
+
+function reasonAllowedForKind(kind: AllowlistKind, reason: AllowlistReason) {
+  if (kind === "temporary") return temporaryReasons.has(reason)
+  if (kind === "external") return externalReasons.has(reason)
+  return historicalFixtureReasons.has(reason)
+}
+
+function kindSummary() {
+  return Array.from(kinds, (kind) => `${kind}=${matchedKindCounts.get(kind as AllowlistKind) ?? 0}`).join(", ")
 }
 
 async function trackedFiles() {

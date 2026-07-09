@@ -1,349 +1,484 @@
 {
-  "version": 1,
+  "version": 2,
   "entries": [
     {
-      // PR 5 migrates internal workspace package scopes.
+      // PR 2 migrates internal workspace package scopes.
       "path": "**",
       "pattern": "@opencode-ai/",
-      "count": 540,
+      "count": 541,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "core",
+      "removalSlice": "PR 2",
     },
     {
       // Repository and release asset URLs stay on the current GitHub repository until a repo migration exists.
       "path": "**",
       "pattern": "github\\.com/anomalyco/opencode|anomalyco/opencode",
-      "count": 84,
-      "reason": "external-repo",
+      "count": 44,
+      "kind": "temporary",
+      "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 3",
     },
     {
-      // Third-party services and package names are outside this repository's brand migration.
+      // Third-party auth plugin package name is outside this repository's brand migration.
       "path": "**",
-      "pattern": "discord\\.gg/opencode|x\\.com/opencode|opencode-gitlab-auth",
-      "count": 54,
+      "pattern": "opencode-gitlab-auth",
+      "count": 5,
+      "kind": "external",
       "reason": "third-party",
-      "owner": "docs",
+      "owner": "core",
     },
     {
-      // PR 2 rewrites public README/doc copy.
+      // PR 3 rewrites public README/doc copy.
       "path": "README*.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 0,
+      "count": 2,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 3",
     },
     {
       // Root contributor/security/context docs are public docs and migrate with docs copy.
       "path": "*.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
       "count": 43,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 3",
+    },
+    {
+      // Root ignore files keep legacy config paths until runtime config names migrate.
+      "path": ".dockerignore",
+      "pattern": "\\.opencode",
+      "count": 1,
+      "kind": "temporary",
+      "reason": "migration",
+      "owner": "core",
+      "removalSlice": "PR 4",
+    },
+    {
+      // Root ignore files keep legacy config and dev paths until runtime config names migrate.
+      "path": ".gitignore",
+      "pattern": "opencode|opencode\\.json",
+      "count": 2,
+      "kind": "temporary",
+      "reason": "migration",
+      "owner": "core",
+      "removalSlice": "PR 4",
+    },
+    {
+      // Root license text migrates with public repository metadata.
+      "path": "LICENSE",
+      "pattern": "opencode",
+      "count": 1,
+      "kind": "temporary",
+      "reason": "migration",
+      "owner": "docs",
+      "removalSlice": "PR 3",
+    },
+    {
+      // Nix flake package names migrate with retained release surfaces.
+      "path": "flake.nix",
+      "pattern": "OpenCode|opencode",
+      "count": 6,
+      "kind": "temporary",
+      "reason": "migration",
+      "owner": "release",
+      "removalSlice": "PR 4",
+    },
+    {
+      // Nix package names, env vars, binary paths, and homepage migrate with retained release surfaces.
+      "path": "nix/**",
+      "pattern": "OpenCode|opencode|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai",
+      "count": 20,
+      "kind": "temporary",
+      "reason": "migration",
+      "owner": "release",
+      "removalSlice": "PR 4",
     },
     {
       // Local opencode project config keeps legacy config paths/models until configuration migration is handled.
       "path": ".opencode/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
       "count": 82,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
       // Editor launch examples are developer docs and migrate with docs copy.
       "path": ".vscode/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
       "count": 1,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 5",
     },
     {
       // Root package scripts still reference package paths, AWS SSO names, and the current external repository.
       "path": "package.json",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
       "count": 3,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 7",
     },
     {
-      // PR 2 rewrites public website docs and examples.
+      // PR 3 rewrites public website docs and examples.
       "path": "packages/web/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
       "count": 121,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 3",
     },
     {
-      // PR 2 rewrites package-local docs.
+      // PR 3 rewrites package-local docs.
       "path": "packages/*/README.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
       "count": 3,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 3",
     },
     {
       // VS Code Marketplace extension identity stays stable until an approved migration exists.
       "path": "sdks/vscode/package.json",
       "pattern": "\"name\": \"opencode\"",
       "count": 1,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "vscode",
+      "removalSlice": "PR 5",
     },
     {
       // VS Code command IDs remain stable for existing keybindings and user muscle memory.
       "path": "sdks/vscode/package.json",
       "pattern": "opencode\\.(openTerminal|openNewTerminal|addFilepathToTerminal)",
       "count": 7,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "vscode",
+      "removalSlice": "PR 5",
     },
     {
-      // PR 3 keeps deprecated env, config file, data directory, and header support.
+      // PR 4 keeps deprecated env, config file, data directory, and header support.
       "path": "packages/core/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 529,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
-      // PR 3 rewrites canonical CLI/config/server wording while preserving legacy behavior.
+      // PR 4 rewrites canonical CLI/config/server wording while preserving legacy behavior.
       "path": "packages/opencode/src/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 534,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
       // Workspace onboarding is developer documentation and migrates with docs copy.
       "path": "packages/onboarding.md",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 12,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 3",
     },
     {
-      // PR 3 covers TUI-facing CLI copy, legacy keymap/provider IDs, and theme defaults.
+      // PR 4 covers TUI-facing CLI copy, legacy keymap/provider IDs, and theme defaults.
       "path": "packages/tui/src/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 117,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
       // Existing TUI tests contain legacy paths, env names, and fixtures.
       "path": "packages/tui/test/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 40,
+      "kind": "temporary",
       "reason": "test-fixture",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
       // Shared UI branding, stories, i18n, theme IDs, and generated theme JSON migrate with app/web slices.
       "path": "packages/ui/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 93,
+      "count": 45,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "app",
+      "removalSlice": "PR 4",
     },
     {
       // Legacy CLI/config/server behavior remains covered by tests until canonical defaults are updated.
       "path": "packages/opencode/test/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 1437,
+      "count": 1438,
+      "kind": "temporary",
       "reason": "test-fixture",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
       // PR 4 rewrites app and shell copy.
       "path": "packages/app/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 218,
+      "count": 208,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "app",
+      "removalSlice": "PR 4",
     },
     {
       // PR 4 rewrites console email/auth and public copy.
       "path": "packages/console/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 85,
+      "count": 89,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "app",
+      "removalSlice": "PR 4",
     },
     {
       // Generated SDK output is regenerated in PR 4 from canonical source changes.
       "path": "packages/sdk/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
       "count": 20,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
-      // PR 7 rewrites desktop copy while keeping identity/updater compatibility decisions explicit.
+      // PR 8 rewrites desktop copy while keeping identity/updater compatibility decisions explicit.
       "path": "packages/desktop/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
       "count": 0,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "desktop",
+      "removalSlice": "PR 8",
     },
     {
-      // PR 7 updates workflows while keeping deprecated triggers/secrets where needed.
+      // PR 6 updates workflows while keeping deprecated triggers/secrets where needed.
       "path": ".github/**",
       "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
-      "count": 119,
+      "count": 111,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 6",
     },
     {
       // GitHub Action compatibility is migrated separately from core product copy.
       "path": "github/**",
       "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
       "count": 9,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 3",
     },
     {
       // Installer compatibility preserves legacy binary/data paths until the release migration is complete.
       "path": "install",
       "pattern": "OpenCode|opencode|\\.opencode|opencode\\.ai",
       "count": 13,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "release",
+      "removalSlice": "PR 3",
     },
     {
       // Historical specs intentionally mention legacy names while documenting migrations.
       "path": "specs/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 501,
+      "count": 529,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 8",
     },
     {
       // Package-local specs intentionally mention legacy names while documenting in-flight design and migration work.
       "path": "packages/*/specs/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
       "count": 1048,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 8",
     },
     {
       // Internal repo automation still invokes legacy package paths and binaries until release/package slices migrate them.
       "path": "script/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 58,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 7",
     },
     {
       // Release script package keeps deprecated env and package fallbacks until package metadata/release slices migrate them.
       "path": "packages/script/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 20,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "release",
+      "removalSlice": "PR 7",
     },
     {
-      // Server package keeps legacy service tags and OPENCODE_* compatibility until PR 3.
+      // Server package keeps legacy service tags and OPENCODE_* compatibility until PR 4.
       "path": "packages/server/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 10,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "core",
+      "removalSlice": "PR 4",
     },
     {
       // Slack integration copy and local variable names are migrated with package docs/public copy.
       "path": "packages/slack/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 7,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 3",
     },
     {
       // Stats app/domain copy and historical provider dimensions migrate with web/app public copy.
       "path": "packages/stats/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 67,
+      "count": 68,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "app",
+      "removalSlice": "PR 8",
     },
     {
       // Storybook addon IDs and fixtures migrate with UI package branding.
       "path": "packages/storybook/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 2,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "app",
+      "removalSlice": "PR 4",
     },
     {
       // Remaining package-local docs, scripts, manifests, and fixtures are migrated by later package-specific slices.
       "path": "packages/*/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 139,
+      "count": 151,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "core",
+      "removalSlice": "PR 8",
     },
     {
       // Historical local patch tooling references the legacy repository and install paths.
       "path": "patches/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 46,
+      "count": 48,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 8",
     },
     {
       // Historical performance notes intentionally cite the package and legacy compatibility fixtures measured at the time.
       "path": "perf/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 7,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "docs",
+      "removalSlice": "PR 8",
     },
     {
       // VS Code command IDs remain stable for existing keybindings and extension callers.
       "path": "sdks/vscode/src/**",
       "pattern": "opencode\\.(openTerminal|openNewTerminal|addFilepathToTerminal)",
       "count": 3,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "vscode",
+      "removalSlice": "PR 5",
     },
     {
       // Existing terminal sessions named opencode can still be focused after the rebrand.
       "path": "sdks/vscode/src/**",
       "pattern": "LEGACY_TERMINAL_NAME = \"opencode\"",
       "count": 1,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "vscode",
+      "removalSlice": "PR 5",
     },
     {
       // Deprecated extension env names remain for CLI compatibility during the transition.
       "path": "sdks/vscode/src/**",
       "pattern": "_EXTENSION_OPENCODE_PORT|OPENCODE_CALLER",
       "count": 3,
+      "kind": "temporary",
       "reason": "compatibility",
       "owner": "vscode",
+      "removalSlice": "PR 5",
     },
     {
       // Infrastructure stack names and env passthroughs are migrated only with release safety review.
       "path": "sst.config.ts",
       "pattern": "opencode|OPENCODE_",
       "count": 3,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 3",
     },
     {
       // Infrastructure names, hosted domains, and OPENCODE_* secrets require release-safety review before migration.
       "path": "infra/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
       "count": 21,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 3",
     },
     {
       // Turbo task and env names follow package/env compatibility until later migration slices.
       "path": "turbo.json",
       "pattern": "opencode|OPENCODE_",
       "count": 4,
+      "kind": "temporary",
       "reason": "migration",
       "owner": "release",
+      "removalSlice": "PR 4",
     }
   ]
 }
