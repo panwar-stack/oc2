@@ -5,7 +5,7 @@
       // PR 5 migrates internal workspace package scopes.
       "path": "**",
       "pattern": "@opencode-ai/",
-      "count": 621,
+      "count": 540,
       "reason": "migration",
       "owner": "core",
     },
@@ -13,7 +13,7 @@
       // Repository and release asset URLs stay on the current GitHub repository until a repo migration exists.
       "path": "**",
       "pattern": "github\\.com/anomalyco/opencode|anomalyco/opencode",
-      "count": 360,
+      "count": 84,
       "reason": "external-repo",
       "owner": "release",
     },
@@ -21,7 +21,7 @@
       // Third-party services and package names are outside this repository's brand migration.
       "path": "**",
       "pattern": "discord\\.gg/opencode|x\\.com/opencode|opencode-gitlab-auth",
-      "count": 87,
+      "count": 54,
       "reason": "third-party",
       "owner": "docs",
     },
@@ -37,7 +37,7 @@
       // Root contributor/security/context docs are public docs and migrate with docs copy.
       "path": "*.md",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 44,
+      "count": 43,
       "reason": "migration",
       "owner": "docs",
     },
@@ -69,7 +69,7 @@
       // PR 2 rewrites public website docs and examples.
       "path": "packages/web/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 1577,
+      "count": 121,
       "reason": "migration",
       "owner": "docs",
     },
@@ -141,7 +141,7 @@
       // Shared UI branding, stories, i18n, theme IDs, and generated theme JSON migrate with app/web slices.
       "path": "packages/ui/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 111,
+      "count": 93,
       "reason": "migration",
       "owner": "app",
     },
@@ -149,7 +149,7 @@
       // Legacy CLI/config/server behavior remains covered by tests until canonical defaults are updated.
       "path": "packages/opencode/test/**",
       "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 1432,
+      "count": 1437,
       "reason": "test-fixture",
       "owner": "core",
     },
@@ -157,7 +157,7 @@
       // PR 4 rewrites app and shell copy.
       "path": "packages/app/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 351,
+      "count": 218,
       "reason": "migration",
       "owner": "app",
     },
@@ -165,7 +165,7 @@
       // PR 4 rewrites console email/auth and public copy.
       "path": "packages/console/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 136,
+      "count": 85,
       "reason": "migration",
       "owner": "app",
     },
@@ -181,7 +181,7 @@
       // PR 7 rewrites desktop copy while keeping identity/updater compatibility decisions explicit.
       "path": "packages/desktop/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|\\.opencode|opencode\\.json",
-      "count": 128,
+      "count": 0,
       "reason": "migration",
       "owner": "desktop",
     },
@@ -189,7 +189,7 @@
       // PR 7 updates workflows while keeping deprecated triggers/secrets where needed.
       "path": ".github/**",
       "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
-      "count": 129,
+      "count": 119,
       "reason": "migration",
       "owner": "release",
     },
@@ -213,7 +213,7 @@
       // Historical specs intentionally mention legacy names while documenting migrations.
       "path": "specs/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 429,
+      "count": 501,
       "reason": "migration",
       "owner": "docs",
     },
@@ -221,7 +221,7 @@
       // Package-local specs intentionally mention legacy names while documenting in-flight design and migration work.
       "path": "packages/*/specs/**",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|@opencode-ai/|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 1041,
+      "count": 1048,
       "reason": "migration",
       "owner": "docs",
     },
