@@ -356,7 +356,7 @@ describe("session.llm-native.request", () => {
     const compatible = LLMNative.model({
       model: {
         ...baseModel,
-        providerID: ProviderV2.ID.oc2,
+        providerID: ProviderV2.ID.make("custom-compatible"),
         api: { ...baseModel.api, url: "https://ai.example.test/v1", npm: "@ai-sdk/openai-compatible" },
       },
       apiKey: "test-key",
@@ -394,31 +394,14 @@ describe("session.llm-native.request", () => {
         provider: { ...providerInfo, id: ProviderV2.ID.oc2 },
         auth: undefined,
       }),
-    ).toMatchObject({
-      type: "supported",
-      apiKey: "test-openai-key",
-    })
-    expect(
-      LLMNativeRuntime.status({
-        model: {
-          ...baseModel,
-          providerID: ProviderV2.ID.oc2,
-          api: { ...baseModel.api, npm: "@ai-sdk/openai-compatible" },
-        },
-        provider: { ...providerInfo, id: ProviderV2.ID.oc2 },
-        auth: undefined,
-      }),
-    ).toMatchObject({
-      type: "supported",
-      apiKey: "test-openai-key",
-    })
+    ).toEqual({ type: "unsupported", reason: "provider is not openai or anthropic" })
     expect(
       LLMNativeRuntime.status({
         model: { ...baseModel, providerID: ProviderV2.ID.make("google") },
         provider: { ...providerInfo, id: ProviderV2.ID.make("google") },
         auth: undefined,
       }),
-    ).toEqual({ type: "unsupported", reason: "provider is not openai, oc2, or anthropic" })
+    ).toEqual({ type: "unsupported", reason: "provider is not openai or anthropic" })
     expect(
       LLMNativeRuntime.status({
         model: baseModel,
@@ -471,17 +454,16 @@ describe("session.llm-native.request", () => {
     ).toMatchObject({ type: "supported", apiKey: "test-anthropic-key" })
   })
 
-  test("prefers console provider api key over stored oc2 auth", () => {
+  test("prefers provider api key over stored auth", () => {
     expect(
       LLMNativeRuntime.status({
-        model: { ...baseModel, providerID: ProviderV2.ID.oc2 },
+        model: baseModel,
         provider: {
           ...providerInfo,
-          id: ProviderV2.ID.oc2,
           options: { apiKey: "console-token" },
-          key: "zen-token",
+          key: "stored-token",
         },
-        auth: { type: "api", key: "zen-token" },
+        auth: { type: "api", key: "stored-token" },
       }),
     ).toMatchObject({
       type: "supported",

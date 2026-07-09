@@ -1,7 +1,5 @@
 import { describe, expect } from "bun:test"
 import { ModelV2 } from "@oc2-ai/core/model"
-import { Naming } from "@oc2-ai/core/naming"
-import { ProjectV2 } from "@oc2-ai/core/project"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Effect } from "effect"
@@ -13,7 +11,6 @@ import type { Provider } from "@/provider/provider"
 import { prepare } from "@/session/llm/request"
 import { MessageID, SessionID } from "@/session/schema"
 import { SystemPrompt } from "@/session/system"
-import { InstanceRef } from "@/effect/instance-ref"
 import { testEffect } from "../lib/effect"
 
 const model: Provider.Model = {
@@ -109,7 +106,7 @@ describe("session.llm.request", () => {
     }),
   )
 
-  it.effect("sends canonical oc2 headers for managed providers", () =>
+  it.effect("uses standard affinity headers for oc2 provider IDs", () =>
     Effect.gen(function* () {
       const flags = yield* RuntimeFlags.Service
       const prepared = yield* prepare({
@@ -125,27 +122,14 @@ describe("session.llm.request", () => {
         plugin,
         flags,
         isWorkflow: false,
-      }).pipe(
-        Effect.provideService(InstanceRef, {
-          directory: "/tmp/oc2-request-test",
-          worktree: "/tmp/oc2-request-test",
-          project: {
-            id: ProjectV2.ID.make("proj_request"),
-            worktree: "/tmp/oc2-request-test",
-            time: { created: 0, updated: 0 },
-            sandboxes: [],
-          },
-        }),
-      )
+      })
 
       expect(prepared.headers).toMatchObject({
-        [Naming.headers.project]: ProjectV2.ID.make("proj_request"),
-        [Naming.headers.session]: sessionID,
-        [Naming.headers.request]: user.id,
-        [Naming.headers.client]: flags.client,
+        "x-session-affinity": sessionID,
+        "User-Agent": expect.stringMatching(/^oc2\//),
       })
-      expect(Object.hasOwn(prepared.headers, Naming.headers.project)).toBe(true)
-      expect(Object.hasOwn(prepared.headers, "x-session-affinity")).toBe(false)
+      expect(Object.hasOwn(prepared.headers, "x-oc2-project")).toBe(false)
+      expect(Object.hasOwn(prepared.headers, "x-oc2-session")).toBe(false)
     }),
   )
 })

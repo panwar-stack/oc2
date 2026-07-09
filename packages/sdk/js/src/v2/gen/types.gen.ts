@@ -651,9 +651,6 @@ export type Session = {
       write: number
     }
   }
-  share?: {
-    url: string
-  }
   title: string
   agent?: string
   model?: {
@@ -1598,7 +1595,6 @@ export type GlobalEvent = {
           command:
             | "session.list"
             | "session.new"
-            | "session.share"
             | "session.interrupt"
             | "session.compact"
             | "session.page.up"
@@ -2080,8 +2076,6 @@ export type Config = {
         },
       ]
   >
-  share?: "manual" | "auto" | "disabled"
-  autoshare?: boolean
   /**
    * Automatically update to the latest version. Set to true to auto-update, false to disable, or 'notify' to show update notifications
    */
@@ -2167,9 +2161,6 @@ export type Config = {
     [key: string]: boolean
   }
   attachment?: AttachmentConfig
-  enterprise?: {
-    url?: string
-  }
   tool_output?: {
     max_lines?: number
     max_bytes?: number
@@ -2291,16 +2282,6 @@ export type Provider = {
   }
 }
 
-export type ConsoleState = {
-  consoleManagedProviders: Array<string>
-  activeOrgName?: string
-  switchableOrgCount: number
-}
-
-export type EffectHttpApiErrorInternalServerError = {
-  _tag: "InternalServerError"
-}
-
 export type ToolListItem = {
   id: string
   description: string
@@ -2376,9 +2357,6 @@ export type GlobalSession = {
       read: number
       write: number
     }
-  }
-  share?: {
-    url: string
   }
   title: string
   agent?: string
@@ -2875,9 +2853,6 @@ export type Session1 = {
       write: number
     }
   }
-  share?: {
-    url: string
-  }
   title: string
   agent?: string
   model?: {
@@ -2928,9 +2903,6 @@ export type Session2 = {
       read: number
       write: number
     }
-  }
-  share?: {
-    url: string
   }
   title: string
   agent?: string
@@ -2995,9 +2967,6 @@ export type Session3 = {
       write: number
     }
   }
-  share?: {
-    url: string
-  }
   title: string
   agent?: string
   model?: {
@@ -3049,9 +3018,6 @@ export type Session4 = {
       write: number
     }
   }
-  share?: {
-    url: string
-  }
   title: string
   agent?: string
   model?: {
@@ -3102,117 +3068,6 @@ export type Session5 = {
       read: number
       write: number
     }
-  }
-  share?: {
-    url: string
-  }
-  title: string
-  agent?: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-  version: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-    updated: number
-    compacting?: number
-    archived?: number
-    processing: number
-  }
-  permission?: PermissionRuleset
-  revert?: {
-    messageID: string
-    partID?: string
-    snapshot?: string
-    diff?: string
-  }
-}
-
-export type Session6 = {
-  id: string
-  slug: string
-  projectID: string
-  workspaceID?: string
-  directory: string
-  path?: string
-  parentID?: string
-  summary?: {
-    additions: number
-    deletions: number
-    files: number
-    diffs?: Array<SnapshotFileDiff>
-  }
-  cost?: number
-  tokens?: {
-    input: number
-    output: number
-    reasoning: number
-    cache: {
-      read: number
-      write: number
-    }
-  }
-  share?: {
-    url: string
-  }
-  title: string
-  agent?: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-  version: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  time: {
-    created: number
-    updated: number
-    compacting?: number
-    archived?: number
-    processing: number
-  }
-  permission?: PermissionRuleset
-  revert?: {
-    messageID: string
-    partID?: string
-    snapshot?: string
-    diff?: string
-  }
-}
-
-export type Session7 = {
-  id: string
-  slug: string
-  projectID: string
-  workspaceID?: string
-  directory: string
-  path?: string
-  parentID?: string
-  summary?: {
-    additions: number
-    deletions: number
-    files: number
-    diffs?: Array<SnapshotFileDiff>
-  }
-  cost?: number
-  tokens?: {
-    input: number
-    output: number
-    reasoning: number
-    cache: {
-      read: number
-      write: number
-    }
-  }
-  share?: {
-    url: string
   }
   title: string
   agent?: string
@@ -3295,7 +3150,7 @@ export type SessionBusyError = {
   message: string
 }
 
-export type Session8 = {
+export type Session6 = {
   id: string
   slug: string
   projectID: string
@@ -3318,9 +3173,6 @@ export type Session8 = {
       read: number
       write: number
     }
-  }
-  share?: {
-    url: string
   }
   title: string
   agent?: string
@@ -3349,7 +3201,7 @@ export type Session8 = {
   }
 }
 
-export type Session9 = {
+export type Session7 = {
   id: string
   slug: string
   projectID: string
@@ -3372,9 +3224,6 @@ export type Session9 = {
       read: number
       write: number
     }
-  }
-  share?: {
-    url: string
   }
   title: string
   agent?: string
@@ -3536,7 +3385,6 @@ export type EventTuiCommandExecute = {
     command:
       | "session.list"
       | "session.new"
-      | "session.share"
       | "session.interrupt"
       | "session.compact"
       | "session.page.up"
@@ -3666,7 +3514,6 @@ export type EventTuiCommandExecute2 = {
     command:
       | "session.list"
       | "session.new"
-      | "session.share"
       | "session.interrupt"
       | "session.compact"
       | "session.page.up"
@@ -6562,104 +6409,6 @@ export type ConfigProvidersResponses = {
 
 export type ConfigProvidersResponse = ConfigProvidersResponses[keyof ConfigProvidersResponses]
 
-export type ExperimentalConsoleGetData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/experimental/console"
-}
-
-export type ExperimentalConsoleGetErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * InternalServerError
-   */
-  500: EffectHttpApiErrorInternalServerError
-}
-
-export type ExperimentalConsoleGetError = ExperimentalConsoleGetErrors[keyof ExperimentalConsoleGetErrors]
-
-export type ExperimentalConsoleGetResponses = {
-  /**
-   * Active Console provider metadata
-   */
-  200: ConsoleState
-}
-
-export type ExperimentalConsoleGetResponse = ExperimentalConsoleGetResponses[keyof ExperimentalConsoleGetResponses]
-
-export type ExperimentalConsoleListOrgsData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/experimental/console/orgs"
-}
-
-export type ExperimentalConsoleListOrgsErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * InternalServerError
-   */
-  500: EffectHttpApiErrorInternalServerError
-}
-
-export type ExperimentalConsoleListOrgsError =
-  ExperimentalConsoleListOrgsErrors[keyof ExperimentalConsoleListOrgsErrors]
-
-export type ExperimentalConsoleListOrgsResponses = {
-  /**
-   * Switchable Console orgs
-   */
-  200: {
-    orgs: Array<{
-      accountID: string
-      accountEmail: string
-      accountUrl: string
-      orgID: string
-      orgName: string
-      active: boolean
-    }>
-  }
-}
-
-export type ExperimentalConsoleListOrgsResponse =
-  ExperimentalConsoleListOrgsResponses[keyof ExperimentalConsoleListOrgsResponses]
-
-export type ExperimentalConsoleSwitchOrgData = {
-  body?: {
-    accountID: string
-    orgID: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/experimental/console/switch"
-}
-
-export type ExperimentalConsoleSwitchOrgResponses = {
-  /**
-   * Switch success
-   */
-  200: boolean
-}
-
-export type ExperimentalConsoleSwitchOrgResponse =
-  ExperimentalConsoleSwitchOrgResponses[keyof ExperimentalConsoleSwitchOrgResponses]
-
 export type ToolListData = {
   body?: never
   path?: never
@@ -9528,82 +9277,6 @@ export type SessionInitResponses = {
 
 export type SessionInitResponse = SessionInitResponses[keyof SessionInitResponses]
 
-export type SessionUnshareData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/share"
-}
-
-export type SessionUnshareErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-  /**
-   * InternalServerError
-   */
-  500: EffectHttpApiErrorInternalServerError
-}
-
-export type SessionUnshareError = SessionUnshareErrors[keyof SessionUnshareErrors]
-
-export type SessionUnshareResponses = {
-  /**
-   * Successfully unshared session
-   */
-  200: Session7
-}
-
-export type SessionUnshareResponse = SessionUnshareResponses[keyof SessionUnshareResponses]
-
-export type SessionShareData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/share"
-}
-
-export type SessionShareErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-  /**
-   * InternalServerError
-   */
-  500: EffectHttpApiErrorInternalServerError
-}
-
-export type SessionShareError = SessionShareErrors[keyof SessionShareErrors]
-
-export type SessionShareResponses = {
-  /**
-   * Successfully shared session
-   */
-  200: Session6
-}
-
-export type SessionShareResponse = SessionShareResponses[keyof SessionShareResponses]
-
 export type SessionSummarizeData = {
   body?: {
     providerID: string
@@ -9828,7 +9501,7 @@ export type SessionRevertResponses = {
   /**
    * Updated session
    */
-  200: Session8
+  200: Session6
 }
 
 export type SessionRevertResponse = SessionRevertResponses[keyof SessionRevertResponses]
@@ -9866,7 +9539,7 @@ export type SessionUnrevertResponses = {
   /**
    * Updated session
    */
-  200: Session9
+  200: Session7
 }
 
 export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnrevertResponses]

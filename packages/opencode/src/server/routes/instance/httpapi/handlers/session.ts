@@ -4,7 +4,6 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
-import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
@@ -53,7 +52,6 @@ const tryParseJson = (text: string) =>
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
-    const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
@@ -188,7 +186,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
       const started = Date.now()
       yield* log.info("create", { status: "started", hasPayload: ctx.payload !== undefined })
-      const result = yield* shareSvc.create(ctx.payload)
+      const result = yield* session.create(ctx.payload)
       yield* log.info("create", { status: "completed", sessionID: result.id, duration: Date.now() - started })
       return result
     })
@@ -291,25 +289,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
       return true
-    })
-
-    // share/unshare errors aren't all client-induced — storage and network
-    // failures from SessionShare are real possibilities. Map to a typed 500
-    // (matches the legacy route behavior which routed any failure through
-    // ErrorMiddleware → NamedError.Unknown 500) instead of blanket-mapping
-    // every failure to a 400 BadRequest.
-    const share = Effect.fn("SessionHttpApi.share")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
-      yield* shareSvc.share(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
-      return yield* requireSession(ctx.params.sessionID)
-    })
-
-    const unshare = Effect.fn("SessionHttpApi.unshare")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
-      yield* shareSvc
-        .unshare(ctx.params.sessionID)
-        .pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
-      return yield* requireSession(ctx.params.sessionID)
     })
 
     const summarize = Effect.fn("SessionHttpApi.summarize")(function* (ctx: {
@@ -473,8 +452,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handleRaw("fork", forkRaw)
       .handle("abort", abort)
       .handle("init", init)
-      .handle("share", share)
-      .handle("unshare", unshare)
       .handle("summarize", summarize)
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)

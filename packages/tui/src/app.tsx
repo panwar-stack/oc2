@@ -96,7 +96,6 @@ const appBindingCommands = [
   "variant.cycle",
   "variant.list",
   "provider.connect",
-  "console.org.switch",
   "opencode.status",
   "theme.switch",
   "theme.switch_mode",
@@ -741,24 +740,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
         category: "Provider",
       },
-      ...(sync.data.console_state.switchableOrgCount > 1
-        ? [
-            {
-              name: "console.org.switch",
-              title: "Switch org",
-              suggested: Boolean(sync.data.console_state.activeOrgName),
-              slashName: "org",
-              slashAliases: ["orgs", "switch-org"],
-              run: () => {
-                void openLazyDialog(async () => {
-                  const { DialogConsoleOrg } = await import("./component/dialog-console-org")
-                  return () => <DialogConsoleOrg />
-                })
-              },
-              category: "Provider",
-            },
-          ]
-        : []),
       {
         name: "opencode.status",
         title: "View status",
@@ -1098,9 +1079,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         evt.stopPropagation()
       }}
       onMouseUp={
-        !Flag.OC2_EXPERIMENTAL_DISABLE_COPY_ON_SELECT
-          ? () => Selection.copy(renderer, toast, clipboard)
-          : undefined
+        !Flag.OC2_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? () => Selection.copy(renderer, toast, clipboard) : undefined
       }
     >
       <Show when={Flag.OC2_SHOW_TTFD}>

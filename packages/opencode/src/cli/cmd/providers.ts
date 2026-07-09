@@ -378,7 +378,6 @@ export const ProvidersLoginCommand = effectCmd({
     const hooks = yield* pluginSvc.list()
 
     const priority: Record<string, number> = {
-      opencode: 0,
       openai: 1,
       "github-copilot": 2,
       google: 3,
@@ -405,7 +404,6 @@ export const ProvidersLoginCommand = effectCmd({
           label: x.name,
           value: x.id,
           hint: {
-            opencode: "recommended",
             openai: "ChatGPT Plus/Pro or API key",
           }[x.id],
         })),
@@ -472,17 +470,13 @@ export const ProvidersLoginCommand = effectCmd({
       )
     }
 
-    if (provider === "opencode") {
-      yield* Prompt.log.info("Create an api key at https://oc2.ai/auth")
-    }
-
     if (provider === "vercel") {
       yield* Prompt.log.info("You can create an api key at https://vercel.link/ai-gateway-token")
     }
 
     if (["cloudflare", "cloudflare-ai-gateway"].includes(provider)) {
       yield* Prompt.log.info(
-        "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://oc2.ai/docs/providers/#cloudflare-ai-gateway",
+        "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables.",
       )
     }
 

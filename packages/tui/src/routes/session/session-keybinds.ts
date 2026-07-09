@@ -1,11 +1,9 @@
 export const sessionBindingCommands = [
-  "session.share",
   "session.rename",
   "session.timeline",
   "session.fork",
   "session.compact",
   "session.roots",
-  "session.unshare",
   "session.undo",
   "session.redo",
   "session.sidebar.toggle",

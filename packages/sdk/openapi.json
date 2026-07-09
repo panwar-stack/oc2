@@ -868,249 +868,6 @@
         ]
       }
     },
-    "/experimental/console": {
-      "get": {
-        "tags": [
-          "experimental"
-        ],
-        "operationId": "experimental.console.get",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Active Console provider metadata",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConsoleState"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "InternalServerError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/effect_HttpApiError_InternalServerError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Get the active Console org name and the set of provider IDs managed by that Console org.",
-        "summary": "Get active Console provider metadata",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.experimental.console.get({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/console/orgs": {
-      "get": {
-        "tags": [
-          "experimental"
-        ],
-        "operationId": "experimental.console.listOrgs",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Switchable Console orgs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "orgs": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "accountID": {
-                            "type": "string"
-                          },
-                          "accountEmail": {
-                            "type": "string"
-                          },
-                          "accountUrl": {
-                            "type": "string"
-                          },
-                          "orgID": {
-                            "type": "string"
-                          },
-                          "orgName": {
-                            "type": "string"
-                          },
-                          "active": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "accountID",
-                          "accountEmail",
-                          "accountUrl",
-                          "orgID",
-                          "orgName",
-                          "active"
-                        ],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": [
-                    "orgs"
-                  ],
-                  "additionalProperties": false,
-                  "description": "Switchable Console orgs"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "InternalServerError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/effect_HttpApiError_InternalServerError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Get the available Console orgs across logged-in accounts, including the current active org.",
-        "summary": "List switchable Console orgs",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.experimental.console.listOrgs({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/console/switch": {
-      "post": {
-        "tags": [
-          "experimental"
-        ],
-        "operationId": "experimental.console.switchOrg",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Switch success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "boolean",
-                  "description": "Switch success"
-                }
-              }
-            }
-          }
-        },
-        "description": "Persist a new active Console account/org selection for the current local OC2 state.",
-        "summary": "Switch active Console org",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "accountID": {
-                    "type": "string"
-                  },
-                  "orgID": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "accountID",
-                  "orgID"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.experimental.console.switchOrg({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/experimental/tool": {
       "get": {
         "tags": [
@@ -8218,174 +7975,6 @@
         ]
       }
     },
-    "/session/{sessionID}/share": {
-      "post": {
-        "tags": [
-          "session"
-        ],
-        "operationId": "session.share",
-        "parameters": [
-          {
-            "name": "sessionID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^ses"
-            },
-            "required": true
-          },
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successfully shared session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Session6"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "InternalServerError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/effect_HttpApiError_InternalServerError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Create a shareable link for a session, allowing others to view the conversation.",
-        "summary": "Share session",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.session.share({\n  ...\n})"
-          }
-        ]
-      },
-      "delete": {
-        "tags": [
-          "session"
-        ],
-        "operationId": "session.unshare",
-        "parameters": [
-          {
-            "name": "sessionID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^ses"
-            },
-            "required": true
-          },
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successfully unshared session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Session7"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "InternalServerError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/effect_HttpApiError_InternalServerError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Remove the shareable link for a session, making it private again.",
-        "summary": "Unshare session",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.session.unshare({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/session/{sessionID}/summarize": {
       "post": {
         "tags": [
@@ -9002,7 +8591,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Session8"
+                  "$ref": "#/components/schemas/Session6"
                 }
               }
             }
@@ -9117,7 +8706,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Session9"
+                  "$ref": "#/components/schemas/Session7"
                 }
               }
             }
@@ -16317,18 +15906,6 @@
             ],
             "additionalProperties": false
           },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
-            ],
-            "additionalProperties": false
-          },
           "title": {
             "type": "string"
           },
@@ -20484,7 +20061,6 @@
                             "enum": [
                               "session.list",
                               "session.new",
-                              "session.share",
                               "session.interrupt",
                               "session.compact",
                               "session.page.up",
@@ -21976,17 +21552,6 @@
               ]
             }
           },
-          "share": {
-            "type": "string",
-            "enum": [
-              "manual",
-              "auto",
-              "disabled"
-            ]
-          },
-          "autoshare": {
-            "type": "boolean"
-          },
           "autoupdate": {
             "anyOf": [
               {
@@ -22232,15 +21797,6 @@
           },
           "attachment": {
             "$ref": "#/components/schemas/AttachmentConfig"
-          },
-          "enterprise": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": false
           },
           "tool_output": {
             "type": "object",
@@ -22695,44 +22251,6 @@
         ],
         "additionalProperties": false
       },
-      "ConsoleState": {
-        "type": "object",
-        "properties": {
-          "consoleManagedProviders": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "activeOrgName": {
-            "type": "string"
-          },
-          "switchableOrgCount": {
-            "type": "integer",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "consoleManagedProviders",
-          "switchableOrgCount"
-        ],
-        "additionalProperties": false
-      },
-      "effect_HttpApiError_InternalServerError": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": [
-              "InternalServerError"
-            ]
-          }
-        },
-        "required": [
-          "_tag"
-        ],
-        "additionalProperties": false
-      },
       "ToolListItem": {
         "type": "object",
         "properties": {
@@ -22962,18 +22480,6 @@
               "output",
               "reasoning",
               "cache"
-            ],
-            "additionalProperties": false
-          },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
             ],
             "additionalProperties": false
           },
@@ -24891,18 +24397,6 @@
             ],
             "additionalProperties": false
           },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
-            ],
-            "additionalProperties": false
-          },
           "title": {
             "type": "string"
           },
@@ -25092,18 +24586,6 @@
               "output",
               "reasoning",
               "cache"
-            ],
-            "additionalProperties": false
-          },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
             ],
             "additionalProperties": false
           },
@@ -25344,18 +24826,6 @@
             ],
             "additionalProperties": false
           },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
-            ],
-            "additionalProperties": false
-          },
           "title": {
             "type": "string"
           },
@@ -25548,18 +25018,6 @@
             ],
             "additionalProperties": false
           },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
-            ],
-            "additionalProperties": false
-          },
           "title": {
             "type": "string"
           },
@@ -25749,426 +25207,6 @@
               "output",
               "reasoning",
               "cache"
-            ],
-            "additionalProperties": false
-          },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
-            ],
-            "additionalProperties": false
-          },
-          "title": {
-            "type": "string"
-          },
-          "agent": {
-            "type": "string"
-          },
-          "model": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "providerID": {
-                "type": "string"
-              },
-              "variant": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "providerID"
-            ],
-            "additionalProperties": false
-          },
-          "version": {
-            "type": "string"
-          },
-          "metadata": {
-            "type": "object"
-          },
-          "time": {
-            "type": "object",
-            "properties": {
-              "created": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "updated": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "compacting": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "archived": {
-                "type": "number"
-              },
-              "processing": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "created",
-              "updated",
-              "processing"
-            ],
-            "additionalProperties": false
-          },
-          "permission": {
-            "$ref": "#/components/schemas/PermissionRuleset"
-          },
-          "revert": {
-            "type": "object",
-            "properties": {
-              "messageID": {
-                "type": "string",
-                "pattern": "^msg"
-              },
-              "partID": {
-                "type": "string",
-                "pattern": "^prt"
-              },
-              "snapshot": {
-                "type": "string"
-              },
-              "diff": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "messageID"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "id",
-          "slug",
-          "projectID",
-          "directory",
-          "title",
-          "version",
-          "time"
-        ],
-        "additionalProperties": false
-      },
-      "Session6": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "projectID": {
-            "type": "string"
-          },
-          "workspaceID": {
-            "type": "string",
-            "pattern": "^wrk"
-          },
-          "directory": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "parentID": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "summary": {
-            "type": "object",
-            "properties": {
-              "additions": {
-                "type": "number"
-              },
-              "deletions": {
-                "type": "number"
-              },
-              "files": {
-                "type": "number"
-              },
-              "diffs": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/SnapshotFileDiff"
-                }
-              }
-            },
-            "required": [
-              "additions",
-              "deletions",
-              "files"
-            ],
-            "additionalProperties": false
-          },
-          "cost": {
-            "type": "number"
-          },
-          "tokens": {
-            "type": "object",
-            "properties": {
-              "input": {
-                "type": "number"
-              },
-              "output": {
-                "type": "number"
-              },
-              "reasoning": {
-                "type": "number"
-              },
-              "cache": {
-                "type": "object",
-                "properties": {
-                  "read": {
-                    "type": "number"
-                  },
-                  "write": {
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "read",
-                  "write"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "required": [
-              "input",
-              "output",
-              "reasoning",
-              "cache"
-            ],
-            "additionalProperties": false
-          },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
-            ],
-            "additionalProperties": false
-          },
-          "title": {
-            "type": "string"
-          },
-          "agent": {
-            "type": "string"
-          },
-          "model": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "providerID": {
-                "type": "string"
-              },
-              "variant": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "providerID"
-            ],
-            "additionalProperties": false
-          },
-          "version": {
-            "type": "string"
-          },
-          "metadata": {
-            "type": "object"
-          },
-          "time": {
-            "type": "object",
-            "properties": {
-              "created": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "updated": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "compacting": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "archived": {
-                "type": "number"
-              },
-              "processing": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "created",
-              "updated",
-              "processing"
-            ],
-            "additionalProperties": false
-          },
-          "permission": {
-            "$ref": "#/components/schemas/PermissionRuleset"
-          },
-          "revert": {
-            "type": "object",
-            "properties": {
-              "messageID": {
-                "type": "string",
-                "pattern": "^msg"
-              },
-              "partID": {
-                "type": "string",
-                "pattern": "^prt"
-              },
-              "snapshot": {
-                "type": "string"
-              },
-              "diff": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "messageID"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "id",
-          "slug",
-          "projectID",
-          "directory",
-          "title",
-          "version",
-          "time"
-        ],
-        "additionalProperties": false
-      },
-      "Session7": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "projectID": {
-            "type": "string"
-          },
-          "workspaceID": {
-            "type": "string",
-            "pattern": "^wrk"
-          },
-          "directory": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "parentID": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "summary": {
-            "type": "object",
-            "properties": {
-              "additions": {
-                "type": "number"
-              },
-              "deletions": {
-                "type": "number"
-              },
-              "files": {
-                "type": "number"
-              },
-              "diffs": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/SnapshotFileDiff"
-                }
-              }
-            },
-            "required": [
-              "additions",
-              "deletions",
-              "files"
-            ],
-            "additionalProperties": false
-          },
-          "cost": {
-            "type": "number"
-          },
-          "tokens": {
-            "type": "object",
-            "properties": {
-              "input": {
-                "type": "number"
-              },
-              "output": {
-                "type": "number"
-              },
-              "reasoning": {
-                "type": "number"
-              },
-              "cache": {
-                "type": "object",
-                "properties": {
-                  "read": {
-                    "type": "number"
-                  },
-                  "write": {
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "read",
-                  "write"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "required": [
-              "input",
-              "output",
-              "reasoning",
-              "cache"
-            ],
-            "additionalProperties": false
-          },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
             ],
             "additionalProperties": false
           },
@@ -26471,7 +25509,7 @@
         ],
         "additionalProperties": false
       },
-      "Session8": {
+      "Session6": {
         "type": "object",
         "properties": {
           "id": {
@@ -26561,18 +25599,6 @@
               "output",
               "reasoning",
               "cache"
-            ],
-            "additionalProperties": false
-          },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
             ],
             "additionalProperties": false
           },
@@ -26675,7 +25701,7 @@
         ],
         "additionalProperties": false
       },
-      "Session9": {
+      "Session7": {
         "type": "object",
         "properties": {
           "id": {
@@ -26765,18 +25791,6 @@
               "output",
               "reasoning",
               "cache"
-            ],
-            "additionalProperties": false
-          },
-          "share": {
-            "type": "object",
-            "properties": {
-              "url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "url"
             ],
             "additionalProperties": false
           },
@@ -28006,7 +27020,6 @@
                     "enum": [
                       "session.list",
                       "session.new",
-                      "session.share",
                       "session.interrupt",
                       "session.compact",
                       "session.page.up",
@@ -28502,7 +27515,6 @@
                     "enum": [
                       "session.list",
                       "session.new",
-                      "session.share",
                       "session.interrupt",
                       "session.compact",
                       "session.page.up",

@@ -80,8 +80,8 @@ import { Memory } from "@/memory/memory"
 
 const log = Log.create({ service: "tool.registry" })
 
-export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
-  return providerID === ProviderV2.ID.oc2 || flags.exa || flags.parallel
+export function webSearchEnabled(_providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
+  return flags.exa || flags.parallel
 }
 
 type TaskDef = Tool.InferDef<typeof TaskTool>

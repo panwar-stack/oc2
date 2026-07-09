@@ -28,16 +28,7 @@ import { Spinner } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
-import type {
-  AssistantMessage,
-  Part,
-  Provider,
-  ToolPart,
-  UserMessage,
-  TextPart,
-  ReasoningPart,
-  SessionStatus,
-} from "@oc2-ai/sdk/v2"
+import type { AssistantMessage, Part, Provider, ToolPart, UserMessage, TextPart, ReasoningPart } from "@oc2-ai/sdk/v2"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -78,7 +69,6 @@ import { nextThinkingMode, reasoningSummary, useThinkingMode, type ThinkingMode 
 import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
-import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { DialogTeam } from "../../component/dialog-team"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OC2_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
@@ -94,34 +84,9 @@ import {
 
 addDefaultParsers(parsers.parsers)
 
-const GO_UPSELL_FREE_TIER_LAST_SEEN_AT = "go_upsell_last_seen_at"
-const GO_UPSELL_FREE_TIER_DONT_SHOW = "go_upsell_dont_show"
-const GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT = "go_upsell_account_rate_limit_last_seen_at"
-const GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW = "go_upsell_account_rate_limit_dont_show"
-const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
-const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go"])
 const TIMELINE_VIRTUALIZE_AFTER = 120
 const TIMELINE_OVERSCAN = 40
 const TIMELINE_ROW_ESTIMATED_HEIGHT = 8
-
-type RetryAction = Extract<SessionStatus, { type: "retry" }>["action"]
-
-function goUpsellKeys(action: RetryAction) {
-  if (!action) return
-  if (!GO_UPSELL_PROVIDERS.has(action.provider)) return
-  if (action.reason === "free_tier_limit") {
-    return {
-      lastSeenAt: GO_UPSELL_FREE_TIER_LAST_SEEN_AT,
-      dontShow: GO_UPSELL_FREE_TIER_DONT_SHOW,
-    }
-  }
-  if (action.reason === "account_rate_limit") {
-    return {
-      lastSeenAt: GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT,
-      dontShow: GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW,
-    }
-  }
-}
 
 const context = createContext<{
   width: number
@@ -485,27 +450,6 @@ export function Session() {
   const dialog = useDialog()
   const renderer = useRenderer()
 
-  const unsubscribeSessionStatus = event.on("session.status", (evt) => {
-    if (evt.properties.sessionID !== route.sessionID) return
-    if (evt.properties.status.type !== "retry") return
-    if (!evt.properties.status.action) return
-    if (dialog.stack.length > 0) return
-
-    const keys = goUpsellKeys(evt.properties.status.action)
-    if (!keys) return
-
-    const seen = kv.get(keys.lastSeenAt)
-    if (typeof seen === "number" && Date.now() - seen < GO_UPSELL_WINDOW) return
-
-    if (kv.get(keys.dontShow)) return
-
-    void DialogRetryAction.show(dialog, evt.properties.status.action).then((dontShowAgain) => {
-      if (dontShowAgain) kv.set(keys.dontShow, true)
-      kv.set(keys.lastSeenAt, Date.now())
-    })
-  })
-  onCleanup(unsubscribeSessionStatus)
-
   function hasNavigableText(message: UserMessage | AssistantMessage) {
     const parts = sync.data.part[message.id]
     if (!parts || !Array.isArray(parts)) return false
@@ -574,7 +518,10 @@ export function Session() {
         return index === undefined ? [] : [{ index, y: child.y }]
       })
       .sort((left, right) => left.y - right.y)
-    return rendered.findLast((child) => child.y <= scroll.y + 10)?.index ?? Math.max(0, Math.floor(scroll.scrollTop / TIMELINE_ROW_ESTIMATED_HEIGHT))
+    return (
+      rendered.findLast((child) => child.y <= scroll.y + 10)?.index ??
+      Math.max(0, Math.floor(scroll.scrollTop / TIMELINE_ROW_ESTIMATED_HEIGHT))
+    )
   }
 
   // Helper: Find next visible message boundary in direction
@@ -647,46 +594,6 @@ export function Session() {
 
   const sessionCommandList = createMemo(() => [
     {
-      title: session()?.share?.url ? "Copy share link" : "Share session",
-      value: "session.share",
-      suggested: route.type === "session",
-      category: "Session",
-      enabled: sync.data.config.share !== "disabled",
-      slash: {
-        name: "share",
-      },
-      run: async () => {
-        const copy = (url: string) =>
-          clipboard
-            .write?.(url)
-            .then(() => toast.show({ message: "Share URL copied to clipboard!", variant: "success" }))
-            .catch(() => toast.show({ message: "Failed to copy URL to clipboard", variant: "error" }))
-        const url = session()?.share?.url
-        if (url) {
-          await copy(url)
-          dialog.clear()
-          return
-        }
-        if (!kv.get("share_consent", false)) {
-          const ok = await DialogConfirm.show(dialog, "Share Session", "Are you sure you want to share it?")
-          if (ok !== true) return
-          kv.set("share_consent", true)
-        }
-        await sdk.client.session
-          .share({
-            sessionID: route.sessionID,
-          })
-          .then((res) => copy(res.data!.share!.url))
-          .catch((error) => {
-            toast.show({
-              message: error instanceof Error ? error.message : "Failed to share session",
-              variant: "error",
-            })
-          })
-        dialog.clear()
-      },
-    },
-    {
       title: "Rename session",
       value: "session.rename",
       category: "Session",
@@ -757,29 +664,6 @@ export function Session() {
           modelID: selectedModel.modelID,
           providerID: selectedModel.providerID,
         })
-        dialog.clear()
-      },
-    },
-    {
-      title: "Unshare session",
-      value: "session.unshare",
-      category: "Session",
-      enabled: !!session()?.share?.url,
-      slash: {
-        name: "unshare",
-      },
-      run: async () => {
-        await sdk.client.session
-          .unshare({
-            sessionID: route.sessionID,
-          })
-          .then(() => toast.show({ message: "Session unshared successfully", variant: "success" }))
-          .catch((error) => {
-            toast.show({
-              message: error instanceof Error ? error.message : "Failed to unshare session",
-              variant: "error",
-            })
-          })
         dialog.clear()
       },
     },
@@ -930,7 +814,7 @@ export function Session() {
       value: "session.page.up",
       category: "Session",
       hidden: true,
-        run: () => {
+      run: () => {
         scrollTimelineBy(-scroll.height / 2)
         dialog.clear()
       },
@@ -1392,9 +1276,7 @@ export function Session() {
 
   const timelineRows = createMemo(() => {
     const revertedMessageID = revert()?.messageID
-    const list = revertedMessageID
-      ? messages().filter((message) => message.id <= revertedMessageID)
-      : messages()
+    const list = revertedMessageID ? messages().filter((message) => message.id <= revertedMessageID) : messages()
     if (list.length <= TIMELINE_VIRTUALIZE_AFTER) {
       return list.map((message, index) => ({ type: "message", key: message.id, message, index }) satisfies TimelineRow)
     }
@@ -1407,11 +1289,7 @@ export function Session() {
     )
     const rendered = new Set<number>()
     for (let index = start; index < end; index++) rendered.add(index)
-    const forcedMessageIDs = new Set([
-      messageIndex().pendingAssistantID,
-      activeUserMessageID(),
-      lastAssistant()?.id,
-    ])
+    const forcedMessageIDs = new Set([messageIndex().pendingAssistantID, activeUserMessageID(), lastAssistant()?.id])
     for (const [index, message] of list.entries()) {
       if (forcedMessageIDs.has(message.id)) rendered.add(index)
     }
@@ -1557,7 +1435,9 @@ export function Session() {
                           )
                         })()}
                       </Match>
-                      <Match when={row.type === "message" && revert()?.messageID && row.message.id >= revert()!.messageID}>
+                      <Match
+                        when={row.type === "message" && revert()?.messageID && row.message.id >= revert()!.messageID}
+                      >
                         <></>
                       </Match>
                       <Match when={row.type === "message" && row.message.role === "user"}>
@@ -1578,7 +1458,9 @@ export function Session() {
                             parts={sync.data.part[row.type === "message" ? row.message.id : ""] ?? []}
                             pending={pending()}
                           />
-                          <Show when={row.type === "message" && row.message.id === activeUserMessageID() && fuguStatus()}>
+                          <Show
+                            when={row.type === "message" && row.message.id === activeUserMessageID() && fuguStatus()}
+                          >
                             {(status) => <FuguStatusBlock status={status()} />}
                           </Show>
                         </>

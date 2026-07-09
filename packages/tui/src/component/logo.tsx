@@ -2,7 +2,7 @@ import { BoxRenderable, MouseButton, MouseEvent, RGBA, TextAttributes } from "@o
 import { useRenderer } from "@opentui/solid"
 import { For, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { useTheme, tint } from "../context/theme"
-import { go, logo } from "../logo"
+import { logo } from "../logo"
 
 export type LogoShape = {
   left: string[]
@@ -303,7 +303,6 @@ function build(shape: LogoShape): LogoContext {
 }
 
 const DEFAULT = build(logo)
-const GO = build(go)
 
 function shimmer(x: number, y: number, frame: Frame, ctx: LogoContext) {
   return frame.list.reduce((best, item) => {
@@ -876,10 +875,4 @@ export function Logo(props: { shape?: LogoShape; ink?: RGBA; idle?: boolean } = 
       </For>
     </box>
   )
-}
-
-export function GoLogo() {
-  const { theme } = useTheme()
-  const base = tint(theme.background, theme.text, 0.62)
-  return <Logo shape={go} ink={base} idle />
 }

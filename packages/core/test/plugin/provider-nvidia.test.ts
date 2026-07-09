@@ -8,7 +8,7 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { expectPluginRegistered, it, provider } from "./provider-helper"
 
 describe("NvidiaPlugin", () => {
-  it.effect("is registered so legacy referer headers can be applied", () =>
+  it.effect("is registered so provider headers can be applied", () =>
     Effect.sync(() =>
       expectPluginRegistered(
         ProviderPlugins.map((item) => item.id),
@@ -36,7 +36,6 @@ describe("NvidiaPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
         Existing: "value",
-        "HTTP-Referer": "https://opencode.ai/",
         "X-Title": "opencode",
         "X-BILLING-INVOKE-ORIGIN": "OpenCode",
       })
@@ -62,7 +61,6 @@ describe("NvidiaPlugin", () => {
       })
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
-        "HTTP-Referer": "https://opencode.ai/",
         "X-Title": "opencode",
         "X-BILLING-INVOKE-ORIGIN": "OpenCode",
       })
@@ -90,7 +88,6 @@ describe("NvidiaPlugin", () => {
       })
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
-        "HTTP-Referer": "https://opencode.ai/",
         "X-Title": "opencode",
         "X-BILLING-INVOKE-ORIGIN": "CustomOrigin",
       })

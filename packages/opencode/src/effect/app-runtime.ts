@@ -47,8 +47,6 @@ import { Reference } from "@/reference/reference"
 import { Workspace } from "@/control-plane/workspace"
 import { Worktree } from "@/worktree"
 import { Installation } from "@/installation"
-import { ShareNext } from "@/share/share-next"
-import { SessionShare } from "@/share/session"
 import { Npm } from "@oc2-ai/core/npm"
 import { memoMap } from "@oc2-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
@@ -111,8 +109,6 @@ const FeatureLayer = Layer.mergeAll(
   Workspace.defaultLayer,
   Worktree.appLayer,
   Installation.defaultLayer,
-  ShareNext.defaultLayer,
-  SessionShare.defaultLayer,
   Memory.defaultLayer,
 )
 

@@ -281,7 +281,7 @@ describe("tool.registry", () => {
           const ids = yield* registry.ids()
           const allIDs = (yield* registry.all()).map((tool) => tool.id)
           const tools = yield* registry.tools({
-            providerID: ProviderV2.ID.oc2,
+            providerID: ProviderV2.ID.openai,
             modelID: ModelV2.ID.make("test"),
             agent: yield* (yield* Agent.Service).defaultInfo(),
           })
@@ -332,7 +332,7 @@ describe("tool.registry", () => {
       const build = yield* agent.get("build")
       if (!build) throw new Error("build agent not found")
       const task = (yield* registry.tools({
-        providerID: ProviderV2.ID.oc2,
+        providerID: ProviderV2.ID.openai,
         modelID: ModelV2.ID.make("test"),
         agent: build,
       })).find((tool) => tool.id === "task")
@@ -603,7 +603,7 @@ describe("tool.registry", () => {
 
       const agents = yield* Agent.Service
       const promptTools = yield* registry.tools({
-        providerID: ProviderV2.ID.oc2,
+        providerID: ProviderV2.ID.openai,
         modelID: ModelV2.ID.make("test"),
         agent: yield* agents.defaultInfo(),
       })

@@ -13,22 +13,11 @@ export type AccessToken = Schema.Schema.Type<typeof AccessToken>
 export const RefreshToken = Schema.String.pipe(Schema.brand("RefreshToken"))
 export type RefreshToken = Schema.Schema.Type<typeof RefreshToken>
 
-export const DeviceCode = Schema.String.pipe(Schema.brand("DeviceCode"))
-export type DeviceCode = Schema.Schema.Type<typeof DeviceCode>
-
-export const UserCode = Schema.String.pipe(Schema.brand("UserCode"))
-export type UserCode = Schema.Schema.Type<typeof UserCode>
-
 export class Info extends Schema.Class<Info>("Account")({
   id: AccountID,
   email: Schema.String,
   url: Schema.String,
   active_org_id: Schema.NullOr(OrgID),
-}) {}
-
-export class Org extends Schema.Class<Org>("Org")({
-  id: OrgID,
-  name: Schema.String,
 }) {}
 
 export class AccountRepoError extends Schema.TaggedErrorClass<AccountRepoError>()("AccountRepoError", {
@@ -69,31 +58,3 @@ export class AccountTransportError extends Schema.TaggedErrorClass<AccountTransp
 }
 
 export type AccountError = AccountRepoError | AccountServiceError | AccountTransportError
-
-export class Login extends Schema.Class<Login>("Login")({
-  code: DeviceCode,
-  user: UserCode,
-  url: Schema.String,
-  server: Schema.String,
-  expiry: Schema.Duration,
-  interval: Schema.Duration,
-}) {}
-
-export class PollSuccess extends Schema.TaggedClass<PollSuccess>()("PollSuccess", {
-  email: Schema.String,
-}) {}
-
-export class PollPending extends Schema.TaggedClass<PollPending>()("PollPending", {}) {}
-
-export class PollSlow extends Schema.TaggedClass<PollSlow>()("PollSlow", {}) {}
-
-export class PollExpired extends Schema.TaggedClass<PollExpired>()("PollExpired", {}) {}
-
-export class PollDenied extends Schema.TaggedClass<PollDenied>()("PollDenied", {}) {}
-
-export class PollError extends Schema.TaggedClass<PollError>()("PollError", {
-  cause: Schema.Defect,
-}) {}
-
-export const PollResult = Schema.Union([PollSuccess, PollPending, PollSlow, PollExpired, PollDenied, PollError])
-export type PollResult = Schema.Schema.Type<typeof PollResult>

@@ -67,7 +67,6 @@ Every field is optional.
   "default_agent": "agent-name",
   "shell": "/bin/zsh",
   "logLevel": "DEBUG" | "INFO" | "WARN" | "ERROR",
-  "share": "manual" | "auto" | "disabled",
   "autoupdate": true | false | "notify",
   "snapshot": true,
   "instructions": ["AGENTS.md", "docs/style.md"],

@@ -6,7 +6,6 @@ import * as Project from "./project"
 import * as Vcs from "./vcs"
 import { InstanceState } from "@/effect/instance-state"
 import { registerDisposer } from "@/effect/instance-registry"
-import { ShareNext } from "@/share/share-next"
 import { Search } from "@oc2-ai/core/filesystem/search"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
@@ -32,7 +31,6 @@ export const layer = Layer.effect(
     const project = yield* Project.Service
     const reference = yield* Reference.Service
     const search = yield* Search.Service
-    const shareNext = yield* ShareNext.Service
     const snapshot = yield* Snapshot.Service
     const vcs = yield* Vcs.Service
 
@@ -62,7 +60,7 @@ export const layer = Layer.effect(
       // its per-instance state scope. We just await materialization here.
       yield* log.info("startup stage", { directory: ctx.directory, stage: "service.init", status: "started" })
       yield* Effect.forEach(
-        [reference, lsp, shareNext, format, vcs, snapshot, project],
+        [reference, lsp, format, vcs, snapshot, project],
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
@@ -83,7 +81,6 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
     Project.defaultLayer,
     Reference.defaultLayer,
     Search.defaultLayer,
-    ShareNext.defaultLayer,
     Snapshot.defaultLayer,
     Vcs.defaultLayer,
   ]),

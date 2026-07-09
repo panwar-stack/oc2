@@ -57,8 +57,7 @@ export function DialogModel(props: { providerID?: string }) {
             title: model.name ?? item.modelID,
             description: provider.name,
             category,
-            disabled: provider.id === "opencode" && model.id.includes("-nano"),
-            footer: model.cost?.input === 0 && provider.id === "opencode" ? "Free" : undefined,
+            footer: model.cost?.input === 0 ? "Free" : undefined,
             onSelect: () => {
               onSelect(provider.id, model.id)
             },
@@ -171,10 +170,7 @@ export function createDialogModelProviderOptions(input: {
 }) {
   return pipe(
     input.providers,
-    sortBy(
-      (provider) => provider.id !== "opencode",
-      (provider) => provider.name,
-    ),
+    sortBy((provider) => provider.name),
     flatMap((provider) =>
       pipe(
         provider.models,
@@ -189,8 +185,7 @@ export function createDialogModelProviderOptions(input: {
             ? "(Favorite)"
             : undefined,
           category: input.connected ? provider.name : undefined,
-          disabled: provider.id === "opencode" && model.includes("-nano"),
-          footer: info.cost?.input === 0 && provider.id === "opencode" ? "Free" : undefined,
+          footer: info.cost?.input === 0 ? "Free" : undefined,
           onSelect() {
             input.onSelect(provider.id, model)
           },

@@ -8,7 +8,7 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { expectPluginRegistered, it, provider } from "./provider-helper"
 
 describe("LLMGatewayPlugin", () => {
-  it.effect("is registered so legacy referer headers can be applied", () =>
+  it.effect("is registered so provider headers can be applied", () =>
     Effect.sync(() =>
       expectPluginRegistered(
         ProviderPlugins.map((item) => item.id),
@@ -17,7 +17,7 @@ describe("LLMGatewayPlugin", () => {
     ),
   )
 
-  it.effect("applies legacy referer headers only to enabled llmgateway", () =>
+  it.effect("applies provider headers only to enabled llmgateway", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
       const catalog = yield* Catalog.Service
@@ -43,7 +43,6 @@ describe("LLMGatewayPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("llmgateway"))).request.headers).toEqual({
         Existing: "value",
-        "HTTP-Referer": "https://opencode.ai/",
         "X-Title": "opencode",
         "X-Source": "opencode",
       })
@@ -51,7 +50,7 @@ describe("LLMGatewayPlugin", () => {
     }),
   )
 
-  it.effect("does not apply legacy headers to a disabled llmgateway provider", () =>
+  it.effect("does not apply headers to a disabled llmgateway provider", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
       const catalog = yield* Catalog.Service

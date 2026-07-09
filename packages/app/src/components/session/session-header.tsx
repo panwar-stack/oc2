@@ -62,7 +62,7 @@ export function SessionHeader() {
         showToast({
           variant: "success",
           icon: "circle-check",
-          title: language.t("session.share.copy.copied"),
+          title: language.t("common.copied"),
           description: directory,
         })
       })
@@ -122,9 +122,7 @@ export function SessionHeader() {
                       aria-label={language.t("session.header.open.copyPath")}
                     >
                       <Icon name="copy" size="small" class="text-icon-base" />
-                      <span class="text-12-regular text-text-strong">
-                        {language.t("session.header.open.copyPath")}
-                      </span>
+                      <span class="text-12-regular text-text-strong">{language.t("session.header.open.copyPath")}</span>
                     </Button>
                   </div>
                 </div>
@@ -133,7 +131,10 @@ export function SessionHeader() {
                 <Tooltip placement="bottom" value={language.t("status.popover.trigger")}>
                   <StatusPopover />
                 </Tooltip>
-                <TooltipKeybind title={language.t("command.terminal.toggle")} keybind={command.keybind("terminal.toggle")}>
+                <TooltipKeybind
+                  title={language.t("command.terminal.toggle")}
+                  keybind={command.keybind("terminal.toggle")}
+                >
                   <Button
                     variant="ghost"
                     class="group/terminal-toggle titlebar-icon w-8 h-6 p-0 box-border shrink-0"
@@ -146,7 +147,10 @@ export function SessionHeader() {
                   </Button>
                 </TooltipKeybind>
                 <div class="hidden md:flex items-center gap-1 shrink-0">
-                  <TooltipKeybind title={language.t("command.review.toggle")} keybind={command.keybind("review.toggle")}>
+                  <TooltipKeybind
+                    title={language.t("command.review.toggle")}
+                    keybind={command.keybind("review.toggle")}
+                  >
                     <Button
                       variant="ghost"
                       class="group/review-toggle titlebar-icon w-8 h-6 p-0 box-border"
@@ -158,7 +162,10 @@ export function SessionHeader() {
                       <Icon size="small" name={view().reviewPanel.opened() ? "review-active" : "review"} />
                     </Button>
                   </TooltipKeybind>
-                  <TooltipKeybind title={language.t("command.fileTree.toggle")} keybind={command.keybind("fileTree.toggle")}>
+                  <TooltipKeybind
+                    title={language.t("command.fileTree.toggle")}
+                    keybind={command.keybind("fileTree.toggle")}
+                  >
                     <Button
                       variant="ghost"
                       class="titlebar-icon w-8 h-6 p-0 box-border"

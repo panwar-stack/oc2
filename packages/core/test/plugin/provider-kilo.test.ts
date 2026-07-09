@@ -8,7 +8,7 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { expectPluginRegistered, it, provider } from "./provider-helper"
 
 describe("KiloPlugin", () => {
-  it.effect("is registered so legacy referer headers can be applied", () =>
+  it.effect("is registered so provider headers can be applied", () =>
     Effect.sync(() =>
       expectPluginRegistered(
         ProviderPlugins.map((item) => item.id),
@@ -17,7 +17,7 @@ describe("KiloPlugin", () => {
     ),
   )
 
-  it.effect("applies legacy referer headers only to kilo", () =>
+  it.effect("applies provider headers only to kilo", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
       const catalog = yield* Catalog.Service
@@ -36,14 +36,13 @@ describe("KiloPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo"))).request.headers).toEqual({
         Existing: "value",
-        "HTTP-Referer": "https://opencode.ai/",
         "X-Title": "opencode",
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.openrouter)).request.headers).toEqual({})
     }),
   )
 
-  it.effect("uses the exact legacy Kilo header casing and set", () =>
+  it.effect("uses the exact Kilo header casing and set", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
       const catalog = yield* Catalog.Service
@@ -60,7 +59,6 @@ describe("KiloPlugin", () => {
 
       const result = yield* catalog.provider.get(ProviderV2.ID.make("kilo"))
       expect(result.request.headers).toEqual({
-        "HTTP-Referer": "https://opencode.ai/",
         "X-Title": "opencode",
       })
       expect(result.request.headers).not.toHaveProperty("http-referer")
@@ -69,7 +67,7 @@ describe("KiloPlugin", () => {
     }),
   )
 
-  it.effect("uses the legacy provider-id guard instead of endpoint package matching", () =>
+  it.effect("uses the provider-id guard instead of endpoint package matching", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
       const catalog = yield* Catalog.Service
@@ -91,7 +89,6 @@ describe("KiloPlugin", () => {
       })
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("kilo"))).request.headers).toEqual({
-        "HTTP-Referer": "https://opencode.ai/",
         "X-Title": "opencode",
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("custom-kilo"))).request.headers).toEqual({})

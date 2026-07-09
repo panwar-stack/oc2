@@ -1,4 +1,5 @@
 import { ConfigProvider, Effect, Layer } from "effect"
+import { Naming } from "@oc2-ai/core/naming"
 import { HttpRouter } from "effect/unstable/http"
 import { parse } from "./assertions"
 import { runtime, type Runtime } from "./runtime"
@@ -94,7 +95,7 @@ function toAuthProbeRequest(scenario: ActiveScenario, credentials: "missing" | "
   const headers = {
     ...(spec.body === undefined ? {} : { "content-type": "application/json" }),
     ...spec.headers,
-    ...(credentials === "valid" ? { authorization: basic("opencode", "secret") } : {}),
+    ...(credentials === "valid" ? { authorization: basic(Naming.appSlug, "secret") } : {}),
   }
   return new Request(new URL(spec.path, "http://localhost"), {
     method: scenario.method,

@@ -25,7 +25,6 @@ const commandLoaders: CommandLoader[] = [
   { names: ["run"], load: async () => (await import("./cli/cmd/run")).RunCommand },
   { names: ["generate"], load: async () => (await import("./cli/cmd/generate")).GenerateCommand },
   { names: ["debug"], load: async () => (await import("./cli/cmd/debug")).DebugCommand },
-  { names: ["console"], load: async () => (await import("./cli/cmd/account")).ConsoleCommand },
   { names: ["providers", "auth"], load: async () => (await import("./cli/cmd/providers")).ProvidersCommand },
   { names: ["agent"], load: async () => (await import("./cli/cmd/agent")).AgentCommand },
   { names: ["upgrade"], load: async () => (await import("./cli/cmd/upgrade")).UpgradeCommand },
@@ -36,7 +35,6 @@ const commandLoaders: CommandLoader[] = [
   { names: ["stats"], load: async () => (await import("./cli/cmd/stats")).StatsCommand },
   { names: ["export"], load: async () => (await import("./cli/cmd/export")).ExportCommand },
   { names: ["import"], load: async () => (await import("./cli/cmd/import")).ImportCommand },
-  { names: ["github"], load: async () => (await import("./cli/cmd/github")).GithubCommand },
   { names: ["pr"], load: async () => (await import("./cli/cmd/pr")).PrCommand },
   { names: ["session"], load: async () => (await import("./cli/cmd/session")).SessionCommand },
   { names: ["plugin", "plug"], load: async () => (await import("./cli/cmd/plug")).PluginCommand },
@@ -75,7 +73,12 @@ const args: string[] = hideBin(process.argv)
 
 async function loadCommands() {
   const selected = selectedCommandName()
-  if (selected === "completion" || args.includes("-h") || args.includes("--help") || args.includes("--get-yargs-completions")) {
+  if (
+    selected === "completion" ||
+    args.includes("-h") ||
+    args.includes("--help") ||
+    args.includes("--get-yargs-completions")
+  ) {
     return Promise.all(commandLoaders.map((loader) => loader.load()))
   }
 

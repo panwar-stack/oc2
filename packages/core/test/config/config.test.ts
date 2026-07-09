@@ -260,8 +260,6 @@ describe("Config", () => {
                 model: "anthropic/claude",
                 default_agent: "reviewer",
                 autoupdate: "notify",
-                share: "disabled",
-                enterprise: { url: "https://share.example.com" },
                 username: "test-user",
                 permissions: [
                   { action: "bash", resource: "*", effect: "ask" },
@@ -345,8 +343,6 @@ describe("Config", () => {
             expect(documents[0]?.info.model).toBe("anthropic/claude")
             expect(documents[0]?.info.default_agent).toBe("reviewer")
             expect(documents[0]?.info.autoupdate).toBe("notify")
-            expect(documents[0]?.info.share).toBe("disabled")
-            expect(documents[0]?.info.enterprise).toEqual({ url: "https://share.example.com" })
             expect(documents[0]?.info.username).toBe("test-user")
             expect(documents[0]?.info.permissions).toEqual([
               { action: "bash", resource: "*", effect: "ask" },
@@ -445,7 +441,6 @@ describe("Config", () => {
                 shell: "/bin/zsh",
                 default_agent: "reviewer",
                 snapshot: false,
-                autoshare: true,
                 permission: {
                   bash: "ask",
                   edit: { "*.md": "allow", "*": "deny" },
@@ -522,7 +517,6 @@ describe("Config", () => {
             expect(documents[0]?.info.shell).toBe("/bin/zsh")
             expect(documents[0]?.info.default_agent).toBe("reviewer")
             expect(documents[0]?.info.snapshots).toBe(false)
-            expect(documents[0]?.info.share).toBe("auto")
             expect(documents[0]?.info.permissions).toEqual([
               { action: "bash", resource: "*", effect: "ask" },
               { action: "edit", resource: "*.md", effect: "allow" },
@@ -680,10 +674,7 @@ describe("Config", () => {
               fs.writeFile(path.join(parent, "oc2.jsonc"), JSON.stringify({ $schema: "parent" })),
               fs.writeFile(path.join(directory, "config.json"), JSON.stringify({ $schema: "directory" })),
               fs.writeFile(path.join(root, ".oc2", "oc2.json"), JSON.stringify({ $schema: "root-dot" })),
-              fs.writeFile(
-                path.join(directory, ".oc2", "oc2.jsonc"),
-                JSON.stringify({ $schema: "directory-dot" }),
-              ),
+              fs.writeFile(path.join(directory, ".oc2", "oc2.jsonc"), JSON.stringify({ $schema: "directory-dot" })),
             ])
           })
 

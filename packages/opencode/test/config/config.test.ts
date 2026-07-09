@@ -15,8 +15,6 @@ import { EffectFlock } from "@oc2-ai/core/util/effect-flock"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import type { InstanceContext } from "../../src/project/instance-context"
 import { Auth } from "../../src/auth"
-import { Account } from "../../src/account/account"
-import { AccessToken, AccountID, OrgID } from "../../src/account/schema"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Env } from "../../src/env"
 import {
@@ -40,7 +38,6 @@ import { ProjectV2 } from "@oc2-ai/core/project"
 import { Filesystem } from "@/util/filesystem"
 import { ConfigPlugin } from "@/config/plugin"
 import { ConfigPluginV1 } from "@oc2-ai/core/v1/config/plugin"
-import { AccountTest } from "../fake/account"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
 
@@ -94,15 +91,12 @@ function remoteConfigClient(input: {
 const configLayer = (
   options: {
     auth?: Layer.Layer<Auth.Service>
-    account?: Layer.Layer<Account.Service>
     client?: HttpClient.HttpClient
   } = {},
 ) =>
   Config.layer.pipe(
     Layer.provide(testFlock),
-    Layer.provide(Env.defaultLayer),
     Layer.provide(options.auth ?? AuthTest.empty),
-    Layer.provide(options.account ?? AccountTest.empty),
     Layer.provideMerge(infra),
     Layer.provide(NpmTest.noop),
     Layer.provide(Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)),
@@ -801,49 +795,6 @@ it.instance("handles file inclusion with replacement tokens", () =>
   }),
 )
 
-const accountTokenIt = configIt({
-  account: Layer.mock(Account.Service)({
-    active: () =>
-      Effect.succeed(
-        Option.some({
-          id: AccountID.make("account-1"),
-          email: "user@example.com",
-          url: "https://control.example.com",
-          active_org_id: OrgID.make("org-1"),
-        }),
-      ),
-    activeOrg: () =>
-      Effect.succeed(
-        Option.some({
-          account: {
-            id: AccountID.make("account-1"),
-            email: "user@example.com",
-            url: "https://control.example.com",
-            active_org_id: OrgID.make("org-1"),
-          },
-          org: {
-            id: OrgID.make("org-1"),
-            name: "Example Org",
-          },
-        }),
-      ),
-    config: () =>
-      Effect.succeed(
-        Option.some({
-          provider: { oc2: { options: { apiKey: "{env:OC2_CONSOLE_TOKEN}" } } },
-        }),
-      ),
-    token: () => Effect.succeed(Option.some(AccessToken.make("st_test_token"))),
-  }),
-})
-
-accountTokenIt.instance("resolves env templates in account config with account token", () =>
-  Effect.gen(function* () {
-    const config = yield* Config.use.get()
-    expect(config.provider?.["oc2"]?.options?.apiKey).toBe("st_test_token")
-  }),
-)
-
 it.instance("validates config schema and throws on invalid fields", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
@@ -932,19 +883,6 @@ it.instance("handles command configuration", () =>
       description: "test command",
       agent: "test_agent",
     })
-  }),
-)
-
-it.instance("migrates autoshare to share field", () =>
-  Effect.gen(function* () {
-    const test = yield* TestInstance
-    yield* writeConfigEffect(test.directory, {
-      $schema: "https://opencode.ai/config.json",
-      autoshare: true,
-    })
-    const config = yield* Config.use.get()
-    expect(config.share).toBe("auto")
-    expect(config.autoshare).toBe(true)
   }),
 )
 
@@ -1390,15 +1328,13 @@ it.instance(
     yield* writeManagedSettingsEffect({
       $schema: "https://opencode.ai/config.json",
       model: "managed/model",
-      share: "disabled",
     })
 
     const config = yield* Config.use.get()
     expect(config.model).toBe("managed/model")
-    expect(config.share).toBe("disabled")
     expect(config.username).toBe("testuser")
   }),
-  { config: { model: "user/model", share: "auto", username: "testuser" } },
+  { config: { model: "user/model", username: "testuser" } },
 )
 
 it.instance(
@@ -1770,7 +1706,6 @@ test("remote well-known config can use FetchHttpClient layer", async () => {
             Layer.provide(FSUtil.defaultLayer),
             Layer.provide(Env.defaultLayer),
             Layer.provide(wellKnownAuth(server.url.origin)),
-            Layer.provide(AccountTest.empty),
             Layer.provideMerge(infra),
             Layer.provide(NpmTest.noop),
             Layer.provide(FetchHttpClient.layer),
@@ -2159,7 +2094,6 @@ test("parseManagedPlist strips MDM metadata keys", async () => {
           PayloadUUID: "AAAA-BBBB-CCCC",
           PayloadVersion: 1,
           _manualProfile: true,
-          share: "disabled",
           model: "mdm/model",
         }),
       ),
@@ -2167,7 +2101,6 @@ test("parseManagedPlist strips MDM metadata keys", async () => {
     ),
     "test:mobileconfig",
   )
-  expect(config.share).toBe("disabled")
   expect(config.model).toBe("mdm/model")
   // MDM keys must not leak into the parsed config
   expect((config as any).PayloadUUID).toBeUndefined()

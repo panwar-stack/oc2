@@ -17,12 +17,10 @@ import { useBindings } from "../keymap"
 import { useClipboard } from "../context/clipboard"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
-  opencode: 0,
-  "opencode-go": 1,
-  openai: 2,
-  "github-copilot": 3,
-  anthropic: 4,
-  google: 5,
+  openai: 0,
+  "github-copilot": 1,
+  anthropic: 2,
+  google: 3,
 }
 
 const CUSTOM_PROVIDER_OPTION_VALUE = "__opencode_custom_provider__"
@@ -59,10 +57,8 @@ export function providerOptions(list: { id: string; name: string }[]): ProviderO
         value: provider.id,
         providerID: provider.id,
         description: {
-          opencode: "(Recommended)",
           anthropic: "(API key)",
           openai: "(ChatGPT Plus/Pro or API key)",
-          "opencode-go": "Low cost subscription for everyone",
         }[provider.id],
         category: provider.id in PROVIDER_PRIORITY ? "Popular" : "Providers",
       })),
@@ -95,9 +91,7 @@ export function createDialogProviderOptions() {
     const value = await DialogPrompt.show(dialog, "Other", {
       placeholder: "Provider id",
       description: () => (
-        <text fg={theme.textMuted}>
-          This only stores a credential. Configure the provider in oc2.json to use it.
-        </text>
+        <text fg={theme.textMuted}>This only stores a credential. Configure the provider in oc2.json to use it.</text>
       ),
     })
     if (value === null) return
@@ -360,38 +354,11 @@ function ApiMethod(props: ApiMethodProps) {
   const sdk = useSDK()
   const sync = useSync()
   const toast = useToast()
-  const { theme } = useTheme()
 
   return (
     <DialogPrompt
       title={props.title}
       placeholder="API key"
-      description={
-        {
-          opencode: (
-            <box gap={1}>
-              <text fg={theme.textMuted}>
-                OC2 Zen gives you access to all the best coding models at the cheapest prices with a single API
-                key.
-              </text>
-              <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://oc2.ai/zen</span> to get a key
-              </text>
-            </box>
-          ),
-          "opencode-go": (
-            <box gap={1}>
-              <text fg={theme.textMuted}>
-                OC2 Go is a $10 per month subscription that provides reliable access to popular open coding models
-                with generous usage limits.
-              </text>
-              <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://oc2.ai/go</span> and enable OC2 Go
-              </text>
-            </box>
-          ),
-        }[props.providerID] ?? undefined
-      }
       onConfirm={async (value) => {
         if (!value) return
         await sdk.client.auth.set({

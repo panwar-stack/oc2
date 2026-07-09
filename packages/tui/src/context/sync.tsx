@@ -18,7 +18,6 @@ import type {
   ProviderAuthMethod,
   VcsInfo,
   SnapshotFileDiff,
-  ConsoleState,
   SessionRoot,
   EventSessionNextFuguStatus,
 } from "@oc2-ai/sdk/v2"
@@ -35,6 +34,12 @@ import path from "path"
 import { aggregateFailures } from "./aggregate-failures"
 import { useKV } from "./kv"
 import { destroyRenderer } from "../util/renderer"
+
+type ConsoleState = {
+  consoleManagedProviders: string[]
+  activeOrgName?: string
+  switchableOrgCount: number
+}
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -636,10 +641,6 @@ export const {
       // blocking - include session.list when continuing a session
       const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
       const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
-      const consoleStatePromise = sdk.client.experimental.console
-        .get({ workspace }, { throwOnError: true })
-        .then((x) => x.data)
-        .catch(() => emptyConsoleState)
       const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
       const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
       const blockingRequests: { name: string; promise: Promise<unknown> }[] = [
@@ -662,7 +663,6 @@ export const {
         .then(async () => {
           const providersResponse = providersPromise.then((x) => x.data!)
           const providerListResponse = providerListPromise.then((x) => x.data!)
-          const consoleStateResponse = consoleStatePromise
           const agentsResponse = agentsPromise.then((x) => x.data ?? [])
           const configResponse = configPromise.then((x) => x.data!)
           const sessionListResponse = args.continue ? sessionListPromise : undefined
@@ -670,23 +670,21 @@ export const {
           return Promise.all([
             providersResponse,
             providerListResponse,
-            consoleStateResponse,
             agentsResponse,
             configResponse,
             ...(sessionListResponse ? [sessionListResponse] : []),
           ]).then((responses) => {
             const providers = responses[0]
             const providerList = responses[1]
-            const consoleState = responses[2]
-            const agents = responses[3]
-            const config = responses[4]
-            const sessions = responses[5]
+            const agents = responses[2]
+            const config = responses[3]
+            const sessions = responses[4]
 
             batch(() => {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
               setStore("provider_next", reconcile(providerList))
-              setStore("console_state", reconcile(consoleState))
+              setStore("console_state", reconcile(emptyConsoleState))
               setStore("agent", reconcile(agents))
               setStore("config", reconcile(config))
               if (sessions !== undefined && listGeneration === sessionListGeneration) {
@@ -706,7 +704,6 @@ export const {
                     if (listGeneration === sessionListGeneration) setStore("session", reconcile(sessions))
                   }),
                 ]),
-            consoleStatePromise.then((consoleState) => setStore("console_state", reconcile(consoleState))),
             sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
             sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
             sdk.client.mcp.status({ workspace }).then((x) => setStore("mcp", reconcile(x.data ?? {}))),

@@ -59,7 +59,7 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     agent: info.agent,
     model: info.model,
     version: info.version,
-    share_url: info.share?.url,
+    share_url: undefined,
     summary_additions: info.summary?.additions,
     summary_deletions: info.summary?.deletions,
     summary_files: info.summary?.files,

@@ -86,11 +86,6 @@ export const dict = {
   "command.session.compact.description": "Summarize the session to reduce context size",
   "command.session.fork": "Fork from message",
   "command.session.fork.description": "Create a new session from a previous message",
-  "command.session.share": "Share session",
-  "command.session.share.description": "Share this session and copy the URL to clipboard",
-  "command.session.unshare": "Unshare session",
-  "command.session.unshare.description": "Stop sharing this session",
-
   "palette.search.placeholder": "Search files, commands, and sessions",
   "palette.empty": "No results found",
   "palette.group.commands": "Commands",
@@ -101,9 +96,6 @@ export const dict = {
   "dialog.provider.group.popular": "Popular",
   "dialog.provider.group.other": "Other",
   "dialog.provider.tag.recommended": "Recommended",
-  "dialog.provider.oc2.note": "Curated models including Claude, GPT, Gemini and more",
-  "dialog.provider.oc2.tagline": "Reliable optimized models",
-  "dialog.provider.oc2Go.tagline": "Low cost subscription for everyone",
   "dialog.provider.anthropic.note": "Direct access to Claude models, including Pro and Max",
   "dialog.provider.copilot.note": "AI models for coding assistance via GitHub Copilot",
   "dialog.provider.openai.note": "GPT models for fast, capable general AI tasks",
@@ -118,7 +110,7 @@ export const dict = {
   "dialog.model.manage.description": "Customize which models appear in the model selector.",
   "dialog.model.manage.provider.toggle": "Toggle all {{provider}} models",
 
-  "dialog.model.unpaid.freeModels.title": "Free models provided by OC2",
+  "dialog.model.unpaid.available.title": "Available models",
   "dialog.model.unpaid.addMore.title": "Add more models from popular providers",
 
   "dialog.provider.viewAll": "Show more providers",
@@ -135,13 +127,6 @@ export const dict = {
   "provider.connect.apiKey.label": "{{provider}} API key",
   "provider.connect.apiKey.placeholder": "API key",
   "provider.connect.apiKey.required": "API key is required",
-  "provider.connect.oc2Zen.line1":
-    "OC2 Zen gives you access to a curated set of reliable optimized models for coding agents.",
-  "provider.connect.oc2Zen.line2":
-    "With a single API key you'll get access to models such as Claude, GPT, Gemini, GLM and more.",
-  "provider.connect.oc2Zen.visit.prefix": "Visit ",
-  "provider.connect.oc2Zen.visit.link": "oc2.ai/zen",
-  "provider.connect.oc2Zen.visit.suffix": " to collect your API key.",
   "provider.connect.oauth.code.visit.prefix": "Visit ",
   "provider.connect.oauth.code.visit.link": "this link",
   "provider.connect.oauth.code.visit.suffix":
@@ -429,17 +414,6 @@ export const dict = {
   "toast.context.noLineSelection.title": "No line selection",
   "toast.context.noLineSelection.description": "Select a line range in a file tab first.",
 
-  "toast.session.share.copyFailed.title": "Failed to copy URL to clipboard",
-  "toast.session.share.success.title": "Session shared",
-  "toast.session.share.success.description": "Share URL copied to clipboard!",
-  "toast.session.share.failed.title": "Failed to share session",
-  "toast.session.share.failed.description": "An error occurred while sharing the session",
-
-  "toast.session.unshare.success.title": "Session unshared",
-  "toast.session.unshare.success.description": "Session unshared successfully!",
-  "toast.session.unshare.failed.title": "Failed to unshare session",
-  "toast.session.unshare.failed.description": "An error occurred while unsharing the session",
-
   "toast.session.listFailed.title": "Failed to load sessions for {{project}}",
   "toast.project.reloadFailed.title": "Failed to reload {{project}}",
 
@@ -612,20 +586,6 @@ export const dict = {
   "status.popover.tab.plugins": "Plugins",
   "status.popover.action.manageServers": "Manage servers",
 
-  "session.share.popover.title": "Publish on web",
-  "session.share.popover.description.shared":
-    "This session is public on the web. It is accessible to anyone with the link.",
-  "session.share.popover.description.unshared":
-    "Share session publicly on the web. It will be accessible to anyone with the link.",
-  "session.share.action.share": "Share",
-  "session.share.action.publish": "Publish",
-  "session.share.action.publishing": "Publishing...",
-  "session.share.action.unpublish": "Unpublish",
-  "session.share.action.unpublishing": "Unpublishing...",
-  "session.share.action.view": "View",
-  "session.share.copy.copied": "Copied",
-  "session.share.copy.copyLink": "Copy link",
-
   "lsp.tooltip.none": "No LSP servers",
   "lsp.label.connected": "{{count}} LSP",
 
@@ -643,6 +603,7 @@ export const dict = {
   "common.dismiss": "Dismiss",
   "common.moreCountSuffix": " (+{{count}} more)",
   "common.requestFailed": "Request failed",
+  "common.copied": "Copied",
   "common.moreOptions": "More options",
   "common.learnMore": "Learn more",
   "common.rename": "Rename",

@@ -30,8 +30,6 @@ import { ModelV2 } from "@oc2-ai/core/model"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "../fixtures/recordings")
 
-const zenURL = (connection: string) => `https://console.oc2.ai/proxy/connections/${connection}/v1`
-
 const replayOpenAIOAuth = {
   type: "oauth",
   refresh: "fixture-refresh-token",
@@ -161,29 +159,6 @@ const RECORDED_SCENARIOS = [
       }),
   },
   {
-    id: "oc2-proxy",
-    name: "OC2 proxy",
-    providerID: ProviderV2.ID.oc2,
-    modelID: "gpt-5.2-codex",
-    cassette: "session/native-zen-tool-loop",
-    protocol: "openai-responses",
-    tags: ["oc2", "zen", "native", "tool-loop"],
-    canRecord: () => Boolean(process.env.OC2_RECORD_CONSOLE_TOKEN && process.env.OC2_RECORD_ZEN_ORG_ID),
-    config: (model) =>
-      providerConfig({
-        providerID: ProviderV2.ID.oc2,
-        name: "OpenCode Zen",
-        env: ["OC2_CONSOLE_TOKEN"],
-        npm: "@ai-sdk/openai-compatible",
-        api: zenURL(process.env.OC2_RECORD_ZEN_CONNECTION ?? "fixture"),
-        model,
-        options: {
-          apiKey: process.env.OC2_RECORD_CONSOLE_TOKEN ?? "fixture-console-token",
-          headers: { "x-org-id": process.env.OC2_RECORD_ZEN_ORG_ID ?? "fixture-org" },
-        },
-      }),
-  },
-  {
     id: "anthropic-api-key",
     name: "Anthropic API key",
     providerID: ProviderV2.ID.anthropic,
@@ -280,7 +255,7 @@ function authLayer(scenario: RecordedScenario) {
 
 async function loadFixture(providerID: string, modelID: string) {
   const data = await modelsFixture
-  const provider = data[providerID] ?? (providerID === ProviderV2.ID.oc2 ? data.opencode : undefined)
+  const provider = data[providerID]
   if (!provider) throw new Error(`Missing provider in fixture: ${providerID}`)
   const model = provider.models[modelID]
   if (!model) throw new Error(`Missing model in fixture: ${modelID}`)

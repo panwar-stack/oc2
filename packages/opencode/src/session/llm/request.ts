@@ -2,7 +2,6 @@ import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import type { Auth } from "@/auth"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
-import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import type { Agent } from "@/agent/agent"
 import type { MessageV2 } from "../message-v2"
@@ -10,7 +9,6 @@ import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@oc2-ai/core/installation/version"
-import { Naming } from "@oc2-ai/core/naming"
 import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
@@ -168,11 +166,6 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     })
   }
 
-  const isManagedProvider = input.model.providerID.startsWith("oc2")
-  const oc2ProjectID = isManagedProvider
-    ? (yield* InstanceState.context).project.id
-    : undefined
-
   return {
     system,
     messages,
@@ -180,19 +173,9 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     params,
     messageTransformOptions: options,
     headers: {
-      ...(isManagedProvider
-        ? {
-            ...(oc2ProjectID ? { [Naming.headers.project]: oc2ProjectID } : {}),
-            [Naming.headers.session]: input.sessionID,
-            [Naming.headers.request]: input.user.id,
-            [Naming.headers.client]: input.flags.client,
-            "User-Agent": USER_AGENT,
-          }
-        : {
-            "x-session-affinity": input.sessionID,
-            ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
-            "User-Agent": USER_AGENT,
-          }),
+      "x-session-affinity": input.sessionID,
+      ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
+      "User-Agent": USER_AGENT,
       ...input.model.headers,
       ...headers,
     },
