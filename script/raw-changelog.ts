@@ -38,7 +38,6 @@ const sections = {
   app: "Web",
   sdk: "SDK",
   plugin: "SDK",
-  "extensions/vscode": "Extensions",
   github: "Extensions",
 } as const
 
@@ -73,7 +72,7 @@ async function diff(base: string, head: string) {
 }
 
 function section(areas: Set<string>) {
-  const priority = ["core", "tui", "app", "sdk", "plugin", "extensions/vscode", "github"]
+  const priority = ["core", "tui", "app", "sdk", "plugin", "github"]
   for (const area of priority) {
     if (areas.has(area)) return sections[area as keyof typeof sections]
   }
@@ -119,7 +118,7 @@ async function commits(from: string, to: string) {
   }
 
   const log =
-    await $`git log ${base}..${head} --format=%H -- packages/opencode packages/sdk packages/plugin packages/app sdks/vscode packages/extensions github`.text()
+    await $`git log ${base}..${head} --format=%H -- packages/opencode packages/sdk packages/plugin packages/app packages/extensions github`.text()
 
   const list: Commit[] = []
   for (const hash of log.split("\n").filter(Boolean)) {
@@ -135,7 +134,7 @@ async function commits(from: string, to: string) {
       else if (file.startsWith("packages/opencode/")) areas.add("core")
       else if (file.startsWith("packages/app/")) areas.add("app")
       else if (file.startsWith("packages/sdk/") || file.startsWith("packages/plugin/")) areas.add("sdk")
-      else if (file.startsWith("sdks/vscode/") || file.startsWith("github/")) areas.add("extensions/vscode")
+      else if (file.startsWith("github/")) areas.add("github")
     }
 
     if (areas.size === 0) continue

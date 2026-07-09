@@ -66,7 +66,7 @@ const kinds = new Set(["temporary", "external", "historical-fixture"])
 const temporaryReasons = new Set(["compatibility", "migration", "test-fixture"])
 const externalReasons = new Set(["external-repo", "third-party"])
 const historicalFixtureReasons = new Set(["test-fixture"])
-const owners = new Set(["core", "desktop", "app", "docs", "release", "vscode"])
+const owners = new Set(["core", "desktop", "app", "docs", "release"])
 
 type AllowlistKind = "temporary" | "external" | "historical-fixture"
 type AllowlistReason = "compatibility" | "migration" | "external-repo" | "third-party" | "test-fixture"
@@ -77,7 +77,7 @@ type LegacyBrandAllowlistEntry = {
   count: number
   kind: AllowlistKind
   reason: AllowlistReason
-  owner: "core" | "desktop" | "app" | "docs" | "release" | "vscode"
+  owner: "core" | "desktop" | "app" | "docs" | "release"
   removalSlice?: string
   note?: string
 }

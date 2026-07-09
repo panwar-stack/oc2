@@ -101,16 +101,6 @@
       "removalSlice": "PR 8",
     },
     {
-      // Editor launch examples are developer docs and migrate with docs copy.
-      "path": ".vscode/**",
-      "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
-      "count": 1,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "docs",
-      "removalSlice": "PR 5",
-    },
-    {
       // Root package scripts still reference package paths, AWS SSO names, and the current external repository.
       "path": "package.json",
       "pattern": "OpenCode|opencode|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json",
@@ -139,26 +129,6 @@
       "reason": "migration",
       "owner": "docs",
       "removalSlice": "PR 3",
-    },
-    {
-      // VS Code Marketplace extension identity stays stable until an approved migration exists.
-      "path": "sdks/vscode/package.json",
-      "pattern": "\"name\": \"opencode\"",
-      "count": 1,
-      "kind": "temporary",
-      "reason": "compatibility",
-      "owner": "vscode",
-      "removalSlice": "PR 5",
-    },
-    {
-      // VS Code command IDs remain stable for existing keybindings and user muscle memory.
-      "path": "sdks/vscode/package.json",
-      "pattern": "opencode\\.(openTerminal|openNewTerminal|addFilepathToTerminal)",
-      "count": 7,
-      "kind": "temporary",
-      "reason": "compatibility",
-      "owner": "vscode",
-      "removalSlice": "PR 5",
     },
     {
       // PR 4 keeps deprecated env, config file, data directory, and header support.
@@ -409,36 +379,6 @@
       "reason": "migration",
       "owner": "docs",
       "removalSlice": "PR 8",
-    },
-    {
-      // VS Code command IDs remain stable for existing keybindings and extension callers.
-      "path": "sdks/vscode/src/**",
-      "pattern": "opencode\\.(openTerminal|openNewTerminal|addFilepathToTerminal)",
-      "count": 3,
-      "kind": "temporary",
-      "reason": "compatibility",
-      "owner": "vscode",
-      "removalSlice": "PR 5",
-    },
-    {
-      // Existing terminal sessions named opencode can still be focused after the rebrand.
-      "path": "sdks/vscode/src/**",
-      "pattern": "LEGACY_TERMINAL_NAME = \"opencode\"",
-      "count": 1,
-      "kind": "temporary",
-      "reason": "compatibility",
-      "owner": "vscode",
-      "removalSlice": "PR 5",
-    },
-    {
-      // Deprecated extension env names remain for CLI compatibility during the transition.
-      "path": "sdks/vscode/src/**",
-      "pattern": "_EXTENSION_OPENCODE_PORT|OPENCODE_CALLER",
-      "count": 0,
-      "kind": "temporary",
-      "reason": "compatibility",
-      "owner": "vscode",
-      "removalSlice": "PR 5",
     },
     {
       // Infrastructure stack names and env passthroughs are migrated only with release safety review.
