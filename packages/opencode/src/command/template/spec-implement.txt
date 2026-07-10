@@ -1,16 +1,17 @@
 # Implement Specification Pull Request
-Resolve and read $1 before creating any worktree.
-Use agent teams.
 
-Treat the checkout that invoked this command as read-only. Record its path and status, and record its committed HEAD as base_sha.
-Create one unique implementation branch and one dedicated git worktree outside the invoking checkout, rooted at base_sha. Perform every edit, generation step, test, review, and commit from the isolated worktree.
-Do not stash, reset, clean, switch, edit, merge into, or cherry-pick into the invoking checkout.
-Keep uncommitted and untracked files in the invoking checkout, including the requested specification, as read-only inputs. Do not copy them into the implementation diff unless the selected pull request explicitly requires them. If implementation depends on other uncommitted source changes, stop and report that dependency.
+Read and resolve $1 first. Use agent teams.
 
-If PR #$2 is provided, implement only that pull request from $1. Verify, test, review, and commit it.
-If PR #$2 is missing, implement `$1` one pull request at a time in the same isolated worktree. For each pull request: implement, verify, test, review, commit. Start the next pull request only after the commit so each committed slice becomes the base for the next. At the very end, audit the whole implementation to ensure nothing was missed.
+Record the invoking worktree path, status, and committed HEAD as base_sha. Treat it as read only except for integration.
 
-Do not implement unrelated pull requests, future phases, or adjacent improvements unless required for the current pull request.
-Before the final response, verify that the invoking checkout's status still matches the recorded status.
-On success or failure, preserve both checkouts and do not discard partial work automatically. Cleanup, merge, cherry-pick, or other integration requires a separate explicit request.
-Report the isolated worktree path, branch, base_sha, created commits, verification results, and remaining worktree status.
+Create one branch and one external worktree from base_sha. Perform all edits, tests, reviews, and commits there. Do not stash, reset, clean, switch, or edit the invoking worktree. Treat its uncommitted and untracked files as read only inputs. Stop if implementation depends on uncommitted source changes.
+
+When $2 is provided, implement only that pull request. Otherwise, implement $1 one pull request at a time. For each pull request, implement, verify, test, review, and commit before continuing.
+
+After each completed pull request, confirm the invoking worktree local changes still match the recorded state, then fast forward merge the implementation branch into it. If local changes block the merge, preserve them outside the invoking worktree, complete the merge, restore them exactly, and verify nothing was lost or overwritten.
+
+Do not implement unrelated work. After all pull requests, audit the full implementation.
+
+Before responding, verify the invoking worktree local changes remain intact. Preserve both worktrees on success or failure. Do not clean up automatically.
+
+Report the external worktree path, branch, base_sha, commits, merge results, verification results, and final status.
