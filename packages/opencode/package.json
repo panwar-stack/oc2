@@ -31,7 +31,6 @@
   },
   "devDependencies": {
     "@babel/core": "7.28.4",
-    "@octokit/webhooks-types": "7.6.1",
     "@oc2-ai/core": "workspace:*",
     "@oc2-ai/http-recorder": "workspace:*",
     "@oc2-ai/script": "workspace:*",
@@ -53,8 +52,6 @@
     "why-is-node-running": "3.2.2"
   },
   "dependencies": {
-    "@actions/core": "1.11.1",
-    "@actions/github": "6.0.1",
     "@agentclientprotocol/sdk": "0.21.0",
     "@ai-sdk/alibaba": "1.0.17",
     "@ai-sdk/amazon-bedrock": "4.0.112",
@@ -87,8 +84,6 @@
     "@oc2-ai/sdk": "workspace:*",
     "@oc2-ai/server": "workspace:*",
     "@oc2-ai/tui": "workspace:*",
-    "@octokit/graphql": "9.0.2",
-    "@octokit/rest": "catalog:",
     "@openauthjs/openauth": "catalog:",
     "@openrouter/ai-sdk-provider": "2.9.0",
     "@opentelemetry/api": "1.9.0",

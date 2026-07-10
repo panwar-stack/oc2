@@ -31,14 +31,13 @@ const team = [
     .then((x) => x.filter((x) => x && !x.startsWith("#")))),
   ...bot,
 ]
-const order = ["Core", "TUI", "Web", "SDK", "Extensions"] as const
+const order = ["Core", "TUI", "Web", "SDK"] as const
 const sections = {
   core: "Core",
   tui: "TUI",
   app: "Web",
   sdk: "SDK",
   plugin: "SDK",
-  github: "Extensions",
 } as const
 
 function ref(input: string) {
@@ -72,7 +71,7 @@ async function diff(base: string, head: string) {
 }
 
 function section(areas: Set<string>) {
-  const priority = ["core", "tui", "app", "sdk", "plugin", "github"]
+  const priority = ["core", "tui", "app", "sdk", "plugin"]
   for (const area of priority) {
     if (areas.has(area)) return sections[area as keyof typeof sections]
   }
@@ -118,7 +117,7 @@ async function commits(from: string, to: string) {
   }
 
   const log =
-    await $`git log ${base}..${head} --format=%H -- packages/opencode packages/sdk packages/plugin packages/app packages/extensions github`.text()
+    await $`git log ${base}..${head} --format=%H -- packages/opencode packages/sdk packages/plugin packages/app packages/extensions`.text()
 
   const list: Commit[] = []
   for (const hash of log.split("\n").filter(Boolean)) {
@@ -134,7 +133,6 @@ async function commits(from: string, to: string) {
       else if (file.startsWith("packages/opencode/")) areas.add("core")
       else if (file.startsWith("packages/app/")) areas.add("app")
       else if (file.startsWith("packages/sdk/") || file.startsWith("packages/plugin/")) areas.add("sdk")
-      else if (file.startsWith("github/")) areas.add("github")
     }
 
     if (areas.size === 0) continue

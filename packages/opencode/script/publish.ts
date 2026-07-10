@@ -24,8 +24,7 @@ async function published(name: string, version: string) {
 }
 
 async function publish(dir: string, name: string, version: string) {
-  // GitHub artifact downloads can drop the executable bit, and Docker uses the
-  // unpacked dist binaries directly rather than the published tarball.
+  // GitHub artifact downloads can drop the executable bit.
   if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(dir)
   if (await published(name, version)) {
     console.log(`already published ${name}@${version}`)
@@ -92,14 +91,7 @@ const tasks = Object.entries(binaries).map(async ([name]) => {
 await Promise.all(tasks)
 await publish("./dist/oc2-ai", "oc2-ai", version)
 
-const images = ["ghcr.io/panwar-stack/oc2"]
-const platforms = "linux/amd64,linux/arm64"
-const tags = images.flatMap((image) => [`${image}:${version}`, `${image}:${Script.channel}`])
-const tagFlags = tags.flatMap((t) => ["-t", t])
-
-// registries
 if (!Script.preview) {
-  await $`docker buildx build --platform ${platforms} ${tagFlags} --push .`
   // Calculate SHA values
   const arm64Sha = await $`sha256sum ./dist/oc2-linux-arm64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
   const x64Sha = await $`sha256sum ./dist/oc2-linux-x64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())

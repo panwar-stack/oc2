@@ -231,16 +231,6 @@
       "removalSlice": "PR 6",
     },
     {
-      // GitHub Action compatibility is migrated separately from core product copy.
-      "path": "github/**",
-      "pattern": "OpenCode|opencode|/opencode|OPENCODE_|opencode\\.ai",
-      "count": 9,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "release",
-      "removalSlice": "PR 3",
-    },
-    {
       // Installer compatibility preserves legacy binary/data paths until the release migration is complete.
       "path": "install",
       "pattern": "OpenCode|opencode|\\.opencode|opencode\\.ai",
@@ -298,26 +288,6 @@
       "kind": "temporary",
       "reason": "compatibility",
       "owner": "core",
-      "removalSlice": "PR 4",
-    },
-    {
-      // Slack integration copy and local variable names are migrated with package docs/public copy.
-      "path": "packages/slack/**",
-      "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 7,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "docs",
-      "removalSlice": "PR 3",
-    },
-    {
-      // Storybook addon IDs and fixtures migrate with UI package branding.
-      "path": "packages/storybook/**",
-      "pattern": "OpenCode|opencode|OPENCODE_|x-opencode-|\\.opencode|opencode\\.json|opencode\\.ai|api\\.opencode\\.ai|app\\.opencode\\.ai|docs\\.opencode\\.ai",
-      "count": 2,
-      "kind": "temporary",
-      "reason": "migration",
-      "owner": "app",
       "removalSlice": "PR 4",
     },
     {

@@ -1,13 +1,13 @@
 # Packages onboarding
 
-`packages/` is the main workspace area for OpenCode. It contains the core runtime, user-facing apps, cloud services, shared libraries, documentation, and build infrastructure.
+`packages/` is the main workspace area for OpenCode. It contains the core runtime, user-facing apps, cloud services, shared libraries, and build tooling.
 
 Use this guide as a first map when deciding where a feature, bug fix, or investigation belongs. For exact commands, package-specific rules, and tests, check the nearest `package.json`, `README.md`, or `AGENTS.md` before editing.
 
 ## How to read this directory
 
 - Core runtime packages implement Sessions, Agents, Tools, Providers, permissions, persistence, API routes, and SDK surfaces.
-- User-facing surfaces render OpenCode in terminals, browsers, Slack, and public docs sites.
+- User-facing surfaces render OpenCode in terminals and browsers.
 - Cloud and product services back hosted OpenCode products, sharing, sync, stats, billing, and support workflows.
 - Shared libraries and tooling support UI, Effect/SQLite integration, build scripts, tests, and CI images.
 - Some folders are assets or generated/local runtime artifacts, not normal source packages.
@@ -31,7 +31,6 @@ Use this guide as a first map when deciding where a feature, bug fix, or investi
 | `cli`     | `@oc2-ai/cli`     | Bun CLI package around an Effect command runtime. Wires daemon/service commands, serve/debug/migrate handlers, and TUI integration.                                                                              | You are changing this newer/alternate CLI command entrypoint, daemon commands, or command-runtime services.                          |
 | `app`     | `@oc2-ai/app`     | Solid/Vite browser UI for OpenCode sessions. Owns session pages, prompt input, terminal panel, file/session UI, settings, i18n, and shared app UI behavior.   | You are changing the web UI used by browser contexts.                                                                    |
 | `web`     | `@oc2-ai/web`     | Astro/Starlight public website and docs/marketing package for opencode.ai content, docs, pages, components, styles, middleware, and i18n.                                                              | You are changing the public website, documentation site content, marketing pages, or web presence.              |
-| `slack`   | `@oc2-ai/slack`   | Slack Bolt bot integration. Starts an OpenCode server, creates or reuses sessions per Slack thread, shares session URLs, forwards Slack messages as prompts, and posts text/tool updates back to Slack.          | You are changing Slack thread/session behavior, Slack event handling, or Slack response rendering.                                   |
 
 ## Cloud and product services
 
@@ -65,19 +64,16 @@ Use this guide as a first map when deciding where a feature, bug fix, or investi
 
 | Folder                  | Package                              | Responsibility                                                                                                                                                                                  | Touch this when                                                                                                                 |
 | ----------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `ui`                    | `@oc2-ai/ui`                    | Shared Solid component and design-system package. Includes components, styles, themes, context providers, hooks, icons, fonts/audio assets, markdown/diff/session rendering, and v2 components. | You are changing reusable UI primitives or design behavior used by app, desktop, console, enterprise, stats, TUI, or Storybook. |
-| `storybook`             | `@oc2-ai/storybook`             | Storybook workspace for developing and documenting shared UI components with Solid/Vite.                                                                                                        | You need an isolated visual development surface for `ui` components.                                                            |
+| `ui`                    | `@oc2-ai/ui`                    | Shared Solid component and design-system package. Includes components, styles, themes, context providers, hooks, icons, fonts/audio assets, markdown/diff/session rendering, and v2 components. | You are changing reusable UI primitives or design behavior used by app, desktop, console, enterprise, stats, or TUI. |
 | `http-recorder`         | `@oc2-ai/http-recorder`         | Test utility for recording and replaying Effect HTTP and WebSocket traffic as deterministic JSON cassettes with redaction and ordered matching.                                                 | You are adding deterministic provider/integration tests that need recorded HTTP or WebSocket traffic.                           |
 | `effect-drizzle-sqlite` | `@oc2-ai/effect-drizzle-sqlite` | Vendored generic Drizzle ORM adapter for Effect SQLite. Provides Effect-backed Drizzle database/session/migrator support and Effect-yieldable SQLite query builders.                            | You are changing the generic Drizzle/Effect/SQLite bridge. Keep OpenCode-specific logic out.                                    |
 | `effect-sqlite-node`    | `@oc2-ai/effect-sqlite-node`    | Node `node:sqlite` implementation of Effect `SqlClient`, including WAL/default options, serialized access, transactions, and extension loading.                                                 | You are changing Node SQLite client behavior used by database runtime paths.                                                    |
 | `script`                | `@oc2-ai/script`                     | Shared release/build helper. Computes Bun compatibility, release channel/version, preview/release flags, and team list from env, git, root package metadata, and `.github/TEAM_MEMBERS`.        | You are changing shared build/release metadata helpers used by scripts.                                                         |
-| `containers`            | None                                 | CI/container infrastructure for prebuilt Linux images used by GitHub Actions, including base, Bun/Node, Rust, Tauri Linux, and publish images.                                                  | You are changing CI image contents or the image build process.                                                                  |
 
 ## Docs, assets, and local artifacts
 
 | Folder     | Package                              | Responsibility                                                                                                                                                            | Touch this when                                                                                            |
 | ---------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `docs`     | Docs config name `@oc2-ai/docs` | Mintlify-style docs source focused on SDK docs and OpenAPI reference. Contains docs config, OpenAPI docs, quickstart/development pages, images, snippets, and navigation. | You are changing generated/reference docs or Mintlify docs content in this package.                        |
 | `identity` | None                                 | Static OpenCode brand identity assets, including SVG and PNG marks in default/light variants and multiple sizes.                                                          | You are updating logo or brand mark assets.                                                                |
 | `runtime`  | None                                 | Local/generated-looking runtime area currently containing cache/dependency artifacts rather than maintained source code.                                                  | Usually do not edit this directly; treat it as a local artifact unless a specific workflow says otherwise. |
 

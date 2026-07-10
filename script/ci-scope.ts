@@ -117,8 +117,7 @@ function packageForFile(file: string, packages: WorkspacePackage[]) {
 function isDocsOnly(file: string) {
   return (
     file.endsWith(".md") ||
-    file.startsWith("docs/") ||
-    file.startsWith("packages/docs/")
+    file.startsWith("docs/")
   )
 }
 
