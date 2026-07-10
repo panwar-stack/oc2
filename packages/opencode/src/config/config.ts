@@ -15,7 +15,7 @@ import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@oc2-ai/core/v1/config/console-state"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Duration, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EffectFlock } from "@oc2-ai/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -260,9 +260,31 @@ export const layer = Layer.effect(
     const readConfigFile = (filepath: string) => fs.readFileStringSafe(filepath).pipe(Effect.orDie)
 
     const writeAtomic = Effect.fnUntraced(function* (file: string, content: string) {
-      const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`)
+      const exists = yield* fs.exists(file)
+      const target = exists ? yield* fs.realPath(file) : file
+      const info = exists ? yield* fs.stat(target) : undefined
+      if (info && Option.getOrElse(info.nlink, () => 1) > 1)
+        return yield* Effect.fail(new Error(`refusing to replace config with multiple hard links: ${target}`))
+      if (exists) yield* fs.access(target, { writable: true })
+      const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`)
       yield* fs.writeWithDirs(temporary, content).pipe(
-        Effect.andThen(fs.rename(temporary, file)),
+        Effect.andThen(
+          info === undefined
+            ? Effect.void
+            : Effect.gen(function* () {
+                const temporaryInfo = yield* fs.stat(temporary)
+                const uid = Option.getOrUndefined(info.uid)
+                const gid = Option.getOrUndefined(info.gid)
+                if (
+                  uid !== undefined &&
+                  gid !== undefined &&
+                  (Option.getOrUndefined(temporaryInfo.uid) !== uid || Option.getOrUndefined(temporaryInfo.gid) !== gid)
+                )
+                  yield* fs.chown(temporary, uid, gid)
+                yield* fs.chmod(temporary, info.mode & 0o7777)
+              }),
+        ),
+        Effect.andThen(fs.rename(temporary, target)),
         Effect.catch((error) =>
           fs.remove(temporary, { force: true }).pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
         ),

@@ -107,6 +107,15 @@ const configLayer = (
 const layer = configLayer()
 
 const it = testEffect(layer)
+const unixIt = process.platform === "win32" ? it.live.skip : it.live
+const unixIdentity = (() => {
+  const uid = process.getuid?.()
+  const gid = process.getgid?.()
+  const supplementary = process.getgroups?.().find((candidate) => candidate !== gid)
+  if (uid === undefined || supplementary === undefined) return
+  return { uid, gid: supplementary }
+})()
+const supplementaryGroupIt = unixIdentity === undefined ? it.live.skip : unixIt
 const configIt = (options?: Parameters<typeof configLayer>[0]) => testEffect(configLayer(options))
 
 const schemaConfig = (config: object) => ({ $schema: Naming.configSchemaURL, ...config })
@@ -1203,9 +1212,97 @@ it.instance("persists an empty nested object when the source does not contain it
   }),
 )
 
-it.live("preserves the selected project source when an atomic write fails", () =>
+unixIt("preserves a restrictive mode when replacing the selected project source", () =>
   Effect.gen(function* () {
-    if (process.platform === "win32") return
+    const root = yield* tmpdirScoped({ git: true })
+    const file = path.join(root, "oc2.json")
+    yield* FSUtil.use.writeFileString(file, JSON.stringify({ username: "before" }))
+    yield* FSUtil.use.chmod(file, 0o600)
+
+    yield* withInstanceDir(root, Config.use.update({ username: "after" }))
+
+    expect((yield* FSUtil.use.stat(file)).mode & 0o777).toBe(0o600)
+    expect(yield* FSUtil.use.readJson(file)).toMatchObject({ username: "after" })
+  }),
+)
+
+supplementaryGroupIt("preserves uid, gid, and mode when replacing the selected project source", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped({ git: true })
+    const file = path.join(root, "oc2.json")
+    yield* FSUtil.use.writeFileString(file, JSON.stringify({ username: "before" }))
+    yield* FSUtil.use.chown(file, unixIdentity!.uid, unixIdentity!.gid)
+    yield* FSUtil.use.chmod(file, 0o640)
+
+    yield* withInstanceDir(root, Config.use.update({ username: "after" }))
+
+    const info = yield* FSUtil.use.stat(file)
+    expect(Option.getOrUndefined(info.uid)).toBe(unixIdentity!.uid)
+    expect(Option.getOrUndefined(info.gid)).toBe(unixIdentity!.gid)
+    expect(info.mode & 0o777).toBe(0o640)
+    expect(yield* FSUtil.use.readJson(file)).toMatchObject({ username: "after" })
+  }),
+)
+
+unixIt("rejects a read-only selected project source without changing it", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped({ git: true })
+    const file = path.join(root, "oc2.json")
+    const before = JSON.stringify({ username: "before" })
+    yield* FSUtil.use.writeFileString(file, before)
+    yield* FSUtil.use.chmod(file, 0o400)
+    yield* Effect.addFinalizer(() => FSUtil.use.chmod(file, 0o600).pipe(Effect.ignore))
+
+    const exit = yield* withInstanceDir(root, Config.use.update({ username: "after" })).pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(yield* FSUtil.use.readFileString(file)).toBe(before)
+    expect((yield* FSUtil.use.readDirectory(root)).some((name) => name.endsWith(".tmp"))).toBe(false)
+  }),
+)
+
+unixIt("replaces a selected project symlink target without replacing the link", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped({ git: true })
+    const target = path.join(root, "source", "config.json")
+    const file = path.join(root, "oc2.json")
+    const link = path.relative(path.dirname(file), target)
+    yield* FSUtil.use.writeWithDirs(target, JSON.stringify({ username: "before" }))
+    yield* Effect.promise(() => fs.symlink(link, file))
+
+    yield* withInstanceDir(root, Config.use.update({ username: "after" }))
+
+    expect((yield* Effect.promise(() => fs.lstat(file))).isSymbolicLink()).toBe(true)
+    expect(yield* Effect.promise(() => fs.readlink(file))).toBe(link)
+    expect(yield* FSUtil.use.readJson(target)).toMatchObject({ username: "after" })
+  }),
+)
+
+unixIt("rejects a hard-linked selected project source without changing link identity", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped({ git: true })
+    const file = path.join(root, "oc2.json")
+    const linked = path.join(root, "linked.json")
+    const before = JSON.stringify({ username: "before" })
+    yield* FSUtil.use.writeFileString(file, before)
+    yield* Effect.promise(() => fs.link(file, linked))
+    const identity = yield* Effect.promise(() => fs.stat(file))
+
+    const exit = yield* withInstanceDir(root, Config.use.update({ username: "after" })).pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(yield* FSUtil.use.readFileString(file)).toBe(before)
+    expect(yield* FSUtil.use.readFileString(linked)).toBe(before)
+    const current = yield* Effect.promise(() => Promise.all([fs.stat(file), fs.stat(linked)]))
+    expect(current[0].ino).toBe(identity.ino)
+    expect(current[1].ino).toBe(identity.ino)
+    expect(current[0].nlink).toBe(2)
+    expect((yield* FSUtil.use.readDirectory(root)).some((name) => name.endsWith(".tmp"))).toBe(false)
+  }),
+)
+
+unixIt("preserves the selected project source when an atomic write fails", () =>
+  Effect.gen(function* () {
     const root = yield* tmpdirScoped({ git: true })
     const file = path.join(root, "oc2.json")
     const before = JSON.stringify({ $schema: "original-schema", username: "before" })
