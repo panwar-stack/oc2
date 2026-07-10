@@ -18,7 +18,7 @@ const it = testEffect(
 )
 
 describe("CommandPlugin.Plugin", () => {
-  it.effect("registers built-in init and review commands", () =>
+  it.effect("registers only the built-in init command", () =>
     Effect.gen(function* () {
       const command = yield* CommandV2.Service
       yield* CommandPlugin.Plugin.effect.pipe(
@@ -34,11 +34,7 @@ describe("CommandPlugin.Plugin", () => {
         description: "guided AGENTS.md setup",
       })
       expect((yield* command.get("init"))?.template).toContain("`/repo`")
-      expect(yield* command.get("review")).toMatchObject({
-        name: "review",
-        description: "review changes [commit|branch|pr], defaults to uncommitted",
-        subtask: true,
-      })
+      expect(yield* command.get("review")).toBeUndefined()
     }),
   )
 })

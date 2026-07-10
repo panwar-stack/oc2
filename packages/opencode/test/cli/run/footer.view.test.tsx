@@ -704,10 +704,10 @@ test("direct footer keeps leader variant binding inactive when leader is disable
   }
 })
 
-test("direct footer submits slash autocomplete selections without dispatching shell completions", async () => {
+test("direct footer submits colon slash autocomplete selections without dispatching shell completions", async () => {
   const submits: RunPrompt[] = []
   const app = await renderFooter({
-    commands: [command({ name: "review", description: "Review code" })],
+    commands: [command({ name: "spec:planner", description: "Plan a spec" })],
     onSubmit(prompt) {
       submits.push(prompt)
       return true
@@ -716,19 +716,19 @@ test("direct footer submits slash autocomplete selections without dispatching sh
 
   try {
     await app.renderOnce()
-    "/rev".split("").forEach((key) => app.mockInput.pressKey(key))
+    "/spe".split("").forEach((key) => app.mockInput.pressKey(key))
     await app.renderOnce()
     app.mockInput.pressEnter()
     await app.renderOnce()
 
-    "/rev".split("").forEach((key) => app.mockInput.pressKey(key))
+    "/spe".split("").forEach((key) => app.mockInput.pressKey(key))
     await app.renderOnce()
     app.mockInput.pressKey("TAB")
     await app.renderOnce()
 
-    "/re branch".split("").forEach((key) => app.mockInput.pressKey(key))
+    "/spe branch".split("").forEach((key) => app.mockInput.pressKey(key))
     Array.from({ length: 7 }).forEach(() => app.mockInput.pressKey("ARROW_LEFT"))
-    app.mockInput.pressKey("v")
+    app.mockInput.pressKey("c")
     await app.renderOnce()
     app.mockInput.pressEnter()
     await app.renderOnce()
@@ -748,19 +748,19 @@ test("direct footer submits slash autocomplete selections without dispatching sh
     await app.renderOnce()
 
     app.mockInput.pressKey("!")
-    "/rev".split("").forEach((key) => app.mockInput.pressKey(key))
+    "/spe".split("").forEach((key) => app.mockInput.pressKey(key))
     await app.renderOnce()
     app.mockInput.pressEnter()
     await app.renderOnce()
 
     expect(submits).toEqual([
-      { text: "/review ", parts: [], command: { name: "review", arguments: "" } },
-      { text: "/review ", parts: [], command: { name: "review", arguments: "" } },
-      { text: "/review branch", parts: [], command: { name: "review", arguments: "branch" } },
+      { text: "/spec:planner ", parts: [], command: { name: "spec:planner", arguments: "" } },
+      { text: "/spec:planner ", parts: [], command: { name: "spec:planner", arguments: "" } },
+      { text: "/spec:planner branch", parts: [], command: { name: "spec:planner", arguments: "branch" } },
       { text: "/new ", parts: [] },
       { text: "/new ", parts: [] },
     ])
-    expect(app.captureCharFrame()).toContain("/review")
+    expect(app.captureCharFrame()).toContain("/spec:planner")
   } finally {
     app.cleanup()
   }

@@ -26,15 +26,15 @@ describe("ConfigCommandPlugin.Plugin", () => {
           yield* Effect.promise(async () => {
             await fs.mkdir(path.join(tmp.path, "commands", "nested"), { recursive: true })
             await fs.writeFile(
-              path.join(tmp.path, "commands", "review.md"),
+              path.join(tmp.path, "commands", "deploy.md"),
               `---
-description: File review
-agent: reviewer
+description: File deploy
+agent: deployer
 model: anthropic/claude
 variant: high
 subtask: true
 ---
-Review files`,
+Deploy files`,
             )
             await fs.writeFile(path.join(tmp.path, "commands", "nested", "docs.md"), "Write docs")
             await fs.writeFile(path.join(tmp.path, "commands", "empty.md"), "")
@@ -50,7 +50,7 @@ Review files`,
                   Effect.succeed([
                     new Config.Document({
                       type: "document",
-                      info: decode({ commands: { review: { template: "Inline review" } } }),
+                      info: decode({ commands: { deploy: { template: "Inline deploy" } } }),
                     }),
                     new Config.Directory({ type: "directory", path: AbsolutePath.make(tmp.path) }),
                   ]),
@@ -60,10 +60,10 @@ Review files`,
 
           expect(yield* command.list()).toEqual([
             new CommandV2.Info({
-              name: "review",
-              template: "Review files",
-              description: "File review",
-              agent: "reviewer",
+              name: "deploy",
+              template: "Deploy files",
+              description: "File deploy",
+              agent: "deployer",
               model: {
                 providerID: ProviderV2.ID.make("anthropic"),
                 id: ModelV2.ID.make("claude"),

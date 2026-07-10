@@ -2147,7 +2147,7 @@ unix(
 )
 
 it.instance(
-  "local_fusion command renders prompt outside json input",
+  "local:fusion command renders prompt outside json input",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
@@ -2156,7 +2156,7 @@ it.instance(
 
       const result = yield* prompt.command({
         sessionID: chat.id,
-        command: "local_fusion",
+        command: "local:fusion",
         arguments: "research-panel Review key=value behavior",
       })
 

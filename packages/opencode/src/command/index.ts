@@ -13,9 +13,7 @@ import PROMPT_IMPLEMENT_SPEC_PR from "./template/spec-implement.txt"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_LEARN from "./template/learn.txt"
 import PROMPT_LOCAL_FUSION from "./template/local-fusion.txt"
-import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_SPEC_PLANNER from "./template/spec-planner.txt"
-import PROMPT_TEAM_REPORT from "./template/team-report.txt"
 import PROMPT_USE_TEAM from "./template/use-team.txt"
 
 type State = {
@@ -60,14 +58,12 @@ export function hints(template: string) {
 
 export const Default = {
   CLARIFY: "clarify",
-  IMPLEMENT_SPEC_PR: "spec-implement",
+  IMPLEMENT_SPEC_PR: "spec:implement",
   INIT: "init",
   LEARN: "learn",
-  LOCAL_FUSION: "local_fusion",
-  REVIEW: "review",
+  LOCAL_FUSION: "local:fusion",
   SPAWN: "spawn",
-  SPEC_PLANNER: "spec-planner",
-  TEAM_REPORT: "team-report",
+  SPEC_PLANNER: "spec:planner",
   USE_TEAM: "use-team",
 } as const
 
@@ -111,16 +107,6 @@ export const layer = Layer.effect(
           return PROMPT_LEARN
         },
         hints: hints(PROMPT_LEARN),
-      }
-      commands[Default.REVIEW] = {
-        name: Default.REVIEW,
-        description: "review changes [commit|branch|pr], defaults to uncommitted",
-        source: "command",
-        get template() {
-          return PROMPT_REVIEW.replace("${path}", ctx.worktree)
-        },
-        subtask: true,
-        hints: hints(PROMPT_REVIEW),
       }
       commands[Default.LOCAL_FUSION] = {
         name: Default.LOCAL_FUSION,
@@ -179,16 +165,6 @@ export const layer = Layer.effect(
         },
         hints: hints(PROMPT_IMPLEMENT_SPEC_PR),
       }
-      commands[Default.TEAM_REPORT] = {
-        name: Default.TEAM_REPORT,
-        description: "Run the team_report tool for the active lead session.",
-        source: "command",
-        get template() {
-          return PROMPT_TEAM_REPORT
-        },
-        hints: hints(PROMPT_TEAM_REPORT),
-      }
-
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
         commands[name] = {
           name,
@@ -234,7 +210,7 @@ export const layer = Layer.effect(
       }
 
       for (const item of yield* skill.all()) {
-        if (commands[item.name]) continue
+        if (item.name === "spec-planner" || commands[item.name]) continue
         commands[item.name] = {
           name: item.name,
           description: item.description,

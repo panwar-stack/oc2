@@ -13,11 +13,11 @@ describe("CommandV2", () => {
       const command = yield* CommandV2.Service
       const transform = yield* command.transform()
       yield* transform((editor) => {
-        editor.update("review", (command) => {
+        editor.update("deploy", (command) => {
           command.template = "First"
-          command.description = "Review code"
+          command.description = "Deploy code"
         })
-        editor.update("review", (command) => {
+        editor.update("deploy", (command) => {
           command.template = "Second"
           command.model = {
             id: ModelV2.ID.make("claude"),
@@ -27,11 +27,11 @@ describe("CommandV2", () => {
         })
       })
 
-      expect(yield* command.get("review")).toEqual(
+      expect(yield* command.get("deploy")).toEqual(
         new CommandV2.Info({
-          name: "review",
+          name: "deploy",
           template: "Second",
-          description: "Review code",
+          description: "Deploy code",
           model: {
             id: ModelV2.ID.make("claude"),
             providerID: ProviderV2.ID.make("anthropic"),
@@ -41,9 +41,9 @@ describe("CommandV2", () => {
       )
       expect(yield* command.list()).toEqual([
         new CommandV2.Info({
-          name: "review",
+          name: "deploy",
           template: "Second",
-          description: "Review code",
+          description: "Deploy code",
           model: {
             id: ModelV2.ID.make("claude"),
             providerID: ProviderV2.ID.make("anthropic"),

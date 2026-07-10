@@ -8,17 +8,18 @@ import { testEffect } from "../lib/effect"
 const it = testEffect(Layer.mergeAll(Command.defaultLayer, CrossSpawnSpawner.defaultLayer))
 
 describe("command", () => {
-  it.live("includes internal spec planning commands", () =>
+  it.live("includes renamed commands and projected skills", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
           const command = yield* Command.Service
-          const specPlanner = yield* command.get("spec-planner")
-          if (!specPlanner) throw new Error("spec-planner command not found")
+          const specPlanner = yield* command.get("spec:planner")
+          if (!specPlanner) throw new Error("spec:planner command not found")
 
           expect(specPlanner.source).toBe("command")
           expect(specPlanner.description).toContain("concrete engineering specs")
           expect(yield* Effect.promise(() => Promise.resolve(specPlanner.template))).toContain("Requirements To Spec")
+          expect(yield* command.get("spec-planner")).toBeUndefined()
 
           const clarify = yield* command.get("clarify")
           if (!clarify) throw new Error("clarify command not found")
@@ -49,8 +50,8 @@ describe("command", () => {
           expect(yield* Effect.promise(() => Promise.resolve(spawn.template))).toContain("$ARGUMENTS")
           expect(yield* command.get("fast")).toBeUndefined()
 
-          const implementSpecPr = yield* command.get("spec-implement")
-          if (!implementSpecPr) throw new Error("spec-implement command not found")
+          const implementSpecPr = yield* command.get("spec:implement")
+          if (!implementSpecPr) throw new Error("spec:implement command not found")
 
           expect(implementSpecPr.source).toBe("command")
           expect(implementSpecPr.description).toBe(
@@ -60,6 +61,7 @@ describe("command", () => {
           expect(yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))).toContain(
             "If PR #$2 is provided, implement only that pull request from $1. commit.",
           )
+          expect(yield* command.get("spec-implement")).toBeUndefined()
 
           const learn = yield* command.get("learn")
           if (!learn) throw new Error("learn command not found")
@@ -73,13 +75,15 @@ describe("command", () => {
           const teamReport = yield* command.get("team-report")
           if (!teamReport) throw new Error("team-report command not found")
 
-          expect(teamReport.source).toBe("command")
-          expect(teamReport.description).toBe("Run the team_report tool for the active lead session.")
+          expect(teamReport.source).toBe("skill")
+          expect(teamReport.description).toBe(
+            "Generate a post-run agent-team effectiveness report and optional baseline comparisons.",
+          )
           expect(yield* Effect.promise(() => Promise.resolve(teamReport.template))).toContain("team_report")
           expect(yield* Effect.promise(() => Promise.resolve(teamReport.template))).toContain("compare_session_ids")
 
-          const localFusion = yield* command.get("local_fusion")
-          if (!localFusion) throw new Error("local_fusion command not found")
+          const localFusion = yield* command.get("local:fusion")
+          if (!localFusion) throw new Error("local:fusion command not found")
 
           expect(localFusion.source).toBe("command")
           expect(localFusion.description).toBe("Run a named local_fusion config with a prompt.")
@@ -87,6 +91,8 @@ describe("command", () => {
           expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("local_fusion")
           expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("`config`: `$1`")
           expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("`prompt`: `$2`")
+          expect(yield* command.get("local_fusion")).toBeUndefined()
+          expect(yield* command.get("review")).toBeUndefined()
         }),
       { git: true },
     ),
