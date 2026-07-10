@@ -1,6 +1,6 @@
 # Contributing To OC2
 
-This repository is a local-first coding agent harness. Contributions should preserve the local CLI, TUI, browser app, server, SDK, plugin, and LLM workflows without introducing a dependency on a hosted service.
+This repository contains OC2, a minimal coding-agent harness. Contributions should preserve its CLI, TUI, browser app, server, SDK, plugin, and LLM workflows while avoiding new or expanded dependencies on OC2-hosted services.
 
 Good contribution targets include bug fixes, provider support, LSP and formatter support, terminal or app usability, model/runtime correctness, platform-specific fixes, tests, and documentation.
 

@@ -2,8 +2,29 @@
 import path from "path"
 
 const root = path.resolve(import.meta.dir, "..")
-const files = ["README.md", "Why.md", "packages/app/README.md", "package.json", "packages/app/package.json"]
+const files = [
+  "README.md",
+  "Why.md",
+  "CONTRIBUTING.md",
+  "SECURITY.md",
+  "packages/onboarding.md",
+  "packages/app/README.md",
+  "package.json",
+  "packages/app/package.json",
+]
 const prohibited = ["OC2 Local Template", "AI coding agent template", "local-first template"]
+const pathProhibited: Record<string, string[]> = {
+  "CONTRIBUTING.md": ["local-first coding agent harness", "without introducing a dependency on a hosted service"],
+  "SECURITY.md": [
+    "OpenCode is an AI-powered coding assistant",
+    "OpenCode does **not** sandbox the agent",
+    "run OpenCode inside a Docker container or VM",
+  ],
+  "packages/onboarding.md": [
+    "local-first coding agent harness",
+    "Avoid adding hosted fallbacks or external service dependencies",
+  ],
+}
 const matches: { file: string; line: number; phrase: string }[] = []
 
 for (const file of files) {
@@ -12,7 +33,7 @@ for (const file of files) {
 
   const text = await source.text()
   const normalized = text.toLowerCase()
-  for (const phrase of prohibited) {
+  for (const phrase of [...prohibited, ...(pathProhibited[file] ?? [])]) {
     const target = phrase.toLowerCase()
     let offset = 0
     while (offset < normalized.length) {

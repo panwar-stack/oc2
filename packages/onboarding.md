@@ -1,6 +1,6 @@
 # Packages Onboarding
 
-`packages/` contains the local OC2 product, its user interfaces, public extension surfaces, shared libraries, and build/test helpers. Hosted websites, account services, sharing services, deployment projects, and social integrations are intentionally excluded so OC2 remains a local-first coding agent harness.
+`packages/` contains OC2's minimal coding-agent harness, its user interfaces, public extension surfaces, shared libraries, and build/test helpers. Most hosted websites, account services, sharing services, deployment projects, and social integrations are intentionally excluded; the current browser asset fallback is documented below.
 
 Use this guide to find the package that owns a change. Before editing, inspect that package's `package.json`, source, tests, and nearest `AGENTS.md`. Package scripts are the source of truth for commands.
 
@@ -24,7 +24,9 @@ Use this guide to find the package that owns a change. Before editing, inspect t
 | `app`  | `@oc2-ai/app` | Solid/Vite browser interface for local sessions, prompts, terminals, files, settings, and server selection.                                    | Changing browser UX or the local app's interaction with the local backend.                         |
 | `ui`   | `@oc2-ai/ui`  | Shared Solid components, themes, styles, icons, rendering helpers, fonts, and audio used by the app and TUI.                                   | Changing reusable visual primitives, shared renderers, theming, or assets.                         |
 
-For browser work, run `bun dev serve --port 4096` from the root and `bun run --cwd packages/app dev -- --port 4444` in another terminal. The app targets the local server by default.
+`oc2 web` and `bun dev web` use the server's browser route. It serves embedded browser assets locally when the generated asset bundle is available. If the bundle is unavailable, or `OC2_DISABLE_EMBEDDED_WEB_UI=true`, the server proxies browser asset requests to `app.oc2.ai`. That fallback requires network access and forwards most incoming request headers, including authorization headers and cookies.
+
+For fully local browser-interface development, run `bun dev serve --port 4096` from the root and `bun run --cwd packages/app dev -- --port 4444` in another terminal. Vite serves the browser assets locally, and the app targets the local server by default.
 
 ## SDK And Extensions
 
@@ -96,4 +98,4 @@ The root `test` script intentionally rejects root-level test runs.
 5. Regenerate the SDK when public API shapes change.
 6. Test the real package boundary with minimal mocking.
 
-Avoid adding hosted fallbacks or external service dependencies. Local UI and command modes should work against the local runtime and server; external network access should be limited to user-configured model providers or integrations.
+Do not add or expand hosted fallbacks or external service dependencies. The existing browser asset proxy described above is current compatibility behavior, not a precedent for new owner-service dependencies. Other external network access should be limited to user-configured model providers or integrations.
