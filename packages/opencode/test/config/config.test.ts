@@ -25,6 +25,7 @@ import {
   withTestInstance,
   provideInstanceEffect,
   testInstanceStoreLayer,
+  disposeAllInstancesEffect,
 } from "../fixture/fixture"
 import { InstanceRuntime } from "@/project/instance-runtime"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
@@ -599,16 +600,12 @@ test("memory config is enabled by default", () => {
 it.instance("updates config and preserves empty shell sentinel", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
-    yield* writeConfigEffect(
-      test.directory,
-      { $schema: "https://opencode.ai/config.json", shell: "bash" },
-      "config.json",
-    )
+    yield* writeConfigEffect(test.directory, { $schema: "https://opencode.ai/config.json", shell: "bash" }, "oc2.json")
 
     yield* Config.Service.use((svc) => svc.update(ConfigParse.schema(ConfigV1.Info, { shell: "" }, "test:config")))
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
-    expect(writtenConfig).toMatchObject({ shell: "" })
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "oc2.json"))
+    expect(writtenConfig).toMatchObject({ $schema: "https://opencode.ai/config.json", shell: "" })
   }),
 )
 
@@ -636,6 +633,65 @@ it.effect("updates global config and omits empty shell key in jsonc", () =>
       expect(parsed.model).toBe("test/model")
     }),
   ),
+)
+
+const globalUpdateCases = [
+  { name: "JSON only", sources: ["oc2.json"], target: "oc2.json" },
+  { name: "JSONC only", sources: ["oc2.jsonc"], target: "oc2.jsonc" },
+  { name: "JSON and JSONC", sources: ["oc2.json", "oc2.jsonc"], target: "oc2.jsonc" },
+  { name: "no existing file", sources: [], target: "oc2.jsonc" },
+] as const
+
+for (const updateCase of globalUpdateCases) {
+  it.effect(`selects the canonical global update target: ${updateCase.name}`, () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const before = new Map<string, string>()
+      for (const name of updateCase.sources) {
+        const file = path.join(dir, name)
+        const content = name.endsWith(".jsonc")
+          ? `{\n  // keep ${name}\n  "$schema": "source:${name}",\n  "model": "before/model"\n}`
+          : JSON.stringify({ $schema: `source:${name}`, model: "before/model" })
+        yield* FSUtil.use.writeFileString(file, content)
+        before.set(file, content)
+      }
+
+      const result = yield* withGlobalConfigDir(
+        dir,
+        Config.use.updateGlobal({ $schema: "request-schema", username: "patched-user" }),
+      )
+
+      expect(result.changed).toBe(true)
+      const target = path.join(dir, updateCase.target)
+      const written = yield* FSUtil.use.readFileString(target)
+      const parsed = ConfigParse.jsonc(written, target) as Record<string, unknown>
+      expect(parsed).toMatchObject({ username: "patched-user" })
+      expect(parsed.model).toBe(updateCase.sources.length ? "before/model" : undefined)
+      expect(parsed.$schema).toBe(updateCase.sources.length ? `source:${updateCase.target}` : undefined)
+      if (target.endsWith(".jsonc") && updateCase.sources.length) {
+        expect(written).toContain(`// keep ${updateCase.target}`)
+      }
+      if (target.endsWith(".json")) expect(written).toBe(JSON.stringify(parsed, null, 2))
+      for (const [file, content] of before) {
+        if (file === target) continue
+        expect(yield* FSUtil.use.readFileString(file)).toBe(content)
+      }
+    }),
+  )
+}
+
+it.effect("validates a global update before replacing the source", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    const file = path.join(dir, "oc2.json")
+    const before = JSON.stringify({ invalid_field: true })
+    yield* FSUtil.use.writeFileString(file, before)
+
+    const exit = yield* withGlobalConfigDir(dir, Config.use.updateGlobal({ username: "patched" })).pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(yield* FSUtil.use.readFileString(file)).toBe(before)
+  }),
 )
 
 it.instance(
@@ -1062,8 +1118,106 @@ it.instance("updates config and writes to file", () =>
       svc.update(ConfigParse.schema(ConfigV1.Info, { model: "updated/model" }, "test:config")),
     )
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "oc2.json"))
     expect(writtenConfig).toMatchObject({ model: "updated/model" })
+    expect(writtenConfig).not.toHaveProperty("$schema")
+    expect(yield* FSUtil.use.existsSafe(path.join(test.directory, "config.json"))).toBe(false)
+  }),
+)
+
+const projectUpdateCases = [
+  {
+    name: "JSON only",
+    sources: ["nested/oc2.json"],
+    target: "nested/oc2.json",
+  },
+  {
+    name: "JSONC only",
+    sources: ["nested/oc2.jsonc"],
+    target: "nested/oc2.jsonc",
+  },
+  {
+    name: "JSON and JSONC",
+    sources: ["nested/oc2.json", "nested/oc2.jsonc"],
+    target: "nested/oc2.jsonc",
+  },
+  {
+    name: "root and nested direct files",
+    sources: ["oc2.jsonc", "nested/oc2.json", "nested/oc2.jsonc"],
+    target: "nested/oc2.jsonc",
+  },
+  {
+    name: "direct and conflicting project .oc2 files",
+    sources: ["nested/oc2.jsonc", "nested/.oc2/oc2.jsonc", ".oc2/oc2.json", ".oc2/oc2.jsonc"],
+    target: ".oc2/oc2.jsonc",
+  },
+  {
+    name: "no existing file",
+    sources: [],
+    target: "nested/oc2.json",
+  },
+] as const
+
+for (const updateCase of projectUpdateCases) {
+  it.effect(`selects the canonical project update target: ${updateCase.name}`, () =>
+    Effect.gen(function* () {
+      const root = yield* tmpdirScoped({ git: true })
+      const routed = path.join(root, "nested")
+      yield* FSUtil.use.ensureDir(routed)
+      const before = new Map<string, string>()
+      for (const relative of updateCase.sources) {
+        const file = path.join(root, relative)
+        const content = file.endsWith(".jsonc")
+          ? `{\n  // keep ${relative}\n  "$schema": "source:${relative}",\n  "model": "before/model"\n}`
+          : JSON.stringify({ $schema: `source:${relative}`, model: "before/model" })
+        yield* FSUtil.use.writeWithDirs(file, content)
+        before.set(file, content)
+      }
+
+      yield* withInstanceDir(routed, Config.use.update({ $schema: "request-schema", username: "patched-user" }))
+
+      const target = path.join(root, updateCase.target)
+      const written = yield* FSUtil.use.readFileString(target)
+      const parsed = ConfigParse.jsonc(written, target) as Record<string, unknown>
+      expect(parsed.username).toBe("patched-user")
+      expect(parsed.model).toBe(updateCase.sources.length ? "before/model" : undefined)
+      expect(parsed.$schema).toBe(updateCase.sources.length ? `source:${updateCase.target}` : undefined)
+      if (target.endsWith(".jsonc")) expect(written).toContain(`// keep ${updateCase.target}`)
+      else expect(written).toBe(JSON.stringify(parsed, null, 2))
+
+      for (const [file, content] of before) {
+        if (file === target) continue
+        expect(yield* FSUtil.use.readFileString(file)).toBe(content)
+      }
+      expect(yield* FSUtil.use.existsSafe(path.join(routed, "config.json"))).toBe(false)
+    }),
+  )
+}
+
+it.instance("persists an empty nested object when the source does not contain it", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* Config.use.update({ permission: {} })
+
+    expect(yield* FSUtil.use.readJson(path.join(test.directory, "oc2.json"))).toEqual({ permission: {} })
+  }),
+)
+
+it.live("preserves the selected project source when an atomic write fails", () =>
+  Effect.gen(function* () {
+    if (process.platform === "win32") return
+    const root = yield* tmpdirScoped({ git: true })
+    const file = path.join(root, "oc2.json")
+    const before = JSON.stringify({ $schema: "original-schema", username: "before" })
+    yield* FSUtil.use.writeFileString(file, before)
+    yield* FSUtil.use.chmod(root, 0o555)
+    yield* Effect.addFinalizer(() => FSUtil.use.chmod(root, 0o755).pipe(Effect.ignore))
+
+    const exit = yield* withInstanceDir(root, Config.use.update({ username: "after" })).pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(yield* FSUtil.use.readFileString(file)).toBe(before)
+    expect((yield* FSUtil.use.readDirectory(root)).some((name) => name.endsWith(".tmp"))).toBe(false)
   }),
 )
 
@@ -1632,6 +1786,91 @@ it.instance("local .oc2 config can override MCP from project config", () =>
 
     const config = yield* Config.use.get()
     expect(config.mcp?.docs?.enabled).toBe(true)
+  }),
+)
+
+const precedenceWellKnown = wellKnown({ config: { username: "well-known" } })
+
+precedenceWellKnown.it.live("keeps every opencode config source tier in precedence order", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped({ git: true })
+    const global = yield* tmpdirScoped()
+    const home = yield* tmpdirScoped()
+    const configDir = yield* tmpdirScoped()
+    const routed = path.join(root, "nested")
+    const custom = path.join(root, "custom.json")
+    const direct = path.join(routed, "oc2.json")
+    const projectDir = path.join(routed, ".oc2", "oc2.json")
+    const homeDir = path.join(home, ".oc2", "oc2.json")
+    const configDirFile = path.join(configDir, "oc2.json")
+    const managed = path.join(managedConfigDir, "oc2.json")
+    yield* Effect.all(
+      [
+        writeConfigEffect(global, { username: "global" }),
+        FSUtil.use.writeWithDirs(custom, JSON.stringify({ username: "OC2_CONFIG" })),
+        FSUtil.use.writeWithDirs(direct, JSON.stringify({ username: "direct-project" })),
+        FSUtil.use.writeWithDirs(projectDir, JSON.stringify({ username: "project-directory" })),
+        FSUtil.use.writeWithDirs(homeDir, JSON.stringify({ username: "home-directory" })),
+        FSUtil.use.writeWithDirs(configDirFile, JSON.stringify({ username: "OC2_CONFIG_DIR" })),
+        FSUtil.use.writeWithDirs(managed, JSON.stringify({ username: "managed" })),
+      ],
+      { concurrency: "unbounded" },
+    )
+
+    const previousConfig = Global.Path.config
+    ;(Global.Path as { config: string }).config = global
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        ;(Global.Path as { config: string }).config = previousConfig
+      }),
+    )
+
+    let preferences = true
+    const readPreferences = spyOn(ConfigManaged, "readManagedPreferences").mockImplementation(async () =>
+      preferences
+        ? { source: "mobileconfig:test", text: JSON.stringify({ username: "managed-preferences" }) }
+        : undefined,
+    )
+    yield* Effect.addFinalizer(() => Effect.sync(() => readPreferences.mockRestore()))
+
+    const current = () =>
+      withInstanceDir(
+        routed,
+        Config.use.get().pipe(
+          Effect.map((config) => config.username),
+          Effect.ensuring(disposeAllInstancesEffect),
+        ),
+      )
+
+    yield* withProcessEnvs(
+      {
+        OC2_CONFIG: custom,
+        OC2_CONFIG_DIR: configDir,
+        OC2_CONFIG_CONTENT: JSON.stringify({ username: "OC2_CONFIG_CONTENT" }),
+        OC2_TEST_HOME: home,
+      },
+      Effect.gen(function* () {
+        expect(yield* current()).toBe("managed-preferences")
+        preferences = false
+        expect(yield* current()).toBe("managed")
+        yield* FSUtil.use.remove(managed)
+        expect(yield* current()).toBe("OC2_CONFIG_CONTENT")
+        delete process.env.OC2_CONFIG_CONTENT
+        expect(yield* current()).toBe("OC2_CONFIG_DIR")
+        yield* FSUtil.use.remove(configDirFile)
+        expect(yield* current()).toBe("home-directory")
+        yield* FSUtil.use.remove(homeDir)
+        expect(yield* current()).toBe("project-directory")
+        yield* FSUtil.use.remove(projectDir)
+        expect(yield* current()).toBe("direct-project")
+        yield* FSUtil.use.remove(direct)
+        expect(yield* current()).toBe("OC2_CONFIG")
+        yield* FSUtil.use.remove(custom)
+        expect(yield* current()).toBe("global")
+        yield* FSUtil.use.remove(path.join(global, "oc2.json"))
+        expect(yield* current()).toBe("well-known")
+      }),
+    )
   }),
 )
 

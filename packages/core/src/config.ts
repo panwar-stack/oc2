@@ -176,7 +176,7 @@ export const layer = Layer.effect(
       ? []
       : yield* fs
           .up({
-            targets: [".oc2", ".oc2", ...names.toReversed()],
+            targets: [".oc2", ...names.toReversed()],
             start: location.directory,
             stop: location.project.directory,
           })

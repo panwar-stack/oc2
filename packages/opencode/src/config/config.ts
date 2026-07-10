@@ -8,7 +8,7 @@ import { Global } from "@oc2-ai/core/global"
 import fsNode from "fs/promises"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { Auth } from "../auth"
-import { applyEdits, modify } from "jsonc-parser"
+import { applyEdits, findNodeAtLocation, modify, parseTree } from "jsonc-parser"
 import { InstallationLocal, InstallationVersion } from "@oc2-ai/core/installation/version"
 import { existsSync } from "fs"
 import { isRecord } from "@/util/record"
@@ -34,6 +34,7 @@ import { InvalidError } from "@oc2-ai/core/v1/config/error"
 import { Npm } from "@oc2-ai/core/npm"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Naming } from "@oc2-ai/core/naming"
+import { randomUUID } from "crypto"
 
 const log = Log.create({ service: "config" })
 
@@ -218,7 +219,12 @@ function globalConfigFile() {
 }
 
 function patchJsonc(input: string, patch: unknown, path: string[] = []): string {
-  if (!isRecord(patch)) {
+  const emptyObject = isRecord(patch) && Object.keys(patch).length === 0
+  if (emptyObject) {
+    const tree = parseTree(input)
+    if (tree && findNodeAtLocation(tree, path)?.type === "object") return input
+  }
+  if (!isRecord(patch) || emptyObject) {
     const edits = modify(input, path, patch, {
       formattingOptions: {
         insertSpaces: true,
@@ -232,7 +238,7 @@ function patchJsonc(input: string, patch: unknown, path: string[] = []): string 
 }
 
 function writable(info: Info) {
-  const { plugin_origins: _plugin_origins, ...next } = info
+  const { $schema: _schema, plugin_origins: _plugin_origins, ...next } = info
   return next
 }
 
@@ -252,6 +258,16 @@ export const layer = Layer.effect(
     const http = yield* HttpClient.HttpClient
 
     const readConfigFile = (filepath: string) => fs.readFileStringSafe(filepath).pipe(Effect.orDie)
+
+    const writeAtomic = Effect.fnUntraced(function* (file: string, content: string) {
+      const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`)
+      yield* fs.writeWithDirs(temporary, content).pipe(
+        Effect.andThen(fs.rename(temporary, file)),
+        Effect.catch((error) =>
+          fs.remove(temporary, { force: true }).pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
+        ),
+      )
+    })
 
     const fetchRemoteJson = Effect.fnUntraced(function* <S extends Schema.Top>(
       url: string,
@@ -302,6 +318,15 @@ export const layer = Layer.effect(
       const text = yield* readConfigFile(filepath)
       if (!text) return {} as Info
       return yield* loadConfig(text, { path: filepath }, env)
+    })
+
+    const validateWrite = Effect.fnUntraced(function* (text: string, file: string) {
+      const auth = yield* authSvc.all().pipe(Effect.orDie)
+      const env: Record<string, string> = {}
+      for (const value of Object.values(auth)) {
+        if (value.type === "wellknown") env[value.key] = value.token
+      }
+      return yield* loadConfig(text, { dir: path.dirname(file), source: file }, env)
     })
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
@@ -463,17 +488,16 @@ export const layer = Layer.effect(
           log.debug("loaded custom config", { path: Flag.OC2_CONFIG })
         }
 
-        if (!Flag.OC2_DISABLE_PROJECT_CONFIG) {
-          for (const file of yield* ConfigPaths.files(Naming.appSlug, ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
-            yield* merge(file, yield* loadFile(file, authEnv), "local")
-          }
+        const plan = yield* ConfigPaths.plan(ctx.directory, ctx.worktree).pipe(Effect.orDie)
+        for (const file of plan.direct) {
+          yield* merge(file, yield* loadFile(file, authEnv), "local")
         }
 
         result.agent = result.agent || {}
         result.mode = result.mode || {}
         result.plugin = result.plugin || []
 
-        const directories = yield* ConfigPaths.directories(ctx.directory, ctx.worktree)
+        const directories = plan.directories
 
         if (Flag.OC2_CONFIG_DIR) {
           log.debug("loading config from OC2_CONFIG_DIR", { path: Flag.OC2_CONFIG_DIR })
@@ -641,12 +665,26 @@ export const layer = Layer.effect(
     })
 
     const update = Effect.fn("Config.update")(function* (config: Info) {
-      const dir = yield* InstanceState.directory
-      const file = path.join(dir, "config.json")
-      const existing = yield* loadFile(file)
-      yield* fs
-        .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
-        .pipe(Effect.orDie)
+      const ctx = yield* InstanceState.context
+      const plan = yield* ConfigPaths.plan(ctx.directory, ctx.worktree).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+        Effect.orDie,
+      )
+      let file = path.join(ctx.directory, Naming.configFiles[0])
+      for (const source of plan.project) {
+        if (yield* fs.existsSafe(source)) file = source
+      }
+      const before = (yield* readConfigFile(file)) ?? "{}"
+      const patch = writable(config)
+      const updated = patchJsonc(before, patch)
+      if (updated === before) return
+
+      const parsed = ConfigParse.jsonc(before, file)
+      if (!isRecord(parsed))
+        throw new InvalidError({ path: file, issues: [{ path: [], message: "Expected an object" }] })
+      const next = file.endsWith(".jsonc") ? updated : JSON.stringify(mergeDeep(parsed, patch), null, 2)
+      yield* validateWrite(next, file)
+      yield* writeAtomic(file, next).pipe(Effect.orDie)
     })
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
@@ -661,17 +699,20 @@ export const layer = Layer.effect(
       let next: Info
       let changed: boolean
       if (!file.endsWith(".jsonc")) {
-        const existing = ConfigParse.schema(InfoSchema, ConfigParse.jsonc(before, file), file)
-        const merged = mergeDeep(writable(existing), patch)
+        const existing = ConfigParse.jsonc(before, file)
+        if (!isRecord(existing)) {
+          throw new InvalidError({ path: file, issues: [{ path: [], message: "Expected an object" }] })
+        }
+        const merged = mergeDeep(existing, patch)
         const serialized = JSON.stringify(merged, null, 2)
-        changed = serialized !== before
-        if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
-        next = merged
+        changed = patchJsonc(before, patch) !== before
+        next = yield* validateWrite(serialized, file)
+        if (changed) yield* writeAtomic(file, serialized).pipe(Effect.orDie)
       } else {
         const updated = patchJsonc(before, patch)
-        next = ConfigParse.schema(InfoSchema, ConfigParse.jsonc(updated, file), file)
+        next = yield* validateWrite(updated, file)
         changed = updated !== before
-        if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        if (changed) yield* writeAtomic(file, updated).pipe(Effect.orDie)
       }
 
       if (changed) yield* invalidate()

@@ -191,12 +191,12 @@ describe("Config", () => {
             const config = yield* Config.Service
             const documents = (yield* config.entries()).filter((entry) => entry.type === "document")
 
-            expect(documents).toHaveLength(3)
-            expect(documents.map((document) => document.type)).toEqual(["document", "document", "document"])
-            expect(documents.map((document) => document.info.$schema)).toEqual(["base", "middle", "last"])
+            expect(documents).toHaveLength(2)
+            expect(documents.map((document) => document.type)).toEqual(["document", "document"])
+            expect(documents.map((document) => document.info.$schema)).toEqual(["middle", "last"])
             expect(documents[0]).toBeInstanceOf(Config.Document)
-            expect(documents[0]?.path).toBe(path.join(tmp.path, "config.json"))
-            expect(documents[2]?.info.providers?.last).toBeInstanceOf(ConfigProvider.Info)
+            expect(documents[0]?.path).toBe(path.join(tmp.path, "oc2.json"))
+            expect(documents[1]?.info.providers?.last).toBeInstanceOf(ConfigProvider.Info)
 
             yield* Effect.promise(() =>
               fs.writeFile(path.join(tmp.path, "oc2.jsonc"), JSON.stringify({ $schema: "changed" })),
@@ -205,7 +205,7 @@ describe("Config", () => {
               (yield* config.entries())
                 .filter((entry) => entry.type === "document")
                 .map((document) => document.info.$schema),
-            ).toEqual(["base", "middle", "last"])
+            ).toEqual(["middle", "last"])
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
       ),
@@ -601,9 +601,9 @@ describe("Config", () => {
         Effect.gen(function* () {
           yield* Effect.promise(() =>
             Promise.all([
-              fs.writeFile(path.join(tmp.path, "config.json"), JSON.stringify({ $schema: "base" })),
-              fs.writeFile(path.join(tmp.path, "oc2.json"), "{ invalid"),
-              fs.writeFile(path.join(tmp.path, "oc2.jsonc"), JSON.stringify({ providers: { invalid: true } })),
+              fs.writeFile(path.join(tmp.path, "config.json"), JSON.stringify({ $schema: "legacy" })),
+              fs.writeFile(path.join(tmp.path, "oc2.json"), JSON.stringify({ $schema: "base" })),
+              fs.writeFile(path.join(tmp.path, "oc2.jsonc"), "{ invalid"),
             ]),
           )
           return yield* Effect.gen(function* () {
@@ -672,7 +672,7 @@ describe("Config", () => {
               fs.writeFile(path.join(global, "oc2.json"), JSON.stringify({ $schema: "global" })),
               fs.writeFile(path.join(root, "oc2.json"), JSON.stringify({ $schema: "root" })),
               fs.writeFile(path.join(parent, "oc2.jsonc"), JSON.stringify({ $schema: "parent" })),
-              fs.writeFile(path.join(directory, "config.json"), JSON.stringify({ $schema: "directory" })),
+              fs.writeFile(path.join(directory, "oc2.json"), JSON.stringify({ $schema: "directory" })),
               fs.writeFile(path.join(root, ".oc2", "oc2.json"), JSON.stringify({ $schema: "root-dot" })),
               fs.writeFile(path.join(directory, ".oc2", "oc2.jsonc"), JSON.stringify({ $schema: "directory-dot" })),
             ])

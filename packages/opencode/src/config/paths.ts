@@ -21,24 +21,43 @@ export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
   })).toReversed()
 })
 
-export const directories = Effect.fn("ConfigPaths.directories")(function* (directory: string, worktree?: string) {
+const directoryPlan = Effect.fnUntraced(function* (directory: string, worktree?: string) {
   const afs = yield* FSUtil.Service
-  return unique([
-    Global.Path.config,
-    ...(!Flag.OC2_DISABLE_PROJECT_CONFIG
-      ? yield* afs.up({
-          targets: [...Naming.configDirs].toReversed(),
-          start: directory,
-          stop: worktree,
-        })
-      : []),
-    ...(yield* afs.up({
-      targets: [...Naming.configDirs].toReversed(),
-      start: Global.Path.home,
-      stop: Global.Path.home,
-    })),
-    ...(Flag.OC2_CONFIG_DIR ? [Flag.OC2_CONFIG_DIR] : []),
-  ])
+  const project = !Flag.OC2_DISABLE_PROJECT_CONFIG
+    ? yield* afs.up({
+        targets: [...Naming.configDirs].toReversed(),
+        start: directory,
+        stop: worktree,
+      })
+    : []
+  return {
+    project,
+    all: unique([
+      Global.Path.config,
+      ...project,
+      ...(yield* afs.up({
+        targets: [...Naming.configDirs].toReversed(),
+        start: Global.Path.home,
+        stop: Global.Path.home,
+      })),
+      ...(Flag.OC2_CONFIG_DIR ? [Flag.OC2_CONFIG_DIR] : []),
+    ]),
+  }
+})
+
+export const plan = Effect.fn("ConfigPaths.plan")(function* (directory: string, worktree?: string) {
+  const direct = Flag.OC2_DISABLE_PROJECT_CONFIG ? [] : yield* files(Naming.appSlug, directory, worktree)
+  const directories = yield* directoryPlan(directory, worktree)
+
+  return {
+    direct,
+    directories: directories.all,
+    project: [...direct, ...directories.project.flatMap((dir) => fileInDirectory(dir, Naming.appSlug))],
+  }
+})
+
+export const directories = Effect.fn("ConfigPaths.directories")(function* (directory: string, worktree?: string) {
+  return (yield* directoryPlan(directory, worktree)).all
 })
 
 export function fileInDirectory(dir: string, name: string) {
