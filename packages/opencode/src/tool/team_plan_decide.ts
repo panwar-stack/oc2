@@ -7,6 +7,7 @@ import { Permission } from "@/permission"
 import type { TaskPromptOps } from "./task"
 import { wakeTeamSessionBounded } from "./team_wake"
 import { Effect, Option, Schema } from "effect"
+import { SessionID } from "@/session/schema"
 
 const Parameters = Schema.Struct({
   member_name: Schema.String.annotate({ description: "Teammate name" }),
@@ -52,9 +53,10 @@ export const TeamPlanDecideTool = Tool.define(
 
           if (params.decision === "approve") {
             yield* team.approveMemberPlan(target.id)
-            const session = yield* sessions.get(target.session_id)
+            const targetSessionID = SessionID.make(target.session_id)
+            const session = yield* sessions.get(targetSessionID)
             const newPermission = removePlanModePermissionOverlay(session.permission ?? [])
-            yield* sessions.setPermission({ sessionID: target.session_id, permission: newPermission })
+            yield* sessions.setPermission({ sessionID: targetSessionID, permission: newPermission })
             yield* team.sendMessage({
               teamID: activeTeam.value.id,
               sender: ctx.sessionID,
@@ -74,7 +76,7 @@ export const TeamPlanDecideTool = Tool.define(
             })
             const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
             if (promptOps) {
-              yield* wakeTeamSessionBounded(promptOps, target.session_id).pipe(Effect.ignore)
+              yield* wakeTeamSessionBounded(promptOps, targetSessionID).pipe(Effect.ignore)
             }
             return { title: "Plan Approved", output: `Plan for ${params.member_name} approved.`, metadata: {} }
           }
@@ -97,7 +99,7 @@ export const TeamPlanDecideTool = Tool.define(
           })
           const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
           if (promptOps) {
-            yield* wakeTeamSessionBounded(promptOps, target.session_id).pipe(Effect.ignore)
+            yield* wakeTeamSessionBounded(promptOps, SessionID.make(target.session_id)).pipe(Effect.ignore)
           }
           return { title: "Plan Rejected", output: `Plan for ${params.member_name} rejected.`, metadata: {} }
         }).pipe(Effect.orDie),

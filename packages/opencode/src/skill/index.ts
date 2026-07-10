@@ -36,7 +36,7 @@ const CUSTOMIZE_OC2_SKILL_DESCRIPTION =
 const CUSTOMIZE_OC2_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
 const SPEC_PLANNER_SKILL_NAME = "spec-planner"
 const SPEC_PLANNER_SKILL_DESCRIPTION =
-  "Convert rough user requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs. Use when Codex needs to draft a Markdown spec, implementation plan, PR breakdown, acceptance criteria, verification plan, or repo-ready proposal similar to opencode specs such as packages/opencode/specs/agent-team-evaluation.md."
+  "Convert rough user requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs. Use when Codex needs to draft a Markdown spec, implementation plan, PR breakdown, acceptance criteria, verification plan, or repo-ready proposal."
 const SPEC_PLANNER_SKILL_BODY = SkillPlugin.SpecPlannerContent
 const TEAM_REPORT_SKILL_NAME = "team-report"
 const TEAM_REPORT_SKILL_DESCRIPTION =

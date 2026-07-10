@@ -58,7 +58,7 @@ describe("sortModelOptions", () => {
         value: { providerID: "fugu", modelID: "fugu" },
         title: "Fugu",
         category: "Fugu",
-        footer: undefined,
+        footer: "Free",
       }),
     )
   })

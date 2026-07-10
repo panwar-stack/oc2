@@ -39,7 +39,7 @@ export const Plugin = PluginV2.define({
           skill: new SkillV2.Info({
             name: "spec-planner",
             description:
-              "Convert rough user requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs. Use when Codex needs to draft a Markdown spec, implementation plan, PR breakdown, acceptance criteria, verification plan, or repo-ready proposal similar to opencode specs such as packages/opencode/specs/agent-team-evaluation.md.",
+              "Convert rough user requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs. Use when Codex needs to draft a Markdown spec, implementation plan, PR breakdown, acceptance criteria, verification plan, or repo-ready proposal.",
             location: AbsolutePath.make("/builtin/spec-planner.md"),
             content: SpecPlannerContent,
           }),

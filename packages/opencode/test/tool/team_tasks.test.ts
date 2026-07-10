@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
-import { MessageID, type SessionID } from "@/session/schema"
+import { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { TeamTaskTable } from "@/team/team.sql"
 import { Team } from "@/team/team"
@@ -293,9 +293,9 @@ describe("tool.team_tasks", () => {
   )
 })
 
-function context(sessionID: SessionID): Context {
+function context(sessionID: string): Context {
   return {
-    sessionID,
+    sessionID: SessionID.make(sessionID),
     messageID: MessageID.ascending(),
     agent: "build",
     abort: new AbortController().signal,

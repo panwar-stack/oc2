@@ -12,6 +12,8 @@ import { EffectBridge } from "@/effect/bridge"
 import { SessionID } from "@/session/schema"
 import { Cause, Effect, Exit, Schema, Scope, Option } from "effect"
 import { Database } from "@oc2-ai/core/database/database"
+import { ModelV2 } from "@oc2-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
 
 const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "Name for this teammate" }),
@@ -293,7 +295,7 @@ export const TeamSpawnTool = Tool.define(
             daemonLastActive: lifecycle === "daemon" ? Date.now() : null,
           })
 
-          const dependencyResults = (members: any[], dependencies: string[]) => {
+          const dependencyResults = (members: Team.Member[], dependencies: string[]) => {
             if (dependencies.length === 0) return ""
             return [
               "Dependency results:",
@@ -327,7 +329,7 @@ export const TeamSpawnTool = Tool.define(
           const notifyLead = (sender: string, body: string) =>
             notifySessions(sender, [activeTeam.value.lead_session_id], body)
 
-          const notifyActiveDependencies = (members: any[]) =>
+          const notifyActiveDependencies = (members: Team.Member[]) =>
             Effect.gen(function* () {
               const recipients = members
                 .filter(
@@ -348,7 +350,7 @@ export const TeamSpawnTool = Tool.define(
               )
             })
 
-          let startMember: (member: any, extraPrompt: string) => Effect.Effect<string>
+          let startMember: (member: Team.Member, extraPrompt: string) => Effect.Effect<string>
           const startReadyBlockedMembers = (completedSessionID: string): Effect.Effect<void> =>
             Effect.gen(function* () {
               const members = yield* team.getMembers(teamID)
@@ -371,7 +373,7 @@ export const TeamSpawnTool = Tool.define(
               )
             })
 
-          startMember = (member: any, extraPrompt: string): Effect.Effect<string> =>
+          startMember = (member: Team.Member, extraPrompt: string): Effect.Effect<string> =>
             Effect.gen(function* () {
               const nextAgent = yield* agent.get(member.agent_type)
               if (!nextAgent) {
@@ -429,9 +431,12 @@ export const TeamSpawnTool = Tool.define(
                   ].join("\n"),
                 )
                 const result = yield* ops.prompt({
-                  sessionID: member.session_id,
+                  sessionID: SessionID.make(member.session_id),
                   model: member.model
-                    ? { providerID: member.model.providerID, modelID: member.model.modelID }
+                    ? {
+                        providerID: ProviderV2.ID.make(member.model.providerID),
+                        modelID: ModelV2.ID.make(member.model.modelID),
+                      }
                     : undefined,
                   variant: member.model?.variant,
                   agent: nextAgent.name,

@@ -34,7 +34,6 @@ jobs:
 
       - name: Check package boundaries
         run: bun run check:packages
-        continue-on-error: true
 
       - name: Check generated artifacts
         if: steps.scope.outputs.check_generated == 'true'

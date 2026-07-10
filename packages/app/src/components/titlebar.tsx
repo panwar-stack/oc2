@@ -571,7 +571,6 @@ function TabNavItem(props: {
     >
       <Show when={session.latest}>
         {(session) => {
-          console.log({ session: session() })
           const project = createMemo(() => projectForSession(session(), serverCtx()?.projects.list() ?? []))
 
           return (

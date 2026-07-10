@@ -11,6 +11,8 @@ const Parameters = Schema.Struct({
   body: Schema.String.annotate({ description: "The message body" }),
 })
 
+type Metadata = { messageID?: string }
+
 export const TeamSendMessageTool = Tool.define(
   "team_send_message",
   Effect.gen(function* () {
@@ -20,7 +22,10 @@ export const TeamSendMessageTool = Tool.define(
     return {
       description: DESCRIPTION,
       parameters: Parameters,
-      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
+      execute: (
+        params: Schema.Schema.Type<typeof Parameters>,
+        ctx: Tool.Context,
+      ): Effect.Effect<Tool.ExecuteResult<Metadata>> =>
         Effect.gen(function* () {
           const cfg = yield* config.get()
           if (!cfg.experimental?.agent_teams)

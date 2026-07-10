@@ -11,7 +11,7 @@ const it = testEffect(Layer.mergeAll(Team.defaultLayer, Bus.layer, CrossSpawnSpa
 
 function unwrap<T>(opt: Option.Option<T>): T {
   if (Option.isNone(opt)) throw new Error("Option is None")
-  return (opt as any).value
+  return opt.value
 }
 
 describe("team", () => {
@@ -153,7 +153,7 @@ describe("team", () => {
 
         const bySession = yield* team.getMemberBySession("ses_test_child_1")
         expect(Option.isSome(bySession)).toBe(true)
-        expect((bySession as any).value.id).toBe(member.id)
+        expect(unwrap(bySession).id).toBe(member.id)
 
         const leadContext = yield* team.getContext(leadSessionID)
         expect(Option.isSome(leadContext)).toBe(true)
@@ -161,7 +161,7 @@ describe("team", () => {
 
         const memberContext = yield* team.getContext("ses_test_child_1")
         expect(Option.isSome(memberContext)).toBe(true)
-        expect(unwrap(memberContext).member.id).toBe(member.id)
+        expect(unwrap(memberContext).member?.id).toBe(member.id)
       }),
     ),
   )

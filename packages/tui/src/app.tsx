@@ -7,7 +7,7 @@ import { InstallationVersion } from "@oc2-ai/core/installation/version"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { EpilogueProvider } from "./context/epilogue"
 import * as Selection from "./util/selection"
-import { createCliRenderer, MouseButton, type CliRenderer } from "@opentui/core"
+import { createCliRenderer, MouseButton } from "@opentui/core"
 import { RouteProvider, useRoute } from "./context/route"
 import {
   Switch,
@@ -999,7 +999,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   event.on("installation.update-available", async (evt) => {
-    console.log("installation.update-available", evt)
     const version = evt.properties.version
 
     const skipped = kv.get("skipped_version")

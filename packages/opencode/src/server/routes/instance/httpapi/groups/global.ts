@@ -1,8 +1,6 @@
-import { Config } from "@/config/config"
 import { ConfigV1 } from "@oc2-ai/core/v1/config/config"
 import { EventV2 } from "@oc2-ai/core/event"
 import { InstanceDisposed } from "@/server/event"
-import "@oc2-ai/core/account"
 import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"

@@ -1,5 +1,3 @@
-import "./init-projectors"
-
 import { NodeHttpServer } from "@effect/platform-node"
 import * as Log from "@oc2-ai/core/util/log"
 import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"

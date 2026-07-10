@@ -24,7 +24,8 @@ export const TeamTaskListTool = Tool.define(
           const tasks = yield* team.getTasks(context.value.team.id)
           if (tasks.length === 0) return { title: "Team Tasks", output: "No tasks found.", metadata: {} }
           const lines = tasks.map(
-            (t: any) => `- [${t.status}] ${t.id.slice(0, 8)}: ${t.description}${t.assignee ? ` (${t.assignee})` : ""}`,
+            (task) =>
+              `- [${task.status}] ${task.id.slice(0, 8)}: ${task.description}${task.assignee ? ` (${task.assignee})` : ""}`,
           )
           return { title: "Team Tasks", output: lines.join("\n"), metadata: {} }
         }).pipe(Effect.orDie),

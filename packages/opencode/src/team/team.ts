@@ -17,16 +17,39 @@ import {
 
 const toOption = <T>(v: T | null | undefined): Option.Option<T> => (v != null ? Option.some(v) : Option.none())
 
-type TeamMemberLifecycle = "task" | "daemon"
-type TeamMemberDaemonState = "initializing" | "running" | "idle" | "cancelled" | "error"
+type TeamRow = typeof TeamTable.$inferSelect
+type TeamMemberRow = typeof TeamMemberTable.$inferSelect
+type TeamMemberInsert = typeof TeamMemberTable.$inferInsert
+type TeamTaskRow = typeof TeamTaskTable.$inferSelect
+type TeamTaskInsert = typeof TeamTaskTable.$inferInsert
+type TeamMessageRow = typeof TeamMessageTable.$inferSelect
+type TeamUsageEventRow = typeof TeamUsageEventTable.$inferSelect
+
+export type Info = TeamRow
+export type Member = Omit<TeamMemberRow, "model" | "dependency_ids" | "result"> & {
+  model: TeamMemberInsert["model"]
+  dependency_ids: TeamMemberInsert["dependency_ids"]
+  result: TeamMemberInsert["result"]
+}
+export type Task = Omit<TeamTaskRow, "assignee" | "dependency_ids" | "metadata"> & {
+  assignee: TeamTaskInsert["assignee"]
+  dependency_ids: TeamTaskInsert["dependency_ids"]
+  metadata: TeamTaskInsert["metadata"]
+}
+export type Message = TeamMessageRow
+export type MemberStatus = TeamMemberRow["status"]
+export type MemberLifecycle = TeamMemberRow["lifecycle"]
+export type MemberDaemonState = NonNullable<TeamMemberRow["daemon_state"]>
+export type TaskStatus = TeamTaskRow["status"]
+
 type TeamMemberStatusUpdate = {
   result?: string
-  daemonState?: TeamMemberDaemonState | null
+  daemonState?: MemberDaemonState | null
   daemonLastActive?: number | null
   daemonError?: string | null
 }
 
-export type UsageEventType = "plan_approved" | "plan_rejected" | "broadcast_sent" | "report_generated"
+export type UsageEventType = TeamUsageEventRow["type"]
 
 export type UsageEvent = {
   id: string
@@ -39,9 +62,9 @@ export type UsageEvent = {
 }
 
 export interface Interface {
-  create: (input: { name: string; goal: string; leadSessionID: string }) => Effect.Effect<any>
-  getActive: (leadSessionID: string) => Effect.Effect<Option.Option<any>>
-  get: (teamID: string) => Effect.Effect<Option.Option<any>>
+  create: (input: { name: string; goal: string; leadSessionID: string }) => Effect.Effect<Info>
+  getActive: (leadSessionID: string) => Effect.Effect<Option.Option<Info>>
+  get: (teamID: string) => Effect.Effect<Option.Option<Info>>
   shutdown: (teamID: string) => Effect.Effect<void>
   addMember: (input: {
     teamID: string
@@ -53,39 +76,39 @@ export interface Interface {
     planMode?: boolean
     workMode?: "plan" | "implement"
     dependencyIDs?: string[]
-    lifecycle?: TeamMemberLifecycle
-    daemonState?: TeamMemberDaemonState | null
+    lifecycle?: MemberLifecycle
+    daemonState?: MemberDaemonState | null
     daemonLastActive?: number | null
     daemonError?: string | null
-  }) => Effect.Effect<any>
+  }) => Effect.Effect<Member>
   updateMemberStatus: (
     memberID: string,
-    status: string,
+    status: MemberStatus,
     resultOrUpdate?: string | TeamMemberStatusUpdate,
-  ) => Effect.Effect<Option.Option<any>>
-  approveMemberPlan: (memberID: string) => Effect.Effect<Option.Option<any>>
-  getMembers: (teamID: string) => Effect.Effect<any[]>
-  getMemberBySession: (sessionID: string) => Effect.Effect<Option.Option<any>>
-  getContext: (sessionID: string) => Effect.Effect<Option.Option<{ team: any; member?: any }>>
+  ) => Effect.Effect<Option.Option<Member>>
+  approveMemberPlan: (memberID: string) => Effect.Effect<Option.Option<Member>>
+  getMembers: (teamID: string) => Effect.Effect<Member[]>
+  getMemberBySession: (sessionID: string) => Effect.Effect<Option.Option<Member>>
+  getContext: (sessionID: string) => Effect.Effect<Option.Option<{ team: Info; member?: Member }>>
   createTask: (input: {
     teamID: string
     description: string
     assignee?: string
     dependencyIDs?: string[]
     metadata?: Record<string, unknown>
-  }) => Effect.Effect<any, Error>
-  getTask: (teamID: string, taskID: string) => Effect.Effect<Option.Option<any>, Error>
+  }) => Effect.Effect<Task, Error>
+  getTask: (teamID: string, taskID: string) => Effect.Effect<Option.Option<Task>, Error>
   updateTask: (
     teamID: string,
     taskID: string,
-    update: Partial<{ status: string; assignee: string }>,
-  ) => Effect.Effect<Option.Option<any>, Error>
-  claimTask: (teamID: string, taskID: string, assignee: string) => Effect.Effect<Option.Option<any>, Error>
-  getTasks: (teamID: string) => Effect.Effect<any[]>
-  sendMessage: (input: { teamID: string; sender: string; recipients: string[]; body: string }) => Effect.Effect<any>
-  getMessages: (teamID: string) => Effect.Effect<any[]>
-  getPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<any[]>
-  claimPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<any[]>
+    update: Partial<{ status: TaskStatus; assignee: string }>,
+  ) => Effect.Effect<Option.Option<Task>, Error>
+  claimTask: (teamID: string, taskID: string, assignee: string) => Effect.Effect<Option.Option<Task>, Error>
+  getTasks: (teamID: string) => Effect.Effect<Task[]>
+  sendMessage: (input: { teamID: string; sender: string; recipients: string[]; body: string }) => Effect.Effect<Message>
+  getMessages: (teamID: string) => Effect.Effect<Message[]>
+  getPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[]>
+  claimPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[]>
   markMessageDelivered: (messageID: string, recipientSession?: string) => Effect.Effect<void>
   createUsageEvent: (input: {
     teamID: string
@@ -164,7 +187,7 @@ export const layer = Layer.effect(
         status: "active",
         time_created: now,
         time_updated: now,
-      }
+      } satisfies Info
     })
 
     const getActive = Effect.fn("Team.getActive")(function* (leadSessionID: string) {
@@ -247,8 +270,8 @@ export const layer = Layer.effect(
       planMode?: boolean
       workMode?: "plan" | "implement"
       dependencyIDs?: string[]
-      lifecycle?: TeamMemberLifecycle
-      daemonState?: TeamMemberDaemonState | null
+      lifecycle?: MemberLifecycle
+      daemonState?: MemberDaemonState | null
       daemonLastActive?: number | null
       daemonError?: string | null
     }) {
@@ -297,17 +320,17 @@ export const layer = Layer.effect(
         result: undefined,
         time_created: now,
         time_updated: now,
-      }
+      } satisfies Member
     })
 
     const updateMemberStatus = Effect.fn("Team.updateMemberStatus")(function* (
       memberID: string,
-      status: string,
+      status: MemberStatus,
       resultOrUpdate?: string | TeamMemberStatusUpdate,
     ) {
       const now = Date.now()
       const update = typeof resultOrUpdate === "string" ? { result: resultOrUpdate } : resultOrUpdate
-      const setData: Record<string, unknown> = { status, time_updated: now }
+      const setData: Partial<TeamMemberInsert> = { status, time_updated: now }
       if (update?.result !== undefined) setData.result = update.result
       if (update?.daemonState !== undefined) setData.daemon_state = update.daemonState
       if (update?.daemonLastActive !== undefined) setData.daemon_last_active = update.daemonLastActive
@@ -523,7 +546,7 @@ export const layer = Layer.effect(
         metadata: input.metadata,
         time_created: now,
         time_updated: now,
-      }
+      } satisfies Task
     })
 
     const getTask = Effect.fn("Team.getTask")(function* (teamID: string, taskID: string) {
@@ -552,12 +575,12 @@ export const layer = Layer.effect(
     const updateTask = Effect.fn("Team.updateTask")(function* (
       teamID: string,
       taskID: string,
-      update: Partial<{ status: string; assignee: string }>,
+      update: Partial<{ status: TaskStatus; assignee: string }>,
     ) {
       const resolved = yield* resolveTaskID(teamID, taskID)
       if (Option.isNone(resolved)) return Option.none()
       const now = Date.now()
-      const setData: Record<string, unknown> = { time_updated: now }
+      const setData: Partial<TeamTaskInsert> = { time_updated: now }
       if (update.status !== undefined) setData.status = update.status
       if (update.assignee !== undefined) setData.assignee = update.assignee
       yield* db
@@ -737,7 +760,7 @@ export const layer = Layer.effect(
         delivery_status: "pending",
         time_created: now,
         time_updated: now,
-      }
+      } satisfies Message
     })
 
     const getMessages = Effect.fn("Team.getMessages")(function* (teamID: string) {

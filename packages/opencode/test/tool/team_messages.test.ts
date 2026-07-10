@@ -4,7 +4,7 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageV2 } from "@/session/message-v2"
-import { MessageID, PartID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
 import { TeamBroadcastTool } from "@/tool/team_broadcast"
@@ -476,7 +476,7 @@ describe("tool.team_plan_decide", () => {
           expect(approved?.plan_mode).toBe(false)
           expect(approved?.work_mode).toBe("implement")
           expect(approved?.status).toBe("active")
-          expect((yield* sessions.get(member.session_id)).permission).toEqual(
+          expect((yield* sessions.get(SessionID.make(member.session_id))).permission).toEqual(
             expectedPermission(inheritedPermissionAfterApproval),
           )
         }),
@@ -503,7 +503,9 @@ describe("tool.team_plan_decide", () => {
           expect(result.title).toBe("Plan Rejected")
           expect(rejected?.plan_mode).toBe(true)
           expect(rejected?.work_mode).toBe("plan")
-          expect((yield* sessions.get(member.session_id)).permission).toEqual(expectedPermission(planModePermission))
+          expect((yield* sessions.get(SessionID.make(member.session_id))).permission).toEqual(
+            expectedPermission(planModePermission),
+          )
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
