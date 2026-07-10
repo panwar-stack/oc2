@@ -1,33 +1,29 @@
-## Usage
+# OC2 Local Browser App
 
-Dependencies for these templates are managed with [pnpm](https://pnpm.io) using `pnpm up -Lri`.
+This package contains the Solid/Vite browser interface for the OC2 minimal local coding agent harness. It runs against a local OC2 backend and is not a standalone hosted web app.
 
-This is the reason you see a `pnpm-lock.yaml`. That said, any package manager will work. This file can safely be removed once you clone a template.
+## Local Development
+
+From the repository root, start the backend and app in separate terminals:
 
 ```bash
-$ npm install # or pnpm install or yarn install
+# Terminal 1
+bun dev serve --port 4096
+
+# Terminal 2
+bun run --cwd packages/app dev -- --port 4444
 ```
 
-### Learn more on the [Solid Website](https://solidjs.com) and come chat with us on our [Discord](https://discord.com/invite/solidjs)
+Open `http://localhost:4444`. The app targets the local backend at `http://localhost:4096` by default.
 
-## Available Scripts
+## Package Scripts
 
-In the project directory, you can run:
-
-### `npm run dev` or `npm start`
-
-Runs the app in the development mode.<br>
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
-
-The page will reload if you make edits.<br>
-
-### `npm run build`
-
-Builds the app for production to the `dist` folder.<br>
-It correctly bundles Solid in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.<br>
-Your app is ready to be deployed!
+```bash
+bun run --cwd packages/app dev -- --port 4444
+bun run --cwd packages/app build
+bun run --cwd packages/app typecheck
+bun run --cwd packages/app test:unit
+```
 
 ## E2E Testing
 
@@ -44,7 +40,3 @@ Environment options:
 - `PLAYWRIGHT_SERVER_HOST` / `PLAYWRIGHT_SERVER_PORT` (backend address, default: `localhost:4096`)
 - `PLAYWRIGHT_PORT` (Vite dev server port, default: `3000`)
 - `PLAYWRIGHT_BASE_URL` (override base URL, default: `http://localhost:<PLAYWRIGHT_PORT>`)
-
-## Deployment
-
-You can deploy the `dist` folder to any static host provider (netlify, surge, now, etc.)

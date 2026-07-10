@@ -1,6 +1,6 @@
 # Packages Onboarding
 
-`packages/` contains the local OC2 product, its user interfaces, public extension surfaces, shared libraries, and build/test helpers. Hosted websites, account services, sharing services, deployment projects, and social integrations are intentionally outside this template.
+`packages/` contains the local OC2 product, its user interfaces, public extension surfaces, shared libraries, and build/test helpers. Hosted websites, account services, sharing services, deployment projects, and social integrations are intentionally excluded so OC2 remains a local-first coding agent harness.
 
 Use this guide to find the package that owns a change. Before editing, inspect that package's `package.json`, source, tests, and nearest `AGENTS.md`. Package scripts are the source of truth for commands.
 
@@ -96,4 +96,4 @@ The root `test` script intentionally rejects root-level test runs.
 5. Regenerate the SDK when public API shapes change.
 6. Test the real package boundary with minimal mocking.
 
-Avoid adding hosted fallbacks or template-owner service dependencies. Local UI and command modes should work against the local runtime and server; external network access should be limited to user-configured model providers or integrations.
+Avoid adding hosted fallbacks or external service dependencies. Local UI and command modes should work against the local runtime and server; external network access should be limited to user-configured model providers or integrations.

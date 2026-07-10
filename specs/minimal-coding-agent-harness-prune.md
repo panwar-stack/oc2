@@ -1,8 +1,8 @@
-# Minimal Local Template Prune
+# Minimal Coding Agent Harness Prune
 
 ## Goal
 
-Turn this repo into a minimal cloneable template that keeps the local core, CLI, TUI, and local app surfaces, while deleting hosted web, docs, deployment, social, GitHub Action, and OC2-hosted service features.
+Turn this repo into a minimal runnable coding agent harness that keeps the local core, CLI, TUI, and local app surfaces, while deleting hosted web, docs, deployment, social, GitHub Action, and OC2-hosted service features.
 
 Default assumption: keep `packages/app` as the local app because the requirement excludes "non-app" features. Delete `packages/web` and every project whose only purpose is hosted web, docs, deployment, or `oc2.ai` service integration.
 
@@ -179,9 +179,9 @@ Review:
 
 Fresh read-only reviewer checks package boundaries, lockfile changes, workflow references, and confirms no retained package imports deleted integrations.
 
-### PR 5: Final URL Sweep And Template Docs
+### PR 5: Final URL Sweep And Harness Docs
 
-- Rewrite `README.md`, `CONTRIBUTING.md`, and `packages/onboarding.md` for a local template.
+- Rewrite `README.md`, `CONTRIBUTING.md`, and `packages/onboarding.md` for a minimal local coding agent harness.
 - Remove or rewrite generated docs/tests/fixtures that still contain hosted OC2 URL references.
 - Replace config/schema URLs with local or relative schema references.
 - Ensure final search returns no hosted OC2 URL/domain references.
@@ -200,9 +200,9 @@ Fresh read-only reviewer checks the final URL sweep output, docs accuracy, gener
 
 ## Future Work
 
-- Delete `packages/app` and split `packages/ui` audio into `packages/tui` if the template later becomes CLI/TUI-only.
+- Delete `packages/app` and split `packages/ui` audio into `packages/tui` if the harness later becomes CLI/TUI-only.
 - Reset DB migrations after deciding this repo no longer supports existing local databases.
-- Rename package scopes away from `@oc2-ai` if the template wants full brand removal, not just hosted URL removal.
+- Rename package scopes away from `@oc2-ai` if the harness wants full brand removal, not just hosted URL removal.
 - Replace release automation with a minimal fork-owned publish workflow.
 
 ## Open Questions

@@ -1,15 +1,15 @@
-# OC2 Local Template
+# OC2 Minimal Coding Agent
 
-OC2 is an AI coding agent template designed to run from a local clone. The repository keeps the core runtime, command-line interface, terminal UI, browser app, local HTTP server, SDK, plugin API, and provider-neutral LLM packages.
+OC2 is a minimal local coding agent harness based on and inspired by opencode. It is a full local-first runtime you can configure, build, and run on your own machine. The repository includes the core runtime, command-line interface, terminal UI, browser app, local HTTP server, SDK, plugin API, and provider-neutral LLM packages.
 
-The template does not depend on an OC2-hosted account, sharing service, managed model provider, documentation site, or hosted app fallback. Model calls still use the providers you configure with your own credentials.
+The harness does not depend on an OC2-hosted account, sharing service, managed model provider, documentation site, or hosted app fallback. Model calls use the providers you configure with your own credentials.
 
 ## Requirements
 
 - [Bun](https://bun.sh) 1.3.14, matching the root `packageManager` field
 - Git
 
-## Start From A Clone
+## Run Locally
 
 ```bash
 git clone <repository-url> oc2-local
@@ -99,7 +99,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and [packa
 - `packages/llm`: provider-neutral model protocol and streaming runtime
 - `packages/ui`: shared UI components and TUI assets
 
-The repository is intentionally a starting point. Fork owners should replace package names, metadata, and release automation to match their own distribution plans.
+This repository is intentionally a runnable starting point for a local coding agent harness. Fork owners can replace package names, metadata, and release automation to match their own distribution plans.
 
 ## License
 

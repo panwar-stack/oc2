@@ -1,6 +1,6 @@
 # Contributing To OC2
 
-This repository is a local-first template. Contributions should preserve the local CLI, TUI, browser app, server, SDK, plugin, and LLM workflows without introducing a dependency on an OC2-hosted service.
+This repository is a local-first coding agent harness. Contributions should preserve the local CLI, TUI, browser app, server, SDK, plugin, and LLM workflows without introducing a dependency on a hosted service.
 
 Good contribution targets include bug fixes, provider support, LSP and formatter support, terminal or app usability, model/runtime correctness, platform-specific fixes, tests, and documentation.
 
