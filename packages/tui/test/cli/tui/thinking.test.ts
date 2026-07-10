@@ -33,4 +33,32 @@ describe("reasoningSummary", () => {
   test("leaves content without a leading title in its body", () => {
     expect(reasoningSummary("Details only.")).toEqual({ title: null, body: "Details only." })
   })
+
+  test.each(["<!---->", "<!-- -->"])("removes empty comments globally: %s", (comment) => {
+    expect(reasoningSummary(`${comment}\nDetails ${comment} only.\n${comment}`)).toEqual({
+      title: null,
+      body: "Details  only.",
+    })
+  })
+
+  test("unwraps a boundary comment while preserving its reasoning", () => {
+    expect(reasoningSummary("<!--\n**Inspecting output**\n\nDetails.\n-->")).toEqual({
+      title: "Inspecting output",
+      body: "Details.",
+    })
+  })
+
+  test("preserves non-empty inline comments", () => {
+    expect(reasoningSummary("Before <!-- keep this --> after.")).toEqual({
+      title: null,
+      body: "Before <!-- keep this --> after.",
+    })
+  })
+
+  test("does not combine separate non-empty comments into a wrapper", () => {
+    expect(reasoningSummary("<!-- first -->\nDetails.\n<!-- second -->")).toEqual({
+      title: null,
+      body: "<!-- first -->\nDetails.\n<!-- second -->",
+    })
+  })
 })

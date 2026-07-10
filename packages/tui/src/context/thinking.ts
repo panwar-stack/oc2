@@ -10,7 +10,9 @@ const MODES: readonly ThinkingMode[] = ["show", "hide"] as const
 // or a complete title still awaiting its body while streaming, as disclosure
 // metadata so the TUI can style its header independently from the markdown body.
 export function reasoningSummary(text: string) {
-  const content = text.trim()
+  const cleaned = text.replace(/<!--\s*-->/g, "").trim()
+  const wrapper = cleaned.match(/^<!--((?:(?!<!--|-->)[\s\S])*)-->$/)
+  const content = (wrapper?.[1] ?? cleaned).trim()
   const match = content.match(/^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/)
   if (!match) return { title: null, body: content }
   return { title: match[1].trim(), body: content.slice(match[0].length).trimEnd() }
