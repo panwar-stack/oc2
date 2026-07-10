@@ -8,6 +8,7 @@ import { Config } from "../../src/config/config"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Global } from "@oc2-ai/core/global"
+import { SkillPlugin } from "@oc2-ai/core/plugin/skill"
 import { provideInstance, provideTmpdirInstance, testInstanceStoreLayer, tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import path from "path"
@@ -84,6 +85,9 @@ describe("skill", () => {
           const skill = yield* Skill.Service
           const builtins = (yield* skill.all()).filter((s) => Skill.isBuiltinLocation(s.location))
           expect(builtins.map((s) => s.name).toSorted()).toEqual(["customize-opencode", "spec-planner", "team-report"])
+          expect(builtins.find((s) => s.name === "customize-opencode")?.description).toBe(
+            SkillPlugin.CustomizeOpencodeDescription,
+          )
           expect(builtins.find((s) => s.name === "spec-planner")?.content).toContain("Requirements To Spec")
           expect(builtins.find((s) => s.name === "team-report")?.content).toContain("team_report")
         }),

@@ -11,6 +11,8 @@ import specPlannerContent from "./skill/spec-planner.md" with { type: "text" }
 import teamReportContent from "./skill/team-report.md" with { type: "text" }
 
 export const CustomizeOpencodeContent = customizeOpencodeContent
+export const CustomizeOpencodeDescription =
+  "Use ONLY when the user is editing or creating OC2's own configuration: oc2.json, oc2.jsonc, files under .oc2/, or files under ~/.config/oc2/. Also use when creating or fixing OC2 agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring OC2 itself."
 export const SpecPlannerContent = specPlannerContent
 export const TeamReportContent = teamReportContent
 
@@ -26,8 +28,7 @@ export const Plugin = PluginV2.define({
           type: "embedded",
           skill: new SkillV2.Info({
             name: "customize-opencode",
-            description:
-              "Use ONLY when the user is editing or creating OC2's own configuration: oc2.json, oc2.jsonc, files under .oc2/, or files under ~/.config/oc2/. Also use when creating or fixing OC2 agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring OC2 itself.",
+            description: CustomizeOpencodeDescription,
             location: AbsolutePath.make("/builtin/customize-opencode.md"),
             content: CustomizeOpencodeContent,
           }),
