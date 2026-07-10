@@ -557,4 +557,4 @@ Build these screens first:
 
 That set covers the first release scope: prompt quality review, suggested improved prompt, agent team overkill detection, cheaper model recommendation, missing context warnings, output format suggestions, post run learning summary, and tip feedback controls.
 
-[1]: https://opencode.ai/docs/tui/ "TUI | OpenCode"
+[1]: ../README.md "OC2 package documentation"

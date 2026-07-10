@@ -1,88 +1,99 @@
-# Packages onboarding
+# Packages Onboarding
 
-`packages/` is the main workspace area for OpenCode. It contains the core runtime, user-facing apps, cloud services, shared libraries, and build tooling.
+`packages/` contains the local OC2 product, its user interfaces, public extension surfaces, shared libraries, and build/test helpers. Hosted websites, account services, sharing services, deployment projects, and social integrations are intentionally outside this template.
 
-Use this guide as a first map when deciding where a feature, bug fix, or investigation belongs. For exact commands, package-specific rules, and tests, check the nearest `package.json`, `README.md`, or `AGENTS.md` before editing.
+Use this guide to find the package that owns a change. Before editing, inspect that package's `package.json`, source, tests, and nearest `AGENTS.md`. Package scripts are the source of truth for commands.
 
-## How to read this directory
+## Product Runtime
 
-- Core runtime packages implement Sessions, Agents, Tools, Providers, permissions, persistence, API routes, and SDK surfaces.
-- User-facing surfaces render OpenCode in terminals and browsers.
-- Cloud and product services back hosted OpenCode products, sharing, sync, stats, billing, and support workflows.
-- Shared libraries and tooling support UI, Effect/SQLite integration, build scripts, tests, and CI images.
-- Some folders are assets or generated/local runtime artifacts, not normal source packages.
+| Folder     | Package          | Responsibility                                                                                                                                                               | Change it when                                                                                                                      |
+| ---------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `opencode` | `oc2`            | Primary product package and `oc2` entrypoint. Integrates sessions, agents, tools, providers, permissions, local persistence, commands, TUI, and server modes.                | Changing end-to-end product behavior, the primary CLI, orchestration, tool execution, provider wiring, or local server integration. |
+| `core`     | `@oc2-ai/core`   | Shared domain and runtime services for sessions, projects/workspaces, config, auth, providers/models, permissions, tools, filesystem, git, storage, PTY, and system context. | Adding reusable behavior shared by the CLI, TUI, app, server, or product runtime.                                                   |
+| `llm`      | `@oc2-ai/llm`    | Provider-neutral model request, protocol, route, transport, streaming event, prompt-caching, and typed tool-dispatch model.                                                  | Implementing or fixing model protocols, provider request/response conversion, streaming, routing, or LLM schemas.                   |
+| `server`   | `@oc2-ai/server` | Typed Effect HTTP API groups and handlers for local health, agents, sessions/messages, models/providers, permissions, filesystem, commands, skills, events, and questions.   | Changing local API schemas, handlers, authorization, middleware, or route composition.                                              |
 
-## Core runtime
+`packages/opencode` is the integration layer. Put reusable domain behavior in `packages/core`, provider-neutral protocol behavior in `packages/llm`, and typed HTTP contracts in `packages/server` rather than duplicating them in the product package.
 
-| Folder     | Package                        | Responsibility                                                                                                                                                                                                                         | Touch this when                                                                                                                                                                                                |
-| ---------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `opencode` | `opencode`                     | Main product package and primary CLI. Owns the command surface, session runtime, agents, tools, permissions, provider orchestration, config, MCP/ACP integration, memory, team features, sharing/sync, and storage.                    | You are changing core product behavior, CLI commands, agent/session orchestration, tools, provider wiring, MCP/ACP, memory, or sync behavior.                                                                  |
-| `core`     | `@oc2-ai/core`            | Shared foundational library for config, auth/accounts, provider and model catalog data, sessions, filesystem, git, projects/workspaces, permissions, plugins, tools, system context, database schema/migrations, and PTY abstractions. | You need reusable domain/runtime primitives that are shared by the app, TUI, server, CLI, or other packages.                                                                                                   |
-| `llm`      | `@oc2-ai/llm`             | Provider-neutral LLM core. Defines canonical request, message, event, tool, route, protocol, provider, streaming, prompt caching, and typed tool-dispatch schemas. Provider quirks live here behind common abstractions.               | You are adding or fixing model provider behavior, request/response conversion, streaming events, prompt caching, or typed LLM protocol handling.                                                               |
-| `server`   | `@oc2-ai/server`          | Effect `HttpApi` server package. Defines typed API groups and handlers for health, agents, sessions/messages, models/providers, permissions, filesystem, commands, skills, events, and questions.                                      | You are changing the HTTP API, route handlers, server auth/middleware, API schemas, or web handler wiring.                                                                                                     |
-| `sdk`      | `@oc2-ai/sdk` in `sdk/js` | OpenAPI-backed JavaScript SDK workspace. The top-level `openapi.json` is the generated API spec; `sdk/js` exposes typed clients, v1/v2 clients/servers, and `createOpencode()`.                                                        | You are changing public client/server SDK behavior, generated API types, or code that consumers use to talk to an OpenCode server. Regenerate with `./packages/sdk/js/script/build.ts` when API shapes change. |
-| `plugin`   | `@oc2-ai/plugin`          | Public plugin authoring API. Defines plugin hooks, provider/auth hooks, custom tool definitions, shell helpers, and TUI extension points.                                                                                              | You are changing what plugin authors can implement or how plugins extend tools, providers, auth, or the TUI.                                                                                                   |
+## User Interfaces And Commands
 
-## User-facing surfaces
+| Folder | Package       | Responsibility                                                                                                                                 | Change it when                                                                                     |
+| ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `cli`  | `@oc2-ai/cli` | Effect-based CLI framework with default, service/daemon, serve, migrate, debug, and TUI handlers.                                              | Changing this command runtime, local service management, migration commands, or CLI-to-TUI wiring. |
+| `tui`  | `@oc2-ai/tui` | Solid/OpenTUI terminal interface, including prompt/editor UI, dialogs, keymaps, contexts, plugin slots, notifications, and terminal utilities. | Changing terminal UX, rendering, keybindings, dialogs, editor integration, or TUI plugins.         |
+| `app`  | `@oc2-ai/app` | Solid/Vite browser interface for local sessions, prompts, terminals, files, settings, and server selection.                                    | Changing browser UX or the local app's interaction with the local backend.                         |
+| `ui`   | `@oc2-ai/ui`  | Shared Solid components, themes, styles, icons, rendering helpers, fonts, and audio used by the app and TUI.                                   | Changing reusable visual primitives, shared renderers, theming, or assets.                         |
 
-| Folder    | Package                | Responsibility                                                                                                                                                                                                   | Touch this when                                                                                                                      |
-| --------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `tui`     | `@oc2-ai/tui`     | Solid/OpenTUI terminal interface. Exports the app runner plus config, context, runtime, keymap, plugin slots, built-in feature plugins, prompt/editor UI, dialogs, toasts, spinner/logo, and terminal utilities. | You are changing terminal UX, keybindings, prompt display, TUI plugins, editor integration, dialogs, or terminal rendering behavior. |
-| `cli`     | `@oc2-ai/cli`     | Bun CLI package around an Effect command runtime. Wires daemon/service commands, serve/debug/migrate handlers, and TUI integration.                                                                              | You are changing this newer/alternate CLI command entrypoint, daemon commands, or command-runtime services.                          |
-| `app`     | `@oc2-ai/app`     | Solid/Vite browser UI for OpenCode sessions. Owns session pages, prompt input, terminal panel, file/session UI, settings, i18n, and shared app UI behavior.   | You are changing the web UI used by browser contexts.                                                                    |
-| `web`     | `@oc2-ai/web`     | Astro/Starlight public website and docs/marketing package for opencode.ai content, docs, pages, components, styles, middleware, and i18n.                                                              | You are changing the public website, documentation site content, marketing pages, or web presence.              |
+For browser work, run `bun dev serve --port 4096` from the root and `bun run --cwd packages/app dev -- --port 4444` in another terminal. The app targets the local server by default.
 
-## Cloud and product services
+## SDK And Extensions
 
-| Folder       | Package                                    | Responsibility                                                                                                                                                                                                                               | Touch this when                                                                                                                                                        |
-| ------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `console`    | Multiple `@oc2-ai/console-*` packages | Hosted console/dashboard product. Contains the SolidStart console app, backend/domain core, deployable functions, email templates, resource bindings, and support app.                                                                       | You are changing the hosted console, accounts, billing, subscriptions, workspaces, provider/model management, console emails, resource bindings, or support workflows. |
-| `function`   | `@oc2-ai/function`                    | Cloudflare Worker/Hono API for sharing, sync, and integrations. Defines the `SyncServer` Durable Object, R2-backed session share storage, websocket polling, share routes, Feishu-to-Discord bridge, and GitHub auth/OIDC-related endpoints. | You are changing top-level hosted sharing/sync APIs, Durable Object behavior, R2 share storage, or integration endpoints.                                              |
-| `enterprise` | `@oc2-ai/enterprise`                  | SolidStart/Hono enterprise/share app with a Cloudflare-oriented build target. Includes routes and small core share/storage utilities.                                                                                                        | You are changing enterprise-hosted UI or share/storage behavior specific to this app.                                                                                  |
-| `stats`      | Multiple `@oc2-ai/stats-*` packages   | OpenCode Stats site and service. Contains a SolidStart frontend, Effect services, config, Drizzle schema/migrations, Athena/database/stat-sync domains, and ingestion/server entrypoints.                                                    | You are changing stats ingestion, stat-sync/backfill, analytics storage, stats APIs, or the stats frontend.                                                            |
+| Folder   | Package          | Responsibility                                                                                                                  | Change it when                                                                                |
+| -------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `sdk/js` | `@oc2-ai/sdk`    | JavaScript clients and server helpers generated from the OpenAPI document at `sdk/openapi.json`, plus v2 client/server exports. | Changing generated API types, client behavior, or server helpers used by local API consumers. |
+| `plugin` | `@oc2-ai/plugin` | Plugin authoring API for hooks, tools, provider/auth integration, shell helpers, and TUI extensions.                            | Changing what plugins can implement or how extensions interact with OC2.                      |
 
-### `console` subfolders
+When an API route or schema changes, regenerate the JavaScript SDK with:
 
-| Folder             | Responsibility                                                                                                                   |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `console/app`      | SolidStart/Vite console web app.                                                                                                 |
-| `console/core`     | Console backend and domain services for accounts, billing, provider/model data, workspaces, subscriptions, and database scripts. |
-| `console/function` | Console-specific deployable function entrypoints. Do not confuse this with top-level `packages/function`.                        |
-| `console/mail`     | JSX email templates.                                                                                                             |
-| `console/resource` | Node/Cloudflare resource binding abstraction.                                                                                    |
-| `console/support`  | Support app backed by console core.                                                                                              |
+```bash
+./packages/sdk/js/script/build.ts
+```
 
-### `stats` subfolders
+Then run `bun run check:generated` from the root and `bun typecheck` from `packages/sdk/js`.
 
-| Folder         | Responsibility                                                                                             |
-| -------------- | ---------------------------------------------------------------------------------------------------------- |
-| `stats/app`    | SolidStart stats frontend/site.                                                                            |
-| `stats/core`   | Effect services, config, Drizzle schema/migrations, Athena/database/stat-sync domains, and backfill logic. |
-| `stats/server` | Server/runtime entrypoints for stats ingestion and service behavior.                                       |
+## Shared Infrastructure
 
-## Shared libraries and tooling
+| Folder                  | Package                         | Responsibility                                                                                              | Change it when                                                                |
+| ----------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `http-recorder`         | `@oc2-ai/http-recorder`         | Deterministic recording and replay of Effect HTTP and WebSocket traffic for provider and integration tests. | Adding or fixing cassette recording, matching, redaction, or replay behavior. |
+| `effect-drizzle-sqlite` | `@oc2-ai/effect-drizzle-sqlite` | Generic vendored Drizzle adapter for Effect SQLite and Effect-yieldable SQLite query builders.              | Changing the generic Drizzle/Effect/SQLite bridge; keep product logic out.    |
+| `effect-sqlite-node`    | `@oc2-ai/effect-sqlite-node`    | Node `node:sqlite` implementation used by Node-compatible database paths.                                   | Changing Node SQLite client behavior.                                         |
+| `script`                | `@oc2-ai/script`                | Shared build/version/release metadata helpers used by repository scripts.                                   | Changing reusable script metadata or build-target selection.                  |
 
-| Folder                  | Package                              | Responsibility                                                                                                                                                                                  | Touch this when                                                                                                                 |
-| ----------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `ui`                    | `@oc2-ai/ui`                    | Shared Solid component and design-system package. Includes components, styles, themes, context providers, hooks, icons, fonts/audio assets, markdown/diff/session rendering, and v2 components. | You are changing reusable UI primitives or design behavior used by app, desktop, console, enterprise, stats, or TUI. |
-| `http-recorder`         | `@oc2-ai/http-recorder`         | Test utility for recording and replaying Effect HTTP and WebSocket traffic as deterministic JSON cassettes with redaction and ordered matching.                                                 | You are adding deterministic provider/integration tests that need recorded HTTP or WebSocket traffic.                           |
-| `effect-drizzle-sqlite` | `@oc2-ai/effect-drizzle-sqlite` | Vendored generic Drizzle ORM adapter for Effect SQLite. Provides Effect-backed Drizzle database/session/migrator support and Effect-yieldable SQLite query builders.                            | You are changing the generic Drizzle/Effect/SQLite bridge. Keep OpenCode-specific logic out.                                    |
-| `effect-sqlite-node`    | `@oc2-ai/effect-sqlite-node`    | Node `node:sqlite` implementation of Effect `SqlClient`, including WAL/default options, serialized access, transactions, and extension loading.                                                 | You are changing Node SQLite client behavior used by database runtime paths.                                                    |
-| `script`                | `@oc2-ai/script`                     | Shared release/build helper. Computes Bun compatibility, release channel/version, preview/release flags, and team list from env, git, root package metadata, and `.github/TEAM_MEMBERS`.        | You are changing shared build/release metadata helpers used by scripts.                                                         |
+`runtime` contains local generated dependency/cache artifacts, not maintained source. Do not edit it as a normal package.
 
-## Docs, assets, and local artifacts
+## Common Workflows
 
-| Folder     | Package                              | Responsibility                                                                                                                                                            | Touch this when                                                                                            |
-| ---------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `identity` | None                                 | Static OpenCode brand identity assets, including SVG and PNG marks in default/light variants and multiple sizes.                                                          | You are updating logo or brand mark assets.                                                                |
-| `runtime`  | None                                 | Local/generated-looking runtime area currently containing cache/dependency artifacts rather than maintained source code.                                                  | Usually do not edit this directly; treat it as a local artifact unless a specific workflow says otherwise. |
+### Run The Product
 
-## Development notes
+From the repository root:
 
-- This repo uses Bun workspaces. Use the relevant package directory and package scripts instead of running tests from the repo root.
-- Run `bun typecheck` from the package you are changing when applicable; do not call `tsc` directly.
-- Server API changes can require SDK/OpenAPI regeneration. For the JS SDK, use `./packages/sdk/js/script/build.ts`.
-- Keep large binary assets out of normal source paths when clone or checkout size becomes a bottleneck. Prefer Git LFS, a CDN/R2 bucket, or release artifacts for console lander videos, bulky media, and large fixtures; keep small placeholders, manifests, or documented fetch scripts in the package that owns the asset.
-- `packages/function` and `packages/console/function` are separate Cloudflare/serverless areas with different responsibilities.
-- `identity` and `runtime` are not normal source packages.
-- Some package READMEs are starter-template or sparse. Prefer `package.json`, `src/`, package-specific `AGENTS.md`, and nearby tests/specs when you need current truth.
+```bash
+bun dev .
+bun dev serve --port 4096
+bun dev web --port 4096
+```
+
+### Verify A Package
+
+Run package tests and typechecks in that package, not at the repository root:
+
+```bash
+cd packages/<package>
+bun typecheck
+bun test
+```
+
+Not every package defines `test`; check its `package.json` first. Do not run `tsc` directly.
+
+For repository-wide structural verification:
+
+```bash
+bun run lint
+bun run check:packages
+bun run check:generated
+bun run typecheck
+```
+
+The root `test` script intentionally rejects root-level test runs.
+
+### Choose The Right Layer
+
+1. Start with the package that presents the behavior.
+2. Move shared domain rules into `core` only when multiple retained surfaces need them.
+3. Keep model protocol and transport concerns in `llm`.
+4. Keep HTTP contracts and handlers in `server`.
+5. Regenerate the SDK when public API shapes change.
+6. Test the real package boundary with minimal mocking.
+
+Avoid adding hosted fallbacks or template-owner service dependencies. Local UI and command modes should work against the local runtime and server; external network access should be limited to user-configured model providers or integrations.

@@ -239,7 +239,7 @@ describe("SessionStatus.Info", () => {
         title: "Free limit reached",
         message: "Subscribe to OpenCode Go.",
         label: "subscribe",
-        link: "https://opencode.ai/go",
+        link: "https://example.invalid/go",
       },
       next: 500,
     }

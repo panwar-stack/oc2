@@ -1,138 +1,106 @@
-<p align="center">
-  <a href="https://oc2.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OC2 logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The open source AI coding agent.</p>
-<p align="center">
-  <a href="https://oc2.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/oc2-ai"><img alt="npm" src="https://img.shields.io/npm/v/oc2-ai?style=flat-square" /></a>
-  <a href="https://github.com/panwar-stack/oc2/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/panwar-stack/oc2/publish.yml?style=flat-square&branch=dev" /></a>
-</p>
+# OC2 Local Template
 
-[![OC2 Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://oc2.ai)
+OC2 is an AI coding agent template designed to run from a local clone. The repository keeps the core runtime, command-line interface, terminal UI, browser app, local HTTP server, SDK, plugin API, and provider-neutral LLM packages.
 
----
+The template does not depend on an OC2-hosted account, sharing service, managed model provider, documentation site, or hosted app fallback. Model calls still use the providers you configure with your own credentials.
 
-### Installation
+## Requirements
+
+- [Bun](https://bun.sh) 1.3.14, matching the root `packageManager` field
+- Git
+
+## Start From A Clone
 
 ```bash
-# YOLO
-curl -fsSL https://oc2.ai/install | bash
-
-# Package managers
-npm i -g oc2-ai@latest        # or bun/pnpm/yarn
-scoop install oc2             # Windows
-choco install oc2             # Windows
-brew install panwar-stack/tap/oc2 # macOS and Linux (recommended, always up to date)
-brew install oc2              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S oc2            # Arch Linux (Stable)
-paru -S oc2-bin               # Arch Linux (Latest from AUR)
-mise use -g oc2               # Any OS
-nix run nixpkgs#oc2           # or github:panwar-stack/oc2 for latest dev branch
+git clone <repository-url> oc2-local
+cd oc2-local
+bun install --frozen-lockfile
 ```
 
-Legacy commands, config files, env vars, and install URLs remain supported as migration aliases. Prefer `oc2` names for new installs and documentation.
-
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
-
-#### Installation Directory
-
-The install script respects the following priority order for the installation path:
-
-1. `$OC2_INSTALL_DIR` - Custom installation directory
-2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
-4. `$HOME/.oc2/bin` - Default fallback
+Launch the terminal UI for a project directory:
 
 ```bash
-# Examples
-OC2_INSTALL_DIR=/usr/local/bin curl -fsSL https://oc2.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://oc2.ai/install | bash
+bun dev /path/to/project
 ```
 
-### Agents
+Use `bun dev .` to work on this repository itself. Run `bun dev --help` to inspect the complete CLI surface.
 
-OC2 includes two built-in agents you can switch between with the `Tab` key.
+Configure a model provider with your own credentials before starting a model-backed session:
 
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
+```bash
+bun dev providers login
+```
 
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
+## Local Interfaces
 
-Subagents are specialized agent types that a primary agent can invoke for a task. Teammates are different: they are background child sessions in an agent team, each with its own name, agent type, role prompt, dependencies, mailbox messages, and optional plan approval. A teammate can run a subagent type, but "teammate" is the team coordination role, not an agent mode.
+The development entrypoint and a built `oc2` binary expose the same primary commands:
 
-Learn more about [agents](https://oc2.ai/docs/agents).
+```bash
+bun dev <directory>            # Terminal UI
+bun dev run "Explain this repo" # Non-interactive prompt
+bun dev serve --port 4096      # Headless local API server
+bun dev web --port 4096        # Local server and embedded browser app
+```
 
-### Feature Highlights
+For browser UI development, run the backend and Vite app separately:
 
-#### Agent Teams (Experimental)
+```bash
+# Terminal 1
+bun dev serve --port 4096
 
-Agent teams let one lead session coordinate multiple background teammate sessions for work that can be split across specialists.
+# Terminal 2
+bun run --cwd packages/app dev -- --port 4444
+```
 
-- Enable with `"experimental": { "agent_teams": true }` in `oc2.json`
-- Spawn teammates with their own agent type, model, role prompt, dependencies, and optional plan approval
-- Coordinate through mailbox messages, broadcasts, shared task lists, and automatic dependency unblocking
-- Use the TUI team panel to inspect teammate status, pending questions, shared tasks, messages, and shutdown controls
-- Generate post-run effectiveness reports with `team_report` or `/team-report`, including throughput, lifecycle, dependency, messaging, cost, token, and evaluation summaries
-- Inspect teams through the HTTP API and generated JavaScript SDK, including `/team/{teamID}/eval` for deterministic DAG-based evaluation findings
+Open `http://localhost:4444`. The app targets the local backend at `http://localhost:4096` by default.
 
-Subagents cannot create nested agent teams, and team tools stay scoped to lead and teammate sessions.
+Set `OC2_SERVER_PASSWORD` before exposing the server beyond a trusted local machine.
 
-Learn more in the [agent teams docs](https://oc2.ai/docs/agent-teams).
+## Build And Verify
 
-#### Local Fusion
+Build a standalone executable for the current platform:
 
-`local_fusion` runs local compound model orchestration from a normal OC2 session. It fans one prompt out to inline configured branch models, judges the branch outputs, and synthesizes one final answer without using a remote compound-model provider.
+```bash
+bun run dev:build
+```
 
-- Configure branches, judge, and synthesizer inline in the tool input
-- Branches default to read/search-only tools, with `toolPolicy: "none"` available per branch
-- Judge and synthesizer run with tools disabled
-- Partial branch failures continue when at least one branch succeeds; all-branch, judge, and synthesizer failures fail loudly
+The binary is written under `packages/opencode/dist/oc2-<platform>/bin/oc2`.
 
-Named compound configs and `model: "compound/..."` routing are not included in this first version.
+Repository-wide checks:
 
-Learn more in the [tools docs](https://oc2.ai/docs/tools#local_fusion).
+```bash
+bun run lint
+bun run check:packages
+bun run check:generated
+bun run typecheck
+```
 
-#### Session Export
+Tests must run from the package that owns them, not from the repository root. For example:
 
-`oc2 export` now includes child sessions recursively, so exported JSON captures subagent and teammate work along with the lead session.
+```bash
+bun run --cwd packages/opencode test
+bun run --cwd packages/llm test
+bun run --cwd packages/tui test
+bun run --cwd packages/app test:unit
+```
 
-#### Repository Memory
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and [packages/onboarding.md](./packages/onboarding.md) for the workspace map.
 
-Repository memory indexes local git history and high-activity file summaries so agents can use historical localization hints before reading source. It is enabled by default, but tools require an index from `oc2 memory index`. Disable it with `"memory": { "enabled": false }`. Memory is historical, so agents must verify every hint against current source before editing.
+## Retained Workspace
 
-Learn more in the [memory docs](https://oc2.ai/docs/memory).
+- `packages/opencode`: primary product package and `oc2` CLI entrypoint
+- `packages/core`: shared local runtime and domain services
+- `packages/cli`: Effect-based CLI package
+- `packages/tui`: Solid/OpenTUI terminal interface
+- `packages/app`: Solid/Vite local browser interface
+- `packages/server`: typed local HTTP API
+- `packages/sdk/js`: generated JavaScript API client
+- `packages/plugin`: plugin authoring API
+- `packages/llm`: provider-neutral model protocol and streaming runtime
+- `packages/ui`: shared UI components and TUI assets
 
-### Documentation
+The repository is intentionally a starting point. Fork owners should replace package names, metadata, and release automation to match their own distribution plans.
 
-For more info on how to configure OC2, [**head over to our docs**](https://oc2.ai/docs).
+## License
 
-### Contributing
-
-If you're interested in contributing to OC2, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
-
-Useful contributor helpers:
-
-- `bun run dev:build` builds the OC2 package with the single-binary build shortcut
-- `/clarify` narrows underspecified requests before planning or implementation
-- `/spec-planner` drafts repo-style implementation specs with verification slices
-- `/init` runs guided `AGENTS.md` setup and adds the repo's required coding principles
-- `/team-report` runs the team report tool for the active or most recent team session
-
-### Building on OC2
-
-If you are working on a project that's related to OC2 and is using "oc2" as part of its name, for example "oc2-dashboard" or "oc2-mobile", please add a note to your README to clarify that it is not built by the OC2 team and is not affiliated with us in any way.
-
----
-
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+MIT
