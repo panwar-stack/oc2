@@ -2,7 +2,7 @@
 
 This package contains the Solid/Vite browser interface for the OC2 minimal coding-agent harness. It is one interface to the full agent loop, including configurable providers and agents, persistent sessions, and permission-gated tools. "Minimal" describes the distribution and owner-service boundary, not the browser app's feature set.
 
-At runtime, `oc2 web` serves embedded browser assets when they are present and currently proxies `app.oc2.ai` when they are unavailable. This hosted fallback forwards incoming request headers, including authorization headers and cookies. The Vite development flow below is separate: it serves the UI assets locally and connects them to a local OC2 backend.
+Production builds embed this app's browser assets in the `oc2` binary. At runtime, `oc2 web` serves those assets locally and returns a local error if the embedded bundle is unavailable instead of proxying browser requests to a hosted UI. The Vite development flow below is separate: it serves the UI assets locally and connects them to a local OC2 backend.
 
 ## Local Development
 

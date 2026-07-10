@@ -60,7 +60,7 @@ describe("HttpApi CORS", () => {
     }),
   )
 
-  it.live("adds CORS headers to unauthorized responses", () =>
+  it.live("rejects implicit hosted origins", () =>
     Effect.gen(function* () {
       const handler = HttpRouter.toWebHandler(
         HttpApiApp.createRoutes().pipe(
@@ -78,14 +78,16 @@ describe("HttpApi CORS", () => {
       )
 
       expect(response.status).toBe(401)
-      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.oc2.ai")
+      expect(response.headers.get("access-control-allow-origin")).toBeNull()
     }),
   )
 
   it.live("uses custom CORS origins passed to the server", () =>
     Effect.gen(function* () {
       const listener = yield* Effect.acquireRelease(
-        Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0, cors: ["https://custom.example"] })),
+        Effect.promise(() =>
+          Server.listen({ hostname: "127.0.0.1", port: 0, cors: ["https://custom.example", "https://app.oc2.ai"] }),
+        ),
         (listener) => Effect.promise(() => listener.stop(true)),
       )
 
@@ -103,6 +105,19 @@ describe("HttpApi CORS", () => {
       expect(response.status).toBe(204)
       expect(response.headers.get("access-control-allow-origin")).toBe("https://custom.example")
       expect(response.headers.get("access-control-allow-headers")).toBe("authorization")
+
+      const hosted = yield* Effect.promise(() =>
+        fetch(new URL(InstancePaths.path, listener.url), {
+          method: "OPTIONS",
+          headers: {
+            origin: "https://app.oc2.ai",
+            "access-control-request-method": "GET",
+          },
+        }),
+      )
+
+      expect(hosted.status).toBe(204)
+      expect(hosted.headers.get("access-control-allow-origin")).toBe("https://app.oc2.ai")
 
       const rejected = yield* Effect.promise(() =>
         fetch(new URL(InstancePaths.path, listener.url), {

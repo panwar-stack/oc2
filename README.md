@@ -48,7 +48,7 @@ Set `OC2_SERVER_PASSWORD` before exposing `oc2 serve` or `oc2 web` beyond a trus
 
 ## Browser Behavior
 
-`oc2 web` starts the local OC2 server and serves embedded browser assets when they are present. If embedded assets are unavailable, the current runtime proxies browser asset requests to `app.oc2.ai`; setting `OC2_DISABLE_EMBEDDED_WEB_UI=true` deliberately selects the same fallback. It requires network access and forwards most incoming request headers, including authorization headers and cookies.
+Production builds embed the browser assets in the `oc2` binary. `oc2 web` starts the local OC2 server and serves those assets without contacting a hosted UI. If the embedded bundle is unavailable, the server returns a local error instead of proxying browser requests elsewhere.
 
 For browser-interface development, run the backend and Vite app separately so the UI assets are served locally:
 

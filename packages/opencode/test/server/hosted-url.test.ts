@@ -1,19 +1,19 @@
 import { describe, expect, test } from "bun:test"
 
 import { resolveNetworkOptionsNoConfig } from "../../src/cli/network"
-import { isAllowedCorsOrigin } from "../../src/server/cors"
-import { upstreamURL } from "../../src/server/shared/ui"
+import { isAllowedCorsOrigin, isAllowedRequestOrigin } from "../../src/server/cors"
 
 describe("hosted URL compatibility", () => {
-  test("allows oc2 and legacy opencode hosted CORS origins", () => {
-    expect(isAllowedCorsOrigin("https://oc2.ai")).toBe(true)
-    expect(isAllowedCorsOrigin("https://app.oc2.ai")).toBe(true)
-    expect(isAllowedCorsOrigin("https://app.oc2.ai")).toBe(true)
+  test("requires explicit configuration for hosted CORS origins", () => {
+    expect(isAllowedCorsOrigin("https://oc2.ai")).toBe(false)
+    expect(isAllowedCorsOrigin("https://app.oc2.ai")).toBe(false)
+    expect(isAllowedCorsOrigin("https://app.opencode.ai")).toBe(false)
+    expect(isAllowedCorsOrigin("https://app.oc2.ai", { cors: ["https://app.oc2.ai"] })).toBe(true)
+    expect(isAllowedCorsOrigin(undefined)).toBe(true)
+    expect(isAllowedCorsOrigin("http://127.0.0.1:3000")).toBe(true)
+    expect(isAllowedCorsOrigin("http://localhost:3000")).toBe(true)
+    expect(isAllowedRequestOrigin("https://dev.example:4096", "dev.example:4096")).toBe(true)
     expect(isAllowedCorsOrigin("https://example.com")).toBe(false)
-  })
-
-  test("uses app.oc2.ai as the upstream UI", () => {
-    expect(upstreamURL("/assets/app.js")).toBe("https://app.oc2.ai/assets/app.js")
   })
 
   test("defaults mDNS to oc2.local", () => {

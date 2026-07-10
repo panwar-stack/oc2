@@ -1,7 +1,5 @@
 import { Context } from "effect"
 
-const hostedOrigins = [/^https:\/\/([a-z0-9-]+\.)*oc2\.ai$/, /^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/]
-
 export type CorsOptions = { readonly cors?: ReadonlyArray<string> }
 
 export const CorsConfig = Context.Reference<CorsOptions | undefined>("@opencode/ServerCorsConfig", {
@@ -12,7 +10,6 @@ export function isAllowedCorsOrigin(input: string | undefined, opts?: CorsOption
   if (!input) return true
   if (input.startsWith("http://localhost:")) return true
   if (input.startsWith("http://127.0.0.1:")) return true
-  if (hostedOrigins.some((origin) => origin.test(input))) return true
   return opts?.cors?.includes(input) ?? false
 }
 
