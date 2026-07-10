@@ -14,7 +14,7 @@ Read the highest-value sources first:
 - existing instruction files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`)
 - repo-local OC2 config such as `oc2.json`
 
-Run `opencode memory index` to create or refresh repository memory for future sessions.
+Run `oc2 memory index` to create or refresh repository memory for future sessions.
 
 If architecture is still unclear after reading config and docs, inspect a small number of representative code files to find the real entrypoints, package boundaries, and execution flow. Prefer reading the files that explain how the system is wired together over random leaf files.
 

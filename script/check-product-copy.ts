@@ -36,6 +36,7 @@ const pathProhibited: Record<string, string[]> = {
     "local-first coding agent harness",
     "Avoid adding hosted fallbacks or external service dependencies",
   ],
+  "packages/app/README.md": ["an opencode backend"],
   "packages/app/src/i18n/en.ts": ["includes free models", "Connect any provider", "bundled provider"],
   "packages/tui/src/feature-plugins/sidebar/footer.tsx": [
     "includes free models",
@@ -44,7 +45,11 @@ const pathProhibited: Record<string, string[]> = {
   ],
   "packages/core/src/plugin/command/initialize.txt": ["OpenCode sessions", "repo-local OpenCode config"],
   "packages/core/src/plugin/skill.ts": ["opencode's own configuration", "opencode agents"],
-  "packages/opencode/src/command/template/initialize.txt": ["OpenCode sessions", "repo-local OpenCode config"],
+  "packages/opencode/src/command/template/initialize.txt": [
+    "OpenCode sessions",
+    "repo-local OpenCode config",
+    "opencode memory index",
+  ],
   "packages/opencode/src/session/prompt/anthropic.txt": [
     "use WebFetch to answer from the documentation",
     "documentation index is https://OC2.ai/docs",
