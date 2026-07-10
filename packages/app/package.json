@@ -1,7 +1,7 @@
 {
   "name": "@oc2-ai/app",
   "version": "1.16.2",
-  "description": "",
+  "description": "Browser interface for the OC2 minimal coding-agent harness",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

@@ -1,6 +1,8 @@
-# OC2 Local Browser App
+# OC2 Browser App
 
-This package contains the Solid/Vite browser interface for the OC2 minimal local coding agent harness. It runs against a local OC2 backend and is not a standalone hosted web app.
+This package contains the Solid/Vite browser interface for the OC2 minimal coding-agent harness. It is one interface to the full agent loop, including configurable providers and agents, persistent sessions, and permission-gated tools. "Minimal" describes the distribution and owner-service boundary, not the browser app's feature set.
+
+At runtime, `oc2 web` serves embedded browser assets when they are present and currently proxies `app.oc2.ai` when they are unavailable. This hosted fallback forwards incoming request headers, including authorization headers and cookies. The Vite development flow below is separate: it serves the UI assets locally and connects them to a local OC2 backend.
 
 ## Local Development
 
@@ -14,7 +16,7 @@ bun dev serve --port 4096
 bun run --cwd packages/app dev -- --port 4444
 ```
 
-Open `http://localhost:4444`. The app targets the local backend at `http://localhost:4096` by default.
+Open `http://localhost:4444`. The app targets the local backend at `http://localhost:4096` by default. Model calls go to the configured provider endpoint, which may be local.
 
 ## Package Scripts
 

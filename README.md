@@ -1,48 +1,56 @@
-# OC2 Minimal Coding Agent
+# OC2
 
-OC2 is a minimal local coding agent harness based on and inspired by opencode. It is a full local-first runtime you can configure, build, and run on your own machine. The repository includes the core runtime, command-line interface, terminal UI, browser app, local HTTP server, SDK, plugin API, and provider-neutral LLM packages.
+OC2 is a minimal coding-agent harness that runs a complete agent loop with configurable model providers and agents, persistent sessions, and permission-gated tools.
 
-The harness does not depend on an OC2-hosted account, sharing service, managed model provider, documentation site, or hosted app fallback. Model calls use the providers you configure with your own credentials.
+For a local workspace, the OC2 process, session orchestration, filesystem and tool execution, and persistence run on your machine by default. Attach, remote, and provider tools can connect to other systems. Model calls go to the configured provider endpoint, which may be local; running OC2 locally does not imply offline operation.
 
-## Requirements
+OC2 is an independent project based on and inspired by [opencode](https://github.com/anomalyco/opencode). It is not an official opencode distribution.
 
-- [Bun](https://bun.sh) 1.3.14, matching the root `packageManager` field
-- Git
-
-## Run Locally
+After installing or building the `oc2` binary, start the interactive terminal UI in the current directory:
 
 ```bash
-git clone <repository-url> oc2-local
-cd oc2-local
-bun install --frozen-lockfile
+oc2 .
 ```
 
-Launch the terminal UI for a project directory:
+## Run OC2
+
+The primary interfaces are available from the same executable:
 
 ```bash
-bun dev /path/to/project
+oc2 .                              # Interactive terminal UI
+oc2 run "Explain this repository" # One-shot execution
+oc2 serve --port 4096              # Headless HTTP server
+oc2 web --port 4096                # Server and browser client
 ```
 
-Use `bun dev .` to work on this repository itself. Run `bun dev --help` to inspect the complete CLI surface.
-
-Configure a model provider with your own credentials before starting a model-backed session:
+Configure credentials for a model provider before starting a model-backed session:
 
 ```bash
-bun dev providers login
+oc2 providers login
 ```
 
-## Local Interfaces
+You can instead configure a local model provider. OC2 does not bundle free model access.
 
-The development entrypoint and a built `oc2` binary expose the same primary commands:
+Set `OC2_SERVER_PASSWORD` before exposing `oc2 serve` or `oc2 web` beyond a trusted local machine.
 
-```bash
-bun dev <directory>            # Terminal UI
-bun dev run "Explain this repo" # Non-interactive prompt
-bun dev serve --port 4096      # Headless local API server
-bun dev web --port 4096        # Local server and embedded browser app
-```
+## Capabilities
 
-For browser UI development, run the backend and Vite app separately:
+- Interactive TUI with `oc2 .`
+- One-shot execution with `oc2 run`
+- Headless server with `oc2 serve`
+- Browser client with `oc2 web`
+- Configurable model providers and agents
+- Persistent sessions
+- Permission-gated filesystem, shell, and supporting tools
+- Experimental agent-team coordination for parallel, inspectable work
+
+"Minimal" describes OC2's distribution and owner-service assumptions, not a reduced agent loop or a starter skeleton.
+
+## Browser Behavior
+
+`oc2 web` starts the local OC2 server and serves embedded browser assets when they are present. If embedded assets are unavailable, the current runtime proxies `app.oc2.ai`; that hosted fallback requires network access and forwards incoming request headers, including authorization headers and cookies.
+
+For browser-interface development, run the backend and Vite app separately so the UI assets are served locally:
 
 ```bash
 # Terminal 1
@@ -52,11 +60,32 @@ bun dev serve --port 4096
 bun run --cwd packages/app dev -- --port 4444
 ```
 
-Open `http://localhost:4444`. The app targets the local backend at `http://localhost:4096` by default.
+Open `http://localhost:4444`. The app targets the local backend at `http://localhost:4096` by default. Model calls still use the provider you configure.
 
-Set `OC2_SERVER_PASSWORD` before exposing the server beyond a trusted local machine.
+## Upstream Lineage
 
-## Build And Verify
+OC2 retains substantial architecture and compatibility identifiers from opencode while developing its own product direction. References to opencode in APIs, configuration compatibility, or third-party attribution do not make OC2 an official upstream release.
+
+## Develop From Source
+
+Source development requires [Bun](https://bun.sh) 1.3.14, matching the root `packageManager` field, and Git.
+
+```bash
+git clone https://github.com/panwar-stack/oc2.git
+cd oc2
+bun install --frozen-lockfile
+```
+
+Clone and fork workflows belong to source development and distribution customization; they are not OC2's primary product value.
+
+Use the development entrypoint for the same core interfaces:
+
+```bash
+bun dev .
+bun dev run "Explain this repository"
+bun dev serve --port 4096
+bun dev web --port 4096
+```
 
 Build a standalone executable for the current platform:
 
@@ -86,20 +115,18 @@ bun run --cwd packages/app test:unit
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and [packages/onboarding.md](./packages/onboarding.md) for the workspace map.
 
-## Retained Workspace
+## Workspace
 
 - `packages/opencode`: primary product package and `oc2` CLI entrypoint
-- `packages/core`: shared local runtime and domain services
+- `packages/core`: shared runtime and domain services
 - `packages/cli`: Effect-based CLI package
 - `packages/tui`: Solid/OpenTUI terminal interface
-- `packages/app`: Solid/Vite local browser interface
-- `packages/server`: typed local HTTP API
+- `packages/app`: Solid/Vite browser interface
+- `packages/server`: typed HTTP API
 - `packages/sdk/js`: generated JavaScript API client
 - `packages/plugin`: plugin authoring API
 - `packages/llm`: provider-neutral model protocol and streaming runtime
 - `packages/ui`: shared UI components and TUI assets
-
-This repository is intentionally a runnable starting point for a local coding agent harness. Fork owners can replace package names, metadata, and release automation to match their own distribution plans.
 
 ## License
 
