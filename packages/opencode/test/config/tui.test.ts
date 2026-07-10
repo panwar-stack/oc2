@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import nodeFs from "fs/promises"
 import path from "path"
 import { pathToFileURL } from "url"
 import { Effect, Layer } from "effect"
@@ -10,6 +11,7 @@ import { CurrentWorkingDirectory } from "@/config/tui-cwd"
 import { TuiConfig } from "../../src/config/tui"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { NpmTest } from "../fake/npm"
 
 const it = testEffect(Layer.mergeAll(Config.defaultLayer, FSUtil.defaultLayer))
 const winIt = process.platform === "win32" ? it.instance : it.instance.skip
@@ -17,14 +19,21 @@ const winIt = process.platform === "win32" ? it.instance : it.instance.skip
 const globalConfigFiles = ["oc2.json", "oc2.jsonc", "tui.json", "tui.jsonc"].map((file) =>
   path.join(Global.Path.config, file),
 )
+const homeConfigFiles = ["oc2.json", "oc2.jsonc", "tui.json", "tui.jsonc"].map((file) =>
+  path.join(Global.Path.home, ".oc2", file),
+)
 
 const cleanState = Effect.gen(function* () {
   const fs = yield* FSUtil.Service
   delete process.env.OC2_CONFIG
+  delete process.env.OC2_CONFIG_DIR
   delete process.env.OC2_TUI_CONFIG
-  yield* Effect.forEach(globalConfigFiles, (file) => fs.remove(file, { force: true }).pipe(Effect.ignore), {
-    discard: true,
-  })
+  delete process.env.OC2_DISABLE_PROJECT_CONFIG
+  yield* Effect.forEach(
+    [...globalConfigFiles, ...homeConfigFiles],
+    (file) => fs.remove(file, { force: true }).pipe(Effect.ignore),
+    { discard: true },
+  )
 })
 
 const withCleanState = <A, E, R>(self: Effect.Effect<A, E, R>) =>
@@ -69,12 +78,24 @@ const withPlatform = <A, E, R>(platform: typeof process.platform, self: Effect.E
 
 const getTuiConfig = (directory: string) =>
   TuiConfig.Service.use((svc) => svc.get()).pipe(
-    Effect.provide(TuiConfig.defaultLayer.pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory)))),
+    Effect.provide(
+      TuiConfig.layer.pipe(
+        Layer.provide(NpmTest.noop),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory)),
+      ),
+    ),
   )
 
 const getTuiPluginOrigins = (directory: string) =>
   TuiConfig.Service.use((svc) => svc.pluginOrigins()).pipe(
-    Effect.provide(TuiConfig.defaultLayer.pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory)))),
+    Effect.provide(
+      TuiConfig.layer.pipe(
+        Layer.provide(NpmTest.noop),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Layer.succeed(CurrentWorkingDirectory, directory)),
+      ),
+    ),
   )
 
 it.instance("keeps server and tui plugin merge semantics aligned", () =>
@@ -135,6 +156,56 @@ it.instance("loads tui config with the same precedence order as server config pa
   ),
 )
 
+it.instance("applies the complete interleaved tui source precedence plan", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const nested = path.join(test.directory, "apps", "client")
+      const nearest = path.join(nested, ".oc2", "tui.json")
+      const outer = path.join(test.directory, ".oc2", "oc2.json")
+      const home = path.join(Global.Path.home, ".oc2", "tui.json")
+      const configDir = path.join(test.directory, "config-dir")
+      const managed = path.join(configDir, "tui.json")
+      const configEnv = path.join(test.directory, "config-env.json")
+      const tuiEnv = path.join(test.directory, "tui-env.json")
+      const root = path.join(test.directory, "tui.json")
+      const direct = path.join(nested, "oc2.json")
+      yield* fs.makeDirectory(nested, { recursive: true })
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { theme: "global" })
+      yield* fs.writeJson(configEnv, { theme: "config-env" })
+      yield* fs.writeJson(tuiEnv, { theme: "tui-env" })
+      yield* fs.writeJson(root, { theme: "direct-root" })
+      yield* fs.writeJson(direct, { theme: "direct-near" })
+      yield* fs.writeWithDirs(nearest, JSON.stringify({ theme: "discovered-near" }))
+      yield* fs.writeWithDirs(outer, JSON.stringify({ theme: "discovered-outer" }))
+      yield* fs.writeWithDirs(home, JSON.stringify({ theme: "home" }))
+      yield* fs.writeWithDirs(managed, JSON.stringify({ theme: "config-dir" }))
+      process.env.OC2_CONFIG = configEnv
+      process.env.OC2_TUI_CONFIG = tuiEnv
+      process.env.OC2_CONFIG_DIR = configDir
+
+      expect((yield* getTuiConfig(nested)).theme).toBe("config-dir")
+      yield* fs.remove(managed)
+      expect((yield* getTuiConfig(nested)).theme).toBe("home")
+      yield* fs.remove(home)
+      expect((yield* getTuiConfig(nested)).theme).toBe("discovered-outer")
+      yield* fs.remove(outer)
+      expect((yield* getTuiConfig(nested)).theme).toBe("discovered-near")
+      yield* fs.remove(nearest)
+      expect((yield* getTuiConfig(nested)).theme).toBe("direct-near")
+      yield* fs.remove(direct)
+      expect((yield* getTuiConfig(nested)).theme).toBe("direct-root")
+      yield* fs.remove(root)
+      expect((yield* getTuiConfig(nested)).theme).toBe("tui-env")
+      delete process.env.OC2_TUI_CONFIG
+      expect((yield* getTuiConfig(nested)).theme).toBe("config-env")
+      delete process.env.OC2_CONFIG
+      expect((yield* getTuiConfig(nested)).theme).toBe("global")
+    }),
+  ),
+)
+
 it.instance("resolves attention config defaults and overrides", () =>
   withCleanState(
     Effect.gen(function* () {
@@ -183,81 +254,95 @@ it.instance("resolves attention config defaults and overrides", () =>
   ),
 )
 
-it.instance("migrates tui-specific keys from oc2.json when tui.json does not exist", () =>
+it.instance("loads legacy tui keys without modifying protected sources", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
       const source = path.join(test.directory, "oc2.json")
-      yield* fs.writeJson(source, {
-        theme: "migrated-theme",
-        tui: { scroll_speed: 5 },
-        keybinds: { app_exit: "ctrl+q" },
-      })
+      const backup = source + ".tui-migration.bak"
+      const sources = [
+        {
+          file: source,
+          content: JSON.stringify({ theme: "legacy-theme", keybinds: { app_exit: "ctrl+q" } }, null, 2),
+        },
+        { file: path.join(test.directory, "tui.json"), content: '{"scroll_speed":5}\n' },
+        {
+          file: path.join(test.directory, "tui.jsonc"),
+          content: '{\n  // protected explicit TUI config\n  "diff_style": "stacked"\n}\n',
+        },
+        { file: backup, content: '{"theme":"existing-backup"}\n' },
+      ]
+      for (const item of sources) yield* fs.writeFileString(item.file, item.content)
+      const fixed = new Date("2020-01-02T03:04:05.000Z")
+      yield* Effect.promise(() => Promise.all(sources.map((item) => nodeFs.utimes(item.file, fixed, fixed))))
+      const before = new Map(
+        yield* Effect.promise(() =>
+          Promise.all(
+            sources.map(async (item) => [
+              item.file,
+              { bytes: await nodeFs.readFile(item.file), mtimeMs: (await nodeFs.stat(item.file)).mtimeMs },
+            ] as const),
+          ),
+        ),
+      )
 
       const config = yield* getTuiConfig(test.directory)
-      expect(config.theme).toBe("migrated-theme")
+      expect(config.theme).toBe("legacy-theme")
       expect(config.scroll_speed).toBe(5)
+      expect(config.diff_style).toBe("stacked")
       expect(config.keybinds.get("app.exit")?.[0]?.key).toBe("ctrl+q")
-      expect(JSON.parse(yield* fs.readFileString(path.join(test.directory, "tui.json")))).toMatchObject({
-        theme: "migrated-theme",
-        scroll_speed: 5,
-      })
-      const server = JSON.parse(yield* fs.readFileString(source))
-      expect(server.theme).toBeUndefined()
-      expect(server.keybinds).toBeUndefined()
-      expect(server.tui).toBeUndefined()
-      expect(yield* fs.existsSafe(path.join(test.directory, "oc2.json.tui-migration.bak"))).toBe(true)
-      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
+      for (const item of sources) {
+        const original = before.get(item.file)
+        if (!original) throw new Error(`missing protected source snapshot for ${item.file}`)
+        expect(yield* Effect.promise(() => nodeFs.readFile(item.file))).toEqual(original.bytes)
+        expect((yield* Effect.promise(() => nodeFs.stat(item.file))).mtimeMs).toBe(original.mtimeMs)
+      }
+      expect(yield* fs.existsSafe(path.join(test.directory, "oc2.jsonc.tui-migration.bak"))).toBe(false)
     }),
   ),
 )
 
-it.instance("migrates project legacy tui keys even when global tui.json already exists", () =>
+it.instance("interleaves legacy and explicit files within each directory", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
-      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { theme: "global" })
-      yield* fs.writeJson(path.join(test.directory, "oc2.json"), {
-        theme: "project-migrated",
-        tui: { scroll_speed: 2 },
-      })
+      yield* fs.writeJson(path.join(test.directory, "oc2.json"), { theme: "legacy-json", tui: { scroll_speed: 1 } })
+      yield* fs.writeFileString(
+        path.join(test.directory, "oc2.jsonc"),
+        `{ "theme": "legacy-jsonc", "tui": { "scroll_speed": 2 } }`,
+      )
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), { theme: "tui-json", scroll_speed: 3 })
+      yield* fs.writeJson(path.join(test.directory, "tui.jsonc"), { theme: "tui-jsonc", scroll_speed: 4 })
 
       const config = yield* getTuiConfig(test.directory)
-      expect(config.theme).toBe("project-migrated")
-      expect(config.scroll_speed).toBe(2)
-      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
-
-      const server = JSON.parse(yield* fs.readFileString(path.join(test.directory, "oc2.json")))
-      expect(server.theme).toBeUndefined()
-      expect(server.tui).toBeUndefined()
+      expect(config.theme).toBe("tui-jsonc")
+      expect(config.scroll_speed).toBe(4)
     }),
   ),
 )
 
-it.instance("drops unknown legacy tui keys during migration", () =>
+it.instance("keeps valid legacy siblings when another field is invalid", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
       yield* fs.writeJson(path.join(test.directory, "oc2.json"), {
-        theme: "migrated-theme",
-        tui: { scroll_speed: 2, foo: 1 },
+        theme: "legacy-theme",
+        keybinds: "invalid",
+        tui: { scroll_speed: 2, diff_style: "invalid", unknown: true },
       })
 
       const config = yield* getTuiConfig(test.directory)
-      expect(config.theme).toBe("migrated-theme")
+      expect(config.theme).toBe("legacy-theme")
       expect(config.scroll_speed).toBe(2)
-
-      const migrated = JSON.parse(yield* fs.readFileString(path.join(test.directory, "tui.json")))
-      expect(migrated.scroll_speed).toBe(2)
-      expect(migrated.foo).toBeUndefined()
+      expect(config.diff_style).toBeUndefined()
     }),
   ),
 )
 
-it.instance("skips migration when oc2.jsonc is syntactically invalid", () =>
+it.instance("skips legacy extraction when oc2.jsonc is syntactically invalid", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -283,7 +368,7 @@ it.instance("skips migration when oc2.jsonc is syntactically invalid", () =>
   ),
 )
 
-it.instance("skips migration when tui.json already exists", () =>
+it.instance("explicit tui config overrides legacy config in the same directory", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -293,7 +378,7 @@ it.instance("skips migration when tui.json already exists", () =>
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.diff_style).toBe("stacked")
-      expect(config.theme).toBeUndefined()
+      expect(config.theme).toBe("legacy")
 
       const server = JSON.parse(yield* fs.readFileString(path.join(test.directory, "oc2.json")))
       expect(server.theme).toBe("legacy")
@@ -302,59 +387,7 @@ it.instance("skips migration when tui.json already exists", () =>
   ),
 )
 
-it.instance("continues loading tui config when legacy source cannot be stripped", () =>
-  withCleanState(
-    Effect.gen(function* () {
-      const fs = yield* FSUtil.Service
-      const test = yield* TestInstance
-      const source = path.join(test.directory, "oc2.json")
-      yield* fs.writeJson(source, { theme: "readonly-theme" })
-
-      yield* Effect.acquireUseRelease(
-        fs.chmod(source, 0o444),
-        () =>
-          Effect.gen(function* () {
-            const config = yield* getTuiConfig(test.directory)
-            expect(config.theme).toBe("readonly-theme")
-            expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
-
-            const server = JSON.parse(yield* fs.readFileString(source))
-            expect(server.theme).toBe("readonly-theme")
-          }),
-        () => fs.chmod(source, 0o644).pipe(Effect.ignore),
-      )
-    }),
-  ),
-)
-
-it.instance("migration backup preserves JSONC comments", () =>
-  withCleanState(
-    Effect.gen(function* () {
-      const fs = yield* FSUtil.Service
-      const test = yield* TestInstance
-      yield* fs.writeFileString(
-        path.join(test.directory, "oc2.jsonc"),
-        `{
-  // top-level comment
-  "theme": "jsonc-theme",
-  "tui": {
-    // nested comment
-    "scroll_speed": 1.5
-  }
-}`,
-      )
-
-      yield* getTuiConfig(test.directory)
-      const backup = yield* fs.readFileString(path.join(test.directory, "oc2.jsonc.tui-migration.bak"))
-      expect(backup).toContain("// top-level comment")
-      expect(backup).toContain("// nested comment")
-      expect(backup).toContain('"theme": "jsonc-theme"')
-      expect(backup).toContain('"scroll_speed": 1.5')
-    }),
-  ),
-)
-
-it.instance("migrates legacy tui keys across multiple oc2.json levels", () =>
+it.instance("loads legacy tui keys across multiple oc2.json levels", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -366,8 +399,8 @@ it.instance("migrates legacy tui keys across multiple oc2.json levels", () =>
 
       const config = yield* getTuiConfig(nested)
       expect(config.theme).toBe("nested-theme")
-      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
-      expect(yield* fs.existsSafe(path.join(nested, "tui.json"))).toBe(true)
+      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(false)
+      expect(yield* fs.existsSafe(path.join(nested, "tui.json"))).toBe(false)
     }),
   ),
 )
@@ -425,6 +458,27 @@ it.instance("project config takes precedence over OC2_TUI_CONFIG (matches OC2_CO
           expect(config.diff_style).toBe("auto")
         }),
       )
+    }),
+  ),
+)
+
+it.instance("reapplies OC2_CONFIG when it is also a direct project source", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const project = path.join(test.directory, "oc2.json")
+      const custom = path.join(test.directory, "custom-tui.json")
+      yield* fs.writeJson(project, { theme: "project" })
+      yield* fs.writeJson(custom, { theme: "custom" })
+
+      const config = yield* withEnv(
+        "OC2_CONFIG",
+        project,
+        withEnv("OC2_TUI_CONFIG", custom, getTuiConfig(test.directory)),
+      )
+
+      expect(config.theme).toBe("project")
     }),
   ),
 )
@@ -651,14 +705,43 @@ it.instance("OC2_TUI_CONFIG provides settings when no project config exists", ()
   ),
 )
 
-it.instance("does not derive tui path from OC2_CONFIG", () =>
+it.instance("project disable excludes direct and discovered project tui sources", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const custom = path.join(test.directory, "custom-tui.json")
+      yield* fs.writeJson(path.join(test.directory, "oc2.json"), { theme: "direct-legacy" })
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), { theme: "direct-explicit" })
+      yield* fs.writeWithDirs(
+        path.join(test.directory, ".oc2", "tui.json"),
+        JSON.stringify({ theme: "discovered" }),
+      )
+      yield* fs.writeJson(custom, { theme: "custom" })
+
+      yield* withEnv(
+        "OC2_DISABLE_PROJECT_CONFIG",
+        "true",
+        withEnv(
+          "OC2_TUI_CONFIG",
+          custom,
+          Effect.gen(function* () {
+            expect((yield* getTuiConfig(test.directory)).theme).toBe("custom")
+          }),
+        ),
+      )
+    }),
+  ),
+)
+
+it.instance("loads only legacy values from OC2_CONFIG without deriving a sibling tui path", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
       const customDir = path.join(test.directory, "custom")
       yield* fs.makeDirectory(customDir, { recursive: true })
-      yield* fs.writeJson(path.join(customDir, "oc2.json"), { model: "test/model" })
+      yield* fs.writeJson(path.join(customDir, "oc2.json"), { theme: "from-config-env", model: "test/model" })
       yield* fs.writeJson(path.join(customDir, "tui.json"), { theme: "should-not-load" })
 
       yield* withEnv(
@@ -666,7 +749,7 @@ it.instance("does not derive tui path from OC2_CONFIG", () =>
         path.join(customDir, "oc2.json"),
         Effect.gen(function* () {
           const config = yield* getTuiConfig(test.directory)
-          expect(config.theme).toBeUndefined()
+          expect(config.theme).toBe("from-config-env")
         }),
       )
     }),
@@ -691,6 +774,44 @@ it.instance("applies env and file substitutions in tui.json", () =>
         expect(config.theme).toBe("env-theme")
         expect(config.keybinds.get("app.exit")?.[0]?.key).toBe("ctrl+q")
       }),
+    ),
+  ),
+)
+
+it.instance("applies substitutions relative to the legacy source", () =>
+  withCleanState(
+    withEnv(
+      "LEGACY_TUI_THEME_TEST",
+      "legacy-env-theme",
+      withEnv(
+        "LEGACY_TUI_SCROLL_SPEED_TEST",
+        "2.5",
+        Effect.gen(function* () {
+          const fs = yield* FSUtil.Service
+          const test = yield* TestInstance
+          const configDir = path.join(test.directory, "config")
+          yield* fs.makeDirectory(configDir, { recursive: true })
+          yield* fs.writeFileString(path.join(configDir, "keybind.txt"), "ctrl+q")
+          yield* fs.writeFileString(path.join(configDir, "diff-style.txt"), "stacked")
+          yield* fs.writeFileString(
+            path.join(configDir, "oc2.jsonc"),
+            `{
+  "theme": "{env:LEGACY_TUI_THEME_TEST}",
+  "keybinds": { "app_exit": "{file:keybind.txt}" },
+  "tui": {
+    "scroll_speed": {env:LEGACY_TUI_SCROLL_SPEED_TEST},
+    "diff_style": "{file:diff-style.txt}"
+  }
+}`,
+          )
+
+          const config = yield* getTuiConfig(configDir)
+          expect(config.theme).toBe("legacy-env-theme")
+          expect(config.scroll_speed).toBe(2.5)
+          expect(config.diff_style).toBe("stacked")
+          expect(config.keybinds.get("app.exit")?.[0]?.key).toBe("ctrl+q")
+        }),
+      ),
     ),
   ),
 )

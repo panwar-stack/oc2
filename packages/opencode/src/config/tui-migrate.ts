@@ -1,156 +1,91 @@
 import path from "path"
-import { type ParseError as JsoncParseError, applyEdits, modify, parse as parseJsonc } from "jsonc-parser"
+import { type ParseError as JsoncParseError, parse as parseJsonc } from "jsonc-parser"
 import { unique } from "remeda"
 import { Option, Schema } from "effect"
 import { TuiConfig } from "@oc2-ai/tui/config"
+import { TuiKeybind } from "@oc2-ai/tui/config/keybind"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { Global } from "@oc2-ai/core/global"
 import { Filesystem } from "@/util/filesystem"
 import * as Log from "@oc2-ai/core/util/log"
 import * as ConfigPaths from "@/config/paths"
+import { ConfigVariable } from "@/config/variable"
 
 const log = Log.create({ service: "tui.migrate" })
 
-const TUI_SCHEMA_URL = "https://oc2.ai/tui.json"
-
-const decodeTheme = Schema.decodeUnknownOption(Schema.String)
-const decodeRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))
-const decodeScrollSpeed = Schema.decodeUnknownOption(TuiConfig.ScrollSpeed)
-const decodeScrollAcceleration = Schema.decodeUnknownOption(TuiConfig.ScrollAcceleration)
-const decodeDiffStyle = Schema.decodeUnknownOption(TuiConfig.DiffStyle)
-
-interface MigrateInput {
-  cwd: string
-  directories: string[]
+const decoders = {
+  theme: Schema.decodeUnknownOption(Schema.String),
+  keybinds: Schema.decodeUnknownOption(TuiKeybind.KeybindOverrides),
+  scroll_speed: Schema.decodeUnknownOption(TuiConfig.ScrollSpeed),
+  scroll_acceleration: Schema.decodeUnknownOption(TuiConfig.ScrollAcceleration),
+  diff_style: Schema.decodeUnknownOption(TuiConfig.DiffStyle),
 }
 
-/**
- * Migrates tui-specific keys (theme, keybinds, tui) from oc2.json files
- * into dedicated tui.json files. Migration is performed per-directory and
- * skips only locations where a tui.json already exists.
- */
-export async function migrateTuiConfig(input: MigrateInput) {
-  const configFiles = await configFilesWithLegacyTui(input)
-  for (const file of configFiles) {
-    const source = await Filesystem.readText(file).catch((error) => {
-      log.warn("failed to read config for tui migration", { path: file, error })
-      return undefined
-    })
-    if (!source) continue
-    const errors: JsoncParseError[] = []
-    const data = parseJsonc(source, errors, { allowTrailingComma: true })
-    if (errors.length || !data || typeof data !== "object" || Array.isArray(data)) continue
+export type LegacyTuiInfo = Pick<
+  TuiConfig.Info,
+  "theme" | "keybinds" | "scroll_speed" | "scroll_acceleration" | "diff_style"
+>
 
-    const theme = decodeTheme("theme" in data ? data.theme : undefined)
-    const keybinds = decodeRecord("keybinds" in data ? data.keybinds : undefined)
-    const legacyTui = decodeRecord("tui" in data ? data.tui : undefined)
-    const extracted = {
-      theme: Option.getOrUndefined(theme),
-      keybinds: Option.getOrUndefined(keybinds),
-      tui: Option.getOrUndefined(legacyTui),
-    }
-    const tui = extracted.tui ? normalizeTui(extracted.tui) : undefined
-    if (extracted.theme === undefined && extracted.keybinds === undefined && !tui) continue
-
-    const target = path.join(path.dirname(file), "tui.json")
-    const targetExists = await Filesystem.exists(target)
-    if (targetExists) continue
-
-    const payload: Record<string, unknown> = {
-      $schema: TUI_SCHEMA_URL,
-    }
-    if (extracted.theme !== undefined) payload.theme = extracted.theme
-    if (extracted.keybinds !== undefined) payload.keybinds = extracted.keybinds
-    if (tui) Object.assign(payload, tui)
-
-    const wrote = await Filesystem.write(target, JSON.stringify(payload, null, 2))
-      .then(() => true)
-      .catch((error) => {
-        log.warn("failed to write tui migration target", { from: file, to: target, error })
-        return false
-      })
-    if (!wrote) continue
-
-    const stripped = await backupAndStripLegacy(file, source)
-    if (!stripped) {
-      log.warn("tui config migrated but source file was not stripped", { from: file, to: target })
-      continue
-    }
-    log.info("migrated tui config", { from: file, to: target })
-  }
+export type LegacyTuiContribution = {
+  source: string
+  directory: string
+  info: LegacyTuiInfo
 }
 
-function normalizeTui(data: Record<string, unknown>):
-  | {
-      scroll_speed: number | undefined
-      scroll_acceleration: { enabled: boolean } | undefined
-      diff_style: "auto" | "stacked" | undefined
-    }
-  | undefined {
-  const parsed = {
-    scroll_speed: Option.getOrUndefined(decodeScrollSpeed(data.scroll_speed)),
-    scroll_acceleration: Option.getOrUndefined(decodeScrollAcceleration(data.scroll_acceleration)),
-    diff_style: Option.getOrUndefined(decodeDiffStyle(data.diff_style)),
-  }
-  return parsed.scroll_speed === undefined &&
-    parsed.diff_style === undefined &&
-    parsed.scroll_acceleration === undefined
-    ? undefined
-    : parsed
-}
-
-async function backupAndStripLegacy(file: string, source: string) {
-  const backup = file + ".tui-migration.bak"
-  const hasBackup = await Filesystem.exists(backup)
-  const backed = hasBackup
-    ? true
-    : await Filesystem.write(backup, source)
-        .then(() => true)
-        .catch((error) => {
-          log.warn("failed to backup source config during tui migration", { path: file, backup, error })
-          return false
-        })
-  if (!backed) return false
-
-  const text = ["theme", "keybinds", "tui"].reduce((acc, key) => {
-    const edits = modify(acc, [key], undefined, {
-      formattingOptions: {
-        insertSpaces: true,
-        tabSize: 2,
-      },
-    })
-    if (!edits.length) return acc
-    return applyEdits(acc, edits)
-  }, source)
-
-  return Filesystem.write(file, text)
-    .then(() => {
-      log.info("stripped tui keys from server config", { path: file, backup })
-      return true
-    })
-    .catch((error) => {
-      log.warn("failed to strip legacy tui keys from server config", { path: file, backup, error })
-      return false
-    })
-}
-
-async function configFilesWithLegacyTui(input: { directories: string[]; cwd: string }) {
-  const files = [
+export async function extractLegacyTuiConfig(input: { cwd: string; directories: string[] }) {
+  const direct = Flag.OC2_DISABLE_PROJECT_CONFIG
+    ? []
+    : await Filesystem.findUp(["oc2.json", "oc2.jsonc"], input.cwd, undefined, { rootFirst: true })
+  const files = unique([
     ...ConfigPaths.fileInDirectory(Global.Path.config, "oc2"),
-    ...(await Filesystem.findUp(["oc2.json", "oc2.jsonc"], input.cwd, undefined, {
-      rootFirst: true,
-    })),
-  ]
-  for (const dir of unique(input.directories)) {
-    files.push(...ConfigPaths.fileInDirectory(dir, "oc2"))
-  }
-  if (Flag.OC2_CONFIG) files.push(Flag.OC2_CONFIG)
+    ...(Flag.OC2_CONFIG ? [Flag.OC2_CONFIG] : []),
+    ...direct,
+    ...unique(input.directories)
+      .filter((directory) => directory !== Global.Path.config)
+      .flatMap((directory) => ConfigPaths.fileInDirectory(directory, "oc2")),
+  ])
 
-  const existing = await Promise.all(
-    unique(files).map(async (file) => {
-      const ok = await Filesystem.exists(file)
-      return ok ? file : undefined
+  const contributions = await Promise.all(
+    files.map(async (source): Promise<LegacyTuiContribution | undefined> => {
+      const text = await Filesystem.readText(source).catch(async (error) => {
+        if (!(await Filesystem.exists(source))) return undefined
+        log.warn("failed to read config for legacy tui extraction", { source, error })
+        return undefined
+      })
+      if (!text) return
+
+      const expanded = await ConfigVariable.substitute({ text, type: "path", path: source, missing: "empty" })
+      const errors: JsoncParseError[] = []
+      const data = parseJsonc(expanded, errors, { allowTrailingComma: true })
+      if (errors.length || !data || typeof data !== "object" || Array.isArray(data)) {
+        log.warn("skipping invalid config during legacy tui extraction", { source })
+        return
+      }
+
+      const info: LegacyTuiInfo = {}
+      const decode = (field: keyof LegacyTuiInfo, parsed: Option.Option<unknown>) => {
+        if (Option.isNone(parsed)) {
+          log.warn("ignored invalid legacy tui field", { source, field })
+          return
+        }
+        Object.assign(info, { [field]: parsed.value })
+      }
+
+      if ("theme" in data) decode("theme", decoders.theme(data.theme))
+      if ("keybinds" in data) decode("keybinds", decoders.keybinds(data.keybinds))
+      if ("tui" in data) {
+        if (!data.tui || typeof data.tui !== "object" || Array.isArray(data.tui)) {
+          log.warn("ignored invalid legacy tui field", { source, field: "tui" })
+        } else {
+          if ("scroll_speed" in data.tui) decode("scroll_speed", decoders.scroll_speed(data.tui.scroll_speed))
+          if ("scroll_acceleration" in data.tui)
+            decode("scroll_acceleration", decoders.scroll_acceleration(data.tui.scroll_acceleration))
+          if ("diff_style" in data.tui) decode("diff_style", decoders.diff_style(data.tui.diff_style))
+        }
+      }
+      if (!Object.keys(info).length) return
+      return { source, directory: path.dirname(source), info }
     }),
   )
-  return existing.filter((file): file is string => !!file)
+  return contributions.filter((contribution): contribution is LegacyTuiContribution => !!contribution)
 }

@@ -350,15 +350,87 @@ it.instance("falls back to generic username when system user info is unavailable
   }),
 )
 
-it.effect("creates global jsonc config with schema when no global configs exist", () =>
+it.effect("does not seed global config when no global configs exist", () =>
   withGlobalConfig({}, ({ dir }) =>
     Effect.gen(function* () {
       yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-      const content = yield* FSUtil.use.readFileString(path.join(dir, "oc2.jsonc"))
-      expect(content).toContain(`"$schema": "${Naming.configSchemaURL}"`)
+      expect(yield* FSUtil.use.existsSafe(path.join(dir, "oc2.json"))).toBe(false)
+      expect(yield* FSUtil.use.existsSafe(path.join(dir, "oc2.jsonc"))).toBe(false)
+      expect(yield* FSUtil.use.existsSafe(path.join(dir, "config.json"))).toBe(false)
     }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   ),
+)
+
+it.effect("loads protected config sources without changing bytes or modification times", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped({ git: true })
+    const global = yield* tmpdirScoped()
+    const configDir = yield* tmpdirScoped()
+    const custom = path.join(root, "custom.jsonc")
+    const sources = [
+      { file: path.join(global, "oc2.json"), content: '{"username":"global-json"}\n' },
+      {
+        file: path.join(global, "oc2.jsonc"),
+        content:
+          '{\n  // user schema\n  "$schema": "https://example.com/user-schema.json",\n  "username": "global-jsonc"\n}\n',
+      },
+      { file: path.join(global, "config"), content: 'provider = "legacy"\nmodel = "model"\n' },
+      { file: path.join(global, "config.bak"), content: 'provider = "backup"\nmodel = "model"\n' },
+      { file: custom, content: '{\n  // selected through OC2_CONFIG\n  "username": "custom"\n}\n' },
+      { file: path.join(root, "oc2.json"), content: '{"username":"project-json"}\n' },
+      {
+        file: path.join(root, "oc2.jsonc"),
+        content: '{\n  // direct project JSONC\n  "username": "project-jsonc"\n}\n',
+      },
+      { file: path.join(root, "tui.json"), content: '{"theme":"protected-json"}\n' },
+      {
+        file: path.join(root, "tui.jsonc"),
+        content: '{\n  // protected TUI JSONC\n  "theme": "protected-jsonc"\n}\n',
+      },
+      { file: path.join(root, "oc2.json.tui-migration.bak"), content: '{"theme":"existing-backup"}\n' },
+      { file: path.join(root, ".oc2", "oc2.json"), content: '{"username":"directory-json"}\n' },
+      {
+        file: path.join(root, ".oc2", "oc2.jsonc"),
+        content: '{\n  // project directory JSONC\n  "username": "directory-jsonc"\n}\n',
+      },
+      { file: path.join(configDir, "oc2.json"), content: '{"username":"config-dir-json"}\n' },
+      {
+        file: path.join(configDir, "oc2.jsonc"),
+        content: '{\n  // OC2_CONFIG_DIR JSONC\n  "username": "config-dir-jsonc"\n}\n',
+      },
+    ]
+    for (const source of sources) yield* FSUtil.use.writeWithDirs(source.file, source.content)
+
+    const fixed = new Date("2020-01-02T03:04:05.000Z")
+    yield* Effect.promise(() => Promise.all(sources.map((source) => fs.utimes(source.file, fixed, fixed))))
+    const before = new Map(
+      yield* Effect.promise(() =>
+        Promise.all(
+          sources.map(async (source) => [
+            source.file,
+            { bytes: await fs.readFile(source.file), mtimeMs: (await fs.stat(source.file)).mtimeMs },
+          ] as const),
+        ),
+      ),
+    )
+
+    const config = yield* withGlobalConfigDir(
+      global,
+      withProcessEnvs({ OC2_CONFIG: custom, OC2_CONFIG_DIR: configDir }, withInstanceDir(root, Config.use.get())),
+    )
+
+    expect(config.model).toBe("legacy/model")
+    expect(config.$schema).toBe("https://example.com/user-schema.json")
+    for (const source of sources) {
+      const original = before.get(source.file)
+      if (!original) throw new Error(`missing original stat for ${source.file}`)
+      expect(yield* Effect.promise(() => fs.readFile(source.file))).toEqual(original.bytes)
+      expect((yield* Effect.promise(() => fs.stat(source.file))).mtimeMs).toBe(original.mtimeMs)
+    }
+    expect(yield* FSUtil.use.existsSafe(path.join(global, "config.json"))).toBe(false)
+    expect(yield* FSUtil.use.existsSafe(path.join(global, "config"))).toBe(true)
+  }),
 )
 
 it.effect("does not create global config when OC2_CONFIG_DIR is set", () =>
@@ -811,25 +883,19 @@ it.instance("handles environment variable substitution", () =>
   ),
 )
 
-it.instance("preserves env variables when adding $schema to config", () =>
+it.instance("does not add $schema while substituting environment variables", () =>
   withProcessEnv(
     "PRESERVE_VAR",
     "secret_value",
     Effect.gen(function* () {
       const test = yield* TestInstance
-      // Config without $schema - should trigger auto-add
-      yield* FSUtil.use.writeWithDirs(
-        path.join(test.directory, "oc2.json"),
-        JSON.stringify({ username: "{env:PRESERVE_VAR}" }),
-      )
+      const file = path.join(test.directory, "oc2.json")
+      const content = JSON.stringify({ username: "{env:PRESERVE_VAR}" })
+      yield* FSUtil.use.writeWithDirs(file, content)
       const config = yield* Config.use.get()
       expect(config.username).toBe("secret_value")
 
-      // Read the file to verify the env variable was preserved
-      const content = yield* FSUtil.use.readFileString(path.join(test.directory, "oc2.json"))
-      expect(content).toContain("{env:PRESERVE_VAR}")
-      expect(content).not.toContain("secret_value")
-      expect(content).toContain("$schema")
+      expect(yield* FSUtil.use.readFileString(file)).toBe(content)
     }),
   ),
 )
@@ -1887,6 +1953,16 @@ it.instance("local .oc2 config can override MCP from project config", () =>
 )
 
 const precedenceWellKnown = wellKnown({ config: { username: "well-known" } })
+
+const schemaFreeWellKnown = wellKnown({ config: { username: "remote-user" } })
+
+schemaFreeWellKnown.it.instance("does not synthesize $schema for remote config", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.username).toBe("remote-user")
+    expect(config.$schema).toBeUndefined()
+  }),
+)
 
 precedenceWellKnown.it.live("keeps every opencode config source tier in precedence order", () =>
   Effect.gen(function* () {

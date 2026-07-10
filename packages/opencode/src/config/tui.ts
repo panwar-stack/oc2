@@ -5,7 +5,7 @@ import { mergeDeep, unique } from "remeda"
 import { Cause, Context, Effect, Fiber, Layer } from "effect"
 import { ConfigParse } from "@/config/parse"
 import * as ConfigPaths from "@/config/paths"
-import { migrateTuiConfig } from "./tui-migrate"
+import { extractLegacyTuiConfig, type LegacyTuiContribution } from "./tui-migrate"
 import { resolveHostAttentionSoundPaths } from "./tui-host-attention"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { isRecord } from "@oc2-ai/tui/util/record"
@@ -163,69 +163,100 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       return yield* load(text, filepath)
     })
 
+  const mergeInfo = (acc: Acc, data: Info, source: string) => {
+    if (Object.keys(data).length) {
+      appliedOrder += 1
+      log.info("applying tui config", { path: source, order: appliedOrder })
+    }
+    acc.result = mergeDeep(acc.result, data)
+    if (!data.plugin?.length) return
+
+    const scope = pluginScope(source, ctx)
+    const plugins = ConfigPlugin.deduplicatePluginOrigins([
+      ...acc.plugin_origins,
+      ...data.plugin.map((spec) => ({ spec: spec as ConfigPlugin.Origin["spec"], scope, source })),
+    ])
+    acc.result = {
+      ...acc.result,
+      plugin: plugins.map((item) => item.spec),
+    }
+    acc.plugin_origins = plugins
+  }
+
   const mergeFile = (acc: Acc, file: string) =>
     Effect.gen(function* () {
       const data = yield* loadFile(file)
-      if (Object.keys(data).length) {
-        appliedOrder += 1
-        log.info("applying tui config", { path: file, order: appliedOrder })
-      }
-      acc.result = mergeDeep(acc.result, data)
-      if (!data.plugin?.length) return
-
-      const scope = pluginScope(file, ctx)
-      const plugins = ConfigPlugin.deduplicatePluginOrigins([
-        ...acc.plugin_origins,
-        ...data.plugin.map((spec) => ({ spec: spec as ConfigPlugin.Origin["spec"], scope, source: file })),
-      ])
-      acc.result = {
-        ...acc.result,
-        plugin: plugins.map((item) => item.spec),
-      }
-      acc.plugin_origins = plugins
+      mergeInfo(acc, data, file)
     })
 
   // Every config dir we may read from: global config dir, any `.oc2`
   // folders between cwd and home, and OC2_CONFIG_DIR.
   const directories = yield* ConfigPaths.directories(ctx.directory)
-  yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
-
-  const projectFiles = Flag.OC2_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
+  const legacy = yield* Effect.promise(() => extractLegacyTuiConfig({ directories, cwd: ctx.directory }))
+  const legacyBySource = new Map(legacy.map((contribution) => [contribution.source, contribution]))
+  const projectDirectories = Flag.OC2_DISABLE_PROJECT_CONFIG
+    ? []
+    : unique(
+        (
+          yield* afs.up({
+            targets: ["oc2.jsonc", "oc2.json", "tui.jsonc", "tui.json"],
+            start: ctx.directory,
+          })
+        )
+          .toReversed()
+          .map((file) => path.dirname(file)),
+      )
 
   const acc: Acc = {
     result: {},
     plugin_origins: [],
   }
 
-  // 1. Global tui config (lowest precedence).
-  for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "tui")) {
-    yield* mergeFile(acc, file)
+  const mergeLegacy = (contribution: LegacyTuiContribution) =>
+    Effect.gen(function* () {
+      const data = yield* load(JSON.stringify(contribution.info), contribution.source)
+      mergeInfo(acc, data, contribution.source)
+    })
+
+  const mergeDirectory = (directory: string) =>
+    Effect.gen(function* () {
+      for (const source of ConfigPaths.fileInDirectory(directory, "oc2")) {
+        const contribution = legacyBySource.get(source)
+        if (contribution) yield* mergeLegacy(contribution)
+      }
+      for (const file of ConfigPaths.fileInDirectory(directory, "tui")) yield* mergeFile(acc, file)
+    })
+
+  // 1. Global config files (lowest precedence).
+  yield* mergeDirectory(Global.Path.config)
+
+  // 2. Legacy values from OC2_CONFIG only. Never infer a sibling tui file.
+  if (Flag.OC2_CONFIG) {
+    const contribution = legacyBySource.get(Flag.OC2_CONFIG)
+    if (contribution) yield* mergeLegacy(contribution)
   }
 
-  // 2. Explicit OC2_TUI_CONFIG override, if set.
+  // 3. Explicit OC2_TUI_CONFIG override, if set.
   if (Flag.OC2_TUI_CONFIG) {
     const configFile = Flag.OC2_TUI_CONFIG
     yield* mergeFile(acc, configFile)
     log.debug("loaded custom tui config", { path: configFile })
   }
 
-  // 3. Project tui files, applied root-first so the closest file wins.
-  for (const file of projectFiles) {
-    yield* mergeFile(acc, file)
-  }
+  // 4. Direct project files, applied root-first so the closest file wins.
+  for (const directory of projectDirectories) yield* mergeDirectory(directory)
 
-  // 4. `.oc2` directories (and OC2_CONFIG_DIR) discovered while
+  // 5. `.oc2` directories (and OC2_CONFIG_DIR) discovered while
   // walking up the tree. Also returned below so callers can install plugin
   // dependencies from each location.
   const dirs = unique(directories).filter(
-    (dir) => Naming.configDirs.some((name) => dir.endsWith(name)) || dir === Flag.OC2_CONFIG_DIR,
+    (dir) =>
+      dir !== Global.Path.config &&
+      (Naming.configDirs.some((name) => dir.endsWith(name)) || dir === Flag.OC2_CONFIG_DIR),
   )
 
   for (const dir of dirs) {
-    if (!Naming.configDirs.some((name) => dir.endsWith(name)) && dir !== Flag.OC2_CONFIG_DIR) continue
-    for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
-      yield* mergeFile(acc, file)
-    }
+    yield* mergeDirectory(dir)
   }
 
   const result = TuiConfig.resolve(
