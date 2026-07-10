@@ -62,7 +62,6 @@ export const layer: Layer.Layer<
     const instructionFiles = [
       "AGENTS.md",
       ...(!flags.disableClaudeCodePrompt ? ["CLAUDE.md"] : []),
-      "CONTEXT.md", // deprecated
     ]
 
     const state = yield* InstanceState.make(
