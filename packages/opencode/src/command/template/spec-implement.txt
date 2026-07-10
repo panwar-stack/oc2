@@ -2,7 +2,7 @@
 
 Read and resolve $1 first. Use agent teams.
 
-Record the invoking worktree path, status, and committed HEAD as base_sha. Treat it as read only except for integration.
+Record the invoking worktree path, status, and committed HEAD as base_sha. Treat it as read only except for integration. Fast forward and merge on completion.
 
 Create one branch and one external worktree from base_sha. Perform all edits, tests, reviews, and commits there. Do not stash, reset, clean, switch, or edit the invoking worktree. Treat its uncommitted and untracked files as read only inputs. Stop if implementation depends on uncommitted source changes.
 
