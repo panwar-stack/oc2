@@ -25,14 +25,14 @@ const EXTERNAL_SKILL_PATTERN = "skills/**/SKILL.md"
 const OC2_SKILL_PATTERN = "{skill,skills}/**/SKILL.md"
 const SKILL_PATTERN = "**/SKILL.md"
 
-// Built-in skill that ships with opencode. The model's intuition for what an
-// oc2.json should look like is often wrong, and opencode hard-fails on
+// Built-in skill that ships with OC2. The model's intuition for what an
+// oc2.json should look like is often wrong, and OC2 hard-fails on
 // invalid config, so users hit cryptic startup errors. Loading this skill
-// when the model is asked to touch opencode's own config files gives it the
+// when the model is asked to touch OC2's own config files gives it the
 // actual schemas instead of guesses.
 const CUSTOMIZE_OC2_SKILL_NAME = "customize-opencode"
 const CUSTOMIZE_OC2_SKILL_DESCRIPTION =
-  "Use ONLY when the user is editing or creating opencode's own configuration: oc2.json, oc2.jsonc, files under .oc2/, or OC2 global config files. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
+  "Use ONLY when the user is editing or creating OC2's own configuration: oc2.json, oc2.jsonc, files under .oc2/, or OC2 global config files. Also use when creating or fixing OC2 agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring OC2 itself."
 const CUSTOMIZE_OC2_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
 const SPEC_PLANNER_SKILL_NAME = "spec-planner"
 const SPEC_PLANNER_SKILL_DESCRIPTION =
