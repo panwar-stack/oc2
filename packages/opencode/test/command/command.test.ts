@@ -27,7 +27,7 @@ describe("command", () => {
           expect(clarify.source).toBe("command")
           expect(clarify.description).toContain("Clarify underspecified requests")
           expect(yield* Effect.promise(() => Promise.resolve(clarify.template))).toContain("Clarify Request")
-          expect(yield* Effect.promise(() => Promise.resolve(clarify.template))).toContain("/spec-planner")
+          expect(yield* Effect.promise(() => Promise.resolve(clarify.template))).toContain("/spec:planner")
 
           const useTeam = yield* command.get("use-team")
           if (!useTeam) throw new Error("use-team command not found")

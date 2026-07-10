@@ -35,7 +35,7 @@ The first pass must make the existing behavior explicit, tested, and complete fo
 - `limits.maxBranches` must be enforced before any branch execution starts.
 - `limits.timeout` must apply to the whole compound run: branches, judge, and synthesizer.
 - Branch-specific `branch.timeout` may remain a narrower per-branch override, but it must not extend the total `limits.timeout`.
-- Do not change `/local_fusion <config> <prompt>` command syntax.
+- Do not change `/local:fusion <config> <prompt>` command syntax.
 - Do not add concurrency limiting in this pass; `maxBranches` is a count limit, not a concurrency setting.
 - Do not introduce persistence or migration work; this is runtime/config behavior only.
 - Tests must run from package directories, not repo root.
@@ -148,7 +148,7 @@ Use a fresh read-only reviewer to confirm tests prove pre-execution rejection an
 - `limits.maxBranches` caps branch count;
 - `limits.timeout` is a total orchestration timeout;
 - `branch.timeout` is a per-branch timeout and cannot exceed the total budget;
-- inline `/local_fusion` tool calls cannot set `limits` in the first pass.
+- inline `local_fusion` tool calls cannot set `limits` in the first pass.
 
 Verification:
 

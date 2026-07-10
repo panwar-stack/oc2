@@ -2059,7 +2059,7 @@ export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
   const modelID = rest.join("/")
   if (providerID === "logu" && modelID === "logu") {
-    throw new Error("logu/logu has been removed; use /local_fusion instead")
+    throw new Error("logu/logu has been removed; use /local:fusion instead")
   }
   return {
     providerID: ProviderV2.ID.make(providerID),

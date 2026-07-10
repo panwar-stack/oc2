@@ -375,7 +375,7 @@ test("parseModel handles model IDs with slashes", () => {
 })
 
 test("parseModel rejects removed logu model", () => {
-  expect(() => Provider.parseModel("logu/logu")).toThrow("logu/logu has been removed; use /local_fusion instead")
+  expect(() => Provider.parseModel("logu/logu")).toThrow("logu/logu has been removed; use /local:fusion instead")
 })
 
 it.instance("defaultModel returns first available model when no config set", () =>

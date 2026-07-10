@@ -2,7 +2,7 @@
 
 ## Goal
 
-Remove the synthetic `logu/logu` model and all Logu-specific runtime, config, docs, TUI, and tests. Keep Local Fusion as an explicit `/local_fusion` tool and generalize the useful Logu-era Local Fusion improvements to normal Local Fusion runs.
+Remove the synthetic `logu/logu` model and all Logu-specific runtime, config, docs, TUI, and tests. Keep Local Fusion as an explicit `/local:fusion` command and generalize the useful Logu-era Local Fusion improvements to normal Local Fusion runs.
 
 The first pass must not introduce a replacement assistant model. Local Fusion remains invoked through the existing tool, slash command, and `local_fusion` config.
 
@@ -79,7 +79,7 @@ Tool policy behavior:
 ## Error Handling
 
 - Top-level `logu` config must fail config validation. Default message: `logu config has been removed; use local_fusion instead`.
-- `model: "logu/logu"` must fail model resolution or runtime validation. Default message: `logu/logu has been removed; use /local_fusion instead`.
+- `model: "logu/logu"` must fail model resolution or runtime validation. Default message: `logu/logu has been removed; use /local:fusion instead`.
 - Negative tests may retain `logu` literals only to verify removed-feature failures.
 - Positive docs, examples, feature tests, and TUI labels must not describe Logu as supported.
 
@@ -102,7 +102,7 @@ Verification:
 
 Review:
 
-Before checking off this slice, run a fresh read-only reviewer against the diff and this spec. The reviewer must confirm write-capable branch/judge policies cannot edit workspace files and normal `/local_fusion` accepts all four policies.
+Before checking off this slice, run a fresh read-only reviewer against the diff and this spec. The reviewer must confirm write-capable branch/judge policies cannot edit workspace files and normal `/local:fusion` accepts all four policies.
 
 ### PR 2: Remove Logu Runtime And Config
 
@@ -127,7 +127,7 @@ Verification:
 
 Review:
 
-Before checking off this slice, run a fresh read-only reviewer. The reviewer must confirm `logu/logu` cannot appear in provider/model lists, top-level `logu` config fails, and Local Fusion still runs through `/local_fusion`.
+Before checking off this slice, run a fresh read-only reviewer. The reviewer must confirm `logu/logu` cannot appear in provider/model lists, top-level `logu` config fails, and Local Fusion still runs through `/local:fusion`.
 
 ### PR 3: Remove Logu TUI And Docs
 
@@ -176,7 +176,7 @@ Before checking off this slice, run a fresh read-only reviewer over the final di
 ## Future Work
 
 - Add a generic Local Fusion progress/sidebar panel keyed off non-Logu metadata.
-- Add migration docs for users moving from `model: "logu/logu"` to explicit `/local_fusion`.
+- Add migration docs for users moving from `model: "logu/logu"` to explicit `/local:fusion`.
 - Define scratch directory cleanup or retention guarantees.
 
 ## Open Questions
