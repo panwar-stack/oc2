@@ -36,7 +36,7 @@ describe("command", () => {
           expect(useTeam.description).toBe("use agent team to accomplish the task")
           expect(useTeam.hints).toEqual(["$ARGUMENTS"])
           expect(yield* Effect.promise(() => Promise.resolve(useTeam.template))).toContain(
-            "use agent teams to do the following",
+            "Use an agent team for this work:",
           )
 
           const spawn = yield* command.get("spawn")
@@ -57,9 +57,29 @@ describe("command", () => {
           expect(implementSpecPr.description).toBe(
             "Understand a specification thoroughly and implement only the requested PR slice.",
           )
+          const template = yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))
+
           expect(implementSpecPr.hints).toEqual(["$1", "$2"])
-          expect(yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))).toContain(
-            "If PR #$2 is provided, implement only that pull request from $1. commit.",
+          expect(template).toContain("Resolve and read $1 before creating any worktree.")
+          expect(template).toContain("Treat the checkout that invoked this command as read-only.")
+          expect(template).toContain("record its committed HEAD as base_sha")
+          expect(template).toContain("one unique implementation branch")
+          expect(template).toContain("one dedicated git worktree outside the invoking checkout")
+          expect(template).toContain("every edit, generation step, test, review, and commit from the isolated worktree")
+          expect(template).toContain(
+            "Do not stash, reset, clean, switch, edit, merge into, or cherry-pick into the invoking checkout.",
+          )
+          expect(template).toContain("If implementation depends on other uncommitted source changes, stop")
+          expect(template).toContain("If PR #$2 is provided, implement only that pull request from $1.")
+          expect(template).toContain("If PR #$2 is missing")
+          expect(template).toContain("one pull request at a time in the same isolated worktree")
+          expect(template).toContain("each committed slice becomes the base for the next")
+          expect(template).toContain(
+            "Cleanup, merge, cherry-pick, or other integration requires a separate explicit request.",
+          )
+          expect(template).toContain("verify that the invoking checkout's status still matches the recorded status")
+          expect(template).toContain(
+            "Report the isolated worktree path, branch, base_sha, created commits, verification results, and remaining worktree status.",
           )
           expect(yield* command.get("spec-implement")).toBeUndefined()
 
