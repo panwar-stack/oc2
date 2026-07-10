@@ -9,6 +9,8 @@ const files = [
   "SECURITY.md",
   "packages/onboarding.md",
   "packages/app/README.md",
+  "packages/app/src/i18n/en.ts",
+  "packages/tui/src/feature-plugins/sidebar/footer.tsx",
   "package.json",
   "packages/app/package.json",
 ]
@@ -23,6 +25,12 @@ const pathProhibited: Record<string, string[]> = {
   "packages/onboarding.md": [
     "local-first coding agent harness",
     "Avoid adding hosted fallbacks or external service dependencies",
+  ],
+  "packages/app/src/i18n/en.ts": ["includes free models", "Connect any provider", "bundled provider"],
+  "packages/tui/src/feature-plugins/sidebar/footer.tsx": [
+    "includes free models",
+    "Connect from 75+ providers",
+    "bundled provider",
   ],
 }
 const matches: { file: string; line: number; phrase: string }[] = []
