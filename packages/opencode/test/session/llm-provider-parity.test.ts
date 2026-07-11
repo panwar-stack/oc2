@@ -590,6 +590,93 @@ describe("provider parity normalization and redaction", () => {
     expect(() => assertCassetteSafe(redactedHeaders)).not.toThrow()
   })
 
+  test("rejects and deterministically redacts the reviewer response metadata reproduction", () => {
+    const raw: ProviderParityCassette = {
+      version: 1,
+      interactions: [
+        {
+          transport: "http",
+          request: { method: "POST", url: "https://example.test/v1", headers: {}, body: "{}" },
+          response: {
+            status: 200,
+            headers: {
+              "content-type": "text/event-stream",
+              "x-request-id": "opaqueRequestValue",
+              "x-ms-request-id": "opaqueAzureRequestValue",
+              "request-id": "opaqueUnprefixedRequestValue",
+              "x-event-id": "opaqueEventValue",
+              date: "Sat, 11 Jul 2026 12:34:56 GMT",
+            },
+            body: 'id: opaqueSseEventValue\nevent: response.output_text.delta\ndata: {"text":"hello"}\n\n',
+          },
+        },
+      ],
+    }
+    expect(() => assertCassetteSafe(raw)).toThrow("possible secrets")
+    const redacted = redactCassette(raw)
+    expect(redacted.interactions[0].response).toEqual({
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+        "x-request-id": "[VOLATILE]",
+        "x-ms-request-id": "[VOLATILE]",
+        "request-id": "[VOLATILE]",
+        "x-event-id": "[VOLATILE]",
+        date: "[VOLATILE]",
+      },
+      body: 'id: [VOLATILE]\nevent: response.output_text.delta\ndata: {"text":"hello"}\n\n',
+    })
+    expect(() => assertCassetteSafe(redacted)).not.toThrow()
+  })
+
+  test("fails closed across volatile response header and SSE event ID variants", () => {
+    for (const header of [
+      "X-Request-ID",
+      "x-ms-request-id",
+      "request-id",
+      "x-event-id",
+      "x-correlation-id",
+      "x-trace-id",
+      "x-amzn-requestid",
+      "Date",
+      "last-modified",
+      "x-response-timestamp",
+      "x-ratelimit-reset",
+    ]) {
+      const raw: ProviderParityCassette = {
+        version: 1,
+        interactions: [
+          {
+            transport: "http",
+            request: { method: "POST", url: "https://example.test/v1", headers: {}, body: "{}" },
+            response: { status: 200, headers: { [header]: "opaqueValue" }, body: "" },
+          },
+        ],
+      }
+      expect(() => assertCassetteSafe(raw)).toThrow("possible secrets")
+      const redacted = redactCassette(raw)
+      expect(redacted.interactions[0].response.headers).toEqual({ [header]: "[VOLATILE]" })
+      expect(() => assertCassetteSafe(redacted)).not.toThrow()
+    }
+
+    for (const line of ["id: opaqueValue", "id:opaqueValue"]) {
+      const raw: ProviderParityCassette = {
+        version: 1,
+        interactions: [
+          {
+            transport: "http",
+            request: { method: "POST", url: "https://example.test/v1", headers: {}, body: "{}" },
+            response: { status: 200, headers: {}, body: `${line}\nevent: message\ndata: {}\n\n` },
+          },
+        ],
+      }
+      expect(() => assertCassetteSafe(raw)).toThrow("possible secrets")
+      const redacted = redactCassette(raw)
+      expect(redacted.interactions[0].response.body).toBe("id: [VOLATILE]\nevent: message\ndata: {}\n\n")
+      expect(() => assertCassetteSafe(redacted)).not.toThrow()
+    }
+  })
+
   test("redacts URL userinfo and resource identifiers in path, query, and host", () => {
     const source = cassette()
     const adversarial: ProviderParityCassette = {

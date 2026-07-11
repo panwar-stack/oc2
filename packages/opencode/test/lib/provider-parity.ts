@@ -494,6 +494,15 @@ function routingIdentifierHeader(key: string) {
   return /(?:^|_)(?:account|organization|project|resource|subscription|tenant|workspace)(?:_id)?$/.test(normalized)
 }
 
+function volatileResponseHeader(key: string) {
+  const normalized = semanticKey(key)
+  return (
+    routingIdentifierHeader(key) ||
+    /(?:^|_)(?:correlation|event|invocation|operation|request|response|trace|transaction)(?:_?id)$/.test(normalized) ||
+    /(?:^|_)(?:created|date|epoch|expires|modified|reset|time|timestamp|updated)(?:$|_)/.test(normalized)
+  )
+}
+
 function semanticKey(key: string) {
   return key
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
@@ -635,7 +644,13 @@ function redactHeaders(headers: Readonly<Record<string, string>>) {
   return Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [
       key,
-      sensitiveHeader(key) ? REDACTED : routingIdentifierHeader(key) ? VOLATILE : redactString(value),
+      sensitiveHeader(key)
+        ? REDACTED
+        : volatileResponseHeader(key)
+          ? VOLATILE
+          : key.toLowerCase() === "content-type"
+            ? value
+            : redactString(value),
     ]),
   )
 }
@@ -670,6 +685,9 @@ function cassetteIdentifierFindings(cassette: ProviderParityCassette) {
     Option.match(decodeJson(body), {
       onNone: () =>
         body.split("\n").forEach((line, index) => {
+          const eventID = /^id:\s?(.*)\r?$/.exec(line)?.[1]
+          if (eventID && eventID !== REDACTED && eventID !== VOLATILE)
+            result.push(`${currentPath}.id[${index}] (volatile event identifier)`)
           if (!line.startsWith("data:")) return
           Option.match(decodeJson(line.slice(5).trimStart()), {
             onNone: () => undefined,
@@ -681,6 +699,9 @@ function cassetteIdentifierFindings(cassette: ProviderParityCassette) {
 
   visit(cassette, "")
   cassette.interactions.forEach((interaction, index) => {
+    for (const [key, value] of Object.entries(interaction.response.headers))
+      if (volatileResponseHeader(key) && value !== REDACTED && value !== VOLATILE)
+        result.push(`interactions[${index}].response.headers.${key} (volatile response metadata)`)
     visitBody(interaction.request.body, `interactions[${index}].request.body`)
     visitBody(interaction.response.body, `interactions[${index}].response.body`)
   })
@@ -696,6 +717,7 @@ function redactBody(body: string) {
   return body
     .split("\n")
     .map((line) => {
+      if (/^id:/.test(line)) return /^id:\s*(?:\r)?$/.test(line) ? "id:" : `id: ${VOLATILE}`
       if (!line.startsWith("data:")) return redactString(line)
       const data = line.slice(5).trimStart()
       return Option.match(decodeJson(data), {
