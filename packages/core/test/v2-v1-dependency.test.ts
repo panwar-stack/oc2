@@ -49,6 +49,17 @@ function moduleSpecifiers(input: string) {
   return [...new Set(result)]
 }
 
+function dependencyEdges(source: string, input: string) {
+  return moduleSpecifiers(input).flatMap((specifier) => {
+    const target = specifier.startsWith("@oc2-ai/core/v1")
+      ? path.posix.join("src", specifier.slice("@oc2-ai/core/".length))
+      : specifier.startsWith(".")
+        ? path.posix.normalize(path.posix.join(path.posix.dirname(source), specifier))
+        : undefined
+    return target === "src/v1" || target?.startsWith("src/v1/") ? [`${source} -> ${target}`] : []
+  })
+}
+
 test("finds runtime and type-only module specifiers", () => {
   const imports = moduleSpecifiers(`
     import type { Imported } from "./v1/imported"
@@ -62,16 +73,24 @@ test("finds runtime and type-only module specifiers", () => {
   expect(imports.sort()).toEqual(["./v1/exported", "./v1/imported", "./v1/legacy", "./v1/loaded", "./v1/queried"])
 })
 
+test("finds self-package V1 dependency edges", () => {
+  const edges = dependencyEdges(
+    "src/example.ts",
+    `
+      import "@oc2-ai/core/v1"
+      type Session = import("@oc2-ai/core/v1/session").Session
+    `,
+  )
+
+  expect(edges.sort()).toEqual(["src/example.ts -> src/v1", "src/example.ts -> src/v1/session"])
+})
+
 test("does not add V2-to-V1 dependencies", async () => {
   const edges: string[] = []
 
   for await (const source of new Bun.Glob("src/**/*.ts").scan(".")) {
     if (source.startsWith("src/v1/")) continue
-    for (const specifier of moduleSpecifiers(await Bun.file(source).text())) {
-      if (!specifier.startsWith(".")) continue
-      const target = path.posix.normalize(path.posix.join(path.posix.dirname(source), specifier))
-      if (target.startsWith("src/v1/")) edges.push(`${source} -> ${target}`)
-    }
+    edges.push(...dependencyEdges(source, await Bun.file(source).text()))
   }
 
   expect([...new Set(edges)].sort().filter((edge) => !baseline.includes(edge))).toEqual([])
