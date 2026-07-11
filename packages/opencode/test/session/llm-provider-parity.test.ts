@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { LLMEvent } from "@oc2-ai/llm"
+import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
 import type { HttpRecorder } from "@oc2-ai/http-recorder"
+import { ModelV2 } from "@oc2-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
+import { createOpenAI } from "@ai-sdk/openai"
+import type { Provider } from "@/provider/provider"
+import { Effect, Layer } from "effect"
 import {
   assertCassetteSafe,
   auditParityCassettes,
@@ -9,6 +15,7 @@ import {
   listParityCassettes,
   loadProviderParityInventory,
   makeReplay,
+  NativeDirectUnsupportedError,
   normalizeEvents,
   providerParityPaths,
   redactCassette,
@@ -18,10 +25,11 @@ import {
   type ProviderParityInventory,
 } from "../lib/provider-parity"
 import { tmpdir } from "../fixture/fixture"
+import { testEffect } from "../lib/effect"
 
 const inventory = (status: "parity" | "unsupported" | "not-applicable" = "parity") =>
   ({
-    version: 1,
+    version: 2,
     source: { path: "synthetic", sha256: "synthetic", providerCount: 1, modelCount: 1 },
     providers: [
       {
@@ -36,7 +44,12 @@ const inventory = (status: "parity" | "unsupported" | "not-applicable" = "parity
             ? {
                 id: "text",
                 modelID: "synthetic-model",
-                api: { package: "@ai-sdk/openai-compatible", url: "https://api.example.test/v1" },
+                api: {
+                  package: "@ai-sdk/openai-compatible",
+                  url: "https://api.example.test/v1",
+                  urlSource: "catalog",
+                  urlEvidence: "synthetic fixture",
+                },
                 status,
                 evidence: "provider-parity/openai-compatible/synthetic/text.json",
                 recordingCredentials: [{ id: "api-key", allOf: ["SYNTHETIC_API_KEY"] }],
@@ -45,7 +58,12 @@ const inventory = (status: "parity" | "unsupported" | "not-applicable" = "parity
               ? {
                   id: "text",
                   modelID: "synthetic-model",
-                  api: { package: "@ai-sdk/openai-compatible", url: "https://api.example.test/v1" },
+                  api: {
+                    package: "@ai-sdk/openai-compatible",
+                    url: "https://api.example.test/v1",
+                    urlSource: "catalog",
+                    urlEvidence: "synthetic fixture",
+                  },
                   status,
                   evidence: "native adapter inventory",
                   reason: "not implemented",
@@ -93,6 +111,102 @@ const cassette = (): ProviderParityCassette => ({
   ],
 })
 
+const nativeModel: Provider.Model = {
+  id: ModelV2.ID.make("gpt-5-mini"),
+  providerID: ProviderV2.ID.make("openai"),
+  api: { id: "gpt-5-mini", url: "https://api.openai.com/v1", npm: "@ai-sdk/openai" },
+  name: "GPT-5 Mini",
+  capabilities: {
+    temperature: true,
+    reasoning: true,
+    attachment: true,
+    toolcall: true,
+    input: { text: true, audio: false, image: true, video: false, pdf: false },
+    output: { text: true, audio: false, image: false, video: false, pdf: false },
+    interleaved: false,
+  },
+  cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+  limit: { context: 128_000, input: 128_000, output: 32_000 },
+  status: "active",
+  options: {},
+  headers: {},
+  release_date: "2026-01-01",
+}
+
+const nativeProvider: Provider.Info = {
+  id: ProviderV2.ID.make("openai"),
+  name: "OpenAI",
+  source: "config",
+  env: ["OPENAI_API_KEY"],
+  options: { apiKey: "test-openai-key" },
+  models: {},
+}
+
+const runtimeCassette = (): ProviderParityCassette => ({
+  version: 1,
+  interactions: [
+    {
+      transport: "http",
+      request: {
+        method: "POST",
+        url: "https://api.openai.com/v1/responses",
+        headers: { authorization: "Bearer test-openai-key", "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5-mini",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+          include: ["reasoning.encrypted_content"],
+          reasoning: { effort: "medium", summary: "auto" },
+          store: false,
+          stream: true,
+        }),
+      },
+      response: {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: [
+          {
+            type: "response.created",
+            response: { id: "resp_live", created_at: 1783773296, model: "gpt-5-mini", service_tier: null },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { type: "message", id: "msg_live", status: "in_progress", role: "assistant", content: [] },
+          },
+          {
+            type: "response.content_part.added",
+            item_id: "msg_live",
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "", annotations: [] },
+          },
+          { type: "response.output_text.delta", item_id: "msg_live", delta: "hello", logprobs: null },
+          {
+            type: "response.completed",
+            response: {
+              incomplete_details: null,
+              usage: {
+                input_tokens: 1,
+                input_tokens_details: null,
+                output_tokens: 1,
+                output_tokens_details: null,
+              },
+              service_tier: null,
+            },
+          },
+        ]
+          .map((chunk) => `data: ${JSON.stringify(chunk)}`)
+          .join("\n\n")
+          .concat("\n\ndata: [DONE]\n\n"),
+      },
+    },
+  ],
+})
+
+const it = testEffect(
+  LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
+)
+
 describe("provider parity inventory and cassettes", () => {
   test("the Core inventory is the sole matrix source and has exact cassette coverage", async () => {
     const core = await loadProviderParityInventory(providerParityPaths.inventory)
@@ -118,7 +232,12 @@ describe("provider parity inventory and cassettes", () => {
     duplicate.providers[0].scenarios.push({
       id: "text",
       modelID: "synthetic-model",
-      api: { package: "@ai-sdk/openai-compatible", url: "https://api.example.test/v1" },
+      api: {
+        package: "@ai-sdk/openai-compatible",
+        url: "https://api.example.test/v1",
+        urlSource: "catalog",
+        urlEvidence: "synthetic fixture",
+      },
       status: "parity",
       evidence: "provider-parity/openai-compatible/synthetic/text.json",
       recordingCredentials: [{ id: "api-key", allOf: ["SYNTHETIC_API_KEY"] }],
@@ -158,6 +277,24 @@ describe("provider parity recording gate", () => {
     ).toBe("provider-parity/openai-compatible/synthetic/text")
   })
 
+  test("requires every credential in one selected alternative", () => {
+    const compound = inventory()
+    compound.providers[0].scenarios[0].recordingCredentials = [
+      { id: "azure-resource-api-key", allOf: ["AZURE_RESOURCE_NAME", "AZURE_API_KEY"] },
+    ]
+    const selected = {
+      RECORD: "true",
+      PROVIDER_PARITY_PROVIDER: "synthetic",
+      PROVIDER_PARITY_SCENARIO: "text",
+    }
+    expect(() => selectRecording(compound, { ...selected, AZURE_RESOURCE_NAME: "resource" })).toThrow(
+      "AZURE_RESOURCE_NAME + AZURE_API_KEY",
+    )
+    expect(
+      selectRecording(compound, { ...selected, AZURE_RESOURCE_NAME: "resource", AZURE_API_KEY: "key" })?.name,
+    ).toBe("provider-parity/openai-compatible/synthetic/text")
+  })
+
   test("redacts, scans, writes atomically, and refuses to overwrite a recording", async () => {
     await using directory = await tmpdir()
     const selection = selectRecording(inventory(), {
@@ -188,45 +325,87 @@ describe("provider parity replay and comparison", () => {
     )
   })
 
-  test("compares canonical requests and normalized event transcripts across direct runtimes", async () => {
-    const events = (textID: string) => [
-      LLMEvent.stepStart({ index: 0 }),
-      LLMEvent.textStart({ id: textID }),
-      LLMEvent.textDelta({ id: textID, text: "hel" }),
-      LLMEvent.textDelta({ id: textID, text: "lo" }),
-      LLMEvent.textEnd({ id: textID }),
-      LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 1, outputTokens: 1 } }),
-      LLMEvent.finish({ reason: "stop", usage: { inputTokens: 1, outputTokens: 1 } }),
-    ]
-    const run = (textID: string) => async (replay: ReturnType<typeof makeReplay>) => {
-      await replay.fetch(request().url, { method: "POST", headers: request().headers, body: request().body })
-      return { requests: replay.requests, events: events(textID) }
-    }
-    const result = await compareParityRuns({
-      cassette: cassette(),
-      aiSdk: run("ai-random"),
-      nativeDirect: run("native-random"),
-    })
-    expect(result.aiSdk).toEqual(result.native)
-    expect(result.aiSdk.events).toContainEqual({ type: "text", text: "hello" })
-  })
+  it.effect("compares production AI SDK and fallback-disabled native direct execution", () =>
+    Effect.gen(function* () {
+      const llmClient = yield* LLMClient.Service
+      const result = yield* Effect.promise(() =>
+        compareParityRuns({
+          cassette: runtimeCassette(),
+          aiSdk: (replay) => ({
+            model: createOpenAI({ apiKey: "test-openai-key", fetch: replay.fetch }).responses("gpt-5-mini"),
+            messages: [{ role: "user", content: "hello" }],
+            providerOptions: {
+              openai: {
+                include: ["reasoning.encrypted_content"],
+                reasoningEffort: "medium",
+                reasoningSummary: "auto",
+                store: false,
+              },
+            },
+            maxRetries: 0,
+          }),
+          nativeDirect: (replay) => ({
+            model: nativeModel,
+            provider: { ...nativeProvider, options: { apiKey: "test-openai-key", fetch: replay.fetch } },
+            auth: { type: "oauth", refresh: "fixture", access: "fixture", expires: 1 },
+            llmClient,
+            messages: [{ role: "user", content: "hello" }],
+            tools: {},
+            headers: {},
+            abort: new AbortController().signal,
+          }),
+        }),
+      )
+      expect(result.aiSdk).toEqual(result.native)
+      expect(result.aiSdk.events).toContainEqual({ type: "text", text: "hello" })
+    }),
+  )
 
-  test("rejects transcript drift and successful runs without exactly one finish", async () => {
-    const run = (events: ReadonlyArray<LLMEvent>) => async (replay: ReturnType<typeof makeReplay>) => {
-      await replay.fetch(request().url, { method: "POST", headers: request().headers, body: request().body })
-      return { requests: replay.requests, events }
-    }
-    await expect(
-      compareParityRuns({
-        cassette: cassette(),
-        aiSdk: run([LLMEvent.finish({ reason: "stop" })]),
-        nativeDirect: run([LLMEvent.textDelta({ id: "native", text: "drift" }), LLMEvent.finish({ reason: "stop" })]),
-      }),
-    ).rejects.toThrow("transcripts differ")
-    await expect(compareParityRuns({ cassette: cassette(), aiSdk: run([]), nativeDirect: run([]) })).rejects.toThrow(
-      "exactly one terminal finish",
-    )
-  })
+  it.effect("returns typed context instead of falling back for unsupported native direct execution", () =>
+    Effect.gen(function* () {
+      const llmClient = yield* LLMClient.Service
+      let aiSdkCalled = false
+      const error = yield* Effect.promise(() =>
+        compareParityRuns({
+          cassette: runtimeCassette(),
+          aiSdk: (replay) => {
+            aiSdkCalled = true
+            return {
+              model: createOpenAI({ apiKey: "test-openai-key", fetch: replay.fetch }).responses("gpt-5-mini"),
+              messages: [{ role: "user", content: "hello" }],
+              providerOptions: {
+                openai: {
+                  include: ["reasoning.encrypted_content"],
+                  reasoningEffort: "medium",
+                  reasoningSummary: "auto",
+                  store: false,
+                },
+              },
+              maxRetries: 0,
+            }
+          },
+          nativeDirect: () => ({
+            model: { ...nativeModel, providerID: ProviderV2.ID.make("cloudflare") },
+            provider: { ...nativeProvider, id: ProviderV2.ID.make("cloudflare") },
+            auth: undefined,
+            llmClient,
+            messages: [{ role: "user", content: "hello" }],
+            tools: {},
+            headers: {},
+            abort: new AbortController().signal,
+          }),
+        }).catch((cause: unknown) => cause),
+      )
+      expect(aiSdkCalled).toBeFalse()
+      expect(error).toBeInstanceOf(NativeDirectUnsupportedError)
+      expect((error as NativeDirectUnsupportedError).context).toEqual({
+        providerID: "cloudflare",
+        modelID: "gpt-5-mini",
+        effectiveAPI: { package: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
+        reason: "provider is not openai or anthropic",
+      })
+    }),
+  )
 })
 
 describe("provider parity normalization and redaction", () => {
@@ -250,6 +429,77 @@ describe("provider parity normalization and redaction", () => {
     expect(text).toContain("[VOLATILE]")
   })
 
+  test("retains material auth header names while redacting their values", () => {
+    const canonical = JSON.stringify(
+      canonicalRequest({
+        method: "POST",
+        url: "https://example.test/v1",
+        headers: {
+          "api-key": "azure-secret",
+          "cf-aig-authorization": "Bearer cloudflare-secret",
+          "private-token": "gitlab-secret",
+        },
+        body: "{}",
+      }),
+    )
+    expect(canonical).toContain('"api-key":"[REDACTED]"')
+    expect(canonical).toContain('"cf-aig-authorization":"[REDACTED]"')
+    expect(canonical).toContain('"private-token":"[REDACTED]"')
+    expect(canonical).not.toContain("azure-secret")
+    expect(canonical).not.toContain("cloudflare-secret")
+  })
+
+  test("redacts URL userinfo and resource identifiers in path, query, and host", () => {
+    const source = cassette()
+    const adversarial: ProviderParityCassette = {
+      ...source,
+      interactions: source.interactions.map((interaction, index) =>
+        index
+          ? interaction
+          : {
+              ...interaction,
+              request: {
+                ...interaction.request,
+                url: "https://user:provider-password@workspace_customer.example.test/client/v4/accounts/0123456789abcdef0123456789abcdef/projects/project_live/events/123e4567-e89b-42d3-a456-426614174000?workspaceId=workspace_live&projectId=customer-project&request_id=req_live&timestamp=1783773296",
+              },
+            },
+      ),
+    }
+    const redacted = redactCassette(adversarial)
+    const text = JSON.stringify(redacted)
+    expect(text).not.toContain("user")
+    expect(text).not.toContain("provider-password")
+    expect(text).not.toContain("0123456789abcdef0123456789abcdef")
+    expect(text).not.toContain("workspace_customer")
+    expect(text).not.toContain("project_live")
+    expect(text).not.toContain("workspace_live")
+    expect(text).not.toContain("customer-project")
+    expect(text).not.toContain("req_live")
+    expect(text).not.toContain("123e4567-e89b-42d3-a456-426614174000")
+    expect(text).not.toContain("1783773296")
+    expect(() => assertCassetteSafe(redacted)).not.toThrow()
+  })
+
+  test("redacts and rejects raw Azure resource and Databricks workspace hostnames", () => {
+    for (const url of [
+      "https://acme-prod.openai.azure.com/v1/responses",
+      "https://adb-1234567890123456.7.azuredatabricks.net/serving-endpoints/model/invocations",
+    ]) {
+      const source = cassette()
+      const adversarial: ProviderParityCassette = {
+        ...source,
+        interactions: source.interactions.map((interaction) => ({
+          ...interaction,
+          request: { ...interaction.request, url },
+        })),
+      }
+      expect(() => assertCassetteSafe(adversarial)).toThrow("sensitive identifier")
+      const redacted = redactCassette(adversarial)
+      expect(redacted.interactions[0].request.url).not.toContain(new URL(url).hostname.split(".")[0])
+      expect(() => assertCassetteSafe(redacted)).not.toThrow()
+    }
+  })
+
   test("normalizes IDs and chunk boundaries while retaining lifecycle, tools, errors, and usage", () => {
     const events = normalizeEvents([
       LLMEvent.stepStart({ index: 0 }),
@@ -271,7 +521,7 @@ describe("provider parity normalization and redaction", () => {
     expect(events).toContainEqual({
       type: "finish",
       reason: "stop",
-      usage: { inputTokens: 4, outputTokens: 2 },
+      usage: { inputTokens: 4, outputTokens: 2, nonCachedInputTokens: 4 },
     })
   })
 

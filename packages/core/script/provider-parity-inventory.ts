@@ -38,16 +38,22 @@ type ScenarioID = (typeof scenarioIDs)[number]
 type Classification = "catalog-mapped" | "generic-factory" | "config-only" | "virtual"
 type Source = "catalog" | "synthetic" | "virtual"
 type Status = "parity" | "unsupported" | "not-applicable"
+type RecordingCredential = { id: string; allOf: string[] }
 
 type Scenario = {
   id: ScenarioID
   modelID: string | null
-  api: { package: string; url: string } | null
+  api: {
+    package: string
+    url: string | null
+    urlSource: "catalog" | "provider-runtime"
+    urlEvidence: string
+  } | null
   status: Status
   reason?: string
   issue?: string
   evidence: string
-  recordingCredentials: { id: string; allOf: string[] }[]
+  recordingCredentials: RecordingCredential[]
 }
 
 type Row = {
@@ -173,6 +179,51 @@ const syntheticPlugins: { id: string; classification: Classification; evidence: 
   },
 ]
 
+const compoundRecordingCredentials: Record<string, RecordingCredential[]> = {
+  databricks: [{ id: "env:databricks", allOf: ["DATABRICKS_HOST", "DATABRICKS_TOKEN"] }],
+  "cloudflare-ai-gateway": [
+    {
+      id: "env:cloudflare-ai-gateway",
+      allOf: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"],
+    },
+  ],
+  "amazon-bedrock": [
+    { id: "env:aws-bedrock-bearer-token", allOf: ["AWS_BEARER_TOKEN_BEDROCK"] },
+    { id: "env:aws-static-credentials", allOf: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"] },
+  ],
+  "azure-cognitive-services": [
+    {
+      id: "env:azure-cognitive-services",
+      allOf: ["AZURE_COGNITIVE_SERVICES_RESOURCE_NAME", "AZURE_COGNITIVE_SERVICES_API_KEY"],
+    },
+  ],
+  "google-vertex-anthropic": [{ id: "env:google-application-credentials", allOf: ["GOOGLE_APPLICATION_CREDENTIALS"] }],
+  "google-vertex": [{ id: "env:google-application-credentials", allOf: ["GOOGLE_APPLICATION_CREDENTIALS"] }],
+  "cloudflare-workers-ai": [
+    { id: "env:cloudflare-workers-ai", allOf: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY"] },
+  ],
+  azure: [{ id: "env:azure", allOf: ["AZURE_RESOURCE_NAME", "AZURE_API_KEY"] }],
+  "privatemode-ai": [{ id: "env:privatemode-ai", allOf: ["PRIVATEMODE_API_KEY"] }],
+  google: [
+    { id: "env:google-generative-ai", allOf: ["GOOGLE_GENERATIVE_AI_API_KEY"] },
+    { id: "env:gemini", allOf: ["GEMINI_API_KEY"] },
+  ],
+}
+
+const runtimeURLEvidence: Record<string, string> = {
+  "amazon-bedrock":
+    "packages/core/src/plugin/provider/amazon-bedrock.ts derives the endpoint from provider options or the AWS SDK runtime",
+  azure: "packages/core/src/plugin/provider/azure.ts delegates resource-based endpoint derivation to @ai-sdk/azure",
+  "azure-cognitive-services":
+    "packages/core/src/plugin/provider/azure.ts delegates configured resource endpoint derivation to @ai-sdk/azure",
+  "cloudflare-ai-gateway":
+    "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options",
+  "google-vertex":
+    "packages/core/src/plugin/provider/google-vertex.ts delegates regional endpoint derivation to @ai-sdk/google-vertex",
+  "google-vertex-anthropic":
+    "packages/core/src/plugin/provider/google-vertex.ts delegates regional endpoint derivation to @ai-sdk/google-vertex/anthropic",
+}
+
 const args = parseArgs({
   args: process.argv.slice(2),
   options: {
@@ -288,7 +339,7 @@ function buildInventory(providers: Record<string, ModelsDev.Provider>) {
     .sort((a, b) => a.id.localeCompare(b.id))
 
   return {
-    version: 1,
+    version: 2,
     source: {
       path: sourceName,
       sha256: sourceSHA256,
@@ -324,6 +375,7 @@ function buildInventory(providers: Record<string, ModelsDev.Provider>) {
 function catalogRow(id: string, provider: ModelsDev.Provider): Row {
   const catalogID = id === "oc2" ? "opencode" : id
   const family = familyFor(provider.npm ?? defaultPackage)
+  const recordingCredentials = credentialsFor(catalogID, provider.env)
   const credentialEvidence = [
     `${sourceName}#${catalogID}.env`,
     "packages/core/src/plugin/account.ts",
@@ -342,11 +394,16 @@ function catalogRow(id: string, provider: ModelsDev.Provider): Row {
       config: true,
       evidence: credentialEvidence,
     },
-    scenarios: scenarioIDs.map((scenarioID) => catalogScenario(catalogID, provider, scenarioID)),
+    scenarios: scenarioIDs.map((scenarioID) => catalogScenario(catalogID, provider, scenarioID, recordingCredentials)),
   }
 }
 
-function catalogScenario(catalogID: string, provider: ModelsDev.Provider, scenarioID: ScenarioID): Scenario {
+function catalogScenario(
+  catalogID: string,
+  provider: ModelsDev.Provider,
+  scenarioID: ScenarioID,
+  recordingCredentials: RecordingCredential[],
+): Scenario {
   const model = Object.values(provider.models)
     .filter((candidate) => applicable(candidate, scenarioID))
     .sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.id.localeCompare(b.id))[0]
@@ -360,19 +417,42 @@ function catalogScenario(catalogID: string, provider: ModelsDev.Provider, scenar
       recordingCredentials: [],
     }
   }
+  const modelURL = model.provider?.api
+  const providerURL = provider.api
+  const url = modelURL ?? providerURL ?? null
+  const apiPackage = model.provider?.npm ?? provider.npm ?? defaultPackage
   return {
     id: scenarioID,
     modelID: model.id,
     api: {
-      package: model.provider?.npm ?? provider.npm ?? defaultPackage,
-      url: model.provider?.api ?? provider.api ?? "",
+      package: apiPackage,
+      url,
+      urlSource: url === null ? "provider-runtime" : "catalog",
+      urlEvidence:
+        modelURL !== undefined
+          ? `${sourceName}#${catalogID}.models.${model.id}.provider.api`
+          : providerURL !== undefined
+            ? `${sourceName}#${catalogID}.api`
+            : (runtimeURLEvidence[catalogID] ??
+              `${apiPackage} derives its endpoint at runtime; ${sourceName}#${catalogID} declares no model or provider URL`),
     },
     status: "unsupported",
     reason: "Parity evidence has not been recorded for this provider and scenario.",
     issue: tracker,
     evidence: `${sourceName}#${catalogID}.models.${model.id}`,
-    recordingCredentials: provider.env.map((name) => ({ id: `env:${name}`, allOf: [name] })),
+    recordingCredentials,
   }
+}
+
+function credentialsFor(providerID: string, env: readonly string[]): RecordingCredential[] {
+  const compound = compoundRecordingCredentials[providerID]
+  if (env.length > 1 && !compound) throw new Error(`Missing compound credential rule for ${providerID}`)
+  const result = compound ?? env.map((name) => ({ id: `env:${name}`, allOf: [name] }))
+  const undeclared = result.flatMap((alternative) => alternative.allOf).filter((name) => !env.includes(name))
+  if (undeclared.length > 0) {
+    throw new Error(`Credential rule for ${providerID} uses undeclared catalog env: ${undeclared.join(", ")}`)
+  }
+  return result
 }
 
 function applicable(model: ModelsDev.Model, scenarioID: ScenarioID) {

@@ -1,12 +1,17 @@
 import { LLMEvent, type Usage } from "@oc2-ai/llm"
 import type { HttpRecorder } from "@oc2-ai/http-recorder"
 import { HttpRecorderInternal } from "@oc2-ai/http-recorder/internal"
-import { Option, Schema } from "effect"
+import { LLMAISDK } from "@/session/llm/ai-sdk"
+import { LLMNativeRuntime } from "@/session/llm/native-runtime"
+import { streamText } from "ai"
+import { Effect, Option, Schema } from "effect"
+import * as Stream from "effect/Stream"
 import { mkdir, rename, rm } from "node:fs/promises"
 import path from "node:path"
 
 const REDACTED = "[REDACTED]"
 const VOLATILE = "[VOLATILE]"
+const VOLATILE_HOST = "volatile"
 const RECORDINGS_PREFIX = "provider-parity"
 
 const RequestSnapshot = Schema.Struct({
@@ -35,7 +40,14 @@ const RecordingCredential = Schema.Struct({ id: Schema.String, allOf: Schema.Arr
 const Scenario = Schema.Struct({
   id: Schema.String,
   modelID: Schema.NullOr(Schema.String),
-  api: Schema.NullOr(Schema.Struct({ package: Schema.String, url: Schema.String })),
+  api: Schema.NullOr(
+    Schema.Struct({
+      package: Schema.String,
+      url: Schema.NullOr(Schema.String),
+      urlSource: Schema.Literals(["catalog", "provider-runtime"]),
+      urlEvidence: Schema.String,
+    }),
+  ),
   status: Schema.Literals(["parity", "unsupported", "not-applicable"]),
   evidence: Schema.String,
   reason: Schema.optional(Schema.String),
@@ -57,7 +69,7 @@ const Provider = Schema.Struct({
   scenarios: Schema.Array(Scenario),
 })
 const Inventory = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   source: Schema.Struct({
     path: Schema.String,
     sha256: Schema.String,
@@ -76,9 +88,25 @@ export type ProviderParityProvider = Schema.Schema.Type<typeof Provider>
 export type ProviderParityScenario = Schema.Schema.Type<typeof Scenario>
 export type ProviderParityCassette = Schema.Schema.Type<typeof Cassette>
 
-export type ParityRun = {
-  readonly requests: ReadonlyArray<HttpRecorder.RequestSnapshot>
-  readonly events: ReadonlyArray<LLMEvent>
+export type AISdkParityInput = Parameters<typeof streamText>[0]
+export type NativeDirectParityInput = Parameters<typeof LLMNativeRuntime.stream>[0]
+
+export class NativeDirectUnsupportedError extends Error {
+  readonly _tag = "ProviderParityNativeDirectUnsupported"
+
+  constructor(
+    readonly context: {
+      readonly providerID: string
+      readonly modelID: string
+      readonly effectiveAPI: { readonly package: string; readonly url: string }
+      readonly reason: string
+    },
+  ) {
+    super(
+      `Native direct execution is unsupported for provider ${context.providerID}, model ${context.modelID}, effective API ${context.effectiveAPI.package} at ${context.effectiveAPI.url}: ${context.reason}`,
+    )
+    this.name = "NativeDirectUnsupportedError"
+  }
 }
 
 export type ParityResult = {
@@ -224,18 +252,31 @@ export function makeReplay(cassette: ProviderParityCassette) {
 
 export async function compareParityRuns(input: {
   readonly cassette: ProviderParityCassette
-  readonly aiSdk: (replay: ReturnType<typeof makeReplay>) => Promise<ParityRun>
-  readonly nativeDirect: (replay: ReturnType<typeof makeReplay>) => Promise<ParityRun>
+  readonly aiSdk: (replay: ReturnType<typeof makeReplay>) => AISdkParityInput
+  readonly nativeDirect: (replay: ReturnType<typeof makeReplay>) => NativeDirectParityInput
 }): Promise<ParityResult> {
   const aiReplay = makeReplay(input.cassette)
   const nativeReplay = makeReplay(input.cassette)
-  const aiSdk = await input.aiSdk(aiReplay)
+  const nativeInput = input.nativeDirect(nativeReplay)
+  const nativeResult = LLMNativeRuntime.stream(nativeInput)
+  if (nativeResult.type === "unsupported")
+    throw new NativeDirectUnsupportedError({
+      providerID: nativeInput.model.providerID,
+      modelID: nativeInput.model.id,
+      effectiveAPI: { package: nativeInput.model.api.npm, url: nativeInput.model.api.url },
+      reason: nativeResult.reason,
+    })
+  const aiResult = streamText(input.aiSdk(aiReplay))
+  const aiEvents: LLMEvent[] = []
+  const aiState = LLMAISDK.adapterState()
+  for await (const event of aiResult.fullStream)
+    aiEvents.push(...(await Effect.runPromise(LLMAISDK.toLLMEvents(aiState, event))))
   aiReplay.assertConsumed()
-  const native = await input.nativeDirect(nativeReplay)
+  const nativeEvents = Array.from(await Effect.runPromise(Stream.runCollect(nativeResult.stream)))
   nativeReplay.assertConsumed()
   const result = {
-    aiSdk: { requests: aiSdk.requests.map(canonicalRequest), events: normalizeEvents(aiSdk.events) },
-    native: { requests: native.requests.map(canonicalRequest), events: normalizeEvents(native.events) },
+    aiSdk: { requests: aiReplay.requests.map(canonicalRequest), events: normalizeEvents(aiEvents) },
+    native: { requests: nativeReplay.requests.map(canonicalRequest), events: normalizeEvents(nativeEvents) },
   }
   const golden = input.cassette.interactions.map((interaction) => canonicalRequest(interaction.request))
   if (!deepEqual(result.aiSdk.requests, golden)) throw new Error("AI SDK requests do not match the cassette golden")
@@ -249,9 +290,12 @@ export async function compareParityRuns(input: {
 }
 
 export function canonicalRequest(snapshot: HttpRecorder.RequestSnapshot): unknown {
-  const url = new URL(snapshot.url)
+  const url = new URL(HttpRecorderInternal.redactUrl(snapshot.url, undefined, canonicalizeUrlIdentifiers))
   for (const key of [...url.searchParams.keys()]) {
-    if (sensitiveKey(key)) url.searchParams.set(key, REDACTED)
+    const values = url.searchParams.getAll(key)
+    url.searchParams.delete(key)
+    for (const value of values)
+      url.searchParams.append(key, sensitiveKey(key) ? REDACTED : volatileKey(key) ? VOLATILE : redactString(value))
   }
   url.searchParams.sort()
   const headers = Object.fromEntries(
@@ -356,9 +400,22 @@ export function redactCassette(cassette: ProviderParityCassette): ProviderParity
 export function assertCassetteSafe(cassette: ProviderParityCassette) {
   const findings = HttpRecorderInternal.secretFindings(cassette)
   const serialized = JSON.stringify(cassette)
+  const unsafeUrls = cassette.interactions.flatMap((interaction, index) => {
+    if (!URL.canParse(interaction.request.url)) return [`interactions[${index}].request.url (invalid URL)`]
+    const url = new URL(interaction.request.url)
+    const credentials = [url.username, url.password].filter((value) => value && decodeURIComponent(value) !== REDACTED)
+    const identifiers = urlIdentifiers(url).filter(
+      (value) => value !== VOLATILE && value !== VOLATILE_HOST && value !== REDACTED,
+    )
+    return credentials.length || identifiers.length ? [`interactions[${index}].request.url (sensitive identifier)`] : []
+  })
   const residual = (
     [
-      [/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b/, "timestamp"],
+      [/\b(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})|1[5-9]\d{8}(?:\d{3})?)\b/, "timestamp"],
+      [
+        /\b(?:[0-9a-f]{24,64}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\b/i,
+        "volatile identifier",
+      ],
       [
         /\b(?:acct|call|event|fc|item|msg|org|proj|req|resp|rs|run|thread|trace|user|workspace|wrk)_[A-Za-z0-9_-]+\b/i,
         "volatile identifier",
@@ -371,11 +428,12 @@ export function assertCassetteSafe(cassette: ProviderParityCassette) {
   )
     .filter(([pattern]) => pattern.test(serialized))
     .map(([, reason]) => reason)
-  if (findings.length || residual.length)
+  if (findings.length || residual.length || unsafeUrls.length)
     throw new Error(
       `Provider parity cassette contains possible secrets: ${[
         ...findings.map((item) => `${item.path} (${item.reason})`),
         ...residual,
+        ...unsafeUrls,
       ].join(", ")}`,
     )
 }
@@ -401,15 +459,22 @@ function canonicalize(value: unknown, key = ""): unknown {
 }
 
 function sensitiveKey(key: string) {
-  return /(?:^|_)(?:access|api_?key|authorization|continuation|cookie|credential|encrypted|password|refresh|secret|signature|token)(?:$|_)/i.test(
-    key,
+  return /(?:^|_)(?:access|api_?key|authorization|continuation|cookie|credential|encrypted|password|refresh|secret|signature|token)(?:$|_)/.test(
+    semanticKey(key),
   )
 }
 
 function volatileKey(key: string) {
-  return /(?:^|_)(?:account|created|date|event|fingerprint|idempotency|obfuscation|organization|project|request|timestamp|updated|workspace)(?:$|_)/i.test(
-    key,
+  return /(?:^|_)(?:account|created|date|epoch|event|fingerprint|idempotency|obfuscation|organization|project|request|time|timestamp|ts|updated|workspace)(?:$|_)/.test(
+    semanticKey(key),
   )
+}
+
+function semanticKey(key: string) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .toLowerCase()
 }
 
 function redactString(value: string) {
@@ -419,10 +484,13 @@ function redactString(value: string) {
     .replace(/\bAIza[0-9A-Za-z_-]+\b/g, REDACTED)
     .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, REDACTED)
     .replace(
-      /\b(?:acct|call|event|fc|item|msg|org|proj|project|req|request|resp|rs|run|thread|trace|user|workspace|wrk)_[A-Za-z0-9_-]+\b/gi,
+      /\b(?:acct|account|call|event|fc|item|msg|org|organization|proj|project|req|request|resp|rs|run|thread|trace|user|workspace|wrk)[_-][A-Za-z0-9_-]+\b/gi,
       VOLATILE,
     )
-    .replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b/g, VOLATILE)
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, VOLATILE)
+    .replace(/\b[0-9a-f]{24,64}\b/gi, VOLATILE)
+    .replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b/g, VOLATILE)
+    .replace(/\b1[5-9]\d{8}(?:\d{3})?\b/g, VOLATILE)
 }
 
 function stableHeader(key: string) {
@@ -430,18 +498,81 @@ function stableHeader(key: string) {
 }
 
 function sensitiveHeader(key: string) {
-  return /^(?:authorization|cookie|proxy-authorization|x-api-key|x-amz-security-token|x-goog-api-key)$/i.test(key)
+  const normalized = key.replace(/[^A-Za-z0-9]/g, "").toLowerCase()
+  return (
+    normalized === "cookie" ||
+    normalized === "setcookie" ||
+    normalized.endsWith("authorization") ||
+    normalized.endsWith("apikey") ||
+    normalized.endsWith("authtoken") ||
+    normalized.endsWith("accesstoken") ||
+    normalized.endsWith("privatetoken") ||
+    normalized.endsWith("securitytoken") ||
+    normalized.endsWith("subscriptionkey")
+  )
+}
+
+function canonicalizeUrlIdentifiers(value: string) {
+  const url = new URL(value)
+  const segments = url.pathname.split("/")
+  url.pathname = segments
+    .map((segment, index) => {
+      const decoded = decodeURIComponent(segment)
+      if (resourceSegment(segments[index - 1] ?? "")) return VOLATILE
+      return redactString(decoded)
+    })
+    .join("/")
+  const labels = url.hostname.split(".")
+  url.hostname = labels
+    .map((label, index) => (hostnameIdentifier(label, index, labels) ? VOLATILE_HOST : label))
+    .join(".")
+  return url.toString()
+}
+
+function urlIdentifiers(url: URL) {
+  const segments = url.pathname.split("/").map((segment) => decodeURIComponent(segment))
+  const labels = url.hostname.split(".")
+  return [
+    ...segments.filter((segment, index) => resourceSegment(segments[index - 1] ?? "") && segment),
+    ...labels.filter((label, index) => hostnameIdentifier(label, index, labels)),
+    ...[...url.searchParams].flatMap(([key, value]) => (volatileKey(key) ? [value] : [])),
+  ]
+}
+
+function resourceSegment(value: string) {
+  return /^(?:accounts?|organizations?|orgs?|projects?|resources?|subscriptions?|tenants?|workspaces?)$/i.test(value)
+}
+
+function identifierValue(value: string) {
+  return (
+    /^(?:acct|account|org|organization|proj|project|workspace|wrk)[_-].+/i.test(value) ||
+    /^[0-9a-f]{24,64}$/i.test(value) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  )
+}
+
+function hostnameIdentifier(value: string, index: number, labels: ReadonlyArray<string>) {
+  if (identifierValue(value)) return true
+  if (index !== 0) return false
+  return /^(?:openai\.azure\.com|cognitiveservices\.azure\.com|services\.ai\.azure\.com|(?:[^.]+\.)*azuredatabricks\.net|(?:[^.]+\.)*snowflakecomputing\.com)$/.test(
+    labels.slice(1).join("."),
+  )
 }
 
 function normalizeUsage(usage: Usage | undefined) {
   if (!usage) return undefined
+  const nonCachedInputTokens =
+    usage.nonCachedInputTokens ??
+    (usage.inputTokens === undefined
+      ? undefined
+      : Math.max(0, usage.inputTokens - (usage.cacheReadInputTokens ?? 0) - (usage.cacheWriteInputTokens ?? 0)))
   return compact({
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
-    nonCachedInputTokens: usage.nonCachedInputTokens,
-    cacheReadInputTokens: usage.cacheReadInputTokens,
-    cacheWriteInputTokens: usage.cacheWriteInputTokens,
-    reasoningTokens: usage.reasoningTokens,
+    nonCachedInputTokens,
+    cacheReadInputTokens: usage.cacheReadInputTokens || undefined,
+    cacheWriteInputTokens: usage.cacheWriteInputTokens || undefined,
+    reasoningTokens: usage.reasoningTokens || undefined,
     totalTokens: usage.totalTokens,
   })
 }

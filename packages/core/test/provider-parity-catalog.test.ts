@@ -20,9 +20,40 @@ const scenarioCounts = {
   "input-pdf": 43,
 }
 const scenarioIDs = Object.keys(scenarioCounts)
+const compoundRecordingCredentials = {
+  databricks: [{ id: "env:databricks", allOf: ["DATABRICKS_HOST", "DATABRICKS_TOKEN"] }],
+  "cloudflare-ai-gateway": [
+    {
+      id: "env:cloudflare-ai-gateway",
+      allOf: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"],
+    },
+  ],
+  "amazon-bedrock": [
+    { id: "env:aws-bedrock-bearer-token", allOf: ["AWS_BEARER_TOKEN_BEDROCK"] },
+    { id: "env:aws-static-credentials", allOf: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"] },
+  ],
+  "azure-cognitive-services": [
+    {
+      id: "env:azure-cognitive-services",
+      allOf: ["AZURE_COGNITIVE_SERVICES_RESOURCE_NAME", "AZURE_COGNITIVE_SERVICES_API_KEY"],
+    },
+  ],
+  "google-vertex-anthropic": [{ id: "env:google-application-credentials", allOf: ["GOOGLE_APPLICATION_CREDENTIALS"] }],
+  "google-vertex": [{ id: "env:google-application-credentials", allOf: ["GOOGLE_APPLICATION_CREDENTIALS"] }],
+  "cloudflare-workers-ai": [
+    { id: "env:cloudflare-workers-ai", allOf: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY"] },
+  ],
+  azure: [{ id: "env:azure", allOf: ["AZURE_RESOURCE_NAME", "AZURE_API_KEY"] }],
+  "privatemode-ai": [{ id: "env:privatemode-ai", allOf: ["PRIVATEMODE_API_KEY"] }],
+  google: [
+    { id: "env:google-generative-ai", allOf: ["GOOGLE_GENERATIVE_AI_API_KEY"] },
+    { id: "env:gemini", allOf: ["GEMINI_API_KEY"] },
+  ],
+}
 
 describe("provider parity catalog", () => {
   test("pins and exhaustively canonicalizes the models.dev fixture", () => {
+    expect(inventory.version).toBe(2)
     expect(inventory.source).toEqual({
       path: "packages/opencode/test/tool/fixtures/models-api.json",
       sha256: "d2ea47cabebb5a683cd5d23677dd8f0d597186986da272cc754fda506f7be99b",
@@ -99,6 +130,10 @@ describe("provider parity catalog", () => {
         if (cell.status === "unsupported") {
           expect(cell.modelID).not.toBeNull()
           expect(cell.api?.package.length).toBeGreaterThan(0)
+          expect(cell.api?.url).not.toBe("")
+          expect(cell.api?.urlEvidence.length).toBeGreaterThan(0)
+          expect(cell.api?.urlSource).toBe(cell.api?.url === null ? "provider-runtime" : "catalog")
+          expect(cell.recordingCredentials.length).toBeGreaterThan(0)
           expect("reason" in cell ? cell.reason : undefined).toBe(
             "Parity evidence has not been recorded for this provider and scenario.",
           )
@@ -124,16 +159,35 @@ describe("provider parity catalog", () => {
 
     const effectiveAPI = (providerID: string) =>
       inventory.providers.find((row) => row.id === providerID)?.scenarios.find((cell) => cell.id === "text")?.api
-    expect(effectiveAPI("azure")).toEqual({
+    expect(effectiveAPI("azure")).toMatchObject({
       package: "@ai-sdk/anthropic",
       url: "https://${AZURE_RESOURCE_NAME}.services.ai.azure.com/anthropic/v1",
+      urlSource: "catalog",
     })
     expect(effectiveAPI("google-vertex")?.package).toBe("@ai-sdk/google-vertex/anthropic")
     expect(effectiveAPI("opencode-go")?.url).toBe("https://example.invalid/zen/go/v1")
     expect(effectiveAPI("vivgrid")?.package).toBe("@ai-sdk/openai-compatible")
-    expect(effectiveAPI("zenmux")).toEqual({
+    expect(effectiveAPI("zenmux")).toMatchObject({
       package: "@ai-sdk/anthropic",
       url: "https://zenmux.ai/api/anthropic/v1",
+      urlSource: "catalog",
     })
+  })
+
+  test("models complete credential alternatives for every compound catalog declaration", () => {
+    expect(
+      inventory.providers
+        .filter((row) => row.source === "catalog" && row.credentialSources.catalogEnv.length > 1)
+        .map((row) => row.id),
+    ).toEqual(Object.keys(compoundRecordingCredentials).toSorted((a, b) => a.localeCompare(b)))
+
+    for (const [providerID, alternatives] of Object.entries(compoundRecordingCredentials)) {
+      const row = inventory.providers.find((provider) => provider.id === providerID)
+      expect(row).toBeDefined()
+      for (const cell of row?.scenarios ?? []) {
+        if (cell.status === "not-applicable") continue
+        expect(cell.recordingCredentials).toEqual(alternatives)
+      }
+    }
   })
 })
