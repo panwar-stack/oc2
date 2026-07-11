@@ -24,7 +24,6 @@ import {
 } from "@/context/settings"
 import { decode64 } from "@/utils/base64"
 import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
-import { Link } from "../link"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import "./settings-v2.css"
@@ -335,14 +334,7 @@ export const SettingsGeneralV2: Component = () => {
 
         <SettingsRowV2
           title={language.t("settings.general.row.theme.title")}
-          description={
-            <>
-              {language.t("settings.general.row.theme.description")}{" "}
-              <Link class="settings-v2-link" href="https://oc2.ai/docs/themes/">
-                {language.t("common.learnMore")}
-              </Link>
-            </>
-          }
+          description={language.t("settings.general.row.theme.description")}
         >
           <SelectV2
             appearance="inline"

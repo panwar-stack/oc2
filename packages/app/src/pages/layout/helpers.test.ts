@@ -13,6 +13,7 @@ import {
   displayName,
   effectiveWorkspaceOrder,
   errorMessage,
+  getProjectAvatarSource,
   hasProjectPermissions,
   homeProjectNavigation,
   homeProjectDirectories,
@@ -113,6 +114,10 @@ describe("layout deep links", () => {
 })
 
 describe("layout workspace helpers", () => {
+  test("uses a local asset for the OC2 project avatar", () => {
+    expect(getProjectAvatarSource("4b0ea68d7af9a6031a7ffda7ad66e0cb83315750")).toBe("/favicon-v3.svg")
+  })
+
   test("normalizes trailing slash in workspace key", () => {
     expect(String(pathKey("/tmp/demo///"))).toBe("/tmp/demo")
     expect(String(pathKey("C:\\tmp\\demo\\\\"))).toBe("C:/tmp/demo")
