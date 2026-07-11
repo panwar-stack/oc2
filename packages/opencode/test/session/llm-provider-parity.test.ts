@@ -449,6 +449,147 @@ describe("provider parity normalization and redaction", () => {
     expect(canonical).not.toContain("cloudflare-secret")
   })
 
+  test("preserves routing structure and rejects the final-review identifier reproduction", () => {
+    const raw: ProviderParityCassette = {
+      version: 1,
+      interactions: [
+        {
+          transport: "http",
+          request: {
+            method: "POST",
+            url: "https://example.test/v1",
+            headers: {
+              authorization: "Bearer test-secret",
+              "chatgpt-account-id": "acc-123",
+              "x-tenant-id": "tenant-123",
+            },
+            body: "{}",
+          },
+          response: {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+            body: 'data: {"responseId":"NyTxaYuTJ_OW_uMPgIPKgAg","tenantId":"tenant-customer","profile":"arn:aws:bedrock:us-east-1:123456789012:inference-profile/customer"}\n\n',
+          },
+        },
+      ],
+    }
+    expect(canonicalRequest(raw.interactions[0].request)).toEqual({
+      body: {},
+      headers: {
+        authorization: "[REDACTED]",
+        "chatgpt-account-id": "[VOLATILE]",
+        "x-tenant-id": "[VOLATILE]",
+      },
+      method: "POST",
+      url: "https://example.test/v1",
+    })
+    expect(() => assertCassetteSafe(raw)).toThrow("possible secrets")
+    const redacted = redactCassette(raw)
+    const text = JSON.stringify(redacted)
+    expect(text).not.toContain("NyTxaYuTJ_OW_uMPgIPKgAg")
+    expect(text).not.toContain("tenant-customer")
+    expect(text).not.toContain("123456789012")
+    expect(text).toContain("arn:aws:bedrock:us-east-1:[VOLATILE]:inference-profile/customer")
+    expect(() => assertCassetteSafe(redacted)).not.toThrow()
+  })
+
+  test("fails closed across provider identifier key, path, and header forms", () => {
+    for (const [key, value] of [
+      ["responseId", "opaqueResponseValue"],
+      ["response_id", "opaque-response-value"],
+      ["tenantId", "customerTenantValue"],
+      ["tenant_id", "customer-tenant-value"],
+      ["subscriptionId", "billingSubscriptionValue"],
+      ["subscription_id", "billing-subscription-value"],
+      ["resourceId", "inferenceResourceValue"],
+      ["resource_id", "inference-resource-value"],
+    ] as const) {
+      const raw: ProviderParityCassette = {
+        version: 1,
+        interactions: [
+          {
+            transport: "http",
+            request: { method: "POST", url: "https://example.test/v1", headers: {}, body: "{}" },
+            response: {
+              status: 200,
+              headers: {},
+              body: `data: ${JSON.stringify({ [key]: value, resourceType: "inference_profile", responseFormat: "json" })}\n\n`,
+            },
+          },
+        ],
+      }
+      expect(() => assertCassetteSafe(raw)).toThrow("possible secrets")
+      const redacted = redactCassette(raw)
+      expect(redacted.interactions[0].response.body).not.toContain(value)
+      expect(redacted.interactions[0].response.body).toContain('"resourceType":"inference_profile"')
+      expect(redacted.interactions[0].response.body).toContain('"responseFormat":"json"')
+      expect(() => assertCassetteSafe(redacted)).not.toThrow()
+    }
+
+    for (const [url, identifiers] of [
+      ["https://example.test/v1/responses/opaque-response-value", ["opaque-response-value"]],
+      ["https://example.test/v1/tenants/customer-tenant-value", ["customer-tenant-value"]],
+      ["https://example.test/v1/subscriptions/billing-subscription-value", ["billing-subscription-value"]],
+      [
+        "https://example.test/v1/resourceGroups/production-group/resources/inference-resource-value",
+        ["production-group", "inference-resource-value"],
+      ],
+    ] as const) {
+      const raw: ProviderParityCassette = {
+        version: 1,
+        interactions: [
+          {
+            transport: "http",
+            request: { method: "POST", url, headers: {}, body: "{}" },
+            response: { status: 200, headers: {}, body: "" },
+          },
+        ],
+      }
+      expect(() => assertCassetteSafe(raw)).toThrow("sensitive identifier")
+      const redacted = redactCassette(raw)
+      for (const identifier of identifiers) expect(redacted.interactions[0].request.url).not.toContain(identifier)
+      expect(() => assertCassetteSafe(redacted)).not.toThrow()
+    }
+
+    const headerValues = {
+      "chatgpt-account-id": "customer-account",
+      "x-tenant-id": "customer-tenant",
+      "x-subscription-id": "customer-subscription",
+      "x-resource-id": "customer-resource",
+    }
+    const headers = canonicalRequest({
+      method: "POST",
+      url: "https://example.test/v1",
+      headers: headerValues,
+      body: "{}",
+    })
+    expect(headers).toEqual({
+      body: {},
+      headers: {
+        "chatgpt-account-id": "[VOLATILE]",
+        "x-resource-id": "[VOLATILE]",
+        "x-subscription-id": "[VOLATILE]",
+        "x-tenant-id": "[VOLATILE]",
+      },
+      method: "POST",
+      url: "https://example.test/v1",
+    })
+    const rawHeaders: ProviderParityCassette = {
+      version: 1,
+      interactions: [
+        {
+          transport: "http",
+          request: { method: "POST", url: "https://example.test/v1", headers: headerValues, body: "{}" },
+          response: { status: 200, headers: headerValues, body: "" },
+        },
+      ],
+    }
+    expect(() => assertCassetteSafe(rawHeaders)).toThrow("possible secrets")
+    const redactedHeaders = redactCassette(rawHeaders)
+    for (const value of Object.values(headerValues)) expect(JSON.stringify(redactedHeaders)).not.toContain(value)
+    expect(() => assertCassetteSafe(redactedHeaders)).not.toThrow()
+  })
+
   test("redacts URL userinfo and resource identifiers in path, query, and host", () => {
     const source = cassette()
     const adversarial: ProviderParityCassette = {

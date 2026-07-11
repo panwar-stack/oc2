@@ -2,7 +2,7 @@
 
 import path from "path"
 import { parseArgs } from "util"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { Flag } from "../src/flag/flag"
 import { ModelsDev } from "../src/models-dev"
 
@@ -113,7 +113,7 @@ const expectedFamilyCounts: Record<(typeof catalogFamilies)[number], number> = {
 const expectedScenarioCounts: Record<ScenarioID, number> = {
   text: 120,
   tools: 118,
-  "structured-output": 120,
+  "structured-output": 72,
   "input-audio": 46,
   "input-image": 94,
   "input-video": 62,
@@ -237,6 +237,17 @@ const source = Bun.file(sourcePath)
 const sourceBytes = await source.bytes()
 const actualSHA256 = new Bun.CryptoHasher("sha256").update(sourceBytes).digest("hex")
 if (actualSHA256 !== sourceSHA256) throw new Error(`Unexpected models.dev fixture SHA-256: ${actualSHA256}`)
+const structuredOutputCatalog = Schema.decodeUnknownSync(
+  Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      models: Schema.Record(
+        Schema.String,
+        Schema.Struct({ structured_output: Schema.optional(Schema.Boolean) }),
+      ),
+    }),
+  ),
+)(Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(new TextDecoder().decode(sourceBytes)))
 
 const previousPath = Flag.OC2_MODELS_PATH
 const previousDisabled = Flag.OC2_DISABLE_MODELS_FETCH
@@ -261,7 +272,7 @@ const catalog = await Effect.runPromise(
   ),
 )
 
-const inventory = buildInventory(catalog)
+const inventory = buildInventory(catalog, structuredOutputCatalog)
 const rendered = `${JSON.stringify(inventory, null, 2)}\n`
 
 if (args.values.batch && !inventory.providers.some((row) => row.batchID === args.values.batch)) {
@@ -284,7 +295,10 @@ if (args.values.check) {
 await Bun.write(outputPath, rendered)
 console.log(`wrote ${path.relative(root, outputPath)} (${inventory.providers.length} providers)`)
 
-function buildInventory(providers: Record<string, ModelsDev.Provider>) {
+function buildInventory(
+  providers: Record<string, ModelsDev.Provider>,
+  capabilities: Record<string, { models: Record<string, { structured_output?: boolean }> }>,
+) {
   const ids = Object.keys(providers).sort()
   if (ids.length !== 120) throw new Error(`Expected 120 canonical catalog providers, found ${ids.length}`)
   if (providers.opencode || !providers.oc2)
@@ -296,7 +310,9 @@ function buildInventory(providers: Record<string, ModelsDev.Provider>) {
   )
   if (modelCount !== 4490) throw new Error(`Expected 4490 catalog models, found ${modelCount}`)
 
-  const rows = ids.map((id) => catalogRow(id, providers[id])).concat(syntheticRows(), [fuguRow()])
+  const rows = ids
+    .map((id) => catalogRow(id, providers[id], capabilities[id === "oc2" ? "opencode" : id]))
+    .concat(syntheticRows(), [fuguRow()])
   const familyCounts = Object.fromEntries(catalogFamilies.map((family) => [family, 0])) as Record<
     (typeof catalogFamilies)[number],
     number
@@ -372,7 +388,11 @@ function buildInventory(providers: Record<string, ModelsDev.Provider>) {
   }
 }
 
-function catalogRow(id: string, provider: ModelsDev.Provider): Row {
+function catalogRow(
+  id: string,
+  provider: ModelsDev.Provider,
+  capabilities: { models: Record<string, { structured_output?: boolean }> },
+): Row {
   const catalogID = id === "oc2" ? "opencode" : id
   const family = familyFor(provider.npm ?? defaultPackage)
   const recordingCredentials = credentialsFor(catalogID, provider.env)
@@ -394,18 +414,21 @@ function catalogRow(id: string, provider: ModelsDev.Provider): Row {
       config: true,
       evidence: credentialEvidence,
     },
-    scenarios: scenarioIDs.map((scenarioID) => catalogScenario(catalogID, provider, scenarioID, recordingCredentials)),
+    scenarios: scenarioIDs.map((scenarioID) =>
+      catalogScenario(catalogID, provider, capabilities.models, scenarioID, recordingCredentials),
+    ),
   }
 }
 
 function catalogScenario(
   catalogID: string,
   provider: ModelsDev.Provider,
+  capabilities: Record<string, { structured_output?: boolean }>,
   scenarioID: ScenarioID,
   recordingCredentials: RecordingCredential[],
 ): Scenario {
   const model = Object.values(provider.models)
-    .filter((candidate) => applicable(candidate, scenarioID))
+    .filter((candidate) => applicable(candidate, capabilities[candidate.id], scenarioID))
     .sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.id.localeCompare(b.id))[0]
   if (!model) {
     return {
@@ -413,7 +436,10 @@ function catalogScenario(
       modelID: null,
       api: null,
       status: "not-applicable",
-      evidence: `${sourceName}#${catalogID}.models declares no ${scenarioID} model`,
+      evidence:
+        scenarioID === "structured-output"
+          ? `${sourceName}#${catalogID}.models declares no model with structured_output: true`
+          : `${sourceName}#${catalogID}.models declares no ${scenarioID} model`,
       recordingCredentials: [],
     }
   }
@@ -455,10 +481,14 @@ function credentialsFor(providerID: string, env: readonly string[]): RecordingCr
   return result
 }
 
-function applicable(model: ModelsDev.Model, scenarioID: ScenarioID) {
+function applicable(
+  model: ModelsDev.Model,
+  capabilities: { structured_output?: boolean } | undefined,
+  scenarioID: ScenarioID,
+) {
   const inputs = model.modalities?.input ?? ["text"]
   if (scenarioID === "tools") return model.tool_call
-  if (scenarioID === "structured-output") return inputs.includes("text")
+  if (scenarioID === "structured-output") return capabilities?.structured_output === true
   if (scenarioID === "text") return inputs.includes("text")
   return inputs.includes(scenarioID.slice("input-".length) as "audio" | "image" | "video" | "pdf")
 }

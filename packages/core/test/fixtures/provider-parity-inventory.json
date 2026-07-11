@@ -18,7 +18,7 @@
   "scenarioCounts": {
     "text": 120,
     "tools": 118,
-    "structured-output": 120,
+    "structured-output": 72,
     "input-audio": 46,
     "input-image": 94,
     "input-video": 62,
@@ -297,7 +297,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "chatgpt-4o-latest",
+          "modelID": "glm-5-turbo",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.302.ai/v1",
@@ -307,7 +307,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#302ai.models.chatgpt-4o-latest",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#302ai.models.glm-5-turbo",
           "recordingCredentials": [
             {
               "id": "env:302AI_API_KEY",
@@ -473,7 +473,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-3-7-sonnet-20250219",
+          "modelID": "gemini-3.1-flash-lite-preview",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://routellm.abacus.ai/v1",
@@ -483,7 +483,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#abacus.models.claude-3-7-sonnet-20250219",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#abacus.models.gemini-3.1-flash-lite-preview",
           "recordingCredentials": [
             {
               "id": "env:ABACUS_API_KEY",
@@ -649,25 +649,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "abliterated-model",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.abliteration.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#abliteration-ai.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#abliteration-ai.models.abliterated-model",
-          "recordingCredentials": [
-            {
-              "id": "env:ABLIT_KEY",
-              "allOf": [
-                "ABLIT_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#abliteration-ai.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -783,7 +769,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-opus-4-6",
+          "modelID": "claude-opus-4-7-think",
           "api": {
             "package": "@aihubmix/ai-sdk-provider",
             "url": null,
@@ -793,7 +779,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-6",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-7-think",
           "recordingCredentials": [
             {
               "id": "env:AIHUBMIX_API_KEY",
@@ -959,7 +945,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "qvq-max",
+          "modelID": "qwen3.5-122b-a10b",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -969,7 +955,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba.models.qvq-max",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba.models.qwen3.5-122b-a10b",
           "recordingCredentials": [
             {
               "id": "env:DASHSCOPE_API_KEY",
@@ -1121,7 +1107,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-r1",
+          "modelID": "deepseek-v4-flash",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -1131,7 +1117,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba-cn.models.deepseek-r1",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba-cn.models.deepseek-v4-flash",
           "recordingCredentials": [
             {
               "id": "env:DASHSCOPE_API_KEY",
@@ -1283,7 +1269,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-4.7",
+          "modelID": "qwen3-coder-next",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://coding-intl.dashscope.aliyuncs.com/v1",
@@ -1293,7 +1279,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba-coding-plan.models.glm-4.7",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba-coding-plan.models.qwen3-coder-next",
           "recordingCredentials": [
             {
               "id": "env:ALIBABA_CODING_PLAN_API_KEY",
@@ -1431,7 +1417,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-4.7",
+          "modelID": "qwen3-coder-next",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://coding.dashscope.aliyuncs.com/v1",
@@ -1441,7 +1427,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba-coding-plan-cn.models.glm-4.7",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#alibaba-coding-plan-cn.models.qwen3-coder-next",
           "recordingCredentials": [
             {
               "id": "env:ALIBABA_CODING_PLAN_API_KEY",
@@ -1596,7 +1582,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "amazon.nova-2-lite-v1:0",
+          "modelID": "anthropic.claude-haiku-4-5-20251001-v1:0",
           "api": {
             "package": "@ai-sdk/amazon-bedrock",
             "url": null,
@@ -1606,7 +1592,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#amazon-bedrock.models.amazon.nova-2-lite-v1:0",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#amazon-bedrock.models.anthropic.claude-haiku-4-5-20251001-v1:0",
           "recordingCredentials": [
             {
               "id": "env:aws-bedrock-bearer-token",
@@ -1807,25 +1793,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-3-5-haiku-20241022",
-          "api": {
-            "package": "@ai-sdk/anthropic",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "@ai-sdk/anthropic derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#anthropic declares no model or provider URL"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#anthropic.models.claude-3-5-haiku-20241022",
-          "recordingCredentials": [
-            {
-              "id": "env:ANTHROPIC_API_KEY",
-              "allOf": [
-                "ANTHROPIC_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#anthropic.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -2293,25 +2265,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "Ling-1T",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.tbox.cn/api/llm/v1/chat/completions",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#bailing.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#bailing.models.Ling-1T",
-          "recordingCredentials": [
-            {
-              "id": "env:BAILING_API_TOKEN",
-              "allOf": [
-                "BAILING_API_TOKEN"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#bailing.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -2413,7 +2371,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-ai/DeepSeek-V3-0324",
+          "modelID": "deepseek-ai/DeepSeek-V4-Pro",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://inference.baseten.co/v1",
@@ -2423,7 +2381,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#baseten.models.deepseek-ai/DeepSeek-V3-0324",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#baseten.models.deepseek-ai/DeepSeek-V4-Pro",
           "recordingCredentials": [
             {
               "id": "env:BASETEN_API_KEY",
@@ -2723,25 +2681,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "gpt-oss-120b",
-          "api": {
-            "package": "@ai-sdk/cerebras",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "@ai-sdk/cerebras derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#cerebras declares no model or provider URL"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cerebras.models.gpt-oss-120b",
-          "recordingCredentials": [
-            {
-              "id": "env:CEREBRAS_API_KEY",
-              "allOf": [
-                "CEREBRAS_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cerebras.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -2991,7 +2935,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "arcee_ai/AFM/models/trinity-mini",
+          "modelID": "moonshotai/chat-completion/models/Kimi-K2_6",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.clarifai.com/v2/ext/openai/v1",
@@ -3001,7 +2945,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#clarifai.models.arcee_ai/AFM/models/trinity-mini",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#clarifai.models.moonshotai/chat-completion/models/Kimi-K2_6",
           "recordingCredentials": [
             {
               "id": "env:CLARIFAI_PAT",
@@ -3139,7 +3083,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "meta-llama/Llama-3.3-70B-Instruct",
+          "modelID": "MiniMaxAI/MiniMax-M2.5",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api-sherlock.cloudferro.com/openai/v1/",
@@ -3149,7 +3093,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudferro-sherlock.models.meta-llama/Llama-3.3-70B-Instruct",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudferro-sherlock.models.MiniMaxAI/MiniMax-M2.5",
           "recordingCredentials": [
             {
               "id": "env:CLOUDFERRO_SHERLOCK_API_KEY",
@@ -3265,7 +3209,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-3-5-haiku",
+          "modelID": "openai/gpt-4o",
           "api": {
             "package": "ai-gateway-provider",
             "url": null,
@@ -3275,7 +3219,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.anthropic/claude-3-5-haiku",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.openai/gpt-4o",
           "recordingCredentials": [
             {
               "id": "env:cloudflare-ai-gateway",
@@ -3422,7 +3366,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "@cf/google/gemma-4-26b-a4b-it",
+          "modelID": "@cf/moonshotai/kimi-k2.5",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
@@ -3432,7 +3376,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-workers-ai.models.@cf/google/gemma-4-26b-a4b-it",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-workers-ai.models.@cf/moonshotai/kimi-k2.5",
           "recordingCredentials": [
             {
               "id": "env:cloudflare-workers-ai",
@@ -3558,25 +3502,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "c4ai-aya-expanse-32b",
-          "api": {
-            "package": "@ai-sdk/cohere",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "@ai-sdk/cohere derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#cohere declares no model or provider URL"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cohere.models.c4ai-aya-expanse-32b",
-          "recordingCredentials": [
-            {
-              "id": "env:COHERE_API_KEY",
-              "allOf": [
-                "COHERE_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cohere.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -3692,7 +3622,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-4-5-sonnet",
+          "modelID": "glm-5.1",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.cortecs.ai/v1",
@@ -3702,7 +3632,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cortecs.models.claude-4-5-sonnet",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cortecs.models.glm-5.1",
           "recordingCredentials": [
             {
               "id": "env:CORTECS_API_KEY",
@@ -3857,7 +3787,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "databricks-claude-haiku-4-5",
+          "modelID": "databricks-gemini-2-5-flash",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://${DATABRICKS_HOST}/ai-gateway/mlflow/v1",
@@ -3867,7 +3797,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#databricks.models.databricks-claude-haiku-4-5",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#databricks.models.databricks-gemini-2-5-flash",
           "recordingCredentials": [
             {
               "id": "env:databricks",
@@ -4038,7 +3968,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-3-7-sonnet-latest",
+          "modelID": "deepseek-ai/DeepSeek-V4-Flash",
           "api": {
             "package": "@ai-sdk/deepinfra",
             "url": null,
@@ -4048,7 +3978,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#deepinfra.models.anthropic/claude-3-7-sonnet-latest",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#deepinfra.models.deepseek-ai/DeepSeek-V4-Flash",
           "recordingCredentials": [
             {
               "id": "env:DEEPINFRA_API_KEY",
@@ -4200,7 +4130,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-chat",
+          "modelID": "deepseek-v4-flash",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.deepseek.com",
@@ -4210,7 +4140,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#deepseek.models.deepseek-chat",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#deepseek.models.deepseek-v4-flash",
           "recordingCredentials": [
             {
               "id": "env:DEEPSEEK_API_KEY",
@@ -4496,7 +4426,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-4.7",
+          "modelID": "glm-5.1",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.dinference.com/v1",
@@ -4506,7 +4436,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#dinference.models.glm-4.7",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#dinference.models.glm-5.1",
           "recordingCredentials": [
             {
               "id": "env:DINFERENCE_API_KEY",
@@ -4616,25 +4546,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "public/deepseek-r1",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://chat.d.run/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#drun.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#drun.models.public/deepseek-r1",
-          "recordingCredentials": [
-            {
-              "id": "env:DRUN_API_KEY",
-              "allOf": [
-                "DRUN_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#drun.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -4810,25 +4726,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "intfloat/multilingual-e5-large-instruct",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://models.think.evroc.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#evroc.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#evroc.models.intfloat/multilingual-e5-large-instruct",
-          "recordingCredentials": [
-            {
-              "id": "env:EVROC_API_KEY",
-              "allOf": [
-                "EVROC_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#evroc.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -4972,25 +4874,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-opus-4.1",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://go.fastrouter.ai/api/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#fastrouter.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#fastrouter.models.anthropic/claude-opus-4.1",
-          "recordingCredentials": [
-            {
-              "id": "env:FASTROUTER_API_KEY",
-              "allOf": [
-                "FASTROUTER_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#fastrouter.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -5120,25 +5008,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "accounts/fireworks/routers/kimi-k2p6-turbo",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.fireworks.ai/inference/v1/",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#firepass.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#firepass.models.accounts/fireworks/routers/kimi-k2p6-turbo",
-          "recordingCredentials": [
-            {
-              "id": "env:FIREPASS_API_KEY",
-              "allOf": [
-                "FIREPASS_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#firepass.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -5254,7 +5128,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "accounts/fireworks/models/deepseek-v3p1",
+          "modelID": "accounts/fireworks/models/deepseek-v4-pro",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.fireworks.ai/inference/v1/",
@@ -5264,7 +5138,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#fireworks-ai.models.accounts/fireworks/models/deepseek-v3p1",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#fireworks-ai.models.accounts/fireworks/models/deepseek-v4-pro",
           "recordingCredentials": [
             {
               "id": "env:FIREWORKS_API_KEY",
@@ -5522,7 +5396,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-haiku-4-5",
+          "modelID": "gemini-3-1-pro-preview",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://app.frogbot.ai/api/v1",
@@ -5532,7 +5406,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#frogbot.models.claude-haiku-4-5",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#frogbot.models.gemini-3-1-pro-preview",
           "recordingCredentials": [
             {
               "id": "env:FROGBOT_API_KEY",
@@ -5846,7 +5720,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-haiku-4.5",
+          "modelID": "gemini-3-flash-preview",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.githubcopilot.com",
@@ -5856,7 +5730,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#github-copilot.models.claude-haiku-4.5",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#github-copilot.models.gemini-3-flash-preview",
           "recordingCredentials": [
             {
               "id": "env:GITHUB_TOKEN",
@@ -6008,25 +5882,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "ai21-labs/ai21-jamba-1.5-large",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://models.github.ai/inference",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#github-models.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#github-models.models.ai21-labs/ai21-jamba-1.5-large",
-          "recordingCredentials": [
-            {
-              "id": "env:GITHUB_TOKEN",
-              "allOf": [
-                "GITHUB_TOKEN"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#github-models.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -6317,7 +6177,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "gemini-1.5-flash",
+          "modelID": "gemini-2.0-flash",
           "api": {
             "package": "@ai-sdk/google",
             "url": null,
@@ -6327,7 +6187,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#google.models.gemini-1.5-flash",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#google.models.gemini-2.0-flash",
           "recordingCredentials": [
             {
               "id": "env:google-generative-ai",
@@ -6525,17 +6385,17 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-3-5-haiku@20241022",
+          "modelID": "deepseek-ai/deepseek-v3.1-maas",
           "api": {
-            "package": "@ai-sdk/google-vertex/anthropic",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "packages/core/src/plugin/provider/google-vertex.ts delegates regional endpoint derivation to @ai-sdk/google-vertex"
+            "package": "@ai-sdk/openai-compatible",
+            "url": "https://${GOOGLE_VERTEX_ENDPOINT}/v1/projects/${GOOGLE_VERTEX_PROJECT}/locations/${GOOGLE_VERTEX_LOCATION}/endpoints/openapi",
+            "urlSource": "catalog",
+            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#google-vertex.models.deepseek-ai/deepseek-v3.1-maas.provider.api"
           },
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#google-vertex.models.claude-3-5-haiku@20241022",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#google-vertex.models.deepseek-ai/deepseek-v3.1-maas",
           "recordingCredentials": [
             {
               "id": "env:google-application-credentials",
@@ -6703,25 +6563,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-3-5-haiku@20241022",
-          "api": {
-            "package": "@ai-sdk/google-vertex/anthropic",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "packages/core/src/plugin/provider/google-vertex.ts delegates regional endpoint derivation to @ai-sdk/google-vertex/anthropic"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#google-vertex-anthropic.models.claude-3-5-haiku@20241022",
-          "recordingCredentials": [
-            {
-              "id": "env:google-application-credentials",
-              "allOf": [
-                "GOOGLE_APPLICATION_CREDENTIALS"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#google-vertex-anthropic.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -6851,7 +6697,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "allam-2-7b",
+          "modelID": "meta-llama/llama-4-scout-17b-16e-instruct",
           "api": {
             "package": "@ai-sdk/groq",
             "url": null,
@@ -6861,7 +6707,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#groq.models.allam-2-7b",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#groq.models.meta-llama/llama-4-scout-17b-16e-instruct",
           "recordingCredentials": [
             {
               "id": "env:GROQ_API_KEY",
@@ -6999,25 +6845,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "chatgpt-4o-latest",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://ai-gateway.helicone.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#helicone.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#helicone.models.chatgpt-4o-latest",
-          "recordingCredentials": [
-            {
-              "id": "env:HELICONE_API_KEY",
-              "allOf": [
-                "HELICONE_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#helicone.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -7161,7 +6993,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "minimax/minimax-m2.5",
+          "modelID": "moonshotai/kimi-k2.5",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.hpc-ai.com/inference/v1",
@@ -7171,7 +7003,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#hpc-ai.models.minimax/minimax-m2.5",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#hpc-ai.models.moonshotai/kimi-k2.5",
           "recordingCredentials": [
             {
               "id": "env:HPC_AI_API_KEY",
@@ -7309,7 +7141,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-ai/DeepSeek-R1-0528",
+          "modelID": "deepseek-ai/DeepSeek-V4-Pro",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://router.huggingface.co/v1",
@@ -7319,7 +7151,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#huggingface.models.deepseek-ai/DeepSeek-R1-0528",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#huggingface.models.deepseek-ai/DeepSeek-V4-Pro",
           "recordingCredentials": [
             {
               "id": "env:HF_TOKEN",
@@ -7457,25 +7289,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-r1",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://apis.iflow.cn/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#iflowcn.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#iflowcn.models.deepseek-r1",
-          "recordingCredentials": [
-            {
-              "id": "env:IFLOW_API_KEY",
-              "allOf": [
-                "IFLOW_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#iflowcn.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -7711,25 +7529,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "google/gemma-3",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://inference.net/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#inference.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#inference.models.google/gemma-3",
-          "recordingCredentials": [
-            {
-              "id": "env:INFERENCE_API_KEY",
-              "allOf": [
-                "INFERENCE_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#inference.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -7845,25 +7649,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-ai/DeepSeek-R1-0528",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.intelligence.io.solutions/api/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#io-net.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#io-net.models.deepseek-ai/DeepSeek-R1-0528",
-          "recordingCredentials": [
-            {
-              "id": "env:IOINTELLIGENCE_API_KEY",
-              "allOf": [
-                "IOINTELLIGENCE_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#io-net.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -8141,7 +7931,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "~anthropic/claude-haiku-latest",
+          "modelID": "microsoft/phi-4-mini-instruct",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.kilo.ai/api/gateway",
@@ -8151,7 +7941,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#kilo.models.~anthropic/claude-haiku-latest",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#kilo.models.microsoft/phi-4-mini-instruct",
           "recordingCredentials": [
             {
               "id": "env:KILO_API_KEY",
@@ -8465,25 +8255,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "GLM-4.7",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://coding-plan-endpoint.kuaecloud.net/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#kuae-cloud-coding-plan.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#kuae-cloud-coding-plan.models.GLM-4.7",
-          "recordingCredentials": [
-            {
-              "id": "env:KUAE_API_KEY",
-              "allOf": [
-                "KUAE_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#kuae-cloud-coding-plan.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -8585,25 +8361,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "cerebras-llama-4-maverick-17b-128e-instruct",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.llama.com/compat/v1/",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#llama.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#llama.models.cerebras-llama-4-maverick-17b-128e-instruct",
-          "recordingCredentials": [
-            {
-              "id": "env:LLAMA_API_KEY",
-              "allOf": [
-                "LLAMA_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#llama.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -8895,25 +8657,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "openai/gpt-oss-20b",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "http://127.0.0.1:1234/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#lmstudio.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#lmstudio.models.openai/gpt-oss-20b",
-          "recordingCredentials": [
-            {
-              "id": "env:LMSTUDIO_API_KEY",
-              "allOf": [
-                "LMSTUDIO_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#lmstudio.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -9015,25 +8763,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "lucidnova-rf1-100b",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://lucidquery.com/api/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#lucidquery.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#lucidquery.models.lucidnova-rf1-100b",
-          "recordingCredentials": [
-            {
-              "id": "env:LUCIDQUERY_API_KEY",
-              "allOf": [
-                "LUCIDQUERY_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#lucidquery.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -9135,7 +8869,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-ai/DeepSeek-R1-0528",
+          "modelID": "deepseek-ai/DeepSeek-V3.1",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.meganova.ai/v1",
@@ -9145,7 +8879,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#meganova.models.deepseek-ai/DeepSeek-R1-0528",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#meganova.models.deepseek-ai/DeepSeek-V3.1",
           "recordingCredentials": [
             {
               "id": "env:MEGANOVA_API_KEY",
@@ -9283,25 +9017,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "MiniMax-M2",
-          "api": {
-            "package": "@ai-sdk/anthropic",
-            "url": "https://api.minimax.io/anthropic/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax.models.MiniMax-M2",
-          "recordingCredentials": [
-            {
-              "id": "env:MINIMAX_API_KEY",
-              "allOf": [
-                "MINIMAX_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -9403,25 +9123,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "MiniMax-M2",
-          "api": {
-            "package": "@ai-sdk/anthropic",
-            "url": "https://api.minimaxi.com/anthropic/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-cn.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-cn.models.MiniMax-M2",
-          "recordingCredentials": [
-            {
-              "id": "env:MINIMAX_API_KEY",
-              "allOf": [
-                "MINIMAX_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-cn.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -9523,25 +9229,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "MiniMax-M2",
-          "api": {
-            "package": "@ai-sdk/anthropic",
-            "url": "https://api.minimaxi.com/anthropic/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-cn-coding-plan.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-cn-coding-plan.models.MiniMax-M2",
-          "recordingCredentials": [
-            {
-              "id": "env:MINIMAX_API_KEY",
-              "allOf": [
-                "MINIMAX_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-cn-coding-plan.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -9643,25 +9335,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "MiniMax-M2",
-          "api": {
-            "package": "@ai-sdk/anthropic",
-            "url": "https://api.minimax.io/anthropic/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-coding-plan.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-coding-plan.models.MiniMax-M2",
-          "recordingCredentials": [
-            {
-              "id": "env:MINIMAX_API_KEY",
-              "allOf": [
-                "MINIMAX_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#minimax-coding-plan.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -9763,7 +9441,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "codestral-latest",
+          "modelID": "mistral-medium-2604",
           "api": {
             "package": "@ai-sdk/mistral",
             "url": null,
@@ -9773,7 +9451,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#mistral.models.codestral-latest",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#mistral.models.mistral-medium-2604",
           "recordingCredentials": [
             {
               "id": "env:MISTRAL_API_KEY",
@@ -9897,25 +9575,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "qwen/qwen3.5-122b-a10b",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://models.mixlayer.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#mixlayer.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#mixlayer.models.qwen/qwen3.5-122b-a10b",
-          "recordingCredentials": [
-            {
-              "id": "env:MIXLAYER_API_KEY",
-              "allOf": [
-                "MIXLAYER_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#mixlayer.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -10017,25 +9681,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "GLM-4.7",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://moark.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#moark.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#moark.models.GLM-4.7",
-          "recordingCredentials": [
-            {
-              "id": "env:MOARK_API_KEY",
-              "allOf": [
-                "MOARK_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#moark.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -10137,25 +9787,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "Qwen/Qwen3-235B-A22B-Instruct-2507",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api-inference.modelscope.cn/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#modelscope.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#modelscope.models.Qwen/Qwen3-235B-A22B-Instruct-2507",
-          "recordingCredentials": [
-            {
-              "id": "env:MODELSCOPE_API_KEY",
-              "allOf": [
-                "MODELSCOPE_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#modelscope.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -10257,7 +9893,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "kimi-k2-0711-preview",
+          "modelID": "kimi-k2.5",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.moonshot.ai/v1",
@@ -10267,7 +9903,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#moonshotai.models.kimi-k2-0711-preview",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#moonshotai.models.kimi-k2.5",
           "recordingCredentials": [
             {
               "id": "env:MOONSHOT_API_KEY",
@@ -10405,7 +10041,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "kimi-k2-0711-preview",
+          "modelID": "kimi-k2.5",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.moonshot.cn/v1",
@@ -10415,7 +10051,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#moonshotai-cn.models.kimi-k2-0711-preview",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#moonshotai-cn.models.kimi-k2.5",
           "recordingCredentials": [
             {
               "id": "env:MOONSHOT_API_KEY",
@@ -10539,25 +10175,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "auto",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.morphllm.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#morph.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#morph.models.auto",
-          "recordingCredentials": [
-            {
-              "id": "env:MORPH_API_KEY",
-              "allOf": [
-                "MORPH_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#morph.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -10659,7 +10281,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "abacusai/Dracarys-72B-Instruct",
+          "modelID": "anthropic/claude-opus-4.6",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://nano-gpt.com/api/v1",
@@ -10669,7 +10291,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#nano-gpt.models.abacusai/Dracarys-72B-Instruct",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#nano-gpt.models.anthropic/claude-opus-4.6",
           "recordingCredentials": [
             {
               "id": "env:NANO_GPT_API_KEY",
@@ -10955,25 +10577,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-5-fast",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.neuralwatt.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#neuralwatt.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#neuralwatt.models.glm-5-fast",
-          "recordingCredentials": [
-            {
-              "id": "env:NEURALWATT_API_KEY",
-              "allOf": [
-                "NEURALWATT_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#neuralwatt.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -11089,25 +10697,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "nova-2-lite-v1",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.nova.amazon.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#nova.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#nova.models.nova-2-lite-v1",
-          "recordingCredentials": [
-            {
-              "id": "env:NOVA_API_KEY",
-              "allOf": [
-                "NOVA_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#nova.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -11251,7 +10845,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "baichuan/baichuan-m2-32b",
+          "modelID": "baidu/ernie-4.5-300b-a47b-paddle",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.novita.ai/openai",
@@ -11261,7 +10855,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#novita-ai.models.baichuan/baichuan-m2-32b",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#novita-ai.models.baidu/ernie-4.5-300b-a47b-paddle",
           "recordingCredentials": [
             {
               "id": "env:NOVITA_API_KEY",
@@ -11413,7 +11007,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "abacusai/dracarys-llama-3_1-70b-instruct",
+          "modelID": "bytedance/seed-oss-36b-instruct",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://integrate.api.nvidia.com/v1",
@@ -11423,7 +11017,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#nvidia.models.abacusai/dracarys-llama-3_1-70b-instruct",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#nvidia.models.bytedance/seed-oss-36b-instruct",
           "recordingCredentials": [
             {
               "id": "env:NVIDIA_API_KEY",
@@ -11751,25 +11345,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "cogito-2.1:671b",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://ollama.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#ollama-cloud.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#ollama-cloud.models.cogito-2.1:671b",
-          "recordingCredentials": [
-            {
-              "id": "env:OLLAMA_API_KEY",
-              "allOf": [
-                "OLLAMA_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#ollama-cloud.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -11885,7 +11465,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "chatgpt-image-latest",
+          "modelID": "gpt-4.1",
           "api": {
             "package": "@ai-sdk/openai",
             "url": null,
@@ -11895,7 +11475,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#openai.models.chatgpt-image-latest",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#openai.models.gpt-4.1",
           "recordingCredentials": [
             {
               "id": "env:OPENAI_API_KEY",
@@ -12283,7 +11863,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-3.5-haiku",
+          "modelID": "anthropic/claude-haiku-4.5",
           "api": {
             "package": "@openrouter/ai-sdk-provider",
             "url": "https://openrouter.ai/api/v1",
@@ -12293,7 +11873,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#openrouter.models.anthropic/claude-3.5-haiku",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#openrouter.models.anthropic/claude-haiku-4.5",
           "recordingCredentials": [
             {
               "id": "env:OPENROUTER_API_KEY",
@@ -12579,25 +12159,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "sonar",
-          "api": {
-            "package": "@ai-sdk/perplexity",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "@ai-sdk/perplexity derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#perplexity declares no model or provider URL"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#perplexity.models.sonar",
-          "recordingCredentials": [
-            {
-              "id": "env:PERPLEXITY_API_KEY",
-              "allOf": [
-                "PERPLEXITY_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#perplexity.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -12713,25 +12279,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-haiku-4-5",
-          "api": {
-            "package": "@ai-sdk/openai",
-            "url": "https://api.perplexity.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#perplexity-agent.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#perplexity-agent.models.anthropic/claude-haiku-4-5",
-          "recordingCredentials": [
-            {
-              "id": "env:PERPLEXITY_API_KEY",
-              "allOf": [
-                "PERPLEXITY_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#perplexity-agent.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -12889,7 +12441,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-haiku-3",
+          "modelID": "openai/gpt-5.5",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.poe.com/v1",
@@ -12899,7 +12451,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#poe.models.anthropic/claude-haiku-3",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#poe.models.openai/gpt-5.5",
           "recordingCredentials": [
             {
               "id": "env:POE_API_KEY",
@@ -13214,7 +12766,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-haiku-4-5-20251001",
+          "modelID": "gemini-2.5-flash",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.qhaigc.net/v1",
@@ -13224,7 +12776,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#qihang-ai.models.claude-haiku-4-5-20251001",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#qihang-ai.models.gemini-2.5-flash",
           "recordingCredentials": [
             {
               "id": "env:QIHANG_API_KEY",
@@ -13390,25 +12942,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "claude-3.5-haiku",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.qnaigc.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#qiniu-ai.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#qiniu-ai.models.claude-3.5-haiku",
-          "recordingCredentials": [
-            {
-              "id": "env:QINIU_API_KEY",
-              "allOf": [
-                "QINIU_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#qiniu-ai.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -13566,25 +13104,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "gpt-oss-120b",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.regolo.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#regolo-ai.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#regolo-ai.models.gpt-oss-120b",
-          "recordingCredentials": [
-            {
-              "id": "env:REGOLO_API_KEY",
-              "allOf": [
-                "REGOLO_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#regolo-ai.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -13700,7 +13224,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-3-7-sonnet",
+          "modelID": "anthropic/claude-opus-4-6",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://router.requesty.ai/v1",
@@ -13710,7 +13234,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#requesty.models.anthropic/claude-3-7-sonnet",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#requesty.models.anthropic/claude-opus-4-6",
           "recordingCredentials": [
             {
               "id": "env:REQUESTY_API_KEY",
@@ -13876,7 +13400,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic--claude-3-haiku",
+          "modelID": "gemini-2.5-flash",
           "api": {
             "package": "@jerome-benoit/sap-ai-provider-v2",
             "url": null,
@@ -13886,7 +13410,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#sap-ai-core.models.anthropic--claude-3-haiku",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#sap-ai-core.models.gemini-2.5-flash",
           "recordingCredentials": [
             {
               "id": "env:AICORE_SERVICE_KEY",
@@ -14052,25 +13576,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "sarvam-105b",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.sarvam.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#sarvam.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#sarvam.models.sarvam-105b",
-          "recordingCredentials": [
-            {
-              "id": "env:SARVAM_API_KEY",
-              "allOf": [
-                "SARVAM_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#sarvam.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -14172,25 +13682,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "bge-multilingual-gemma2",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.scaleway.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#scaleway.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#scaleway.models.bge-multilingual-gemma2",
-          "recordingCredentials": [
-            {
-              "id": "env:SCALEWAY_API_KEY",
-              "allOf": [
-                "SCALEWAY_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#scaleway.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -14769,7 +14265,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "cortecs/Llama-3.3-70B-Instruct-FP8-Dynamic",
+          "modelID": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1",
@@ -14779,7 +14275,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#stackit.models.cortecs/Llama-3.3-70B-Instruct-FP8-Dynamic",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#stackit.models.neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
           "recordingCredentials": [
             {
               "id": "env:STACKIT_API_KEY",
@@ -14903,25 +14399,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "step-1-32k",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.stepfun.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#stepfun.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#stepfun.models.step-1-32k",
-          "recordingCredentials": [
-            {
-              "id": "env:STEPFUN_API_KEY",
-              "allOf": [
-                "STEPFUN_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#stepfun.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -15023,25 +14505,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-ai/DeepSeek-R1-0528",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://llm.submodel.ai/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#submodel.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#submodel.models.deepseek-ai/DeepSeek-R1-0528",
-          "recordingCredentials": [
-            {
-              "id": "env:SUBMODEL_INSTAGEN_ACCESS_KEY",
-              "allOf": [
-                "SUBMODEL_INSTAGEN_ACCESS_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#submodel.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -15143,7 +14611,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "hf:deepseek-ai/DeepSeek-R1",
+          "modelID": "hf:deepseek-ai/DeepSeek-V3.2",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.synthetic.new/openai/v1",
@@ -15153,7 +14621,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#synthetic.models.hf:deepseek-ai/DeepSeek-R1",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#synthetic.models.hf:deepseek-ai/DeepSeek-V3.2",
           "recordingCredentials": [
             {
               "id": "env:SYNTHETIC_API_KEY",
@@ -15277,25 +14745,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-5",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.lkeap.cloud.tencent.com/coding/v3",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#tencent-coding-plan.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#tencent-coding-plan.models.glm-5",
-          "recordingCredentials": [
-            {
-              "id": "env:TENCENT_CODING_PLAN_API_KEY",
-              "allOf": [
-                "TENCENT_CODING_PLAN_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#tencent-coding-plan.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -15425,25 +14879,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "hy3-preview",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://tokenhub.tencentmaas.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#tencent-tokenhub.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#tencent-tokenhub.models.hy3-preview",
-          "recordingCredentials": [
-            {
-              "id": "env:TENCENT_TOKENHUB_API_KEY",
-              "allOf": [
-                "TENCENT_TOKENHUB_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#tencent-tokenhub.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -15665,7 +15105,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-ai/DeepSeek-R1",
+          "modelID": "deepseek-ai/DeepSeek-V4-Pro",
           "api": {
             "package": "@ai-sdk/togetherai",
             "url": null,
@@ -15675,7 +15115,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#togetherai.models.deepseek-ai/DeepSeek-R1",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#togetherai.models.deepseek-ai/DeepSeek-V4-Pro",
           "recordingCredentials": [
             {
               "id": "env:TOGETHER_API_KEY",
@@ -15813,25 +15253,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "solar-mini",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.upstage.ai/v1/solar",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#upstage.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#upstage.models.solar-mini",
-          "recordingCredentials": [
-            {
-              "id": "env:UPSTAGE_API_KEY",
-              "allOf": [
-                "UPSTAGE_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#upstage.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -15933,25 +15359,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "v0-1.0-md",
-          "api": {
-            "package": "@ai-sdk/vercel",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "@ai-sdk/vercel derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#v0 declares no model or provider URL"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#v0.models.v0-1.0-md",
-          "recordingCredentials": [
-            {
-              "id": "env:V0_API_KEY",
-              "allOf": [
-                "V0_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#v0.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -16067,7 +15479,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "aion-labs-aion-2-0",
+          "modelID": "arcee-trinity-large-thinking",
           "api": {
             "package": "venice-ai-sdk-provider",
             "url": null,
@@ -16077,7 +15489,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#venice.models.aion-labs-aion-2-0",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#venice.models.arcee-trinity-large-thinking",
           "recordingCredentials": [
             {
               "id": "env:VENICE_API_KEY",
@@ -16243,7 +15655,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "alibaba/qwen-3-14b",
+          "modelID": "google/gemini-2.0-flash",
           "api": {
             "package": "@ai-sdk/gateway",
             "url": null,
@@ -16253,7 +15665,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#vercel.models.alibaba/qwen-3-14b",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#vercel.models.google/gemini-2.0-flash",
           "recordingCredentials": [
             {
               "id": "env:AI_GATEWAY_API_KEY",
@@ -16419,7 +15831,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "deepseek-v3.2",
+          "modelID": "deepseek-v4-pro",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.vivgrid.com/v1",
@@ -16429,7 +15841,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#vivgrid.models.deepseek-v3.2",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#vivgrid.models.deepseek-v4-pro",
           "recordingCredentials": [
             {
               "id": "env:VIVGRID_API_KEY",
@@ -16595,25 +16007,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "DeepSeek-V3.2",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.vultrinference.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#vultr.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#vultr.models.DeepSeek-V3.2",
-          "recordingCredentials": [
-            {
-              "id": "env:VULTR_API_KEY",
-              "allOf": [
-                "VULTR_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#vultr.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -16997,25 +16395,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "grok-2",
-          "api": {
-            "package": "@ai-sdk/xai",
-            "url": null,
-            "urlSource": "provider-runtime",
-            "urlEvidence": "@ai-sdk/xai derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#xai declares no model or provider URL"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xai.models.grok-2",
-          "recordingCredentials": [
-            {
-              "id": "env:XAI_API_KEY",
-              "allOf": [
-                "XAI_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xai.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -17131,25 +16515,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "mimo-v2-flash",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://api.xiaomimimo.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi.models.mimo-v2-flash",
-          "recordingCredentials": [
-            {
-              "id": "env:XIAOMI_API_KEY",
-              "allOf": [
-                "XIAOMI_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -17307,25 +16677,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "mimo-v2-flash",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://token-plan-ams.xiaomimimo.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-ams.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-ams.models.mimo-v2-flash",
-          "recordingCredentials": [
-            {
-              "id": "env:XIAOMI_API_KEY",
-              "allOf": [
-                "XIAOMI_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-ams.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -17483,25 +16839,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "mimo-v2-flash",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://token-plan-cn.xiaomimimo.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-cn.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-cn.models.mimo-v2-flash",
-          "recordingCredentials": [
-            {
-              "id": "env:XIAOMI_API_KEY",
-              "allOf": [
-                "XIAOMI_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-cn.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -17659,25 +17001,11 @@
         },
         {
           "id": "structured-output",
-          "modelID": "mimo-v2-flash",
-          "api": {
-            "package": "@ai-sdk/openai-compatible",
-            "url": "https://token-plan-sgp.xiaomimimo.com/v1",
-            "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-sgp.api"
-          },
-          "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-sgp.models.mimo-v2-flash",
-          "recordingCredentials": [
-            {
-              "id": "env:XIAOMI_API_KEY",
-              "allOf": [
-                "XIAOMI_API_KEY"
-              ]
-            }
-          ]
+          "modelID": null,
+          "api": null,
+          "status": "not-applicable",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#xiaomi-token-plan-sgp.models declares no model with structured_output: true",
+          "recordingCredentials": []
         },
         {
           "id": "input-audio",
@@ -17835,7 +17163,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-4.5",
+          "modelID": "glm-5-turbo",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.z.ai/api/paas/v4",
@@ -17845,7 +17173,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zai.models.glm-4.5",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zai.models.glm-5-turbo",
           "recordingCredentials": [
             {
               "id": "env:ZHIPU_API_KEY",
@@ -17997,7 +17325,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-4.5-air",
+          "modelID": "glm-5-turbo",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://api.z.ai/api/coding/paas/v4",
@@ -18007,7 +17335,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zai-coding-plan.models.glm-4.5-air",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zai-coding-plan.models.glm-5-turbo",
           "recordingCredentials": [
             {
               "id": "env:ZHIPU_API_KEY",
@@ -18159,17 +17487,17 @@
         },
         {
           "id": "structured-output",
-          "modelID": "anthropic/claude-3.5-haiku",
+          "modelID": "deepseek/deepseek-v4-flash",
           "api": {
-            "package": "@ai-sdk/anthropic",
-            "url": "https://zenmux.ai/api/anthropic/v1",
+            "package": "@ai-sdk/openai-compatible",
+            "url": "https://zenmux.ai/api/v1",
             "urlSource": "catalog",
-            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#zenmux.models.anthropic/claude-3.5-haiku.provider.api"
+            "urlEvidence": "packages/opencode/test/tool/fixtures/models-api.json#zenmux.api"
           },
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zenmux.models.anthropic/claude-3.5-haiku",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zenmux.models.deepseek/deepseek-v4-flash",
           "recordingCredentials": [
             {
               "id": "env:ZENMUX_API_KEY",
@@ -18335,7 +17663,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-4.5",
+          "modelID": "glm-5.1",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://open.bigmodel.cn/api/paas/v4",
@@ -18345,7 +17673,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zhipuai.models.glm-4.5",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zhipuai.models.glm-5.1",
           "recordingCredentials": [
             {
               "id": "env:ZHIPU_API_KEY",
@@ -18497,7 +17825,7 @@
         },
         {
           "id": "structured-output",
-          "modelID": "glm-4.5-air",
+          "modelID": "glm-5-turbo",
           "api": {
             "package": "@ai-sdk/openai-compatible",
             "url": "https://open.bigmodel.cn/api/coding/paas/v4",
@@ -18507,7 +17835,7 @@
           "status": "unsupported",
           "reason": "Parity evidence has not been recorded for this provider and scenario.",
           "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
-          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zhipuai-coding-plan.models.glm-4.5-air",
+          "evidence": "packages/opencode/test/tool/fixtures/models-api.json#zhipuai-coding-plan.models.glm-5-turbo",
           "recordingCredentials": [
             {
               "id": "env:ZHIPU_API_KEY",

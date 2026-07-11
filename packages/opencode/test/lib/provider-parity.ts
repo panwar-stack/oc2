@@ -300,7 +300,13 @@ export function canonicalRequest(snapshot: HttpRecorder.RequestSnapshot): unknow
   url.searchParams.sort()
   const headers = Object.fromEntries(
     Object.entries(snapshot.headers)
-      .map(([key, value]) => [key.toLowerCase(), sensitiveHeader(key) ? REDACTED : value] as const)
+      .map(
+        ([key, value]) =>
+          [
+            key.toLowerCase(),
+            sensitiveHeader(key) ? REDACTED : routingIdentifierHeader(key) ? VOLATILE : value,
+          ] as const,
+      )
       .filter(([key]) => stableHeader(key))
       .toSorted(([left], [right]) => left.localeCompare(right)),
   )
@@ -400,6 +406,7 @@ export function redactCassette(cassette: ProviderParityCassette): ProviderParity
 export function assertCassetteSafe(cassette: ProviderParityCassette) {
   const findings = HttpRecorderInternal.secretFindings(cassette)
   const serialized = JSON.stringify(cassette)
+  const identifiers = cassetteIdentifierFindings(cassette)
   const unsafeUrls = cassette.interactions.flatMap((interaction, index) => {
     if (!URL.canParse(interaction.request.url)) return [`interactions[${index}].request.url (invalid URL)`]
     const url = new URL(interaction.request.url)
@@ -428,12 +435,13 @@ export function assertCassetteSafe(cassette: ProviderParityCassette) {
   )
     .filter(([pattern]) => pattern.test(serialized))
     .map(([, reason]) => reason)
-  if (findings.length || residual.length || unsafeUrls.length)
+  if (findings.length || residual.length || unsafeUrls.length || identifiers.length)
     throw new Error(
       `Provider parity cassette contains possible secrets: ${[
         ...findings.map((item) => `${item.path} (${item.reason})`),
         ...residual,
         ...unsafeUrls,
+        ...identifiers,
       ].join(", ")}`,
     )
 }
@@ -465,9 +473,25 @@ function sensitiveKey(key: string) {
 }
 
 function volatileKey(key: string) {
-  return /(?:^|_)(?:account|created|date|epoch|event|fingerprint|idempotency|obfuscation|organization|project|request|time|timestamp|ts|updated|workspace)(?:$|_)/.test(
-    semanticKey(key),
+  return (
+    identifierKey(key) ||
+    /(?:^|_)(?:created|date|epoch|event|fingerprint|idempotency|obfuscation|request|time|timestamp|ts|updated)(?:$|_)/.test(
+      semanticKey(key),
+    )
   )
+}
+
+function identifierKey(key: string) {
+  const normalized = semanticKey(key)
+  return (
+    /(?:^|_)(?:account|organization|project|workspace)(?:_id)?$/.test(normalized) ||
+    /(?:^|_)(?:resource|response|subscription|tenant)_id$/.test(normalized)
+  )
+}
+
+function routingIdentifierHeader(key: string) {
+  const normalized = semanticKey(key)
+  return /(?:^|_)(?:account|organization|project|resource|subscription|tenant|workspace)(?:_id)?$/.test(normalized)
 }
 
 function semanticKey(key: string) {
@@ -483,6 +507,7 @@ function redactString(value: string) {
     .replace(/\b(?:sk|sk-ant)-[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(/\bAIza[0-9A-Za-z_-]+\b/g, REDACTED)
     .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, REDACTED)
+    .replace(/\b(arn:(?:aws|aws-cn|aws-us-gov):[^:\s]*:[^:\s]*:)\d{12}(?=:)/gi, `$1${VOLATILE}`)
     .replace(
       /\b(?:acct|account|call|event|fc|item|msg|org|organization|proj|project|req|request|resp|rs|run|thread|trace|user|workspace|wrk)[_-][A-Za-z0-9_-]+\b/gi,
       VOLATILE,
@@ -494,7 +519,11 @@ function redactString(value: string) {
 }
 
 function stableHeader(key: string) {
-  return sensitiveHeader(key) || /^(?:accept|anthropic-version|content-type|openai-beta|x-goog-api-client)$/i.test(key)
+  return (
+    sensitiveHeader(key) ||
+    routingIdentifierHeader(key) ||
+    /^(?:accept|anthropic-version|content-type|openai-beta|x-goog-api-client)$/i.test(key)
+  )
 }
 
 function sensitiveHeader(key: string) {
@@ -540,7 +569,9 @@ function urlIdentifiers(url: URL) {
 }
 
 function resourceSegment(value: string) {
-  return /^(?:accounts?|organizations?|orgs?|projects?|resources?|subscriptions?|tenants?|workspaces?)$/i.test(value)
+  return /^(?:accounts?|organizations?|orgs?|projects?|resources?|resource-?groups?|responses?|subscriptions?|tenants?|workspaces?)$/i.test(
+    value,
+  )
 }
 
 function identifierValue(value: string) {
@@ -602,8 +633,58 @@ function redactedRequest(request: HttpRecorder.RequestSnapshot) {
 
 function redactHeaders(headers: Readonly<Record<string, string>>) {
   return Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => [key, sensitiveHeader(key) ? REDACTED : redactString(value)]),
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      sensitiveHeader(key) ? REDACTED : routingIdentifierHeader(key) ? VOLATILE : redactString(value),
+    ]),
   )
+}
+
+function cassetteIdentifierFindings(cassette: ProviderParityCassette) {
+  const result: string[] = []
+  const visit = (value: unknown, currentPath: string): void => {
+    if (typeof value === "string") {
+      if (/\barn:(?:aws|aws-cn|aws-us-gov):[^:\s]*:[^:\s]*:\d{12}(?=:)/i.test(value))
+        result.push(`${currentPath} (AWS account identifier)`)
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${currentPath}[${index}]`))
+      return
+    }
+    if (!value || typeof value !== "object") return
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = currentPath ? `${currentPath}.${key}` : key
+      if (
+        identifierKey(key) &&
+        (typeof child === "string" || typeof child === "number") &&
+        child !== "" &&
+        child !== REDACTED &&
+        child !== VOLATILE
+      )
+        result.push(`${childPath} (volatile identifier)`)
+      visit(child, childPath)
+    }
+  }
+  const visitBody = (body: string, currentPath: string) =>
+    Option.match(decodeJson(body), {
+      onNone: () =>
+        body.split("\n").forEach((line, index) => {
+          if (!line.startsWith("data:")) return
+          Option.match(decodeJson(line.slice(5).trimStart()), {
+            onNone: () => undefined,
+            onSome: (value) => visit(value, `${currentPath}.data[${index}]`),
+          })
+        }),
+      onSome: (value) => visit(value, currentPath),
+    })
+
+  visit(cassette, "")
+  cassette.interactions.forEach((interaction, index) => {
+    visitBody(interaction.request.body, `interactions[${index}].request.body`)
+    visitBody(interaction.response.body, `interactions[${index}].response.body`)
+  })
+  return result
 }
 
 function redactBody(body: string) {

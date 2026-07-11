@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test"
+import catalogFixture from "../../opencode/test/tool/fixtures/models-api.json"
 import inventory from "./fixtures/provider-parity-inventory.json"
+
+type FixtureModel = {
+  id: string
+  status?: "alpha" | "beta" | "deprecated"
+  tool_call: boolean
+  structured_output?: boolean
+  modalities?: { input: string[] }
+}
+
+const catalog = catalogFixture as unknown as Record<string, { models: Record<string, FixtureModel> }>
+const sourcePath = "packages/opencode/test/tool/fixtures/models-api.json"
 
 const familyCounts = {
   "openai-compatible": 89,
@@ -13,7 +25,7 @@ const familyCounts = {
 const scenarioCounts = {
   text: 120,
   tools: 118,
-  "structured-output": 120,
+  "structured-output": 72,
   "input-audio": 46,
   "input-image": 94,
   "input-video": 62,
@@ -172,6 +184,46 @@ describe("provider parity catalog", () => {
       url: "https://zenmux.ai/api/anthropic/v1",
       urlSource: "catalog",
     })
+  })
+
+  test("independently derives every catalog representative and not-applicable cell", () => {
+    for (const row of inventory.providers) {
+      if (row.source !== "catalog") continue
+      if (row.catalogID === null) throw new Error(`Catalog row ${row.id} has no catalog ID`)
+      const provider = catalog[row.catalogID]
+      if (!provider) throw new Error(`Missing catalog fixture provider ${row.catalogID}`)
+
+      for (const cell of row.scenarios) {
+        const model = Object.values(provider.models)
+          .filter((candidate) => {
+            const inputs = candidate.modalities?.input ?? ["text"]
+            if (cell.id === "tools") return candidate.tool_call
+            if (cell.id === "structured-output") return candidate.structured_output === true
+            if (cell.id === "text") return inputs.includes("text")
+            return inputs.includes(cell.id.slice("input-".length))
+          })
+          .sort((a, b) => {
+            const rank = (candidate: FixtureModel) => {
+              if (candidate.status === "deprecated") return 3
+              if (candidate.status === "alpha") return 2
+              if (candidate.status === "beta") return 1
+              return 0
+            }
+            return rank(a) - rank(b) || a.id.localeCompare(b.id)
+          })[0]
+
+        expect(cell.modelID).toBe(model?.id ?? null)
+        if (model) continue
+        expect(cell.status).toBe("not-applicable")
+        expect(cell.api).toBeNull()
+        expect(cell.recordingCredentials).toEqual([])
+        expect(cell.evidence).toBe(
+          cell.id === "structured-output"
+            ? `${sourcePath}#${row.catalogID}.models declares no model with structured_output: true`
+            : `${sourcePath}#${row.catalogID}.models declares no ${cell.id} model`,
+        )
+      }
+    }
   })
 
   test("models complete credential alternatives for every compound catalog declaration", () => {
