@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 
-BUMP_TYPE=${1:-patch}
+set -euo pipefail
 
-gh workflow run publish.yml -f bump="$BUMP_TYPE"
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  echo "Usage: $0 <version> [dist-tag]" >&2
+  exit 1
+fi
+
+VERSION=$1
+DIST_TAG=${2:-latest}
+
+gh workflow run publish.yml --ref "v${VERSION}" -f version="$VERSION" -f dist-tag="$DIST_TAG"
