@@ -1,169 +1,211 @@
 name: publish
-run-name: "${{ format('release {0}', inputs.bump) }}"
+run-name: "publish oc2-ai@${{ inputs.version }} (${{ inputs.dist-tag }})"
 
 on:
-  push:
-    branches:
-      - ci
-      - dev
-      - beta
-      - fix/npm-native-binary-install
-      - snapshot-*
   workflow_dispatch:
     inputs:
-      bump:
-        description: "Bump major, minor, or patch"
-        required: false
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
       version:
-        description: "Override version (optional)"
-        required: false
+        description: "Canonical semver matching the v<version> dispatch tag"
+        required: true
+        type: string
+      dist-tag:
+        description: "Lowercase npm dist-tag"
+        required: true
+        default: latest
         type: string
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || inputs.bump }}
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
 
 permissions:
-  id-token: write
-  contents: write
-  packages: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  version:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+  validate:
     if: github.repository == 'panwar-stack/oc2'
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+      - name: Checkout release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
-      - uses: ./.github/actions/setup-bun
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          oc2-app-id: ${{ vars.OC2_APP_ID }}
-          oc2-app-secret: ${{ secrets.OC2_APP_SECRET }}
-
-      - name: Install oc2
-        if: inputs.bump || inputs.version
-        run: bun i -g oc2-ai
-
-      - id: version
-        run: |
-          ./script/version.ts
+      - name: Verify immutable release ref
+        shell: bash
         env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-          OC2_BUMP: ${{ inputs.bump }}
-          OC2_VERSION: ${{ inputs.version }}
-          OC2_API_KEY: ${{ secrets.OC2_API_KEY }}
-          GH_REPO: ${{ (github.ref_name == 'beta' && 'panwar-stack/oc2-beta') || github.repository }}
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      release: ${{ steps.version.outputs.release }}
-      tag: ${{ steps.version.outputs.tag }}
-      repo: ${{ steps.version.outputs.repo }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          expected_ref="refs/tags/v${VERSION}"
+          if [ "$GITHUB_REF" != "$expected_ref" ]; then
+            echo "workflow must be dispatched from ${expected_ref}, got ${GITHUB_REF}" >&2
+            exit 1
+          fi
 
-  build-cli:
-    needs: version
+          tag_commit=$(git rev-parse "${expected_ref}^{commit}")
+          head_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$GITHUB_SHA" ] || [ "$head_commit" != "$GITHUB_SHA" ]; then
+            echo "tag, checkout, and github.sha must resolve to the same commit" >&2
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Validate release inputs
+        shell: bash
+        working-directory: packages/opencode
+        env:
+          VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist-tag }}
+        run: |
+          node <<'NODE'
+          const npa = require("npm-package-arg")
+          const semver = require("semver")
+          const version = process.env.VERSION
+          const tag = process.env.DIST_TAG
+
+          if (semver.valid(version) !== version) {
+            console.error(`version must be canonical semver, got ${JSON.stringify(version)}`)
+            process.exit(1)
+          }
+          const spec = npa(`oc2-ai@${tag}`)
+          if (!/^[a-z][a-z0-9._-]{0,63}$/.test(tag) || spec.type !== "tag" || spec.rawSpec !== tag) {
+            console.error(`dist-tag must be a safe lowercase non-semver tag, got ${JSON.stringify(tag)}`)
+            process.exit(1)
+          }
+          NODE
+
+  build:
+    needs: validate
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: github.repository == 'panwar-stack/oc2'
-    steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
-        with:
-          fetch-tags: true
-
-      - uses: ./.github/actions/setup-bun
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          oc2-app-id: ${{ vars.OC2_APP_ID }}
-          oc2-app-secret: ${{ secrets.OC2_APP_SECRET }}
-
-      - name: Build
-        id: build
-        run: |
-          ./packages/opencode/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
-          ./packages/cli/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
-        env:
-          OC2_VERSION: ${{ needs.version.outputs.version }}
-          OC2_RELEASE: ${{ needs.version.outputs.release }}
-          GH_REPO: ${{ needs.version.outputs.repo }}
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: oc2-cli
-          path: |
-            packages/opencode/dist/oc2-darwin*
-            packages/opencode/dist/oc2-linux*
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: oc2-cli-windows
-          path: packages/opencode/dist/oc2-windows*
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: oc2-preview-cli
-          path: packages/cli/dist/cli-*
-
     outputs:
-      version: ${{ needs.version.outputs.version }}
-
-  sign-cli-windows:
-    needs:
-      - build-cli
-      - version
-    runs-on: blacksmith-4vcpu-windows-2025
-    if: github.repository == 'panwar-stack/oc2'
-    env:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      unix-artifact: ${{ steps.artifacts.outputs.unix }}
+      windows-artifact: ${{ steps.artifacts.outputs.windows }}
     steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Checkout release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          name: oc2-cli-windows
-          path: packages/opencode/dist
+          ref: ${{ github.sha }}
 
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          oc2-app-id: ${{ vars.OC2_APP_ID }}
-          oc2-app-secret: ${{ secrets.OC2_APP_SECRET }}
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Build native packages
+        run: ./packages/opencode/script/build.ts
+        env:
+          OC2_VERSION: ${{ inputs.version }}
+          OC2_CHANNEL: ${{ inputs.dist-tag }}
+
+      - name: Validate built package set
+        shell: bash
+        run: |
+          expected=$(printf '%s\n' \
+            oc2-darwin-arm64 \
+            oc2-darwin-x64 \
+            oc2-darwin-x64-baseline \
+            oc2-linux-arm64 \
+            oc2-linux-arm64-musl \
+            oc2-linux-x64 \
+            oc2-linux-x64-baseline \
+            oc2-linux-x64-baseline-musl \
+            oc2-linux-x64-musl \
+            oc2-windows-arm64 \
+            oc2-windows-x64 \
+            oc2-windows-x64-baseline)
+          actual=$(find packages/opencode/dist -mindepth 1 -maxdepth 1 -type d -print | sed 's|.*/||' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "unexpected native package set" >&2
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+            exit 1
+          fi
+
+          bun -e 'import { validateNativePackages } from "./packages/opencode/script/publish.ts"; const version = await validateNativePackages("packages/opencode/dist"); if (version !== process.env.OC2_VERSION) throw new Error(`built version ${version} does not match ${process.env.OC2_VERSION}`)'
+        env:
+          OC2_VERSION: ${{ inputs.version }}
+
+      - name: Select artifact names
+        id: artifacts
+        shell: bash
+        run: |
+          echo "unix=oc2-native-unix-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "windows=oc2-native-windows-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Unix native packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifacts.outputs.unix }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            packages/opencode/dist/oc2-darwin-arm64
+            packages/opencode/dist/oc2-darwin-x64
+            packages/opencode/dist/oc2-darwin-x64-baseline
+            packages/opencode/dist/oc2-linux-arm64
+            packages/opencode/dist/oc2-linux-arm64-musl
+            packages/opencode/dist/oc2-linux-x64
+            packages/opencode/dist/oc2-linux-x64-baseline
+            packages/opencode/dist/oc2-linux-x64-baseline-musl
+            packages/opencode/dist/oc2-linux-x64-musl
+
+      - name: Upload unsigned Windows native packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifacts.outputs.windows }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            packages/opencode/dist/oc2-windows-arm64
+            packages/opencode/dist/oc2-windows-x64
+            packages/opencode/dist/oc2-windows-x64-baseline
+
+  sign-windows:
+    needs: build
+    runs-on: blacksmith-4vcpu-windows-2025
+    permissions:
+      id-token: write
+    outputs:
+      artifact: ${{ steps.artifact.outputs.name }}
+    env:
+      TRANSFER_DIR: ${{ github.workspace }}\transfer\${{ github.sha }}\${{ github.run_attempt }}\windows
+    steps:
+      - name: Download unsigned native packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.build.outputs.windows-artifact }}
+          path: ${{ env.TRANSFER_DIR }}
 
       - name: Azure login
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+      - name: Sign Windows binaries
+        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
-          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
           files: |
-            ${{ github.workspace }}\packages\opencode\dist\oc2-windows-arm64\bin\oc2.exe
-            ${{ github.workspace }}\packages\opencode\dist\oc2-windows-arm64\bin\opencode.exe
-            ${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64\bin\oc2.exe
-            ${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64\bin\opencode.exe
-            ${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64-baseline\bin\oc2.exe
-            ${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64-baseline\bin\opencode.exe
+            ${{ env.TRANSFER_DIR }}\oc2-windows-arm64\bin\oc2.exe
+            ${{ env.TRANSFER_DIR }}\oc2-windows-x64\bin\oc2.exe
+            ${{ env.TRANSFER_DIR }}\oc2-windows-x64-baseline\bin\oc2.exe
           exclude-environment-credential: true
           exclude-workload-identity-credential: true
           exclude-managed-identity-credential: true
@@ -175,122 +217,123 @@ jobs:
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
 
-      - name: Verify Windows CLI signatures
+      - name: Verify Windows signatures
         shell: pwsh
         run: |
           $files = @(
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-arm64\bin\oc2.exe",
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-arm64\bin\opencode.exe",
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64\bin\oc2.exe",
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64\bin\opencode.exe",
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64-baseline\bin\oc2.exe",
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64-baseline\bin\opencode.exe"
+            "$env:TRANSFER_DIR\oc2-windows-arm64\bin\oc2.exe",
+            "$env:TRANSFER_DIR\oc2-windows-x64\bin\oc2.exe",
+            "$env:TRANSFER_DIR\oc2-windows-x64-baseline\bin\oc2.exe"
           )
 
           foreach ($file in $files) {
-            $sig = Get-AuthenticodeSignature $file
-            if ($sig.Status -ne "Valid") {
-              throw "Invalid signature for ${file}: $($sig.Status)"
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid signature for ${file}: $($signature.Status)"
             }
           }
 
-      - name: Repack Windows CLI archives
-        working-directory: packages/opencode/dist
+      - name: Select artifact name
+        id: artifact
         shell: pwsh
-        run: |
-          Compress-Archive -Path "oc2-windows-arm64\bin\*" -DestinationPath "oc2-windows-arm64.zip" -Force
-          Compress-Archive -Path "oc2-windows-x64\bin\*" -DestinationPath "oc2-windows-x64.zip" -Force
-          Compress-Archive -Path "oc2-windows-x64-baseline\bin\*" -DestinationPath "oc2-windows-x64-baseline.zip" -Force
+        run: '"name=oc2-native-signed-$env:GITHUB_SHA-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
 
-      - name: Upload signed Windows CLI release assets
-        if: needs.version.outputs.release != ''
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-        run: |
-          gh release upload "v${{ needs.version.outputs.version }}" `
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-arm64.zip" `
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64.zip" `
-            "${{ github.workspace }}\packages\opencode\dist\oc2-windows-x64-baseline.zip" `
-            --clobber `
-            --repo "${{ needs.version.outputs.repo }}"
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Upload signed native packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: oc2-cli-signed-windows
+          name: ${{ steps.artifact.outputs.name }}
+          if-no-files-found: error
+          retention-days: 7
           path: |
-            packages/opencode/dist/oc2-windows-arm64
-            packages/opencode/dist/oc2-windows-x64
-            packages/opencode/dist/oc2-windows-x64-baseline
+            ${{ env.TRANSFER_DIR }}\oc2-windows-arm64
+            ${{ env.TRANSFER_DIR }}\oc2-windows-x64
+            ${{ env.TRANSFER_DIR }}\oc2-windows-x64-baseline
 
   publish:
     needs:
-      - version
-      - build-cli
-      - sign-cli-windows
-    if: github.repository == 'panwar-stack/oc2' && always() && !failure() && !cancelled()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+      - build
+      - sign-windows
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TRANSFER_DIR: ${{ github.workspace }}/transfer/${{ github.sha }}/${{ github.run_attempt }}/release
     steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+      - name: Checkout release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
 
-      - uses: ./.github/actions/setup-bun
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Setup Node and npm registry
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
+          registry-url: https://registry.npmjs.org
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: oc2-cli
-          path: packages/opencode/dist
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: oc2-cli-windows
-          path: packages/opencode/dist
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: oc2-cli-signed-windows
-          path: packages/opencode/dist
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: oc2-preview-cli
-          path: packages/cli/dist
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          oc2-app-id: ${{ vars.OC2_APP_ID }}
-          oc2-app-secret: ${{ secrets.OC2_APP_SECRET }}
-
-      - name: Cache apt packages (AUR)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-aur-${{ hashFiles('.github/workflows/publish.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-apt-aur-
-
-      - name: Setup SSH for AUR
+      - name: Verify trusted-publishing npm version
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pacman-package-manager
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          git config --global user.email "oc2@sst.dev"
-          git config --global user.name "oc2"
-          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts || true
+          npm_version=$(npm --version)
+          node - "$npm_version" <<'NODE'
+          const value = process.argv[2]
+          const version = value.split(".").map(Number)
+          const valid = version.length === 3 && version.every(Number.isInteger)
+          const supported = valid && (version[0] > 11 ||
+            version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1))
+          if (!supported) {
+            console.error(`npm >=11.5.1 is required for trusted publishing, got ${value}`)
+            process.exit(1)
+          }
+          NODE
 
-      - run: ./script/publish.ts
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Download Unix native packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.build.outputs.unix-artifact }}
+          path: ${{ env.TRANSFER_DIR }}
+
+      - name: Download signed Windows native packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.sign-windows.outputs.artifact }}
+          path: ${{ env.TRANSFER_DIR }}
+
+      - name: Validate publish package set
+        shell: bash
+        run: |
+          expected=$(printf '%s\n' \
+            oc2-darwin-arm64 \
+            oc2-darwin-x64 \
+            oc2-darwin-x64-baseline \
+            oc2-linux-arm64 \
+            oc2-linux-arm64-musl \
+            oc2-linux-x64 \
+            oc2-linux-x64-baseline \
+            oc2-linux-x64-baseline-musl \
+            oc2-linux-x64-musl \
+            oc2-windows-arm64 \
+            oc2-windows-x64 \
+            oc2-windows-x64-baseline)
+          actual=$(find "$TRANSFER_DIR" -mindepth 1 -maxdepth 1 -type d -print | sed 's|.*/||' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "unexpected extracted native package set" >&2
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+            exit 1
+          fi
+
+          bun -e 'import { validateNativePackages } from "./packages/opencode/script/publish.ts"; const version = await validateNativePackages(process.env.TRANSFER_DIR); if (version !== process.env.OC2_VERSION) throw new Error(`artifact version ${version} does not match ${process.env.OC2_VERSION}`)'
+          rm -rf packages/opencode/dist
+          mv "$TRANSFER_DIR" packages/opencode/dist
         env:
-          OC2_VERSION: ${{ needs.version.outputs.version }}
-          OC2_RELEASE: ${{ needs.version.outputs.release }}
-          AUR_KEY: ${{ secrets.AUR_KEY }}
-          GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
-          GH_REPO: ${{ needs.version.outputs.repo }}
-          NPM_CONFIG_PROVENANCE: false
+          OC2_VERSION: ${{ inputs.version }}
+
+      - name: Publish native packages and wrapper
+        run: ./packages/opencode/script/publish.ts
+        env:
+          OC2_VERSION: ${{ inputs.version }}
+          OC2_CHANNEL: ${{ inputs.dist-tag }}
+          NPM_CONFIG_PROVENANCE: true
