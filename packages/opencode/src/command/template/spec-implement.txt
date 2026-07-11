@@ -6,7 +6,7 @@ Record the invoking worktree path, status, and committed HEAD as base_sha. Treat
 
 Create one branch and one external worktree from base_sha. Perform all edits, tests, reviews, and commits there. Do not stash, reset, clean, switch, or edit the invoking worktree. Treat its uncommitted and untracked files as read only inputs. Stop if implementation depends on uncommitted source changes.
 
-When $2 is provided, implement only that pull request. Otherwise, implement $1 one pull request at a time. For each pull request, implement, verify, test, review, and commit before continuing.
+When $2 is provided, implement only that pull request. Otherwise, implement $1 one pull request at a time(Dont stop until you have fully done the spec). For each pull request, implement, verify, test, review, and commit before continuing.
 
 After each completed pull request, confirm the invoking worktree local changes still match the recorded state, then fast forward merge the implementation branch into it. If local changes block the merge, preserve them outside the invoking worktree, complete the merge, restore them exactly, and verify nothing was lost or overwritten.
 
