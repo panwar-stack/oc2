@@ -182,6 +182,7 @@ describe("tool.team_spawn", () => {
           expect(calls[0]?.model).toEqual(ref)
           expect(calls[0]?.variant).toBe("lead-variant")
           expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "lead-variant" })
+          expect(child?.permission).toContainEqual({ permission: "question", pattern: "*", action: "deny" })
           expect(member?.model).toEqual({ ...ref, variant: "lead-variant" })
         }),
       { config: { experimental: { agent_teams: true } } },
@@ -752,6 +753,8 @@ describe("tool.team_spawn", () => {
           expect(architectDone).toBe(false)
           const architectPrompt = calls[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
           expect(architectPrompt).toContain("Proactive communication requirements:")
+          expect(architectPrompt).toContain("Never ask the user questions directly")
+          expect(architectPrompt).toContain("If a child subagent needs user input")
           expect(architectPrompt).toContain('team_send_message recipient "lead"')
           expect(calls[0]?.tools).toEqual({ team_create: false, team_spawn: false, local_fusion: false })
           const pendingLeadAfterStart = yield* team.getPendingMessages(lead.id, info.id)

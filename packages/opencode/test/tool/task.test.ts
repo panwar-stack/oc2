@@ -402,6 +402,10 @@ describe("tool.task", () => {
       Effect.gen(function* () {
         const sessions = yield* Session.Service
         const { chat, assistant } = yield* seed()
+        yield* sessions.setPermission({
+          sessionID: chat.id,
+          permission: [{ permission: "question", pattern: "*", action: "deny" }],
+        })
         const tool = yield* TaskTool
         const def = yield* tool.init()
         let seen: SessionPrompt.PromptInput | undefined
@@ -429,6 +433,11 @@ describe("tool.task", () => {
         expect(child.parentID).toBe(chat.id)
         expect(child.agent).toBe("reviewer")
         expect(child.permission).toEqual([
+          {
+            permission: "question",
+            pattern: "*",
+            action: "deny",
+          },
           {
             permission: "todowrite",
             pattern: "*",
@@ -462,6 +471,7 @@ describe("tool.task", () => {
           local_fusion: false,
           bash: false,
           read: false,
+          question: false,
         })
       }),
     {
@@ -475,7 +485,7 @@ describe("tool.task", () => {
           },
         },
         experimental: {
-          primary_tools: ["bash", "read"],
+          primary_tools: ["bash", "read", "question"],
         },
       },
     },

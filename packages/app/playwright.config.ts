@@ -46,5 +46,10 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
+    {
+      name: "mobile-chromium",
+      testMatch: "**/smoke/mobile-shell.spec.ts",
+      use: { ...devices["Pixel 5"] },
+    },
   ],
 })
