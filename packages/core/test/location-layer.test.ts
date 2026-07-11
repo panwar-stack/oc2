@@ -5,9 +5,13 @@ import { Effect, Layer, Schema } from "effect"
 import { Tool } from "@oc2-ai/core/public"
 import { Catalog } from "@oc2-ai/core/catalog"
 import { LocationServiceMap } from "@oc2-ai/core/location-layer"
+import { FileSystem } from "@oc2-ai/core/filesystem"
+import { PermissionV2 } from "@oc2-ai/core/permission"
 import { PluginBoot } from "@oc2-ai/core/plugin/boot"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { AbsolutePath } from "@oc2-ai/core/schema"
+import { SessionRunner } from "@oc2-ai/core/session/runner"
+import { SessionRunnerModel } from "@oc2-ai/core/session/runner/model"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { toolDefinitions } from "./lib/tool"
@@ -44,6 +48,39 @@ const it = testEffect(
 )
 
 describe("LocationServiceMap", () => {
+  it.live("isolates runner, model, tools, permissions, and filesystem by location", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+    ).pipe(
+      Effect.flatMap((dirs) =>
+        Effect.forEach(dirs, (dir) =>
+          Effect.gen(function* () {
+            const filesystem = yield* FileSystem.Service
+            return {
+              filesystem,
+              model: yield* SessionRunnerModel.Service,
+              permission: yield* PermissionV2.Service,
+              root: yield* filesystem.resolveRoot(),
+              runner: yield* SessionRunner.Service,
+              tools: yield* ToolRegistry.Service,
+            }
+          }).pipe(Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(dir.path) }))),
+        ),
+      ),
+      Effect.tap(([first, second]) =>
+        Effect.sync(() => {
+          expect(first.root.root).not.toBe(second.root.root)
+          expect(first.runner).not.toBe(second.runner)
+          expect(first.model).not.toBe(second.model)
+          expect(first.tools).not.toBe(second.tools)
+          expect(first.permission).not.toBe(second.permission)
+          expect(first.filesystem).not.toBe(second.filesystem)
+        }),
+      ),
+    ),
+  )
+
   it.live("isolates location state while sharing location policy with catalog", () =>
     Effect.acquireRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),

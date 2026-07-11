@@ -1,7 +1,11 @@
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
+import { PermissionV2 } from "@oc2-ai/core/permission"
+import { LocationServiceMap } from "@oc2-ai/core/location-layer"
+import { AbsolutePath } from "@oc2-ai/core/schema"
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { SessionV2 } from "@oc2-ai/core/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { Cause, Config, Effect, Exit, Layer } from "effect"
@@ -69,6 +73,7 @@ const it = testEffect(
     Session.defaultLayer,
     workspaceLayer,
     Database.defaultLayer,
+    LocationServiceMap.layer,
     httpApiLayer,
   ),
 )
@@ -672,6 +677,84 @@ describe("session HttpApi", () => {
           _tag: "ConflictError",
           message: "Prompt message ID conflicts with an existing durable record: msg_http_prompt",
           resource: "msg_http_prompt",
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "serves and replies to pending v2 permission requests",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-oc2-directory": test.directory }
+        const owner = yield* createSession({ title: "permission owner" })
+        const other = yield* createSession({ title: "other permission owner" })
+        const requestID = PermissionV2.ID.create("per_httpapi_pending")
+        const pending = {
+          id: requestID,
+          sessionID: SessionV2.ID.make(owner.id),
+          action: "read",
+          resources: [".env"],
+        }
+        const listed = { ...pending, save: null, metadata: null, source: null }
+        expect(
+          yield* PermissionV2.Service.use((service) => service.ask(pending)).pipe(
+            Effect.provide(
+              LocationServiceMap.get({ directory: AbsolutePath.make(test.directory), workspaceID: undefined }),
+            ),
+          ),
+        ).toEqual({ id: requestID, effect: "ask" })
+
+        const project = yield* Project.use.fromDirectory(test.directory)
+        expect(
+          yield* requestJson<{ location: unknown; data: (typeof listed)[] }>("/api/permission/request", {
+            headers,
+          }),
+        ).toEqual({
+          location: {
+            directory: test.directory,
+            workspaceID: null,
+            project: { id: project.project.id, directory: test.directory },
+          },
+          data: [listed],
+        })
+        expect(
+          yield* requestJson<{ data: (typeof listed)[] }>(`/api/session/${owner.id}/permission`, { headers }),
+        ).toEqual({ data: [listed] })
+
+        const wrongOwner = yield* request(`/api/session/${other.id}/permission/${requestID}/reply`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ reply: "once" }),
+        })
+        expect(wrongOwner.status).toBe(404)
+        expect(yield* responseJson(wrongOwner)).toEqual({
+          _tag: "PermissionNotFoundError",
+          requestID,
+          message: `Permission request not found: ${requestID}`,
+        })
+        expect(
+          yield* requestJson<{ data: (typeof listed)[] }>(`/api/session/${owner.id}/permission`, { headers }),
+        ).toEqual({ data: [listed] })
+
+        const replied = yield* request(`/api/session/${owner.id}/permission/${requestID}/reply`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ reply: "once" }),
+        })
+        expect(replied.status).toBe(204)
+        expect(
+          yield* requestJson<{ location: unknown; data: (typeof listed)[] }>("/api/permission/request", {
+            headers,
+          }),
+        ).toEqual({
+          location: {
+            directory: test.directory,
+            workspaceID: null,
+            project: { id: project.project.id, directory: test.directory },
+          },
+          data: [],
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
