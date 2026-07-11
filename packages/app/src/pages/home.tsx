@@ -360,7 +360,7 @@ function HomeDesign() {
           clearNotifications={clearNotifications}
           unseenCount={unseenCount}
           openSettings={openSettings}
-          openHelp={() => platform.openLink("https://oc2.ai/discord")}
+          openHelp={() => platform.openLink("https://github.com/panwar-stack/oc2#readme")}
           language={language}
         />
 
