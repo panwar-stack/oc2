@@ -42,6 +42,8 @@ type Metadata = {
 
 const CommunicationGuidance = [
   "Proactive communication requirements:",
+  '- Never ask the user questions directly. Route every question or clarification request to the lead with team_send_message recipient "lead".',
+  "- If a child subagent needs user input, relay its question to the lead through team_send_message instead of asking the user directly.",
   '- Before doing substantial work, send a brief kickoff update to the lead with team_send_message recipient "lead".',
   "- Send concise progress updates to the lead after material findings, decisions, completed milestones, and before or after risky edits.",
   "- Message teammates directly when your work affects them, unblocks them, or gives them information they need.",
@@ -254,6 +256,7 @@ export const TeamSpawnTool = Tool.define(
             ...(parent.permission ?? []).filter(
               (rule) => rule.permission === "external_directory" || rule.action === "deny",
             ),
+            { permission: "question" as const, pattern: "*" as const, action: "deny" as const },
           ]
           if (requirePlanApproval) {
             permissionRules.push(
