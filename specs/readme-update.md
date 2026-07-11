@@ -15,7 +15,6 @@ Keep `OC2` as the product name. Use "minimal coding-agent harness" as its catego
 - Template positioning remains in `CONTRIBUTING.md:3`, `README.md:102`, `packages/app/README.md:1-3`, and `packages/onboarding.md:3,99`.
 - `packages/core/src/naming.ts` centralizes the stable `oc2` slug, `OC2` display name, config names, environment prefix, schema URL, and domain.
 - `README.md:5` claims there is no hosted app fallback, but `packages/opencode/src/server/shared/ui.ts` proxies `app.oc2.ai` when embedded browser assets are unavailable. Model prompts also reference hosted docs, while browser and TUI onboarding claim OC2 includes free models.
-- `script/check-brand.ts` does not currently reject the stale positioning or provider claims. `script/legacy-brand-allowlist.jsonc` tracks compatibility-sensitive legacy names separately.
 - `specs/minimal-coding-agent-harness-prune.md` owns hosted-service and package-pruning decisions. This spec owns product positioning and copy only.
 
 ## Non-Negotiables

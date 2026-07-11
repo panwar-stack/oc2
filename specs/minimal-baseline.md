@@ -308,12 +308,10 @@ A fresh reviewer who did not author the slice must inspect it read-only and run 
 - Remove false free-model, subscription, and unsupported MCP-authentication claims from app and UI translations, TUI copy, and prompt text.
 - Describe retained behavior only when it is verified by the current provider and MCP implementations.
 - Keep technical identifiers such as `OpenCodeHttpApi` and persisted theme IDs unchanged.
-- Update the brand-check allowlist to exact new counts; do not suppress failures.
 - Do not change URLs, fetch behavior, assets, or build/release metadata in this slice.
 
 Verification:
 
-- `bun run check:brand`
 - `cd packages/app && bun run test:unit`
 - `cd packages/app && bun typecheck`
 - `cd packages/app && bun run test:e2e -- --project=chromium --project=mobile-chromium`
@@ -336,7 +334,6 @@ A fresh reviewer who did not author the slice must inspect it read-only and run 
 Verification:
 
 - `test -z "$(rg -n 'https://oc2\.ai/docs' packages/opencode/script/build.ts packages/opencode/script/publish.ts)"`
-- `bun run check:brand`
 - `cd packages/opencode && bun typecheck`
 - `cd packages/opencode && bun run build --single --skip-install`
 

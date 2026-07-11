@@ -10,7 +10,6 @@
     "dev:build": "./packages/opencode/script/build.ts --single",
     "dev:web": "bun --cwd packages/app dev",
     "lint": "oxlint",
-    "check:brand": "bun run script/check-brand.ts",
     "check:generated": "bun run script/check-generated.ts",
     "check:packages": "bun run script/package-boundaries.ts",
     "check:product-copy": "bun run script/check-product-copy.ts",

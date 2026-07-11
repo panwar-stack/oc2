@@ -22,7 +22,6 @@ const generatedPrefixes = [
   "packages/ui/src/styles/tailwind/",
   "packages/ui/src/theme/",
   "script/check-generated.ts",
-  "script/generate.ts",
 ]
 const sharedPackages = new Set([
   "@oc2-ai/core",
