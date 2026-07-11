@@ -1,11 +1,35 @@
 #!/usr/bin/env bun
 import { $ } from "bun"
-import pkg from "../package.json"
 import { Script } from "@oc2-ai/script"
+import pkg from "../package.json"
+import path from "path"
 import { fileURLToPath } from "url"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
-process.chdir(dir)
+const wrapperName = "oc2-ai"
+
+type NativePackage = {
+  name: string
+  os: string
+  cpu: string
+  libc?: string
+  binary: string
+}
+
+export const nativePackages: readonly NativePackage[] = [
+  { name: "oc2-darwin-arm64", os: "darwin", cpu: "arm64", binary: "oc2" },
+  { name: "oc2-darwin-x64", os: "darwin", cpu: "x64", binary: "oc2" },
+  { name: "oc2-darwin-x64-baseline", os: "darwin", cpu: "x64", binary: "oc2" },
+  { name: "oc2-linux-arm64", os: "linux", cpu: "arm64", binary: "oc2" },
+  { name: "oc2-linux-arm64-musl", os: "linux", cpu: "arm64", libc: "musl", binary: "oc2" },
+  { name: "oc2-linux-x64", os: "linux", cpu: "x64", binary: "oc2" },
+  { name: "oc2-linux-x64-baseline", os: "linux", cpu: "x64", binary: "oc2" },
+  { name: "oc2-linux-x64-baseline-musl", os: "linux", cpu: "x64", libc: "musl", binary: "oc2" },
+  { name: "oc2-linux-x64-musl", os: "linux", cpu: "x64", libc: "musl", binary: "oc2" },
+  { name: "oc2-windows-arm64", os: "win32", cpu: "arm64", binary: "oc2.exe" },
+  { name: "oc2-windows-x64", os: "win32", cpu: "x64", binary: "oc2.exe" },
+  { name: "oc2-windows-x64-baseline", os: "win32", cpu: "x64", binary: "oc2.exe" },
+]
 
 const packageMetadata = {
   description: "The AI coding agent built for the terminal.",
@@ -19,63 +43,92 @@ const packageMetadata = {
   },
 }
 
-async function published(name: string, version: string) {
-  return (await $`npm view ${name}@${version} version`.nothrow()).exitCode === 0
+function record(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("expected an object")
+  return value as Record<string, unknown>
 }
 
-async function publish(dir: string, name: string, version: string) {
-  // GitHub artifact downloads can drop the executable bit.
-  if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(dir)
-  if (await published(name, version)) {
-    console.log(`already published ${name}@${version}`)
-    return
+function stringArray(value: unknown) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("expected strings")
+  return value as string[]
+}
+
+async function manifest(filepath: string) {
+  try {
+    return record(await Bun.file(filepath).json())
+  } catch (error) {
+    throw new Error(`invalid package manifest ${filepath}`, { cause: error })
   }
-  await $`bun pm pack`.cwd(dir)
-  await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(dir)
 }
 
-const binaries: Record<string, string> = {}
-for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" })) {
-  const pkg = await Bun.file(`./dist/${filepath}`).json()
-  binaries[pkg.name] = pkg.version
-}
-console.log("binaries", binaries)
-const version = Object.values(binaries)[0]
+export async function validateNativePackages(dist: string) {
+  const names = Array.from(new Bun.Glob("*/package.json").scanSync({ cwd: dist }))
+    .map((filepath) => filepath.split("/")[0])
+    .sort()
+  const expected = nativePackages.map((item) => item.name)
+  if (JSON.stringify(names) !== JSON.stringify(expected)) {
+    throw new Error(`expected native packages ${expected.join(", ")}; found ${names.join(", ") || "none"}`)
+  }
 
-async function writeWrapperPackage(name: string) {
-  await $`mkdir -p ./dist/${name}/bin`
-  await $`cp ./script/postinstall.mjs ./dist/${name}/postinstall.mjs`
-  await Bun.file(`./dist/${name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+  let version = ""
+  for (const item of nativePackages) {
+    const directory = path.join(dist, item.name)
+    const value = await manifest(path.join(directory, "package.json"))
+    if (value.name !== item.name) throw new Error(`${item.name} manifest name must be ${item.name}`)
+    if (typeof value.version !== "string" || !value.version) throw new Error(`${item.name} must have a version`)
+    if (version && value.version !== version)
+      throw new Error(`${item.name} version ${value.version} does not match ${version}`)
+    version = value.version
+    if (JSON.stringify(stringArray(value.os)) !== JSON.stringify([item.os]))
+      throw new Error(`${item.name} has invalid os`)
+    if (JSON.stringify(stringArray(value.cpu)) !== JSON.stringify([item.cpu]))
+      throw new Error(`${item.name} has invalid cpu`)
+    const libc = item.libc ? [item.libc] : undefined
+    if (JSON.stringify(value.libc) !== JSON.stringify(libc)) throw new Error(`${item.name} has invalid libc`)
+    if (!(await Bun.file(path.join(directory, "bin", item.binary)).exists())) {
+      throw new Error(`${item.name} is missing bin/${item.binary}`)
+    }
+    const otherBinary = item.binary === "oc2" ? "oc2.exe" : "oc2"
+    if (await Bun.file(path.join(directory, "bin", otherBinary)).exists()) {
+      throw new Error(`${item.name} contains unexpected bin/${otherBinary}`)
+    }
+  }
+  return version
+}
+
+export async function writeWrapperPackage(dist: string, version: string) {
+  const directory = path.join(dist, wrapperName)
+  await $`rm -rf ${directory}`
+  await $`mkdir -p ${path.join(directory, "bin")}`
+  await Bun.write(path.join(directory, "postinstall.mjs"), Bun.file(path.join(dir, "script/postinstall.mjs")))
+  await Bun.write(path.join(directory, "LICENSE"), Bun.file(path.join(dir, "../../LICENSE")))
   const fallback = [
-    `echo "Error: ${name}'s postinstall script was not run." >&2`,
+    `echo "Error: ${wrapperName}'s postinstall script was not run." >&2`,
     'echo "" >&2',
     'echo "This occurs when using --ignore-scripts during installation, or when using a" >&2',
     'echo "package manager like pnpm that does not run postinstall scripts by default." >&2',
     'echo "" >&2',
     'echo "To fix this, run the postinstall script manually:" >&2',
-    `echo "  cd node_modules/${name} && node postinstall.mjs" >&2`,
+    `echo "  cd node_modules/${wrapperName} && node postinstall.mjs" >&2`,
     'echo "" >&2',
-    `echo "Or reinstall ${name} without the --ignore-scripts flag." >&2`,
+    `echo "Or reinstall ${wrapperName} without the --ignore-scripts flag." >&2`,
     "exit 1",
     "",
   ].join("\n")
-  await Bun.file(`./dist/${name}/bin/oc2.exe`).write(fallback)
-  await Bun.file(`./dist/${name}/package.json`).write(
+  await Bun.write(path.join(directory, "bin/oc2.exe"), fallback)
+  await Bun.write(
+    path.join(directory, "package.json"),
     JSON.stringify(
       {
-        name,
+        name: wrapperName,
         ...packageMetadata,
-        bin: {
-          oc2: "./bin/oc2.exe",
-        },
-        scripts: {
-          postinstall: "node ./postinstall.mjs",
-        },
+        bin: { oc2: "./bin/oc2.exe" },
+        scripts: { postinstall: "node ./postinstall.mjs" },
         version,
         license: pkg.license,
         os: ["darwin", "linux", "win32"],
         cpu: ["arm64", "x64"],
-        optionalDependencies: binaries,
+        optionalDependencies: Object.fromEntries(nativePackages.map((item) => [item.name, version])),
       },
       null,
       2,
@@ -83,137 +136,102 @@ async function writeWrapperPackage(name: string) {
   )
 }
 
-await writeWrapperPackage("oc2-ai")
-
-const tasks = Object.entries(binaries).map(async ([name]) => {
-  await publish(`./dist/${name}`, name, binaries[name])
-})
-await Promise.all(tasks)
-await publish("./dist/oc2-ai", "oc2-ai", version)
-
-if (!Script.preview) {
-  // Calculate SHA values
-  const arm64Sha = await $`sha256sum ./dist/oc2-linux-arm64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
-  const x64Sha = await $`sha256sum ./dist/oc2-linux-x64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
-  const macX64Sha = await $`sha256sum ./dist/oc2-darwin-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
-  const macArm64Sha = await $`sha256sum ./dist/oc2-darwin-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
-
-  const [pkgver, _subver = ""] = Script.version.split(/(-.*)/, 2)
-
-  // arch
-  const binaryPkgbuild = [
-    "# Maintainer: dax",
-    "# Maintainer: adam",
-    "",
-    "pkgname='oc2-bin'",
-    `pkgver=${pkgver}`,
-    `_subver=${_subver}`,
-    "options=('!debug' '!strip')",
-    "pkgrel=1",
-    "pkgdesc='The AI coding agent built for the terminal.'",
-    "url='https://oc2.ai/docs'",
-    "arch=('aarch64' 'x86_64')",
-    "license=('MIT')",
-    "provides=('oc2')",
-    "conflicts=('oc2')",
-    "depends=('ripgrep')",
-    "",
-    `source_aarch64=("\${pkgname}_\${pkgver}_aarch64.tar.gz::https://github.com/panwar-stack/oc2/releases/download/v\${pkgver}\${_subver}/oc2-linux-arm64.tar.gz")`,
-    `sha256sums_aarch64=('${arm64Sha}')`,
-
-    `source_x86_64=("\${pkgname}_\${pkgver}_x86_64.tar.gz::https://github.com/panwar-stack/oc2/releases/download/v\${pkgver}\${_subver}/oc2-linux-x64.tar.gz")`,
-    `sha256sums_x86_64=('${x64Sha}')`,
-    "",
-    "package() {",
-    '  install -Dm755 ./oc2 "${pkgdir}/usr/bin/oc2"',
-    "}",
-    "",
-  ].join("\n")
-
-  for (const [pkg, pkgbuild] of [["oc2-bin", binaryPkgbuild]]) {
-    for (let i = 0; i < 30; i++) {
-      try {
-        await $`rm -rf ./dist/aur-${pkg}`
-        await $`git clone ssh://aur@aur.archlinux.org/${pkg}.git ./dist/aur-${pkg}`
-        await $`cd ./dist/aur-${pkg} && git checkout master`
-        await Bun.file(`./dist/aur-${pkg}/PKGBUILD`).write(pkgbuild)
-        await $`cd ./dist/aur-${pkg} && makepkg --printsrcinfo > .SRCINFO`
-        await $`cd ./dist/aur-${pkg} && git add PKGBUILD .SRCINFO`
-        if ((await $`cd ./dist/aur-${pkg} && git diff --cached --quiet`.nothrow()).exitCode === 0) break
-        await $`cd ./dist/aur-${pkg} && git commit -m "Update to v${Script.version}"`
-        await $`cd ./dist/aur-${pkg} && git push`
-        break
-      } catch {
-        continue
-      }
-    }
+function validateWrapperManifest(value: Record<string, unknown>, version: string) {
+  const optionalDependencies = record(value.optionalDependencies)
+  const expected = Object.fromEntries(nativePackages.map((item) => [item.name, version]))
+  if (value.name !== wrapperName || value.version !== version)
+    throw new Error(`wrapper must be ${wrapperName}@${version}`)
+  if (JSON.stringify(optionalDependencies) !== JSON.stringify(expected)) {
+    throw new Error(`${wrapperName} optional dependencies do not match the native package set`)
   }
-
-  // Homebrew formula
-  const homebrewFormula = [
-    "# typed: false",
-    "# frozen_string_literal: true",
-    "",
-    "# This file was generated by GoReleaser. DO NOT EDIT.",
-    "class Oc2 < Formula",
-    `  desc "The AI coding agent built for the terminal."`,
-    `  homepage "https://oc2.ai/docs"`,
-    `  version "${Script.version.split("-")[0]}"`,
-    "",
-    `  depends_on "ripgrep"`,
-    "",
-    "  on_macos do",
-    "    if Hardware::CPU.intel?",
-    `      url "https://github.com/panwar-stack/oc2/releases/download/v${Script.version}/oc2-darwin-x64.zip"`,
-    `      sha256 "${macX64Sha}"`,
-    "",
-    "      def install",
-    '        bin.install "oc2"',
-    "      end",
-    "    end",
-    "    if Hardware::CPU.arm?",
-    `      url "https://github.com/panwar-stack/oc2/releases/download/v${Script.version}/oc2-darwin-arm64.zip"`,
-    `      sha256 "${macArm64Sha}"`,
-    "",
-    "      def install",
-    '        bin.install "oc2"',
-    "      end",
-    "    end",
-    "  end",
-    "",
-    "  on_linux do",
-    "    if Hardware::CPU.intel? and Hardware::CPU.is_64_bit?",
-    `      url "https://github.com/panwar-stack/oc2/releases/download/v${Script.version}/oc2-linux-x64.tar.gz"`,
-    `      sha256 "${x64Sha}"`,
-    "      def install",
-    '        bin.install "oc2"',
-    "      end",
-    "    end",
-    "    if Hardware::CPU.arm? and Hardware::CPU.is_64_bit?",
-    `      url "https://github.com/panwar-stack/oc2/releases/download/v${Script.version}/oc2-linux-arm64.tar.gz"`,
-    `      sha256 "${arm64Sha}"`,
-    "      def install",
-    '        bin.install "oc2"',
-    "      end",
-    "    end",
-    "  end",
-    "end",
-    "",
-    "",
-  ].join("\n")
-
-  const token = process.env.GITHUB_TOKEN
-  if (!token) {
-    console.error("GITHUB_TOKEN is required to update homebrew tap")
-    process.exit(1)
-  }
-  const tap = `https://x-access-token:${token}@github.com/panwar-stack/homebrew-tap.git`
-  await $`rm -rf ./dist/homebrew-tap`
-  await $`git clone ${tap} ./dist/homebrew-tap`
-  await Bun.file("./dist/homebrew-tap/oc2.rb").write(homebrewFormula)
-  await $`cd ./dist/homebrew-tap && git add oc2.rb`
-  if ((await $`cd ./dist/homebrew-tap && git diff --cached --quiet`.nothrow()).exitCode !== 0) {
-    await $`cd ./dist/homebrew-tap && git commit -m "Update to v${Script.version}"`
-    await $`cd ./dist/homebrew-tap && git push`
-  }
+  const bin = record(value.bin)
+  if (bin.oc2 !== "./bin/oc2.exe" || Object.keys(bin).length !== 1)
+    throw new Error(`${wrapperName} must expose only oc2`)
 }
+
+async function pack(directory: string, archives: string) {
+  const output = await $`bun pm pack --quiet --destination ${archives}`.cwd(directory).text()
+  const archive = path.resolve(directory, output.trim())
+  if (!(await Bun.file(archive).exists())) throw new Error(`pack did not create ${archive}`)
+  return archive
+}
+
+export async function validateArchive(archive: string, name: string, version: string, files: string[]) {
+  const entries = (await $`tar -tzf ${archive}`.text()).trim().split("\n").filter(Boolean).sort()
+  const expected = files.map((file) => `package/${file}`).sort()
+  if (JSON.stringify(entries) !== JSON.stringify(expected)) {
+    throw new Error(`${name} archive contains ${entries.join(", ")}; expected ${expected.join(", ")}`)
+  }
+  const value = record(JSON.parse(await $`tar -xOzf ${archive} package/package.json`.text()))
+  if (value.name !== name || value.version !== version) {
+    throw new Error(`${archive} contains ${String(value.name)}@${String(value.version)}, expected ${name}@${version}`)
+  }
+  return value
+}
+
+export async function prepareArchives(dist: string) {
+  await $`rm -rf ${path.join(dist, wrapperName)}`
+  const version = await validateNativePackages(dist)
+  await writeWrapperPackage(dist, version)
+  const archives = path.join(dist, "npm")
+  await $`rm -rf ${archives}`
+  await $`mkdir -p ${archives}`
+
+  const packed: { name: string; version: string; archive: string }[] = []
+  for (const item of nativePackages) {
+    const directory = path.join(dist, item.name)
+    if (process.platform !== "win32") await $`chmod 755 ${path.join(directory, "bin", item.binary)}`
+    const archive = await pack(directory, archives)
+    await validateArchive(archive, item.name, version, ["package.json", `bin/${item.binary}`])
+    packed.push({ name: item.name, version, archive })
+  }
+  const wrapperDirectory = path.join(dist, wrapperName)
+  if (process.platform !== "win32") await $`chmod 755 ${path.join(wrapperDirectory, "bin/oc2.exe")}`
+  const wrapperArchive = await pack(wrapperDirectory, archives)
+  const wrapper = await validateArchive(wrapperArchive, wrapperName, version, [
+    "LICENSE",
+    "bin/oc2.exe",
+    "package.json",
+    "postinstall.mjs",
+  ])
+  validateWrapperManifest(wrapper, version)
+  packed.push({ name: wrapperName, version, archive: wrapperArchive })
+  return packed
+}
+
+export function npmViewResult(name: string, version: string, exitCode: number, stdout: string, stderr: string) {
+  if (exitCode !== 0) {
+    if (/\bE404\b/.test(`${stdout}\n${stderr}`)) return false
+    throw new Error(`npm view failed for ${name}@${version}:\n${stderr || stdout}`)
+  }
+  const value = record(JSON.parse(stdout))
+  if (value.name !== name || value.version !== version) {
+    throw new Error(`npm has ${String(value.name)}@${String(value.version)}, expected ${name}@${version}`)
+  }
+  return true
+}
+
+async function published(name: string, version: string) {
+  const result = await $`npm view ${`${name}@${version}`} name version --json`.quiet().nothrow()
+  return npmViewResult(name, version, result.exitCode, result.stdout.toString(), result.stderr.toString())
+}
+
+async function publish(item: { name: string; version: string; archive: string }) {
+  if (await published(item.name, item.version)) {
+    console.log(`already published ${item.name}@${item.version}`)
+    return
+  }
+  await $`npm publish ${item.archive} --access public --tag ${Script.channel}`
+}
+
+async function main() {
+  const packages = await prepareArchives(path.join(dir, "dist"))
+  console.log(
+    "packages",
+    packages.map((item) => `${item.name}@${item.version}`),
+  )
+  for (const item of packages.slice(0, -1)) await publish(item)
+  await publish(packages[packages.length - 1])
+}
+
+if (import.meta.main) await main()

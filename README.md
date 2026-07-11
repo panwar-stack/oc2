@@ -12,6 +12,14 @@ After installing or building the `oc2` binary, start the interactive terminal UI
 oc2 .
 ```
 
+Install the canonical npm package globally:
+
+```bash
+npm install --global oc2-ai
+```
+
+Installation lifecycle scripts must be enabled so `oc2-ai` can select the native binary for the current platform. Installs using `--ignore-scripts` are not supported.
+
 ## Run OC2
 
 The primary interfaces are available from the same executable:
