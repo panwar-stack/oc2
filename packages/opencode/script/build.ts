@@ -20,7 +20,6 @@ import pkg from "../package.json"
 const packageMetadata = {
   description: "The AI coding agent built for the terminal.",
   license: pkg.license,
-  homepage: "https://oc2.ai/docs",
   repository: {
     type: "git",
     url: "git+https://github.com/panwar-stack/oc2.git",

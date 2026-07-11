@@ -33,7 +33,6 @@ export const nativePackages: readonly NativePackage[] = [
 
 const packageMetadata = {
   description: "The AI coding agent built for the terminal.",
-  homepage: "https://oc2.ai/docs",
   repository: {
     type: "git",
     url: "git+https://github.com/panwar-stack/oc2.git",
