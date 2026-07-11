@@ -144,9 +144,7 @@ export const dict = {
   "provider.connect.toast.connected.description": "{{provider}} models are now available to use.",
 
   "provider.custom.title": "Custom provider",
-  "provider.custom.description.prefix": "Configure an OpenAI-compatible provider. See the ",
-  "provider.custom.description.link": "provider config docs",
-  "provider.custom.description.suffix": ".",
+  "provider.custom.description": "Configure an OpenAI-compatible provider.",
   "provider.custom.field.providerID.label": "Provider ID",
   "provider.custom.field.providerID.placeholder": "myprovider",
   "provider.custom.field.providerID.description": "Lowercase letters, numbers, hyphens, or underscores",

@@ -181,9 +181,7 @@ export function DialogCustomProvider(props: Props) {
 
         <form onSubmit={save} class="px-2.5 pb-6 flex flex-col gap-6">
           <p class="text-14-regular text-text-base">
-            {language.t("provider.custom.description.prefix")}
-            {language.t("provider.custom.description.link")}
-            {language.t("provider.custom.description.suffix")}
+            {language.t("provider.custom.description")}
           </p>
 
           <div class="flex flex-col gap-4">
