@@ -1,10 +1,15 @@
 Use the `local_fusion` tool exactly once.
+Before calling the tool, create a single combined prompt that includes:
 
-Tool input:
+1. All relevant visible user and assistant messages from the current conversation, in chronological order
+2. The current request provided in `$2`
+3. Any requirements, decisions, definitions, examples, or constraints from earlier messages that are needed to answer the current request correctly
+Clearly label the conversation history and the current request so they are not confused with each other.
 
-- `config`: `$1`
-- `prompt`: `$2`
+Call the tool with exactly these two fields:
+`config`: `$1`
+`prompt`: the combined conversation context and current request described above
 
-Pass exactly those two fields. Do not include `branches`, `judge`, or `synthesizer` when `config` is set.
-
-Return the synthesized final answer from the tool result. Do not run branch, judge, or synthesizer models yourself outside the tool.
+Do not pass `branches`, `judge`, or `synthesizer` when `config` is set.
+Do not run branch, judge, or synthesizer models yourself outside the tool.
+Return only the synthesized final answer from the tool result.
