@@ -45,19 +45,32 @@ const commandNames = [...cliSource.matchAll(/\{ names: \[([^\]]*)\], load:/g)].m
   [...match[1].matchAll(/"([^"]+)"/g)].map((name) => name[1]),
 )
 const registeredCommands = new Set(["completion", ...commandNames.flatMap((names) => names.slice(0, 1))])
+const registeredAliases = new Set(commandNames.flatMap((names) => names.slice(1)))
 const undocumentedCommands = [...registeredCommands].filter((command) => !documentedCommands.has(command))
 if (undocumentedCommands.length)
   throw new Error(`docs/cli.md: undocumented CLI commands: ${undocumentedCommands.join(", ")}`)
 const staleCommands = [...documentedCommands].filter((command) => !registeredCommands.has(command))
 if (staleCommands.length) throw new Error(`docs/cli.md: unrecognized CLI commands: ${staleCommands.join(", ")}`)
-const undocumentedAliases = commandNames
-  .flatMap((names) => names.slice(1))
-  .filter((alias) => !cliReference.includes(`\`oc2 ${alias}\``))
-if (undocumentedAliases.length)
-  throw new Error(`docs/cli.md: undocumented CLI aliases: ${undocumentedAliases.join(", ")}`)
+const aliasDrift = topLevelAliasDrift(cliReference)
+if (aliasDrift.undocumented.length)
+  throw new Error(`docs/cli.md: undocumented CLI aliases: ${aliasDrift.undocumented.join(", ")}`)
+if (aliasDrift.unregistered.length)
+  throw new Error(`docs/cli.md: unregistered CLI aliases: ${aliasDrift.unregistered.join(", ")}`)
+if (topLevelAliasDrift(`${cliReference}\nAlias: \`oc2 invented-alias\``).unregistered.join(",") !== "invented-alias")
+  throw new Error("top-level CLI alias drift negative probe failed")
 const unregisteredHelpCommands = [...helpCommands].filter((command) => !registeredCommands.has(command))
 if (unregisteredHelpCommands.length)
   throw new Error(`oc2 --help contained unregistered commands: ${unregisteredHelpCommands.join(", ")}`)
+
+function topLevelAliasDrift(reference: string) {
+  const documented = new Set(
+    [...reference.matchAll(/\bAlias:\s*`oc2 ([a-z][\w-]*)`/gi)].map((match) => match[1]),
+  )
+  return {
+    undocumented: [...registeredAliases].filter((alias) => !documented.has(alias)),
+    unregistered: [...documented].filter((alias) => !registeredAliases.has(alias)),
+  }
+}
 
 const cliContracts = [
   {
