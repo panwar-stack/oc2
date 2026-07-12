@@ -1475,6 +1475,24 @@ it.effect("merges plugin arrays from global and local configs", () =>
   ),
 )
 
+it.effect("enables agent teams by default", () =>
+  withConfigTree(
+    {},
+    Effect.gen(function* () {
+      expect((yield* Config.use.get()).experimental?.agent_teams).toBe(true)
+    }),
+  ),
+)
+
+it.effect("allows agent teams to be disabled", () =>
+  withConfigTree(
+    { project: { experimental: { agent_teams: false } } },
+    Effect.gen(function* () {
+      expect((yield* Config.use.get()).experimental?.agent_teams).toBe(false)
+    }),
+  ),
+)
+
 it.effect("global config remains global when project config is disabled", () =>
   withConfigTree(
     {
