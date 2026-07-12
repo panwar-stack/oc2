@@ -160,14 +160,49 @@ Memory results are localization hypotheses rather than current truth. Historical
 
 ## Install From Source
 
-The verified installation path requires [Git](https://git-scm.com/) and Bun 1.3.14.
+The repository setup command supports macOS, Linux, and Windows. To launch it, the machine must already have npm and Node.js 24 or newer; setup cannot install or upgrade the Node.js runtime that npm is using. You also need Git to clone the repository (or another way to obtain the checkout).
 
 ```bash
 git clone https://github.com/panwar-stack/oc2.git
 cd oc2
-bun install --frozen-lockfile
-bun run dev:build
+npm run setup
+# Then run the exact build command printed by setup.
 ```
+
+By default, setup checks the environment, offers to install missing system prerequisites, installs the exact repository pin Bun 1.3.14 from the npm registry into an isolated user cache when needed, and runs `bun install --frozen-lockfile`. Setup installs the matching `@oven/bun-*` binary package directly with lifecycle scripts disabled, so npm verifies registry integrity without running the `bun` wrapper package's installer or fallback downloader. For broad CPU compatibility, x64 hosts use Bun's baseline build. It asks for confirmation before making changes. Supported system package managers are Homebrew on macOS, `apt-get` or `dnf` on Linux with glibc 2.17 or newer, and `winget` on x64 Windows. AWS and Google Cloud machines follow the behavior of their installed Linux distribution; setup does not provide cloud-specific provisioning.
+
+On Windows, PowerShell is required to refresh `PATH` after a `winget` Git install and to verify that dependency installation is not running from an elevated shell. Setup installs dependencies with Bun's hoisted linker. It does not change `PATH`, profiles, registration, or shell completions on any platform.
+
+Setup always reports the absolute pinned Bun executable it used and prints an exact next build command. This matters when another Bun version is already on `PATH`: use the printed command rather than the stale `bun` command.
+
+Use `npm run setup -- --help` for usage. Available options are:
+
+| Option          | Behavior                                       |
+| --------------- | ---------------------------------------------- |
+| `--check`       | Check prerequisites without making changes     |
+| `--dry-run`     | Print planned actions without making changes   |
+| `--yes`         | Allow changes without interactive confirmation |
+| `--skip-system` | Do not install system prerequisites            |
+| `--skip-deps`   | Do not install workspace dependencies          |
+| `-h`, `--help`  | Show help                                      |
+
+For example:
+
+```bash
+# Check prerequisites only; add --skip-deps because dependency state is not guessed
+npm run setup -- --check --skip-deps
+
+# Full check; conservatively reports that frozen dependency installation is required
+npm run setup -- --check
+
+# Safely inspect what setup would change
+npm run setup -- --dry-run
+
+# Apply the setup plan in a non-interactive environment
+npm run setup -- --yes
+```
+
+`--check` and `--dry-run` cannot be combined. Setup refuses to make changes in a non-interactive shell unless `--yes` is supplied, and refuses to install dependencies as root or from an elevated Windows shell. Setup cannot soundly prove from an arbitrary existing `node_modules` directory that it matches `bun.lock`, so a full run performs the frozen install and a full `--check` reports dependency action required. For a manual dependency install, use the absolute Bun command reported by setup and append `install --frozen-lockfile` (plus `--linker hoisted` on Windows).
 
 The executable is written to `packages/opencode/dist/oc2-<platform>/bin/oc2`. Connect a [model provider](./docs/providers.md), then open a workspace:
 
