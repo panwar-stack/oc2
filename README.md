@@ -34,7 +34,7 @@ OC2 does not bundle model access.
 
 Recent additions in this [fork](https://github.com/panwar-stack/oc2) include:
 
-- **Agent teams:** experimental, opt-in shared tasks, dependency-aware workers, plan approval, daemon teammates, and `/use-team` or `/spawn` workflows.
+- **Agent teams:** experimental persistent shared tasks, dependency-aware workers, plan approval, daemon teammates, and `/use-team` or `/spawn` workflows.
 - **Multi-model orchestration:** Local Fusion plus the optional Fugu virtual model for combining model work.
 - **Repository memory:** opt-in commit and file-summary indexing with CLI and tool access.
 - **Multi-root sessions:** additional repository roots with file-tool boundaries preserved.
