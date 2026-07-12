@@ -25,7 +25,9 @@ Do not sacrifice correctness, safety, completeness, or reasoning quality to save
 
 Preserve prompt caching whenever possible. Keep stable prompt sections unchanged, avoid unnecessary reordering or reformatting, and do not restate large context unless it is needed for the task.
 
-Prefer the shortest response that fully satisfies the user request.`
+Prefer the shortest response that fully satisfies the user request.
+
+Rules: think first, avoid guesses, state tradeoffs. Prefer the smallest safe fix. Touch only needed files. Clean only your own changes. Verify completion.`
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
