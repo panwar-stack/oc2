@@ -1,0 +1,16 @@
+{
+  "$schema": "https://oc2.ai/tui.json",
+  "theme": "oc2",
+  "mouse": true,
+  "scroll_speed": 3,
+  "diff_style": "auto",
+  "prompt": {
+    "max_height": 12,
+    "max_width": "auto",
+  },
+  "keybinds": {
+    "leader": "ctrl+x",
+    "session_new": "<leader>n",
+    "app_debug": "none",
+  },
+}

@@ -23,6 +23,9 @@ jobs:
         id: scope
         run: ./script/ci-scope.ts
 
+      - name: Check documentation
+        run: bun run docs:check
+
       - name: Cache Turbo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

@@ -29,7 +29,7 @@
       "model": "anthropic/claude-sonnet-4-6",
       "variant": "high",
       "hidden": false,
-      "color": "red",
+      "color": "error",
       "temperature": 0.2,
       "top_p": 0.9,
       "steps": 50,
@@ -42,7 +42,7 @@
       "description": "Read-only research subagent.",
       "mode": "subagent",
       "model": "openai/gpt-5.5",
-      "permission": "allow",
+      "permission": { "*": "allow" },
       "prompt": "Research the codebase and report findings."
     }
   },
@@ -50,17 +50,17 @@
   "command": {
     "deploy": {
       "description": "Deploy the current project.",
-      "prompt": "Run the deploy script and verify the rollout."
+      "template": "Run the deploy script and verify the rollout."
     },
     "release-notes": {
       "description": "Generate release notes from recent commits.",
-      "prompt": "Summarize commits since the last tag."
+      "template": "Summarize commits since the last tag."
     }
   },
 
   "provider": {
-    "anthropic": { "options": { "apiKey": "sk-ant-..." } },
-    "openai": { "options": { "apiKey": "sk-..." } },
+    "anthropic": { "options": { "apiKey": "{env:ANTHROPIC_API_KEY}" } },
+    "openai": { "options": { "apiKey": "{env:OPENAI_API_KEY}" } },
     "deepseek": { "options": { "apiKey": "{env:DEEPSEEK_API_KEY}" } }
   },
   "enabled_providers": ["anthropic", "openai", "deepseek"],
@@ -71,7 +71,7 @@
       "type": "local",
       "command": ["npx", "-y", "@playwright/mcp"],
       "enabled": true,
-      "env": { "BROWSER": "chromium" }
+      "environment": { "BROWSER": "chromium" }
     },
     "github": {
       "type": "remote",

@@ -11,6 +11,7 @@
     "dev:web": "bun --cwd packages/app dev",
     "lint": "oxlint",
     "check:generated": "bun run script/check-generated.ts",
+    "docs:check": "bun run --cwd packages/opencode script/docs-check.ts",
     "check:packages": "bun run script/package-boundaries.ts",
     "check:product-copy": "bun run script/check-product-copy.ts",
     "report:packages": "bun run script/package-boundaries.ts --graph",

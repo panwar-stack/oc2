@@ -1,0 +1,48 @@
+{
+  "$schema": "https://oc2.ai/config.json",
+  "model": "anthropic/claude-sonnet-4-6",
+  "small_model": "anthropic/claude-haiku-4-5",
+  "default_agent": "build",
+  "instructions": ["AGENTS.md", "docs/style.md"],
+  "provider": {
+    "anthropic": {
+      "options": {
+        "apiKey": "{env:ANTHROPIC_API_KEY}",
+        "timeout": 60000,
+      },
+    },
+  },
+  "command": {
+    "review": {
+      "description": "Review the current changes",
+      "template": "Review the current diff for correctness and missing tests.",
+    },
+  },
+  "agent": {
+    "reviewer": {
+      "description": "Reviews changes without editing files.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "bash": "ask",
+      },
+    },
+  },
+  "permission": {
+    "edit": "ask",
+    "bash": {
+      "git status*": "allow",
+      "rm *": "deny",
+      "*": "ask",
+    },
+    "webfetch": "ask",
+  },
+  "tool_output": {
+    "max_lines": 500,
+    "max_bytes": 20000,
+  },
+  "compaction": {
+    "auto": true,
+    "tail_turns": 4,
+  },
+}

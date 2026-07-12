@@ -1,0 +1,12 @@
+{
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp"],
+      "environment": {
+        "BROWSER": "chromium",
+      },
+      "enabled": true,
+    },
+  },
+}
