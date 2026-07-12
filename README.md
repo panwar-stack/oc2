@@ -1,64 +1,76 @@
+<div align="center">
+
 # OC2
 
-OC2 is a minimal coding-agent harness that runs a complete agent loop with configurable model providers and agents, persistent sessions, and permission-gated tools.
+A focused coding-agent harness with persistent sessions, provider choice, and permission-gated tools.
 
-For a local workspace, the OC2 process, session orchestration, filesystem and tool execution, and persistence run on your machine by default. Attach, remote, and provider tools can connect to other systems. Model calls go to the configured provider endpoint, which may be local; running OC2 locally does not imply offline operation.
+![OC2 coding agent interface](./packages/app/public/social-share.png)
 
-OC2 is an independent project based on and inspired by [opencode](https://github.com/anomalyco/opencode). It is not an official opencode distribution.
+</div>
 
-After installing or building the `oc2` binary, start the interactive terminal UI in the current directory:
+OC2 is an independent project based on and inspired by [opencode](https://github.com/anomalyco/opencode). It is not an official opencode distribution. The agent runtime, session orchestration, tools, and persistence run locally by default; model requests go to your configured provider and may leave your machine.
 
-```bash
-oc2 .
-```
+## Install
 
-Install the canonical npm package globally:
+The verified installation path is to build from source. It requires [Git](https://git-scm.com/) and Bun 1.3.14.
 
 ```bash
-npm install --global oc2-ai
+git clone https://github.com/panwar-stack/oc2.git
+cd oc2
+bun install --frozen-lockfile
+bun run dev:build
 ```
 
-Installation lifecycle scripts must be enabled so `oc2-ai` can select the native binary for the current platform. Installs using `--ignore-scripts` are not supported.
-
-## Run OC2
-
-The primary interfaces are available from the same executable:
+The executable is written to `packages/opencode/dist/oc2-<platform>/bin/oc2`. Configure a [model provider](./docs/providers.md), then start the terminal UI in a workspace:
 
 ```bash
-oc2 .                              # Interactive terminal UI
-oc2 run "Explain this repository" # One-shot execution
-oc2 serve --port 4096              # Headless HTTP server
-oc2 web --port 4096                # Server and browser client
+packages/opencode/dist/oc2-*/bin/oc2 providers login
+packages/opencode/dist/oc2-*/bin/oc2 .
 ```
 
-Configure credentials for a model provider before starting a model-backed session:
+OC2 does not bundle model access.
+
+## Highlights
+
+Recent additions in this [fork](https://github.com/panwar-stack/oc2) include:
+
+- **Agent teams:** experimental, opt-in shared tasks, dependency-aware workers, plan approval, daemon teammates, and `/use-team` or `/spawn` workflows.
+- **Multi-model orchestration:** Local Fusion plus the optional Fugu virtual model for combining model work.
+- **Repository memory:** opt-in commit and file-summary indexing with CLI and tool access.
+- **Multi-root sessions:** additional repository roots with file-tool boundaries preserved.
+- **Structural search:** OpenGrep-compatible search when available, with ordinary grep as a fallback.
+- **Scalable TUI:** deferred startup and virtualized session, diff, and selection views.
+
+## Common Workflows
+
+Use the built executable as `oc2` below, or replace it with its full path:
 
 ```bash
-oc2 providers login
+oc2 .                              # Open the interactive TUI
+oc2 run "Explain this repository" # Run a one-shot prompt
+oc2 attach http://localhost:4096   # Attach to an OC2 server
+oc2 serve --port 4096              # Start the headless HTTP server
+oc2 web --port 4096                # Start the server and browser client
 ```
 
-You can instead configure a local model provider. OC2 does not bundle free model access.
+Set `OC2_SERVER_PASSWORD` before exposing `serve` or `web` beyond a trusted local machine.
 
-Set `OC2_SERVER_PASSWORD` before exposing `oc2 serve` or `oc2 web` beyond a trusted local machine.
+## Documentation
 
-## Capabilities
+- [CLI reference](./docs/cli.md)
+- [TUI guide](./docs/tui.md)
+- [Configuration](./docs/configuration.md)
+- [Providers](./docs/providers.md)
+- [Agents and permissions](./docs/agents-permissions.md)
+- [Extensions: MCP, plugins, and skills](./docs/extensions.md)
+- [Environment variables](./docs/reference/environment.md)
+- [Keybindings](./docs/reference/keybindings.md)
 
-- Interactive TUI with `oc2 .`
-- One-shot execution with `oc2 run`
-- Headless server with `oc2 serve`
-- Browser client with `oc2 web`
-- Configurable model providers and agents
-- Persistent sessions
-- Permission-gated filesystem, shell, and supporting tools
-- Experimental agent-team coordination for parallel, inspectable work
+## Browser And Source Development
 
-"Minimal" describes OC2's distribution and owner-service assumptions, not a reduced agent loop or a starter skeleton.
+Release binaries embed the browser assets used by `oc2 web`. If those assets are missing or disabled, OC2 returns a local `503`; it does not proxy to a hosted application.
 
-## Browser Behavior
-
-Production builds embed the browser assets in the `oc2` binary. `oc2 web` starts the local OC2 server and serves those assets without contacting a hosted UI. If the embedded bundle is unavailable, the server returns a local error instead of proxying browser requests elsewhere.
-
-For browser-interface development, run the backend and Vite app separately so the UI assets are served locally:
+For browser-interface development, run the backend and Vite app as separate processes:
 
 ```bash
 # Terminal 1
@@ -68,74 +80,8 @@ bun dev serve --port 4096
 bun run --cwd packages/app dev -- --port 4444
 ```
 
-Open `http://localhost:4444`. The app targets the local backend at `http://localhost:4096` by default. Model calls still use the provider you configure.
+Open `http://localhost:4444`; by default, the app targets the backend at `http://localhost:4096`. Other source commands use `bun dev`, such as `bun dev .` and `bun dev run "Explain this repository"`.
 
-## Upstream Lineage
+## Contributing And License
 
-OC2 retains substantial architecture and compatibility identifiers from opencode while developing its own product direction. References to opencode in APIs, configuration compatibility, or third-party attribution do not make OC2 an official upstream release.
-
-## Develop From Source
-
-Source development requires [Bun](https://bun.sh) 1.3.14, matching the root `packageManager` field, and Git.
-
-```bash
-git clone https://github.com/panwar-stack/oc2.git
-cd oc2
-bun install --frozen-lockfile
-```
-
-Clone and fork workflows belong to source development and distribution customization; they are not OC2's primary product value.
-
-Use the development entrypoint for the same core interfaces:
-
-```bash
-bun dev .
-bun dev run "Explain this repository"
-bun dev serve --port 4096
-bun dev web --port 4096
-```
-
-Build a standalone executable for the current platform:
-
-```bash
-bun run dev:build
-```
-
-The binary is written under `packages/opencode/dist/oc2-<platform>/bin/oc2`.
-
-Repository-wide checks:
-
-```bash
-bun run lint
-bun run check:packages
-bun run check:generated
-bun run typecheck
-```
-
-Tests must run from the package that owns them, not from the repository root. For example:
-
-```bash
-bun run --cwd packages/opencode test
-bun run --cwd packages/llm test
-bun run --cwd packages/tui test
-bun run --cwd packages/app test:unit
-```
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and [packages/onboarding.md](./packages/onboarding.md) for the workspace map.
-
-## Workspace
-
-- `packages/opencode`: primary product package and `oc2` CLI entrypoint
-- `packages/core`: shared runtime and domain services
-- `packages/cli`: Effect-based CLI package
-- `packages/tui`: Solid/OpenTUI terminal interface
-- `packages/app`: Solid/Vite browser interface
-- `packages/server`: typed HTTP API
-- `packages/sdk/js`: generated JavaScript API client
-- `packages/plugin`: plugin authoring API
-- `packages/llm`: provider-neutral model protocol and streaming runtime
-- `packages/ui`: shared UI components and TUI assets
-
-## License
-
-MIT
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and [packages/onboarding.md](./packages/onboarding.md) for the workspace map. OC2 is available under the [MIT License](./LICENSE).
