@@ -34,6 +34,8 @@ const scenarioCounts = {
   "provider-error": 120,
 }
 const scenarioIDs = Object.keys(scenarioCounts)
+const unsupportedNativeProviders = new Set(["aihubmix", "cloudflare-ai-gateway", "gitlab"])
+const batchTracker = "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches"
 const compoundRecordingCredentials = {
   databricks: [{ id: "env:databricks", allOf: ["DATABRICKS_HOST", "DATABRICKS_TOKEN"] }],
   "cloudflare-ai-gateway": [
@@ -167,10 +169,14 @@ describe("provider parity catalog", () => {
           expect(cell.api?.urlSource).toBe(cell.api?.url === null ? "provider-runtime" : "catalog")
           expect(cell.recordingCredentials.length).toBeGreaterThan(0)
           expect("reason" in cell ? cell.reason : undefined).toBe(
-            "Parity evidence has not been recorded for this provider and scenario.",
+            unsupportedNativeProviders.has(row.id)
+              ? `Native direct execution does not support provider package ${cell.api?.package}.`
+              : "Parity evidence has not been recorded for this provider and scenario.",
           )
           expect("issue" in cell ? cell.issue : undefined).toBe(
-            "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+            unsupportedNativeProviders.has(row.id)
+              ? batchTracker
+              : "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
           )
         }
         if (cell.status === "not-applicable") {

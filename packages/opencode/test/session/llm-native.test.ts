@@ -11,6 +11,8 @@ import { OAUTH_DUMMY_KEY } from "@/auth"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import providerParityInventory from "../../../core/test/fixtures/provider-parity-inventory.json"
+import { compareParityRuns, NativeDirectUnsupportedError, type ProviderParityCassette } from "../lib/provider-parity"
 
 const baseModel: Provider.Model = {
   id: ModelV2.ID.make("gpt-5-mini"),
@@ -432,6 +434,74 @@ describe("session.llm-native.request", () => {
         auth: undefined,
       }),
     ).toEqual({ type: "unsupported", reason: "API key is not configured" })
+  })
+
+  test("fails all bespoke batch cells before transport or AI SDK fallback", async () => {
+    const providers = providerParityInventory.providers.filter(
+      (provider) => provider.batchID === "bespoke-sdk-gateway-01",
+    )
+    const emptyCassette: ProviderParityCassette = { version: 1, interactions: [] }
+    let checked = 0
+    for (const provider of providers) {
+      for (const scenario of provider.scenarios) {
+        if (scenario.status === "not-applicable") continue
+        if (!scenario.modelID || !scenario.api) throw new Error(`Incomplete cell ${provider.id}/${scenario.id}`)
+        let aiSdkCalled = false
+        let transportCalls = 0
+        const llmClient: LLMClientShape = {
+          prepare: () => Effect.die("provider parity transport must not prepare"),
+          stream: () => {
+            transportCalls++
+            return Stream.die("provider parity transport must not stream")
+          },
+          generate: () => Effect.die("provider parity transport must not generate"),
+        }
+        const failure = await compareParityRuns({
+          cassette: emptyCassette,
+          aiSdk: () => {
+            aiSdkCalled = true
+            throw new Error("AI SDK fallback must not run")
+          },
+          nativeDirect: () => ({
+            model: {
+              ...baseModel,
+              id: ModelV2.ID.make(scenario.modelID),
+              providerID: ProviderV2.ID.make(provider.id),
+              api: {
+                id: scenario.modelID,
+                url: scenario.api.url ?? "",
+                npm: scenario.api.package,
+              },
+            },
+            provider: {
+              ...providerInfo,
+              id: ProviderV2.ID.make(provider.id),
+              name: provider.id,
+              env: provider.credentialSources.catalogEnv,
+              options: { apiKey: "unused" },
+            },
+            auth: undefined,
+            llmClient,
+            messages: [],
+            tools: {},
+            headers: {},
+            abort: new AbortController().signal,
+          }),
+        }).catch((cause: unknown) => cause)
+        expect(failure).toBeInstanceOf(NativeDirectUnsupportedError)
+        if (!(failure instanceof NativeDirectUnsupportedError)) throw failure
+        expect(failure.context).toEqual({
+          providerID: provider.id,
+          modelID: scenario.modelID,
+          effectiveAPI: { package: scenario.api.package, url: scenario.api.url },
+          reason: "provider is not openai or anthropic",
+        })
+        expect(aiSdkCalled).toBeFalse()
+        expect(transportCalls).toBe(0)
+        checked++
+      }
+    }
+    expect(checked).toBe(23)
   })
 
   test("enables native runtime for Anthropic API-key models", () => {

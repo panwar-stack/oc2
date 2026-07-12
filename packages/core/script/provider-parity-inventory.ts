@@ -12,6 +12,7 @@ const outputPath = path.join(root, "packages/core/test/fixtures/provider-parity-
 const sourceName = "packages/opencode/test/tool/fixtures/models-api.json"
 const sourceSHA256 = "d2ea47cabebb5a683cd5d23677dd8f0d597186986da272cc754fda506f7be99b"
 const tracker = "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches"
+const batchTracker = "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches"
 const defaultPackage = "@ai-sdk/openai-compatible"
 const scenarioIDs = [
   "text",
@@ -189,6 +190,8 @@ const syntheticPlugins: { id: string; classification: Classification; evidence: 
     env: ["SNOWFLAKE_CORTEX_PAT"],
   },
 ]
+
+const unsupportedNativeProviders = new Set(["aihubmix", "cloudflare-ai-gateway", "gitlab"])
 
 const compoundRecordingCredentials: Record<string, RecordingCredential[]> = {
   databricks: [{ id: "env:databricks", allOf: ["DATABRICKS_HOST", "DATABRICKS_TOKEN"] }],
@@ -496,8 +499,10 @@ function catalogScenario(
               `${apiPackage} derives its endpoint at runtime; ${sourceName}#${catalogID} declares no model or provider URL`),
     },
     status: "unsupported",
-    reason: "Parity evidence has not been recorded for this provider and scenario.",
-    issue: tracker,
+    reason: unsupportedNativeProviders.has(catalogID)
+      ? `Native direct execution does not support provider package ${apiPackage}.`
+      : "Parity evidence has not been recorded for this provider and scenario.",
+    issue: unsupportedNativeProviders.has(catalogID) ? batchTracker : tracker,
     evidence: `${sourceName}#${catalogID}.models.${model.id}`,
     recordingCredentials,
   }

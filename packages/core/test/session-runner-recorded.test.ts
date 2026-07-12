@@ -27,7 +27,7 @@ import { SystemContext } from "@oc2-ai/core/system-context"
 import { SkillGuidance } from "@oc2-ai/core/skill/guidance"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
 
@@ -35,14 +35,34 @@ const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
+const decodeBody = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+const matchRecordedRequest: HttpRecorder.RequestMatcher = (incoming, recorded) => {
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize)
+    if (!value || typeof value !== "object") return value
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => key !== "prompt_cache_key")
+        .map(([key, child]) => [key, canonicalize(child)] as const)
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    )
+  }
+  const snapshot = (value: HttpRecorder.RequestSnapshot) => ({
+    ...value,
+    body: canonicalize(Option.getOrElse(decodeBody(value.body), () => value.body)),
+  })
+  return JSON.stringify(snapshot(incoming)) === JSON.stringify(snapshot(recorded))
+}
 const cassette =
   process.env.RECORD === "true"
     ? HttpRecorderInternal.cassetteLayer("session-runner/openai-chat-streams-text", {
         directory: path.resolve(import.meta.dir, "fixtures/recordings"),
         mode: "record",
+        match: matchRecordedRequest,
       })
     : HttpRecorder.http("session-runner/openai-chat-streams-text", {
         directory: path.resolve(import.meta.dir, "fixtures/recordings"),
+        match: matchRecordedRequest,
       })
 const executor = RequestExecutor.layer.pipe(Layer.provide(cassette))
 const client = LLMClient.layer.pipe(Layer.provide(executor))

@@ -1250,8 +1250,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-6",
           "recordingCredentials": [
             {
@@ -1272,8 +1272,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-6",
           "recordingCredentials": [
             {
@@ -1294,8 +1294,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-7-think",
           "recordingCredentials": [
             {
@@ -1316,8 +1316,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.gemini-2.5-flash",
           "recordingCredentials": [
             {
@@ -1338,8 +1338,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-6",
           "recordingCredentials": [
             {
@@ -1360,8 +1360,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.gemini-2.5-flash",
           "recordingCredentials": [
             {
@@ -1382,8 +1382,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-6",
           "recordingCredentials": [
             {
@@ -1404,8 +1404,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-6",
           "recordingCredentials": [
             {
@@ -1426,8 +1426,8 @@
             "urlEvidence": "@aihubmix/ai-sdk-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#aihubmix declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package @aihubmix/ai-sdk-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#aihubmix.models.claude-opus-4-6",
           "recordingCredentials": [
             {
@@ -4408,8 +4408,8 @@
             "urlEvidence": "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package ai-gateway-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.anthropic/claude-3-5-haiku",
           "recordingCredentials": [
             {
@@ -4432,8 +4432,8 @@
             "urlEvidence": "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package ai-gateway-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.anthropic/claude-3-5-haiku",
           "recordingCredentials": [
             {
@@ -4456,8 +4456,8 @@
             "urlEvidence": "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package ai-gateway-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.openai/gpt-4o",
           "recordingCredentials": [
             {
@@ -4488,8 +4488,8 @@
             "urlEvidence": "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package ai-gateway-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.anthropic/claude-3-5-haiku",
           "recordingCredentials": [
             {
@@ -4520,8 +4520,8 @@
             "urlEvidence": "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package ai-gateway-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.anthropic/claude-3-5-haiku",
           "recordingCredentials": [
             {
@@ -4544,8 +4544,8 @@
             "urlEvidence": "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package ai-gateway-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.anthropic/claude-3-5-haiku",
           "recordingCredentials": [
             {
@@ -4568,8 +4568,8 @@
             "urlEvidence": "packages/core/src/plugin/provider/cloudflare-ai-gateway.ts derives the gateway endpoint from account and gateway options"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package ai-gateway-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#cloudflare-ai-gateway.models.anthropic/claude-3-5-haiku",
           "recordingCredentials": [
             {
@@ -8067,8 +8067,8 @@
             "urlEvidence": "gitlab-ai-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#gitlab declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package gitlab-ai-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#gitlab.models.duo-chat-gpt-5-1",
           "recordingCredentials": [
             {
@@ -8089,8 +8089,8 @@
             "urlEvidence": "gitlab-ai-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#gitlab declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package gitlab-ai-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#gitlab.models.duo-chat-gpt-5-1",
           "recordingCredentials": [
             {
@@ -8111,8 +8111,8 @@
             "urlEvidence": "gitlab-ai-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#gitlab declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package gitlab-ai-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#gitlab.models.duo-chat-gpt-5-1",
           "recordingCredentials": [
             {
@@ -8141,8 +8141,8 @@
             "urlEvidence": "gitlab-ai-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#gitlab declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package gitlab-ai-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#gitlab.models.duo-chat-gpt-5-1",
           "recordingCredentials": [
             {
@@ -8171,8 +8171,8 @@
             "urlEvidence": "gitlab-ai-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#gitlab declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package gitlab-ai-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#gitlab.models.duo-chat-gpt-5-2-codex",
           "recordingCredentials": [
             {
@@ -8193,8 +8193,8 @@
             "urlEvidence": "gitlab-ai-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#gitlab declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package gitlab-ai-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#gitlab.models.duo-chat-gpt-5-1",
           "recordingCredentials": [
             {
@@ -8215,8 +8215,8 @@
             "urlEvidence": "gitlab-ai-provider derives its endpoint at runtime; packages/opencode/test/tool/fixtures/models-api.json#gitlab declares no model or provider URL"
           },
           "status": "unsupported",
-          "reason": "Parity evidence has not been recorded for this provider and scenario.",
-          "issue": "specs/minimal-baseline.md#pr-11a-n-record-provider-parity-in-capped-batches",
+          "reason": "Native direct execution does not support provider package gitlab-ai-provider.",
+          "issue": "specs/minimal-baseline.md#pr-11-record-provider-parity-in-capped-batches",
           "evidence": "packages/opencode/test/tool/fixtures/models-api.json#gitlab.models.duo-chat-gpt-5-1",
           "recordingCredentials": [
             {

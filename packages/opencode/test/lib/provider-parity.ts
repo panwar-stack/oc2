@@ -103,7 +103,7 @@ export type NativeDirectParityInput = Parameters<typeof LLMNativeRuntime.stream>
 export type NativeDirectUnsupportedContext = {
   readonly providerID: string
   readonly modelID: string
-  readonly effectiveAPI: { readonly package: string; readonly url: string }
+  readonly effectiveAPI: { readonly package: string; readonly url: string | null }
   readonly reason: string
 }
 
@@ -310,7 +310,7 @@ export async function compareParityRuns(input: {
     throw new NativeDirectUnsupportedError({
       providerID: nativeInput.model.providerID,
       modelID: nativeInput.model.id,
-      effectiveAPI: { package: nativeInput.model.api.npm, url: nativeInput.model.api.url },
+      effectiveAPI: { package: nativeInput.model.api.npm, url: nativeInput.model.api.url || null },
       reason: nativeResult.reason,
     })
   const aiResult = streamText(input.aiSdk(aiReplay))
