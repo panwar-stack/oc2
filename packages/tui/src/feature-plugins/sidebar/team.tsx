@@ -11,24 +11,24 @@ function memberStatusDot(
   theme: TuiPluginApi["theme"]["current"],
 ) {
   const t = status?.type
-  if (teamStatus?.status === "completed") return theme.success
-  if (teamStatus?.status === "cancelled") return theme.error
   if (t === "retry") return theme.error
   if (t === "busy") return theme.success
+  if (teamStatus?.status === "completed") return theme.success
+  if (teamStatus?.status === "cancelled") return theme.error
   if (["starting", "blocked", "active", "idle"].includes(teamStatus?.status ?? "")) return theme.info
   return theme.textMuted
 }
 
-function statusLabel(
+export function statusLabel(
   status: { type: string } | undefined,
   teamStatus: { status: string; lifecycle?: string; daemonState?: string | null } | undefined,
 ) {
   const t = status?.type
   if (teamStatus?.lifecycle === "daemon") return `daemon:${teamStatus.daemonState ?? teamStatus.status}`
-  if (teamStatus?.status === "completed") return "completed"
-  if (teamStatus?.status === "cancelled") return "cancelled"
   if (t === "retry") return "retry"
   if (t === "busy") return "working"
+  if (teamStatus?.status === "completed") return "completed"
+  if (teamStatus?.status === "cancelled") return "cancelled"
   if (teamStatus?.status === "active") return "active"
   if (teamStatus?.status === "starting") return "starting"
   if (teamStatus?.status === "blocked") return "blocked"
@@ -36,12 +36,12 @@ function statusLabel(
   return "idle"
 }
 
-function isMemberWorking(
+export function isMemberWorking(
   status: { type: string } | undefined,
   teamStatus: { status: string; lifecycle?: string; daemonState?: string | null } | undefined,
 ) {
-  if (teamStatus?.status === "completed" || teamStatus?.status === "cancelled") return false
-  return status?.type === "busy" || teamStatus?.status === "starting"
+  if (status?.type === "busy" || status?.type === "retry") return true
+  return teamStatus?.status === "starting"
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {

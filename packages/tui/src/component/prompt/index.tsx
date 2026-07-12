@@ -164,6 +164,16 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const teammateWorking = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID || sync.session.get(sessionID)?.parentID) return false
+    return sync.data.session.some((session) => {
+      if (session.parentID !== sessionID || !sync.data.team_member_status[session.id]) return false
+      const type = sync.data.session_status[session.id]?.type
+      return type === "busy" || type === "retry"
+    })
+  })
+  const working = createMemo(() => status().type !== "idle" || teammateWorking())
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -1550,7 +1560,7 @@ export function Prompt(props: PromptProps) {
         </box>
         <box width="100%" flexDirection="row" justifyContent="space-between">
           <Switch>
-            <Match when={status().type !== "idle"}>
+            <Match when={working()}>
               <box
                 flexDirection="row"
                 gap={1}
@@ -1622,12 +1632,17 @@ export function Prompt(props: PromptProps) {
                     })()}
                   </box>
                 </box>
-                <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
-                  esc{" "}
-                  <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
-                    {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
-                  </span>
-                </text>
+                <Show
+                  when={status().type !== "idle"}
+                  fallback={<text fg={theme.textMuted}>team working</text>}
+                >
+                  <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
+                    esc{" "}
+                    <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
+                      {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
+                    </span>
+                  </text>
+                </Show>
               </box>
             </Match>
             <Match when={workspace.notice()}>

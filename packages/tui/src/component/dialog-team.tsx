@@ -35,10 +35,10 @@ function memberStatusColor(
   theme: ReturnType<typeof useTheme>["theme"],
 ) {
   const t = status?.type
-  if (teamStatus?.status === "completed") return theme.success
-  if (teamStatus?.status === "cancelled") return theme.error
   if (t === "retry") return theme.error
   if (t === "busy") return theme.success
+  if (teamStatus?.status === "completed") return theme.success
+  if (teamStatus?.status === "cancelled") return theme.error
   if (["starting", "blocked", "active", "idle"].includes(teamStatus?.status ?? "")) return theme.info
   return theme.textMuted
 }
@@ -49,10 +49,10 @@ function memberStatusLabel(
 ) {
   const t = status?.type
   if (teamStatus?.lifecycle === "daemon") return `daemon:${teamStatus.daemonState ?? teamStatus.status}`
-  if (teamStatus?.status === "completed") return "completed"
-  if (teamStatus?.status === "cancelled") return "cancelled"
   if (t === "retry") return "retry"
   if (t === "busy") return "working"
+  if (teamStatus?.status === "completed") return "completed"
+  if (teamStatus?.status === "cancelled") return "cancelled"
   if (teamStatus?.status === "active") return "active"
   if (teamStatus?.status === "starting") return "starting"
   if (teamStatus?.status === "blocked") return "blocked"
