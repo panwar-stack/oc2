@@ -28,9 +28,54 @@ const [helpStdout, helpStderr, helpExit] = await Promise.all([
   new Response(help.stderr).text(),
   help.exited,
 ])
-if (helpExit !== 0 || !`${helpStdout}\n${helpStderr}`.includes("Commands:")) {
+const helpText = `${helpStdout}\n${helpStderr}`
+if (helpExit !== 0 || !helpText.includes("Commands:")) {
   throw new Error("failed to read oc2 --help output from stdout or stderr")
 }
+
+const cliReference = await Bun.file("docs/cli.md").text()
+const cliSource = await Bun.file("packages/opencode/src/index.ts").text()
+const documentedCommands = new Set([...cliReference.matchAll(/^\| `oc2 ([a-z][\w-]*)/gm)].map((match) => match[1]))
+const helpCommands = new Set([...helpText.matchAll(/^\s+oc2 ([a-z][\w-]*)/gm)].map((match) => match[1]))
+const commandNames = [...cliSource.matchAll(/\{ names: \[([^\]]*)\], load:/g)].map((match) =>
+  [...match[1].matchAll(/"([^"]+)"/g)].map((name) => name[1]),
+)
+const registeredCommands = new Set(["completion", ...commandNames.flatMap((names) => names.slice(0, 1))])
+const undocumentedCommands = [...registeredCommands].filter((command) => !documentedCommands.has(command))
+if (undocumentedCommands.length)
+  throw new Error(`docs/cli.md: undocumented CLI commands: ${undocumentedCommands.join(", ")}`)
+const staleCommands = [...documentedCommands].filter((command) => !registeredCommands.has(command))
+if (staleCommands.length) throw new Error(`docs/cli.md: unrecognized CLI commands: ${staleCommands.join(", ")}`)
+const undocumentedAliases = commandNames
+  .flatMap((names) => names.slice(1))
+  .filter((alias) => !cliReference.includes(`\`oc2 ${alias}\``))
+if (undocumentedAliases.length)
+  throw new Error(`docs/cli.md: undocumented CLI aliases: ${undocumentedAliases.join(", ")}`)
+const unregisteredHelpCommands = [...helpCommands].filter((command) => !registeredCommands.has(command))
+if (unregisteredHelpCommands.length)
+  throw new Error(`oc2 --help contained unregistered commands: ${unregisteredHelpCommands.join(", ")}`)
+
+const keybindingReference = await Bun.file("docs/reference/keybindings.md").text()
+const documentedKeybinds = new Map(
+  [...keybindingReference.matchAll(/^\|\s+`([^`]+)`\s+\|\s+`([^`]*)`\s+\|\s+(.+?)\s+\|$/gm)].map((match) => [
+    match[1],
+    { default: match[2], description: match[3] },
+  ]),
+)
+const keybindDrift = Object.entries(TuiKeybind.Definitions).flatMap(([name, item]) => {
+  const documented = documentedKeybinds.get(name)
+  const value = typeof item.default === "string" ? item.default : JSON.stringify(item.default)
+  if (!documented) return [`missing ${name}`]
+  if (documented.default !== value) return [`${name} default is ${documented.default}; expected ${value}`]
+  if (documented.description !== item.description)
+    return [`${name} description is ${documented.description}; expected ${item.description}`]
+  return []
+})
+const keybindNames = new Set(Object.keys(TuiKeybind.Definitions))
+keybindDrift.push(
+  ...[...documentedKeybinds.keys()].filter((name) => !keybindNames.has(name)).map((name) => `unknown ${name}`),
+)
+if (keybindDrift.length) throw new Error(`docs/reference/keybindings.md: keybinding drift: ${keybindDrift.join("; ")}`)
 
 const exampleFiles = ["oc2.example.json", ...new Bun.Glob("docs/examples/**/*.{json,jsonc}").scanSync()].sort()
 if (!exampleFiles.includes("docs/examples/oc2.minimal.jsonc")) throw new Error("missing minimal OC2 example")
