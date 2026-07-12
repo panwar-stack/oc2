@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import path from "node:path"
 import { existsSync } from "node:fs"
+import { Effect, Exit } from "effect"
 
 import { Info as TuiConfig } from "@oc2-ai/tui/config"
 import { TuiKeybind } from "@oc2-ai/tui/config/keybind"
@@ -63,9 +64,7 @@ if (unregisteredHelpCommands.length)
   throw new Error(`oc2 --help contained unregistered commands: ${unregisteredHelpCommands.join(", ")}`)
 
 function topLevelAliasDrift(reference: string) {
-  const documented = new Set(
-    [...reference.matchAll(/\bAlias:\s*`oc2 ([a-z][\w-]*)`/gi)].map((match) => match[1]),
-  )
+  const documented = new Set([...reference.matchAll(/\bAlias:\s*`oc2 ([a-z][\w-]*)`/gi)].map((match) => match[1]))
   return {
     undocumented: [...registeredAliases].filter((alias) => !documented.has(alias)),
     unregistered: [...documented].filter((alias) => !registeredAliases.has(alias)),
@@ -196,17 +195,48 @@ if (TuiKeybind.unknownKeys({ not_a_keybind: "none" }).join(",") !== "not_a_keybi
 
 for (const file of exampleFiles) {
   const data = ConfigParse.jsonc(await Bun.file(file).text(), file)
-  rejectSecretLikeValues(data, file)
   const name = path.basename(file)
-  if (name.startsWith("oc2.")) ConfigParse.schema(Oc2Config, data, file)
-  if (name.startsWith("tui.")) {
-    ConfigParse.schema(TuiConfig, data, file)
-    if (data && typeof data === "object" && "keybinds" in data && data.keybinds && typeof data.keybinds === "object") {
-      const unknown = TuiKeybind.unknownKeys(data.keybinds)
-      if (unknown.length) throw new Error(`${file}: unrecognized TUI keybinds: ${unknown.join(", ")}`)
-    }
+  if (name.startsWith("oc2.")) validateConfigExample(data, "oc2", file)
+  if (name.startsWith("tui.")) validateConfigExample(data, "tui", file)
+}
+
+let fencedConfigExamples = 0
+for (const file of markdownFiles) {
+  const text = await Bun.file(file).text()
+  const fences = [...text.matchAll(/^```jsonc?\n([\s\S]*?)^```$/gm)]
+  const classified = [...text.matchAll(/^<!-- docs-check: (oc2|tui) -->\n\n?```jsonc?\n([\s\S]*?)^```$/gm)]
+  if (fences.length !== classified.length)
+    throw new Error(`${file}: every JSON or JSONC fence must declare <!-- docs-check: oc2|tui -->`)
+  for (const [index, match] of classified.entries()) {
+    const source = `${file}: fenced configuration example ${index + 1}`
+    validateConfigExample(ConfigParse.jsonc(match[2], source), match[1] === "oc2" ? "oc2" : "tui", source)
+    fencedConfigExamples++
   }
 }
+if (fencedConfigExamples !== 8)
+  throw new Error(`expected 8 fenced configuration examples, found ${fencedConfigExamples}`)
+
+const rejected = (text: string, schema: "oc2" | "tui") =>
+  Exit.isFailure(
+    Effect.runSync(
+      Effect.exit(
+        Effect.sync(() =>
+          validateConfigExample(
+            ConfigParse.jsonc(text, "documentation negative probe"),
+            schema,
+            "documentation negative probe",
+          ),
+        ),
+      ),
+    ),
+  )
+if (!rejected("{", "oc2")) throw new Error("fenced configuration syntax negative probe failed")
+if (!rejected('{ "not_a_real_key": true }', "oc2"))
+  throw new Error("fenced configuration unknown-key negative probe failed")
+if (!rejected('{ "provider": { "probe": { "options": { "apiKey": "sk-example" } } } }', "oc2"))
+  throw new Error("fenced configuration secret negative probe failed")
+if (rejected('{ "mouse": true }', "tui") || !rejected('{ "mouse": true }', "oc2"))
+  throw new Error("fenced configuration schema classification negative probe failed")
 
 const markdown = new Map(markdownFiles.map((file) => [path.resolve(file), Bun.file(file).text()]))
 const contents = new Map(await Promise.all([...markdown].map(async ([file, text]) => [file, await text] as const)))
@@ -240,6 +270,19 @@ function rejectSecretLikeValues(value: unknown, file: string, keys: string[] = [
   const location = secretLikeLocation(value, keys)
   if (location !== undefined)
     throw new Error(`${file}: secret-like value at ${location.join(".")}; use an {env:NAME} substitution`)
+}
+
+function validateConfigExample(data: unknown, schema: "oc2" | "tui", source: string) {
+  rejectSecretLikeValues(data, source)
+  if (schema === "oc2") {
+    ConfigParse.schema(Oc2Config, data, source)
+    return
+  }
+  ConfigParse.schema(TuiConfig, data, source)
+  if (!data || typeof data !== "object" || !("keybinds" in data) || !data.keybinds || typeof data.keybinds !== "object")
+    return
+  const unknown = TuiKeybind.unknownKeys(data.keybinds)
+  if (unknown.length) throw new Error(`${source}: unrecognized TUI keybinds: ${unknown.join(", ")}`)
 }
 
 function secretLikeLocation(value: unknown, keys: string[] = []): string[] | undefined {

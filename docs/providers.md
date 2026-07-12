@@ -52,6 +52,8 @@ oc2 run --model openai/gpt-5 "Summarize this project"
 model picker described in the [TUI Guide](tui.md). To set project defaults, use
 the singular V1 keys `model` and `small_model`:
 
+<!-- docs-check: oc2 -->
+
 ```jsonc
 {
   "$schema": "https://oc2.ai/config.json",
@@ -70,6 +72,8 @@ default matters.
 Use the singular `provider` map. Existing catalog entries can be narrowed or
 overridden with `whitelist`, `blacklist`, `options`, and `models`:
 
+<!-- docs-check: oc2 -->
+
 ```jsonc
 {
   "$schema": "https://oc2.ai/config.json",
@@ -86,6 +90,8 @@ overridden with `whitelist`, `blacklist`, `options`, and `models`:
 
 Custom OpenAI-compatible endpoints need a provider package, base URL, model
 definitions, and a credential source:
+
+<!-- docs-check: oc2 -->
 
 ```jsonc
 {

@@ -48,6 +48,8 @@ Experimental workspaces are separate from multi-root sessions. If enabled, `/wor
 
 Put new TUI settings in `tui.jsonc` or `tui.json`, not under the deprecated TUI keys in `oc2.jsonc` or `oc2.json`. Legacy values remain compatible, but dedicated TUI files are the current surface. For example:
 
+<!-- docs-check: tui -->
+
 ```jsonc
 {
   "$schema": "https://oc2.ai/tui.json",

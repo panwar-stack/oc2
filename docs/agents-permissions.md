@@ -27,6 +27,8 @@ The map key is the agent ID. The shipped V1 schema supports `model`, `variant`,
 `temperature`, `top_p`, `prompt`, `disable`, `description`, `mode`, `hidden`,
 `options`, `color`, `steps`, and `permission`:
 
+<!-- docs-check: oc2 -->
+
 ```jsonc
 {
   "$schema": "https://oc2.ai/config.json",
@@ -119,6 +121,8 @@ permission names and patterns, and the **last matching rule wins**. An
 unmatched operation defaults to `ask`. Put broad fallbacks first and exceptions
 later:
 
+<!-- docs-check: oc2 -->
+
 ```jsonc
 {
   "$schema": "https://oc2.ai/config.json",
@@ -152,6 +156,8 @@ restarts. Permission and question interactions are described in the
 
 Configured commands use the singular `command` map. Each entry requires
 `template` and may set `description`, `agent`, `model`, `variant`, or `subtask`:
+
+<!-- docs-check: oc2 -->
 
 ```jsonc
 {

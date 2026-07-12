@@ -76,6 +76,8 @@ local servers. See [CLI](cli.md) for the top-level command reference.
 V1 configuration uses the singular top-level `plugin` list. Each entry is an
 npm specifier, a file path or URL, or a `[specifier, options]` tuple:
 
+<!-- docs-check: oc2 -->
+
 ```jsonc
 {
   "plugin": [
