@@ -7,10 +7,15 @@ import { onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
 
 mock.module("../../../../../tui/src/keymap", () => ({
+  OC2_BASE_MODE: "base",
+  formatKeyBindings: () => "",
+  OpencodeKeymapProvider: (props: { children: unknown }) => props.children,
+  registerOpencodeKeymap: () => {},
   useBindings: () => {},
   useCommandShortcut: (command: string) => () => (command === "command.palette.show" ? "ctrl+p" : "tab"),
   useCommandSlashes: () => () => [],
   useLeaderActive: () => () => false,
+  useKeymapSelector: () => () => new Map(),
   useOpencodeModeStack: () => ({ push: () => () => {} }),
   useOpencodeKeymap: () => ({
     pending: () => [],
@@ -58,6 +63,7 @@ const {
 } = await import("@oc2-ai/tui/testing")
 
 const sessionID = "ses_prompt_footer"
+const teammateID = "ses_prompt_footer_teammate"
 const created = Date.now() - 62_000
 
 const sessionPayload = {
@@ -68,6 +74,13 @@ const sessionPayload = {
   directory,
   project_id: "proj_test",
   cost: 0.05,
+}
+
+const teammatePayload = {
+  ...sessionPayload,
+  id: teammateID,
+  title: "Teammate",
+  parentID: sessionID,
 }
 
 const messagesPayload = [
@@ -137,7 +150,7 @@ const fetchForPrompt = (async (input: RequestInfo | URL) => {
     case "/provider":
       return json({ all: [], default: {}, connected: [] })
     case "/session":
-      return json([sessionPayload])
+      return json([sessionPayload, teammatePayload])
     case `/session/${sessionID}`:
       return json(sessionPayload)
     case `/session/${sessionID}/root`:
@@ -226,7 +239,7 @@ async function mountPrompt(props: { sessionID?: string }) {
 
   await mounted
   await wait(() => sync.status === "complete")
-  return { app, sync }
+  return { app, events, sync }
 }
 
 describe("prompt footer", () => {
@@ -272,6 +285,45 @@ describe("prompt footer", () => {
       expect(frame).toContain("tab agents")
       expect(frame).toContain("ctrl+p commands")
       expect(frame.indexOf("tab agents")).toBeLessThan(frame.indexOf("ctrl+p commands"))
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("shows an idle lead as working while a direct teammate is busy", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const { app, events, sync } = await mountPrompt({ sessionID })
+
+    try {
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("team working")
+
+      events.emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "event-team-member-completed",
+          type: "team.member.updated",
+          properties: { memberID: "member-teammate", sessionID: teammateID, status: "completed" },
+        },
+      })
+      events.emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "event-teammate-busy",
+          type: "session.status",
+          properties: { sessionID: teammateID, status: { type: "busy" } },
+        },
+      })
+      await wait(() => sync.data.session_status[teammateID]?.type === "busy")
+      await app.renderOnce()
+
+      expect(app.captureCharFrame()).toContain("team working")
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
