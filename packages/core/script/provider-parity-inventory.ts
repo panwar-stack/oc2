@@ -21,6 +21,8 @@ const scenarioIDs = [
   "input-image",
   "input-video",
   "input-pdf",
+  "abort",
+  "provider-error",
 ] as const
 const catalogFamilies = [
   "openai-compatible",
@@ -39,6 +41,13 @@ type Classification = "catalog-mapped" | "generic-factory" | "config-only" | "vi
 type Source = "catalog" | "synthetic" | "virtual"
 type Status = "parity" | "unsupported" | "not-applicable"
 type RecordingCredential = { id: string; allOf: string[] }
+type Batch = {
+  id: string
+  family: Family
+  providerIDs: string[]
+  providerCount: number
+  applicableCellCount: number
+}
 
 type Scenario = {
   id: ScenarioID
@@ -118,6 +127,8 @@ const expectedScenarioCounts: Record<ScenarioID, number> = {
   "input-image": 94,
   "input-video": 62,
   "input-pdf": 43,
+  abort: 120,
+  "provider-error": 120,
 }
 
 const catalogPluginIDs = [
@@ -241,10 +252,7 @@ const structuredOutputCatalog = Schema.decodeUnknownSync(
   Schema.Record(
     Schema.String,
     Schema.Struct({
-      models: Schema.Record(
-        Schema.String,
-        Schema.Struct({ structured_output: Schema.optional(Schema.Boolean) }),
-      ),
+      models: Schema.Record(Schema.String, Schema.Struct({ structured_output: Schema.optional(Schema.Boolean) })),
     }),
   ),
 )(Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(new TextDecoder().decode(sourceBytes)))
@@ -275,9 +283,8 @@ const catalog = await Effect.runPromise(
 const inventory = buildInventory(catalog, structuredOutputCatalog)
 const rendered = `${JSON.stringify(inventory, null, 2)}\n`
 
-if (args.values.batch && !inventory.providers.some((row) => row.batchID === args.values.batch)) {
-  throw new Error(`Unknown provider parity batch: ${args.values.batch}`)
-}
+const selectedBatch = args.values.batch ? inventory.batches.find((batch) => batch.id === args.values.batch) : undefined
+if (args.values.batch && !selectedBatch) throw new Error(`Unknown provider parity batch: ${args.values.batch}`)
 
 if (args.values.check) {
   if (!(await Bun.file(outputPath).exists())) throw new Error(`Missing generated inventory: ${outputPath}`)
@@ -287,13 +294,14 @@ if (args.values.check) {
     )
   }
   console.log(
-    `provider parity inventory is current (${inventory.providers.length} providers${args.values.batch ? `, batch ${args.values.batch}` : ""})`,
+    `provider parity inventory is current (${inventory.providers.length} providers${selectedBatch ? `; ${batchSummary(selectedBatch)}` : ""})`,
   )
   process.exit(0)
 }
 
 await Bun.write(outputPath, rendered)
 console.log(`wrote ${path.relative(root, outputPath)} (${inventory.providers.length} providers)`)
+if (selectedBatch) console.log(batchSummary(selectedBatch))
 
 function buildInventory(
   providers: Record<string, ModelsDev.Provider>,
@@ -339,20 +347,44 @@ function buildInventory(
     }
   }
 
-  const batchByID = new Map<string, string>()
+  const batchByProviderID = new Map<string, string>()
+  const batches: Batch[] = []
   for (const family of allFamilies) {
     const members = rows.filter((row) => row.family === family).sort((a, b) => a.id.localeCompare(b.id))
-    members.forEach((row, index) =>
-      batchByID.set(row.id, `${family}-${String(Math.floor(index / 10) + 1).padStart(2, "0")}`),
-    )
+    let providerIDs: string[] = []
+    let applicableCellCount = 0
+    const finish = () => {
+      if (providerIDs.length === 0) return
+      const id = `${family}-${String(batches.filter((batch) => batch.family === family).length + 1).padStart(2, "0")}`
+      const batch = {
+        id,
+        family,
+        providerIDs,
+        providerCount: providerIDs.length,
+        applicableCellCount,
+      }
+      batches.push(batch)
+      for (const providerID of providerIDs) batchByProviderID.set(providerID, id)
+      providerIDs = []
+      applicableCellCount = 0
+    }
+    for (const row of members) {
+      const cells = row.scenarios.filter((scenario) => scenario.status !== "not-applicable").length
+      if (cells > 30) throw new Error(`Provider ${row.id} has ${cells} applicable parity cells and cannot fit a batch`)
+      if (providerIDs.length > 0 && (providerIDs.length === 10 || applicableCellCount + cells > 30)) finish()
+      providerIDs.push(row.id)
+      applicableCellCount += cells
+    }
+    finish()
   }
   const batched = rows
     .map((row) => {
-      const batchID = batchByID.get(row.id)
+      const batchID = batchByProviderID.get(row.id)
       if (!batchID) throw new Error(`Missing batch for ${row.id}`)
       return { ...row, batchID }
     })
     .sort((a, b) => a.id.localeCompare(b.id))
+  validateBatches(batched, batches)
 
   return {
     version: 2,
@@ -364,6 +396,7 @@ function buildInventory(
     },
     familyCounts,
     scenarioCounts: expectedScenarioCounts,
+    batches,
     plugins: [
       ...catalogPluginIDs.map((id) => ({
         id,
@@ -489,8 +522,42 @@ function applicable(
   const inputs = model.modalities?.input ?? ["text"]
   if (scenarioID === "tools") return model.tool_call
   if (scenarioID === "structured-output") return capabilities?.structured_output === true
-  if (scenarioID === "text") return inputs.includes("text")
+  if (scenarioID === "text" || scenarioID === "abort" || scenarioID === "provider-error") return inputs.includes("text")
   return inputs.includes(scenarioID.slice("input-".length) as "audio" | "image" | "video" | "pdf")
+}
+
+function validateBatches(rows: Row[], batches: Batch[]) {
+  const assigned = new Set<string>()
+  for (const batch of batches) {
+    const members = rows.filter((row) => row.batchID === batch.id).sort((a, b) => a.id.localeCompare(b.id))
+    const providerIDs = members.map((row) => row.id)
+    const applicableCellCount = members.reduce(
+      (total, row) => total + row.scenarios.filter((scenario) => scenario.status !== "not-applicable").length,
+      0,
+    )
+    if (batch.providerCount === 0 || batch.providerCount > 10)
+      throw new Error(`Provider parity batch ${batch.id} has invalid provider count ${batch.providerCount}`)
+    if (batch.applicableCellCount > 30)
+      throw new Error(`Provider parity batch ${batch.id} has ${batch.applicableCellCount} applicable cells`)
+    if (members.some((row) => row.family !== batch.family))
+      throw new Error(`Provider parity batch ${batch.id} mixes protocol families`)
+    if (
+      batch.providerCount !== providerIDs.length ||
+      batch.applicableCellCount !== applicableCellCount ||
+      batch.providerIDs.join("\0") !== providerIDs.join("\0")
+    )
+      throw new Error(`Provider parity batch ${batch.id} manifest does not match its providers`)
+    for (const providerID of providerIDs) {
+      if (assigned.has(providerID)) throw new Error(`Provider ${providerID} appears in multiple parity batches`)
+      assigned.add(providerID)
+    }
+  }
+  if (assigned.size !== rows.length)
+    throw new Error(`Expected ${rows.length} batched providers, found ${assigned.size}`)
+}
+
+function batchSummary(batch: Batch) {
+  return `batch ${batch.id}: family ${batch.family}, ${batch.providerCount} providers, ${batch.applicableCellCount} applicable cells [${batch.providerIDs.join(", ")}]`
 }
 
 function statusRank(status: ModelsDev.Model["status"]) {

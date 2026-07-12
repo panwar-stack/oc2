@@ -68,6 +68,13 @@ const Provider = Schema.Struct({
   }),
   scenarios: Schema.Array(Scenario),
 })
+const Batch = Schema.Struct({
+  id: Schema.String,
+  family: Schema.String,
+  providerIDs: Schema.Array(Schema.String),
+  providerCount: Schema.Number,
+  applicableCellCount: Schema.Number,
+})
 const Inventory = Schema.Struct({
   version: Schema.Literal(2),
   source: Schema.Struct({
@@ -76,6 +83,7 @@ const Inventory = Schema.Struct({
     providerCount: Schema.Number,
     modelCount: Schema.Number,
   }),
+  batches: Schema.Array(Batch),
   providers: Schema.Array(Provider),
 })
 
@@ -86,22 +94,23 @@ const decodeCassette = Schema.decodeUnknownSync(Cassette)
 export type ProviderParityInventory = Schema.Schema.Type<typeof Inventory>
 export type ProviderParityProvider = Schema.Schema.Type<typeof Provider>
 export type ProviderParityScenario = Schema.Schema.Type<typeof Scenario>
+export type ProviderParityBatch = Schema.Schema.Type<typeof Batch>
 export type ProviderParityCassette = Schema.Schema.Type<typeof Cassette>
 
 export type AISdkParityInput = Parameters<typeof streamText>[0]
 export type NativeDirectParityInput = Parameters<typeof LLMNativeRuntime.stream>[0]
 
+export type NativeDirectUnsupportedContext = {
+  readonly providerID: string
+  readonly modelID: string
+  readonly effectiveAPI: { readonly package: string; readonly url: string }
+  readonly reason: string
+}
+
 export class NativeDirectUnsupportedError extends Error {
   readonly _tag = "ProviderParityNativeDirectUnsupported"
 
-  constructor(
-    readonly context: {
-      readonly providerID: string
-      readonly modelID: string
-      readonly effectiveAPI: { readonly package: string; readonly url: string }
-      readonly reason: string
-    },
-  ) {
+  constructor(readonly context: NativeDirectUnsupportedContext) {
     super(
       `Native direct execution is unsupported for provider ${context.providerID}, model ${context.modelID}, effective API ${context.effectiveAPI.package} at ${context.effectiveAPI.url}: ${context.reason}`,
     )
@@ -135,11 +144,42 @@ export const listParityCassettes = async (directory: string) => {
   return (await files).map((file) => file.replace(/\\/g, "/").replace(/\.json$/, "")).toSorted()
 }
 
+export function selectProviderParityBatch(inventory: ProviderParityInventory, batchID: string) {
+  const manifests = inventory.batches.filter((batch) => batch.id === batchID)
+  if (manifests.length !== 1) throw new Error(`Unknown or duplicate provider parity batch "${batchID}"`)
+  const batch = manifests[0]
+  const providers = inventory.providers
+    .filter((provider) => provider.batchID === batchID)
+    .toSorted((a, b) => a.id.localeCompare(b.id))
+  const providerIDs = providers.map((provider) => provider.id)
+  const cells = providers.flatMap((provider) =>
+    provider.scenarios
+      .filter((scenario) => scenario.status !== "not-applicable")
+      .map((scenario) => ({ provider, scenario, name: cassetteName(provider, scenario) })),
+  )
+  if (providers.length === 0 || providers.length > 10)
+    throw new Error(`Provider parity batch ${batchID} has invalid provider count ${providers.length}`)
+  if (new Set(providers.map((provider) => provider.family)).size !== 1 || providers[0].family !== batch.family)
+    throw new Error(`Provider parity batch ${batchID} mixes protocol families`)
+  if (
+    batch.providerCount !== providers.length ||
+    batch.applicableCellCount !== cells.length ||
+    batch.providerIDs.join("\0") !== providerIDs.join("\0")
+  )
+    throw new Error(`Provider parity batch ${batchID} manifest does not match its selected cells`)
+  if (cells.length > 30) throw new Error(`Provider parity batch ${batchID} has ${cells.length} applicable cells`)
+  return { batch, providers, cells }
+}
+
 export function auditParityCassettes(
   inventory: ProviderParityInventory,
   committed: ReadonlyArray<string>,
+  batchID?: string,
 ): ReadonlyArray<string> {
+  const selected = batchID ? selectProviderParityBatch(inventory, batchID) : undefined
+  const selectedProviders = selected ? new Set(selected.providers.map((provider) => provider.id)) : undefined
   const required: string[] = []
+  const parity: string[] = []
   const registered = new Set<string>()
   for (const provider of inventory.providers) {
     for (const scenario of provider.scenarios) {
@@ -155,7 +195,8 @@ export function auditParityCassettes(
         throw new Error(
           `Provider parity cell ${provider.id}/${scenario.id} has evidence "${scenario.evidence}", expected "${name}.json"`,
         )
-      required.push(name)
+      parity.push(name)
+      if (!selectedProviders || selectedProviders.has(provider.id)) required.push(name)
     }
   }
 
@@ -163,7 +204,7 @@ export function auditParityCassettes(
   for (const name of committed) counts.set(name, (counts.get(name) ?? 0) + 1)
   const duplicates = [...counts].filter(([, count]) => count > 1).map(([name]) => name)
   const missing = required.filter((name) => !counts.has(name))
-  const extra = [...counts.keys()].filter((name) => !required.includes(name))
+  const extra = [...counts.keys()].filter((name) => !parity.includes(name))
   const errors = [
     ...(missing.length ? [`Missing provider parity cassettes: ${missing.join(", ")}`] : []),
     ...(extra.length ? [`Extra provider parity cassettes: ${extra.join(", ")}`] : []),
@@ -175,10 +216,16 @@ export function auditParityCassettes(
 
 export function selectRecording(inventory: ProviderParityInventory, env: Readonly<Record<string, string | undefined>>) {
   if (env.RECORD !== "true") return undefined
+  const batchFilter = exactFilter("PROVIDER_PARITY_BATCH", env.PROVIDER_PARITY_BATCH)
   const providerFilter = exactFilter("PROVIDER_PARITY_PROVIDER", env.PROVIDER_PARITY_PROVIDER)
   const scenarioFilter = exactFilter("PROVIDER_PARITY_SCENARIO", env.PROVIDER_PARITY_SCENARIO)
+  selectProviderParityBatch(inventory, batchFilter)
   const provider = inventory.providers.find((item) => item.id === providerFilter)
   if (!provider) throw new Error(`Unknown provider parity provider "${providerFilter}"`)
+  if (provider.batchID !== batchFilter)
+    throw new Error(
+      `Provider parity provider "${providerFilter}" belongs to batch ${provider.batchID}, not ${batchFilter}`,
+    )
   const scenario = provider.scenarios.find((item) => item.id === scenarioFilter)
   if (!scenario) throw new Error(`Unknown provider parity scenario "${providerFilter}/${scenarioFilter}"`)
   if (scenario.status !== "parity")

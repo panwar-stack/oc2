@@ -30,6 +30,8 @@ const scenarioCounts = {
   "input-image": 94,
   "input-video": 62,
   "input-pdf": 43,
+  abort: 120,
+  "provider-error": 120,
 }
 const scenarioIDs = Object.keys(scenarioCounts)
 const compoundRecordingCredentials = {
@@ -96,6 +98,7 @@ describe("provider parity catalog", () => {
     }
 
     const batches = Map.groupBy(inventory.providers, (row) => row.batchID)
+    expect(new Set(inventory.batches.map((batch) => batch.id))).toEqual(new Set(batches.keys()))
     for (const [batchID, rows] of batches) {
       expect(batchID).toMatch(
         /^(openai-compatible|openai-direct|anthropic|google-vertex|aws-azure|dedicated-ai-sdk|bespoke-sdk-gateway|synthetic|virtual)-\d{2}$/,
@@ -104,7 +107,24 @@ describe("provider parity catalog", () => {
       expect(rows.length).toBeLessThanOrEqual(10)
       expect(new Set(rows.map((row) => row.family)).size).toBe(1)
       expect(rows.map((row) => row.id)).toEqual(rows.map((row) => row.id).toSorted((a, b) => a.localeCompare(b)))
+      const manifest = inventory.batches.find((batch) => batch.id === batchID)
+      expect(manifest).toEqual({
+        id: batchID,
+        family: rows[0].family,
+        providerIDs: rows.map((row) => row.id),
+        providerCount: rows.length,
+        applicableCellCount: rows.reduce(
+          (total, row) => total + row.scenarios.filter((cell) => cell.status !== "not-applicable").length,
+          0,
+        ),
+      })
+      expect(manifest?.applicableCellCount).toBeLessThanOrEqual(30)
     }
+    expect(inventory.batches.find((batch) => batch.id === "anthropic-01")).toMatchObject({
+      family: "anthropic",
+      providerCount: 6,
+      applicableCellCount: 29,
+    })
   })
 
   test("classifies every built-in and virtual provider", () => {
@@ -199,7 +219,8 @@ describe("provider parity catalog", () => {
             const inputs = candidate.modalities?.input ?? ["text"]
             if (cell.id === "tools") return candidate.tool_call
             if (cell.id === "structured-output") return candidate.structured_output === true
-            if (cell.id === "text") return inputs.includes("text")
+            if (cell.id === "text" || cell.id === "abort" || cell.id === "provider-error")
+              return inputs.includes("text")
             return inputs.includes(cell.id.slice("input-".length))
           })
           .sort((a, b) => {

@@ -19,6 +19,7 @@ import {
   normalizeEvents,
   providerParityPaths,
   redactCassette,
+  selectProviderParityBatch,
   selectRecording,
   writeRecordedCassette,
   type ProviderParityCassette,
@@ -31,13 +32,22 @@ const inventory = (status: "parity" | "unsupported" | "not-applicable" = "parity
   ({
     version: 2,
     source: { path: "synthetic", sha256: "synthetic", providerCount: 1, modelCount: 1 },
+    batches: [
+      {
+        id: "openai-compatible-01",
+        family: "openai-compatible",
+        providerIDs: ["synthetic"],
+        providerCount: 1,
+        applicableCellCount: status === "not-applicable" ? 0 : 1,
+      },
+    ],
     providers: [
       {
         id: "synthetic",
         source: "synthetic",
         classification: "generic-factory",
         family: "openai-compatible",
-        batchID: "openai-compatible-001",
+        batchID: "openai-compatible-01",
         credentialSources: { catalogEnv: ["SYNTHETIC_API_KEY"] },
         scenarios: [
           status === "parity"
@@ -211,7 +221,7 @@ describe("provider parity inventory and cassettes", () => {
   test("the Core inventory is the sole matrix source and has exact cassette coverage", async () => {
     const core = await loadProviderParityInventory(providerParityPaths.inventory)
     const committed = await listParityCassettes(providerParityPaths.recordings)
-    expect(() => auditParityCassettes(core, committed)).not.toThrow()
+    expect(() => auditParityCassettes(core, committed, process.env.PROVIDER_PARITY_BATCH)).not.toThrow()
   })
 
   test("fails on missing, extra, and duplicate cassettes", () => {
@@ -244,15 +254,56 @@ describe("provider parity inventory and cassettes", () => {
     })
     expect(() => auditParityCassettes(duplicate, [])).toThrow("Duplicate provider parity cell")
   })
+
+  test("selects one exact capped family batch and rejects a stale manifest", () => {
+    const selected = selectProviderParityBatch(inventory(), "openai-compatible-01")
+    expect(selected.providers.map((provider) => provider.id)).toEqual(["synthetic"])
+    expect(selected.cells.map((cell) => cell.name)).toEqual(["provider-parity/openai-compatible/synthetic/text"])
+
+    const stale = inventory()
+    stale.batches[0].applicableCellCount = 2
+    expect(() => selectProviderParityBatch(stale, "openai-compatible-01")).toThrow("manifest does not match")
+
+    const mixed = inventory()
+    mixed.providers[0].family = "anthropic"
+    expect(() => selectProviderParityBatch(mixed, "openai-compatible-01")).toThrow("mixes protocol families")
+  })
+
+  test("scopes missing cassettes to a batch but rejects stale committed cassettes globally", () => {
+    const scoped = inventory("unsupported")
+    scoped.providers.push({
+      ...inventory().providers[0],
+      id: "second",
+      batchID: "openai-compatible-02",
+      scenarios: [
+        { ...inventory().providers[0].scenarios[0], evidence: "provider-parity/openai-compatible/second/text.json" },
+      ],
+    })
+    scoped.batches.push({
+      id: "openai-compatible-02",
+      family: "openai-compatible",
+      providerIDs: ["second"],
+      providerCount: 1,
+      applicableCellCount: 1,
+    })
+    expect(() => auditParityCassettes(scoped, [], "openai-compatible-01")).not.toThrow()
+    expect(() =>
+      auditParityCassettes(scoped, ["provider-parity/openai-compatible/second/text"], "openai-compatible-01"),
+    ).not.toThrow()
+    expect(() =>
+      auditParityCassettes(scoped, ["provider-parity/openai-compatible/synthetic/text"], "openai-compatible-01"),
+    ).toThrow("Extra provider parity cassettes")
+  })
 })
 
 describe("provider parity recording gate", () => {
-  test("requires RECORD=true plus exact provider and scenario filters", () => {
+  test("requires RECORD=true plus exact batch, provider, and scenario filters", () => {
     expect(selectRecording(inventory(), {})).toBeUndefined()
-    expect(() => selectRecording(inventory(), { RECORD: "true" })).toThrow("PROVIDER_PARITY_PROVIDER")
+    expect(() => selectRecording(inventory(), { RECORD: "true" })).toThrow("PROVIDER_PARITY_BATCH")
     expect(() =>
       selectRecording(inventory(), {
         RECORD: "true",
+        PROVIDER_PARITY_BATCH: "openai-compatible-01",
         PROVIDER_PARITY_PROVIDER: "synthetic,other",
         PROVIDER_PARITY_SCENARIO: "text",
       }),
@@ -263,6 +314,7 @@ describe("provider parity recording gate", () => {
     expect(() =>
       selectRecording(inventory(), {
         RECORD: "true",
+        PROVIDER_PARITY_BATCH: "openai-compatible-01",
         PROVIDER_PARITY_PROVIDER: "synthetic",
         PROVIDER_PARITY_SCENARIO: "text",
       }),
@@ -270,6 +322,7 @@ describe("provider parity recording gate", () => {
     expect(
       selectRecording(inventory(), {
         RECORD: "true",
+        PROVIDER_PARITY_BATCH: "openai-compatible-01",
         PROVIDER_PARITY_PROVIDER: "synthetic",
         PROVIDER_PARITY_SCENARIO: "text",
         SYNTHETIC_API_KEY: "present",
@@ -284,6 +337,7 @@ describe("provider parity recording gate", () => {
     ]
     const selected = {
       RECORD: "true",
+      PROVIDER_PARITY_BATCH: "openai-compatible-01",
       PROVIDER_PARITY_PROVIDER: "synthetic",
       PROVIDER_PARITY_SCENARIO: "text",
     }
@@ -299,6 +353,7 @@ describe("provider parity recording gate", () => {
     await using directory = await tmpdir()
     const selection = selectRecording(inventory(), {
       RECORD: "true",
+      PROVIDER_PARITY_BATCH: "openai-compatible-01",
       PROVIDER_PARITY_PROVIDER: "synthetic",
       PROVIDER_PARITY_SCENARIO: "text",
       SYNTHETIC_API_KEY: "present",
