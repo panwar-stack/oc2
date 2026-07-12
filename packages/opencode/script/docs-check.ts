@@ -3,6 +3,7 @@ import path from "node:path"
 import { existsSync } from "node:fs"
 
 import { Info as TuiConfig } from "@oc2-ai/tui/config"
+import { TuiKeybind } from "@oc2-ai/tui/config/keybind"
 import { Info as Oc2Config } from "../src/config/config"
 import { ConfigParse } from "../src/config/parse"
 
@@ -37,13 +38,25 @@ if (!exampleFiles.includes("docs/examples/oc2.full.jsonc")) throw new Error("mis
 if (!exampleFiles.includes("docs/examples/tui.jsonc")) throw new Error("missing TUI example")
 if (!exampleFiles.includes("docs/examples/oc2.mcp-local.jsonc")) throw new Error("missing local MCP example")
 if (!exampleFiles.includes("docs/examples/oc2.mcp-remote.jsonc")) throw new Error("missing remote MCP example")
+if (secretLikeLocation(["sk-example"])?.join(".") !== "0") throw new Error("secret array validation probe failed")
+if (secretLikeLocation({ apiKey: "{env:API_KEY}" })) throw new Error("environment substitution validation probe failed")
+if (secretLikeLocation(["{env:API_KEY} sk-example"])?.join(".") !== "0")
+  throw new Error("mixed secret validation probe failed")
+if (TuiKeybind.unknownKeys({ not_a_keybind: "none" }).join(",") !== "not_a_keybind")
+  throw new Error("TUI keybind validation probe failed")
 
 for (const file of exampleFiles) {
   const data = ConfigParse.jsonc(await Bun.file(file).text(), file)
   rejectSecretLikeValues(data, file)
   const name = path.basename(file)
   if (name.startsWith("oc2.")) ConfigParse.schema(Oc2Config, data, file)
-  if (name.startsWith("tui.")) ConfigParse.schema(TuiConfig, data, file)
+  if (name.startsWith("tui.")) {
+    ConfigParse.schema(TuiConfig, data, file)
+    if (data && typeof data === "object" && "keybinds" in data && data.keybinds && typeof data.keybinds === "object") {
+      const unknown = TuiKeybind.unknownKeys(data.keybinds)
+      if (unknown.length) throw new Error(`${file}: unrecognized TUI keybinds: ${unknown.join(", ")}`)
+    }
+  }
 }
 
 const markdown = new Map(markdownFiles.map((file) => [path.resolve(file), Bun.file(file).text()]))
@@ -75,27 +88,37 @@ if (failures.length)
 console.log(`Checked ${markdownFiles.length} Markdown files and ${exampleFiles.length} configuration examples.`)
 
 function rejectSecretLikeValues(value: unknown, file: string, keys: string[] = []) {
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => rejectSecretLikeValues(item, file, [...keys, String(index)]))
-    return
+  const location = secretLikeLocation(value, keys)
+  if (location !== undefined)
+    throw new Error(`${file}: secret-like value at ${location.join(".")}; use an {env:NAME} substitution`)
+}
+
+function secretLikeLocation(value: unknown, keys: string[] = []): string[] | undefined {
+  if (typeof value === "string") {
+    const literal = value.replace(/\{env:[A-Z][A-Z\d_]*\}/g, "")
+    const key = keys.at(-1) ?? ""
+    const sensitiveKey = /(?:api.?key|authorization|client.?secret|password|token)$/i.test(key)
+    const allowedWrapper = /^(?:\s|Bearer\s*)*$/i.test(literal)
+    const secretLike =
+      /(?:sk-(?:ant-)?|gh[pousr]_|AKIA)[A-Za-z\d._-]*|<(?:api.?key|secret|token|password)>|(?:your|replace.?me).*(?:api.?key|secret|token|password)/i.test(
+        literal,
+      )
+    return secretLike || (sensitiveKey && literal.length > 0 && !allowedWrapper) ? keys : undefined
   }
-  if (!value || typeof value !== "object") return
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      const location = secretLikeLocation(value[index], [...keys, String(index)])
+      if (location) return location
+    }
+    return undefined
+  }
+  if (!value || typeof value !== "object") return undefined
 
   for (const [key, item] of Object.entries(value)) {
-    const location = [...keys, key]
-    if (typeof item === "string") {
-      const usesEnvironment = /\{env:[A-Z][A-Z\d_]*\}/.test(item)
-      const sensitiveKey = /(?:api.?key|authorization|client.?secret|password|token)$/i.test(key)
-      const secretLike =
-        /(?:sk-(?:ant-)?|gh[pousr]_|AKIA)[A-Za-z\d._-]*|<(?:api.?key|secret|token|password)>|(?:your|replace.?me).*(?:api.?key|secret|token|password)/i.test(
-          item,
-        )
-      if (!usesEnvironment && (secretLike || (sensitiveKey && item.length > 0))) {
-        throw new Error(`${file}: secret-like value at ${location.join(".")}; use an {env:NAME} substitution`)
-      }
-    }
-    rejectSecretLikeValues(item, file, location)
+    const location = secretLikeLocation(item, [...keys, key])
+    if (location) return location
   }
+  return undefined
 }
 
 function markdownLinks(text: string) {
