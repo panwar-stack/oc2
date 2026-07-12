@@ -421,7 +421,7 @@ Review:
 
 A fresh reviewer who did not author the slice must inspect it read-only and run the Review Protocol against the recorded SHAs and manifest. Reject provider evidence mixed into harness infrastructure, live-network CI, missing-cassette skips, provider removal, production models.dev integration changes, or unexplained fixture hash/count changes.
 
-### PR 11A-N: Record Provider Parity In Capped Batches
+### PR 11: Record Provider Parity In Capped Batches
 
 - Generate deterministic batches within one protocol family, capped at 10 catalog providers and 30 new or changed cassettes per PR.
 - Use these families: OpenAI-compatible, OpenAI direct, Anthropic, Google/Vertex, AWS/Azure, dedicated AI SDKs, and bespoke SDKs/gateways. Do not mix families in one batch.
