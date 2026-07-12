@@ -57,21 +57,21 @@ Configuration precedence is documented only in
 
 ## Extensions And Tools
 
-| Variable                         | Effect                                                                                       |
-| -------------------------------- | -------------------------------------------------------------------------------------------- |
-| `OC2_PURE`                       | Skip configured and discovered external server and TUI plugins. Built-in plugins still load. |
-| `OC2_DISABLE_DEFAULT_PLUGINS`    | Skip built-in server plugins.                                                                |
-| `OC2_DISABLE_EXTERNAL_SKILLS`    | Skip both Claude and Agents skills found outside OC2 configuration directories.              |
-| `OC2_DISABLE_CLAUDE_CODE`        | Disable both Claude Code prompt-file and skill compatibility.                                |
-| `OC2_DISABLE_CLAUDE_CODE_PROMPT` | Skip global and project `CLAUDE.md` instruction files.                                       |
-| `OC2_DISABLE_CLAUDE_CODE_SKILLS` | Skip `.claude/skills` while retaining `.agents/skills`.                                      |
-| `OC2_DISABLE_LSP_DOWNLOAD`       | Prevent automatic language-server downloads.                                                 |
-| `OC2_ENABLE_QUESTION_TOOL`       | Enable the question tool for clients where it is not enabled by default.                     |
-| `OC2_WEBSEARCH_PROVIDER`         | Select `exa` or `parallel` as the web-search provider independently of their enable flags.   |
-| `OC2_ENABLE_EXA`                 | Select Exa for web search. Also enabled by `OC2_EXPERIMENTAL`.                               |
-| `OC2_ENABLE_PARALLEL`            | Select Parallel for web search.                                                              |
-| `OC2_EXPERIMENTAL_EXA`           | Legacy alias that enables Exa web search.                                                    |
-| `OC2_EXPERIMENTAL_PARALLEL`      | Legacy alias that enables Parallel web search.                                               |
+| Variable                         | Effect                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `OC2_PURE`                       | Skip configured and discovered external server and TUI plugins. Built-in plugins still load.            |
+| `OC2_DISABLE_DEFAULT_PLUGINS`    | Skip built-in server plugins.                                                                           |
+| `OC2_DISABLE_EXTERNAL_SKILLS`    | Skip both Claude and Agents skills found outside OC2 configuration directories.                         |
+| `OC2_DISABLE_CLAUDE_CODE`        | Disable both Claude Code prompt-file and skill compatibility.                                           |
+| `OC2_DISABLE_CLAUDE_CODE_PROMPT` | Skip global and project `CLAUDE.md` instruction files.                                                  |
+| `OC2_DISABLE_CLAUDE_CODE_SKILLS` | Skip `.claude/skills` while retaining `.agents/skills`.                                                 |
+| `OC2_DISABLE_LSP_DOWNLOAD`       | Prevent automatic language-server downloads.                                                            |
+| `OC2_ENABLE_QUESTION_TOOL`       | Enable the question tool for clients where it is not enabled by default.                                |
+| `OC2_WEBSEARCH_PROVIDER`         | Select `exa` or `parallel` after web search is enabled. This variable alone does not register the tool. |
+| `OC2_ENABLE_EXA`                 | Select Exa for web search. Also enabled by `OC2_EXPERIMENTAL`.                                          |
+| `OC2_ENABLE_PARALLEL`            | Select Parallel for web search.                                                                         |
+| `OC2_EXPERIMENTAL_EXA`           | Legacy alias that enables Exa web search.                                                               |
+| `OC2_EXPERIMENTAL_PARALLEL`      | Legacy alias that enables Parallel web search.                                                          |
 
 Extension configuration and behavior are documented in
 [Extensions](../extensions.md).

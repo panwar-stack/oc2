@@ -6,7 +6,7 @@ Agents combine a role, prompt, model settings, and permission rules. Use
 
 ## Built-In Agents
 
-- `build` is the normal primary agent and uses the configured permissions.
+- `build` is the normal primary agent.
 - `plan` is a primary planning agent. It denies edits except for its allowed
   plan-file locations.
 - `general` is a general-purpose subagent for multi-step work.
@@ -16,6 +16,10 @@ Agents combine a role, prompt, model settings, and permission rules. Use
 
 Built-ins can be adjusted or disabled through the singular `agent` map.
 User-defined agents default to `mode: "all"`.
+
+Built-in agents are not deny-by-default. Their shared baseline allows tools unless a more specific rule asks or denies. It asks for doom-loop operations, most external-directory access, and sensitive `.env` reads; each agent then adds role-specific rules. Global and per-agent permission configuration is merged afterward and can override those built-in rules.
+
+Permissions are operation policy gates, not an OS sandbox. Review the effective policy before running OC2 in an untrusted workspace, and use external isolation when the environment requires a security boundary.
 
 ## Define An Agent
 

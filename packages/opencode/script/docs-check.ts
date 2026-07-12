@@ -10,6 +10,21 @@ import { ConfigParse } from "../src/config/parse"
 const root = path.resolve(import.meta.dir, "../../..")
 process.chdir(root)
 
+async function commandHelp(args: string[]) {
+  const command = Bun.spawn(["bun", "run", "--conditions=browser", "src/index.ts", ...args, "--help"], {
+    cwd: path.join(root, "packages/opencode"),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, stderr, exit] = await Promise.all([
+    new Response(command.stdout).text(),
+    new Response(command.stderr).text(),
+    command.exited,
+  ])
+  if (exit !== 0) throw new Error(`failed to read oc2 ${args.join(" ")} --help output`)
+  return `${stdout}\n${stderr}`
+}
+
 const markdownFiles = ["README.md", ...new Bun.Glob("docs/**/*.md").scanSync()].sort()
 const prettier = Bun.spawn(["bunx", "prettier", "--check", ...markdownFiles], {
   cwd: root,
@@ -18,22 +33,11 @@ const prettier = Bun.spawn(["bunx", "prettier", "--check", ...markdownFiles], {
 })
 if ((await prettier.exited) !== 0) process.exit(1)
 
-const help = Bun.spawn(["bun", "run", "--conditions=browser", "src/index.ts", "--help"], {
-  cwd: path.join(root, "packages/opencode"),
-  stdout: "pipe",
-  stderr: "pipe",
-})
-const [helpStdout, helpStderr, helpExit] = await Promise.all([
-  new Response(help.stdout).text(),
-  new Response(help.stderr).text(),
-  help.exited,
-])
-const helpText = `${helpStdout}\n${helpStderr}`
-if (helpExit !== 0 || !helpText.includes("Commands:")) {
-  throw new Error("failed to read oc2 --help output from stdout or stderr")
-}
+const helpText = await commandHelp([])
+if (!helpText.includes("Commands:")) throw new Error("oc2 --help output did not contain commands")
 
 const cliReference = await Bun.file("docs/cli.md").text()
+const cliDocumentation = `${cliReference}\n${await Bun.file("docs/extensions.md").text()}`
 const cliSource = await Bun.file("packages/opencode/src/index.ts").text()
 const documentedCommands = new Set([...cliReference.matchAll(/^\| `oc2 ([a-z][\w-]*)/gm)].map((match) => match[1]))
 const helpCommands = new Set([...helpText.matchAll(/^\s+oc2 ([a-z][\w-]*)/gm)].map((match) => match[1]))
@@ -55,13 +59,100 @@ const unregisteredHelpCommands = [...helpCommands].filter((command) => !register
 if (unregisteredHelpCommands.length)
   throw new Error(`oc2 --help contained unregistered commands: ${unregisteredHelpCommands.join(", ")}`)
 
-const keybindingReference = await Bun.file("docs/reference/keybindings.md").text()
-const documentedKeybinds = new Map(
-  [...keybindingReference.matchAll(/^\|\s+`([^`]+)`\s+\|\s+`([^`]*)`\s+\|\s+(.+?)\s+\|$/gm)].map((match) => [
-    match[1],
-    { default: match[2], description: match[3] },
-  ]),
+const cliContracts = [
+  {
+    args: [],
+    options: [
+      "--help",
+      "--version",
+      "--print-logs",
+      "--log-level",
+      "--pure",
+      "--model",
+      "--agent",
+      "--continue",
+      "--session",
+      "--fork",
+      "--prompt",
+      "--port",
+      "--hostname",
+      "--mdns",
+      "--mdns-domain",
+      "--cors",
+    ],
+  },
+  {
+    args: ["run"],
+    options: [
+      "--format",
+      "--file",
+      "--model",
+      "--agent",
+      "--variant",
+      "--title",
+      "--dir",
+      "--attach",
+      "--continue",
+      "--session",
+      "--fork",
+      "--command",
+      "--interactive",
+      "--dangerously-skip-permissions",
+    ],
+  },
+  {
+    args: ["attach"],
+    options: ["--dir", "--continue", "--session", "--fork", "--password", "--username"],
+  },
+  { args: ["export"], options: ["--sanitize"] },
+  { args: ["stats"], options: ["--days", "--tools", "--models", "--project"] },
+  { args: ["upgrade"], options: ["--method"] },
+  { args: ["uninstall"], options: ["--keep-config", "--keep-data", "--dry-run", "--force"] },
+  { args: ["plugin"], options: ["--global", "--force"] },
+  { args: ["mcp", "add"], options: ["--url", "--header", "--env"] },
+] as const
+for (const [contract, output] of await Promise.all(
+  cliContracts.map(async (contract) => [contract, await commandHelp([...contract.args])] as const),
+)) {
+  const missingFromHelp = contract.options.filter((option) => !output.includes(option))
+  if (missingFromHelp.length)
+    throw new Error(
+      `oc2 ${contract.args.join(" ")} --help is missing documented options: ${missingFromHelp.join(", ")}`,
+    )
+  const missingFromDocs = contract.options.filter((option) => !cliDocumentation.includes(option))
+  if (missingFromDocs.length)
+    throw new Error(`docs/cli.md is missing contracted options: ${missingFromDocs.join(", ")}`)
+}
+
+for (const [args, alias, documentation] of [
+  [["mcp"], "ls", "`list` (`ls`)"],
+  [["mcp", "auth"], "ls", "`auth list` (`auth ls`)"],
+] as const) {
+  const output = await commandHelp([...args])
+  if (!output.includes(`aliases: ${alias}`) || !cliDocumentation.includes(documentation))
+    throw new Error(`docs/cli.md or oc2 ${args.join(" ")} --help is missing alias ${alias}`)
+}
+
+const tuiCliSource = await Bun.file("packages/opencode/src/cli/cmd/tui.ts").text()
+if (!/return piped \+ "\\n" \+ value/.test(tuiCliSource) || !cliReference.includes("Piped stdin is prepended"))
+  throw new Error("default TUI stdin ordering drifted from docs/cli.md")
+const runCliSource = await Bun.file("packages/opencode/src/cli/cmd/run.ts").text()
+if (
+  !/return value \+ "\\n" \+ piped/.test(runCliSource) ||
+  !cliReference.includes("argument text is followed by the piped content")
 )
+  throw new Error("oc2 run stdin ordering drifted from docs/cli.md")
+
+const keybindingReference = await Bun.file("docs/reference/keybindings.md").text()
+const keybindRows = [...keybindingReference.matchAll(/^\|\s+`([^`]+)`\s+\|\s+`([^`]*)`\s+\|\s+(.+?)\s+\|$/gm)].map(
+  (match) => [match[1], { default: match[2], description: match[3] }] as const,
+)
+const duplicateKeybinds = keybindRows
+  .map(([name]) => name)
+  .filter((name, index, names) => names.indexOf(name) !== index)
+if (duplicateKeybinds.length)
+  throw new Error(`docs/reference/keybindings.md: duplicate keybindings: ${[...new Set(duplicateKeybinds)].join(", ")}`)
+const documentedKeybinds = new Map(keybindRows)
 const keybindDrift = Object.entries(TuiKeybind.Definitions).flatMap(([name, item]) => {
   const documented = documentedKeybinds.get(name)
   const value = typeof item.default === "string" ? item.default : JSON.stringify(item.default)

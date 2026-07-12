@@ -20,9 +20,11 @@ connection, or an enable-only override:
 `command` and `environment` are not valid for remote servers; `url`, `headers`,
 and `oauth` are not valid for local servers. Both shapes accept `enabled` and a
 positive `timeout` in milliseconds. Servers are enabled unless `enabled` is
-`false`. The runtime default timeout is 30 seconds and applies to connection,
-tool discovery, and tool calls; progress notifications reset a running tool
-call's timeout.
+`false`. Without a configured value, connection attempts and tool-list requests
+default to 30 seconds, but model-facing tool calls do not receive that default.
+An explicitly configured `timeout` applies to all three; progress notifications
+reset a running tool call's timeout. MCP prompt and resource operations do not
+currently use this setting.
 
 Use the validated examples as starting points:
 
@@ -140,9 +142,11 @@ OC2 discovers skills from:
   scanned recursively.
 
 `skills.paths` expands a leading `~/`; other relative paths resolve from the
-active instance directory. A later-discovered duplicate `name` replaces the
-earlier skill. Give every skill a description: only described, permitted skills
-are advertised to the model.
+active instance directory. A disk skill with the same name as a built-in
+replaces the built-in. Duplicate names among discovered disk skills produce a
+warning, but their winner is not a stable precedence contract because skill
+files load concurrently. Use unique skill names. Give every skill a description:
+only described, permitted skills are advertised to the model.
 
 The model loads a skill through the `skill` tool. The agent's `skill` permission
 is matched against the skill name: denied skills are omitted from its available

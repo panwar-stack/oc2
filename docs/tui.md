@@ -69,12 +69,14 @@ TUI contributions load from lowest to highest priority:
 1. Global legacy settings from `oc2.json[c]`, then global `tui.json[c]`.
 2. Legacy settings in the file named by `OC2_CONFIG`.
 3. The dedicated file named by `OC2_TUI_CONFIG`.
-4. Direct project files from the worktree boundary toward the current project directory, with each directory's legacy `oc2.json[c]` followed by dedicated `tui.json[c]`.
-5. Discovered project `.oc2` directories from nearest to outermost, again legacy then dedicated. The outer directory loads later and can override the nearer one.
+4. Direct project files from the filesystem root toward the current project directory, with each directory's legacy `oc2.json[c]` followed by dedicated `tui.json[c]`.
+5. Discovered `.oc2` directories from nearest to outermost through the filesystem ancestors, again legacy then dedicated. The outer directory loads later and can override the nearer one.
 6. Legacy and dedicated files under `~/.oc2`.
 7. Legacy and dedicated files under `OC2_CONFIG_DIR`.
 
 This means project configuration intentionally overrides `OC2_TUI_CONFIG`. At each directory tier, JSON loads before JSONC, and dedicated `tui.json[c]` values override legacy values from `oc2.json[c]`.
+
+Unlike main project configuration, the TUI loader does not stop discovery at the worktree boundary.
 
 The legacy fields are top-level `theme` and `keybinds`, plus `tui.scroll_speed`, `tui.scroll_acceleration`, and `tui.diff_style`. Move those values to their corresponding fields in `tui.json[c]` for new configuration. Other main configuration behavior remains owned by [Configuration](./configuration.md).
 

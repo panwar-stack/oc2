@@ -4,6 +4,8 @@ This table is the complete set of binding names accepted by `keybinds` in `tui.j
 
 A binding accepts a key string, a keystroke object, a binding object, an array of those values, `false`, or `none`. Comma-separated strings define alternatives, and `<leader>` uses the configured `leader` value.
 
+On Windows, `terminal_suspend` is always disabled. When `input_undo` is not explicitly configured, OC2 prepends `ctrl+z` to its default alternatives; an explicit `input_undo` value is preserved.
+
 | Name                                  | Default                                      | Purpose                                   |
 | ------------------------------------- | -------------------------------------------- | ----------------------------------------- |
 | `leader`                              | `ctrl+x`                                     | Leader key for keybind combinations       |

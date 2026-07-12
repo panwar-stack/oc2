@@ -9,7 +9,7 @@ Start with [`examples/oc2.minimal.jsonc`](examples/oc2.minimal.jsonc), or see [`
 The normal global directory is `~/.config/oc2` (`$XDG_CONFIG_HOME/oc2` when `XDG_CONFIG_HOME` is set). OC2 recursively merges these sources from lowest to highest priority:
 
 1. Configuration returned for authenticated providers by `/.well-known/oc2`, including any fetched remote configuration it names.
-2. Global `~/.config/oc2/oc2.json`, then `~/.config/oc2/oc2.jsonc`.
+2. Global `~/.config/oc2/oc2.json`, then `~/.config/oc2/oc2.jsonc`, then the legacy `~/.config/oc2/config` TOML file.
 3. The file named by `OC2_CONFIG`.
 4. Direct project files from the worktree boundary toward the current project directory, ancestor to descendant. Each directory contributes `oc2.json`, then `oc2.jsonc`.
 5. Project `.oc2` directories, currently from the nearest directory outward through its ancestors. Each contributes `oc2.json`, then `oc2.jsonc`.
@@ -26,6 +26,8 @@ The project `.oc2` nearest-first order is intentional current behavior: an outer
 ### JSON And JSONC
 
 JSONC supports comments and trailing commas. When both names exist in a directory, OC2 reads both rather than selecting one: `oc2.jsonc` is later and therefore has higher priority than `oc2.json`. The same JSON-then-JSONC order applies to global, project, home, custom-directory, and system-managed directory tiers.
+
+The legacy global `~/.config/oc2/config` TOML file loads after the two global JSON files and can override them. When it contains both `provider` and `model`, OC2 combines those fields as `provider/model`; either field alone is discarded. Unreadable or invalid legacy TOML is ignored. Later tiers such as `OC2_CONFIG` and project files still override it.
 
 Configuration updates preserve an existing global `oc2.jsonc` in preference to `oc2.json`; if neither exists, OC2 creates global `oc2.jsonc`. Project updates target the last existing project-owned file in the direct/project-`.oc2` plan, or create `oc2.json` in the routed project directory when none exists. Environment-selected, remote, home, and managed sources are not write targets for these updates.
 
@@ -50,7 +52,7 @@ OC2 expands substitutions before parsing and validating each contribution:
 
 ## Validation And Errors
 
-Every main configuration contribution is parsed as JSONC and validated against the shipped V1 schema. Unknown top-level V1 keys fail validation, and invalid main V1 configuration aborts configuration loading rather than being partially applied. Nested validation still follows the schema for that section.
+JSON and JSONC main configuration contributions are parsed and validated against the shipped V1 schema. Unknown top-level V1 keys fail validation. Invalid project, custom, inline, home, and managed main configuration aborts loading rather than being partially applied. The normal cached global `~/.config/oc2/oc2.json[c]` path is tolerant: a parse, substitution, validation, or plugin-resolution failure logs an error, drops the entire global JSON/JSONC tier, and continues with defaults and later sources. Nested validation still follows the schema for that section.
 
 Agent selection and the strict `default_agent` contract are documented in [Agents and permissions](agents-permissions.md).
 

@@ -28,15 +28,15 @@ oc2 [project]
 
 `project` selects the starting directory. The default invocation accepts:
 
-| Option                                                      | Purpose                                                                  |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `-m`, `--model <provider/model>`                            | Select a model.                                                          |
-| `--agent <name>`                                            | Select an agent.                                                         |
-| `-c`, `--continue`                                          | Continue the most recent session.                                        |
-| `-s`, `--session <id>`                                      | Continue a specific session.                                             |
-| `--fork`                                                    | Fork while continuing. Requires `--continue` or `--session`.             |
-| `--prompt <text>`                                           | Submit an initial prompt. Piped stdin is appended when both are present. |
-| `--port`, `--hostname`, `--mdns`, `--mdns-domain`, `--cors` | Configure the TUI's local server transport.                              |
+| Option                                                      | Purpose                                                                   |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `-m`, `--model <provider/model>`                            | Select a model.                                                           |
+| `--agent <name>`                                            | Select an agent.                                                          |
+| `-c`, `--continue`                                          | Continue the most recent session.                                         |
+| `-s`, `--session <id>`                                      | Continue a specific session.                                              |
+| `--fork`                                                    | Fork while continuing. Requires `--continue` or `--session`.              |
+| `--prompt <text>`                                           | Submit an initial prompt. Piped stdin is prepended when both are present. |
+| `--port`, `--hostname`, `--mdns`, `--mdns-domain`, `--cors` | Configure the TUI's local server transport.                               |
 
 For interactive workflows, see the [TUI guide](./tui.md).
 
