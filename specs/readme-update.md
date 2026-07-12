@@ -1,136 +1,208 @@
-# OC2 Minimal Coding Agent Positioning
+# Modern README And User Documentation
 
 ## Goal
 
-Position OC2 as a full, locally runnable coding-agent harness based on and inspired by [opencode](https://github.com/anomalyco/opencode), not as a "Local Template." Lead with the working agent loop, provider integration, persistence, permission-gated tools, agents, and CLI/TUI/server/browser interfaces. Treat cloning and forking as development workflows, not the product's primary value.
+Refresh `README.md` into a concise, modern entry point for OC2 and document the shipped `oc2` CLI, TUI, and configuration surfaces comprehensively.
 
-Keep `OC2` as the product name. Use "minimal coding-agent harness" as its category: minimal in distribution and owner-service assumptions, while retaining the execution capabilities required for a usable coding agent.
+Keep the README visually restrained and task-oriented. Move detailed reference material into focused `docs/` pages with one canonical owner for each fact.
 
 ## Current State
 
-- `README.md:1-5` calls the project "OC2 Local Template" and an "AI coding agent template"; `README.md:12-57` already documents interactive, one-shot, server, and browser startup.
-- `packages/opencode/package.json:19-20` exposes the `oc2` executable. `packages/opencode/src/index.ts` provides the default TUI plus `run`, `serve`, `web`, provider, MCP, ACP, and agent commands.
-- `packages/opencode/src/provider/provider.ts`, `packages/opencode/src/agent/agent.ts`, and `packages/opencode/src/tool/registry.ts` implement configurable providers, built-in/configured agents, permissions, and tools.
-- `packages/opencode/test/cli/run/run-process.test.ts` and `packages/opencode/test/cli/serve/serve-process.test.ts` exercise the real CLI as subprocesses.
-- Template positioning remains in `CONTRIBUTING.md:3`, `README.md:102`, `packages/app/README.md:1-3`, and `packages/onboarding.md:3,99`.
-- `packages/core/src/naming.ts` centralizes the stable `oc2` slug, `OC2` display name, config names, environment prefix, schema URL, and domain.
-- `README.md:5` claims there is no hosted app fallback, but `packages/opencode/src/server/shared/ui.ts` proxies `app.oc2.ai` when embedded browser assets are unavailable. Model prompts also reference hosted docs, while browser and TUI onboarding claim OC2 includes free models.
-- `specs/minimal-coding-agent-harness-prune.md` owns hosted-service and package-pruning decisions. This spec owns product positioning and copy only.
+- `README.md` covers installation, startup, browser behavior, source development, and workspaces, but lacks a structured CLI, TUI, or configuration reference.
+- The shipped CLI is registered in `packages/opencode/src/index.ts` and `packages/opencode/src/cli/cmd/`.
+- `packages/cli` contains the separate preview `lildax` CLI and must not be presented as the primary product.
+- The shipped `oc2` runtime uses the V1 configuration surface from `packages/opencode/src/config/config.ts` and `packages/core/src/v1/config/`.
+- TUI configuration and canonical bindings live in `packages/opencode/src/config/tui.ts` and `packages/tui/src/config/keybind.ts`.
+- `oc2.example.json` is not currently a valid canonical example:
+  - `command.*.prompt` must be `command.*.template`.
+  - Local MCP `env` must be `environment`.
+- Existing browser documentation conflicts. Runtime code in `packages/opencode/src/server/shared/ui.ts` returns a local `503` when embedded assets are unavailable and does not proxy to a hosted application.
+- Existing visual assets are limited. `packages/app/public/social-share.png` is the strongest current README hero candidate; favicons must not be enlarged into branding.
+- There is no Markdown lint, internal-link checker, or executable documentation-example validation gate. Documentation-only PRs skip most existing CI checks through `script/ci-scope.ts`.
 
 ## Non-Negotiables
 
-- Keep `OC2` as the product name and use "minimal coding-agent harness based on and inspired by opencode" as the default descriptor. Do not imply this is an official opencode distribution.
-- Define "runs locally" precisely: the OC2 process, session orchestration, filesystem/tool execution, and persistence run on the user's machine. Model-provider calls remain external unless the user configures a local provider. Do not claim offline operation.
-- Do not reduce the project to a starter skeleton. The positioning must retain the full execution loop, providers, persistence, permission-gated tools, CLI/TUI/server/browser interfaces, and experimental team orchestration.
-- Preserve the `oc2` binary, `@oc2-ai/*` package scope, `oc2.json`/`oc2.jsonc`, `.oc2`, `OC2_*`, HTTP routes and headers, deep links, storage keys, API symbols, hosted schema/OAuth identifiers, artifact names, and legacy aliases. Renaming them requires a separate migration spec.
-- Preserve the short `OC2` UI label and existing OC2 visual assets. Do not perform a global replacement of `OC2`, `OpenCode`, or `opencode`.
-- Preserve the no-sandbox and unauthenticated-server warnings in `SECURITY.md` and the attribution in `LICENSE`.
-- Do not promise free models, a bundled provider, offline operation, or freedom from hosted fallbacks while runtime behavior contradicts those claims.
-- Keep runtime removal of `app.oc2.ai` and other hosted services in `specs/minimal-coding-agent-harness-prune.md`; this positioning change must document current behavior honestly without changing it.
+- Document only behavior verified from current source, tests, or executable help output.
+- Clearly distinguish the shipped `oc2` CLI from preview or internal packages.
+- Describe V1 only as the configuration surface used by the shipped CLI. Do not imply that all repository configuration is V1.
+- New examples must use `tui.json` or `tui.jsonc` for TUI settings while documenting compatibility with deprecated TUI keys in `oc2.json[c]`.
+- Do not claim that npm installation is available unless the package and version are verified from the registry during implementation.
+- Do not claim Docker sandboxing as a shipped security boundary.
+- Do not include removed `/fast`, Logu, or supervisor behavior.
+- Attribute recent work humbly as additions authored in this fork. Git authorship must not be presented as sole conceptual ownership.
+- Do not add decorative stock imagery, animated GIFs, large badge collections, or custom HTML that renders poorly on mobile.
+- Every implementation slice requires a fresh read-only review against its todo, plan, and `origin/master` before completion.
 
-## Positioning And Copy Contract
+## README Design
 
-- The README opening must answer, in order: what OC2 does, what runs locally, its opencode lineage, and how to run it.
-- Product usage must lead with installed or built `oc2` commands. Put repository cloning, Bun setup, and fork customization under a secondary "Develop From Source" section.
-- The capability summary must name only implemented surfaces: interactive TUI (`oc2 .`), one-shot execution (`oc2 run`), headless server (`oc2 serve`), browser client (`oc2 web`), configurable providers and agents, persistence, and permissioned tools.
-- The browser documentation must state that embedded assets are served locally when present and that the current fallback proxies `app.oc2.ai`. Distinguish `oc2 web` from the fully local Vite development flow.
-- Provider onboarding must say that users configure credentials or a local provider. It must not claim that OC2 bundles free models.
-- "Minimal" must describe the reduced distribution and hosted-service boundary, not a lack of agent functionality.
-- "Clone," "fork," "template," and "starting point" may appear in source-development or contribution instructions, but not in the title, elevator pitch, or capability summary.
-- Model-facing help must use built-in help/action discovery, `oc2 --help`, and the stable issue tracker. It must not assume OC2's repository README exists in the user's working directory or direct WebFetch to nonexistent hosted documentation.
-- References to opencode must be classified as upstream lineage, external compatibility, inherited identifiers, or third-party attribution. Only stale current-product prose should change.
+Use this order in `README.md`:
 
-## Deterministic Copy Checks
+1. Centered product name, short value statement, and one restrained visual.
+2. Installation and a minimal first-run example.
+3. Six compact feature highlights.
+4. Common CLI workflows.
+5. Links to TUI, configuration, and extension documentation.
+6. Browser and source-development behavior.
+7. Contribution and license links.
 
-Add `script/check-product-copy.ts` and a root `check:product-copy` script. The checker must:
+Visual constraints:
 
-- Scan an explicit list of public and maintainer documentation for prohibited product phrases such as `OC2 Local Template`, `AI coding agent template`, and `local-first template`.
-- Scan the specific browser/TUI onboarding messages for free-model or bundled-provider claims.
-- Scan the default and Anthropic prompt files for hosted OC2 documentation instructions.
-- Exclude historical specs, compatibility identifiers, schema URLs, OAuth metadata, runtime endpoints, fixtures, and third-party attribution.
-- Print every path and matched phrase, then exit nonzero when any prohibited phrase is present.
+- Default to `packages/app/public/social-share.png` as the single hero image after checking light and dark GitHub themes.
+- Use meaningful alt text and a repository-relative path.
+- Use no more than three factual badges.
+- Prefer whitespace, short headings, compact code blocks, and native Markdown.
+- Avoid a large table of contents in the README.
+- Verify the layout at narrow and desktop widths using GitHub-compatible Markdown rendering.
 
-Do not extend the check to every occurrence of `OC2`, `OpenCode`, `opencode`, or `oc2.ai`; the repository contains legitimate compatibility and runtime uses.
+## Feature Highlights
+
+The README should use six short bullets under wording such as "Recent additions in this fork include":
+
+- **Agent teams:** persistent shared tasks, dependency-aware workers, plan approval, daemon teammates, and `/use-team` or `/spawn` workflows. Mark the feature experimental or opt-in where appropriate. Sources include `packages/opencode/src/team/` and `packages/opencode/src/command/template/`.
+- **Multi-model orchestration:** Local Fusion and the optional Fugu virtual model. Sources include `packages/opencode/src/session/compound/`, `packages/opencode/src/session/llm/fugu.ts`, and `packages/core/src/config/local-fusion.ts`.
+- **Repository memory:** opt-in commit and file-summary indexing with CLI and tool access. Source: `packages/opencode/src/memory/`.
+- **Multi-root sessions:** attach multiple repository roots while preserving file-tool boundaries. Sources include `packages/opencode/src/session/session.ts` and `packages/tui/src/routes/session/dialog-roots.tsx`.
+- **Structural search:** OpenGrep-compatible structural search when available, with ordinary grep fallback. Sources include `packages/opencode/src/tool/opengrep.ts` and `packages/core/src/filesystem/opengrep.ts`.
+- **Scalable TUI:** deferred startup and virtualized session, diff, and selection views. Phrase this as implementation behavior, not an unsupported performance benchmark.
+
+## Documentation Structure
+
+Each fact must have one canonical owner. Other pages should link rather than duplicate tables or defaults.
+
+| File                            | Responsibility                                                                                |
+| ------------------------------- | --------------------------------------------------------------------------------------------- |
+| `README.md`                     | Product overview, verified installation, quick start, feature summary, documentation links    |
+| `docs/cli.md`                   | Global flags, default invocation, commands, aliases, input/output behavior, advanced commands |
+| `docs/tui.md`                   | Home-to-session workflow, prompt modes, permissions, questions, navigation, command palette   |
+| `docs/configuration.md`         | V1 CLI configuration files, source order, merge rules, substitutions, managed configuration   |
+| `docs/providers.md`             | Provider discovery, authentication, model selection, provider examples                        |
+| `docs/agents-permissions.md`    | Agents, permissions, commands, and safe examples                                              |
+| `docs/extensions.md`            | MCP, plugins, and skills without repeating configuration precedence                           |
+| `docs/reference/environment.md` | Supported environment variables and control flags                                             |
+| `docs/reference/keybindings.md` | Complete binding table derived from `packages/tui/src/config/keybind.ts`                      |
+| `docs/examples/`                | Executably validated JSON/JSONC and Markdown examples                                         |
+
+Keep V2 configuration architecture or migration notes outside the primary user reference unless users must act on them.
+
+## CLI Documentation
+
+`docs/cli.md` must:
+
+- Derive commands, aliases, and global flags from `packages/opencode/src/index.ts` and `packages/opencode/src/cli/cmd/`.
+- Cover the default `oc2 [project]` TUI invocation and common commands including `run`, `attach`, `serve`, `web`, models, provider authentication, agents, sessions, MCP, plugins, memory, import/export, statistics, upgrades, and uninstall.
+- Record aliases such as `providers`/`auth` and `plugin`/`plug`.
+- Put diagnostic, database, generation, and unstable commands in an Advanced section with a stability warning.
+- Document that yargs parsing is strict and help may be written to stderr.
+- Cover piped input for `run` and the dependency of `--fork` on `--continue` or `--session`.
+- Avoid examples containing literal credentials.
+
+## TUI And Configuration Behavior
+
+The documentation must specify:
+
+- Prompt, shell, configured-command, and slash-command workflows.
+- Permission and question interactions.
+- Session navigation, multi-root management, and keybinding customization.
+- Bindings disabled with `none`.
+- New TUI configuration examples use `tui.json[c]`.
+- Compatibility behavior for deprecated TUI settings in `oc2.json[c]`.
+- The tested configuration source order, including global files, `OC2_CONFIG`, `OC2_TUI_CONFIG`, project files, discovered `.oc2` directories, and `OC2_CONFIG_DIR`.
+- JSONC versus JSON selection, root-to-current-directory merging, instruction concatenation, and plugin provenance deduplication.
+- `{env:NAME}` and `{file:path}` substitutions.
+- Unknown V1 top-level keys fail validation.
+- Invalid TUI configuration may be skipped rather than terminating the main configuration load.
+- Local and remote MCP examples, including their mutually exclusive URL/command forms.
+
+## Browser And Installation Accuracy
+
+- Release binaries embed browser assets through `packages/opencode/script/build.ts`.
+- Missing or disabled embedded assets produce a local `503`; they do not proxy to a hosted application.
+- Source development must document the backend plus Vite workflow rather than presenting `bun dev web` as equivalent to a release binary.
+- Source installation is the default verified path until npm availability is confirmed with package name and version evidence.
+
+## Documentation Validation
+
+Add a single root command, defaulting to `bun run docs:check`, that:
+
+- Runs Prettier over `README.md` and `docs/**/*.md`.
+- Checks repository-relative links and Markdown anchors.
+- Parses JSON and JSONC examples.
+- Validates `oc2` examples through the shipped V1 schema.
+- Validates TUI examples through the real TUI configuration parser.
+- Rejects unknown keys and placeholder values that resemble real secrets.
+- Handles CLI help output written to either stdout or stderr.
 
 ## Implementation Slices
 
-### PR 1: Establish Public Positioning
+### PR 1: Documentation Validation And Correct Examples
 
-- Rewrite `README.md` around the copy contract. Add an upstream-lineage section and state that OC2 is an independent project based on opencode.
-- Move clone-first instructions into "Develop From Source" and lead with the supported `oc2` product commands.
-- Update `Why.md` and `packages/app/README.md` to describe the full harness and the narrow meaning of "minimal."
-- Update descriptions in the root and app `package.json` files without changing package names, repository coordinates, binaries, or publishing automation.
-- Add `script/check-product-copy.ts` and the root `check:product-copy` command with assertions for this slice.
-
-Verification:
-
-- `bun run check:product-copy`
-- `bun run check:packages`
-- `bun run lint`
-
-Review:
-
-A fresh read-only reviewer must compare the diff with this slice, confirm clone/fork language is secondary, map every capability claim to the cited implementation, and confirm naming and compatibility identifiers are untouched before the slice is checked off.
-
-### PR 2: Align Repository Guidance
-
-- Update `CONTRIBUTING.md` and `packages/onboarding.md` to call OC2 a coding-agent harness or codebase rather than a template.
-- Update `SECURITY.md` only where OpenCode incorrectly names the current product; preserve its no-sandbox and server-authentication warnings verbatim in meaning.
-- Document the current embedded-browser-assets and hosted-fallback behavior in `README.md` and `packages/onboarding.md` without changing `packages/opencode/src/server/shared/ui.ts`.
-- Extend `check:product-copy` with the maintainer-doc paths and prohibited phrases covered by this slice.
+- Add the `docs:check` command and focused validation tooling.
+- Correct `oc2.example.json` to use `template` and `environment`.
+- Add minimal validated examples:
+  - `docs/examples/oc2.minimal.jsonc`
+  - `docs/examples/oc2.full.jsonc`
+  - `docs/examples/tui.jsonc`
+  - Local and remote MCP examples
+- Add a repository-relative link and anchor checker.
+- Ensure docs-only changes execute the documentation gate in CI.
 
 Verification:
 
-- `bun run check:product-copy`
-- `bun run lint`
+- `bun run docs:check`
+- From `packages/opencode`: `bun test test/config/config.test.ts test/config/tui.test.ts`
+- `git fetch origin master`
+- `git diff --check origin/master...HEAD`
 
 Review:
 
-A fresh read-only reviewer must verify that current runtime behavior is described accurately, security warnings remain intact, opencode lineage is preserved, and source-development guidance does not become the product pitch before the slice is checked off.
+A fresh read-only reviewer must compare the diff with this slice, confirm examples use real parser paths, and ensure unrelated worktree changes are excluded. Resolve all findings before marking the slice complete.
 
-### PR 3: Correct Provider Onboarding
+### PR 2: Canonical CLI, TUI, And Configuration Guides
 
-- Replace the free-model/bundled-provider claim in `packages/app/src/i18n/en.ts` with user-configured credential or local-provider guidance.
-- Apply the same correction to `packages/tui/src/feature-plugins/sidebar/footer.tsx`.
-- Audit changed onboarding flows for claims about provider availability; do not rename providers or change authentication behavior.
-- Extend `check:product-copy` with path-specific assertions for the corrected messages.
+- Add the documentation structure defined above.
+- Generate command and binding tables from source where practical; otherwise add checks that detect drift.
+- Resolve browser documentation against `packages/opencode/src/server/shared/ui.ts`.
+- Keep advanced/internal commands separate from normal workflows.
+- Cross-link canonical pages instead of repeating precedence, defaults, or keybinding tables.
 
 Verification:
 
-- `bun run check:product-copy`
-- `bun run --cwd packages/app typecheck`
-- `bun run --cwd packages/tui typecheck`
+- `bun run docs:check`
+- From `packages/opencode`: `bun test test/cli/help/help-snapshots.test.ts test/cli/smokes/read-only.test.ts test/config/config.test.ts test/config/tui.test.ts`
+- From `packages/tui`: `bun test test/app-lifecycle.test.tsx test/keymap.test.tsx test/config.test.tsx`
+- `git diff --check origin/master...HEAD`
 
 Review:
 
-A fresh read-only reviewer must confirm the copy matches provider behavior, does not imply offline or bundled inference, and leaves provider/authentication logic unchanged before the slice is checked off.
+A fresh read-only reviewer must trace representative CLI, TUI, config, and MCP claims to source or tests and flag duplicated or ambiguous ownership of documentation facts.
 
-### PR 4: Align Model-Facing Identity And Help
+### PR 3: README And Visual Refresh
 
-- Replace stale current-product identity in the provider prompt files under `packages/opencode/src/session/prompt/` while retaining provider-specific instructions.
-- Replace hosted documentation instructions in `packages/opencode/src/session/prompt/default.txt` and `anthropic.txt` with built-in help/action discovery, `oc2 --help`, and the stable issue tracker.
-- Update stale current-product prose in `packages/core/src/plugin/command/initialize.txt`, `packages/opencode/src/command/template/initialize.txt`, and built-in skill display guidance.
-- Preserve the `customize-opencode` skill ID, ACP names, client aliases, Effect tags, and other compatibility identifiers.
-- Extend `check:product-copy` with path-specific prompt and guidance assertions.
+- Rewrite `README.md` after all linked documentation exists.
+- Add the restrained hero, minimal quick start, six feature highlights, and documentation navigation.
+- Remove contradictory browser and installation claims.
+- Check all feature attribution against current implementation and Git history.
+- Verify rendering on narrow and desktop layouts.
 
 Verification:
 
+- `bun run docs:check`
 - `bun run check:product-copy`
-- `bun run --cwd packages/opencode typecheck`
-- `bun run --cwd packages/core typecheck`
+- `bunx prettier --check "README.md" "docs/**/*.md"`
+- `git diff --check origin/master...HEAD`
 
 Review:
 
-A fresh read-only reviewer must inspect only changed prose and the curated compatibility inventory, confirm provider-specific prompt behavior remains intact, and reject blind identifier replacement before the slice is checked off.
+A fresh read-only reviewer must evaluate factual accuracy, attribution, visual restraint, mobile readability, broken links, and whether the README remains concise.
 
 ## Future Work
 
-- Execute the hosted-service removal plan in `specs/minimal-coding-agent-harness-prune.md`, including removal of the `app.oc2.ai` fallback and fully local browser behavior.
-- Design a versioned migration if package scope, executable, config namespace, domains, persisted state, or release artifacts are renamed.
-- Add offline bootstrap and local-model-provider documentation. "Runs locally" does not mean offline in this pass.
-- Commission new visual assets only if `OC2` itself is renamed later.
+- Automated generation of the full CLI and keybinding references from runtime metadata.
+- Dedicated light and dark product screenshots from a deterministic demo session.
+- A user-facing V2 configuration migration guide once that surface becomes relevant to shipped workflows.
 
 ## Open Questions
 
-- Should the README call the category "minimal coding agent" or "minimal coding-agent harness"? Default: use "minimal coding-agent harness" because it communicates a runnable system rather than a single model or starter repository.
-- Should product docs mention experimental team orchestration in the primary capability list? Default: mention it after the core agent loop, not in the elevator pitch.
+- **Hero asset:** Default to the existing social-share image. Create new artwork only if it is inaccurate or unreadable on GitHub.
+- **npm installation:** Default to omission until registry availability and the current published version are verified during implementation.
+- **Attribution heading:** Default to "Recent additions in this fork" with a modest link to `panwar-stack`, rather than claiming exclusive ownership.
