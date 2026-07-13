@@ -53,51 +53,48 @@ jobs:
         working-directory: packages/opencode
         env:
           GH_TOKEN: ${{ github.token }}
-          MARKER: <!-- oc2-release-source:${{ github.sha }} -->
           RELEASES_FILE: ${{ runner.temp }}/oc2-releases.json
+          RECOVERY_FILE: ${{ runner.temp }}/oc2-release-recovery.json
         run: |
           set -euo pipefail
           gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$RELEASES_FILE"
+          bun ./script/release-plan.ts >> "$GITHUB_OUTPUT"
 
-          node <<'NODE'
-          const fs = require("node:fs")
-          const semver = require("semver")
+      - name: Repair blocked workflow draft tag
+        if: steps.find.outputs.state == 'blocked'
+        shell: bash
+        working-directory: packages/opencode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_FILE: ${{ runner.temp }}/oc2-release-recovery.json
+        run: |
+          set -euo pipefail
+          TAG=$(bun -e 'const value = await Bun.file(process.env.RECOVERY_FILE).json(); process.stdout.write(value.tag)')
+          SOURCE=$(bun -e 'const value = await Bun.file(process.env.RECOVERY_FILE).json(); process.stdout.write(value.source)')
 
-          const pages = JSON.parse(fs.readFileSync(process.env.RELEASES_FILE, "utf8"))
-          if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
-            throw new Error("unexpected GitHub Releases response")
-          }
-          const matches = pages.flat().filter((release) =>
-            typeof release.body === "string" && release.body.includes(process.env.MARKER),
-          )
-          if (matches.length > 1) throw new Error(`found ${matches.length} Releases for source commit`)
-          const workflowDrafts = pages.flat().filter((release) =>
-            release.draft &&
-            typeof release.body === "string" &&
-            release.body.includes("<!-- oc2-release-source:"),
-          )
-          if (matches.length === 0 && workflowDrafts.length > 0) {
-            const tags = workflowDrafts.map((release) => release.tag_name).join(", ")
-            throw new Error(`finish workflow draft Releases before allocating another version: ${tags}`)
-          }
+          actual=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${SOURCE}" --jq .sha)
+          if [ "$actual" != "$SOURCE" ]; then
+            echo "workflow draft source commit does not exist in this repository" >&2
+            exit 1
+          fi
 
-          const output = [`complete=${matches.length === 1 && !matches[0].draft}`]
-          if (matches.length === 0) {
-            output.push("state=missing")
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${output.join("\n")}\n`)
-            process.exit(0)
-          }
+          remote_tag=$(git ls-remote --tags origin "refs/tags/${TAG}")
+          if [ -z "$remote_tag" ]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${TAG}" \
+              -f "sha=${SOURCE}" > /dev/null
+          fi
 
-          const release = matches[0]
-          const tag = release.tag_name
-          const version = typeof tag === "string" && tag.startsWith("v") ? tag.slice(1) : ""
-          if (`v${version}` !== tag || semver.valid(version) !== version || semver.prerelease(version) !== null) {
-            throw new Error(`Release tag must be canonical stable semver, got ${JSON.stringify(tag)}`)
-          }
-          if (release.prerelease) throw new Error(`Release ${tag} must not be a prerelease`)
-          output.push(`state=${release.draft ? "draft" : "published"}`, `tag=${tag}`, `version=${version}`)
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `${output.join("\n")}\n`)
-          NODE
+          verify_ref="refs/oc2-release-repair/${TAG}"
+          git fetch --no-tags origin "refs/tags/${TAG}:${verify_ref}"
+          tag_commit=$(git rev-parse "${verify_ref}^{commit}")
+          if [ "$tag_commit" != "$SOURCE" ]; then
+            echo "workflow draft tag does not resolve to its source commit" >&2
+            exit 1
+          fi
+
+          echo "finish workflow draft Releases before allocating another version: ${TAG}" >&2
+          exit 1
 
       - name: Allocate patch and create draft release
         if: steps.find.outputs.state == 'missing'
