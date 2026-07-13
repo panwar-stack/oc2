@@ -161,12 +161,16 @@ jobs:
             --fail-on-no-commits
           printf 'version=%s\ntag=%s\n' "$VERSION" "$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Verify release tag
+      - name: Create and verify release tag
         shell: bash
         env:
           TAG: ${{ steps.find.outputs.tag || steps.create.outputs.tag }}
         run: |
           set -euo pipefail
+          remote_tag=$(git ls-remote --tags origin "refs/tags/${TAG}")
+          if [ -z "$remote_tag" ]; then
+            git push origin "${GITHUB_SHA}:refs/tags/${TAG}"
+          fi
           git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}"
           tag_commit=$(git rev-parse "refs/tags/${TAG}^{commit}")
           head_commit=$(git rev-parse HEAD)
