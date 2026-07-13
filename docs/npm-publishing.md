@@ -56,6 +56,14 @@ git tag v1.2.3 <release-commit>
 git push origin v1.2.3
 ```
 
+For example, to publish `0.0.1`:
+
+```sh
+git tag -a v0.0.1 <release-commit> -m "v0.0.1"
+git push origin refs/tags/v0.0.1
+./script/release 0.0.1 latest
+```
+
 Dispatch `publish.yml` from `v1.2.3` in the GitHub Actions UI, with `version`
 set to `1.2.3` and `dist-tag` set to `latest`. Alternatively, install and
 authenticate the [GitHub CLI](https://cli.github.com/) and run the repository
