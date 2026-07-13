@@ -1,7 +1,7 @@
 # Publish OC2 To npm
 
 OC2 patch releases are published by manually dispatching the `publish` GitHub
-Actions workflow from `master` without inputs. The workflow chooses the next
+Actions workflow from `main` without inputs. The workflow chooses the next
 patch version, reserves its tag in a draft GitHub Release, builds and validates
 every platform package, publishes the native packages and `oc2-ai` to npm under
 `latest`, uploads the GitHub Release assets, and publishes the Release last.
@@ -17,10 +17,11 @@ Before dispatching a release:
 
 - have permission to dispatch workflows and create Releases in
   `panwar-stack/oc2`;
-- confirm the commit to release is on `master` and all required checks passed;
+- confirm the commit to release is on `main` and all required checks passed;
 - confirm the `oc2-ai` package and every `oc2-<platform>` package produced by
   `packages/opencode/script/build.ts` are controlled by the intended npm
-  organization or maintainers; and
+  organization or maintainers;
+- confirm `RELEASE_TAG_RECOVERY_TOKEN` is configured as described below; and
 - confirm npm trusted publishing is configured as described below.
 
 ## Bootstrap npm And Trusted Publishing
@@ -45,13 +46,36 @@ bootstrap and configuration screens may change independently of this
 repository; use the current trusted-publishing documentation if they differ
 from the fields above.
 
-The publish job requests `id-token: write`, uses npm trusted publishing, and
-enables provenance. Do not add an `NPM_TOKEN`: the workflow is intentionally
-authenticated to npm through GitHub OIDC.
+The publish job requests `id-token: write` and uses npm trusted publishing.
+Normal and same-source resumed releases include npm provenance. A recovery run
+that adopts an older source omits provenance because its source differs from
+the workflow dispatch commit. Do not add an `NPM_TOKEN`: every publication,
+including adopted recovery, is authenticated to npm through GitHub OIDC.
+
+## Configure Release Tag Recovery
+
+Add a fine-grained personal access token for the repository owner with:
+
+- resource owner: `panwar-stack`;
+- repository access: only `panwar-stack/oc2`;
+- repository permission `Contents`: read and write; and
+- repository permission `Workflows`: read and write.
+
+Store the token as the repository Actions secret
+`RELEASE_TAG_RECOVERY_TOKEN`. Do not grant access to other repositories or add
+other permissions. Give the token a short practical expiration, record its
+owner and expiration, and rotate it before expiry by replacing the repository
+secret. Revoke superseded tokens.
+
+Normal GitHub operations continue to use the workflow's `github.token`. The
+recovery token is exposed only to the step that atomically creates an absent
+tag for an adopted draft. It is never used to publish npm packages, edit a
+Release, move a tag, or force-push a ref. npm authentication remains limited to
+OIDC in the publish job.
 
 ## Dispatch A Patch Release
 
-Dispatch `publish.yml` from the `master` branch in the GitHub Actions UI. The
+Dispatch `publish.yml` from the `main` branch in the GitHub Actions UI. The
 workflow has no inputs. Alternatively, install and authenticate the [GitHub
 CLI](https://cli.github.com/) and run:
 
@@ -59,27 +83,27 @@ CLI](https://cli.github.com/) and run:
 ./script/release
 ```
 
-The helper runs `gh workflow run publish.yml --ref master`. Passing a version,
+The helper runs `gh workflow run publish.yml --ref main`. Passing a version,
 dist-tag, or any other argument is an error. All patch releases use the
 `latest` npm dist-tag.
 
 The workflow computes the next patch after the highest canonical stable
 version found across the repository's `v*` tags and all published `oc2-ai`
 versions. It then creates a draft GitHub Release that reserves both the
-`v<version>` tag and the exact `master` commit being released. Generated
+`v<version>` tag and the exact `main` dispatch commit being released. Generated
 release notes are included automatically. Never move, replace, or delete a
 release tag to retry a release.
 
 ## Resume A Failed Release
 
-The draft Release records the source commit. A rerun for the same commit finds
-that reservation and continues the same version instead of allocating another
-one. Existing Release assets are replaced, and packages already present on npm
-are verified and skipped, so publication can continue after a partial failure.
-The GitHub Release remains a draft until every asset and npm package has been
+The draft Release records the source commit. A run for that commit finds the
+reservation and continues the same version instead of allocating another one.
+Existing Release assets are replaced, and packages already present on npm are
+verified and skipped, so publication can continue after a partial failure. The
+GitHub Release remains a draft until every asset and npm package has been
 published successfully.
 
-Use the Actions UI to rerun the failed run, or use the GitHub CLI:
+For a current failed run, use the Actions UI to rerun it, or use the GitHub CLI:
 
 ```sh
 gh run rerun <run-id> --failed
@@ -87,13 +111,27 @@ gh run watch <run-id>
 gh run view <run-id> --log-failed
 ```
 
-Rerunning the existing run preserves its source commit even if `master` has
-advanced. A new dispatch resumes the reservation only while `master` still
-points to that commit. If the Release is already published, another run for
-the same commit exits without republishing it. The workflow will not allocate
-a release for a newer commit while a workflow-owned draft for another commit
-remains unfinished. Resume the failed workflow run that owns the draft before
-dispatching a release from newer `master`.
+Rerunning the existing run preserves its source commit even if `main` has
+advanced. For a stranded draft created by an older workflow, dispatch
+`publish.yml` from current `main` instead of rerunning a historical run that
+uses an unsupported runner. The new run adopts the sole workflow-owned draft's
+source commit, tag, and version, then builds and publishes that source. Its npm
+packages remain authenticated through trusted publishing, but omit provenance
+rather than attest to the newer dispatch commit. Same-source releases retain
+provenance.
+
+Adoption is fail-closed. The draft must contain exactly one valid source marker,
+its target must equal that lowercase 40-hex source, its tag must be canonical
+stable semver, and its source must exist and be an ancestor of the new `main`
+dispatch commit. If its tag is absent, the workflow requires
+`RELEASE_TAG_RECOVERY_TOKEN` and creates the ref once. If the tag exists, it
+must already resolve to the recorded source. Multiple drafts, malformed draft
+metadata, a non-ancestor source, a conflicting tag, or a missing recovery token
+stop the run without allocating another version or changing any existing ref.
+
+If the Release is already published, another run for the same commit exits
+without republishing it. Never delete, move, or force-create a tag to recover a
+release.
 
 ## Verify A Release
 

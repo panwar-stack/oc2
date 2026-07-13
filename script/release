@@ -7,4 +7,4 @@ if [ "$#" -ne 0 ]; then
   exit 1
 fi
 
-gh workflow run publish.yml --ref master
+gh workflow run publish.yml --ref main

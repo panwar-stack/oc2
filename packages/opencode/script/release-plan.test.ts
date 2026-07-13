@@ -27,6 +27,7 @@ describe("release plan", () => {
       complete: false,
       tag: "v1.2.3",
       version: "1.2.3",
+      source,
     })
   })
 
@@ -36,6 +37,7 @@ describe("release plan", () => {
       complete: true,
       tag: "v1.2.3",
       version: "1.2.3",
+      source,
     })
   })
 
@@ -54,6 +56,7 @@ describe("release plan", () => {
       state: "blocked",
       complete: false,
       tag: "v1.2.3",
+      version: "1.2.3",
       source: foreign,
     })
   })

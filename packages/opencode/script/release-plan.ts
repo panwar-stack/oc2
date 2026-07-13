@@ -23,6 +23,7 @@ export function findRelease(pages: unknown, sourceSha: string) {
       complete: !release.draft,
       tag: release.tag,
       version: release.version,
+      source: release.source,
     } as const
   }
 
@@ -36,7 +37,13 @@ export function findRelease(pages: unknown, sourceSha: string) {
   if (workflowDrafts.length > 1) throw new Error(`found ${workflowDrafts.length} workflow draft Releases`)
   if (workflowDrafts.length === 1) {
     const release = validateRelease(workflowDrafts[0])
-    return { state: "blocked", complete: false, tag: release.tag, source: release.source } as const
+    return {
+      state: "blocked",
+      complete: false,
+      tag: release.tag,
+      version: release.version,
+      source: release.source,
+    } as const
   }
 
   return { state: "missing", complete: false } as const
@@ -67,15 +74,13 @@ function validateRelease(release: Record<string, unknown>) {
 if (import.meta.main) {
   const releasesFile = process.env.RELEASES_FILE
   const sourceSha = process.env.GITHUB_SHA
-  const recoveryFile = process.env.RECOVERY_FILE
-  if (!releasesFile || !sourceSha || !recoveryFile) throw new Error("missing release plan environment")
+  if (!releasesFile || !sourceSha) throw new Error("missing release plan environment")
 
   const pages: unknown = await Bun.file(releasesFile).json()
   const plan = findRelease(pages, sourceSha)
-  if (plan.state === "blocked") {
-    await Bun.write(recoveryFile, `${JSON.stringify({ tag: plan.tag, source: plan.source })}\n`)
-  }
   const output = [`complete=${plan.complete}`, `state=${plan.state}`]
-  if (plan.state === "draft" || plan.state === "published") output.push(`tag=${plan.tag}`, `version=${plan.version}`)
+  if (plan.state !== "missing") {
+    output.push(`tag=${plan.tag}`, `version=${plan.version}`, `source=${plan.source}`)
+  }
   process.stdout.write(`${output.join("\n")}\n`)
 }

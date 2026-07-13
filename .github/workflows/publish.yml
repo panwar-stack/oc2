@@ -23,6 +23,7 @@ jobs:
     outputs:
       version: ${{ steps.find.outputs.version || steps.create.outputs.version }}
       tag: ${{ steps.find.outputs.tag || steps.create.outputs.tag }}
+      source: ${{ steps.find.outputs.source || steps.create.outputs.source }}
       complete: ${{ steps.find.outputs.complete }}
     steps:
       - name: Verify main dispatch
@@ -54,47 +55,70 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASES_FILE: ${{ runner.temp }}/oc2-releases.json
-          RECOVERY_FILE: ${{ runner.temp }}/oc2-release-recovery.json
         run: |
           set -euo pipefail
           gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$RELEASES_FILE"
           bun ./script/release-plan.ts >> "$GITHUB_OUTPUT"
 
-      - name: Repair blocked workflow draft tag
+      - name: Validate adopted workflow draft
         if: steps.find.outputs.state == 'blocked'
+        id: adopt
         shell: bash
-        working-directory: packages/opencode
         env:
           GH_TOKEN: ${{ github.token }}
-          RECOVERY_FILE: ${{ runner.temp }}/oc2-release-recovery.json
+          SOURCE: ${{ steps.find.outputs.source }}
+          TAG: ${{ steps.find.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG=$(bun -e 'const value = await Bun.file(process.env.RECOVERY_FILE).json(); process.stdout.write(value.tag)')
-          SOURCE=$(bun -e 'const value = await Bun.file(process.env.RECOVERY_FILE).json(); process.stdout.write(value.source)')
-
           actual=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${SOURCE}" --jq .sha)
           if [ "$actual" != "$SOURCE" ]; then
             echo "workflow draft source commit does not exist in this repository" >&2
             exit 1
           fi
+          if ! git merge-base --is-ancestor "$SOURCE" "$GITHUB_SHA"; then
+            echo "workflow draft source must be an ancestor of the dispatch commit" >&2
+            exit 1
+          fi
 
           remote_tag=$(git ls-remote --tags origin "refs/tags/${TAG}")
           if [ -z "$remote_tag" ]; then
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f "ref=refs/tags/${TAG}" \
-              -f "sha=${SOURCE}" > /dev/null
+            echo "create=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "create=false" >> "$GITHUB_OUTPUT"
 
-          verify_ref="refs/oc2-release-repair/${TAG}"
+      - name: Create missing adopted release tag
+        if: steps.find.outputs.state == 'blocked' && steps.adopt.outputs.create == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TAG_RECOVERY_TOKEN }}
+          SOURCE: ${{ steps.find.outputs.source }}
+          TAG: ${{ steps.find.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "RELEASE_TAG_RECOVERY_TOKEN is required to recover a missing adopted release tag" >&2
+            exit 1
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${TAG}" \
+            -f "sha=${SOURCE}" > /dev/null
+
+      - name: Verify adopted release tag
+        if: steps.find.outputs.state == 'blocked'
+        shell: bash
+        env:
+          SOURCE: ${{ steps.find.outputs.source }}
+          TAG: ${{ steps.find.outputs.tag }}
+        run: |
+          set -euo pipefail
+          verify_ref="refs/oc2-release-adopt/${TAG}"
           git fetch --no-tags origin "refs/tags/${TAG}:${verify_ref}"
           tag_commit=$(git rev-parse "${verify_ref}^{commit}")
           if [ "$tag_commit" != "$SOURCE" ]; then
             echo "workflow draft tag does not resolve to its source commit" >&2
             exit 1
           fi
-
-          echo "finish workflow draft Releases before allocating another version: ${TAG}" >&2
-          exit 1
 
       - name: Allocate patch and create draft release
         if: steps.find.outputs.state == 'missing'
@@ -156,30 +180,36 @@ jobs:
             --generate-notes \
             --notes "$NOTES" \
             --fail-on-no-commits
-          printf 'version=%s\ntag=%s\n' "$VERSION" "$TAG" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\ntag=%s\nsource=%s\n' "$VERSION" "$TAG" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Create and verify release tag
         shell: bash
         env:
+          SOURCE: ${{ steps.find.outputs.source || steps.create.outputs.source }}
+          STATE: ${{ steps.find.outputs.state }}
           TAG: ${{ steps.find.outputs.tag || steps.create.outputs.tag }}
         run: |
           set -euo pipefail
           remote_tag=$(git ls-remote --tags origin "refs/tags/${TAG}")
           if [ -z "$remote_tag" ]; then
-            git push origin "${GITHUB_SHA}:refs/tags/${TAG}"
+            if [ "$STATE" = "blocked" ]; then
+              echo "adopted release tag disappeared after recovery" >&2
+              exit 1
+            fi
+            git push origin "${SOURCE}:refs/tags/${TAG}"
           fi
-          git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}"
-          tag_commit=$(git rev-parse "refs/tags/${TAG}^{commit}")
-          head_commit=$(git rev-parse HEAD)
-          if [ "$tag_commit" != "$GITHUB_SHA" ] || [ "$head_commit" != "$GITHUB_SHA" ]; then
-            echo "release tag, checkout, and github.sha must resolve to the same commit" >&2
+          verify_ref="refs/oc2-release-check/${TAG}"
+          git fetch --no-tags origin "refs/tags/${TAG}:${verify_ref}"
+          tag_commit=$(git rev-parse "${verify_ref}^{commit}")
+          if [ "$tag_commit" != "$SOURCE" ]; then
+            echo "release tag must resolve to the planned source commit" >&2
             exit 1
           fi
 
   build:
     needs: plan
     if: needs.plan.outputs.complete != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     outputs:
@@ -189,7 +219,7 @@ jobs:
       - name: Checkout release commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.plan.outputs.source }}
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -238,9 +268,11 @@ jobs:
       - name: Select artifact names
         id: artifacts
         shell: bash
+        env:
+          SOURCE: ${{ needs.plan.outputs.source }}
         run: |
-          echo "unix=oc2-native-unix-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-          echo "windows=oc2-native-windows-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "unix=oc2-native-unix-${SOURCE}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "windows=oc2-native-windows-${SOURCE}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Upload Unix native packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -278,12 +310,12 @@ jobs:
       contents: write
       id-token: write
     env:
-      TRANSFER_DIR: ${{ github.workspace }}/transfer/${{ github.sha }}/${{ github.run_attempt }}/release
+      TRANSFER_DIR: ${{ github.workspace }}/transfer/${{ needs.plan.outputs.source }}/${{ github.run_attempt }}/release
     steps:
       - name: Checkout release commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.plan.outputs.source }}
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -355,32 +387,37 @@ jobs:
         env:
           OC2_VERSION: ${{ needs.plan.outputs.version }}
           OC2_CHANNEL: latest
-          NPM_CONFIG_PROVENANCE: true
+          NPM_CONFIG_PROVENANCE: ${{ needs.plan.outputs.source == github.sha }}
 
       - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
-          MARKER: <!-- oc2-release-source:${{ github.sha }} -->
+          SOURCE: ${{ needs.plan.outputs.source }}
+          MARKER: <!-- oc2-release-source:${{ needs.plan.outputs.source }} -->
           RELEASE_FILE: ${{ runner.temp }}/oc2-release.json
         run: |
           set -euo pipefail
-          git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}"
-          tag_commit=$(git rev-parse "refs/tags/${TAG}^{commit}")
+          verify_ref="refs/oc2-release-publish/${TAG}"
+          git fetch --no-tags origin "refs/tags/${TAG}:${verify_ref}"
+          tag_commit=$(git rev-parse "${verify_ref}^{commit}")
           head_commit=$(git rev-parse HEAD)
-          if [ "$tag_commit" != "$GITHUB_SHA" ] || [ "$head_commit" != "$GITHUB_SHA" ]; then
-            echo "release tag, checkout, and github.sha must resolve to the same commit" >&2
+          if [ "$tag_commit" != "$SOURCE" ] || [ "$head_commit" != "$SOURCE" ]; then
+            echo "release tag, checkout, and planned source must resolve to the same commit" >&2
             exit 1
           fi
 
           gh release view "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --json body,isDraft,isPrerelease,tagName > "$RELEASE_FILE"
+            --json body,isDraft,isPrerelease,tagName,targetCommitish > "$RELEASE_FILE"
           node <<'NODE'
           const fs = require("node:fs")
           const release = JSON.parse(fs.readFileSync(process.env.RELEASE_FILE, "utf8"))
           if (release.tagName !== process.env.TAG) throw new Error("Release tag changed before publication")
+          if (release.targetCommitish !== process.env.SOURCE) {
+            throw new Error("Release source changed before publication")
+          }
           if (typeof release.body !== "string" || !release.body.includes(process.env.MARKER)) {
             throw new Error("Release source marker changed before publication")
           }
