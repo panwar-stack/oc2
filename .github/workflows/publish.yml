@@ -1,18 +1,8 @@
 name: publish
-run-name: "publish oc2-ai@${{ inputs.version }} (${{ inputs.dist-tag }})"
+run-name: "publish patch from ${{ github.sha }}"
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Canonical semver matching the v<version> dispatch tag"
-        required: true
-        type: string
-      dist-tag:
-        description: "Lowercase npm dist-tag"
-        required: true
-        default: latest
-        type: string
 
 concurrency:
   group: npm-publish
@@ -25,33 +15,29 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  validate:
+  plan:
     if: github.repository == 'panwar-stack/oc2'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.find.outputs.version || steps.create.outputs.version }}
+      tag: ${{ steps.find.outputs.tag || steps.create.outputs.tag }}
+      complete: ${{ steps.find.outputs.complete }}
     steps:
+      - name: Verify master dispatch
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/master" ]; then
+            echo "workflow must be dispatched from refs/heads/master, got ${GITHUB_REF}" >&2
+            exit 1
+          fi
+
       - name: Checkout release commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-
-      - name: Verify immutable release ref
-        shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          expected_ref="refs/tags/v${VERSION}"
-          if [ "$GITHUB_REF" != "$expected_ref" ]; then
-            echo "workflow must be dispatched from ${expected_ref}, got ${GITHUB_REF}" >&2
-            exit 1
-          fi
-
-          tag_commit=$(git rev-parse "${expected_ref}^{commit}")
-          head_commit=$(git rev-parse HEAD)
-          if [ "$tag_commit" != "$GITHUB_SHA" ] || [ "$head_commit" != "$GITHUB_SHA" ]; then
-            echo "tag, checkout, and github.sha must resolve to the same commit" >&2
-            exit 1
-          fi
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -61,33 +47,140 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Validate release inputs
+      - name: Find release for source commit
+        id: find
         shell: bash
         working-directory: packages/opencode
         env:
-          VERSION: ${{ inputs.version }}
-          DIST_TAG: ${{ inputs.dist-tag }}
+          GH_TOKEN: ${{ github.token }}
+          MARKER: <!-- oc2-release-source:${{ github.sha }} -->
+          RELEASES_FILE: ${{ runner.temp }}/oc2-releases.json
         run: |
-          node <<'NODE'
-          const npa = require("npm-package-arg")
-          const semver = require("semver")
-          const version = process.env.VERSION
-          const tag = process.env.DIST_TAG
+          set -euo pipefail
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$RELEASES_FILE"
 
-          if (semver.valid(version) !== version) {
-            console.error(`version must be canonical semver, got ${JSON.stringify(version)}`)
-            process.exit(1)
+          node <<'NODE'
+          const fs = require("node:fs")
+          const semver = require("semver")
+
+          const pages = JSON.parse(fs.readFileSync(process.env.RELEASES_FILE, "utf8"))
+          if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+            throw new Error("unexpected GitHub Releases response")
           }
-          const spec = npa(`oc2-ai@${tag}`)
-          if (!/^[a-z][a-z0-9._-]{0,63}$/.test(tag) || spec.type !== "tag" || spec.rawSpec !== tag) {
-            console.error(`dist-tag must be a safe lowercase non-semver tag, got ${JSON.stringify(tag)}`)
-            process.exit(1)
+          const matches = pages.flat().filter((release) =>
+            typeof release.body === "string" && release.body.includes(process.env.MARKER),
+          )
+          if (matches.length > 1) throw new Error(`found ${matches.length} Releases for source commit`)
+          const workflowDrafts = pages.flat().filter((release) =>
+            release.draft &&
+            typeof release.body === "string" &&
+            release.body.includes("<!-- oc2-release-source:"),
+          )
+          if (matches.length === 0 && workflowDrafts.length > 0) {
+            const tags = workflowDrafts.map((release) => release.tag_name).join(", ")
+            throw new Error(`finish workflow draft Releases before allocating another version: ${tags}`)
           }
+
+          const output = [`complete=${matches.length === 1 && !matches[0].draft}`]
+          if (matches.length === 0) {
+            output.push("state=missing")
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${output.join("\n")}\n`)
+            process.exit(0)
+          }
+
+          const release = matches[0]
+          const tag = release.tag_name
+          const version = typeof tag === "string" && tag.startsWith("v") ? tag.slice(1) : ""
+          if (`v${version}` !== tag || semver.valid(version) !== version || semver.prerelease(version) !== null) {
+            throw new Error(`Release tag must be canonical stable semver, got ${JSON.stringify(tag)}`)
+          }
+          if (release.prerelease) throw new Error(`Release ${tag} must not be a prerelease`)
+          output.push(`state=${release.draft ? "draft" : "published"}`, `tag=${tag}`, `version=${version}`)
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `${output.join("\n")}\n`)
           NODE
 
+      - name: Allocate patch and create draft release
+        if: steps.find.outputs.state == 'missing'
+        id: create
+        shell: bash
+        working-directory: packages/opencode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MARKER: <!-- oc2-release-source:${{ github.sha }} -->
+          TAGS_FILE: ${{ runner.temp }}/oc2-tags.txt
+          NPM_FILE: ${{ runner.temp }}/oc2-npm-versions.json
+          NPM_ERROR_FILE: ${{ runner.temp }}/oc2-npm-error.txt
+          ALLOCATION_FILE: ${{ runner.temp }}/oc2-allocation.json
+        run: |
+          set -euo pipefail
+          git ls-remote --tags origin 'refs/tags/v*' > "$TAGS_FILE"
+
+          npm_status=0
+          npm view oc2-ai versions --json > "$NPM_FILE" 2> "$NPM_ERROR_FILE" || npm_status=$?
+          if [ "$npm_status" -ne 0 ]; then
+            if ! grep -Eq '(^|[^[:alnum:]_])E404([^[:alnum:]_]|$)' "$NPM_FILE" "$NPM_ERROR_FILE"; then
+              cat "$NPM_ERROR_FILE" >&2
+              exit "$npm_status"
+            fi
+            printf '[]\n' > "$NPM_FILE"
+          fi
+
+          node <<'NODE'
+          const fs = require("node:fs")
+          const semver = require("semver")
+
+          const tags = fs.readFileSync(process.env.TAGS_FILE, "utf8")
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .map((line) => line.split(/\s+/)[1])
+            .filter((ref) => typeof ref === "string" && ref.startsWith("refs/tags/v"))
+            .map((ref) => ref.slice("refs/tags/v".length).replace(/\^\{\}$/, ""))
+          const npmValue = JSON.parse(fs.readFileSync(process.env.NPM_FILE, "utf8"))
+          const npmVersions = typeof npmValue === "string" ? [npmValue] : npmValue
+          if (!Array.isArray(npmVersions) || npmVersions.some((version) => typeof version !== "string")) {
+            throw new Error("unexpected npm versions response")
+          }
+          const versions = [...new Set([...tags, ...npmVersions])]
+            .filter((version) => semver.valid(version) === version && semver.prerelease(version) === null)
+            .sort(semver.rcompare)
+          const version = semver.inc(versions[0] || "0.0.0", "patch")
+          if (!version) throw new Error("could not allocate patch version")
+          fs.writeFileSync(process.env.ALLOCATION_FILE, `${JSON.stringify({ version })}\n`)
+          NODE
+
+          VERSION=$(node -e 'const fs = require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.env.ALLOCATION_FILE, "utf8")).version)')
+          TAG="v${VERSION}"
+          NOTES=$(printf '%s\n\nnpm: https://www.npmjs.com/package/oc2-ai/v/%s' "$MARKER" "$VERSION")
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --notes "$NOTES" \
+            --fail-on-no-commits
+          printf 'version=%s\ntag=%s\n' "$VERSION" "$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag
+        shell: bash
+        env:
+          TAG: ${{ steps.find.outputs.tag || steps.create.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          tag_commit=$(git rev-parse "refs/tags/${TAG}^{commit}")
+          head_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$GITHUB_SHA" ] || [ "$head_commit" != "$GITHUB_SHA" ]; then
+            echo "release tag, checkout, and github.sha must resolve to the same commit" >&2
+            exit 1
+          fi
+
   build:
-    needs: validate
+    needs: plan
+    if: needs.plan.outputs.complete != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: write
     outputs:
       unix-artifact: ${{ steps.artifacts.outputs.unix }}
       windows-artifact: ${{ steps.artifacts.outputs.windows }}
@@ -108,8 +201,11 @@ jobs:
       - name: Build native packages
         run: ./packages/opencode/script/build.ts
         env:
-          OC2_VERSION: ${{ inputs.version }}
-          OC2_CHANNEL: ${{ inputs.dist-tag }}
+          OC2_VERSION: ${{ needs.plan.outputs.version }}
+          OC2_CHANNEL: latest
+          OC2_RELEASE: true
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
 
       - name: Validate built package set
         shell: bash
@@ -136,7 +232,7 @@ jobs:
 
           bun -e 'import { validateNativePackages } from "./packages/opencode/script/publish.ts"; const version = await validateNativePackages("packages/opencode/dist"); if (version !== process.env.OC2_VERSION) throw new Error("built version " + version + " does not match " + process.env.OC2_VERSION)'
         env:
-          OC2_VERSION: ${{ inputs.version }}
+          OC2_VERSION: ${{ needs.plan.outputs.version }}
 
       - name: Select artifact names
         id: artifacts
@@ -174,10 +270,11 @@ jobs:
             packages/opencode/dist/oc2-windows-x64-baseline
 
   publish:
-    needs: build
+    needs: [plan, build]
+    if: needs.plan.outputs.complete != 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
       id-token: write
     env:
       TRANSFER_DIR: ${{ github.workspace }}/transfer/${{ github.sha }}/${{ github.run_attempt }}/release
@@ -250,11 +347,43 @@ jobs:
           rm -rf packages/opencode/dist
           mv "$TRANSFER_DIR" packages/opencode/dist
         env:
-          OC2_VERSION: ${{ inputs.version }}
+          OC2_VERSION: ${{ needs.plan.outputs.version }}
 
       - name: Publish native packages and wrapper
         run: ./packages/opencode/script/publish.ts
         env:
-          OC2_VERSION: ${{ inputs.version }}
-          OC2_CHANNEL: ${{ inputs.dist-tag }}
+          OC2_VERSION: ${{ needs.plan.outputs.version }}
+          OC2_CHANNEL: latest
           NPM_CONFIG_PROVENANCE: true
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          MARKER: <!-- oc2-release-source:${{ github.sha }} -->
+          RELEASE_FILE: ${{ runner.temp }}/oc2-release.json
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          tag_commit=$(git rev-parse "refs/tags/${TAG}^{commit}")
+          head_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$GITHUB_SHA" ] || [ "$head_commit" != "$GITHUB_SHA" ]; then
+            echo "release tag, checkout, and github.sha must resolve to the same commit" >&2
+            exit 1
+          fi
+
+          gh release view "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json body,isDraft,isPrerelease,tagName > "$RELEASE_FILE"
+          node <<'NODE'
+          const fs = require("node:fs")
+          const release = JSON.parse(fs.readFileSync(process.env.RELEASE_FILE, "utf8"))
+          if (release.tagName !== process.env.TAG) throw new Error("Release tag changed before publication")
+          if (typeof release.body !== "string" || !release.body.includes(process.env.MARKER)) {
+            throw new Error("Release source marker changed before publication")
+          }
+          if (release.isPrerelease) throw new Error("Release must not be a prerelease")
+          if (typeof release.isDraft !== "boolean") throw new Error("unexpected Release draft state")
+          NODE
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
