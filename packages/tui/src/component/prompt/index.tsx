@@ -338,6 +338,7 @@ export function Prompt(props: PromptProps) {
     extmarkToPartIndex: Map<number, number>
     interrupt: number
     placeholder: number
+    clipboardPending: number
   }>({
     placeholder: randomIndex(list().length),
     prompt: {
@@ -347,6 +348,7 @@ export function Prompt(props: PromptProps) {
     mode: "normal",
     extmarkToPartIndex: new Map(),
     interrupt: 0,
+    clipboardPending: 0,
   })
 
   createEffect(
@@ -426,17 +428,22 @@ export function Prompt(props: PromptProps) {
         run: async (ctx: CommandContext<Renderable, KeyEvent>) => {
           ctx.event.preventDefault()
           ctx.event.stopPropagation()
-          const content = await clipboard.read?.()
-          if (content?.mime.startsWith("image/")) {
-            await pasteAttachment({
-              filename: "clipboard",
-              mime: content.mime,
-              content: content.data,
-            })
-            return
-          }
-          if (content?.mime === "text/plain") {
-            await pasteInputText(content.data)
+          setStore("clipboardPending", (pending) => pending + 1)
+          try {
+            const content = await clipboard.read?.()
+            if (content?.mime.startsWith("image/")) {
+              await pasteAttachment({
+                filename: "clipboard",
+                mime: content.mime,
+                content: content.data,
+              })
+              return
+            }
+            if (content?.mime === "text/plain") {
+              await pasteInputText(content.data)
+            }
+          } finally {
+            setStore("clipboardPending", (pending) => pending - 1)
           }
         },
       },
@@ -1559,6 +1566,11 @@ export function Prompt(props: PromptProps) {
           />
         </box>
         <box width="100%" flexDirection="row" justifyContent="space-between">
+          <Show when={store.clipboardPending > 0}>
+            <box paddingLeft={3} paddingRight={1} flexShrink={0}>
+              <Spinner color={theme.accent}>Reading clipboard...</Spinner>
+            </box>
+          </Show>
           <Switch>
             <Match when={working()}>
               <box

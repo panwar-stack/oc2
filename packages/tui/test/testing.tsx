@@ -15,6 +15,7 @@ export {
 } from "./cli/cmd/tui/sync-fixture"
 
 export { ArgsProvider } from "../src/context/args"
+export { ClipboardProvider } from "../src/context/clipboard"
 export { EditorContextProvider } from "../src/context/editor"
 export { KVProvider } from "../src/context/kv"
 export { LocalProvider } from "../src/context/local"

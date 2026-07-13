@@ -6,12 +6,21 @@ import { Global } from "@oc2-ai/core/global"
 import { onMount } from "solid-js"
 import { tmpdir } from "../../../fixture/fixture"
 
+type PromptCommand = {
+  name: string
+  run(ctx: { event: { preventDefault(): void; stopPropagation(): void } }): void | Promise<void>
+}
+
+const promptCommands = new Map<string, PromptCommand>()
+
 mock.module("../../../../../tui/src/keymap", () => ({
   OC2_BASE_MODE: "base",
   formatKeyBindings: () => "",
   OpencodeKeymapProvider: (props: { children: unknown }) => props.children,
   registerOpencodeKeymap: () => {},
-  useBindings: () => {},
+  useBindings: (get: () => { commands?: PromptCommand[] }) => {
+    for (const command of get().commands ?? []) promptCommands.set(command.name, command)
+  },
   useCommandShortcut: (command: string) => () => (command === "command.palette.show" ? "ctrl+p" : "tab"),
   useCommandSlashes: () => () => [],
   useLeaderActive: () => () => false,
@@ -40,6 +49,7 @@ mock.module("../../../../../tui/src/context/command-palette", () => ({
 
 const {
   ArgsProvider,
+  ClipboardProvider,
   createEventSource,
   DialogProvider,
   directory,
@@ -167,10 +177,14 @@ const fetchForPrompt = (async (input: RequestInfo | URL) => {
   throw new Error(`unexpected request: ${url.pathname}`)
 }) as typeof globalThis.fetch
 
-async function mountPrompt(props: { sessionID?: string }) {
+async function mountPrompt(props: {
+  sessionID?: string
+  clipboard?: { read?(): Promise<{ data: string; mime: string } | undefined> }
+}) {
   const { Prompt } = await import("../../../../../tui/src/component/prompt")
   const events = createEventSource()
   let sync!: ReturnType<typeof useSync>
+  let prompt!: { reset(): void }
   let ready!: () => void
   const mounted = new Promise<void>((resolve) => {
     ready = resolve
@@ -179,7 +193,14 @@ async function mountPrompt(props: { sessionID?: string }) {
   function Probe() {
     sync = useSync()
     onMount(ready)
-    return <Prompt sessionID={props.sessionID} />
+    return (
+      <Prompt
+        sessionID={props.sessionID}
+        ref={(value) => {
+          if (value) prompt = value
+        }}
+      />
+    )
   }
 
   const app = await testRender(
@@ -214,11 +235,13 @@ async function mountPrompt(props: { sessionID?: string }) {
                             <PromptStashProvider>
                               <DialogProvider>
                                 <PromptHistoryProvider>
-                                  <EditorContextProvider>
-                                    <box width={100} height={8}>
-                                      <Probe />
-                                    </box>
-                                  </EditorContextProvider>
+                                  <ClipboardProvider value={props.clipboard}>
+                                    <EditorContextProvider>
+                                      <box width={100} height={8}>
+                                        <Probe />
+                                      </box>
+                                    </EditorContextProvider>
+                                  </ClipboardProvider>
                                 </PromptHistoryProvider>
                               </DialogProvider>
                             </PromptStashProvider>
@@ -239,10 +262,132 @@ async function mountPrompt(props: { sessionID?: string }) {
 
   await mounted
   await wait(() => sync.status === "complete")
-  return { app, events, sync }
+  return { app, events, prompt, sync }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, reject, resolve }
+}
+
+function paste() {
+  const command = promptCommands.get("prompt.paste")
+  if (!command) throw new Error("prompt paste command was not registered")
+  return command.run({
+    event: {
+      preventDefault() {},
+      stopPropagation() {},
+    },
+  })
 }
 
 describe("prompt footer", () => {
+  test("shows clipboard feedback until an image is inserted", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const read = deferred<{ data: string; mime: string } | undefined>()
+    const { app, prompt } = await mountPrompt({ clipboard: { read: () => read.promise } })
+
+    try {
+      const operation = paste()
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("Reading clipboard...")
+
+      read.resolve({ data: "aGVsbG8=", mime: "image/png" })
+      await operation
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("[Image 1]")
+      expect(frame).not.toContain("Reading clipboard...")
+    } finally {
+      prompt.reset()
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("clears clipboard feedback after an empty read", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const empty = deferred<{ data: string; mime: string } | undefined>()
+    const { app } = await mountPrompt({ clipboard: { read: () => empty.promise } })
+
+    try {
+      const emptyOperation = paste()
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("Reading clipboard...")
+      empty.resolve(undefined)
+      await emptyOperation
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("Reading clipboard...")
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("clears clipboard feedback after a rejected read", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const failed = deferred<{ data: string; mime: string } | undefined>()
+    const { app } = await mountPrompt({ clipboard: { read: () => failed.promise } })
+
+    try {
+      const operation = paste()
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("Reading clipboard...")
+      failed.reject(new Error("clipboard failed"))
+      await expect(operation).rejects.toThrow("clipboard failed")
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("Reading clipboard...")
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("keeps clipboard feedback while overlapping reads remain", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const first = deferred<{ data: string; mime: string } | undefined>()
+    const second = deferred<{ data: string; mime: string } | undefined>()
+    const reads = [first.promise, second.promise]
+    const { app } = await mountPrompt({ clipboard: { read: () => reads.shift() ?? Promise.resolve(undefined) } })
+
+    try {
+      const firstOperation = paste()
+      const secondOperation = paste()
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("Reading clipboard...")
+
+      first.resolve(undefined)
+      await firstOperation
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("Reading clipboard...")
+
+      second.resolve(undefined)
+      await secondOperation
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("Reading clipboard...")
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
   test("renders elapsed time before usage and commands when session is synced", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
@@ -296,7 +441,8 @@ describe("prompt footer", () => {
     await using tmp = await tmpdir()
     Global.Path.state = tmp.path
     await Bun.write(`${tmp.path}/kv.json`, "{}")
-    const { app, events, sync } = await mountPrompt({ sessionID })
+    const read = deferred<{ data: string; mime: string } | undefined>()
+    const { app, events, sync } = await mountPrompt({ sessionID, clipboard: { read: () => read.promise } })
 
     try {
       await app.renderOnce()
@@ -321,9 +467,14 @@ describe("prompt footer", () => {
         },
       })
       await wait(() => sync.data.session_status[teammateID]?.type === "busy")
+      const operation = paste()
       await app.renderOnce()
 
-      expect(app.captureCharFrame()).toContain("team working")
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("Reading clipboard...")
+      expect(frame).toContain("team working")
+      read.resolve(undefined)
+      await operation
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
