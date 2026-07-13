@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process"
-import { readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { platform, release, tmpdir } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
@@ -27,50 +27,65 @@ function writeOsc52(text: string) {
 }
 
 export async function read() {
-  if (platform() === "darwin") {
-    const file = path.join(tmpdir(), "opencode-clipboard.png")
-    try {
-      await exec("osascript", [
-        "-e",
-        'set imageData to the clipboard as "PNGf"',
-        "-e",
-        `set fileRef to open for access POSIX file "${file}" with write permission`,
-        "-e",
-        "set eof fileRef to 0",
-        "-e",
-        "write imageData to fileRef",
-        "-e",
-        "close access fileRef",
-      ])
-      return { data: (await readFile(file)).toString("base64"), mime: "image/png" }
-    } catch {
-      // Fall through to text clipboard.
-    } finally {
-      await rm(file, { force: true }).catch(() => {})
-    }
-  }
-
-  if (platform() === "win32" || release().includes("WSL")) {
-    const script =
-      "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img) { $ms = New-Object System.IO.MemoryStream; $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); [System.Convert]::ToBase64String($ms.ToArray()) }"
-    const image = await command("powershell.exe", ["-NonInteractive", "-NoProfile", "-command", script]).catch(() =>
-      Buffer.alloc(0),
-    )
-    if (image.length) return { data: image.toString().trim(), mime: "image/png" }
-  }
-
-  if (platform() === "linux") {
-    const wayland = await command("wl-paste", ["-t", "image/png"]).catch(() => Buffer.alloc(0))
-    if (wayland.length) return { data: wayland.toString("base64"), mime: "image/png" }
-    const x11 = await command("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"]).catch(() =>
-      Buffer.alloc(0),
-    )
-    if (x11.length) return { data: x11.toString("base64"), mime: "image/png" }
-  }
+  const image = await readImage()
+  if (image) return image
 
   const { default: clipboardy } = await import("clipboardy")
   const text = await clipboardy.read().catch(() => undefined)
   if (text) return { data: text, mime: "text/plain" }
+}
+
+export async function readImage(
+  os = platform(),
+  version = release(),
+  run: (command: string, args?: string[]) => Promise<Buffer> = command,
+  readMac = readMacImage,
+) {
+  if (os === "darwin") {
+    const image = await readMac().catch(() => Buffer.alloc(0))
+    if (image.length) return { data: image.toString("base64"), mime: "image/png" }
+  }
+
+  if (os === "win32" || /microsoft|wsl/i.test(version)) {
+    const script =
+      "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img) { $ms = New-Object System.IO.MemoryStream; $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); [System.Convert]::ToBase64String($ms.ToArray()) }"
+    const image = await run("powershell.exe", ["-NonInteractive", "-NoProfile", "-command", script]).catch(() =>
+      Buffer.alloc(0),
+    )
+    const data = image.toString().trim()
+    if (data) return { data, mime: "image/png" }
+  }
+
+  if (os === "linux") {
+    const wayland = await run("wl-paste", ["-t", "image/png"]).catch(() => Buffer.alloc(0))
+    if (wayland.length) return { data: wayland.toString("base64"), mime: "image/png" }
+    const x11 = await run("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"]).catch(() =>
+      Buffer.alloc(0),
+    )
+    if (x11.length) return { data: x11.toString("base64"), mime: "image/png" }
+  }
+}
+
+async function readMacImage() {
+  const directory = await mkdtemp(path.join(tmpdir(), "oc2-clipboard-"))
+  const file = path.join(directory, "clipboard.png")
+  try {
+    await exec("osascript", [
+      "-e",
+      'set imageData to the clipboard as "PNGf"',
+      "-e",
+      `set fileRef to open for access POSIX file "${file}" with write permission`,
+      "-e",
+      "set eof fileRef to 0",
+      "-e",
+      "write imageData to fileRef",
+      "-e",
+      "close access fileRef",
+    ])
+    return readFile(file)
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => {})
+  }
 }
 
 export function copyCommand(
