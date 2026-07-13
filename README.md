@@ -238,6 +238,7 @@ See [Extensions](./docs/extensions.md) and [Providers](./docs/providers.md) for 
 - [Providers](./docs/providers.md)
 - [Agents and permissions](./docs/agents-permissions.md)
 - [Extensions: MCP, plugins, and skills](./docs/extensions.md)
+- [npm publishing guide](./docs/npm-publishing.md)
 - [Environment variables](./docs/reference/environment.md)
 - [Keybindings](./docs/reference/keybindings.md)
 

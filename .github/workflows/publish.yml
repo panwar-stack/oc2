@@ -173,86 +173,8 @@ jobs:
             packages/opencode/dist/oc2-windows-x64
             packages/opencode/dist/oc2-windows-x64-baseline
 
-  sign-windows:
-    needs: build
-    runs-on: blacksmith-4vcpu-windows-2025
-    permissions:
-      id-token: write
-    outputs:
-      artifact: ${{ steps.artifact.outputs.name }}
-    env:
-      TRANSFER_DIR: ${{ github.workspace }}\transfer\${{ github.sha }}\${{ github.run_attempt }}\windows
-    steps:
-      - name: Download unsigned native packages
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: ${{ needs.build.outputs.windows-artifact }}
-          path: ${{ env.TRANSFER_DIR }}
-
-      - name: Azure login
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign Windows binaries
-        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
-        with:
-          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-          files: |
-            ${{ env.TRANSFER_DIR }}\oc2-windows-arm64\bin\oc2.exe
-            ${{ env.TRANSFER_DIR }}\oc2-windows-x64\bin\oc2.exe
-            ${{ env.TRANSFER_DIR }}\oc2-windows-x64-baseline\bin\oc2.exe
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-cli-credential: false
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-          exclude-interactive-browser-credential: true
-
-      - name: Verify Windows signatures
-        shell: pwsh
-        run: |
-          $files = @(
-            "$env:TRANSFER_DIR\oc2-windows-arm64\bin\oc2.exe",
-            "$env:TRANSFER_DIR\oc2-windows-x64\bin\oc2.exe",
-            "$env:TRANSFER_DIR\oc2-windows-x64-baseline\bin\oc2.exe"
-          )
-
-          foreach ($file in $files) {
-            $signature = Get-AuthenticodeSignature $file
-            if ($signature.Status -ne "Valid") {
-              throw "Invalid signature for ${file}: $($signature.Status)"
-            }
-          }
-
-      - name: Select artifact name
-        id: artifact
-        shell: pwsh
-        run: '"name=oc2-native-signed-$env:GITHUB_SHA-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
-
-      - name: Upload signed native packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.artifact.outputs.name }}
-          if-no-files-found: error
-          retention-days: 7
-          path: |
-            ${{ env.TRANSFER_DIR }}\oc2-windows-arm64
-            ${{ env.TRANSFER_DIR }}\oc2-windows-x64
-            ${{ env.TRANSFER_DIR }}\oc2-windows-x64-baseline
-
   publish:
-    needs:
-      - build
-      - sign-windows
+    needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -265,11 +187,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Setup Node and npm registry
+      - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
 
       - name: Verify trusted-publishing npm version
         shell: bash
@@ -296,10 +217,10 @@ jobs:
           name: ${{ needs.build.outputs.unix-artifact }}
           path: ${{ env.TRANSFER_DIR }}
 
-      - name: Download signed Windows native packages
+      - name: Download unsigned Windows native packages
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ${{ needs.sign-windows.outputs.artifact }}
+          name: ${{ needs.build.outputs.windows-artifact }}
           path: ${{ env.TRANSFER_DIR }}
 
       - name: Validate publish package set
