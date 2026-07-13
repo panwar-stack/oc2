@@ -25,11 +25,11 @@ jobs:
       tag: ${{ steps.find.outputs.tag || steps.create.outputs.tag }}
       complete: ${{ steps.find.outputs.complete }}
     steps:
-      - name: Verify master dispatch
+      - name: Verify main dispatch
         shell: bash
         run: |
-          if [ "$GITHUB_REF" != "refs/heads/master" ]; then
-            echo "workflow must be dispatched from refs/heads/master, got ${GITHUB_REF}" >&2
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "workflow must be dispatched from refs/heads/main, got ${GITHUB_REF}" >&2
             exit 1
           fi
 
