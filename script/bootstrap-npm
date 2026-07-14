@@ -107,7 +107,7 @@ bun ./packages/opencode/script/build.ts
 # The JavaScript template expression must be evaluated by Bun, not Bash.
 # shellcheck disable=SC2016
 OC2_VERSION="$BOOTSTRAP_VERSION" bun -e '
-import { validateNativePackages } from "./packages/opencode/script/publish.ts"
+import { validateNativePackages } from "./packages/opencode/script/release-artifacts.ts"
 
 const version = await validateNativePackages("./packages/opencode/dist")
 if (version !== process.env.OC2_VERSION) {
