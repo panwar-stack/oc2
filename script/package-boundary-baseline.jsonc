@@ -2,6 +2,12 @@
   "version": 1,
   "exceptions": [
     {
+      "source": "packages/core/test/provider-parity-catalog.test.ts",
+      "import": "../../opencode/test/tool/fixtures/models-api.json",
+      "target": "packages/opencode/test/tool/fixtures/models-api.json",
+      "reason": "core provider parity test imports the opencode models API fixture",
+    },
+    {
       // TODO(PR-7/PR-8 cleanup): replace with a stable TUI testing/package surface.
       "source": "packages/opencode/test/cli/cmd/tui/prompt-footer.test.tsx",
       "import": "../../../../../tui/src/component/prompt",
@@ -14,6 +20,12 @@
       "import": "../../../../tui/src/feature-plugins/builtins",
       "target": "packages/tui/src/feature-plugins/builtins.ts",
       "reason": "existing test imports TUI builtins before boundary guardrail",
+    },
+    {
+      "source": "packages/opencode/test/session/llm-native.test.ts",
+      "import": "../../../core/test/fixtures/provider-parity-inventory.json",
+      "target": "packages/core/test/fixtures/provider-parity-inventory.json",
+      "reason": "opencode native LLM test imports the core provider parity inventory",
     },
   ],
 }
