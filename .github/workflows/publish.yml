@@ -308,7 +308,6 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      id-token: write
     env:
       TRANSFER_DIR: ${{ github.workspace }}/transfer/${{ needs.plan.outputs.source }}/${{ github.run_attempt }}/release
     steps:
@@ -323,21 +322,8 @@ jobs:
           node-version: "24"
           registry-url: https://registry.npmjs.org
 
-      - name: Verify trusted-publishing npm version
-        shell: bash
-        run: |
-          npm_version=$(npm --version)
-          node - "$npm_version" <<'NODE'
-          const value = process.argv[2]
-          const version = value.split(".").map(Number)
-          const valid = version.length === 3 && version.every(Number.isInteger)
-          const supported = valid && (version[0] > 11 ||
-            version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1))
-          if (!supported) {
-            console.error(`npm >=11.5.1 is required for trusted publishing, got ${value}`)
-            process.exit(1)
-          }
-          NODE
+      - name: Authenticate with npm
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
