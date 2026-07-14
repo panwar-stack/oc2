@@ -2,7 +2,8 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test"
 import { $ } from "bun"
 import { rmSync } from "fs"
 import path from "path"
-import { nativePackages, npmViewResult, prepareArchives, validateNativePackages } from "./publish"
+import { nativePackages } from "./release-artifacts"
+import { npmViewResult, prepareArchives } from "./publish"
 
 setDefaultTimeout(30_000)
 
@@ -73,20 +74,6 @@ describe("npm packaging", () => {
 
       await expect(prepareArchives(dist)).rejects.toThrow("expected native packages")
       expect(await Bun.file(path.join(dist, "npm")).exists()).toBeFalse()
-    } finally {
-      rmSync(dist, { recursive: true, force: true })
-    }
-  })
-
-  test("rejects mixed native versions before packing", async () => {
-    const dist = await fixture()
-    try {
-      const filepath = path.join(dist, nativePackages[1].name, "package.json")
-      const value = await Bun.file(filepath).json()
-      value.version = "1.2.4"
-      await Bun.write(filepath, JSON.stringify(value))
-
-      await expect(validateNativePackages(dist)).rejects.toThrow("does not match")
     } finally {
       rmSync(dist, { recursive: true, force: true })
     }

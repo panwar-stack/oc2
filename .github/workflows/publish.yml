@@ -224,7 +224,7 @@ jobs:
             exit 1
           fi
 
-          bun -e 'import { validateNativePackages } from "./packages/opencode/script/publish.ts"; const version = await validateNativePackages("packages/opencode/dist"); if (version !== process.env.OC2_VERSION) throw new Error("built version " + version + " does not match " + process.env.OC2_VERSION)'
+          bun -e 'import { validateNativePackages } from "./packages/opencode/script/release-artifacts.ts"; const version = await validateNativePackages("packages/opencode/dist"); if (version !== process.env.OC2_VERSION) throw new Error("built version " + version + " does not match " + process.env.OC2_VERSION)'
         env:
           OC2_VERSION: ${{ needs.plan.outputs.version }}
 
@@ -283,10 +283,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
-
-      - name: Authenticate with npm
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -326,18 +322,11 @@ jobs:
             exit 1
           fi
 
-          bun -e 'import { validateNativePackages } from "./packages/opencode/script/publish.ts"; const version = await validateNativePackages(process.env.TRANSFER_DIR); if (version !== process.env.OC2_VERSION) throw new Error("artifact version " + version + " does not match " + process.env.OC2_VERSION)'
+          bun -e 'import { validateNativePackages } from "./packages/opencode/script/release-artifacts.ts"; const version = await validateNativePackages(process.env.TRANSFER_DIR); if (version !== process.env.OC2_VERSION) throw new Error("artifact version " + version + " does not match " + process.env.OC2_VERSION)'
           rm -rf packages/opencode/dist
           mv "$TRANSFER_DIR" packages/opencode/dist
         env:
           OC2_VERSION: ${{ needs.plan.outputs.version }}
-
-      - name: Publish native packages and wrapper
-        run: ./packages/opencode/script/publish.ts
-        env:
-          OC2_VERSION: ${{ needs.plan.outputs.version }}
-          OC2_CHANNEL: latest
-          NPM_CONFIG_PROVENANCE: ${{ needs.plan.outputs.source == github.sha }}
 
       - name: Publish GitHub Release
         shell: bash
@@ -347,6 +336,7 @@ jobs:
           SOURCE: ${{ needs.plan.outputs.source }}
           MARKER: <!-- oc2-release-source:${{ needs.plan.outputs.source }} -->
           RELEASE_FILE: ${{ runner.temp }}/oc2-release.json
+          RELEASE_BODY_FILE: ${{ runner.temp }}/oc2-release-body.md
         run: |
           set -euo pipefail
           verify_ref="refs/oc2-release-publish/${TAG}"
@@ -364,6 +354,7 @@ jobs:
           node <<'NODE'
           const fs = require("node:fs")
           const release = JSON.parse(fs.readFileSync(process.env.RELEASE_FILE, "utf8"))
+          const stale = ["npm: https://www.npmjs", "com/package/oc2-ai/v/0.0.2"].join(".")
           if (release.tagName !== process.env.TAG) throw new Error("Release tag changed before publication")
           if (release.targetCommitish !== process.env.SOURCE) {
             throw new Error("Release source changed before publication")
@@ -372,6 +363,64 @@ jobs:
             throw new Error("Release source marker changed before publication")
           }
           if (release.isPrerelease) throw new Error("Release must not be a prerelease")
-          if (typeof release.isDraft !== "boolean") throw new Error("unexpected Release draft state")
+          if (release.isDraft !== true) throw new Error("Release must still be a draft")
+          if (process.env.TAG === "v0.0.2") {
+            const lines = release.body.split(/\r?\n/)
+            if (lines.filter((line) => line === stale).length > 1) throw new Error("duplicate stale npm URL lines")
+            if (lines.includes(stale)) {
+              fs.writeFileSync(process.env.RELEASE_BODY_FILE, lines.filter((line) => line !== stale).join("\n"))
+            }
+          }
+          NODE
+
+          if [ -f "$RELEASE_BODY_FILE" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RELEASE_BODY_FILE"
+          fi
+
+          gh release view "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets,body,isDraft,isPrerelease,tagName,targetCommitish > "$RELEASE_FILE"
+          node <<'NODE'
+          const fs = require("node:fs")
+          const release = JSON.parse(fs.readFileSync(process.env.RELEASE_FILE, "utf8"))
+          const stale = ["npm: https://www.npmjs", "com/package/oc2-ai/v/0.0.2"].join(".")
+          const expected = [
+            "oc2-darwin-arm64.zip",
+            "oc2-darwin-x64-baseline.zip",
+            "oc2-darwin-x64.zip",
+            "oc2-linux-arm64-musl.tar.gz",
+            "oc2-linux-arm64.tar.gz",
+            "oc2-linux-x64-baseline-musl.tar.gz",
+            "oc2-linux-x64-baseline.tar.gz",
+            "oc2-linux-x64-musl.tar.gz",
+            "oc2-linux-x64.tar.gz",
+            "oc2-windows-arm64.zip",
+            "oc2-windows-x64-baseline.zip",
+            "oc2-windows-x64.zip",
+          ]
+          if (release.tagName !== process.env.TAG) throw new Error("Release tag changed before publication")
+          if (release.targetCommitish !== process.env.SOURCE) {
+            throw new Error("Release source changed before publication")
+          }
+          if (typeof release.body !== "string" || !release.body.includes(process.env.MARKER)) {
+            throw new Error("Release source marker changed before publication")
+          }
+          if (process.env.TAG === "v0.0.2" && release.body.split(/\r?\n/).includes(stale)) {
+            throw new Error("stale npm URL remains in Release body")
+          }
+          if (release.isPrerelease) throw new Error("Release must not be a prerelease")
+          if (release.isDraft !== true) throw new Error("Release must still be a draft")
+          if (!Array.isArray(release.assets)) throw new Error("unexpected Release assets")
+          const names = release.assets.map((asset) => asset && asset.name).sort()
+          if (JSON.stringify(names) !== JSON.stringify(expected)) {
+            throw new Error(`Release assets must be exactly ${expected.join(", ")}; found ${names.join(", ")}`)
+          }
+          for (const asset of release.assets) {
+            if (typeof asset !== "object" || asset === null) throw new Error("unexpected Release asset")
+            if (asset.state !== "uploaded") throw new Error(`Release asset ${asset.name} is not uploaded`)
+            if (!Number.isInteger(asset.size) || asset.size <= 0) {
+              throw new Error(`Release asset ${asset.name} is empty`)
+            }
+          }
           NODE
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
