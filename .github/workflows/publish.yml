@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: npm-publish
+  group: github-release-publish
   cancel-in-progress: false
 
 permissions:
