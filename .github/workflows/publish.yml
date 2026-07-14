@@ -129,56 +129,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MARKER: <!-- oc2-release-source:${{ github.sha }} -->
           TAGS_FILE: ${{ runner.temp }}/oc2-tags.txt
-          NPM_FILE: ${{ runner.temp }}/oc2-npm-versions.json
-          NPM_ERROR_FILE: ${{ runner.temp }}/oc2-npm-error.txt
-          ALLOCATION_FILE: ${{ runner.temp }}/oc2-allocation.json
+          RELEASES_FILE: ${{ runner.temp }}/oc2-releases.json
         run: |
           set -euo pipefail
           git ls-remote --tags origin 'refs/tags/v*' > "$TAGS_FILE"
-
-          npm_status=0
-          npm view oc2-ai versions --json > "$NPM_FILE" 2> "$NPM_ERROR_FILE" || npm_status=$?
-          if [ "$npm_status" -ne 0 ]; then
-            if ! grep -Eq '(^|[^[:alnum:]_])E404([^[:alnum:]_]|$)' "$NPM_FILE" "$NPM_ERROR_FILE"; then
-              cat "$NPM_ERROR_FILE" >&2
-              exit "$npm_status"
-            fi
-            printf '[]\n' > "$NPM_FILE"
-          fi
-
-          node <<'NODE'
-          const fs = require("node:fs")
-          const semver = require("semver")
-
-          const tags = fs.readFileSync(process.env.TAGS_FILE, "utf8")
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .map((line) => line.split(/\s+/)[1])
-            .filter((ref) => typeof ref === "string" && ref.startsWith("refs/tags/v"))
-            .map((ref) => ref.slice("refs/tags/v".length).replace(/\^\{\}$/, ""))
-          const npmValue = JSON.parse(fs.readFileSync(process.env.NPM_FILE, "utf8"))
-          const npmVersions = typeof npmValue === "string" ? [npmValue] : npmValue
-          if (!Array.isArray(npmVersions) || npmVersions.some((version) => typeof version !== "string")) {
-            throw new Error("unexpected npm versions response")
-          }
-          const versions = [...new Set([...tags, ...npmVersions])]
-            .filter((version) => semver.valid(version) === version && semver.prerelease(version) === null)
-            .sort(semver.rcompare)
-          const version = semver.inc(versions[0] || "0.0.0", "patch")
-          if (!version) throw new Error("could not allocate patch version")
-          fs.writeFileSync(process.env.ALLOCATION_FILE, `${JSON.stringify({ version })}\n`)
-          NODE
-
-          VERSION=$(node -e 'const fs = require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.env.ALLOCATION_FILE, "utf8")).version)')
+          VERSION=$(bun ./script/release-plan.ts)
           TAG="v${VERSION}"
-          NOTES=$(printf '%s\n\nnpm: https://www.npmjs.com/package/oc2-ai/v/%s' "$MARKER" "$VERSION")
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --generate-notes \
-            --notes "$NOTES" \
+            --notes "$MARKER" \
             --fail-on-no-commits
           printf 'version=%s\ntag=%s\nsource=%s\n' "$VERSION" "$TAG" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 

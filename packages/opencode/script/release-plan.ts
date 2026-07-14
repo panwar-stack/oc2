@@ -2,15 +2,7 @@ import semver from "semver"
 
 export function findRelease(pages: unknown, sourceSha: string) {
   if (!/^[0-9a-f]{40}$/.test(sourceSha)) throw new Error(`invalid release source SHA: ${JSON.stringify(sourceSha)}`)
-  if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
-    throw new Error("unexpected GitHub Releases response")
-  }
-
-  const values = (pages as unknown[][]).flat()
-  if (values.some((value) => typeof value !== "object" || value === null || Array.isArray(value))) {
-    throw new Error("unexpected GitHub Release")
-  }
-  const releases = values as Record<string, unknown>[]
+  const releases = releasesFromPages(pages)
   const sourceMarker = `<!-- oc2-release-source:${sourceSha} -->`
   const matches = releases.filter((release) => typeof release.body === "string" && release.body.includes(sourceMarker))
   if (matches.length > 1) throw new Error(`found ${matches.length} Releases for source commit`)
@@ -49,6 +41,36 @@ export function findRelease(pages: unknown, sourceSha: string) {
   return { state: "missing", complete: false } as const
 }
 
+export function allocateVersion(
+  pages: unknown,
+  tagRefs: readonly string[],
+  increment: (version: string) => string | null = (version) => semver.inc(version, "patch"),
+) {
+  const versions = new Set(
+    [...releasesFromPages(pages).map((release) => release.tag_name), ...tagRefs]
+      .filter((tag): tag is string => typeof tag === "string")
+      .map((tag) => tag.replace(/^refs\/tags\//, "").replace(/\^\{\}$/, ""))
+      .filter((tag) => tag.startsWith("v"))
+      .map((tag) => tag.slice(1))
+      .filter((version) => semver.valid(version) === version && semver.prerelease(version) === null),
+  )
+  const version = increment([...versions].sort(semver.rcompare)[0] ?? "0.0.0")
+  if (!version) throw new Error("could not allocate patch version")
+  return version
+}
+
+function releasesFromPages(pages: unknown) {
+  if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+    throw new Error("unexpected GitHub Releases response")
+  }
+
+  const values = pages.flat()
+  if (values.some((value) => typeof value !== "object" || value === null || Array.isArray(value))) {
+    throw new Error("unexpected GitHub Release")
+  }
+  return values as Record<string, unknown>[]
+}
+
 function validateRelease(release: Record<string, unknown>) {
   if (typeof release.body !== "string") throw new Error("workflow Release body must be a string")
   const prefixes = release.body.match(/<!-- oc2-release-source:/g) ?? []
@@ -73,10 +95,22 @@ function validateRelease(release: Record<string, unknown>) {
 
 if (import.meta.main) {
   const releasesFile = process.env.RELEASES_FILE
-  const sourceSha = process.env.GITHUB_SHA
-  if (!releasesFile || !sourceSha) throw new Error("missing release plan environment")
+  if (!releasesFile) throw new Error("missing release plan environment")
 
   const pages: unknown = await Bun.file(releasesFile).json()
+  const tagsFile = process.env.TAGS_FILE
+  if (tagsFile) {
+    const tagRefs = (await Bun.file(tagsFile).text())
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => line.split(/\s+/)[1])
+      .filter((tag): tag is string => typeof tag === "string")
+    process.stdout.write(`${allocateVersion(pages, tagRefs)}\n`)
+    process.exit(0)
+  }
+
+  const sourceSha = process.env.GITHUB_SHA
+  if (!sourceSha) throw new Error("missing release plan environment")
   const plan = findRelease(pages, sourceSha)
   const output = [`complete=${plan.complete}`, `state=${plan.state}`]
   if (plan.state !== "missing") {

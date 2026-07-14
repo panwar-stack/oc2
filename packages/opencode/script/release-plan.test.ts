@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { findRelease } from "./release-plan"
+import { allocateVersion, findRelease } from "./release-plan"
 
 const source = "1111111111111111111111111111111111111111"
 const foreign = "2222222222222222222222222222222222222222"
@@ -17,6 +17,45 @@ function release(overrides: Record<string, unknown> = {}) {
 }
 
 describe("release plan", () => {
+  test("allocates 0.0.1 with empty release history", () => {
+    expect(allocateVersion([], [])).toBe("0.0.1")
+  })
+
+  test("allocates from Git-tag-only history", () => {
+    expect(allocateVersion([], ["refs/tags/v1.2.3"])).toBe("1.2.4")
+  })
+
+  test("allocates from Release-only history", () => {
+    expect(allocateVersion([[{ tag_name: "v1.2.3" }]], [])).toBe("1.2.4")
+  })
+
+  test("reserves versions used by draft Releases", () => {
+    expect(allocateVersion([[release({ tag_name: "v1.2.3" })]], [])).toBe("1.2.4")
+  })
+
+  test("selects the highest version across Releases and Git tags", () => {
+    expect(allocateVersion([[{ tag_name: "v1.2.3" }]], ["refs/tags/v1.2.4"])).toBe("1.2.5")
+  })
+
+  test("deduplicates duplicate and annotated Git tags", () => {
+    expect(
+      allocateVersion([[{ tag_name: "v1.2.3" }, { tag_name: "v1.2.3" }]], ["refs/tags/v1.2.3", "refs/tags/v1.2.3^{}"]),
+    ).toBe("1.2.4")
+  })
+
+  test("ignores malformed and prerelease versions", () => {
+    expect(
+      allocateVersion(
+        [[{ tag_name: "v1.2.3-beta.1" }, { tag_name: "invalid" }]],
+        ["refs/tags/v1.2", "refs/tags/v2.0.0-rc.1"],
+      ),
+    ).toBe("0.0.1")
+  })
+
+  test("rejects version increment failures", () => {
+    expect(() => allocateVersion([], [], () => null)).toThrow("could not allocate patch version")
+  })
+
   test("allocates only when no workflow Release exists", () => {
     expect(findRelease([[release({ body: "unrelated" })]], source)).toEqual({ state: "missing", complete: false })
   })
