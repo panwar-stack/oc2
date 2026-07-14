@@ -58,10 +58,19 @@ NPMRC="$WORK_DIR/npmrc"
 LOGGED_IN=0
 
 cleanup_credentials() {
+  local fail_closed="${1:-0}"
+
   if [[ "$LOGGED_IN" == "1" ]]; then
-    NPM_CONFIG_USERCONFIG="$NPMRC" npm logout --registry="$REGISTRY" >/dev/null 2>&1 || true
+    if ! NPM_CONFIG_USERCONFIG="$NPMRC" npm logout --registry="$REGISTRY" >/dev/null 2>&1; then
+      if [[ "$fail_closed" == "1" ]]; then
+        return 1
+      fi
+      printf 'Warning: npm logout failed; revoke the active npm credential manually.\n' >&2
+    fi
     LOGGED_IN=0
   fi
+
+  rm -f "$NPMRC"
 }
 
 cleanup() {
@@ -108,11 +117,23 @@ if (version !== process.env.OC2_VERSION) {
 
 umask 077
 printf 'registry=%s\n' "$REGISTRY" >"$NPMRC"
+chmod 600 "$NPMRC"
 export NPM_CONFIG_USERCONFIG="$NPMRC"
 export NPM_CONFIG_REGISTRY="$REGISTRY"
 
+printf '\nCreate a short-lived granular npm token with read/write package access and Bypass 2FA enabled.\n'
+unset NPM_BOOTSTRAP_TOKEN
+if ! IFS= read -r -s -p 'Paste the bootstrap npm token: ' NPM_BOOTSTRAP_TOKEN; then
+  printf '\n'
+  die "could not read the bootstrap npm token"
+fi
+printf '\n'
+[[ -n "$NPM_BOOTSTRAP_TOKEN" ]] || die "bootstrap npm token cannot be empty"
+
 LOGGED_IN=1
-npm login --auth-type=web --registry="$REGISTRY"
+printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_BOOTSTRAP_TOKEN" >>"$NPMRC"
+unset NPM_BOOTSTRAP_TOKEN
+
 NPM_USER=$(npm whoami --registry="$REGISTRY")
 printf 'Authenticated to npm as %s\n' "$NPM_USER"
 
@@ -148,6 +169,13 @@ for package in "${PACKAGES[@]}"; do
   npm owner ls "$package" --registry="$REGISTRY"
 done
 
+cleanup_credentials 1 || die "could not log out the bootstrap npm token"
+printf 'registry=%s\n' "$REGISTRY" >"$NPMRC"
+chmod 600 "$NPMRC"
+
+LOGGED_IN=1
+npm login --auth-type=web --registry="$REGISTRY"
+
 for package in "${PACKAGES[@]}"; do
   trust=$(npm trust list "$package" --json --registry="$REGISTRY")
   if [[ -z "$trust" ]]; then
@@ -179,7 +207,7 @@ NODE
   printf 'Trusted publishing configured for %s\n' "$package"
 done
 
-cleanup_credentials
+cleanup_credentials 1 || die "could not log out the npm web session"
 rm -rf "$WORK_DIR"
 WORK_DIR=""
 unset NPM_CONFIG_USERCONFIG NPM_CONFIG_REGISTRY
