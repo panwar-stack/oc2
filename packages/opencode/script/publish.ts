@@ -220,7 +220,7 @@ async function publish(item: { name: string; version: string; archive: string })
     console.log(`already published ${item.name}@${item.version}`)
     return
   }
-  await $`npm publish ${item.archive} --access public --tag ${Script.channel}`
+  await $`npm publish ${item.archive} --access public --tag ${Script.channel} --provenance false`
 }
 
 async function main() {
