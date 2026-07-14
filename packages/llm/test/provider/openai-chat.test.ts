@@ -465,6 +465,7 @@ describe("OpenAI Chat route", () => {
         cacheReadInputTokens: 1,
         reasoningTokens: 0,
         totalTokens: 7,
+        providerTotalTokens: 7,
         providerMetadata: {
           openai: {
             prompt_tokens: 5,
@@ -490,6 +491,21 @@ describe("OpenAI Chat route", () => {
           usage,
         },
       ])
+    }),
+  )
+
+  it.effect("keeps incomplete usage absent", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(sseEvents(deltaChunk({}, "stop"), usageChunk({ prompt_tokens: 5, total_tokens: 7 }))),
+        ),
+      )
+
+      expect(response.usage).toBeUndefined()
+      expect(response.events.flatMap((event) => ("usage" in event ? [event.usage] : [])).every((usage) => !usage)).toBe(
+        true,
+      )
     }),
   )
 

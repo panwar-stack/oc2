@@ -325,6 +325,7 @@ describe("Gemini route", () => {
         cacheReadInputTokens: 1,
         reasoningTokens: 1,
         totalTokens: 7,
+        providerTotalTokens: 7,
       })
       const usage = new Usage({
         inputTokens: 5,
@@ -333,6 +334,7 @@ describe("Gemini route", () => {
         cacheReadInputTokens: 1,
         reasoningTokens: 1,
         totalTokens: 7,
+        providerTotalTokens: 7,
         providerMetadata: {
           google: {
             promptTokenCount: 5,
@@ -345,7 +347,7 @@ describe("Gemini route", () => {
       })
       expect(response.events).toEqual([
         { type: "step-start", index: 0 },
-        { type: "reasoning-start", id: "reasoning-0" },
+        { type: "reasoning-start", id: "reasoning-0", providerMetadata: undefined },
         { type: "reasoning-delta", id: "reasoning-0", text: "thinking" },
         { type: "text-start", id: "text-0" },
         { type: "text-delta", id: "text-0", text: "Hello" },
@@ -539,14 +541,32 @@ describe("Gemini route", () => {
     }),
   )
 
-  it.effect("leaves total usage undefined when component counts are missing", () =>
+  it.effect("keeps reasoning-only usage absent", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(request).pipe(
         Effect.provide(fixedResponse(sseEvents({ usageMetadata: { thoughtsTokenCount: 1 } }))),
       )
 
-      expect(response.usage).toMatchObject({ reasoningTokens: 1 })
-      expect(response.usage?.totalTokens).toBeUndefined()
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("keeps incomplete input and cache usage absent", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              usageMetadata: { promptTokenCount: 5, totalTokenCount: 7, cachedContentTokenCount: 3 },
+            }),
+          ),
+        ),
+      )
+
+      expect(response.usage).toBeUndefined()
+      expect(response.events.flatMap((event) => ("usage" in event ? [event.usage] : [])).every((usage) => !usage)).toBe(
+        true,
+      )
     }),
   )
 

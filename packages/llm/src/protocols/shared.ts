@@ -6,6 +6,9 @@ import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
   LLMError,
+  CanonicalUsage,
+  Usage,
+  type CanonicalUsageInput,
   type ContentPart,
   type LLMRequest,
   type MediaPart,
@@ -72,12 +75,9 @@ export interface ToolAccumulator {
  * when at least one is defined. Returns `undefined` when neither input nor
  * output is known so routes don't publish a misleading `0`.
  *
- * Under the additive `LLM.Usage` contract, `inputTokens` and `outputTokens`
- * are the non-cached input and visible output only. The provider-supplied
- * `total` is the source of truth when present; the computed fallback
- * under-counts cache and reasoning by design and exists mainly so
- * Anthropic-style providers (which don't surface a total) still get a
- * sensible aggregate on the input + output axes.
+ * `inputTokens` and `outputTokens` are inclusive compatibility totals. The
+ * provider-supplied `total` is retained when present; otherwise their sum is
+ * the reconciliation fallback.
  */
 export const totalTokens = (
   inputTokens: number | undefined,
@@ -116,6 +116,26 @@ export const subtractTokens = (total: number | undefined, subtrahend: number | u
 export const sumTokens = (...values: ReadonlyArray<number | undefined>): number | undefined => {
   if (values.every((value) => value === undefined)) return undefined
   return values.reduce((acc: number, value) => acc + (value ?? 0), 0)
+}
+
+export const usage = (
+  input: CanonicalUsageInput,
+  reported: { readonly cacheRead?: boolean; readonly cacheWrite?: boolean; readonly reasoning?: boolean } = {},
+): Usage => {
+  const canonical = CanonicalUsage.from(input)
+  const inputTokens = canonical.input + canonical.cache.read + canonical.cache.write
+  const outputTokens = canonical.output + canonical.reasoning
+  return Usage.from({
+    inputTokens,
+    outputTokens,
+    nonCachedInputTokens: canonical.input,
+    ...(canonical.cache.read || reported.cacheRead ? { cacheReadInputTokens: canonical.cache.read } : {}),
+    ...(canonical.cache.write || reported.cacheWrite ? { cacheWriteInputTokens: canonical.cache.write } : {}),
+    ...(canonical.reasoning || reported.reasoning ? { reasoningTokens: canonical.reasoning } : {}),
+    totalTokens: totalTokens(inputTokens, outputTokens, canonical.providerTotal),
+    providerTotalTokens: canonical.providerTotal,
+    providerMetadata: canonical.providerMetadata,
+  })
 }
 
 export const eventError = (route: string, message: string, raw?: string) =>

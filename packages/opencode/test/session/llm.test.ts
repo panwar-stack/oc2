@@ -9,7 +9,7 @@ import { InstanceRef } from "../../src/effect/instance-ref"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
-import type { LLMEvent as LLMEventType } from "@oc2-ai/llm"
+import { CanonicalUsage, type LLMEvent as LLMEventType } from "@oc2-ai/llm"
 import type { EventV2 } from "@oc2-ai/core/event"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
 import { Auth } from "@/auth"
@@ -407,11 +407,8 @@ describe("session.llm.ai-sdk adapter", () => {
     })
   })
 
-  test("emits undefined usage when every AI SDK usage field is missing", async () => {
-    // If every numeric field is undefined the translator should signal "no usage info"
-    // by emitting undefined, not by polluting the event with usage: {}. Downstream cost
-    // telemetry distinguishes "missing" from "zero," so emitting an empty object causes
-    // false positives ("usage was tracked, just empty") instead of correct nulls.
+  test("emits undefined usage when AI SDK category fields are missing", async () => {
+    // A provider total without disjoint categories cannot establish billable usage.
     const events = await adapt([
       {
         type: "finish-step",
@@ -422,19 +419,33 @@ describe("session.llm.ai-sdk adapter", () => {
         usage: {
           inputTokens: undefined,
           outputTokens: undefined,
-          totalTokens: undefined,
+          totalTokens: 3,
           reasoningTokens: undefined,
           cachedInputTokens: undefined,
           inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
           outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
         },
       },
+      {
+        type: "finish-step",
+        response: { id: "response-2", timestamp: new Date(0), modelId: "gpt-test" },
+        finishReason: "stop",
+        rawFinishReason: "stop",
+        providerMetadata: undefined,
+        usage: {
+          inputTokens: 3,
+          outputTokens: undefined,
+          totalTokens: 3,
+          reasoningTokens: 1,
+          cachedInputTokens: undefined,
+          inputTokenDetails: { noCacheTokens: 3, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: 1 },
+        },
+      },
     ])
 
-    expect(events).toHaveLength(1)
-    const stepFinish = events[0]
-    if (stepFinish.type !== "step-finish") throw new Error("expected step-finish")
-    expect(stepFinish.usage).toBeUndefined()
+    expect(events).toHaveLength(2)
+    expect(events.every((event) => event.type === "step-finish" && event.usage === undefined)).toBe(true)
   })
 
   test("reuses adapter state cleanly across streams once finish has fired", async () => {
@@ -500,10 +511,8 @@ describe("session.llm.ai-sdk adapter", () => {
     ])
   })
 
-  // Anthropic emits cache write counts in providerMetadata.anthropic.cacheCreationInputTokens
-  // rather than usage.inputTokenDetails.cacheWriteTokens. Session.getUsage falls back to the
-  // metadata path — but only if the adapter preserves providerMetadata on step-finish.
-  test("preserves providerMetadata on step-finish so Anthropic cache writes survive getUsage", async () => {
+  // Anthropic emits cache writes in provider metadata rather than inputTokenDetails.
+  test("recovers Anthropic cache writes from step metadata", async () => {
     const events = await adapt([
       {
         type: "finish-step",
@@ -526,10 +535,11 @@ describe("session.llm.ai-sdk adapter", () => {
     const stepFinish = events[0]
     if (stepFinish.type !== "step-finish") throw new Error("expected step-finish")
     expect(stepFinish.providerMetadata).toEqual({ anthropic: { cacheCreationInputTokens: 300 } })
-    expect(stepFinish.usage?.cacheWriteInputTokens).toBeUndefined()
+    expect(stepFinish.usage?.nonCachedInputTokens).toBe(500)
+    expect(stepFinish.usage?.cacheWriteInputTokens).toBe(300)
     expect(stepFinish.usage?.cacheReadInputTokens).toBe(200)
 
-    // End-to-end: with the metadata preserved, getUsage extracts cache.write from the fallback path.
+    // End-to-end compatibility still receives the same inclusive totals and event metadata.
     const result = SessionNs.getUsage({
       model: {
         id: "claude-3-5-sonnet",
@@ -553,6 +563,222 @@ describe("session.llm.ai-sdk adapter", () => {
     })
     expect(result.tokens.cache.write).toBe(300)
     expect(result.tokens.cache.read).toBe(200)
+  })
+
+  test("applies AI SDK usage precedence and whitelists reconciliation metadata", async () => {
+    const metadata = {
+      anthropic: {
+        cacheCreationInputTokens: 30,
+        prompt: "secret prompt",
+        responseBody: { secret: true },
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          prompt: "secret prompt",
+          authorization: ["Bearer secret"],
+        },
+      },
+      bedrock: { usage: ["Bearer secret"] },
+      google: { usageMetadata: { promptTokenCount: 100, totalTokenCount: 120, prompt: "secret prompt" } },
+      openrouter: {
+        authorization: "secret",
+        usage: {
+          inputTokens: 100,
+          cost: 0.25,
+          prompt: "secret prompt",
+          headers: { authorization: "secret" },
+          costDetails: ["secret billing payload"],
+        },
+      },
+      custom: { billing: ["secret"], usage: { inputTokens: 100, cost: 0.25 } },
+    }
+    const events = await adapt([
+      {
+        type: "finish-step",
+        response: { id: "metadata-write", timestamp: new Date(0), modelId: "test" },
+        finishReason: "stop",
+        rawFinishReason: "stop",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          totalTokens: 120,
+          inputTokenDetails: { noCacheTokens: 90, cacheReadTokens: 20, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 4, reasoningTokens: 16 },
+        },
+        providerMetadata: metadata,
+      },
+      {
+        type: "finish-step",
+        response: { id: "detail-write", timestamp: new Date(0), modelId: "test" },
+        finishReason: "stop",
+        rawFinishReason: "stop",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          totalTokens: 120,
+          inputTokenDetails: { noCacheTokens: 90, cacheReadTokens: 20, cacheWriteTokens: 30 },
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: 16 },
+        },
+        providerMetadata: metadata,
+      },
+    ])
+
+    const finishes = events.filter((event) => event.type === "step-finish")
+    expect(finishes).toHaveLength(2)
+    expect(CanonicalUsage.fromUsage(finishes[0]!.usage!)).toEqual({
+      input: 50,
+      output: 4,
+      reasoning: 16,
+      cache: { read: 20, write: 30 },
+      providerTotal: 120,
+      providerMetadata: {
+        anthropic: {
+          cacheCreationInputTokens: 30,
+          usage: { input_tokens: 100, output_tokens: 20 },
+        },
+        google: { usageMetadata: { promptTokenCount: 100, totalTokenCount: 120 } },
+        openrouter: { usage: { inputTokens: 100, cost: 0.25 } },
+      },
+    })
+    expect(CanonicalUsage.fromUsage(finishes[1]!.usage!)).toMatchObject({
+      input: 90,
+      output: 4,
+      reasoning: 16,
+      cache: { read: 20, write: 30 },
+    })
+  })
+
+  test("retains metadata-only cache writes in one-step cumulative finish usage", async () => {
+    const events = await adapt([
+      {
+        type: "finish-step",
+        response: { id: "metadata-write", timestamp: new Date(0), modelId: "test" },
+        finishReason: "stop",
+        rawFinishReason: "stop",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 4,
+          totalTokens: 104,
+          inputTokenDetails: { noCacheTokens: 80, cacheReadTokens: 20, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 4, reasoningTokens: undefined },
+        },
+        providerMetadata: { anthropic: { cacheCreationInputTokens: 30 } },
+      },
+      {
+        type: "finish",
+        finishReason: "stop",
+        rawFinishReason: "stop",
+        totalUsage: {
+          inputTokens: 100,
+          outputTokens: 4,
+          totalTokens: 104,
+          inputTokenDetails: { noCacheTokens: 80, cacheReadTokens: 20, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 4, reasoningTokens: undefined },
+        },
+      },
+    ])
+
+    expect(events).toHaveLength(2)
+    const finish = events[1]
+    if (finish.type !== "finish") throw new Error("expected finish")
+    expect(CanonicalUsage.fromUsage(finish.usage!)).toEqual({
+      input: 50,
+      output: 4,
+      reasoning: 0,
+      cache: { read: 20, write: 30 },
+    })
+  })
+
+  test("sums metadata-only cache writes across cumulative finish usage", async () => {
+    const events = await adapt([
+      {
+        type: "finish-step",
+        response: { id: "metadata-write-1", timestamp: new Date(0), modelId: "test" },
+        finishReason: "tool-calls",
+        rawFinishReason: "tool_use",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 4,
+          totalTokens: 104,
+          inputTokenDetails: { noCacheTokens: 80, cacheReadTokens: 20, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 4, reasoningTokens: undefined },
+        },
+        providerMetadata: { anthropic: { cacheCreationInputTokens: 30 } },
+      },
+      {
+        type: "finish-step",
+        response: { id: "metadata-write-2", timestamp: new Date(0), modelId: "test" },
+        finishReason: "stop",
+        rawFinishReason: "end_turn",
+        usage: {
+          inputTokens: 200,
+          outputTokens: 8,
+          totalTokens: 208,
+          inputTokenDetails: { noCacheTokens: 150, cacheReadTokens: 50, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 8, reasoningTokens: undefined },
+        },
+        providerMetadata: { anthropic: { cacheCreationInputTokens: 40 } },
+      },
+      {
+        type: "finish",
+        finishReason: "stop",
+        rawFinishReason: "end_turn",
+        totalUsage: {
+          inputTokens: 300,
+          outputTokens: 12,
+          totalTokens: 312,
+          inputTokenDetails: { noCacheTokens: 230, cacheReadTokens: 70, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 12, reasoningTokens: undefined },
+        },
+      },
+    ])
+
+    const finish = events[2]
+    if (finish.type !== "finish") throw new Error("expected finish")
+    expect(CanonicalUsage.fromUsage(finish.usage!)).toEqual({
+      input: 160,
+      output: 12,
+      reasoning: 0,
+      cache: { read: 70, write: 70 },
+    })
+  })
+
+  test("prefers standard cumulative cache writes over recovered step metadata", async () => {
+    const events = await adapt([
+      {
+        type: "finish-step",
+        response: { id: "metadata-write", timestamp: new Date(0), modelId: "test" },
+        finishReason: "stop",
+        rawFinishReason: "stop",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 4,
+          totalTokens: 104,
+          inputTokenDetails: { noCacheTokens: 80, cacheReadTokens: 20, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 4, reasoningTokens: undefined },
+        },
+        providerMetadata: { anthropic: { cacheCreationInputTokens: 30 } },
+      },
+      {
+        type: "finish",
+        finishReason: "stop",
+        rawFinishReason: "stop",
+        totalUsage: {
+          inputTokens: 100,
+          outputTokens: 4,
+          totalTokens: 104,
+          inputTokenDetails: { noCacheTokens: 55, cacheReadTokens: 20, cacheWriteTokens: 25 },
+          outputTokenDetails: { textTokens: 4, reasoningTokens: undefined },
+        },
+      },
+    ])
+
+    const finish = events[1]
+    if (finish.type !== "finish") throw new Error("expected finish")
+    expect(CanonicalUsage.fromUsage(finish.usage!)).toMatchObject({
+      input: 55,
+      cache: { read: 20, write: 25 },
+    })
   })
 
   test("captures Copilot billed usage from raw Anthropic message deltas per step", async () => {
@@ -1716,10 +1942,17 @@ describe("session.llm.stream", () => {
             Ref.modify(branchCalls, (count) => [count, count + 1] as const).pipe(
               Effect.flatMap((index): Effect.Effect<LLMEventType, Error> => {
                 if (index === 1) {
-                  return Effect.succeed({ type: "provider-error", message: "branch provider failed" } satisfies LLMEventType)
+                  return Effect.succeed({
+                    type: "provider-error",
+                    message: "branch provider failed",
+                  } satisfies LLMEventType)
                 }
                 if (index === 3) return Effect.fail(new Error("branch stream failed"))
-                return Effect.succeed({ type: "text-delta", id: `branch-${index}`, text: `branch ${index}` } satisfies LLMEventType)
+                return Effect.succeed({
+                  type: "text-delta",
+                  id: `branch-${index}`,
+                  text: `branch ${index}`,
+                } satisfies LLMEventType)
               }),
             ),
           )

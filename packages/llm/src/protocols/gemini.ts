@@ -6,7 +6,6 @@ import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
-  Usage,
   type FinishReason,
   type LLMRequest,
   type MediaPart,
@@ -15,6 +14,7 @@ import {
   type ToolCallPart,
   type ToolDefinition,
   type ToolResultContentPart,
+  type Usage,
 } from "../schema"
 import { JsonObject, optionalArray, ProviderShared } from "./shared"
 import { GeminiToolSchema } from "./utils/gemini-tool-schema"
@@ -330,6 +330,7 @@ const fromRequest = Effect.fn("Gemini.fromRequest")(function* (request: LLMReque
 // to produce the inclusive `outputTokens` the rest of the contract expects.
 const mapUsage = (usage: GeminiUsage | undefined) => {
   if (!usage) return undefined
+  if (usage.promptTokenCount === undefined || usage.candidatesTokenCount === undefined) return undefined
   const cached = usage.cachedContentTokenCount
   const nonCached = ProviderShared.subtractTokens(usage.promptTokenCount, cached)
   // `candidatesTokenCount` is visible-only; sum with thoughts to produce the
@@ -338,15 +339,17 @@ const mapUsage = (usage: GeminiUsage | undefined) => {
   // inclusive number from a partial breakdown.
   const outputTokens =
     usage.candidatesTokenCount !== undefined ? usage.candidatesTokenCount + (usage.thoughtsTokenCount ?? 0) : undefined
-  return new Usage({
-    inputTokens: usage.promptTokenCount,
-    outputTokens,
-    nonCachedInputTokens: nonCached,
-    cacheReadInputTokens: cached,
-    reasoningTokens: usage.thoughtsTokenCount,
-    totalTokens: ProviderShared.totalTokens(usage.promptTokenCount, outputTokens, usage.totalTokenCount),
-    providerMetadata: { google: usage },
-  })
+  return ProviderShared.usage(
+    {
+      input: nonCached ?? 0,
+      output: ProviderShared.subtractTokens(outputTokens, usage.thoughtsTokenCount) ?? 0,
+      reasoning: usage.thoughtsTokenCount ?? 0,
+      cache: { read: cached ?? 0, write: 0 },
+      providerTotal: usage.totalTokenCount,
+      providerMetadata: { google: usage },
+    },
+    { cacheRead: cached !== undefined, reasoning: usage.thoughtsTokenCount !== undefined },
+  )
 }
 
 const mapFinishReason = (finishReason: string | undefined, hasToolCalls: boolean): FinishReason => {

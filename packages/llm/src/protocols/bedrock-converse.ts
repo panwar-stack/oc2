@@ -4,7 +4,6 @@ import { Endpoint } from "../route/endpoint"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
-  Usage,
   type CacheHint,
   type FinishReason,
   type LLMRequest,
@@ -13,6 +12,7 @@ import {
   type ToolCallPart,
   type ToolDefinition,
   type ToolResultPart,
+  type Usage,
 } from "../schema"
 import { BedrockEventStream } from "./bedrock-event-stream"
 import { isContextOverflow } from "../provider-error"
@@ -427,17 +427,23 @@ const mapFinishReason = (reason: string): FinishReason => {
 // not break reasoning out of `outputTokens` for any current model.
 const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
   if (!usage) return undefined
+  if (usage.inputTokens === undefined || usage.outputTokens === undefined) return undefined
   const cacheTotal = (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0)
   const nonCached = ProviderShared.subtractTokens(usage.inputTokens, cacheTotal)
-  return new Usage({
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    nonCachedInputTokens: nonCached,
-    cacheReadInputTokens: usage.cacheReadInputTokens,
-    cacheWriteInputTokens: usage.cacheWriteInputTokens,
-    totalTokens: ProviderShared.totalTokens(usage.inputTokens, usage.outputTokens, usage.totalTokens),
-    providerMetadata: { bedrock: usage },
-  })
+  return ProviderShared.usage(
+    {
+      input: nonCached ?? 0,
+      output: usage.outputTokens ?? 0,
+      reasoning: 0,
+      cache: { read: usage.cacheReadInputTokens ?? 0, write: usage.cacheWriteInputTokens ?? 0 },
+      providerTotal: usage.totalTokens,
+      providerMetadata: { bedrock: usage },
+    },
+    {
+      cacheRead: usage.cacheReadInputTokens !== undefined,
+      cacheWrite: usage.cacheWriteInputTokens !== undefined,
+    },
+  )
 }
 
 interface ParserState {

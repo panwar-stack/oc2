@@ -1,4 +1,4 @@
-import { LLMEvent, type Usage } from "@oc2-ai/llm"
+import { CanonicalUsage, LLMEvent, type Usage } from "@oc2-ai/llm"
 import type { HttpRecorder } from "@oc2-ai/http-recorder"
 import { HttpRecorderInternal } from "@oc2-ai/http-recorder/internal"
 import { LLMAISDK } from "@/session/llm/ai-sdk"
@@ -418,15 +418,25 @@ export function normalizeEvents(events: ReadonlyArray<LLMEvent>): ReadonlyArray<
     }
     if (LLMEvent.is.stepStart(event)) result.push({ type: event.type, index: event.index })
     if (LLMEvent.is.stepFinish(event))
-      result.push({ type: event.type, index: event.index, reason: event.reason, usage: normalizeUsage(event.usage) })
+      result.push({
+        type: event.type,
+        index: event.index,
+        reason: event.reason,
+        usage: normalizeUsage(event.usage),
+      })
     if (LLMEvent.is.finish(event))
-      result.push({ type: event.type, reason: event.reason, usage: normalizeUsage(event.usage) })
+      result.push({
+        type: event.type,
+        reason: event.reason,
+        usage: normalizeUsage(event.usage),
+      })
     if (LLMEvent.is.providerError(event))
       result.push({
         type: event.type,
         message: redactString(event.message),
         classification: event.classification,
         retryable: event.retryable,
+        usage: normalizeUsage(event.usage),
       })
   }
   return result.map(compact)
@@ -648,20 +658,14 @@ function hostnameIdentifier(value: string, index: number, labels: ReadonlyArray<
 
 function normalizeUsage(usage: Usage | undefined) {
   if (!usage) return undefined
-  const nonCachedInputTokens =
-    usage.nonCachedInputTokens ??
-    (usage.inputTokens === undefined
-      ? undefined
-      : Math.max(0, usage.inputTokens - (usage.cacheReadInputTokens ?? 0) - (usage.cacheWriteInputTokens ?? 0)))
-  return compact({
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    nonCachedInputTokens,
-    cacheReadInputTokens: usage.cacheReadInputTokens || undefined,
-    cacheWriteInputTokens: usage.cacheWriteInputTokens || undefined,
-    reasoningTokens: usage.reasoningTokens || undefined,
-    totalTokens: usage.totalTokens,
-  })
+  const canonical = CanonicalUsage.fromUsage(usage)
+  if (!canonical) return undefined
+  return {
+    input: canonical.input,
+    output: canonical.output,
+    reasoning: canonical.reasoning,
+    cache: canonical.cache,
+  }
 }
 
 function pushText(result: Array<Record<string, unknown>>, type: "text" | "reasoning", text: string) {

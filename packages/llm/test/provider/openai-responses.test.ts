@@ -654,6 +654,7 @@ describe("OpenAI Responses route", () => {
         cacheReadInputTokens: 1,
         reasoningTokens: 0,
         totalTokens: 7,
+        providerTotalTokens: 7,
         providerMetadata: {
           openai: {
             input_tokens: 5,
@@ -686,6 +687,23 @@ describe("OpenAI Responses route", () => {
           usage,
         },
       ])
+    }),
+  )
+
+  it.effect("keeps incomplete usage absent", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({ type: "response.completed", response: { usage: { input_tokens: 5, total_tokens: 7 } } }),
+          ),
+        ),
+      )
+
+      expect(response.usage).toBeUndefined()
+      expect(response.events.flatMap((event) => ("usage" in event ? [event.usage] : [])).every((usage) => !usage)).toBe(
+        true,
+      )
     }),
   )
 

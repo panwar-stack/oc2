@@ -4,6 +4,55 @@ import { ModelSchema } from "./options"
 import { ToolOutput, ToolResultValue } from "./messages"
 import { ProviderFailureClassification } from "./errors"
 
+const UsageToken = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
+export class CanonicalUsage extends Schema.Class<CanonicalUsage>("LLM.CanonicalUsage")({
+  input: UsageToken,
+  output: UsageToken,
+  reasoning: UsageToken,
+  cache: Schema.Struct({
+    read: UsageToken,
+    write: UsageToken,
+  }),
+  providerTotal: Schema.optional(UsageToken),
+  providerMetadata: Schema.optional(ProviderMetadata),
+}) {
+  static from(input: CanonicalUsageInput) {
+    return decodeCanonicalUsage(input)
+  }
+
+  static fromUsage(input: UsageInput) {
+    const usage = Usage.from(input)
+    if ((usage.nonCachedInputTokens === undefined && usage.inputTokens === undefined) || usage.outputTokens === undefined)
+      return undefined
+    const cacheRead = usage.cacheReadInputTokens ?? 0
+    const cacheWrite = usage.cacheWriteInputTokens ?? 0
+    const reasoning = usage.reasoningTokens ?? 0
+    return decodeCanonicalUsage({
+      input: usage.nonCachedInputTokens ?? Math.max(0, (usage.inputTokens ?? 0) - cacheRead - cacheWrite),
+      output: Math.max(0, (usage.outputTokens ?? 0) - reasoning),
+      reasoning,
+      cache: { read: cacheRead, write: cacheWrite },
+      providerTotal: usage.providerTotalTokens,
+      providerMetadata: usage.providerMetadata,
+    })
+  }
+}
+
+export type CanonicalUsageInput = ConstructorParameters<typeof CanonicalUsage>[0]
+
+const UsageWrite = Schema.Struct({
+  inputTokens: Schema.optional(UsageToken),
+  outputTokens: Schema.optional(UsageToken),
+  nonCachedInputTokens: Schema.optional(UsageToken),
+  cacheReadInputTokens: Schema.optional(UsageToken),
+  cacheWriteInputTokens: Schema.optional(UsageToken),
+  reasoningTokens: Schema.optional(UsageToken),
+  totalTokens: Schema.optional(UsageToken),
+  providerTotalTokens: Schema.optional(UsageToken),
+  providerMetadata: Schema.optional(ProviderMetadata),
+})
+
 /**
  * Token usage reported by an LLM provider.
  *
@@ -13,6 +62,7 @@ import { ProviderFailureClassification } from "./errors"
  * - `inputTokens` — total prompt tokens, *including* cached reads/writes.
  * - `outputTokens` — total output tokens, *including* reasoning.
  * - `totalTokens` — provider-supplied total, or `inputTokens + outputTokens`.
+ * - `providerTotalTokens` — provider-supplied total when its provenance is known.
  *
  * **Non-overlapping breakdown** (every field is independently meaningful;
  * consumers never have to subtract):
@@ -43,10 +93,8 @@ import { ProviderFailureClassification } from "./errors"
  *   `reasoningTokens` is `undefined` and `outputTokens` carries the
  *   combined total — a documented limitation of the Anthropic API.
  *
- * `providerMetadata` always carries the provider's raw usage payload —
- * keyed by provider name (`{ openai: ... }`, `{ anthropic: ... }`, etc.)
- * — for fields we don't normalize and for billing-level audit trails.
- * Matches the same escape-hatch field on `LLMEvent`.
+ * `providerMetadata` carries provider usage and billing fields that are not
+ * normalized, keyed by provider name (`{ openai: ... }`, `{ anthropic: ... }`).
  */
 export class Usage extends Schema.Class<Usage>("LLM.Usage")({
   inputTokens: Schema.optional(Schema.Number),
@@ -56,6 +104,7 @@ export class Usage extends Schema.Class<Usage>("LLM.Usage")({
   cacheWriteInputTokens: Schema.optional(Schema.Number),
   reasoningTokens: Schema.optional(Schema.Number),
   totalTokens: Schema.optional(Schema.Number),
+  providerTotalTokens: Schema.optional(Schema.Number),
   providerMetadata: Schema.optional(ProviderMetadata),
 }) {
   /**
@@ -69,11 +118,14 @@ export class Usage extends Schema.Class<Usage>("LLM.Usage")({
   }
 
   static from(input: UsageInput) {
-    return input instanceof Usage ? input : new Usage(input)
+    return new Usage(decodeUsageWrite(input))
   }
 }
 
 export type UsageInput = Usage | ConstructorParameters<typeof Usage>[0]
+
+const decodeCanonicalUsage = Schema.decodeUnknownSync(CanonicalUsage)
+const decodeUsageWrite = Schema.decodeUnknownSync(UsageWrite)
 
 export const StepStart = Schema.Struct({
   type: Schema.tag("step-start"),
@@ -202,6 +254,7 @@ export const ProviderErrorEvent = Schema.Struct({
   message: Schema.String,
   classification: Schema.optional(ProviderFailureClassification),
   retryable: Schema.optional(Schema.Boolean),
+  usage: Schema.optional(Usage),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ProviderError" })
 export type ProviderErrorEvent = Schema.Schema.Type<typeof ProviderErrorEvent>
@@ -272,7 +325,11 @@ export const LLMEvent = Object.assign(llmEventTagged, {
       ...input,
       usage: input.usage === undefined ? undefined : Usage.from(input.usage),
     }),
-  providerError: ProviderErrorEvent.make,
+  providerError: (input: WithUsage<ProviderErrorEvent>) =>
+    ProviderErrorEvent.make({
+      ...input,
+      usage: input.usage === undefined ? undefined : Usage.from(input.usage),
+    }),
   is: {
     stepStart: llmEventTagged.guards["step-start"],
     textStart: llmEventTagged.guards["text-start"],

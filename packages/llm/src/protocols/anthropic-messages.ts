@@ -6,7 +6,6 @@ import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
-  Usage,
   type CacheHint,
   type FinishReason,
   type LLMRequest,
@@ -16,6 +15,7 @@ import {
   type ToolDefinition,
   type ToolResultContentPart,
   type ToolResultPart,
+  type Usage,
 } from "../schema"
 import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { isContextOverflow } from "../provider-error"
@@ -220,7 +220,7 @@ type AnthropicEvent = Schema.Schema.Type<typeof AnthropicEvent>
 
 interface ParserState {
   readonly tools: ToolStream.State<number>
-  readonly usage?: Usage
+  readonly usage?: AnthropicUsage
   readonly lifecycle: Lifecycle.State
 }
 
@@ -561,49 +561,40 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // part of `output_tokens`, so `reasoningTokens` stays `undefined` and
 // `outputTokens` carries the combined total.
 const mapUsage = (usage: AnthropicUsage | undefined): Usage | undefined => {
-  if (!usage) return undefined
+  if (!usage || usage.input_tokens === undefined || usage.output_tokens === undefined) return undefined
   const nonCached = usage.input_tokens
   const cacheRead = usage.cache_read_input_tokens ?? undefined
   const cacheWrite = usage.cache_creation_input_tokens ?? undefined
   const inputTokens = ProviderShared.sumTokens(nonCached, cacheRead, cacheWrite)
-  return new Usage({
-    inputTokens,
-    outputTokens: usage.output_tokens,
-    nonCachedInputTokens: nonCached,
-    cacheReadInputTokens: cacheRead,
-    cacheWriteInputTokens: cacheWrite,
-    totalTokens: ProviderShared.totalTokens(inputTokens, usage.output_tokens, undefined),
-    providerMetadata: { anthropic: usage },
-  })
+  return ProviderShared.usage(
+    {
+      input: nonCached ?? 0,
+      output: usage.output_tokens ?? 0,
+      reasoning: 0,
+      cache: { read: cacheRead ?? 0, write: cacheWrite ?? 0 },
+      providerTotal: undefined,
+      providerMetadata: { anthropic: usage },
+    },
+    { cacheRead: cacheRead !== undefined, cacheWrite: cacheWrite !== undefined },
+  )
 }
 
 // Anthropic emits usage on `message_start` and again on `message_delta` — the
-// final delta carries the authoritative totals. Right-biased merge: each
-// field prefers `right` when defined, falls back to `left`. `inputTokens` is
-// recomputed from the merged breakdown so the inclusive total stays
-// consistent with `nonCached + cacheRead + cacheWrite`.
-const mergeUsage = (left: Usage | undefined, right: Usage | undefined) => {
+// final delta carries the authoritative totals. Merge the raw observations
+// before lowering so a partial chunk never becomes provider-reported usage.
+const mergeUsage = (left: AnthropicUsage | undefined, right: AnthropicUsage | undefined) => {
   if (!left) return right
   if (!right) return left
-  const nonCachedInputTokens = right.nonCachedInputTokens ?? left.nonCachedInputTokens
-  const cacheReadInputTokens = right.cacheReadInputTokens ?? left.cacheReadInputTokens
-  const cacheWriteInputTokens = right.cacheWriteInputTokens ?? left.cacheWriteInputTokens
-  const inputTokens = ProviderShared.sumTokens(nonCachedInputTokens, cacheReadInputTokens, cacheWriteInputTokens)
-  const outputTokens = right.outputTokens ?? left.outputTokens
-  return new Usage({
-    inputTokens,
-    outputTokens,
-    nonCachedInputTokens,
-    cacheReadInputTokens,
-    cacheWriteInputTokens,
-    totalTokens: ProviderShared.totalTokens(inputTokens, outputTokens, undefined),
-    providerMetadata: {
-      anthropic: {
-        ...left.providerMetadata?.["anthropic"],
-        ...right.providerMetadata?.["anthropic"],
-      },
-    },
-  })
+  return {
+    input_tokens: right.input_tokens === undefined ? left.input_tokens : right.input_tokens,
+    output_tokens: right.output_tokens === undefined ? left.output_tokens : right.output_tokens,
+    cache_read_input_tokens:
+      right.cache_read_input_tokens === undefined ? left.cache_read_input_tokens : right.cache_read_input_tokens,
+    cache_creation_input_tokens:
+      right.cache_creation_input_tokens === undefined
+        ? left.cache_creation_input_tokens
+        : right.cache_creation_input_tokens,
+  }
 }
 
 // Server tool result blocks come whole in `content_block_start` (no streaming
@@ -640,8 +631,8 @@ type StepResult = readonly [ParserState, ReadonlyArray<LLMEvent>]
 const NO_EVENTS: StepResult["1"] = []
 
 const onMessageStart = (state: ParserState, event: AnthropicEvent): StepResult => {
-  const usage = mapUsage(event.message?.usage)
-  return [usage ? { ...state, usage: mergeUsage(state.usage, usage) } : state, NO_EVENTS]
+  const usage = mergeUsage(state.usage, event.message?.usage)
+  return [usage ? { ...state, usage } : state, NO_EVENTS]
 }
 
 const onContentBlockStart = (state: ParserState, event: AnthropicEvent): StepResult => {
@@ -770,7 +761,8 @@ const onContentBlockStop = Effect.fn("AnthropicMessages.onContentBlockStop")(fun
 })
 
 const onMessageDelta = (state: ParserState, event: AnthropicEvent): StepResult => {
-  const usage = mergeUsage(state.usage, mapUsage(event.usage))
+  const merged = mergeUsage(state.usage, event.usage)
+  const usage = mapUsage(merged)
   const events: LLMEvent[] = []
   const lifecycle = Lifecycle.finish(state.lifecycle, events, {
     reason: mapFinishReason(event.delta?.stop_reason),
@@ -779,7 +771,7 @@ const onMessageDelta = (state: ParserState, event: AnthropicEvent): StepResult =
       ? anthropicMetadata({ stopSequence: event.delta.stop_sequence })
       : undefined,
   })
-  return [{ ...state, lifecycle, usage }, events]
+  return [{ ...state, lifecycle, usage: merged }, events]
 }
 
 // Prefix `error.type` so overloads, rate limits, and quota errors are visible

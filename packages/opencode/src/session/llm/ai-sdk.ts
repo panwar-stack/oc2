@@ -1,4 +1,5 @@
 import { FinishReason, LLMEvent, ProviderMetadata, ToolResultValue } from "@oc2-ai/llm"
+import { ProviderShared } from "@oc2-ai/llm/protocols"
 import { Effect, Schema } from "effect"
 import { type streamText } from "ai"
 import { errorMessage } from "@/util/error"
@@ -15,6 +16,7 @@ export function adapterState() {
     currentReasoningID: undefined as string | undefined,
     toolNames: {} as Record<string, string>,
     copilotTotalNanoAiu: undefined as number | undefined,
+    recoveredCacheWrite: undefined as number | undefined,
   }
 }
 
@@ -25,6 +27,111 @@ function finishReason(value: string | undefined): FinishReason {
 function providerMetadata(value: unknown): ProviderMetadata | undefined {
   if (value == null) return undefined
   return Schema.is(ProviderMetadata)(value) ? value : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function usageProviderMetadata(value: ProviderMetadata | undefined): ProviderMetadata | undefined {
+  if (!value) return undefined
+  const entries: Array<readonly [string, Record<string, unknown>]> = []
+  for (const provider of ["anthropic", "vertex"] as const) {
+    const metadata = value[provider]
+    const fields = pickUsageNumbers(metadata, ["cacheCreationInputTokens"])
+    const usage = pickUsageNumbers(metadata?.usage, [
+      "input_tokens",
+      "output_tokens",
+      "cache_creation_input_tokens",
+      "cache_read_input_tokens",
+    ])
+    if (Object.keys(usage).length) fields.usage = usage
+    if (Object.keys(fields).length) entries.push([provider, fields])
+  }
+  for (const provider of ["google", "google-vertex"] as const) {
+    const usageMetadata = pickUsageNumbers(value[provider]?.usageMetadata, [
+      "promptTokenCount",
+      "candidatesTokenCount",
+      "totalTokenCount",
+      "cachedContentTokenCount",
+      "thoughtsTokenCount",
+    ])
+    if (Object.keys(usageMetadata).length) entries.push([provider, { usageMetadata }])
+  }
+  const openai = pickUsageNumbers(value.openai, ["acceptedPredictionTokens", "rejectedPredictionTokens"])
+  if (Object.keys(openai).length) entries.push(["openai", openai])
+  const copilot = pickUsageNumbers(value.copilot, ["totalNanoAiu"])
+  if (Object.keys(copilot).length) entries.push(["copilot", copilot])
+  for (const provider of ["bedrock", "venice"] as const) {
+    const metadata = value[provider]
+    const fields = pickUsageNumbers(isRecord(metadata?.usage) ? metadata.usage : undefined, [
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "cacheReadInputTokens",
+      "cacheWriteInputTokens",
+      "cacheCreationInputTokens",
+    ])
+    if (Object.keys(fields).length) entries.push([provider, { usage: fields }])
+  }
+  const openrouterUsage = isRecord(value.openrouter?.usage) ? value.openrouter.usage : undefined
+  const openrouter = pickUsageNumbers(openrouterUsage, [
+    "inputTokens",
+    "outputTokens",
+    "promptTokens",
+    "completionTokens",
+    "reasoningTokens",
+    "totalTokens",
+    "cachedInputTokens",
+    "cost",
+  ])
+  for (const [key, fields] of [
+    ["costDetails", pickUsageNumbers(openrouterUsage?.costDetails, ["upstreamInferenceCost"])],
+    ["promptTokensDetails", pickUsageNumbers(openrouterUsage?.promptTokensDetails, ["cachedTokens"])],
+    ["completionTokensDetails", pickUsageNumbers(openrouterUsage?.completionTokensDetails, ["reasoningTokens"])],
+  ] as const)
+    if (Object.keys(fields).length) openrouter[key] = fields
+  if (Object.keys(openrouter).length) entries.push(["openrouter", { usage: openrouter }])
+  return entries.length ? Object.fromEntries(entries) : undefined
+}
+
+function pickUsageNumbers(value: unknown, fields: ReadonlyArray<string>): Record<string, unknown> {
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(
+    fields.flatMap((field) => {
+      const item = value[field]
+      return typeof item === "number" && Number.isFinite(item) && item >= 0 ? [[field, item]] : []
+    }),
+  )
+}
+
+function metadataCacheWrite(metadata: ProviderMetadata | undefined) {
+  if (!metadata) return undefined
+  const bedrockUsage = metadata.bedrock?.usage
+  const veniceUsage = metadata.venice?.usage
+  const value =
+    metadata.anthropic?.cacheCreationInputTokens ??
+    metadata.vertex?.cacheCreationInputTokens ??
+    (isRecord(bedrockUsage) && "cacheWriteInputTokens" in bedrockUsage
+      ? bedrockUsage.cacheWriteInputTokens
+      : undefined) ??
+    (isRecord(veniceUsage) && "cacheCreationInputTokens" in veniceUsage
+      ? veniceUsage.cacheCreationInputTokens
+      : undefined)
+  return typeof value === "number" ? value : undefined
+}
+
+function metadataProviderTotal(metadata: ProviderMetadata | undefined) {
+  if (!metadata) return undefined
+  const total = (value: unknown) => (isRecord(value) ? value.totalTokenCount ?? value.totalTokens : undefined)
+  const values = [
+    total(metadata.google?.usageMetadata),
+    total(metadata["google-vertex"]?.usageMetadata),
+    total(metadata.bedrock?.usage),
+    total(metadata.venice?.usage),
+    total(metadata.openrouter?.usage),
+  ]
+  return values.find((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0)
 }
 
 // Temporary AI SDK bridge: Copilot billing survives only in raw provider chunks here.
@@ -41,7 +148,7 @@ function copilotTotalNanoAiu(value: unknown) {
   return total
 }
 
-function usage(value: unknown) {
+function usage(value: unknown, metadata?: ProviderMetadata, recoveredCacheWrite?: number) {
   if (!value || typeof value !== "object") return undefined
   const item = value as {
     inputTokens?: number
@@ -49,18 +156,41 @@ function usage(value: unknown) {
     totalTokens?: number
     reasoningTokens?: number
     cachedInputTokens?: number
-    inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number }
-    outputTokenDetails?: { reasoningTokens?: number }
+    inputTokenDetails?: { noCacheTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+    outputTokenDetails?: { textTokens?: number; reasoningTokens?: number }
   }
-  const entries = Object.entries({
-    inputTokens: item.inputTokens,
-    outputTokens: item.outputTokens,
-    totalTokens: item.totalTokens,
-    reasoningTokens: item.outputTokenDetails?.reasoningTokens ?? item.reasoningTokens,
-    cacheReadInputTokens: item.inputTokenDetails?.cacheReadTokens ?? item.cachedInputTokens,
-    cacheWriteInputTokens: item.inputTokenDetails?.cacheWriteTokens,
-  }).filter((entry) => entry[1] !== undefined)
-  return entries.length === 0 ? undefined : Object.fromEntries(entries)
+  const reasoning = item.outputTokenDetails?.reasoningTokens ?? item.reasoningTokens
+  const cacheRead = item.inputTokenDetails?.cacheReadTokens ?? item.cachedInputTokens
+  const metadataWrite = metadataCacheWrite(metadata) ?? recoveredCacheWrite
+  const cacheWrite = item.inputTokenDetails?.cacheWriteTokens ?? metadataWrite
+  if (
+    (item.inputTokens === undefined && item.inputTokenDetails?.noCacheTokens === undefined) ||
+    (item.outputTokens === undefined && item.outputTokenDetails?.textTokens === undefined)
+  )
+    return undefined
+  const metadataOnlyWrite = item.inputTokenDetails?.cacheWriteTokens === undefined && metadataWrite !== undefined
+  const input =
+    metadataOnlyWrite && item.inputTokens !== undefined
+      ? Math.max(0, item.inputTokens - (cacheRead ?? 0) - metadataWrite)
+      : (item.inputTokenDetails?.noCacheTokens ??
+        (item.inputTokens === undefined ? 0 : Math.max(0, item.inputTokens - (cacheRead ?? 0) - (cacheWrite ?? 0))))
+  return ProviderShared.usage(
+    {
+      input,
+      output:
+        item.outputTokenDetails?.textTokens ??
+        (item.outputTokens === undefined ? 0 : Math.max(0, item.outputTokens - (reasoning ?? 0))),
+      reasoning: reasoning ?? 0,
+      cache: { read: cacheRead ?? 0, write: cacheWrite ?? 0 },
+      providerTotal: metadataProviderTotal(metadata),
+      providerMetadata: usageProviderMetadata(metadata),
+    },
+    {
+      cacheRead: cacheRead !== undefined,
+      cacheWrite: cacheWrite !== undefined,
+      reasoning: reasoning !== undefined,
+    },
+  )
 }
 
 function currentTextID(state: ReturnType<typeof adapterState>, id: string | undefined) {
@@ -97,12 +227,15 @@ export function toLLMEvents(
                   totalNanoAiu: state.copilotTotalNanoAiu,
                 },
               }
+        const recoveredCacheWrite = metadataCacheWrite(metadata)
+        if (event.usage.inputTokenDetails.cacheWriteTokens === undefined && recoveredCacheWrite !== undefined)
+          state.recoveredCacheWrite = (state.recoveredCacheWrite ?? 0) + recoveredCacheWrite
         state.copilotTotalNanoAiu = undefined
         return [
           LLMEvent.stepFinish({
             index: state.step++,
             reason: finishReason(event.finishReason),
-            usage: usage(event.usage),
+            usage: usage(event.usage, metadata),
             providerMetadata: metadata,
           }),
         ]
@@ -113,8 +246,8 @@ export function toLLMEvents(
         const events = [
           LLMEvent.finish({
             reason: finishReason(event.finishReason),
-            usage: usage(event.totalUsage),
-            providerMetadata: "providerMetadata" in event ? providerMetadata(event.providerMetadata) : undefined,
+            usage: usage(event.totalUsage, undefined, state.recoveredCacheWrite),
+            providerMetadata: undefined,
           }),
         ]
         // Reset so the adapter can be reused for a follow-up stream without leaking

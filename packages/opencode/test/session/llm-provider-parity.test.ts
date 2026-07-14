@@ -804,7 +804,7 @@ describe("provider parity normalization and redaction", () => {
     expect(events).toContainEqual({
       type: "finish",
       reason: "stop",
-      usage: { inputTokens: 4, outputTokens: 2, nonCachedInputTokens: 4 },
+      usage: { input: 4, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
     })
   })
 

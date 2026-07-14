@@ -245,7 +245,29 @@ describe("Bedrock Converse route", () => {
         inputTokens: 5,
         outputTokens: 2,
         totalTokens: 7,
+        providerTotalTokens: 7,
       })
+    }),
+  )
+
+  it.effect("keeps incomplete usage absent", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            eventStreamBody(
+              ["messageStart", { role: "assistant" }],
+              ["messageStop", { stopReason: "end_turn" }],
+              ["metadata", { usage: { inputTokens: 5, totalTokens: 7 } }],
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toBeUndefined()
+      expect(response.events.flatMap((event) => ("usage" in event ? [event.usage] : [])).every((usage) => !usage)).toBe(
+        true,
+      )
     }),
   )
 

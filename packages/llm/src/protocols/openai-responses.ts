@@ -6,7 +6,6 @@ import { HttpTransport, WebSocketTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
-  Usage,
   type FinishReason,
   type LLMError,
   type LLMRequest,
@@ -17,6 +16,7 @@ import {
   type ToolDefinition,
   type ToolResultContentPart,
   type ToolResultPart,
+  type Usage,
 } from "../schema"
 import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { isContextOverflow } from "../provider-error"
@@ -504,18 +504,21 @@ const fromRequest: (request: LLMRequest) => Effect.Effect<OpenAIResponsesBody, L
 // non-cached breakdown.
 const mapUsage = (usage: OpenAIResponsesUsage | null | undefined) => {
   if (!usage) return undefined
+  if (usage.input_tokens === undefined || usage.output_tokens === undefined) return undefined
   const cached = usage.input_tokens_details?.cached_tokens
   const reasoning = usage.output_tokens_details?.reasoning_tokens
   const nonCached = ProviderShared.subtractTokens(usage.input_tokens, cached)
-  return new Usage({
-    inputTokens: usage.input_tokens,
-    outputTokens: usage.output_tokens,
-    nonCachedInputTokens: nonCached,
-    cacheReadInputTokens: cached,
-    reasoningTokens: reasoning,
-    totalTokens: ProviderShared.totalTokens(usage.input_tokens, usage.output_tokens, usage.total_tokens),
-    providerMetadata: { openai: usage },
-  })
+  return ProviderShared.usage(
+    {
+      input: nonCached ?? 0,
+      output: ProviderShared.subtractTokens(usage.output_tokens, reasoning) ?? 0,
+      reasoning: reasoning ?? 0,
+      cache: { read: cached ?? 0, write: 0 },
+      providerTotal: usage.total_tokens,
+      providerMetadata: { openai: usage },
+    },
+    { cacheRead: cached !== undefined, reasoning: reasoning !== undefined },
+  )
 }
 
 const mapFinishReason = (event: OpenAIResponsesEvent, hasFunctionCall: boolean): FinishReason => {

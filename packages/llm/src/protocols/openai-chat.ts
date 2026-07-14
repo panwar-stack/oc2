@@ -6,7 +6,6 @@ import { HttpTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
-  Usage,
   type FinishReason,
   type LLMRequest,
   type MediaPart,
@@ -15,6 +14,7 @@ import {
   type ToolCallPart,
   type ToolDefinition,
   type ToolResultContentPart,
+  type Usage,
 } from "../schema"
 import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { OpenAIOptions } from "./utils/openai-options"
@@ -385,18 +385,21 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // satisfied on both sides.
 const mapUsage = (usage: OpenAIChatEvent["usage"]): Usage | undefined => {
   if (!usage) return undefined
+  if (usage.prompt_tokens === undefined || usage.completion_tokens === undefined) return undefined
   const cached = usage.prompt_tokens_details?.cached_tokens
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
   const nonCached = ProviderShared.subtractTokens(usage.prompt_tokens, cached)
-  return new Usage({
-    inputTokens: usage.prompt_tokens,
-    outputTokens: usage.completion_tokens,
-    nonCachedInputTokens: nonCached,
-    cacheReadInputTokens: cached,
-    reasoningTokens: reasoning,
-    totalTokens: ProviderShared.totalTokens(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens),
-    providerMetadata: { openai: usage },
-  })
+  return ProviderShared.usage(
+    {
+      input: nonCached ?? 0,
+      output: ProviderShared.subtractTokens(usage.completion_tokens, reasoning) ?? 0,
+      reasoning: reasoning ?? 0,
+      cache: { read: cached ?? 0, write: 0 },
+      providerTotal: usage.total_tokens,
+      providerMetadata: { openai: usage },
+    },
+    { cacheRead: cached !== undefined, reasoning: reasoning !== undefined },
+  )
 }
 
 const step = (state: ParserState, event: OpenAIChatEvent) =>
