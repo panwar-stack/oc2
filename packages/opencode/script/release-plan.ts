@@ -47,15 +47,21 @@ export function allocateVersion(
   increment: (version: string) => string | null = (version) => semver.inc(version, "patch"),
 ) {
   const versions = new Set(
-    [...releasesFromPages(pages).map((release) => release.tag_name), ...tagRefs]
+    [
+      ...releasesFromPages(pages).map((release) => release.tag_name),
+      ...tagRefs
+        .filter((ref) => ref.startsWith("refs/tags/"))
+        .map((ref) => ref.slice("refs/tags/".length).replace(/\^\{\}$/, "")),
+    ]
       .filter((tag): tag is string => typeof tag === "string")
-      .map((tag) => tag.replace(/^refs\/tags\//, "").replace(/\^\{\}$/, ""))
       .filter((tag) => tag.startsWith("v"))
       .map((tag) => tag.slice(1))
       .filter((version) => semver.valid(version) === version && semver.prerelease(version) === null),
   )
   const version = increment([...versions].sort(semver.rcompare)[0] ?? "0.0.0")
-  if (!version) throw new Error("could not allocate patch version")
+  if (!version || semver.valid(version) !== version || semver.prerelease(version) !== null) {
+    throw new Error("could not allocate patch version")
+  }
   return version
 }
 

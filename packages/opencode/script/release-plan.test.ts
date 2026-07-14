@@ -52,8 +52,22 @@ describe("release plan", () => {
     ).toBe("0.0.1")
   })
 
+  test("does not normalize Release tags as Git refs", () => {
+    expect(allocateVersion([[{ tag_name: "refs/tags/v9.0.0" }]], [])).toBe("0.0.1")
+  })
+
   test("rejects version increment failures", () => {
     expect(() => allocateVersion([], [], () => null)).toThrow("could not allocate patch version")
+  })
+
+  test("rejects noncanonical increment results", () => {
+    expect(() => allocateVersion([], [], () => "1.0")).toThrow("could not allocate patch version")
+  })
+
+  test("rejects an actual patch overflow", () => {
+    expect(() => allocateVersion([[{ tag_name: "v0.0.9007199254740991" }]], [])).toThrow(
+      "could not allocate patch version",
+    )
   })
 
   test("allocates only when no workflow Release exists", () => {
