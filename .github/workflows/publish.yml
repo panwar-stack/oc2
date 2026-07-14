@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: npm-publish
+  group: github-release-publish
   cancel-in-progress: false
 
 permissions:
@@ -201,6 +201,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
 
+      - name: Checkout release tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: packages/opencode/script/release-artifacts.ts
+          sparse-checkout-cone-mode: false
+
       - name: Validate built package set
         shell: bash
         run: |
@@ -224,7 +232,7 @@ jobs:
             exit 1
           fi
 
-          bun -e 'import { validateNativePackages } from "./packages/opencode/script/release-artifacts.ts"; const version = await validateNativePackages("packages/opencode/dist"); if (version !== process.env.OC2_VERSION) throw new Error("built version " + version + " does not match " + process.env.OC2_VERSION)'
+          bun -e 'import { validateNativePackages } from "./.release-tooling/packages/opencode/script/release-artifacts.ts"; const version = await validateNativePackages("packages/opencode/dist"); if (version !== process.env.OC2_VERSION) throw new Error("built version " + version + " does not match " + process.env.OC2_VERSION)'
         env:
           OC2_VERSION: ${{ needs.plan.outputs.version }}
 
@@ -299,6 +307,14 @@ jobs:
           name: ${{ needs.build.outputs.windows-artifact }}
           path: ${{ env.TRANSFER_DIR }}
 
+      - name: Checkout release tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: packages/opencode/script/release-artifacts.ts
+          sparse-checkout-cone-mode: false
+
       - name: Validate publish package set
         shell: bash
         run: |
@@ -322,7 +338,7 @@ jobs:
             exit 1
           fi
 
-          bun -e 'import { validateNativePackages } from "./packages/opencode/script/release-artifacts.ts"; const version = await validateNativePackages(process.env.TRANSFER_DIR); if (version !== process.env.OC2_VERSION) throw new Error("artifact version " + version + " does not match " + process.env.OC2_VERSION)'
+          bun -e 'import { validateNativePackages } from "./.release-tooling/packages/opencode/script/release-artifacts.ts"; const version = await validateNativePackages(process.env.TRANSFER_DIR); if (version !== process.env.OC2_VERSION) throw new Error("artifact version " + version + " does not match " + process.env.OC2_VERSION)'
           rm -rf packages/opencode/dist
           mv "$TRANSFER_DIR" packages/opencode/dist
         env:

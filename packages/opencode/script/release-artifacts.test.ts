@@ -29,6 +29,17 @@ async function fixture(version = "1.2.3") {
 }
 
 describe("release artifacts", () => {
+  test("loads workflow validators from the dispatched commit", async () => {
+    const workflow = await Bun.file(path.join(import.meta.dir, "../../../.github/workflows/publish.yml")).text()
+    expect(workflow.match(/- name: Checkout release tooling/g) ?? []).toHaveLength(2)
+    expect(workflow.match(/ref: \$\{\{ github\.sha \}\}\n\s+path: \.release-tooling/g) ?? []).toHaveLength(2)
+    expect(
+      workflow.match(
+        /from "\.\/\.release-tooling\/packages\/opencode\/script\/release-artifacts\.ts"/g,
+      ) ?? [],
+    ).toHaveLength(2)
+  })
+
   test("validates the exact native package set", async () => {
     const dist = await fixture()
     try {
