@@ -1,6 +1,6 @@
 # Implement Specification Pull Request
 
-Read and resolve $1 first. Use agent teams.
+Read and resolve $1 first. MUST Use agent teams.
 
 Record the invoking worktree path, status, and committed HEAD as base_sha. Treat it as read only except for integration. Fast forward and merge on completion.
 
