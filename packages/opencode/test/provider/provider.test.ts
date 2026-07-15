@@ -341,6 +341,22 @@ it.instance("getModel returns model for valid provider/model", () =>
   }),
 )
 
+it.instance(
+  "Tinker Inkling uses the standard openai-compatible chat model",
+  Effect.gen(function* () {
+    yield* set("TINKER_API_KEY", "test-api-key")
+    const provider = yield* Provider.Service
+    const modelID = ModelV2.ID.make("thinkingmachines/Inkling")
+    const model = yield* provider.getModel(ProviderV2.ID.make("tinker"), modelID)
+    const language = yield* provider.getLanguage(model)
+
+    expect(model.api.npm).toBe("@ai-sdk/openai-compatible")
+    expect(model.capabilities.toolcall).toBe(true)
+    expect(language.provider).toBe("tinker.chat")
+    expect(language.modelId).toBe(modelID)
+  }),
+)
+
 it.instance("getModel throws ModelNotFoundError for invalid model", () =>
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")

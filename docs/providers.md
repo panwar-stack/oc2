@@ -37,6 +37,15 @@ For supported credential variables and other environment controls, see the
 [Environment Reference](reference/environment.md). Do not put literal secrets
 in committed configuration.
 
+### Tinker Connect
+
+Select Tinker in Connect and enter your API key. `TINKER_API_KEY` is the
+credential name for environment-based configuration. The preset supplies
+Tinker's fixed base URL, so you do not need to configure an endpoint.
+
+Tinker provides `tinker/thinkingmachines/Inkling`, with normal streaming chat
+and tool support.
+
 ## Select A Model
 
 Model IDs use `provider/model` form. List the IDs currently available to this

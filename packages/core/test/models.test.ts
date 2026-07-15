@@ -116,6 +116,11 @@ const writeCache = (data: object, mtimeMs?: number) => writeCacheText(JSON.strin
 const provided = <A, E>(state: Ref.Ref<MockState>, eff: Effect.Effect<A, E, ModelsDev.Service>) =>
   eff.pipe(Effect.provide(buildLayer(state)))
 
+const withoutTinker = ({ tinker, ...catalog }: Record<string, ModelsDev.Provider>) => {
+  expect(tinker).toBeDefined()
+  return catalog
+}
+
 beforeEach(async () => {
   await rm(cacheFile, { force: true })
 })
@@ -171,20 +176,74 @@ describe("ModelsDev Service", () => {
         state,
         ModelsDev.Service.use((s) => s.get()),
       )
-      expect(result).toEqual(fixture)
+      expect(withoutTinker(result)).toEqual(fixture)
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
     }),
   )
 
-  it.live("get() returns empty catalog when disk empty, fetch disabled, and no bundled snapshot is injected", () =>
+  it.live("get() overlays the fixed Tinker provider and model", () =>
+    Effect.gen(function* () {
+      yield* writeCache({
+        ...fixture,
+        tinker: {
+          id: "tinker",
+          name: "Upstream Tinker",
+          env: [],
+          models: { old: fixture.acme.models["acme-1"] },
+        },
+      })
+      const state = yield* Ref.make(initialState)
+      const first = yield* provided(
+        state,
+        Effect.gen(function* () {
+          const service = yield* ModelsDev.Service
+          const result = yield* service.get()
+          return { result, next: yield* service.get() }
+        }),
+      )
+
+      expect(withoutTinker(first.result)).toEqual(fixture)
+      expect(first.result.tinker).not.toBe(first.next.tinker)
+      expect(first.result.tinker.models["thinkingmachines/Inkling"]).not.toBe(
+        first.next.tinker.models["thinkingmachines/Inkling"],
+      )
+      expect(first.next.tinker).toEqual({
+        id: "tinker",
+        name: "Tinker",
+        env: ["TINKER_API_KEY"],
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+        models: {
+          "thinkingmachines/Inkling": {
+            id: "thinkingmachines/Inkling",
+            name: "Inkling",
+            release_date: "2026-07-15",
+            attachment: false,
+            reasoning: true,
+            temperature: true,
+            tool_call: true,
+            limit: { context: 256_000, output: 0 },
+            modalities: { input: ["text"], output: ["text"] },
+          },
+        },
+      })
+    }),
+  )
+
+  it.live("get() returns the local overlay when no upstream catalog is available", () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(initialState)
       const result = yield* provided(
         state,
         ModelsDev.Service.use((s) => s.get()),
       )
-      expect(result).toEqual({})
+      expect(result).toEqual({
+        tinker: expect.objectContaining({
+          id: "tinker",
+          models: { "thinkingmachines/Inkling": expect.any(Object) },
+        }),
+      })
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
     }),
@@ -208,7 +267,7 @@ describe("ModelsDev Service", () => {
             Flag.OC2_DISABLE_MODELS_FETCH = true
           }),
       )
-      expect(result).toEqual(fixture2)
+      expect(withoutTinker(result)).toEqual(fixture2)
       expect(yield* Effect.promise(() => readFile(cacheFile, "utf8"))).toBe(JSON.stringify(fixture2))
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
@@ -228,7 +287,7 @@ describe("ModelsDev Service", () => {
           })
         }),
       )
-      for (const result of results) expect(result).toEqual(fixture)
+      for (const result of results) expect(withoutTinker(result)).toEqual(fixture)
     }),
   )
 
@@ -247,8 +306,8 @@ describe("ModelsDev Service", () => {
           return { a, b }
         }),
       )
-      expect(first.a).toEqual(fixture)
-      expect(first.b).toEqual(fixture)
+      expect(withoutTinker(first.a)).toEqual(fixture)
+      expect(withoutTinker(first.b)).toEqual(fixture)
     }),
   )
 
@@ -266,8 +325,8 @@ describe("ModelsDev Service", () => {
           return { before, after }
         }),
       )
-      expect(result.before).toEqual(fixture)
-      expect(result.after).toEqual(fixture2)
+      expect(withoutTinker(result.before)).toEqual(fixture)
+      expect(withoutTinker(result.after)).toEqual(fixture2)
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
       expect(final.calls[0].url).toContain("/api.json")
@@ -304,7 +363,7 @@ describe("ModelsDev Service", () => {
       )
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
-      expect(after).toEqual(fixture2)
+      expect(withoutTinker(after)).toEqual(fixture2)
     }),
   )
 
@@ -320,7 +379,7 @@ describe("ModelsDev Service", () => {
           return yield* svc.get()
         }),
       )
-      expect(result).toEqual(fixture)
+      expect(withoutTinker(result)).toEqual(fixture)
       // retryTransient retries 5xx, so calls may be > 1.
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBeGreaterThanOrEqual(1)

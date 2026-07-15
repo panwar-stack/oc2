@@ -115,6 +115,27 @@ export const Event = {
 
 declare const OC2_MODELS_DEV: Record<string, Provider> | undefined
 
+const TINKER_MODEL = {
+  id: "thinkingmachines/Inkling",
+  name: "Inkling",
+  release_date: "2026-07-15",
+  attachment: false,
+  reasoning: true,
+  temperature: true,
+  tool_call: true,
+  limit: { context: 256_000, output: 0 },
+  modalities: { input: ["text"], output: ["text"] },
+} satisfies Model
+
+const TINKER_PROVIDER = {
+  id: "tinker",
+  name: "Tinker",
+  env: ["TINKER_API_KEY"],
+  npm: "@ai-sdk/openai-compatible",
+  api: "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+  models: { [TINKER_MODEL.id]: TINKER_MODEL },
+} satisfies Provider
+
 export interface Interface {
   readonly get: () => Effect.Effect<Record<string, Provider>>
   readonly refresh: (force?: boolean) => Effect.Effect<void>
@@ -246,10 +267,25 @@ export const layer = Layer.effect(
 
 function canonicalizeProviders(input: Record<string, Provider>) {
   const legacy = input.opencode
-  if (!legacy) return input
   const next = { ...input }
-  delete next.opencode
-  next.oc2 ??= { ...legacy, id: "oc2" }
+  if (legacy) {
+    delete next.opencode
+    next.oc2 ??= { ...legacy, id: "oc2" }
+  }
+  next.tinker = {
+    ...TINKER_PROVIDER,
+    env: [...TINKER_PROVIDER.env],
+    models: {
+      [TINKER_MODEL.id]: {
+        ...TINKER_MODEL,
+        limit: { ...TINKER_MODEL.limit },
+        modalities: {
+          input: [...TINKER_MODEL.modalities.input],
+          output: [...TINKER_MODEL.modalities.output],
+        },
+      },
+    },
+  }
   return next
 }
 
