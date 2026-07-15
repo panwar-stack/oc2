@@ -46,6 +46,7 @@ import { NonNegativeInt, optionalOmitUndefined } from "@oc2-ai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { SessionAccounting } from "@oc2-ai/core/session/accounting"
 
 const log = Log.create({ service: "session" })
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
@@ -446,29 +447,53 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
     },
   }
 
-  const contextTokens = inputTokens
-  const costInfo =
-    input.model.cost?.tiers
-      ?.filter((item) => item.tier.type === "context" && contextTokens > item.tier.size)
-      .sort((a, b) => b.tier.size - a.tier.size)[0] ??
-    (input.model.cost?.experimentalOver200K && contextTokens > 200_000
-      ? input.model.cost.experimentalOver200K
-      : input.model.cost)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
+  const openrouterUsage = input.metadata?.["openrouter"]?.["usage"]
+  const openrouterCost =
+    typeof openrouterUsage === "object" && openrouterUsage !== null && "cost" in openrouterUsage
+      ? openrouterUsage.cost
+      : undefined
+  const pricing = SessionAccounting.calculate({
+    model: {
+      cost: [
+        {
+          input: input.model.cost.input,
+          output: input.model.cost.output,
+          cache: input.model.cost.cache,
+        },
+        ...(input.model.cost.tiers ?? []),
+        ...(input.model.cost.experimentalOver200K
+          ? [
+              {
+                ...input.model.cost.experimentalOver200K,
+                tier: { type: "context" as const, size: 200_000 },
+              },
+            ]
+          : []),
+      ],
+    },
+    usage: tokens,
+    providerAmount:
+      typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0
+        ? totalNanoAiu / 100_000_000_000
+        : typeof openrouterCost === "number" && Number.isFinite(openrouterCost) && openrouterCost >= 0
+          ? openrouterCost
+          : undefined,
+  })
   return {
     cost:
-      typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0
-        ? new Decimal(totalNanoAiu).div(100_000_000_000).toNumber()
+      pricing?.source === "provider"
+        ? pricing.amount
         : safe(
-            new Decimal(0)
-              .add(new Decimal(tokens.input).mul(costInfo?.input ?? 0).div(1_000_000))
-              .add(new Decimal(tokens.output).mul(costInfo?.output ?? 0).div(1_000_000))
-              .add(new Decimal(tokens.cache.read).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
-              .add(new Decimal(tokens.cache.write).mul(costInfo?.cache?.write ?? 0).div(1_000_000))
-              // TODO: update models.dev to have better pricing model, for now:
-              // charge reasoning tokens at the same rate as output tokens
-              .add(new Decimal(tokens.reasoning).mul(costInfo?.output ?? 0).div(1_000_000))
-              .toNumber(),
+            pricing?.rate
+              ? new Decimal(0)
+                  .add(new Decimal(tokens.input).mul(pricing.rate.input).div(1_000_000))
+                  .add(new Decimal(tokens.output).mul(pricing.rate.output).div(1_000_000))
+                  .add(new Decimal(tokens.cache.read).mul(pricing.rate.cache.read).div(1_000_000))
+                  .add(new Decimal(tokens.cache.write).mul(pricing.rate.cache.write).div(1_000_000))
+                  .add(new Decimal(tokens.reasoning).mul(pricing.rate.output).div(1_000_000))
+                  .toNumber()
+              : 0,
           ),
     tokens,
   }

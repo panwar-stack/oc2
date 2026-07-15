@@ -28396,6 +28396,61 @@
                 },
                 "options": {
                   "type": "object"
+                },
+                "cost": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "tier": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "context"
+                            ]
+                          },
+                          "size": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "size"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "input": {
+                        "type": "number"
+                      },
+                      "output": {
+                        "type": "number"
+                      },
+                      "cache": {
+                        "type": "object",
+                        "properties": {
+                          "read": {
+                            "type": "number"
+                          },
+                          "write": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "read",
+                          "write"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "input",
+                      "output",
+                      "cache"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -33961,6 +34016,61 @@
                 },
                 "options": {
                   "type": "object"
+                },
+                "cost": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "tier": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "context"
+                            ]
+                          },
+                          "size": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "size"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "input": {
+                        "type": "number"
+                      },
+                      "output": {
+                        "type": "number"
+                      },
+                      "cache": {
+                        "type": "object",
+                        "properties": {
+                          "read": {
+                            "type": "number"
+                          },
+                          "write": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "read",
+                          "write"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "input",
+                      "output",
+                      "cache"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [

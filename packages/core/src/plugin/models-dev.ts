@@ -12,40 +12,54 @@ function released(date: string) {
   return DateTime.makeUnsafe(Number.isFinite(time) ? time : 0)
 }
 
-function cost(input: ModelsDev.Model["cost"]) {
+export function modelCost(input: ModelsDev.Model["cost"]): ModelV2.Cost[] {
+  if (!input) return []
   const base = {
-    input: input?.input ?? 0,
-    output: input?.output ?? 0,
+    input: input.input,
+    output: input.output,
     cache: {
-      read: input?.cache_read ?? 0,
-      write: input?.cache_write ?? 0,
+      read: input.cache_read ?? 0,
+      write: input.cache_write ?? 0,
     },
   }
-  if (!input?.context_over_200k) return [base]
   return [
     base,
-    {
-      tier: {
-        type: "context" as const,
-        size: 200_000,
-      },
-      input: input.context_over_200k.input,
-      output: input.context_over_200k.output,
+    ...(input.tiers ?? []).map((item) => ({
+      tier: item.tier,
+      input: item.input,
+      output: item.output,
       cache: {
-        read: input.context_over_200k.cache_read ?? 0,
-        write: input.context_over_200k.cache_write ?? 0,
+        read: item.cache_read ?? 0,
+        write: item.cache_write ?? 0,
       },
-    },
+    })),
+    ...(input.context_over_200k
+      ? [
+          {
+            tier: {
+              type: "context" as const,
+              size: 200_000,
+            },
+            input: input.context_over_200k.input,
+            output: input.context_over_200k.output,
+            cache: {
+              read: input.context_over_200k.cache_read ?? 0,
+              write: input.context_over_200k.cache_write ?? 0,
+            },
+          },
+        ]
+      : []),
   ]
 }
 
-function variants(model: ModelsDev.Model, packageName?: string) {
+export function modelVariants(model: ModelsDev.Model, packageName?: string) {
   return Object.entries(model.experimental?.modes ?? {}).map(([id, item]) => {
     const request = ModelRequest.normalizeAiSdkOptions(packageName, item.provider?.body ?? {})
     return {
       id: ModelV2.VariantID.make(id),
       headers: { ...(item.provider?.headers ?? {}) },
       ...request,
+      cost: item.cost ? modelCost(item.cost) : undefined,
     }
   })
 }
@@ -102,9 +116,9 @@ export const ModelsDevPlugin = PluginV2.define({
                 input: [...(model.modalities?.input ?? [])],
                 output: [...(model.modalities?.output ?? [])],
               }
-              draft.variants = variants(model, model.provider?.npm ?? item.npm)
+              draft.variants = modelVariants(model, model.provider?.npm ?? item.npm)
               draft.time.released = released(model.release_date)
-              draft.cost = cost(model.cost)
+              draft.cost = modelCost(model.cost)
               draft.status = model.status ?? "active"
               draft.enabled = true
               draft.limit = {

@@ -1,5 +1,5 @@
-import { describe, expect, beforeAll, beforeEach, afterAll } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { describe, expect, beforeAll, beforeEach, afterAll, test } from "bun:test"
+import { Effect, Layer, Ref, Schema } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Flag } from "@oc2-ai/core/flag/flag"
@@ -129,6 +129,38 @@ const initialState: MockState = {
   status: 200,
   calls: [],
 }
+
+test("ModelsDev.Model preserves base, tiered, context-over, and mode costs", () => {
+  const model = Schema.decodeUnknownSync(ModelsDev.Model)({
+    id: "priced",
+    name: "Priced",
+    release_date: "2026-01-01",
+    attachment: false,
+    reasoning: true,
+    temperature: true,
+    tool_call: true,
+    limit: { context: 1_000_000, output: 32_000 },
+    cost: {
+      input: 1,
+      output: 2,
+      tiers: [{ input: 3, output: 4, tier: { type: "context", size: 200_000 } }],
+      context_over_200k: { input: 5, output: 6 },
+    },
+    experimental: {
+      modes: {
+        high: { cost: { input: 7, output: 8 } },
+      },
+    },
+  })
+
+  expect(model.cost).toMatchObject({
+    input: 1,
+    output: 2,
+    tiers: [{ input: 3, output: 4, tier: { type: "context", size: 200_000 } }],
+    context_over_200k: { input: 5, output: 6 },
+  })
+  expect(model.experimental?.modes?.high?.cost).toMatchObject({ input: 7, output: 8 })
+})
 
 describe("ModelsDev Service", () => {
   it.live("get() returns providers from disk when cache file exists", () =>

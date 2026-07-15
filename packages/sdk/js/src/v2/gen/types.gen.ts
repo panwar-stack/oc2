@@ -3660,6 +3660,18 @@ export type ModelV2Info = {
     options?: {
       [key: string]: unknown
     }
+    cost?: Array<{
+      tier?: {
+        type: "context"
+        size: number
+      }
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+    }>
   }>
   time: {
     released: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -5009,6 +5021,18 @@ export type ModelV2Info1 = {
     options?: {
       [key: string]: unknown
     }
+    cost?: Array<{
+      tier?: {
+        type: "context"
+        size: number
+      }
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+    }>
   }>
   time: {
     released: number | "NaN" | "Infinity" | "-Infinity"

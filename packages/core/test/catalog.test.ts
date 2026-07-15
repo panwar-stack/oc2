@@ -1,15 +1,18 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { DateTime, Effect, Layer, Option } from "effect"
 import { Catalog } from "@oc2-ai/core/catalog"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Location } from "@oc2-ai/core/location"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { ModelsDev } from "@oc2-ai/core/models-dev"
 import { FuguPlugin } from "@oc2-ai/core/plugin/fugu"
+import { modelCost, modelVariants } from "@oc2-ai/core/plugin/models-dev"
 import { PluginV2 } from "@oc2-ai/core/plugin"
 import { Policy } from "@oc2-ai/core/policy"
 import { Project } from "@oc2-ai/core/project"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { AbsolutePath } from "@oc2-ai/core/schema"
+import { SessionAccounting } from "@oc2-ai/core/session/accounting"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -20,6 +23,73 @@ const locationLayer = Layer.succeed(
 const it = testEffect(
   Catalog.locationLayer.pipe(Layer.provideMerge(EventV2.defaultLayer), Layer.provideMerge(locationLayer)),
 )
+
+test("models.dev mapping preserves base, tiered, context-over, and variant costs", () => {
+  const model: ModelsDev.Model = {
+    id: "model",
+    name: "Model",
+    release_date: "2026-01-01",
+    attachment: false,
+    reasoning: true,
+    temperature: true,
+    tool_call: true,
+    limit: { context: 1_000_000, output: 32_000 },
+    cost: {
+      input: 1,
+      output: 2,
+      cache_read: 0.1,
+      cache_write: 0.5,
+      tiers: [
+        {
+          input: 3,
+          output: 4,
+          cache_read: 0.3,
+          cache_write: 1.5,
+          tier: { type: "context", size: 200_000 },
+        },
+        { input: 5, output: 6, tier: { type: "context", size: 500_000 } },
+      ],
+      context_over_200k: { input: 30, output: 40 },
+    },
+    experimental: {
+      modes: {
+        high: {
+          cost: {
+            input: 7,
+            output: 8,
+            tiers: [{ input: 9, output: 10, tier: { type: "context", size: 300_000 } }],
+          },
+        },
+        unpriced: {},
+      },
+    },
+  }
+
+  expect(modelCost(model.cost)).toEqual([
+    { input: 1, output: 2, cache: { read: 0.1, write: 0.5 } },
+    { input: 3, output: 4, cache: { read: 0.3, write: 1.5 }, tier: { type: "context", size: 200_000 } },
+    { input: 5, output: 6, cache: { read: 0, write: 0 }, tier: { type: "context", size: 500_000 } },
+    { input: 30, output: 40, cache: { read: 0, write: 0 }, tier: { type: "context", size: 200_000 } },
+  ])
+  expect(modelVariants(model)).toMatchObject([
+    {
+      id: "high",
+      cost: [
+        { input: 7, output: 8, cache: { read: 0, write: 0 } },
+        { input: 9, output: 10, cache: { read: 0, write: 0 }, tier: { type: "context", size: 300_000 } },
+      ],
+    },
+    { id: "unpriced", cost: undefined },
+  ])
+  expect(modelCost(undefined)).toEqual([])
+  expect(
+    SessionAccounting.calculate({
+      model: { cost: modelCost(model.cost), variants: modelVariants(model) },
+      variant: "unpriced",
+      usage: { input: 100_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    }),
+  ).toMatchObject({ source: "catalog", amount: 0.1, rate: modelCost(model.cost)[0] })
+})
 
 describe("CatalogV2", () => {
   it.effect("exposes virtual fugu provider and model", () =>

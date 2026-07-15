@@ -33,6 +33,7 @@ export const Cost = Schema.Struct({
     write: Schema.Finite,
   }),
 })
+export type Cost = typeof Cost.Type
 
 export const Ref = Schema.Struct({
   id: ID,
@@ -67,6 +68,7 @@ export class Info extends Schema.Class<Info>("ModelV2.Info")({
   variants: Schema.Struct({
     id: VariantID,
     ...ModelRequest.Request.fields,
+    cost: Cost.pipe(Schema.Array, Schema.optional),
   }).pipe(Schema.Array),
   time: Schema.Struct({
     released: DateTimeUtcFromMillis,

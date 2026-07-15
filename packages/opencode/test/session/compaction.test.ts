@@ -1678,6 +1678,33 @@ describe("SessionNs.getUsage", () => {
     expect(result.cost).toBe(3 + 1.5)
   })
 
+  test("preserves exact legacy Decimal pricing arithmetic", () => {
+    const result = SessionNs.getUsage({
+      model: createModel({
+        context: 100_000,
+        output: 32_000,
+        cost: { input: 1.05, output: 9.5, cache: { read: 0.07, write: 0.87 } },
+      }),
+      usage: usage({
+        inputTokens: 20_562,
+        outputTokens: 8_273,
+        reasoningTokens: 4_252,
+        cacheReadInputTokens: 7_912,
+        cacheWriteInputTokens: 9_741,
+        totalTokens: 28_835,
+      }),
+    })
+
+    expect(result.tokens).toEqual({
+      input: 2_909,
+      output: 4_021,
+      reasoning: 4_252,
+      cache: { read: 7_912, write: 9_741 },
+      total: 28_835,
+    })
+    expect(result.cost).toBe(0.09067646)
+  })
+
   test("uses authoritative Copilot billed cost when provided", () => {
     const result = SessionNs.getUsage({
       model: createModel({
@@ -1690,6 +1717,22 @@ describe("SessionNs.getUsage", () => {
     })
 
     expect(result.cost).toBe(0.04473525)
+  })
+
+  test("uses valid OpenRouter provider cost and rejects invalid provider cost", () => {
+    const model = createModel({
+      context: 100_000,
+      output: 32_000,
+      cost: { input: 3, output: 15, cache: { read: 0.3, write: 0.3 } },
+    })
+    const item = usage({ inputTokens: 1_000_000, outputTokens: 100_000, totalTokens: 1_100_000 })
+
+    expect(
+      SessionNs.getUsage({ model, usage: item, metadata: { openrouter: { usage: { cost: 0.25 } } } }).cost,
+    ).toBe(0.25)
+    expect(
+      SessionNs.getUsage({ model, usage: item, metadata: { openrouter: { usage: { cost: -1 } } } }).cost,
+    ).toBe(4.5)
   })
 
   test("uses matching context cost tier before over-200k fallback", () => {

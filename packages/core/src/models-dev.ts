@@ -21,7 +21,7 @@ const CostTier = Schema.Struct({
   cache_write: Schema.optional(Schema.Finite),
   tier: Schema.Struct({
     type: Schema.Literal("context"),
-    size: Schema.Finite,
+    size: Schema.Int,
   }),
 })
 
