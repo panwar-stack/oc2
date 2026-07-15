@@ -19,14 +19,18 @@ Options:
     -b, --binary <path>     Install from a local binary instead of downloading
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
+Environment:
+    OC2_ASSET_SHA256        Expected SHA-256 of the release archive (required for downloads)
+
 Examples:
-    curl -fsSL https://oc2.ai/install | bash
-    curl -fsSL https://oc2.ai/install | bash -s -- --version 1.0.180
+    OC2_ASSET_SHA256=<sha256> ./install
+    OC2_ASSET_SHA256=<sha256> ./install --version 1.0.180
     ./install --binary /path/to/oc2
 EOF
 }
 
 requested_version=${VERSION:-}
+expected_sha256=${OC2_ASSET_SHA256:-}
 no_modify_path=false
 binary_path=""
 
@@ -64,6 +68,18 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ -z "$binary_path" ]; then
+    if [ -z "$expected_sha256" ]; then
+        echo -e "${RED}Error: OC2_ASSET_SHA256 is required for downloaded release archives${NC}" >&2
+        exit 1
+    fi
+    if [[ ! "$expected_sha256" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+        echo -e "${RED}Error: OC2_ASSET_SHA256 must be exactly 64 hexadecimal characters${NC}" >&2
+        exit 1
+    fi
+    expected_sha256=$(printf '%s' "$expected_sha256" | tr '[:upper:]' '[:lower:]')
+fi
 
 DEFAULT_INSTALL_DIR=$HOME/.oc2/bin
 INSTALL_DIR=$DEFAULT_INSTALL_DIR
@@ -220,28 +236,6 @@ print_message() {
     echo -e "${color}${message}${NC}"
 }
 
-check_version() {
-    if [ -x "$INSTALL_DIR/oc2" ]; then
-        oc2_path="$INSTALL_DIR/oc2"
-    elif [ -x "$INSTALL_DIR/oc2.exe" ]; then
-        oc2_path="$INSTALL_DIR/oc2.exe"
-    elif command -v oc2 >/dev/null 2>&1; then
-        oc2_path=$(which oc2)
-    else
-        return 0
-    fi
-
-    ## Check the installed version
-    installed_version=$("$oc2_path" --version 2>/dev/null || echo "")
-
-    if [[ "$installed_version" != "$specific_version" ]]; then
-        print_message info "${MUTED}Installed version: ${NC}$installed_version."
-    else
-        print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
-        exit 0
-    fi
-}
-
 unbuffered_sed() {
     if echo | sed -u -e "" >/dev/null 2>&1; then
         sed -nu "$@"
@@ -282,17 +276,15 @@ download_with_progress() {
         exec 4>/dev/null
     fi
 
-    local tmp_dir=${TMPDIR:-/tmp}
-    local basename="${tmp_dir}/oc2_install_$$"
-    local tracefile="${basename}.trace"
-
-    rm -f "$tracefile"
+    local progress_dir
+    progress_dir=$(mktemp -d "${TMPDIR:-/tmp}/oc2_install_progress.XXXXXXXXXX")
+    local tracefile="$progress_dir/trace"
     mkfifo "$tracefile"
 
     # Hide cursor
     printf "\033[?25l" >&4
 
-    trap "trap - RETURN; rm -f \"$tracefile\"; printf '\033[?25h' >&4; exec 4>&-" RETURN
+    trap "trap - RETURN; rm -rf \"$progress_dir\"; printf '\033[?25h' >&4; exec 4>&-" RETURN
 
     (
         curl --trace-ascii "$tracefile" -s -L -o "$output" "$url"
@@ -334,12 +326,32 @@ download_with_progress() {
 
 download_and_install() {
     print_message info "\n${MUTED}Installing ${NC}oc2 ${MUTED}version: ${NC}$specific_version"
-    local tmp_dir="${TMPDIR:-/tmp}/oc2_install_$$"
-    mkdir -p "$tmp_dir"
+    local tmp_dir
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/oc2_install.XXXXXXXXXX")
+    trap 'rm -rf "$tmp_dir"' EXIT
 
     if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
         # Fallback to standard curl on Windows, non-TTY environments, or if custom progress fails
         curl -# -L -o "$tmp_dir/$filename" "$url"
+    fi
+
+    local actual_sha256=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual_sha256=$(sha256sum "$tmp_dir/$filename" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual_sha256=$(shasum -a 256 "$tmp_dir/$filename" | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+        actual_sha256=$(openssl dgst -sha256 "$tmp_dir/$filename" | awk '{print $NF}')
+    else
+        rm -rf "$tmp_dir"
+        echo -e "${RED}Error: sha256sum, shasum, or openssl is required to verify the release archive${NC}" >&2
+        exit 1
+    fi
+    actual_sha256=$(printf '%s' "$actual_sha256" | tr '[:upper:]' '[:lower:]')
+    if [ "$actual_sha256" != "$expected_sha256" ]; then
+        rm -rf "$tmp_dir"
+        echo -e "${RED}Error: release archive SHA-256 does not match OC2_ASSET_SHA256${NC}" >&2
+        exit 1
     fi
 
     if [ "$os" = "linux" ]; then
@@ -356,6 +368,7 @@ download_and_install() {
         chmod 755 "${INSTALL_DIR}/oc2"
     fi
     rm -rf "$tmp_dir"
+    trap - EXIT
 }
 
 install_from_binary() {
@@ -372,7 +385,6 @@ install_from_binary() {
 if [ -n "$binary_path" ]; then
     install_from_binary
 else
-    check_version
     download_and_install
 fi
 

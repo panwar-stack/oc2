@@ -201,6 +201,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
 
+      - name: Publish release asset checksums
+        shell: bash
+        working-directory: packages/opencode/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sha256sum oc2-*.tar.gz oc2-*.zip | sort -k 2 > SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+
       - name: Checkout release tooling
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -344,6 +355,38 @@ jobs:
         env:
           OC2_VERSION: ${{ needs.plan.outputs.version }}
 
+      - name: Verify published release checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          checksum_dir=$(mktemp -d "${RUNNER_TEMP}/oc2-release-checksums.XXXXXXXXXX")
+          trap 'rm -rf "$checksum_dir"' EXIT
+          gh release download "$TAG" --dir "$checksum_dir" --repo "$GITHUB_REPOSITORY"
+
+          expected=$(printf '%s\n' \
+            oc2-darwin-arm64.zip \
+            oc2-darwin-x64-baseline.zip \
+            oc2-darwin-x64.zip \
+            oc2-linux-arm64-musl.tar.gz \
+            oc2-linux-arm64.tar.gz \
+            oc2-linux-x64-baseline-musl.tar.gz \
+            oc2-linux-x64-baseline.tar.gz \
+            oc2-linux-x64-musl.tar.gz \
+            oc2-linux-x64.tar.gz \
+            oc2-windows-arm64.zip \
+            oc2-windows-x64-baseline.zip \
+            oc2-windows-x64.zip)
+          actual=$(awk 'NF == 2 { name=$2; sub(/^\*/, "", name); print name }' "$checksum_dir/SHA256SUMS" | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "SHA256SUMS must contain exactly one entry for every release archive" >&2
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+            exit 1
+          fi
+          (cd "$checksum_dir" && sha256sum --check --strict SHA256SUMS)
+
       - name: Publish GitHub Release
         shell: bash
         env:
@@ -401,6 +444,7 @@ jobs:
           const release = JSON.parse(fs.readFileSync(process.env.RELEASE_FILE, "utf8"))
           const stale = ["npm: https://www.npmjs", "com/package/oc2-ai/v/0.0.2"].join(".")
           const expected = [
+            "SHA256SUMS",
             "oc2-darwin-arm64.zip",
             "oc2-darwin-x64-baseline.zip",
             "oc2-darwin-x64.zip",

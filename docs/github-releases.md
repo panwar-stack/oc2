@@ -3,9 +3,9 @@
 OC2 patch releases are published by manually dispatching the `publish` GitHub
 Actions workflow from `main` without inputs. The workflow allocates the next
 patch version, creates or adopts a draft GitHub Release, builds every native
-binary, uploads and validates the installer archives, and publishes the Release
-as `latest` only after every check passes. Windows executables are intentionally
-unsigned.
+binary, uploads the installer archives and their `SHA256SUMS` manifest, validates
+the complete asset set, and publishes the Release as `latest` only after every
+check passes. Windows executables are intentionally unsigned.
 
 Do not create, move, or replace a release tag manually. The workflow owns
 version selection, the tag, the source commit, and the GitHub Release so they
@@ -58,10 +58,11 @@ records the exact source commit in the draft body and verifies that the release
 tag resolves to that source before building. Generated release notes are
 included automatically.
 
-The Release remains a draft until all 12 expected archives are uploaded,
-nonempty, and in GitHub's `uploaded` state. The final step refetches the Release
-and rejects missing, extra, incomplete, or empty assets before publishing it as
-`latest`.
+The Release remains a draft until all 12 expected archives and the `SHA256SUMS`
+manifest are uploaded, nonempty, and in GitHub's `uploaded` state. The manifest
+contains one SHA-256 digest for each archive. The final step refetches the
+Release and rejects missing, extra, incomplete, or empty assets before
+publishing it as `latest`.
 
 ## Recover A Failed Release
 
@@ -111,6 +112,7 @@ Confirm that the Release is public, is not a prerelease, targets the intended
 source, is the latest release, and has exactly these assets:
 
 ```text
+SHA256SUMS
 oc2-darwin-arm64.zip
 oc2-darwin-x64.zip
 oc2-darwin-x64-baseline.zip
@@ -126,24 +128,41 @@ oc2-windows-x64-baseline.zip
 ```
 
 Every asset must report state `uploaded` and a size greater than zero. Download
-the archives and confirm each contains only `oc2` or `oc2.exe` at its root:
+the assets, verify every archive against the published manifest, and confirm
+each archive contains only `oc2` or `oc2.exe` at its root:
 
 ```sh
 ARCHIVES=$(mktemp -d)
 gh release download "$TAG" --dir "$ARCHIVES"
 
+(cd "$ARCHIVES" && sha256sum --check SHA256SUMS)
 for archive in "$ARCHIVES"/*.tar.gz; do tar -tzf "$archive"; done
 for archive in "$ARCHIVES"/*.zip; do unzip -Z1 "$archive"; done
 ```
 
+On macOS, use `shasum -a 256 --check SHA256SUMS` instead. A checksum downloaded
+from the same Release detects corruption but does not independently authenticate
+the Release. Record trusted digests separately before using them as deployment
+inputs.
+
 Finally, exercise the same versioned GitHub download path used by end users and
-confirm the installed binary reports the release version:
+confirm the installed binary reports the release version. Set `ASSET` to the
+archive selected for the test host; this example is for a glibc Linux x64 host
+with AVX2:
 
 ```sh
 TEST_HOME=$(mktemp -d)
-HOME="$TEST_HOME" ./install --version "$VERSION" --no-modify-path
+ASSET=oc2-linux-x64.tar.gz
+ASSET_SHA256=$(awk -v asset="$ASSET" '$2 == asset { print $1 }' "$ARCHIVES/SHA256SUMS")
+HOME="$TEST_HOME" OC2_ASSET_SHA256="$ASSET_SHA256" \
+  ./install --version "$VERSION" --no-modify-path
 "$TEST_HOME/.oc2/bin/oc2" --version
 ```
 
+The installer refuses downloaded archives when `OC2_ASSET_SHA256` is absent,
+malformed, or does not match. `--binary` installs a caller-supplied local file
+and therefore does not require a release-archive digest.
+
 Do not announce the release until the workflow, Release metadata, exact asset
-set, archive layouts, tag target, and installer check all pass.
+set, checksum verification, archive layouts, tag target, and installer check all
+pass.
