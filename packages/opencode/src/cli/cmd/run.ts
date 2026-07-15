@@ -229,6 +229,11 @@ export const RunCommand = effectCmd({
         describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
         default: false,
       })
+      .option("automation", {
+        type: "boolean",
+        describe: "run with explicit, fail-closed automation identity and failure handling",
+        default: false,
+      })
       .option("demo", {
         type: "boolean",
         default: false,
@@ -263,6 +268,30 @@ export const RunCommand = effectCmd({
 
       if (args.interactive && args.command) {
         die("--interactive cannot be used with --command")
+      }
+
+      if (args.automation && args.interactive) {
+        die("--automation cannot be used with --interactive")
+      }
+
+      if (args.automation && args["dangerously-skip-permissions"]) {
+        die("--automation cannot be used with --dangerously-skip-permissions")
+      }
+
+      if (args.automation && args.format === "json") {
+        die("--automation cannot be used with --format json")
+      }
+
+      if (args.automation && !args.agent) {
+        die("--automation requires --agent")
+      }
+
+      if (args.automation && !args.model) {
+        die("--automation requires --model")
+      }
+
+      if (args.automation && !args.variant) {
+        die("--automation requires --variant")
       }
 
       if (args.demo && !args.interactive) {
@@ -582,6 +611,51 @@ export const RunCommand = effectCmd({
         return localAgent()
       }
 
+      async function automationIdentity(sdk: OpencodeClient) {
+        const model = pick(args.model)
+        if (!model) {
+          return die(`model "${args.model}" not found`)
+        }
+        if (!model.providerID || !model.modelID) {
+          return die(`model "${args.model}" not found`)
+        }
+        const variant = args.variant
+        if (!variant) {
+          return die("--automation requires --variant")
+        }
+
+        const [agentResult, providerResult, commandResult] = await Promise.all([
+          sdk.app.agents(undefined, { throwOnError: true }),
+          sdk.provider.list(undefined, { throwOnError: true }),
+          args.command ? sdk.command.list(undefined, { throwOnError: true }) : undefined,
+        ])
+        const agent = agentResult.data?.find((item) => item.name === args.agent)
+        if (!agent) {
+          return die(`agent "${args.agent}" not found or disabled`)
+        }
+        if (agent.mode === "subagent") {
+          return die(`agent "${args.agent}" is a subagent, not a primary agent`)
+        }
+
+        const provider = providerResult.data?.all.find((item) => item.id === model.providerID)
+        const selected = provider?.models[model.modelID]
+        if (!provider || !selected || selected.id !== model.modelID || selected.providerID !== model.providerID) {
+          return die(`model "${args.model}" not found`)
+        }
+        if (!selected.variants || !Object.hasOwn(selected.variants, variant)) {
+          return die(`variant "${variant}" not found for model "${args.model}"`)
+        }
+
+        if (args.command && !commandResult?.data?.some((item) => item.name === args.command)) {
+          return die(`command "${args.command}" not found`)
+        }
+
+        return {
+          agent: agent.name,
+          model,
+        }
+      }
+
       async function execute(sdk: OpencodeClient) {
         const sess = await session(sdk)
         if (!sess?.id) {
@@ -605,13 +679,22 @@ export const RunCommand = effectCmd({
           return false
         }
 
+        function toolFailed(part: ToolPart) {
+          if (part.state.status === "error") return true
+          if (part.state.status !== "completed") return false
+          if (part.tool === "invalid") return true
+          if (part.state.metadata.isError === true) return true
+          return Object.hasOwn(part.state.metadata, "exit") && part.state.metadata.exit !== 0
+        }
+
         // Consume one subscribed event stream for the active session and mirror it
         // to stdout/UI. `client` is passed explicitly because attach mode may
         // rebind the SDK to the session's directory after the subscription is
         // created, and replies issued from inside the loop must use that client.
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
-          let error: string | undefined
+          let failed = false
+          let terminal = false
 
           for await (const event of events.stream) {
             if (
@@ -619,6 +702,7 @@ export const RunCommand = effectCmd({
               event.properties.sessionID === sessionID &&
               event.properties.info.role === "assistant" &&
               args.format !== "json" &&
+              !args.automation &&
               toggles.get("start") !== true
             ) {
               UI.empty()
@@ -634,9 +718,13 @@ export const RunCommand = effectCmd({
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
                 if (emit("tool_use", { part })) continue
                 if (part.state.status === "completed") {
+                  failed = failed || toolFailed(part)
+                  if (args.automation) continue
                   await tool(part)
                   continue
                 }
+                failed = true
+                if (args.automation) continue
                 await toolError(part)
                 UI.error(part.state.error)
               }
@@ -645,7 +733,8 @@ export const RunCommand = effectCmd({
                 part.type === "tool" &&
                 part.tool === "task" &&
                 part.state.status === "running" &&
-                args.format !== "json"
+                args.format !== "json" &&
+                !args.automation
               ) {
                 if (toggles.get(part.id) === true) continue
                 await tool(part)
@@ -662,6 +751,7 @@ export const RunCommand = effectCmd({
 
               if (part.type === "text" && part.time?.end) {
                 if (emit("text", { part })) continue
+                if (args.automation) continue
                 const text = part.text.trim()
                 if (!text) continue
                 if (!process.stdout.isTTY) {
@@ -673,7 +763,7 @@ export const RunCommand = effectCmd({
                 UI.empty()
               }
 
-              if (part.type === "reasoning" && part.time?.end && thinking) {
+              if (part.type === "reasoning" && part.time?.end && thinking && !args.automation) {
                 if (emit("reasoning", { part })) continue
                 const text = part.text.trim()
                 if (!text) continue
@@ -695,17 +785,21 @@ export const RunCommand = effectCmd({
               if ("data" in props.error && props.error.data && "message" in props.error.data) {
                 err = String(props.error.data.message)
               }
-              error = error ? error + EOL + err : err
+              failed = true
               if (emit("error", { error: props.error })) continue
+              if (args.automation) continue
               UI.error(err)
             }
 
-            if (
-              event.type === "session.status" &&
-              event.properties.sessionID === sessionID &&
-              event.properties.status.type === "idle"
-            ) {
-              break
+            if (event.type === "session.status" && event.properties.sessionID === sessionID) {
+              if (event.properties.status.type === "retry") {
+                failed = true
+                continue
+              }
+              if (event.properties.status.type === "idle") {
+                terminal = true
+                break
+              }
             }
 
             if (event.type === "permission.asked") {
@@ -718,11 +812,14 @@ export const RunCommand = effectCmd({
                   reply: "once",
                 })
               } else {
-                UI.println(
-                  UI.Style.TEXT_WARNING_BOLD + "!",
-                  UI.Style.TEXT_NORMAL +
-                    `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting`,
-                )
+                failed = true
+                if (!args.automation) {
+                  UI.println(
+                    UI.Style.TEXT_WARNING_BOLD + "!",
+                    UI.Style.TEXT_NORMAL +
+                      `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting`,
+                  )
+                }
                 await client.permission.reply({
                   requestID: permission.id,
                   reply: "reject",
@@ -730,20 +827,64 @@ export const RunCommand = effectCmd({
               }
             }
           }
-          return error
+          return { failed, terminal }
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
 
-        // Validate agent if specified
-        const agent = await pickAgent(client)
+        const identity = args.automation ? await automationIdentity(client) : undefined
+        const agent = identity?.agent ?? (await pickAgent(client))
+        const model = identity?.model ?? pick(args.model)
 
         if (!args.interactive) {
           const events = await client.event.subscribe()
-          loop(client, events).catch((e) => {
-            console.error(e)
-            process.exit(1)
+          const completion = loop(client, events).catch((error) => {
+            if (!args.automation) {
+              console.error(error)
+              process.exit(1)
+            }
+            return { failed: true, terminal: false }
           })
+
+          async function finishAutomation() {
+            if (!args.automation || !identity) return
+            const outcome = await completion
+            const history = await client.session
+              .messages({ sessionID }, { throwOnError: true })
+              .then((result) => result.data ?? [])
+            const user = history.findLast((item) => item.info.role === "user")
+            const assistants = user
+              ? history.filter((item) => item.info.role === "assistant" && item.info.parentID === user.info.id)
+              : []
+            const lastAssistant = assistants.findLast((item) => item.info.role === "assistant")
+            const identityMismatch =
+              !user ||
+              user.info.role !== "user" ||
+              user.info.agent !== identity.agent ||
+              user.info.model.providerID !== identity.model.providerID ||
+              user.info.model.modelID !== identity.model.modelID ||
+              user.info.model.variant !== args.variant
+            const recordedFailure =
+              !lastAssistant ||
+              lastAssistant.info.role !== "assistant" ||
+              lastAssistant.info.finish !== "stop" ||
+              assistants.some(
+                (item) =>
+                  item.info.role === "assistant" &&
+                  (item.info.error !== undefined || item.parts.some((part) => part.type === "tool" && toolFailed(part))),
+              )
+            if (outcome.terminal && !outcome.failed && !identityMismatch && !recordedFailure) {
+              const text = lastAssistant.parts
+                .filter((part) => part.type === "text")
+                .map((part) => part.text.trim())
+                .filter(Boolean)
+                .join(EOL)
+              if (text) process.stdout.write(text + EOL)
+              return
+            }
+            UI.error("Automation run failed")
+            process.exitCode = 1
+          }
 
           if (args.command) {
             const result = await client.session.command({
@@ -753,15 +894,18 @@ export const RunCommand = effectCmd({
               command: args.command,
               arguments: message,
               variant: args.variant,
+              automation: args.automation || undefined,
             })
             if (result.error) {
-              if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+              if (args.automation) UI.error("Automation request failed")
+              else if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
+              return
             }
+            await finishAutomation()
             return
           }
 
-          const model = pick(args.model)
           const result = await client.session.prompt({
             sessionID,
             agent,
@@ -770,13 +914,15 @@ export const RunCommand = effectCmd({
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {
-            if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+            if (args.automation) UI.error("Automation request failed")
+            else if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
             process.exitCode = 1
+            return
           }
+          await finishAutomation()
           return
         }
 
-        const model = pick(args.model)
         const { runInteractiveMode } = await import("./run/runtime")
         try {
           await runInteractiveMode({

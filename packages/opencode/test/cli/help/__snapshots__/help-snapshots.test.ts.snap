@@ -109,6 +109,8 @@ Options:
                                                                           [boolean] [default: false]
       --dangerously-skip-permissions  auto-approve permissions that are not explicitly denied
                                       (dangerous!)                        [boolean] [default: false]
+      --automation                    run with explicit, fail-closed automation identity and failure
+                                      handling                            [boolean] [default: false]
       --demo                          enable direct interactive demo slash commands; pass one as the
                                       message to run it immediately       [boolean] [default: false]"
 `;

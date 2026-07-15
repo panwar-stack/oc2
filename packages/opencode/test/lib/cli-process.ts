@@ -89,6 +89,8 @@ export type SpawnOpts = { readonly timeoutMs?: number; readonly env?: Record<str
 export type RunOpts = SpawnOpts & {
   readonly model?: string
   readonly agent?: string
+  readonly variant?: string
+  readonly automation?: boolean
   readonly format?: "default" | "json"
   readonly command?: string
   readonly printLogs?: boolean
@@ -241,6 +243,8 @@ export function withCliFixture<A, E>(
       if (opts?.printLogs) argv.push("--print-logs")
       argv.push("--model", opts?.model ?? testModelID)
       if (opts?.agent) argv.push("--agent", opts.agent)
+      if (opts?.variant) argv.push("--variant", opts.variant)
+      if (opts?.automation) argv.push("--automation")
       if (opts?.format) argv.push("--format", opts.format)
       if (opts?.command) argv.push("--command", opts.command)
       if (opts?.extraArgs) argv.push(...opts.extraArgs)

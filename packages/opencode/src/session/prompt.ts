@@ -1677,7 +1677,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
-      const agentName = cmd.agent ?? input.agent
+      const agentName = input.automation ? (input.agent ?? cmd.agent) : (cmd.agent ?? input.agent)
 
       const raw = input.arguments.match(argsRegex) ?? []
       const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
@@ -1719,6 +1719,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
       template = template.trim()
 
       const taskModel = yield* Effect.gen(function* () {
+        if (input.automation && input.model) return Provider.parseModel(input.model)
         if (cmd.model === Command.Model.SMALL) {
           const current = input.model ? Provider.parseModel(input.model) : yield* currentModel(input.sessionID)
           const small = yield* provider.getSmallModel(current.providerID)
@@ -1885,6 +1886,7 @@ export const CommandInput = Schema.Struct({
   arguments: Schema.String,
   command: Schema.String,
   variant: Schema.optional(Schema.String),
+  automation: Schema.optional(Schema.Boolean),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.

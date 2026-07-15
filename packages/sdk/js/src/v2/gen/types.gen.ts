@@ -9890,6 +9890,7 @@ export type SessionCommandData = {
     arguments: string
     command: string
     variant?: string
+    automation?: boolean
     parts?: Array<{
       id?: string
       type: "file"
