@@ -1608,7 +1608,7 @@ it.instance(
 )
 
 raceNoLLMServer.instance(
-  "spawn command launches background child without parent handoff",
+  "spawn command preserves literal arguments and attachments before launching the child",
   () =>
     Effect.gen(function* () {
       const { directory } = yield* TestInstance
@@ -1620,12 +1620,20 @@ raceNoLLMServer.instance(
       processorCreateStarted.push(() => succeedVoid(started))
       const chat = yield* sessions.create({ title: "Pinned" })
 
+      const literalReplacementPatterns = "literal-$&-$'-$`"
+      const attachment = {
+        type: "file" as const,
+        mime: "application/pdf",
+        url: "data:application/pdf;base64,JVBERi0xLjQ=",
+        filename: "review.pdf",
+      }
       const result = yield* prompt.command({
         sessionID: chat.id,
         command: "spawn",
-        arguments: "look into the cache key path",
+        arguments: `look into the cache key path ${literalReplacementPatterns}`,
         agent: "build",
         model: "test/test-model",
+        parts: [attachment],
       })
 
       expect(result.info.role).toBe("assistant")
@@ -1647,6 +1655,11 @@ raceNoLLMServer.instance(
 
       const messages = yield* MessageV2.filterCompactedEffect(chat.id)
       expect(messages.filter((msg) => msg.info.role === "user")).toHaveLength(1)
+      const userMessage = messages.find((msg) => msg.info.role === "user")
+      expect(userMessage?.parts.some((part) => part.type === "file" && part.url === attachment.url)).toBe(true)
+      expect(
+        userMessage?.parts.some((part) => part.type === "subtask" && part.prompt.includes(literalReplacementPatterns)),
+      ).toBe(true)
       expect(
         messages.some((msg) =>
           msg.parts.some((part) => part.type === "text" && part.text.includes("Summarize the task tool output")),
@@ -1656,6 +1669,52 @@ raceNoLLMServer.instance(
       yield* jobs.cancel(child.id)
     }),
   5_000,
+)
+
+it.instance(
+  "configured subtask command forwards explicit attachments to the child provider",
+  () =>
+    Effect.gen(function* () {
+      const marker = "EXPLICIT_SUBTASK_ATTACHMENT"
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        command: {
+          "attachment-subtask": {
+            template: "Inspect the explicit attachment",
+            subtask: true,
+          },
+        },
+      }))
+      const { prompt, chat } = yield* boot()
+      yield* llm.textMatch(({ body }) => JSON.stringify(body.messages).includes(marker), "child inspected attachment")
+      yield* llm.textMatch(
+        ({ body }) => JSON.stringify(body.messages).includes("Summarize the task tool output"),
+        "parent completed command",
+      )
+
+      const result = yield* prompt.command({
+        sessionID: chat.id,
+        command: "attachment-subtask",
+        arguments: "",
+        automation: true,
+        agent: "build",
+        model: "test/test-model",
+        parts: [
+          {
+            type: "file",
+            mime: "text/plain",
+            filename: "context.txt",
+            url: `data:text/plain;base64,${Buffer.from(marker).toString("base64")}`,
+          },
+        ],
+      })
+
+      expect(result.info.role).toBe("assistant")
+      const childInput = (yield* llm.inputs).find((input) => JSON.stringify(input.messages).includes(marker))
+      expect(childInput).toBeDefined()
+      expect(JSON.stringify(childInput?.messages)).toContain(marker)
+    }),
+  30_000,
 )
 
 it.instance(

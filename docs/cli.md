@@ -107,7 +107,7 @@ Usage:
 | `--fork`                         | Fork before continuing. Requires `--continue` or `--session`.                                                 |
 | `-m, --model <provider/model>`   | Select a model.                                                                                               |
 | `--agent <name>`                 | Select an agent.                                                                                              |
-| `--format <format>`              | Output `default` formatted text or raw `json` events. Default: `default`.                                     |
+| `--format <format>`              | Output `default` text, raw `json` events, or one automation `result-json` object. Default: `default`.         |
 | `-f, --file <path>`              | Attach a file to the message. Repeatable.                                                                     |
 | `--title [text]`                 | Set the session title; bare or empty uses a truncated prompt. Omission leaves title generation to the server. |
 | `--attach <url>`                 | Connect to a running OC2 server instead of starting an in-process server.                                     |
@@ -121,11 +121,39 @@ Usage:
 | `--replay-limit <number>`        | Limit interactive replay to the newest positive number of messages.                                           |
 | `-i, --interactive`              | Use the direct split-footer interface. Default: `false`.                                                      |
 | `--dangerously-skip-permissions` | Auto-approve permission requests not explicitly denied. Default: `false`.                                     |
+| `--automation`                   | Require an explicit identity and use fail-closed execution and output handling. Default: `false`.             |
 | `--demo`                         | Enable direct-interactive demo slash commands. Default: `false`.                                              |
 
 Piped stdin becomes the message. When message arguments are also present, their text is followed by the piped content. For local runs, relative `--file` paths are resolved after changing to `--dir`. With `--attach`, they are resolved against the original local root while `--dir` is interpreted on the remote server.
 
-Interactive mode requires a TTY on stdout. It cannot be combined with `--command` or `--format json`; `--replay-limit` and `--demo` require interactive mode. Only use `--dangerously-skip-permissions` in a trusted environment.
+Interactive mode requires a TTY on stdout. It cannot be combined with `--command`, `--automation`, or `--format json`; `--replay-limit` and `--demo` require interactive mode. Only use `--dangerously-skip-permissions` in a trusted environment.
+
+Automation mode requires explicit `--agent`, `--model`, and `--variant` values. It rejects `--dangerously-skip-permissions` and raw `--format json`, and suppresses `--print-logs` output. Configured-command arguments are treated literally: shell/backtick execution and implicit `@file` expansion are disabled. Use repeatable `--file` options for explicit attachments; supported image and PDF types are detected from file bytes rather than trusted filename extensions.
+
+`--format result-json` is automation-only and writes exactly one terminal-safe JSON object. It suppresses progress, reasoning, tools, UI output, and raw provider or tool errors:
+
+```ts
+type AutomationResult =
+  | { status: "ok"; sessionID: string; text: string }
+  | {
+      status: "error"
+      sessionID: string | null
+      error:
+        | "invalid_input"
+        | "invalid_agent"
+        | "invalid_model"
+        | "invalid_variant"
+        | "invalid_command"
+        | "permission_denied"
+        | "tool_error"
+        | "provider_error"
+        | "session_error"
+        | "cancelled"
+        | "timeout"
+    }
+```
+
+The process exits `0` only for `status: "ok"`, `1` for execution failures, and `2` for invalid invocation. Run automation with `--pure`, an isolated `HOME` and XDG state tree, and `OC2_DISABLE_EXTERNAL_SKILLS=1`; capture stdout and stderr, parse only the terminal result object, and remove the isolated state afterward.
 
 ```bash
 oc2 run "Explain this repository"
@@ -136,6 +164,7 @@ oc2 run -f src/index.ts -f package.json "Review these files"
 oc2 run --session ses_abc123 "Continue the investigation"
 oc2 run --attach http://localhost:4096 --dir /repo "Run the tests"
 oc2 run --command spec:planner "Plan a retry policy for provider requests"
+OC2_DISABLE_EXTERNAL_SKILLS=1 oc2 run --automation --pure --agent build --model anthropic/claude-sonnet-4-5 --variant high --format result-json -- "Inspect this repository"
 ```
 
 ## Attach

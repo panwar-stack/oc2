@@ -310,7 +310,10 @@ export const ReadTool = Tool.define<
       const loaded = yield* instruction.resolve(ctx.messages, filepath, ctx.messageID)
       const sample = yield* readSample(filepath, Number(stat.size), SAMPLE_BYTES)
 
-      const mime = sniffAttachmentMime(sample, FSUtil.mimeType(filepath))
+      const mime = sniffAttachmentMime(
+        sample,
+        typeof ctx.extra?.attachmentMime === "string" ? ctx.extra.attachmentMime : FSUtil.mimeType(filepath),
+      )
       const isImage = SUPPORTED_IMAGE_MIMES.has(mime)
 
       if (isImage || isPdfAttachment(mime)) {

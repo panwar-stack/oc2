@@ -84,8 +84,9 @@ Options:
                                       --session)                                           [boolean]
   -m, --model                         model to use in the format of provider/model          [string]
       --agent                         agent to use                                          [string]
-      --format                        format: default (formatted) or json (raw JSON events)
-                                          [string] [choices: "default", "json"] [default: "default"]
+      --format                        format: default (formatted), json (raw JSON events), or
+                                      result-json (automation result)
+                           [string] [choices: "default", "json", "result-json"] [default: "default"]
   -f, --file                          file(s) to attach to message                           [array]
       --title                         title for the session (uses truncated prompt if no value
                                       provided)                                             [string]

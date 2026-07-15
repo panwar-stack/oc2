@@ -71,6 +71,7 @@ function isolatedEnv(home: string, configJson: string): Record<string, string> {
     OC2_DISABLE_AUTOUPDATE: "1",
     OC2_DISABLE_AUTOCOMPACT: "1",
     OC2_DISABLE_MODELS_FETCH: "1",
+    OC2_DISABLE_EXTERNAL_SKILLS: "1",
     OC2_AUTH_CONTENT: "{}",
   }
 }
@@ -91,8 +92,9 @@ export type RunOpts = SpawnOpts & {
   readonly agent?: string
   readonly variant?: string
   readonly automation?: boolean
-  readonly format?: "default" | "json"
+  readonly format?: "default" | "json" | "result-json"
   readonly command?: string
+  readonly file?: string[]
   readonly printLogs?: boolean
   readonly extraArgs?: string[]
 }
@@ -247,7 +249,9 @@ export function withCliFixture<A, E>(
       if (opts?.automation) argv.push("--automation")
       if (opts?.format) argv.push("--format", opts.format)
       if (opts?.command) argv.push("--command", opts.command)
+      if (opts?.file) opts.file.forEach((file) => argv.push("--file", file))
       if (opts?.extraArgs) argv.push(...opts.extraArgs)
+      if (opts?.file) argv.push("--")
       argv.push(message)
       return spawn(argv, opts)
     }

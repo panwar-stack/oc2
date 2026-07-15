@@ -11,6 +11,7 @@ import { errorMessage } from "./util/error"
 import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@oc2-ai/core/util/opencode-process"
 import { isRecord } from "@/util/record"
+import { writeFileSync } from "node:fs"
 
 type CommandLoader = {
   readonly names: readonly string[]
@@ -70,6 +71,40 @@ process.on("uncaughtException", (e) => {
 })
 
 const args: string[] = hideBin(process.argv)
+const optionArgs = args.slice(0, args.indexOf("--") === -1 ? undefined : args.indexOf("--"))
+const preflight = yargs(
+  optionArgs.map((arg) =>
+    arg === "--get-yargs-completions" || arg.startsWith("--get-yargs-completions=")
+      ? "--oc2-result-json-completion"
+      : arg,
+  ),
+)
+  .exitProcess(false)
+  .help(false)
+  .version(false)
+  .option("help", { type: "boolean", alias: "h" })
+  .option("version", { type: "boolean", alias: "v" })
+  .option("format", { type: "string" })
+  .parseSync()
+const completionOutput =
+  preflight._[0] === "completion" ||
+  optionArgs.some((arg) => arg === "--get-yargs-completions" || arg.startsWith("--get-yargs-completions="))
+const formats = Array.isArray(preflight.format)
+  ? preflight.format
+  : preflight.format === undefined
+    ? []
+    : [preflight.format]
+const resultJsonOutput = formats.includes("result-json")
+const automationOutput = optionArgs.some((arg) => arg === "--automation" || arg === "--automation=true")
+const safeAutomationOutput = automationOutput || resultJsonOutput
+
+if (
+  resultJsonOutput &&
+  (formats.length !== 1 || completionOutput || Object.hasOwn(preflight, "help") || Object.hasOwn(preflight, "version"))
+) {
+  writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"invalid_input"}' + EOL)
+  process.exit(2)
+}
 
 async function loadCommands() {
   const selected = selectedCommandName()
@@ -147,7 +182,7 @@ const cli = yargs(args)
     }
 
     await Log.init({
-      print: process.argv.includes("--print-logs"),
+      print: process.argv.includes("--print-logs") && !safeAutomationOutput,
       dev: Installation.isLocal(),
       level: (() => {
         if (opts.logLevel) return opts.logLevel as Log.Level
@@ -164,7 +199,7 @@ const cli = yargs(args)
 
     Log.Default.info("opencode", {
       version: InstallationVersion,
-      args: process.argv.slice(2),
+      args: safeAutomationOutput ? ["<automation arguments redacted>"] : process.argv.slice(2),
       process_role: processMetadata.processRole,
       run_id: processMetadata.runID,
     })
@@ -176,6 +211,10 @@ for (const command of commands) registerCommand.call(cli, command)
 
 cli
   .fail((msg, err) => {
+    if (resultJsonOutput) {
+      writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"invalid_input"}' + EOL)
+      process.exit(2)
+    }
     if (
       msg?.startsWith("Unknown argument") ||
       msg?.startsWith("Not enough non-option arguments") ||
@@ -184,8 +223,12 @@ cli
       if (err) throw err
       cli.showHelp(show)
     }
+    if (err && automationOutput) {
+      UI.error("Invalid automation invocation")
+      process.exit(2)
+    }
     if (err) throw err
-    process.exit(1)
+    process.exit(automationOutput ? 2 : 1)
   })
   .strict()
 
@@ -200,45 +243,50 @@ try {
     await cli.parse()
   }
 } catch (e) {
-  let data: Record<string, any> = {}
-  if (e instanceof Error) {
-    Object.assign(data, {
-      name: e.name,
-      message: e.message,
-      cause: e.cause?.toString(),
-      stack: e.stack,
-    })
-  }
+  if (resultJsonOutput) {
+    writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"session_error"}' + EOL)
+    process.exitCode = 1
+  } else {
+    let data: Record<string, any> = {}
+    if (e instanceof Error) {
+      Object.assign(data, {
+        name: e.name,
+        message: e.message,
+        cause: e.cause?.toString(),
+        stack: e.stack,
+      })
+    }
 
-  if (e instanceof NamedError) {
-    const obj = e.toObject()
-    if (isRecord(obj.data)) {
-      for (const [key, value] of Object.entries(obj.data)) {
-        if (key === "name" || key === "stack" || key === "cause") continue
-        data[key] = value
+    if (e instanceof NamedError) {
+      const obj = e.toObject()
+      if (isRecord(obj.data)) {
+        for (const [key, value] of Object.entries(obj.data)) {
+          if (key === "name" || key === "stack" || key === "cause") continue
+          data[key] = value
+        }
       }
     }
-  }
 
-  if (e instanceof ResolveMessage) {
-    Object.assign(data, {
-      name: e.name,
-      message: e.message,
-      code: e.code,
-      specifier: e.specifier,
-      referrer: e.referrer,
-      position: e.position,
-      importKind: e.importKind,
-    })
+    if (e instanceof ResolveMessage) {
+      Object.assign(data, {
+        name: e.name,
+        message: e.message,
+        code: e.code,
+        specifier: e.specifier,
+        referrer: e.referrer,
+        position: e.position,
+        importKind: e.importKind,
+      })
+    }
+    Log.Default.error("fatal", data)
+    const formatted = FormatError(e)
+    if (formatted) UI.error(formatted)
+    if (formatted === undefined) {
+      UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
+      process.stderr.write(errorMessage(e) + EOL)
+    }
+    process.exitCode = 1
   }
-  Log.Default.error("fatal", data)
-  const formatted = FormatError(e)
-  if (formatted) UI.error(formatted)
-  if (formatted === undefined) {
-    UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
-    process.stderr.write(errorMessage(e) + EOL)
-  }
-  process.exitCode = 1
 } finally {
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless

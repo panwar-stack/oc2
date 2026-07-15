@@ -23,6 +23,7 @@ import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@oc2-ai/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
+import { sniffAttachmentMime } from "@/util/media"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -65,6 +66,23 @@ type SessionInfo = {
   title?: string
   directory?: string
 }
+
+type AutomationError =
+  | "invalid_input"
+  | "invalid_agent"
+  | "invalid_model"
+  | "invalid_variant"
+  | "invalid_command"
+  | "permission_denied"
+  | "tool_error"
+  | "provider_error"
+  | "session_error"
+  | "cancelled"
+  | "timeout"
+
+type AutomationResult =
+  | { status: "ok"; sessionID: string; text: string }
+  | { status: "error"; sessionID: string | null; error: AutomationError }
 
 function inline(info: Inline) {
   const suffix = info.description ? UI.Style.TEXT_DIM + ` ${info.description}` + UI.Style.TEXT_NORMAL : ""
@@ -165,9 +183,9 @@ export const RunCommand = effectCmd({
       })
       .option("format", {
         type: "string",
-        choices: ["default", "json"],
+        choices: ["default", "json", "result-json"],
         default: "default",
-        describe: "format: default (formatted) or json (raw JSON events)",
+        describe: "format: default (formatted), json (raw JSON events), or result-json (automation result)",
       })
       .option("file", {
         alias: ["f"],
@@ -247,16 +265,66 @@ export const RunCommand = effectCmd({
     const agentSvc = yield* Agent.Service
     const flags = yield* RuntimeFlags.Service
     const localInstance = yield* InstanceRef
+    const resultJson = args.format === "result-json"
+    let automationSessionID: string | null = null
+    let automationResultEmitted = false
+    const emitAutomationResult = async (result: AutomationResult) => {
+      if (automationResultEmitted) return
+      const safe = JSON.stringify(result).replace(/[\u007f-\u009f\u2028\u2029]/g, (char) => {
+        return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`
+      })
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(safe + EOL, (error) => (error ? reject(error) : resolve()))
+      })
+      automationResultEmitted = true
+    }
+    const executionError = (error: unknown): AutomationError => {
+      const value = typeof error === "object" && error !== null ? error : undefined
+      const name = value && "name" in value ? String(value.name) : error instanceof Error ? error.name : ""
+      const data =
+        value && "data" in value && typeof value.data === "object" && value.data !== null ? value.data : undefined
+      const message = data && "message" in data ? String(data.message) : error instanceof Error ? error.message : ""
+      const metadata =
+        data && "metadata" in data && typeof data.metadata === "object" && data.metadata !== null
+          ? data.metadata
+          : undefined
+      const code = metadata && "code" in metadata ? String(metadata.code) : ""
+      if (/timeout|timed out/i.test(name + " " + code + " " + message)) return "timeout"
+      if (name === "MessageAbortedError" || name === "AbortError") return "cancelled"
+      if (name.includes("Permission")) return "permission_denied"
+      if (
+        name.includes("Provider") ||
+        name === "APIError" ||
+        name === "ContextOverflowError" ||
+        name === "StructuredOutputError" ||
+        name === "MessageOutputLengthError"
+      ) {
+        return "provider_error"
+      }
+      return "session_error"
+    }
+    const failAutomation = async (error: AutomationError) => {
+      if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error })
+      else UI.error("Automation run failed")
+      process.exitCode = 1
+    }
+
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
       const thinking = args.interactive ? (args.thinking ?? true) : (args.thinking ?? false)
-      const die = (message: string): never => {
-        UI.error(message)
+      const die = async (message: string, error: AutomationError = "invalid_input"): Promise<never> => {
+        if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error })
+        else UI.error(message)
+        process.exit(args.automation || resultJson ? 2 : 1)
+      }
+      const abortExecution = async (message: string, error: AutomationError = "session_error"): Promise<never> => {
+        if (args.automation) await failAutomation(error)
+        else UI.error(message)
         process.exit(1)
       }
-      const dieInteractive = (error: unknown): never => {
+      const dieInteractive = async (error: unknown): Promise<never> => {
         if (error instanceof Error && error.message === INTERACTIVE_INPUT_ERROR) {
-          die(error.message)
+          return die(error.message)
         }
 
         throw error
@@ -267,68 +335,72 @@ export const RunCommand = effectCmd({
         .join(" ")
 
       if (args.interactive && args.command) {
-        die("--interactive cannot be used with --command")
+        await die("--interactive cannot be used with --command")
+      }
+
+      if (resultJson && !args.automation) {
+        await die("--format result-json requires --automation")
       }
 
       if (args.automation && args.interactive) {
-        die("--automation cannot be used with --interactive")
+        await die("--automation cannot be used with --interactive")
       }
 
       if (args.automation && args["dangerously-skip-permissions"]) {
-        die("--automation cannot be used with --dangerously-skip-permissions")
+        await die("--automation cannot be used with --dangerously-skip-permissions")
       }
 
       if (args.automation && args.format === "json") {
-        die("--automation cannot be used with --format json")
+        await die("--automation cannot be used with --format json")
       }
 
       if (args.automation && !args.agent) {
-        die("--automation requires --agent")
+        await die("--automation requires --agent", "invalid_agent")
       }
 
       if (args.automation && !args.model) {
-        die("--automation requires --model")
+        await die("--automation requires --model", "invalid_model")
       }
 
       if (args.automation && !args.variant) {
-        die("--automation requires --variant")
+        await die("--automation requires --variant", "invalid_variant")
       }
 
       if (args.demo && !args.interactive) {
-        die("--demo requires --interactive")
+        await die("--demo requires --interactive")
       }
 
       if (args.interactive && args.format === "json") {
-        die("--interactive cannot be used with --format json")
+        await die("--interactive cannot be used with --format json")
       }
 
       if (args["replay-limit"] !== undefined && !args.interactive) {
-        die("--replay-limit requires --interactive")
+        await die("--replay-limit requires --interactive")
       }
 
       if (
         args["replay-limit"] !== undefined &&
         (!Number.isInteger(args["replay-limit"]) || args["replay-limit"] <= 0)
       ) {
-        die("--replay-limit must be a positive integer")
+        await die("--replay-limit must be a positive integer")
       }
 
       if (args.interactive && !process.stdout.isTTY) {
-        die("--interactive requires a TTY stdout")
+        await die("--interactive requires a TTY stdout")
       }
 
       if (args.interactive) {
         try {
           resolveInteractiveStdin().cleanup?.()
         } catch (error) {
-          dieInteractive(error)
+          await dieInteractive(error)
         }
       }
 
       const replay = args.replay || args["replay-limit"] !== undefined
 
       const root = Filesystem.resolve(process.env.PWD ?? process.cwd())
-      const directory = (() => {
+      const directory = await (async () => {
         if (!args.dir) return args.attach ? undefined : root
         if (args.attach) return args.dir
 
@@ -336,8 +408,7 @@ export const RunCommand = effectCmd({
           process.chdir(path.isAbsolute(args.dir) ? args.dir : path.join(root, args.dir))
           return process.cwd()
         } catch {
-          UI.error("Failed to change directory to " + args.dir)
-          process.exit(1)
+          return die("Failed to change directory to " + args.dir)
         }
       })()
       const attachHeaders = args.attach
@@ -358,11 +429,12 @@ export const RunCommand = effectCmd({
         for (const filePath of list) {
           const resolvedPath = path.resolve(args.attach ? root : (directory ?? root), filePath)
           if (!(await Filesystem.exists(resolvedPath))) {
-            UI.error(`File not found: ${filePath}`)
-            process.exit(1)
+            await die(`File not found: ${filePath}`)
           }
 
-          const mime = (await Filesystem.isDir(resolvedPath)) ? "application/x-directory" : "text/plain"
+          const mime = (await Filesystem.isDir(resolvedPath))
+            ? "application/x-directory"
+            : sniffAttachmentMime(new Uint8Array(await Bun.file(resolvedPath).slice(0, 12).arrayBuffer()), "text/plain")
 
           files.push({
             type: "file",
@@ -378,13 +450,11 @@ export const RunCommand = effectCmd({
       const initialInput = resolveRunInput(rawMessage, piped)
 
       if (message.trim().length === 0 && !args.command && !args.interactive) {
-        UI.error("You must provide a message or a command")
-        process.exit(1)
+        await die("You must provide a message or a command")
       }
 
       if (args.fork && !args.continue && !args.session) {
-        UI.error("--fork requires --continue or --session")
-        process.exit(1)
+        await die("--fork requires --continue or --session")
       }
 
       const rules: PermissionV1.Ruleset = args.interactive
@@ -422,8 +492,7 @@ export const RunCommand = effectCmd({
             .catch(() => undefined)
 
           if (!current?.data) {
-            UI.error("Session not found")
-            process.exit(1)
+            return abortExecution("Session not found")
           }
 
           if (args.fork) {
@@ -532,8 +601,7 @@ export const RunCommand = effectCmd({
           return next
         }
 
-        UI.error("Failed to resolve remote directory")
-        process.exit(1)
+        return abortExecution("Failed to resolve remote directory")
       }
 
       async function localAgent() {
@@ -614,14 +682,14 @@ export const RunCommand = effectCmd({
       async function automationIdentity(sdk: OpencodeClient) {
         const model = pick(args.model)
         if (!model) {
-          return die(`model "${args.model}" not found`)
+          return die(`model "${args.model}" not found`, "invalid_model")
         }
         if (!model.providerID || !model.modelID) {
-          return die(`model "${args.model}" not found`)
+          return die(`model "${args.model}" not found`, "invalid_model")
         }
         const variant = args.variant
         if (!variant) {
-          return die("--automation requires --variant")
+          return die("--automation requires --variant", "invalid_variant")
         }
 
         const [agentResult, providerResult, commandResult] = await Promise.all([
@@ -631,23 +699,23 @@ export const RunCommand = effectCmd({
         ])
         const agent = agentResult.data?.find((item) => item.name === args.agent)
         if (!agent) {
-          return die(`agent "${args.agent}" not found or disabled`)
+          return die(`agent "${args.agent}" not found or disabled`, "invalid_agent")
         }
         if (agent.mode === "subagent") {
-          return die(`agent "${args.agent}" is a subagent, not a primary agent`)
+          return die(`agent "${args.agent}" is a subagent, not a primary agent`, "invalid_agent")
         }
 
         const provider = providerResult.data?.all.find((item) => item.id === model.providerID)
         const selected = provider?.models[model.modelID]
         if (!provider || !selected || selected.id !== model.modelID || selected.providerID !== model.providerID) {
-          return die(`model "${args.model}" not found`)
+          return die(`model "${args.model}" not found`, "invalid_model")
         }
         if (!selected.variants || !Object.hasOwn(selected.variants, variant)) {
-          return die(`variant "${variant}" not found for model "${args.model}"`)
+          return die(`variant "${variant}" not found for model "${args.model}"`, "invalid_variant")
         }
 
         if (args.command && !commandResult?.data?.some((item) => item.name === args.command)) {
-          return die(`command "${args.command}" not found`)
+          return die(`command "${args.command}" not found`, "invalid_command")
         }
 
         return {
@@ -659,10 +727,10 @@ export const RunCommand = effectCmd({
       async function execute(sdk: OpencodeClient) {
         const sess = await session(sdk)
         if (!sess?.id) {
-          UI.error("Session not found")
-          process.exit(1)
+          return abortExecution("Session not found")
         }
         const sessionID = sess.id
+        if (args.automation) automationSessionID = sessionID
 
         function emit(type: string, data: Record<string, unknown>) {
           if (args.format === "json") {
@@ -693,7 +761,7 @@ export const RunCommand = effectCmd({
         // created, and replies issued from inside the loop must use that client.
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
-          let failed = false
+          let failure: AutomationError | undefined
           let terminal = false
 
           for await (const event of events.stream) {
@@ -718,12 +786,12 @@ export const RunCommand = effectCmd({
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
                 if (emit("tool_use", { part })) continue
                 if (part.state.status === "completed") {
-                  failed = failed || toolFailed(part)
+                  if (toolFailed(part)) failure ??= "tool_error"
                   if (args.automation) continue
                   await tool(part)
                   continue
                 }
-                failed = true
+                failure ??= "tool_error"
                 if (args.automation) continue
                 await toolError(part)
                 UI.error(part.state.error)
@@ -785,7 +853,7 @@ export const RunCommand = effectCmd({
               if ("data" in props.error && props.error.data && "message" in props.error.data) {
                 err = String(props.error.data.message)
               }
-              failed = true
+              failure ??= executionError(props.error)
               if (emit("error", { error: props.error })) continue
               if (args.automation) continue
               UI.error(err)
@@ -793,7 +861,7 @@ export const RunCommand = effectCmd({
 
             if (event.type === "session.status" && event.properties.sessionID === sessionID) {
               if (event.properties.status.type === "retry") {
-                failed = true
+                failure ??= /timeout|timed out/i.test(event.properties.status.message) ? "timeout" : "provider_error"
                 continue
               }
               if (event.properties.status.type === "idle") {
@@ -812,7 +880,7 @@ export const RunCommand = effectCmd({
                   reply: "once",
                 })
               } else {
-                failed = true
+                failure ??= "permission_denied"
                 if (!args.automation) {
                   UI.println(
                     UI.Style.TEXT_WARNING_BOLD + "!",
@@ -827,7 +895,7 @@ export const RunCommand = effectCmd({
               }
             }
           }
-          return { failed, terminal }
+          return { failure, terminal }
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
@@ -843,7 +911,7 @@ export const RunCommand = effectCmd({
               console.error(error)
               process.exit(1)
             }
-            return { failed: true, terminal: false }
+            return { failure: executionError(error), terminal: false }
           })
 
           async function finishAutomation() {
@@ -864,26 +932,26 @@ export const RunCommand = effectCmd({
               user.info.model.providerID !== identity.model.providerID ||
               user.info.model.modelID !== identity.model.modelID ||
               user.info.model.variant !== args.variant
-            const recordedFailure =
-              !lastAssistant ||
-              lastAssistant.info.role !== "assistant" ||
-              lastAssistant.info.finish !== "stop" ||
-              assistants.some(
-                (item) =>
-                  item.info.role === "assistant" &&
-                  (item.info.error !== undefined || item.parts.some((part) => part.type === "tool" && toolFailed(part))),
-              )
-            if (outcome.terminal && !outcome.failed && !identityMismatch && !recordedFailure) {
+            let recordedFailure: AutomationError | undefined
+            for (const item of assistants) {
+              if (item.info.role !== "assistant") continue
+              if (item.info.error) recordedFailure ??= executionError(item.info.error)
+              if (item.parts.some((part) => part.type === "tool" && toolFailed(part))) recordedFailure ??= "tool_error"
+            }
+            if (!lastAssistant || lastAssistant.info.role !== "assistant" || lastAssistant.info.finish !== "stop") {
+              recordedFailure ??= "session_error"
+            }
+            if (outcome.terminal && !outcome.failure && !identityMismatch && !recordedFailure && lastAssistant) {
               const text = lastAssistant.parts
                 .filter((part) => part.type === "text")
                 .map((part) => part.text.trim())
                 .filter(Boolean)
                 .join(EOL)
-              if (text) process.stdout.write(text + EOL)
+              if (resultJson) await emitAutomationResult({ status: "ok", sessionID, text })
+              else if (text) process.stdout.write(text + EOL)
               return
             }
-            UI.error("Automation run failed")
-            process.exitCode = 1
+            await failAutomation(outcome.failure ?? recordedFailure ?? "session_error")
           }
 
           if (args.command) {
@@ -895,9 +963,10 @@ export const RunCommand = effectCmd({
               arguments: message,
               variant: args.variant,
               automation: args.automation || undefined,
+              parts: files,
             })
             if (result.error) {
-              if (args.automation) UI.error("Automation request failed")
+              if (args.automation) await failAutomation("provider_error")
               else if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
               return
@@ -914,7 +983,7 @@ export const RunCommand = effectCmd({
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {
-            if (args.automation) UI.error("Automation request failed")
+            if (args.automation) await failAutomation("provider_error")
             else if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
             process.exitCode = 1
             return
@@ -944,7 +1013,7 @@ export const RunCommand = effectCmd({
             demo: args.demo,
           })
         } catch (error) {
-          dieInteractive(error)
+          await dieInteractive(error)
         }
         return
       }
@@ -977,7 +1046,7 @@ export const RunCommand = effectCmd({
             demo: args.demo,
           })
         } catch (error) {
-          dieInteractive(error)
+          await dieInteractive(error)
         }
       }
 
@@ -997,6 +1066,11 @@ export const RunCommand = effectCmd({
         directory,
       })
       await execute(sdk)
-    })
+    }).pipe(
+      Effect.catch((error) => {
+        if (!resultJson || automationResultEmitted) return Effect.fail(error)
+        return Effect.promise(() => failAutomation(executionError(error)))
+      }),
+    )
   }),
 })

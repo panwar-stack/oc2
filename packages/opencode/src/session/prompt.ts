@@ -332,7 +332,28 @@ export const layer = Layer.effect(
     }) {
       const { task, model, lastUser, sessionID, session, msgs } = input
       const ctx = yield* InstanceState.context
-      const promptOps = yield* ops()
+      const basePromptOps = yield* ops()
+      const forwardedParts =
+        msgs
+          .findLast((msg) => msg.info.role === "user" && msg.info.id === lastUser.id)
+          ?.parts.flatMap((part): PromptInput["parts"] =>
+            part.type === "file"
+              ? [
+                  {
+                    type: "file",
+                    mime: part.mime,
+                    filename: part.filename,
+                    url: part.url,
+                    source: part.source,
+                  },
+                ]
+              : [],
+          ) ?? []
+      const promptOps = {
+        ...basePromptOps,
+        resolvePromptParts: (template: string) =>
+          basePromptOps.resolvePromptParts(template).pipe(Effect.map((parts) => [...parts, ...forwardedParts])),
+      } satisfies TaskPromptOps
       const { task: taskTool } = yield* registry.named()
       const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
       const isSpawnCommand = task.command === Command.Default.SPAWN
@@ -724,7 +745,8 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+    type InternalPromptInput = PromptInput & { resolveReferences?: boolean }
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: InternalPromptInput) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -936,7 +958,7 @@ export const layer = Layer.effect(
                   },
                 ]
                 const exit = yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(
-                  Effect.flatMap((mdl) => execRead(args, { model: mdl })),
+                  Effect.flatMap((mdl) => execRead(args, { model: mdl, attachmentMime: mime })),
                   Effect.exit,
                 )
                 if (Exit.isSuccess(exit)) {
@@ -1073,7 +1095,7 @@ export const layer = Layer.effect(
         ),
       )
       for (const part of input.parts) {
-        if (part.type !== "text" || part.synthetic) continue
+        if (part.type !== "text" || part.synthetic || input.resolveReferences === false) continue
         for (const reference of yield* resolveReferenceParts(part.text)) {
           if (reference.type === "file" && attachedReferences.has(reference.url)) continue
           if (reference.type === "file") attachedReferences.add(reference.url)
@@ -1230,9 +1252,7 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
-      "SessionPrompt.prompt",
-    )(function* (input: PromptInput) {
+    const prompt = Effect.fn("SessionPrompt.prompt")(function* (input: InternalPromptInput) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
@@ -1698,13 +1718,13 @@ Do not create a team for trivial one step requests or when the user explicitly a
         return args[argIndex]
       })
       const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
-      let template = withArgs.replaceAll("$ARGUMENTS", input.arguments)
+      let template = withArgs.replaceAll("$ARGUMENTS", () => input.arguments)
 
       if (placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()) {
         template = template + "\n\n" + input.arguments
       }
 
-      const shellMatches = ConfigMarkdown.shell(template)
+      const shellMatches = input.automation ? [] : ConfigMarkdown.shell(template)
       if (shellMatches.length > 0) {
         const cfg = yield* config.get()
         const sh = Shell.preferred(cfg.shell)
@@ -1746,7 +1766,9 @@ Do not create a team for trivial one step requests or when the user explicitly a
         throw error
       }
 
-      const templateParts = yield* resolvePromptParts(template)
+      const templateParts = input.automation
+        ? [{ type: "text" as const, text: template }]
+        : yield* resolvePromptParts(template)
       const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
       const parts = isSubtask
         ? [
@@ -1758,6 +1780,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
               model: { providerID: taskModel.providerID, modelID: taskModel.modelID },
               prompt: templateParts.find((y) => y.type === "text")?.text ?? "",
             },
+            ...(input.parts ?? []),
           ]
         : [...templateParts, ...(input.parts ?? [])]
 
@@ -1781,6 +1804,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
         agent: userAgent,
         parts,
         variant: input.variant,
+        resolveReferences: !input.automation,
       })
       yield* events.publish(Command.Event.Executed, {
         name: input.command,

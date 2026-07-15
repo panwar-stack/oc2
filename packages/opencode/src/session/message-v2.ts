@@ -648,10 +648,7 @@ export function fromError(
     if (e.classification === "context-overflow") {
       return new ContextOverflowError({ message: e.message }, { cause: e }).toObject()
     }
-    if (e.retryable !== undefined) {
-      return new APIError({ message: e.message, isRetryable: e.retryable }, { cause: e }).toObject()
-    }
-    return new NamedError.Unknown({ message: e.message }, { cause: e }).toObject()
+    return new APIError({ message: e.message, isRetryable: e.retryable ?? false }, { cause: e }).toObject()
   }
   switch (true) {
     case e instanceof DOMException && e.name === "AbortError":

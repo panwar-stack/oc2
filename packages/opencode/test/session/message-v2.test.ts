@@ -9,6 +9,7 @@ import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { Question } from "../../src/question"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { LLMEvent } from "@oc2-ai/llm"
 
 const sessionID = SessionID.make("session")
 const providerID = ProviderV2.ID.make("test")
@@ -1512,6 +1513,13 @@ describe("session.message-v2.fromError", () => {
         message: "123",
       },
     })
+  })
+
+  test("classifies native provider errors without retry metadata as API errors", () => {
+    const result = MessageV2.fromError(LLMEvent.providerError({ message: "native provider failure" }), { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(true)
+    if (SessionV1.APIError.isInstance(result)) expect(result.data.isRetryable).toBe(false)
   })
 
   test("serializes tagged errors with their message", () => {

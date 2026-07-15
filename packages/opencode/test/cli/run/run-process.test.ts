@@ -10,6 +10,31 @@ import { cliIt, testModelID } from "../../lib/cli-process"
 import { reply } from "../../lib/llm-server"
 import { testProviderConfig } from "../../lib/test-provider"
 
+type AutomationResult =
+  | { status: "ok"; sessionID: string; text: string }
+  | {
+      status: "error"
+      sessionID: string | null
+      error:
+        | "invalid_input"
+        | "invalid_agent"
+        | "invalid_model"
+        | "invalid_variant"
+        | "invalid_command"
+        | "permission_denied"
+        | "tool_error"
+        | "provider_error"
+        | "session_error"
+        | "cancelled"
+        | "timeout"
+    }
+
+function automationResult(stdout: string) {
+  const lines = stdout.split(/\r?\n/).filter(Boolean)
+  expect(lines).toHaveLength(1)
+  return JSON.parse(lines[0]) as AutomationResult
+}
+
 describe("opencode run (non-interactive subprocess)", () => {
   // Happy path: prompt completes, output reaches stdout, process exits 0.
   // If this fails, all the others likely will too — debug here first.
@@ -37,6 +62,319 @@ describe("opencode run (non-interactive subprocess)", () => {
         })
         opencode.expectExit(result, 0)
         expect(result.stdout).toContain("automation completed")
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "result-json emits exactly one terminal-safe success object",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const text =
+          "safe result \u001b]8;;https://attacker.invalid\u0007link\u001b]8;;\u0007 \u009b31m " + "x".repeat(900_000)
+        yield* llm.push(reply().reason("REASONING_SECRET").text(text).stop())
+        const result = yield* opencode.run("return a hostile-looking result", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          printLogs: true,
+        })
+
+        opencode.expectExit(result, 0)
+        expect(result.stderr).toBe("")
+        expect(result.stdout).not.toContain("\u001b")
+        expect(result.stdout).not.toContain("\u009b")
+        const parsed = automationResult(result.stdout)
+        expect(parsed).toMatchObject({ status: "ok", sessionID: expect.any(String) })
+        expect(parsed.status === "ok" && parsed.text === text).toBe(true)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "result-json reports invalid invocation with exit 2 and no UI output",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const result = yield* opencode.spawn([
+          "run",
+          "--automation",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "--format",
+          "result-json",
+          "hello",
+        ])
+
+        opencode.expectExit(result, 2)
+        expect(result.stderr).toBe("")
+        expect(automationResult(result.stdout)).toEqual({
+          status: "error",
+          sessionID: null,
+          error: "invalid_agent",
+        })
+
+        const hostile = "\u001b]8;;https://attacker.invalid\u0007HOSTILE_ARGUMENT\u001b]8;;\u0007"
+        const parserFailure = yield* opencode.spawn([
+          "run",
+          "--automation",
+          "--agent",
+          "build",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "--format",
+          "result-json",
+          "--unknown-option",
+          hostile,
+        ])
+        opencode.expectExit(parserFailure, 2)
+        expect(parserFailure.stderr).toBe("")
+        expect(parserFailure.stdout).not.toContain("\u001b")
+        expect(parserFailure.stdout).not.toContain("HOSTILE_ARGUMENT")
+        expect(automationResult(parserFailure.stdout)).toEqual({
+          status: "error",
+          sessionID: null,
+          error: "invalid_input",
+        })
+
+        const base = [
+          "run",
+          "--automation",
+          "--agent",
+          "build",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "--format",
+          "result-json",
+        ]
+        const help = yield* opencode.spawn([...base, "--help"])
+        const helpValue = yield* opencode.spawn([...base, "--help=true"])
+        const shortHelpValue = yield* opencode.spawn([...base, "-h=true"])
+        const version = yield* opencode.spawn([...base, "--version"])
+        const versionValue = yield* opencode.spawn([...base, "--version=true"])
+        const shortVersionValue = yield* opencode.spawn([...base, "-v=true"])
+        const shortCluster = yield* opencode.spawn([...base, "-hv"])
+        const completion = yield* opencode.spawn([...base, "--get-yargs-completions=true"])
+        const duplicate = yield* opencode.spawn([...base, "--format", "result-json", "hello"])
+        const conflicting = yield* opencode.spawn([...base, "--format=json", "hello"])
+        for (const invalid of [
+          help,
+          helpValue,
+          shortHelpValue,
+          version,
+          versionValue,
+          shortVersionValue,
+          shortCluster,
+          completion,
+          duplicate,
+          conflicting,
+        ]) {
+          opencode.expectExit(invalid, 2)
+          expect(invalid.stderr).toBe("")
+          expect(automationResult(invalid.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_input",
+          })
+        }
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "result-json reports a missing requested session as an execution failure",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const result = yield* opencode.run("continue missing session", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          extraArgs: ["--session", "ses_missing"],
+        })
+
+        opencode.expectExit(result, 1)
+        expect(result.stderr).toBe("")
+        expect(automationResult(result.stdout)).toEqual({
+          status: "error",
+          sessionID: null,
+          error: "session_error",
+        })
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "completion rejects result-json before emitting its script",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const positional = yield* opencode.spawn(["completion", "--automation", "--format", "result-json"])
+        const shell = yield* opencode.spawn(["completion", "bash", "--automation", "--format=result-json"])
+
+        for (const invalid of [positional, shell]) {
+          opencode.expectExit(invalid, 2)
+          expect(invalid.stderr).toBe("")
+          expect(automationResult(invalid.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_input",
+          })
+          expect(invalid.stdout).not.toContain("yargs command completion script")
+        }
+
+        const ordinary = yield* opencode.spawn(["completion"])
+        opencode.expectExit(ordinary, 0)
+        expect(ordinary.stderr).toBe("")
+        expect(ordinary.stdout).toContain("###-begin-oc2-completions-###")
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "automation treats hostile command arguments literally without ambient file inclusion",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const secret = path.join(home, "ambient-secret.txt")
+        const marker = path.join(home, "shell-expansion-marker")
+        yield* Effect.promise(() => Bun.write(secret, "AMBIENT_FILE_SECRET"))
+        yield* llm.text("hostile arguments stayed literal")
+
+        const literalReplacementPatterns = "literal-$&-$'-$`"
+        const result = yield* opencode.run(`!\`touch ${marker}\` @ambient-secret.txt ${literalReplacementPatterns}`, {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          command: "hostile-arguments",
+          env: {
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              command: { "hostile-arguments": { template: "$ARGUMENTS" } },
+            }),
+          },
+        })
+
+        opencode.expectExit(result, 0)
+        expect(automationResult(result.stdout)).toMatchObject({
+          status: "ok",
+          text: "hostile arguments stayed literal",
+        })
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        const input = JSON.stringify(yield* llm.inputs)
+        expect(input).toContain("@ambient-secret.txt")
+        expect(input).toContain(literalReplacementPatterns)
+        expect(input).not.toContain("AMBIENT_FILE_SECRET")
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "explicit file parts reach ordinary and configured-command runs",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const attachment = path.join(home, "context.txt")
+        yield* Effect.promise(() => Bun.write(attachment, "EXPLICIT_ATTACHMENT_CONTEXT"))
+
+        yield* llm.text("ordinary attachment accepted")
+        const ordinary = yield* opencode.run("inspect the explicit attachment", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          file: [attachment],
+        })
+        opencode.expectExit(ordinary, 0)
+
+        yield* llm.text("command attachment accepted")
+        const command = yield* opencode.run("inspect the explicit attachment", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          command: "attachment-test",
+          file: [attachment],
+          env: {
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              command: { "attachment-test": { template: "$ARGUMENTS" } },
+            }),
+          },
+        })
+        opencode.expectExit(command, 0)
+
+        expect(automationResult(ordinary.stdout)).toMatchObject({ status: "ok", text: "ordinary attachment accepted" })
+        expect(automationResult(command.stdout)).toMatchObject({ status: "ok", text: "command attachment accepted" })
+        const inputs = JSON.stringify(yield* llm.inputs)
+        expect(inputs.match(/EXPLICIT_ATTACHMENT_CONTEXT/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "explicit file MIME is sniffed from bytes instead of the filename",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const fakePng = path.join(home, "plain-text.png")
+        const fakePdf = path.join(home, "plain-text.pdf")
+        const realPng = path.join(home, "pixel.bin")
+        yield* Effect.promise(() => Bun.write(fakePng, "PLAIN_TEXT_NAMED_PNG"))
+        yield* Effect.promise(() => Bun.write(fakePdf, "PLAIN_TEXT_NAMED_PDF"))
+        yield* Effect.promise(() =>
+          Bun.write(
+            realPng,
+            Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+              "base64",
+            ),
+          ),
+        )
+        const config = testProviderConfig(llm.url)
+        const env = {
+          OC2_CONFIG_CONTENT: JSON.stringify({
+            ...config,
+            provider: {
+              ...config.provider,
+              test: {
+                ...config.provider.test,
+                models: {
+                  ...config.provider.test.models,
+                  "test-model": {
+                    ...config.provider.test.models["test-model"],
+                    attachment: true,
+                    modalities: { input: ["text", "image"], output: ["text"] },
+                  },
+                },
+              },
+            },
+          }),
+        }
+
+        for (const file of [fakePng, fakePdf, realPng]) {
+          yield* llm.text("attachment accepted")
+          const result = yield* opencode.run("inspect the attachment", {
+            automation: true,
+            agent: "build",
+            variant: "high",
+            format: "result-json",
+            file: [file],
+            env,
+          })
+          opencode.expectExit(result, 0)
+        }
+
+        const inputs = JSON.stringify(yield* llm.inputs)
+        expect(inputs).toContain("PLAIN_TEXT_NAMED_PNG")
+        expect(inputs).toContain("PLAIN_TEXT_NAMED_PDF")
+        expect(inputs).toContain('"image_url"')
       }),
     60_000,
   )
@@ -303,8 +641,11 @@ describe("opencode run (non-interactive subprocess)", () => {
           automation: true,
           agent: "build",
           variant: "high",
+          format: "result-json",
         })
-        expect(result.exitCode).not.toBe(0)
+        opencode.expectExit(result, 1)
+        expect(result.stderr).toBe("")
+        expect(automationResult(result.stdout)).toMatchObject({ status: "error", error: "provider_error" })
       }),
     60_000,
   )
@@ -416,9 +757,14 @@ describe("opencode run (non-interactive subprocess)", () => {
           automation: true,
           agent: "build",
           variant: "high",
+          format: "result-json",
         })
         opencode.expectExit(result, 1)
-        expect(result.stdout).toBe("")
+        expect(automationResult(result.stdout)).toMatchObject({ status: "error", error: "tool_error" })
+        expect(result.stdout).not.toContain("PRE_TOOL_SECRET")
+        expect(result.stdout).not.toContain("POST_TOOL_SECRET")
+        expect(result.stdout).not.toContain("unavailable_sensitive_tool")
+        expect(result.stdout).not.toContain("RAW_ARGUMENT_SECRET")
         expect(result.stderr).not.toContain("PRE_TOOL_SECRET")
         expect(result.stderr).not.toContain("POST_TOOL_SECRET")
         expect(result.stderr).not.toContain("unavailable_sensitive_tool")
