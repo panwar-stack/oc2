@@ -1,4 +1,5 @@
 import {
+  CanonicalUsage,
   ToolOutput as LLMToolOutput,
   type LLMEvent,
   type ProviderMetadata,
@@ -7,8 +8,10 @@ import {
   type Usage,
 } from "@oc2-ai/llm"
 import { DateTime, Effect } from "effect"
+import { isDeepStrictEqual } from "node:util"
 import { EventV2 } from "../../event"
 import { ModelV2 } from "../../model"
+import { SessionAccounting } from "../accounting"
 import { SessionEvent } from "../event"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
@@ -17,21 +20,33 @@ type Input = {
   readonly sessionID: SessionSchema.ID
   readonly agent: string
   readonly model: ModelV2.Ref
+  readonly catalog: ModelV2.Info
+  readonly clock?: () => number
 }
 
-const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
+type Settlement = "success" | "error" | "interrupt" | "eof"
 
-const tokens = (usage: Usage | undefined) => {
-  const reasoning = safe(usage?.reasoningTokens)
-  const read = safe(usage?.cacheReadInputTokens)
-  const write = safe(usage?.cacheWriteInputTokens)
-  return {
-    input: safe(usage?.nonCachedInputTokens),
-    output: safe(usage?.visibleOutputTokens),
-    reasoning,
-    cache: { read, write },
-  }
+const providerAmount = (usage: CanonicalUsage) => {
+  const copilot = usage.providerMetadata?.copilot
+  const totalNanoAiu = copilot && typeof copilot.totalNanoAiu === "number" ? copilot.totalNanoAiu : undefined
+  if (totalNanoAiu !== undefined && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0)
+    return totalNanoAiu / 100_000_000_000
+  const openrouter = usage.providerMetadata?.openrouter
+  const details = openrouter?.usage
+  if (!details || typeof details !== "object" || !("cost" in details)) return undefined
+  const cost = details.cost
+  return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : undefined
 }
+
+const compatibility = (usage: CanonicalUsage | undefined, pricing: SessionEvent.Step.Accounting["pricing"]) => ({
+  cost: usage ? (pricing?.amount ?? 0) : 0,
+  tokens: {
+    input: usage?.input ?? 0,
+    output: usage?.output ?? 0,
+    reasoning: usage?.reasoning ?? 0,
+    cache: { read: usage?.cache.read ?? 0, write: usage?.cache.write ?? 0 },
+  },
+})
 
 const record = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : { value }
@@ -72,23 +87,92 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   >()
   const timestamp = DateTime.now
   const assistantMessageID = SessionMessage.ID.create()
+  const clock = input.clock ?? Date.now
+  const intervals = new Array<{ readonly started: number; readonly completed: number; readonly duration: number }>()
   let assistantStarted = false
   let providerFailed = false
+  let activeAttempt: number | undefined
+  let stepStart: number | undefined
+  let stepFinish: Extract<LLMEvent, { readonly type: "step-finish" }> | undefined
+  let finish: Extract<LLMEvent, { readonly type: "finish" }> | undefined
+  let providerError: Extract<LLMEvent, { readonly type: "provider-error" }> | undefined
+  let terminal: "ended" | "failed" | undefined
 
-  const startAssistant = Effect.fnUntraced(function* () {
+  const startAttempt = () => {
+    if (activeAttempt !== undefined) throw new Error("Provider attempt is already active")
+    activeAttempt = clock()
+  }
+
+  const completeAttempt = (outcome: Settlement) => {
+    if (activeAttempt === undefined) return
+    const completed = clock()
+    intervals.push({
+      started: activeAttempt,
+      completed,
+      duration: Math.max(0, Math.floor(completed - activeAttempt)),
+    })
+    activeAttempt = undefined
+    return outcome
+  }
+
+  const timing = () => {
+    if (!intervals.length) return undefined
+    return {
+      started: intervals[0].started,
+      completed: intervals.at(-1)!.completed,
+      duration: intervals.reduce((total, interval) => total + interval.duration, 0),
+    }
+  }
+
+  const canonical = (usage: Usage | undefined) => (usage ? CanonicalUsage.fromUsage(usage) : undefined)
+
+  const accounting = (
+    time: NonNullable<ReturnType<typeof timing>>,
+    usage:
+      | {
+          readonly authoritative: CanonicalUsage
+          readonly source: "step-finish" | "finish-fallback" | "provider-error"
+          readonly finalObservation?: CanonicalUsage
+          readonly anomaly?: "final-usage-mismatch"
+        }
+      | undefined,
+  ): SessionEvent.Step.Accounting => {
+    const pricing = usage
+      ? SessionAccounting.calculate({
+          model: input.catalog,
+          variant: input.model.variant,
+          usage: usage.authoritative,
+          providerAmount: providerAmount(usage.authoritative),
+        })
+      : undefined
+    return {
+      mode: "aggregate",
+      purpose: "assistant",
+      model: input.model,
+      time: {
+        started: DateTime.makeUnsafe(time.started),
+        completed: DateTime.makeUnsafe(time.completed),
+        duration: time.duration,
+      },
+      usage,
+      pricing,
+    }
+  }
+
+  const startAssistant = Effect.fnUntraced(function* (startedAt?: DateTime.Utc) {
     if (assistantStarted) return assistantMessageID
     assistantStarted = true
     yield* events.publish(SessionEvent.Step.Started, {
-      ...input,
+      sessionID: input.sessionID,
+      agent: input.agent,
+      model: input.model,
       assistantMessageID,
-      timestamp: yield* timestamp,
+      timestamp: startedAt ?? (yield* timestamp),
     })
     return assistantMessageID
   })
   const currentAssistantMessageID = () =>
-    !assistantStarted
-      ? Effect.die("Tool event before assistant step start")
-      : Effect.succeed(assistantMessageID)
+    !assistantStarted ? Effect.die("Tool event before assistant step start") : Effect.succeed(assistantMessageID)
 
   const fragments = (
     name: string,
@@ -224,12 +308,91 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     return tool ? Effect.succeed(tool.assistantMessageID) : Effect.die(`Unknown tool call: ${callID}`)
   }
 
+  const settle = Effect.fn("SessionRunner.settleLLMEventPublisher")(function* (
+    outcome: Settlement,
+    failureMessage?: string,
+  ) {
+    if (terminal) return terminal
+    completeAttempt(outcome)
+    const time =
+      timing() ??
+      (() => {
+        const completed = clock()
+        return { started: completed, completed, duration: 0 }
+      })()
+    const stepUsage = canonical(stepFinish?.usage)
+    const finalUsage = canonical(finish?.usage)
+    const failedUsage = canonical(providerError?.usage)
+    if (stepFinish || finish) {
+      const usage = stepUsage
+        ? {
+            authoritative: stepUsage,
+            source: "step-finish" as const,
+            ...(finalUsage && !isDeepStrictEqual(stepUsage, finalUsage)
+              ? {
+                  finalObservation: finalUsage,
+                  anomaly: "final-usage-mismatch" as const,
+                }
+              : {}),
+          }
+        : !stepFinish && stepStart !== undefined && finalUsage
+          ? { authoritative: finalUsage, source: "finish-fallback" as const }
+          : undefined
+      const owned = accounting(time, usage)
+      const projected = compatibility(usage?.authoritative, owned.pricing)
+      yield* flush()
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID: input.sessionID,
+        timestamp: DateTime.makeUnsafe(time.completed),
+        assistantMessageID: yield* startAssistant(DateTime.makeUnsafe(time.started)),
+        finish: stepFinish?.reason ?? finish!.reason,
+        ...projected,
+        accounting: owned,
+      })
+      terminal = "ended"
+      return terminal
+    }
+    const usage = failedUsage ? { authoritative: failedUsage, source: "provider-error" as const } : undefined
+    const owned = accounting(time, usage)
+    yield* flush()
+    yield* events.publish(SessionEvent.Step.Failed, {
+      sessionID: input.sessionID,
+      timestamp: DateTime.makeUnsafe(time.completed),
+      assistantMessageID: yield* startAssistant(DateTime.makeUnsafe(time.started)),
+      error: {
+        type: "unknown",
+        message:
+          providerError?.message ??
+          failureMessage ??
+          (outcome === "interrupt" ? "Provider stream interrupted" : "Provider stream ended without a terminal event"),
+      },
+      accounting: owned,
+    })
+    terminal = "failed"
+    return terminal
+  })
+
+  const localSettlementAfterTerminal = (event: LLMEvent) => {
+    if (event.type === "tool-result") {
+      const tool = tools.get(event.id)
+      return event.providerExecuted !== true && tool?.providerExecuted !== true
+    }
+    if (event.type === "tool-error") return tools.get(event.id)?.providerExecuted !== true
+    return false
+  }
+
   const publish = Effect.fn("SessionRunner.publishLLMEvent")(function* (
     event: LLMEvent,
     outputPaths: ReadonlyArray<string> = [],
   ) {
+    if ((terminal || finish || providerError || stepFinish) && !localSettlementAfterTerminal(event)) {
+      const reconciliation = stepFinish && !finish && !providerError && event.type === "finish"
+      if (!reconciliation) return yield* Effect.die(`Provider content after terminal: ${event.type}`)
+    }
     switch (event.type) {
       case "step-start":
+        if (stepStart !== undefined) return yield* Effect.die(`Duplicate provider step start: ${event.index}`)
+        stepStart = event.index
         return
       case "text-start":
         yield* text.start(event.id)
@@ -382,27 +545,20 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         return
       }
       case "step-finish":
-        yield* flush()
-        yield* events.publish(SessionEvent.Step.Ended, {
-          sessionID: input.sessionID,
-          timestamp: yield* timestamp,
-          assistantMessageID: yield* startAssistant(),
-          finish: event.reason,
-          cost: 0,
-          tokens: tokens(event.usage),
-        })
+        if (stepFinish) return yield* Effect.die("Duplicate provider step finish")
+        if (stepStart !== undefined && stepStart !== event.index)
+          return yield* Effect.die(`Provider step index changed: ${stepStart} -> ${event.index}`)
+        stepFinish = event
+        completeAttempt("success")
         return
       case "finish":
+        finish = event
+        completeAttempt("success")
         return
       case "provider-error":
         providerFailed = true
-        yield* flush()
-        yield* events.publish(SessionEvent.Step.Failed, {
-          sessionID: input.sessionID,
-          timestamp: yield* timestamp,
-          assistantMessageID: yield* startAssistant(),
-          error: { type: "unknown", message: event.message },
-        })
+        providerError = event
+        completeAttempt("error")
         return
     }
   })
@@ -411,7 +567,12 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     publish,
     flush,
     failUnsettledTools,
+    settle,
+    startAttempt,
+    failAttempt: () => completeAttempt("error"),
+    completeRawAttempt: (outcome: Exclude<Settlement, "success">) => completeAttempt(outcome),
     hasAssistantStarted: () => assistantStarted,
+    hasAuthoritativeSuccess: () => stepFinish !== undefined || finish !== undefined,
     hasProviderError: () => providerFailed,
     startAssistant,
     plannedAssistantMessageID: () => assistantMessageID,

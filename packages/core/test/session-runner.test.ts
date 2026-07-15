@@ -61,12 +61,18 @@ const questions = QuestionV2.layer.pipe(Layer.provide(events))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
 const requests: LLMRequest[] = []
+const successfulResponse = [
+  LLMEvent.stepStart({ index: 0 }),
+  LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+  LLMEvent.finish({ reason: "stop" }),
+]
 let response: LLMEvent[] = []
 let responses: LLMEvent[][] | undefined
 let responseStream: Stream.Stream<LLMEvent, LLMError> | undefined
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
 let streamFailure: LLMError | undefined
+let omitDispatch = false
 let toolExecutionGate: Deferred.Deferred<void> | undefined
 let toolExecutionsStarted: Deferred.Deferred<void> | undefined
 let toolExecutionsReady = 5
@@ -76,23 +82,26 @@ const client = Layer.succeed(
   LLMClient.Service,
   LLMClient.Service.of({
     prepare: () => Effect.die("unused"),
-    stream: ((request: LLMRequest) => {
+    stream: ((request: LLMRequest, options?: Parameters<LLMClientShape["stream"]>[1]) => {
       requests.push(request)
+      let output: Stream.Stream<LLMEvent, LLMError>
       if (responseStream) {
-        const stream = responseStream
+        output = responseStream
         responseStream = undefined
-        return stream
+      } else {
+        const events = streamFailure
+          ? Stream.fail(streamFailure)
+          : Stream.fromIterable(responses === undefined ? response : (responses.shift() ?? []))
+        output = !streamGate
+          ? events
+          : Stream.unwrap(
+              (streamStarted ? Deferred.succeed(streamStarted, undefined) : Effect.void).pipe(
+                Effect.andThen(Deferred.await(streamGate)),
+                Effect.as(events),
+              ),
+            )
       }
-      const events = streamFailure
-        ? Stream.fail(streamFailure)
-        : Stream.fromIterable(responses === undefined ? response : (responses.shift() ?? []))
-      if (!streamGate) return events
-      return Stream.unwrap(
-        (streamStarted ? Deferred.succeed(streamStarted, undefined) : Effect.void).pipe(
-          Effect.andThen(Deferred.await(streamGate)),
-          Effect.as(events),
-        ),
-      )
+      return output.pipe(Stream.onStart(Effect.sync(() => (omitDispatch ? undefined : options?.onDispatch?.()))))
     }) as unknown as LLMClientShape["stream"],
     generate: () => Effect.die("unused"),
   }),
@@ -161,8 +170,18 @@ const echo = Layer.effectDiscard(
 ).pipe(Layer.provide(registry))
 let modelResolveHook = Effect.void
 let currentModel = model
+let catalogOverride: ModelV2.Info | undefined
 const models = SessionRunnerModel.layerWith((session) =>
-  modelResolveHook.pipe(Effect.as(session.model?.id === "replacement" ? replacementModel : currentModel)),
+  modelResolveHook.pipe(
+    Effect.map(() => {
+      const selected = session.model?.id === "replacement" ? replacementModel : currentModel
+      return {
+        model: selected,
+        catalog:
+          catalogOverride ?? ModelV2.Info.empty(ProviderV2.ID.make(selected.provider), ModelV2.ID.make(selected.id)),
+      }
+    }),
+  ),
 )
 const systemContextKey = SystemContext.Key.make("test/context")
 const systemVariableContextKey = SystemContext.Key.make("test/variable-context")
@@ -326,7 +345,7 @@ const insertSession = (id: SessionV2.ID) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
-  response = []
+  response = successfulResponse
   systemBaseline = "Initial context"
   systemVariableContext = ""
   systemRemoved = false
@@ -334,9 +353,11 @@ const setup = Effect.gen(function* () {
   systemLoadHook = Effect.void
   modelResolveHook = Effect.void
   currentModel = model
+  catalogOverride = undefined
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
+  omitDispatch = false
   responseStream = undefined
   streamGate = undefined
   streamStarted = undefined
@@ -389,7 +410,7 @@ const resetRequestCapture = () => {
   responseStream = undefined
   streamGate = undefined
   streamStarted = undefined
-  response = []
+  response = successfulResponse
 }
 
 const capturedRequest = () => {
@@ -420,6 +441,20 @@ const replaySessionProjection = (id: SessionV2.ID) =>
     yield* events.remove(id)
     yield* db.delete(SessionInputTable).where(eq(SessionInputTable.session_id, id)).run().pipe(Effect.orDie)
     yield* db.delete(SessionMessageTable).where(eq(SessionMessageTable.session_id, id)).run().pipe(Effect.orDie)
+    yield* db
+      .update(SessionTable)
+      .set({
+        cost: 0,
+        tokens_input: 0,
+        tokens_output: 0,
+        tokens_reasoning: 0,
+        tokens_cache_read: 0,
+        tokens_cache_write: 0,
+        time_processing: 0,
+      })
+      .where(eq(SessionTable.id, id))
+      .run()
+      .pipe(Effect.orDie)
     yield* events.replayAll(
       recorded.map((event) => ({
         id: event.id,
@@ -429,6 +464,37 @@ const replaySessionProjection = (id: SessionV2.ID) =>
         data: event.data,
       })),
     )
+  })
+
+const terminalTypes = (id: SessionV2.ID) =>
+  Effect.gen(function* () {
+    const recorded = yield* (yield* Database.Service).db
+      .select({ type: EventTable.type })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, id))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    return recorded
+      .map((event) => event.type)
+      .filter((type) => type === "session.next.step.ended.2" || type === "session.next.step.failed.2")
+  })
+
+const sessionAggregate = (id: SessionV2.ID) =>
+  Effect.gen(function* () {
+    return yield* (yield* Database.Service).db
+      .select({
+        cost: SessionTable.cost,
+        input: SessionTable.tokens_input,
+        output: SessionTable.tokens_output,
+        reasoning: SessionTable.tokens_reasoning,
+        cacheRead: SessionTable.tokens_cache_read,
+        cacheWrite: SessionTable.tokens_cache_write,
+      })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, id))
+      .get()
+      .pipe(Effect.orDie)
   })
 
 type FragmentKind = "text" | "reasoning" | "tool input"
@@ -617,7 +683,7 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
-        [],
+        successfulResponse,
       ]
 
       yield* session.resume(sessionID)
@@ -643,6 +709,7 @@ describe("SessionRunnerLLM", () => {
             },
           ],
         },
+        { type: "assistant", finish: "stop", content: [] },
       ])
     }),
   )
@@ -655,12 +722,13 @@ describe("SessionRunnerLLM", () => {
       responses = undefined
       streamGate = undefined
       streamStarted = undefined
-      response = []
+      response = successfulResponse
 
       const message = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run automatically" }) })
 
       expect(requests).toHaveLength(1)
       expect(yield* session.messages({ sessionID })).toMatchObject([
+        { type: "assistant", finish: "stop" },
         { id: message.id, type: "user", text: "Run automatically" },
       ])
     }),
@@ -677,7 +745,7 @@ describe("SessionRunnerLLM", () => {
       responses = undefined
       streamGate = undefined
       streamStarted = undefined
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
@@ -687,7 +755,7 @@ describe("SessionRunnerLLM", () => {
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "Second" }] },
       ])
-      expect(yield* session.messages({ sessionID })).toHaveLength(2)
+      expect(yield* session.messages({ sessionID })).toHaveLength(3)
     }),
   )
 
@@ -709,7 +777,7 @@ describe("SessionRunnerLLM", () => {
       responses = undefined
       streamGate = undefined
       streamStarted = undefined
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
@@ -913,7 +981,7 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       yield* events.publish(SessionEvent.Moved, {
@@ -944,7 +1012,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       yield* db
         .update(SessionContextEpochTable)
@@ -1003,7 +1071,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       systemBaseline = "Changed context"
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
@@ -1013,9 +1081,9 @@ describe("SessionRunnerLLM", () => {
         ["Initial context"],
         ["Initial context"],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "system"])
       expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Changed context" }])
-      expect(yield* session.messages({ sessionID })).toHaveLength(3)
+      expect(yield* session.messages({ sessionID })).toHaveLength(5)
       const { db } = yield* Database.Service
       expect(
         yield* db
@@ -1026,7 +1094,7 @@ describe("SessionRunnerLLM", () => {
           .pipe(Effect.orDie),
       ).toHaveLength(1)
       yield* replaySessionProjection(sessionID)
-      expect(yield* session.messages({ sessionID })).toHaveLength(3)
+      expect(yield* session.messages({ sessionID })).toHaveLength(5)
     }),
   )
 
@@ -1147,7 +1215,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
       yield* events.publish(SessionEvent.AgentSwitched, {
@@ -1189,7 +1257,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
@@ -1226,7 +1294,7 @@ describe("SessionRunnerLLM", () => {
       })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
@@ -1258,7 +1326,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         ["Initial context\n\nReviewer skills"],
@@ -1295,7 +1363,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([replacementModel])
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([["Initial context"]])
@@ -1309,7 +1377,7 @@ describe("SessionRunnerLLM", () => {
       const events = yield* EventV2.Service
       const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       let switched = false
       systemLoadHook = Effect.suspend(() => {
@@ -1358,7 +1426,7 @@ describe("SessionRunnerLLM", () => {
       const events = yield* EventV2.Service
       const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       yield* events.publish(SessionEvent.AgentSwitched, {
         sessionID,
@@ -1410,7 +1478,7 @@ describe("SessionRunnerLLM", () => {
       skillBaselines.set(AgentV2.defaultID, "Build skills")
       skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       yield* events.publish(SessionEvent.AgentSwitched, {
         sessionID,
@@ -1443,17 +1511,17 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       systemRemoved = true
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "system"])
       expect(requests[1]?.messages.at(-1)?.content).toEqual([
         { type: "text", text: "System context source removed: test/context" },
       ])
-      expect(yield* session.messages({ sessionID })).toHaveLength(3)
+      expect(yield* session.messages({ sessionID })).toHaveLength(5)
     }),
   )
 
@@ -1465,7 +1533,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       systemBaseline = "Changed context"
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
@@ -1485,16 +1553,25 @@ describe("SessionRunnerLLM", () => {
         ["Initial context"],
         ["Replacement context"],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[2]?.messages.map((message) => message.role)).toEqual(["user", "user", "user"])
-      expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "system"])
+      expect(requests[2]?.messages.map((message) => message.role)).toEqual([
         "user",
+        "assistant",
         "user",
-        "model-switched",
+        "assistant",
         "user",
       ])
+      expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "model-switched",
+        "user",
+        "assistant",
+      ])
       yield* replaySessionProjection(sessionID)
-      expect(yield* session.messages({ sessionID })).toHaveLength(5)
+      expect(yield* session.messages({ sessionID })).toHaveLength(8)
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fourth" }), resume: false })
       yield* session.resume(sessionID)
     }),
@@ -1508,7 +1585,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       yield* events.publish(SessionEvent.ModelSwitched, {
         sessionID,
@@ -1539,7 +1616,7 @@ describe("SessionRunnerLLM", () => {
       const events = yield* EventV2.Service
       const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       yield* events.publish(SessionEvent.ModelSwitched, {
@@ -1573,7 +1650,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       requests.length = 0
@@ -1609,7 +1686,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       systemBaseline = "Changed context"
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
@@ -1637,7 +1714,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       const compactionID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Compaction.Started, {
@@ -1733,11 +1810,27 @@ describe("SessionRunnerLLM", () => {
   it.effect("forces one compaction and retries after provider context overflow", () =>
     Effect.gen(function* () {
       const session = yield* setupOverflowRecovery
-      responses = [
-        [
+      const overflowFinalized = yield* Deferred.make<void>()
+      responseStream = Stream.concat(
+        Stream.fromIterable([
           LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
-        ],
+          LLMEvent.providerError({
+            message: "prompt too long",
+            classification: "context-overflow",
+            usage: {
+              inputTokens: 20,
+              nonCachedInputTokens: 10,
+              cacheReadInputTokens: 6,
+              cacheWriteInputTokens: 4,
+              outputTokens: 5,
+              reasoningTokens: 2,
+              providerMetadata: { openrouter: { usage: { cost: 0.25 } } },
+            },
+          }),
+        ]),
+        Stream.never,
+      ).pipe(Stream.ensuring(Deferred.succeed(overflowFinalized, undefined)))
+      responses = [
         fragmentFixture("text", "text-summary", ["## Goal\n- Recover overflow"]).completeEvents,
         fragmentFixture("text", "text-final", ["Recovered"]).completeEvents,
       ]
@@ -1745,16 +1838,82 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(3)
+      yield* Deferred.await(overflowFinalized)
       expect(userTexts(requests[1])[0]).toContain("## Goal")
       expect(userTexts(requests[2])[0]).toContain("<summary>\n## Goal\n- Recover overflow\n</summary>")
+      expect(requests[2]?.messages.map((message) => message.role)).toEqual(["user"])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "compaction", summary: "## Goal\n- Recover overflow" },
         { type: "assistant", finish: "stop" },
       ])
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.failed.2",
+        "session.next.step.ended.2",
+      ])
+      const beforeReplay = yield* sessionAggregate(sessionID)
+      expect(beforeReplay).toMatchObject({
+        cost: 0.25,
+        input: 10,
+        output: 3,
+        reasoning: 2,
+        cacheRead: 6,
+        cacheWrite: 4,
+      })
       yield* replaySessionProjection(sessionID)
+      expect(yield* sessionAggregate(sessionID)).toEqual(beforeReplay)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "compaction" },
         { type: "assistant", finish: "stop" },
+      ])
+    }),
+  )
+
+  it.effect("rejects context overflow after an authoritative provider terminal", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 3, outputTokens: 2 } }),
+          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+        ],
+      ]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject conflicting overflow" }), resume: false })
+
+      expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect(requests).toHaveLength(1)
+      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.ended.2",
+      ])
+    }),
+  )
+
+  it.effect("does not recover raw context overflow after an authoritative provider terminal", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      const overflow = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new InvalidRequestReason({ message: "prompt too long", classification: "context-overflow" }),
+      })
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 3, outputTokens: 2 } }),
+        ]),
+        Stream.fail(overflow),
+      )
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Keep successful overflow" }), resume: false })
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(overflow)
+      expect(requests).toHaveLength(1)
+      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.ended.2",
       ])
     }),
   )
@@ -1778,6 +1937,11 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "compaction" },
         { type: "assistant", finish: "error", error: { message: "prompt too long" } },
+      ])
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.failed.2",
+        "session.next.step.failed.2",
       ])
     }),
   )
@@ -1807,6 +1971,19 @@ describe("SessionRunnerLLM", () => {
         { type: "compaction", summary: "## Goal\n- Recover raw overflow" },
         { type: "assistant", finish: "stop" },
       ])
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.failed.2",
+        "session.next.step.ended.2",
+      ])
+      expect(yield* sessionAggregate(sessionID)).toMatchObject({
+        cost: 0,
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      })
     }),
   )
 
@@ -1826,6 +2003,10 @@ describe("SessionRunnerLLM", () => {
       expect(context.slice(-2)).toMatchObject([
         { type: "user", text: "Continue" },
         { type: "assistant", finish: "error", error: { message: "prompt too long" } },
+      ])
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.failed.2",
       ])
     }),
   )
@@ -1849,6 +2030,10 @@ describe("SessionRunnerLLM", () => {
 
       yield* session.interrupt(sessionID)
       expect(yield* Fiber.await(run)).toMatchObject({ _tag: "Failure" })
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.failed.2",
+      ])
       streamGate = undefined
       expect(requests).toHaveLength(2)
       expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
@@ -1863,7 +2048,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       systemBaseline = "Changed context"
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
@@ -2144,7 +2329,7 @@ describe("SessionRunnerLLM", () => {
       ])
 
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests[1]?.messages[1]?.content).toEqual([
@@ -2188,7 +2373,7 @@ describe("SessionRunnerLLM", () => {
       yield* replaySessionProjection(sessionID)
 
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"])
@@ -2224,7 +2409,7 @@ describe("SessionRunnerLLM", () => {
       toolExecutionGate = yield* Deferred.make<void>()
       toolExecutionsStarted = yield* Deferred.make<void>()
       const providerGate = yield* Deferred.make<void>()
-      response = []
+      response = successfulResponse
       responses = undefined
       const initial = Stream.fromIterable([
         LLMEvent.stepStart({ index: 0 }),
@@ -2295,7 +2480,7 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
-        [],
+        successfulResponse,
       ]
 
       yield* session.resume(sessionID)
@@ -2328,6 +2513,7 @@ describe("SessionRunnerLLM", () => {
             },
           ],
         },
+        { type: "assistant", finish: "stop", content: [] },
       ])
 
       yield* replaySessionProjection(sessionID)
@@ -2358,7 +2544,89 @@ describe("SessionRunnerLLM", () => {
             },
           ],
         },
+        { type: "assistant", finish: "stop", content: [] },
       ])
+    }),
+  )
+
+  it.effect("accounts two native provider turns exactly once across replay", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const rate = { input: 1, output: 2, cache: { read: 0.5, write: 1.5 } }
+      catalogOverride = new ModelV2.Info({
+        ...ModelV2.Info.empty(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id)),
+        cost: [rate],
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Account two turns" }), resume: false })
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-accounting", name: "echo", input: { text: "continue" } }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "tool-calls",
+            usage: {
+              inputTokens: 20,
+              nonCachedInputTokens: 10,
+              cacheReadInputTokens: 6,
+              cacheWriteInputTokens: 4,
+              outputTokens: 10,
+              reasoningTokens: 3,
+            },
+          }),
+          LLMEvent.finish({
+            reason: "tool-calls",
+            usage: {
+              inputTokens: 20,
+              nonCachedInputTokens: 10,
+              cacheReadInputTokens: 6,
+              cacheWriteInputTokens: 4,
+              outputTokens: 10,
+              reasoningTokens: 3,
+            },
+          }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: {
+              inputTokens: 8,
+              nonCachedInputTokens: 5,
+              cacheReadInputTokens: 2,
+              cacheWriteInputTokens: 1,
+              outputTokens: 5,
+              reasoningTokens: 1,
+            },
+          }),
+          LLMEvent.finish({
+            reason: "stop",
+            usage: {
+              inputTokens: 8,
+              nonCachedInputTokens: 5,
+              cacheReadInputTokens: 2,
+              cacheWriteInputTokens: 1,
+              outputTokens: 5,
+              reasoningTokens: 1,
+            },
+          }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+      const before = yield* sessionAggregate(sessionID)
+
+      expect(yield* terminalTypes(sessionID)).toEqual([
+        "session.next.step.ended.2",
+        "session.next.step.ended.2",
+      ])
+      expect(before).toMatchObject({ input: 15, output: 11, reasoning: 4, cacheRead: 8, cacheWrite: 5 })
+      expect(before?.cost).toBeCloseTo(0.0000565)
+
+      yield* replaySessionProjection(sessionID)
+      expect(yield* sessionAggregate(sessionID)).toEqual(before)
     }),
   )
 
@@ -2500,7 +2768,7 @@ describe("SessionRunnerLLM", () => {
 
       requests.length = 0
       responses = [
-        [],
+        successfulResponse,
         [
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.stepFinish({ index: 0, reason: "stop" }),
@@ -2543,7 +2811,7 @@ describe("SessionRunnerLLM", () => {
 
       requests.length = 0
       responses = [
-        [],
+        successfulResponse,
         [
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.stepFinish({ index: 0, reason: "stop" }),
@@ -2767,7 +3035,7 @@ describe("SessionRunnerLLM", () => {
 
       requests.length = 0
       responses = undefined
-      response = []
+      response = successfulResponse
       streamFailure = providerUnavailable()
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
@@ -2827,7 +3095,7 @@ describe("SessionRunnerLLM", () => {
         provider: { executed: false },
       })
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
@@ -2844,6 +3112,7 @@ describe("SessionRunnerLLM", () => {
             },
           ],
         },
+        { type: "assistant", finish: "stop", content: [] },
       ])
     }),
   )
@@ -2891,7 +3160,7 @@ describe("SessionRunnerLLM", () => {
         provider: { executed: true, metadata: { openai: { itemId: "call-hosted-interrupted" } } },
       })
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
@@ -2935,7 +3204,7 @@ describe("SessionRunnerLLM", () => {
         name: "echo",
       })
       requests.length = 0
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
@@ -2943,6 +3212,7 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Recover interrupted tool input" },
         { type: "assistant", content: [{ type: "tool", id: "call-pending-interrupted", state: { status: "error" } }] },
+        { type: "assistant", finish: "stop", content: [] },
       ])
     }),
   )
@@ -3050,7 +3320,7 @@ describe("SessionRunnerLLM", () => {
 
       requests.length = 0
       responses = undefined
-      response = []
+      response = successfulResponse
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
 
@@ -3116,7 +3386,7 @@ describe("SessionRunnerLLM", () => {
 
       requests.length = 0
       responses = undefined
-      response = []
+      response = successfulResponse
       streamFailure = providerUnavailable()
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
@@ -3204,6 +3474,7 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toBe("unexpected tool defect")
 
       expect(requests).toHaveLength(1)
+      expect(yield* terminalTypes(sessionID)).toEqual(["session.next.step.ended.2"])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Call defect" },
         {
@@ -3248,7 +3519,7 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
-        [],
+        successfulResponse,
       ]
 
       const run = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
@@ -3357,7 +3628,7 @@ describe("SessionRunnerLLM", () => {
       ])
       requests.length = 0
       responseStream = undefined
-      response = []
+      response = successfulResponse
       yield* session.resume(sessionID)
       expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
     }),
@@ -3369,7 +3640,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Interrupt provider" }), resume: false })
       requests.length = 0
-      response = []
+      response = successfulResponse
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
 
@@ -3382,6 +3653,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBeTrue()
       expect(requests).toHaveLength(1)
+      expect(yield* terminalTypes(sessionID)).toEqual(["session.next.step.failed.2"])
       yield* session.interrupt(sessionID)
     }),
   )
@@ -3528,6 +3800,27 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("persists exactly one duration-only failure when the provider reaches EOF without a terminal", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fail missing terminal" }), resume: false })
+      response = []
+
+      yield* session.resume(sessionID)
+
+      expect(yield* terminalTypes(sessionID)).toEqual(["session.next.step.failed.2"])
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Fail missing terminal" },
+        {
+          type: "assistant",
+          finish: "error",
+          error: { type: "unknown", message: "Provider stream ended without a terminal event" },
+        },
+      ])
+    }),
+  )
+
   it.effect("projects provider errors emitted before assistant step start", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3544,6 +3837,51 @@ describe("SessionRunnerLLM", () => {
         { type: "user", text: "Fail before step" },
         { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider unavailable" } },
       ])
+    }),
+  )
+
+  it.effect("omits a replayed failed empty assistant from later provider context", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fail before retry" }), resume: false })
+      requests.length = 0
+      response = [LLMEvent.providerError({ message: "Provider unavailable" })]
+      yield* session.resume(sessionID)
+      yield* replaySessionProjection(sessionID)
+
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Retry cleanly" }), resume: false })
+      response = successfulResponse
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user"])
+      expect(userTexts(requests[1]!)).toEqual(["Fail before retry", "Retry cleanly"])
+    }),
+  )
+
+  it.effect("omits a replayed incomplete empty assistant from later provider context", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID: SessionMessage.ID.create(),
+        timestamp: yield* DateTime.now,
+        agent: "build",
+        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* replaySessionProjection(sessionID)
+
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Retry after crash" }), resume: false })
+      response = successfulResponse
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
+      expect(userTexts(requests[0]!)).toEqual(["Retry after crash"])
     }),
   )
 
@@ -3589,6 +3927,56 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Fail raw stream durably" },
         { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider unavailable" } },
+      ])
+    }),
+  )
+
+  it.effect("persists a zero-duration terminal when the stream fails before transport dispatch", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const failure = providerUnavailable()
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fail before dispatch" }), resume: false })
+      responseStream = Stream.fail(failure)
+      omitDispatch = true
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(yield* terminalTypes(sessionID)).toEqual(["session.next.step.failed.2"])
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Fail before dispatch" },
+        {
+          type: "assistant",
+          finish: "error",
+          error: { message: "Provider unavailable" },
+          accounting: { time: { duration: 0 } },
+        },
+      ])
+    }),
+  )
+
+  it.effect("keeps a step-finish aggregate ended when the raw stream fails before final finish", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const failure = providerUnavailable()
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Keep authoritative step" }), resume: false })
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: { inputTokens: 3, nonCachedInputTokens: 3, outputTokens: 2 },
+          }),
+        ]),
+        Stream.fail(failure),
+      )
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(yield* terminalTypes(sessionID)).toEqual(["session.next.step.ended.2"])
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Keep authoritative step" },
+        { type: "assistant", finish: "stop", tokens: { input: 3, output: 2 } },
       ])
     }),
   )

@@ -37,7 +37,9 @@ export type Error =
   | UnsupportedApiError
 
 export interface Interface {
-  readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
+  readonly resolve: (
+    session: SessionSchema.Info,
+  ) => Effect.Effect<{ readonly model: Model; readonly catalog: ModelV2.Info }, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionRunnerModel") {}
@@ -140,7 +142,10 @@ export const locationLayer = Layer.effect(
           : (Option.getOrUndefined((yield* catalog.model.default()).pipe(Option.filter(supported))) ??
             (yield* catalog.model.available()).find(supported))
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
-        return yield* resolve(session, selected, yield* catalog.provider.get(selected.providerID))
+        return {
+          model: yield* resolve(session, selected, yield* catalog.provider.get(selected.providerID)),
+          catalog: selected,
+        }
       }),
     })
   }),

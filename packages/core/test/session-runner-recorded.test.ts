@@ -11,6 +11,8 @@ import { Config } from "@oc2-ai/core/config"
 import { Project } from "@oc2-ai/core/project"
 import { ProjectTable } from "@oc2-ai/core/project/sql"
 import { AbsolutePath } from "@oc2-ai/core/schema"
+import { ModelV2 } from "@oc2-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
 import { SessionV2 } from "@oc2-ai/core/session"
 import { Prompt } from "@oc2-ai/core/session/prompt"
 import { SessionProjector } from "@oc2-ai/core/session/projector"
@@ -86,7 +88,12 @@ const model = OpenAIChat.route
     generation: { maxTokens: 20, temperature: 0 },
   })
   .model({ id: "gpt-4o-mini" })
-const models = SessionRunnerModel.layerWith(() => Effect.succeed(model))
+const models = SessionRunnerModel.layerWith(() =>
+  Effect.succeed({
+    model,
+    catalog: ModelV2.Info.empty(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id)),
+  }),
+)
 const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })

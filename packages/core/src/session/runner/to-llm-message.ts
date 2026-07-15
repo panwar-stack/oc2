@@ -88,6 +88,7 @@ const assistant = (message: SessionMessage.Assistant, model: Model) => {
     .map((item) => toolResult(item, sameModel ? (item.provider?.resultMetadata ?? item.provider?.metadata) : undefined))
     .filter((message) => message !== undefined)
     .map(Message.tool)
+  if (content.length === 0 && results.length === 0 && (message.error !== undefined || message.finish === undefined)) return []
   return [Message.make({ id: message.id, role: "assistant", content, metadata: message.metadata }), ...results]
 }
 
