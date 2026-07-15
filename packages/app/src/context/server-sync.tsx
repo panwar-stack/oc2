@@ -17,7 +17,12 @@ import {
   loadProvidersQuery,
 } from "./global-sync/bootstrap"
 import { createChildStoreManager } from "./global-sync/child-store"
-import { applyDirectoryEvent, applyGlobalEvent, cleanupDroppedSessionCaches } from "./global-sync/event-reducer"
+import {
+  aggregateRefreshSessionID,
+  applyDirectoryEvent,
+  applyGlobalEvent,
+  cleanupDroppedSessionCaches,
+} from "./global-sync/event-reducer"
 import { clearSessionPrefetchDirectory } from "./global-sync/session-prefetch"
 import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global-sync/session-load"
 import { trimSessions } from "./global-sync/session-trim"
@@ -37,6 +42,7 @@ import { retry } from "@oc2-ai/core/util/retry"
 import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
 import { toggleMcp } from "./global-sync/mcp"
+import { createSessionAuthority, mergeSessionAggregates } from "./global-sync/session-authority"
 
 type GlobalStore = {
   ready: boolean
@@ -94,6 +100,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   const booting = new Map<string, Promise<void>>()
   const sessionLoads = new Map<string, Promise<void>>()
   const sessionMeta = new Map<string, { limit: number }>()
+  const sessionAuthority = createSessionAuthority()
 
   const sdkFor = (directory: string) => {
     const key = directoryKey(directory)
@@ -238,6 +245,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       queue.clear(key)
       sessionMeta.delete(key)
       sdkCache.delete(key)
+      sessionAuthority.reset(key)
       clearProviderRev(serverSDK.scope, key)
       clearSessionPrefetchDirectory(serverSDK.scope, key)
     },
@@ -247,6 +255,34 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       provider: globalStore.provider,
     },
   })
+
+  async function refreshSession(directory: string, sessionID: string, options?: { aggregatesOnly?: boolean }) {
+    const key = directoryKey(directory)
+    const generation = sessionAuthority.beginSession(key, sessionID)
+    const response = await retry(() => sdkFor(key).session.get({ sessionID }))
+    if (!sessionAuthority.accepts(key, sessionID, generation)) return
+    const session = response.data
+    if (session?.id !== sessionID) return
+    const [, setStore] = children.child(key, { bootstrap: false })
+    setStore(
+      "session",
+      produce((draft) => {
+        const match = draft.findIndex((item) => item.id >= sessionID)
+        if (match === -1) {
+          if (options?.aggregatesOnly) return
+          draft.push(session)
+          return
+        }
+        const current = draft[match]
+        if (current?.id === sessionID) {
+          draft[match] = options?.aggregatesOnly ? mergeSessionAggregates(current, session) : session
+          return
+        }
+        if (options?.aggregatesOnly) return
+        draft.splice(match, 0, session)
+      }),
+    )
+  }
 
   async function loadSessions(directory: string, options?: { limit?: number }) {
     const key = directoryKey(directory)
@@ -274,6 +310,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     }
 
     const limit = Math.max(retainedLimit + SESSION_RECENT_LIMIT, SESSION_RECENT_LIMIT)
+    const generation = sessionAuthority.beginList(key)
     const promise = queryClient
       .fetchQuery({
         ...queryOptionsApi.sessions(key),
@@ -287,10 +324,15 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
               const nonArchived = (x.data ?? [])
                 .filter((s) => !!s?.id)
                 .filter((s) => !s.time?.archived)
+                .filter((s) => !sessionAuthority.deleted(key, s.id))
                 .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
               const limit = Math.max(store.limit, options?.limit ?? 0, sessionMeta.get(key)?.limit ?? 0)
               const childSessions = store.session.filter((s) => !!s.parentID)
-              const sessions = trimSessions([...nonArchived, ...childSessions], {
+              const reconciled = sessionAuthority.reconcileList(key, generation, store.session, [
+                ...nonArchived,
+                ...childSessions,
+              ])
+              const sessions = trimSessions(reconciled, {
                 limit,
                 permission: store.permission,
               })
@@ -356,6 +398,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         setStore: child[1],
         vcsCache: cache,
         loadSessions,
+        loadSession: (sessionID) => refreshSession(key, sessionID),
         translate: language.t,
         queryClient,
       })
@@ -398,6 +441,25 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     if (!existing) return
     children.mark(key)
     const [store, setStore] = existing
+    if (event.type === "session.created") {
+      const sessionID = (event.properties as { info?: { id?: string } }).info?.id
+      if (sessionID) sessionAuthority.create(key, sessionID)
+    }
+    if (event.type === "session.deleted") {
+      const sessionID = (event.properties as { info?: { id?: string } }).info?.id
+      if (sessionID) sessionAuthority.remove(key, sessionID)
+    }
+    const updatedID =
+      event.type === "session.updated" ? (event.properties as { info?: { id?: string } }).info?.id : undefined
+    if (updatedID) sessionAuthority.update(key, updatedID)
+    const refreshID =
+      updatedID && !sessionAuthority.deleted(key, updatedID) ? updatedID : aggregateRefreshSessionID(event)
+    if (refreshID) {
+      void refreshSession(key, refreshID, { aggregatesOnly: refreshID === updatedID }).catch((error) => {
+        if (sessionAuthority.deleted(key, refreshID)) return
+        console.error("Failed to refresh session aggregates", error)
+      })
+    }
     applyDirectoryEvent({
       event,
       directory,
@@ -406,6 +468,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       push: queue.push,
       setSessionTodo,
       retainedLimit: sessionMeta.get(key)?.limit,
+      sessionDeleted: (sessionID) => sessionAuthority.deleted(key, sessionID),
       vcsCache: children.vcsCache.get(key),
       loadLsp: () => {
         void queryClient.fetchQuery(queryOptionsApi.lsp(key))
@@ -481,6 +544,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     project: projectApi,
     todo: {
       set: setSessionTodo,
+    },
+    session: {
+      refresh: refreshSession,
+      beginList: (directory: string) => sessionAuthority.beginList(directoryKey(directory)),
+      reconcileList: sessionAuthority.reconcileList,
     },
     mcp: {
       toggle: async (directory: string, name: string) => {

@@ -165,17 +165,20 @@ function warmSessions(input: {
   store: Store<State>
   setStore: SetStoreFunction<State>
   sdk: OpencodeClient
+  loadSession?: (sessionID: string) => Promise<void>
 }) {
   const known = new Set(input.store.session.map((item) => item.id))
   const ids = [...new Set(input.ids)].filter((id) => !!id && !known.has(id))
   if (ids.length === 0) return Promise.resolve()
   return Promise.all(
     ids.map((sessionID) =>
-      retry(() => input.sdk.session.get({ sessionID })).then((x) => {
-        const session = x.data
-        if (!session?.id) return
-        mergeSession(input.setStore, session)
-      }),
+      input.loadSession
+        ? input.loadSession(sessionID)
+        : retry(() => input.sdk.session.get({ sessionID })).then((x) => {
+            const session = x.data
+            if (!session?.id) return
+            mergeSession(input.setStore, session)
+          }),
     ),
   ).then(() => undefined)
 }
@@ -207,6 +210,7 @@ export async function bootstrapDirectory(input: {
   setStore: SetStoreFunction<State>
   vcsCache: VcsCache
   loadSessions: (directory: string) => Promise<void> | void
+  loadSession?: (sessionID: string) => Promise<void>
   translate: (key: string, vars?: Record<string, string | number>) => string
   global: {
     config: Config
@@ -263,7 +267,7 @@ export async function bootstrapDirectory(input: {
             const grouped = groupBySession(
               (x.data ?? []).filter((perm): perm is PermissionRequest => !!perm?.id && !!perm.sessionID),
             )
-            return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk }).then(() =>
+            return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk, loadSession: input.loadSession }).then(() =>
               batch(() => {
                 for (const sessionID of Object.keys(input.store.permission)) {
                   if (grouped[sessionID]) continue
@@ -288,7 +292,7 @@ export async function bootstrapDirectory(input: {
           input.sdk.question.list().then((x) => {
             const ids = (x.data ?? []).map((question) => question?.sessionID).filter((id): id is string => !!id)
             const grouped = groupBySession((x.data ?? []).filter((q): q is QuestionRequest => !!q?.id && !!q.sessionID))
-            return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk }).then(() =>
+            return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk, loadSession: input.loadSession }).then(() =>
               batch(() => {
                 for (const sessionID of Object.keys(input.store.question)) {
                   if (grouped[sessionID]) continue

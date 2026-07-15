@@ -30,7 +30,6 @@ type Context = {
 }
 
 type Metrics = {
-  totalCost: number
   context: Context | undefined
 }
 
@@ -48,9 +47,8 @@ const lastAssistantWithTokens = (messages: Message[]) => {
 }
 
 const build = (messages: Message[] = [], providers: Provider[] = []): Metrics => {
-  const totalCost = messages.reduce((sum, msg) => sum + (msg.role === "assistant" ? msg.cost : 0), 0)
   const message = lastAssistantWithTokens(messages)
-  if (!message) return { totalCost, context: undefined }
+  if (!message) return { context: undefined }
 
   const provider = providers.find((item) => item.id === message.providerID)
   const model = provider?.models[message.modelID]
@@ -58,7 +56,6 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Metrics =>
   const total = tokenTotal(message)
 
   return {
-    totalCost,
     context: {
       message,
       provider,
@@ -79,4 +76,9 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Metrics =>
 
 export function getSessionContextMetrics(messages: Message[] = [], providers: Provider[] = []) {
   return build(messages, providers)
+}
+
+export function getSessionTokenTotal(tokens: AssistantMessage["tokens"] | undefined) {
+  if (!tokens) return 0
+  return tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
 }

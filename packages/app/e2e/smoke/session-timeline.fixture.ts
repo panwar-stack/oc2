@@ -26,6 +26,11 @@ const targetID = "ses_smoke_target"
 const directory = "C:/OpenCode/SmokeProject"
 const projectID = "proj_smoke_timeline"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
+const targetAggregates = {
+  cost: 47.25,
+  tokens: { input: 100_000, output: 20_000, reasoning: 3_000, cache: { read: 4_000, write: 500 } },
+  processing: 123_456,
+}
 
 type MessageInfo = Record<string, unknown> & { id: string; role: "user" | "assistant" }
 type MessagePart = Record<string, unknown> & { id: string; type: string; text?: string; tool?: string }
@@ -269,7 +274,9 @@ export const fixture = {
       directory,
       title: "Uncommitted changes inquiry",
       version: "dev",
-      time: { created: 1700000000000, updated: 1700000000000 },
+      cost: 1.5,
+      tokens: { input: 1_000, output: 200, reasoning: 50, cache: { read: 100, write: 25 } },
+      time: { created: 1700000000000, updated: 1700000000000, processing: 12_000 },
     },
     {
       id: targetID,
@@ -278,7 +285,9 @@ export const fixture = {
       directory,
       title: "Example Game: sample jump movement & sample physics analysis",
       version: "dev",
-      time: { created: 1700000001000, updated: 1700000001000 },
+      cost: targetAggregates.cost,
+      tokens: targetAggregates.tokens,
+      time: { created: 1700000001000, updated: 1700000001000, processing: targetAggregates.processing },
     },
   ],
   sourceID,
@@ -287,6 +296,9 @@ export const fixture = {
   expected: {
     sourceTitle: "Uncommitted changes inquiry",
     targetTitle: "Example Game: sample jump movement & sample physics analysis",
+    targetCost: "$47.25",
+    targetContextTokens: "300",
+    targetAggregateTokens: "127,500",
     targetMessageIDs: targetMessages
       .filter((message) => message.info.role === "user")
       .map((message) => message.info.id),

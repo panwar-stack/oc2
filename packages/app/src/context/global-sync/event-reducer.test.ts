@@ -10,7 +10,12 @@ import type {
 } from "@oc2-ai/sdk/v2/client"
 import { createStore } from "solid-js/store"
 import type { State } from "./types"
-import { applyDirectoryEvent, applyGlobalEvent, cleanupDroppedSessionCaches } from "./event-reducer"
+import {
+  aggregateRefreshSessionID,
+  applyDirectoryEvent,
+  applyGlobalEvent,
+  cleanupDroppedSessionCaches,
+} from "./event-reducer"
 
 const rootSession = (input: { id: string; parentID?: string; archived?: number }) =>
   ({
@@ -156,6 +161,48 @@ describe("applyGlobalEvent", () => {
   })
 })
 
+describe("aggregateRefreshSessionID", () => {
+  test("refreshes owning V2 terminals but not mirrors", () => {
+    expect(
+      aggregateRefreshSessionID({
+        type: "session.next.step.ended",
+        properties: { sessionID: "ses_1", accounting: { mode: "aggregate" } },
+      }),
+    ).toBe("ses_1")
+    expect(
+      aggregateRefreshSessionID({
+        type: "session.next.step.failed",
+        properties: { sessionID: "ses_2", accounting: { mode: "aggregate" } },
+      }),
+    ).toBe("ses_2")
+    expect(
+      aggregateRefreshSessionID({
+        type: "session.next.step.ended",
+        properties: { sessionID: "ses_1", accounting: { mode: "mirror" } },
+      }),
+    ).toBeUndefined()
+    expect(
+      aggregateRefreshSessionID({ type: "session.next.step.failed", properties: { sessionID: "ses_1" } }),
+    ).toBeUndefined()
+  })
+
+  test("unconditionally refreshes V1 aggregate-lowering updates and removals", () => {
+    expect(
+      aggregateRefreshSessionID({
+        type: "message.part.updated",
+        properties: { sessionID: "ses_1", part: { type: "text" } },
+      }),
+    ).toBe("ses_1")
+    expect(
+      aggregateRefreshSessionID({ type: "message.part.removed", properties: { sessionID: "ses_2" } }),
+    ).toBe("ses_2")
+    expect(aggregateRefreshSessionID({ type: "message.removed", properties: { sessionID: "ses_3" } })).toBe(
+      "ses_3",
+    )
+    expect(aggregateRefreshSessionID({ type: "message.updated", properties: { sessionID: "ses_4" } })).toBeUndefined()
+  })
+})
+
 describe("applyDirectoryEvent", () => {
   test("preserves a Home-specific retained session limit", () => {
     const [store, setStore] = createStore(
@@ -208,6 +255,54 @@ describe("applyDirectoryEvent", () => {
     })
 
     expect(store.sessionTotal).toBe(2)
+  })
+
+  test("preserves aggregate columns across stale session.updated events", () => {
+    const current = {
+      ...rootSession({ id: "ses_1" }),
+      title: "old",
+      cost: 9,
+      tokens: { input: 10, output: 20, reasoning: 30, cache: { read: 40, write: 50 } },
+      time: { created: 1, updated: 1, processing: 900 },
+    } as Session
+    const incoming = {
+      ...current,
+      title: "new",
+      cost: 1,
+      tokens: { input: 1, output: 1, reasoning: 1, cache: { read: 1, write: 1 } },
+      time: { created: 1, updated: 2, processing: 100 },
+    } as Session
+    const [store, setStore] = createStore(baseState({ session: [current] }))
+
+    applyDirectoryEvent({
+      event: { type: "session.updated", properties: { info: incoming } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.session[0]?.title).toBe("new")
+    expect(store.session[0]?.cost).toBe(9)
+    expect(store.session[0]?.tokens).toEqual(current.tokens)
+    expect(store.session[0]?.time.processing).toBe(900)
+  })
+
+  test("does not let session.updated reinsert a tombstoned session", () => {
+    const [store, setStore] = createStore(baseState())
+
+    applyDirectoryEvent({
+      event: { type: "session.updated", properties: { info: rootSession({ id: "ses_1" }) } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+      sessionDeleted: () => true,
+    })
+
+    expect(store.session).toEqual([])
   })
 
   test("cleans session caches when archived", () => {

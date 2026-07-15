@@ -15,6 +15,7 @@ export function TestTuiContexts(
     cwd?: string
     directory?: string
     paths?: Partial<TuiPaths>
+    skipInitialLoading?: boolean
   }>,
 ) {
   const state = props.paths?.state ?? createTestState()
@@ -31,7 +32,9 @@ export function TestTuiContexts(
       }}
     >
       <TuiTerminalEnvironmentProvider value={{ platform: "linux" }}>
-        <TuiStartupProvider value={{ skipInitialLoading: false }}>{props.children}</TuiStartupProvider>
+        <TuiStartupProvider value={{ skipInitialLoading: props.skipInitialLoading ?? false }}>
+          {props.children}
+        </TuiStartupProvider>
       </TuiTerminalEnvironmentProvider>
     </TuiPathsProvider>
   )

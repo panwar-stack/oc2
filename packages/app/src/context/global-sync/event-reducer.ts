@@ -16,8 +16,23 @@ import type { State, VcsCache } from "./types"
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
+import { preserveSessionAggregates } from "./session-authority"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
+
+export function aggregateRefreshSessionID(event: { type: string; properties?: unknown }) {
+  if (event.type === "session.next.step.ended" || event.type === "session.next.step.failed") {
+    const properties = event.properties as { sessionID?: string; accounting?: { mode?: string } }
+    return properties.accounting?.mode === "aggregate" ? properties.sessionID : undefined
+  }
+  if (event.type === "message.part.updated") {
+    return (event.properties as { sessionID?: string; part?: { sessionID?: string } }).sessionID ??
+      (event.properties as { part?: { sessionID?: string } }).part?.sessionID
+  }
+  if (event.type === "message.part.removed" || event.type === "message.removed") {
+    return (event.properties as { sessionID?: string }).sessionID
+  }
+}
 
 export function applyGlobalEvent(input: {
   event: { type: string; properties?: unknown }
@@ -102,6 +117,7 @@ export function applyDirectoryEvent(input: {
   vcsCache?: VcsCache
   setSessionTodo?: (sessionID: string, todos: Todo[] | undefined) => void
   retainedLimit?: number
+  sessionDeleted?: (sessionID: string) => boolean
 }) {
   const event = input.event
   const limit = Math.max(input.store.limit, input.retainedLimit ?? 0)
@@ -127,9 +143,10 @@ export function applyDirectoryEvent(input: {
     }
     case "session.updated": {
       const info = (event.properties as { info: Session }).info
+      if (input.sessionDeleted?.(info.id)) break
       const result = Binary.search(input.store.session, info.id, (s) => s.id)
       if (info.time.archived) {
-        if (input.store.session[result.index]!.time.archived === info.time.archived) break
+        if (result.found && input.store.session[result.index]!.time.archived === info.time.archived) break
         if (result.found) {
           input.setStore(
             "session",
@@ -144,7 +161,7 @@ export function applyDirectoryEvent(input: {
         break
       }
       if (result.found) {
-        input.setStore("session", result.index, reconcile(info))
+        input.setStore("session", result.index, reconcile(preserveSessionAggregates(input.store.session[result.index]!, info)))
         break
       }
       const next = input.store.session.slice()
@@ -166,7 +183,7 @@ export function applyDirectoryEvent(input: {
         )
       }
       cleanupSessionCaches(input.setStore, info.id, input.setSessionTodo)
-      if (info.parentID) break
+      if (!result.found || info.parentID) break
       input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
       break
     }

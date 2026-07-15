@@ -20,6 +20,7 @@ import type {
   SnapshotFileDiff,
   SessionRoot,
   EventSessionNextFuguStatus,
+  Event,
 } from "@oc2-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -67,6 +68,99 @@ function search<T>(items: T[], target: string, key: (item: T) => string) {
     else right = middle - 1
   }
   return { found: false, index: left }
+}
+
+function aggregateRefreshSessionID(event: Event) {
+  if (event.type === "session.next.step.ended" || event.type === "session.next.step.failed") {
+    return event.properties.accounting?.mode === "aggregate" ? event.properties.sessionID : undefined
+  }
+  if (
+    event.type === "message.part.updated" ||
+    event.type === "message.part.removed" ||
+    event.type === "message.removed"
+  )
+    return event.properties.sessionID
+}
+
+function preserveSessionAggregates(current: Session, incoming: Session): Session {
+  return {
+    ...incoming,
+    cost: current.cost,
+    tokens: current.tokens,
+    time: { ...incoming.time, processing: current.time.processing },
+  }
+}
+
+function mergeSessionAggregates(current: Session, authoritative: Session): Session {
+  return {
+    ...current,
+    cost: authoritative.cost,
+    tokens: authoritative.tokens,
+    time: { ...current.time, processing: authoritative.time.processing },
+  }
+}
+
+function createSessionAuthority() {
+  let generation = 0
+  let latestList = 0
+  const versions = new Map<string, number>()
+  const tombstones = new Set<string>()
+
+  return {
+    beginSession(sessionID: string) {
+      const next = ++generation
+      versions.set(sessionID, next)
+      return next
+    },
+    beginList() {
+      latestList = ++generation
+      return latestList
+    },
+    accepts(sessionID: string, request: number) {
+      return !tombstones.has(sessionID) && versions.get(sessionID) === request
+    },
+    deleted(sessionID: string) {
+      return tombstones.has(sessionID)
+    },
+    remove(sessionID: string) {
+      versions.set(sessionID, ++generation)
+      tombstones.add(sessionID)
+    },
+    create(sessionID: string) {
+      tombstones.delete(sessionID)
+      versions.set(sessionID, ++generation)
+    },
+    update(sessionID: string) {
+      versions.set(sessionID, ++generation)
+    },
+    reconcileList(request: number, current: readonly Session[], incoming: readonly Session[]) {
+      if (latestList > request) {
+        return current
+          .filter((session) => !tombstones.has(session.id))
+          .toSorted((a, b) => a.id.localeCompare(b.id))
+      }
+      const currentByID = new Map(current.map((session) => [session.id, session]))
+      const incomingIDs = new Set(incoming.map((session) => session.id))
+      const next = incoming.flatMap((session) => {
+        if (tombstones.has(session.id)) return []
+        if ((versions.get(session.id) ?? 0) > request) {
+          const retained = currentByID.get(session.id)
+          return retained ? [retained] : []
+        }
+        versions.set(session.id, request)
+        return [session]
+      })
+      for (const session of current) {
+        if (incomingIDs.has(session.id) || tombstones.has(session.id)) continue
+        if ((versions.get(session.id) ?? 0) > request) {
+          next.push(session)
+          continue
+        }
+        versions.set(session.id, request)
+      }
+      return next.toSorted((a, b) => a.id.localeCompare(b.id))
+    },
+  }
 }
 
 export const {
@@ -166,7 +260,7 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
-    let sessionListGeneration = 0
+    const sessionAuthority = createSessionAuthority()
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string>; cancelled: boolean }>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
@@ -267,12 +361,54 @@ export const {
     }
 
     function listSessions() {
+      const generation = sessionAuthority.beginList()
       return sdk.client.session
         .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery() })
-        .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+        .then((x) => ({
+          generation,
+          sessions: (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)),
+        }))
+    }
+
+    function applySessionList(input: Awaited<ReturnType<typeof listSessions>>) {
+      const sessions = sessionAuthority.reconcileList(input.generation, store.session, input.sessions)
+      setStore("session", reconcile(sessions))
+    }
+
+    async function refreshSession(sessionID: string, options?: { aggregatesOnly?: boolean }) {
+      const generation = sessionAuthority.beginSession(sessionID)
+      const response = await sdk.client.session.get({ sessionID }, { throwOnError: true })
+      if (!sessionAuthority.accepts(sessionID, generation)) return
+      const session = response.data
+      if (session?.id !== sessionID) return
+      setStore(
+        "session",
+        produce((draft) => {
+          const match = search(draft, sessionID, (item) => item.id)
+          if (match.found) {
+            const current = draft[match.index]
+            if (!current) return
+            draft[match.index] = options?.aggregatesOnly ? mergeSessionAggregates(current, session) : session
+            return
+          }
+          if (!options?.aggregatesOnly) draft.splice(match.index, 0, session)
+        }),
+      )
     }
 
     event.subscribe((event, { workspace }) => {
+      if (event.type === "session.created") sessionAuthority.create(event.properties.info.id)
+      if (event.type === "session.deleted") sessionAuthority.remove(event.properties.info.id)
+      const updatedID = event.type === "session.updated" ? event.properties.info.id : undefined
+      if (updatedID) sessionAuthority.update(updatedID)
+      const refreshID =
+        updatedID && !sessionAuthority.deleted(updatedID) ? updatedID : aggregateRefreshSessionID(event)
+      if (refreshID) {
+        void refreshSession(refreshID, { aggregatesOnly: refreshID === updatedID }).catch((error) => {
+          if (sessionAuthority.deleted(refreshID)) return
+          console.error("Failed to refresh session aggregates", error)
+        })
+      }
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()
@@ -370,7 +506,6 @@ export const {
           syncingSessions.delete(sessionID)
           if (tracker) tracker.cancelled = true
           hydratingSessions.delete(sessionID)
-          sessionListGeneration++
           if (result.found) {
             setStore(
               "session",
@@ -400,10 +535,20 @@ export const {
           })
           break
         }
+        case "session.created":
         case "session.updated": {
+          if (sessionAuthority.deleted(event.properties.info.id)) break
           const result = search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
-            setStore("session", result.index, reconcile(event.properties.info))
+            setStore(
+              "session",
+              result.index,
+              reconcile(
+                event.type === "session.updated"
+                  ? preserveSessionAggregates(store.session[result.index], event.properties.info)
+                  : event.properties.info,
+              ),
+            )
             break
           }
           setStore(
@@ -634,7 +779,6 @@ export const {
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
-      const listGeneration = sessionListGeneration
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
 
@@ -687,9 +831,7 @@ export const {
               setStore("console_state", reconcile(emptyConsoleState))
               setStore("agent", reconcile(agents))
               setStore("config", reconcile(config))
-              if (sessions !== undefined && listGeneration === sessionListGeneration) {
-                setStore("session", reconcile(sessions))
-              }
+              if (sessions !== undefined) applySessionList(sessions)
             })
           })
         })
@@ -701,7 +843,7 @@ export const {
               ? []
               : [
                   sessionListPromise.then((sessions) => {
-                    if (listGeneration === sessionListGeneration) setStore("session", reconcile(sessions))
+                    applySessionList(sessions)
                   }),
                 ]),
             sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
@@ -767,21 +909,23 @@ export const {
           return sessionListQuery()
         },
         async refresh() {
-          const listGeneration = sessionListGeneration
           const list = await listSessions()
-          if (listGeneration !== sessionListGeneration) return
-          setStore("session", reconcile(list))
+          applySessionList(list)
         },
         async refreshRoots(sessionID: string) {
+          const generation = sessionAuthority.beginSession(sessionID)
           const [session, roots] = await Promise.all([
             sdk.client.session.get({ sessionID }, { throwOnError: true }),
             sdk.client.session.root.list({ sessionID }, { throwOnError: true }),
           ])
+          if (sessionAuthority.deleted(sessionID)) return roots.data ?? []
           setStore(
             produce((draft) => {
-              const match = search(draft.session, sessionID, (s) => s.id)
-              if (match.found) draft.session[match.index] = session.data!
-              if (!match.found) draft.session.splice(match.index, 0, session.data!)
+              if (sessionAuthority.accepts(sessionID, generation)) {
+                const match = search(draft.session, sessionID, (s) => s.id)
+                if (match.found) draft.session[match.index] = session.data!
+                if (!match.found) draft.session.splice(match.index, 0, session.data!)
+              }
               draft.session_root[sessionID] = roots.data ?? []
             }),
           )
@@ -804,6 +948,7 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>(), cancelled: false }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
+            const sessionGeneration = sessionAuthority.beginSession(sessionID)
             const [session, roots, messages, todo, diff] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.root.list({ sessionID }),
@@ -818,9 +963,11 @@ export const {
             flushStreamingSession(sessionID)
             setStore(
               produce((draft) => {
-                const match = search(draft.session, sessionID, (s) => s.id)
-                if (match.found) draft.session[match.index] = session.data!
-                if (!match.found) draft.session.splice(match.index, 0, session.data!)
+                if (sessionAuthority.accepts(sessionID, sessionGeneration)) {
+                  const match = search(draft.session, sessionID, (s) => s.id)
+                  if (match.found) draft.session[match.index] = session.data!
+                  if (!match.found) draft.session.splice(match.index, 0, session.data!)
+                }
                 draft.session_root[sessionID] = roots.data ?? []
                 draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []

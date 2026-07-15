@@ -60,6 +60,19 @@ test("keeps retained shell navigation usable without horizontal overflow", async
   await expectAppVisible(prompt)
   await expectWithinViewport(page, prompt)
   await expectNoHorizontalOverflow(page)
+
+  if (mobile) {
+    const menu = page.getByRole("button", { name: "Toggle menu" })
+    if ((await menu.getAttribute("aria-expanded")) === "true") await menu.click()
+    await expect(menu).toHaveAttribute("aria-expanded", "false")
+  }
+
+  const usage = page.getByRole("button", { name: "View context usage" })
+  await expectAppVisible(usage)
+  await page.locator('[data-component="tooltip-trigger"]', { has: usage }).hover()
+  const tooltip = page.locator('[data-component="tooltip"]')
+  await expect(tooltip.getByText(fixture.expected.targetContextTokens, { exact: true })).toBeVisible()
+  await expect(tooltip.getByText(fixture.expected.targetCost, { exact: true })).toBeVisible()
 })
 
 async function expectWithinViewport(page: Page, locator: Locator) {

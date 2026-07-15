@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Message } from "@oc2-ai/sdk/v2/client"
-import { getSessionContextMetrics } from "./session-context-metrics"
+import { getSessionContextMetrics, getSessionTokenTotal } from "./session-context-metrics"
 
 const assistant = (
   id: string,
@@ -59,7 +59,6 @@ describe("getSessionContextMetrics", () => {
 
     const metrics = getSessionContextMetrics(messages, providers)
 
-    expect(metrics.totalCost).toBe(1.75)
     expect(metrics.context?.message.id).toBe("a2")
     expect(metrics.context?.total).toBe(500)
     expect(metrics.context?.usage).toBe(50)
@@ -89,13 +88,50 @@ describe("getSessionContextMetrics", () => {
 
     expect(one.context?.message.id).toBe("a1")
     expect(two.context?.message.id).toBe("a2")
-    expect(two.totalCost).toBe(1)
   })
 
   test("returns empty metrics when inputs are undefined", () => {
     const metrics = getSessionContextMetrics(undefined, undefined)
 
-    expect(metrics.totalCost).toBe(0)
     expect(metrics.context).toBeUndefined()
+  })
+
+  test("keeps current context invariant when 144 messages are paginated to the latest 80", () => {
+    const messages = Array.from({ length: 72 }, (_, index) => [
+      user(`u${index}`),
+      assistant(
+        `a${index}`,
+        index === 71
+          ? { input: 300, output: 100, reasoning: 50, read: 25, write: 25 }
+          : { input: 10, output: 5, reasoning: 0, read: 0, write: 0 },
+        index,
+      ),
+    ]).flat()
+
+    const full = getSessionContextMetrics(messages, [])
+    const initialPage = getSessionContextMetrics(messages.slice(-80), [])
+
+    expect(messages).toHaveLength(144)
+    expect(initialPage.context?.message.id).toBe("a71")
+    expect(initialPage.context?.total).toBe(500)
+    expect(initialPage.context?.total).toBe(full.context?.total)
+  })
+
+  test("selects the latest assistant with any positive consumed category", () => {
+    const messages = [
+      assistant("visible", { input: 20, output: 10, reasoning: 0, read: 0, write: 0 }, 1),
+      assistant("reasoning", { input: 0, output: 0, reasoning: 9, read: 0, write: 0 }, 2),
+      assistant("cache", { input: 0, output: 0, reasoning: 0, read: 0, write: 7 }, 3),
+      assistant("zero", { input: 0, output: 0, reasoning: 0, read: 0, write: 0 }, 4),
+    ]
+
+    expect(getSessionContextMetrics(messages, []).context?.message.id).toBe("cache")
+  })
+
+  test("sums authoritative session aggregate tokens independently of message pages", () => {
+    expect(
+      getSessionTokenTotal({ input: 1_000, output: 200, reasoning: 50, cache: { read: 300, write: 25 } }),
+    ).toBe(1_575)
+    expect(getSessionTokenTotal(undefined)).toBe(0)
   })
 })

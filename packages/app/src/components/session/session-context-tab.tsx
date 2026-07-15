@@ -14,7 +14,7 @@ import type { Message, Part, UserMessage } from "@oc2-ai/sdk/v2/client"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { getSessionContextMetrics } from "./session-context-metrics"
+import { getSessionContextMetrics, getSessionTokenTotal } from "./session-context-metrics"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
 import { createSessionContextFormatter } from "./session-context-format"
 
@@ -137,7 +137,7 @@ export function SessionContextTab() {
   const formatter = createMemo(() => createSessionContextFormatter(language.intl()))
 
   const cost = createMemo(() => {
-    return usd().format(metrics().totalCost)
+    return usd().format(info()?.cost ?? 0)
   })
 
   const counts = createMemo(() => {
@@ -202,7 +202,7 @@ export function SessionContextTab() {
     { label: "context.stats.provider", value: providerLabel },
     { label: "context.stats.model", value: modelLabel },
     { label: "context.stats.limit", value: () => formatter().number(ctx()?.limit) },
-    { label: "context.stats.totalTokens", value: () => formatter().number(ctx()?.total) },
+    { label: "context.stats.totalTokens", value: () => formatter().number(getSessionTokenTotal(info()?.tokens)) },
     { label: "context.stats.usage", value: () => formatter().percent(ctx()?.usage) },
     { label: "context.stats.inputTokens", value: () => formatter().number(ctx()?.input) },
     { label: "context.stats.outputTokens", value: () => formatter().number(ctx()?.output) },

@@ -8,18 +8,15 @@ The displayed value must count only time spent processing AI responses. It must 
 
 ## Current State
 
-- `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx:357` creates a `now` signal and updates it once per second.
-- `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx:365` computes `elapsed` as `Date.now() - sync.session.get(props.sessionID)?.time.created`.
-- `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx:1771` renders the elapsed value before token usage and command hints.
-- `packages/opencode/specs/tui-prompt-footer-elapsed-time.md:7` explicitly scoped the current feature as UI-only with no storage/API changes. That constraint no longer fits this requirement.
-- `packages/opencode/src/session/session.sql.ts:36` through `packages/opencode/src/session/session.sql.ts:41` already persist cumulative cost and token usage on the `session` table.
-- `packages/opencode/src/session/projectors.ts:32` accumulates cost and tokens from `step-finish` parts through `applyUsage`.
-- `packages/opencode/src/session/projectors.ts:188` through `packages/opencode/src/session/projectors.ts:191` already subtracts previous step usage and adds new step usage when a `PartUpdated` event changes.
-- `packages/opencode/src/session/processor.ts:484` emits a `step-start` part.
-- `packages/opencode/src/session/processor.ts:516` emits a `step-finish` part with tokens and cost.
-- `packages/opencode/src/session/message-v2.ts:229` defines `StepFinishPart`; it currently has cost and tokens but no duration.
-- `packages/opencode/src/session/session.ts:187` defines the session `time` object with timestamps only.
-- `packages/opencode/src/v2/session.ts:25` defines `SessionV2.Info`, which exposes cost, tokens, and timestamps from the same session table.
+- `packages/tui/src/component/prompt/index.tsx` reads `sync.session.get(props.sessionID)?.time.processing` and renders the persisted AI duration before token usage and command hints.
+- `specs/tui-prompt-footer-elapsed-time.md:7` explicitly scoped the current feature as UI-only with no storage/API changes. That constraint no longer fits this requirement.
+- `packages/core/src/session/sql.ts` persists cumulative cost, tokens, and `time_processing` on the `session` table.
+- `packages/core/src/session/projector.ts` applies owning V2 terminal deltas and V1 `step-finish` add, replacement, and removal deltas to the same aggregate columns.
+- `packages/opencode/src/session/processor.ts` emits V1 `step-finish` parts with authoritative accounting duration.
+- `packages/core/src/v1/session.ts` defines the compatible `StepFinishPart` and optional duration/accounting fields.
+- `packages/core/src/session/info.ts` and `packages/opencode/src/session/session.ts` map persisted processing milliseconds into V2 and V1 session info.
+- `packages/tui/src/context/sync.tsx` authoritatively refetches guarded session aggregates after owning V2 terminals and V1 aggregate-lowering events, so existing cost and processing views update live.
+- `specs/accurate-session-token-accounting.md` is the prerequisite for trusting newly executed V1/V2 processing aggregates.
 - `packages/sdk/js/src/gen/types.gen.ts:533` and `packages/sdk/js/src/v2/gen/types.gen.ts:3408` are generated SDK session surfaces that must be regenerated if session shapes change.
 
 ## Non-Negotiables
@@ -68,13 +65,12 @@ time: {
 
 Update these mappings:
 
-- `packages/opencode/src/session/session.sql.ts`
+- `packages/core/src/session/sql.ts`
 - `packages/opencode/src/session/session.ts` `fromRow`
 - `packages/opencode/src/session/session.ts` `toRow`
 - `packages/opencode/src/session/session.ts` `Time`
-- `packages/opencode/src/session/projectors.ts` `toPartialRow`
-- `packages/opencode/src/v2/session.ts` `Info`
-- `packages/opencode/src/v2/session.ts` row-to-info mapping
+- `packages/core/src/session/projector.ts`
+- `packages/core/src/session/info.ts`
 
 ## Measurement
 
@@ -121,7 +117,7 @@ Recommended implementation:
 
 Extend the existing usage projector instead of recomputing duration in the TUI.
 
-Update `packages/opencode/src/session/projectors.ts`:
+Update `packages/core/src/session/projector.ts`:
 
 - Extend `Usage` to include `duration`.
 - Update `usage()` so only `step-finish` parts contribute.
@@ -145,7 +141,7 @@ This keeps duration semantics aligned with cost and tokens:
 
 Replace the wall-clock elapsed display with persisted AI processing time.
 
-Update `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx`:
+Update `packages/tui/src/component/prompt/index.tsx`:
 
 - Remove the `now` signal and one-second timer used only for wall-clock elapsed time.
 - Replace `elapsed()` with a memo that reads `sync.session.get(props.sessionID)?.time.processing`.
@@ -178,7 +174,7 @@ The migration must:
 
 ### PR 1: Persist Processing Time
 
-- Add `time_processing` to `SessionTable`.
+- Add `time_processing` to `SessionTable` in `packages/core/src/session/sql.ts`.
 - Generate the database migration.
 - Add `time.processing` to `Session.Info`.
 - Update `fromRow`, `toRow`, `toPartialRow`, and schema tests.
@@ -215,10 +211,10 @@ Check generated SDK diffs only reflect schema changes from `time.processing` and
 
 ### PR 3: Switch TUI Footer Display
 
-- Update `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx` to render `AI <duration>` from `session.time.processing`.
+- Update `packages/tui/src/component/prompt/index.tsx` to render `AI <duration>` from `session.time.processing`.
 - Remove the wall-clock timer used for elapsed session age.
 - Keep token/cost and command shortcut rendering unchanged.
-- Update or replace `packages/opencode/specs/tui-prompt-footer-elapsed-time.md` so it no longer describes wall-clock elapsed behavior.
+- Update or replace `specs/tui-prompt-footer-elapsed-time.md` so it no longer describes wall-clock elapsed behavior.
 
 Verification:
 

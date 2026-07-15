@@ -8,15 +8,16 @@ The implementation must preserve the original lead-session AI time and token val
 
 ## Current State
 
-- `packages/opencode/src/session/session.sql.ts` persists aggregate usage on `SessionTable`: `cost`, token columns, and `time_processing`.
-- `packages/opencode/src/session/session.ts` exposes `Session.Info.cost`, `Session.Info.tokens`, and `Session.Info.time.processing`.
-- `packages/opencode/src/session/projectors.ts` projects `step-finish` parts into `SessionTable` and safely adds/subtracts aggregate usage.
+- `packages/core/src/session/sql.ts` persists aggregate usage on `SessionTable`: `cost`, token columns, and `time_processing`.
+- `packages/core/src/session/info.ts` and `packages/opencode/src/session/session.ts` expose the V2 and V1 session aggregate shapes.
+- `packages/core/src/session/projector.ts` transactionally projects aggregate-owning V2 terminals and V1 `step-finish` parts into `SessionTable`, including replacement and removal deltas.
 - `packages/opencode/src/session/processor.ts` emits `step-finish` parts with `cost`, `tokens`, and `duration`.
 - `packages/opencode/src/team/team.sql.ts` stores `TeamTable.lead_session_id` and `TeamMemberTable.session_id`.
 - `packages/opencode/src/tool/team_spawn.ts` creates teammate sessions and records them in `TeamMemberTable`.
 - `packages/opencode/src/tool/team_report.ts` already sums lead + teammate session rows, but reports wall runtime instead of AI processing time.
-- `packages/app/src/context/directory-sync.ts` and `packages/app/src/context/global-sync/event-reducer.ts` already sync `Session.Info`.
-- `packages/app/src/components/session-context-usage.tsx`, `packages/app/src/components/session/session-context-tab.tsx`, and `packages/app/src/components/session/session-context-metrics.ts` currently derive most visible usage from messages, not session aggregate rows.
+- `packages/app/src/context/server-sync.tsx`, `packages/app/src/context/global-sync/session-authority.ts`, and `packages/app/src/context/global-sync/event-reducer.ts` keep live `Session.Info` aggregates authoritative across list, GET, event, and deletion races.
+- `packages/app/src/components/session-context-usage.tsx` and `packages/app/src/components/session/session-context-tab.tsx` use `Session.Info` for cumulative cost and tokens while `packages/app/src/components/session/session-context-metrics.ts` remains current-context-only.
+- `specs/accurate-session-token-accounting.md` is the prerequisite for trusting newly executed V1/V2 session aggregates; this rollup must build on those persisted totals rather than transcript pagination.
 
 ## Non-Negotiables
 
@@ -71,7 +72,7 @@ type SessionUsageRollup = {
 
 Implementation rules:
 
-- Define the response as an Effect schema near `packages/opencode/src/server/routes/instance/httpapi/groups/session.ts`.
+- Define the response as an Effect schema near `packages/opencode/src/server/routes/instance/httpapi/groups/session.ts`, using `SessionTable` from `packages/core/src/session/sql.ts`.
 - Add `session.usage({ sessionID }) -> SessionUsageRollup`.
 - If `sessionID` is a lead session, use it as `lead.sessionID`.
 - If `sessionID` belongs to `TeamMemberTable.session_id`, resolve its team and use `TeamTable.lead_session_id` as `lead.sessionID`.

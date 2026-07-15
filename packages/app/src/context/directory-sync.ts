@@ -469,30 +469,10 @@ export const createDirSyncContext = (
           if (cached && hasSession && !opts?.force) return
 
           const limit = meta.limit[key] ?? initialMessagePageSize
-          const sessionReq =
-            hasSession && !opts?.force
-              ? Promise.resolve()
-              : retry(() => client.session.get({ sessionID }))
-                  .then((session) => {
-                    if (!tracked(directory, sessionID)) return
-                    const data = session.data
-                    if (!data) return
-                    setStore(
-                      "session",
-                      produce((draft) => {
-                        const match = Binary.search(draft, sessionID, (s) => s.id)
-                        if (match.found) {
-                          draft[match.index] = data
-                          return
-                        }
-                        draft.splice(match.index, 0, data)
-                      }),
-                    )
-                  })
-                  .catch((error) => {
-                    if (isNotFound(error) && !tracked(directory, sessionID)) return
-                    throw error
-                  })
+          const sessionReq = serverSync.session.refresh(directory, sessionID).catch((error) => {
+            if (isNotFound(error) && !tracked(directory, sessionID)) return
+            throw error
+          })
 
           const messagesReq =
             cached && !opts?.force
@@ -589,11 +569,13 @@ export const createDirSyncContext = (
       fetch: async (count = 10) => {
         const [store, setStore] = serverSync.child(directory)
         setStore("limit", (x) => x + count)
+        const generation = serverSync.session.beginList(directory)
         await client.session.list().then((x) => {
-          const sessions = (x.data ?? [])
+          const incoming = (x.data ?? [])
             .filter((s) => !!s?.id)
             .sort((a, b) => cmp(a.id, b.id))
             .slice(0, store.limit)
+          const sessions = serverSync.session.reconcileList(directory, generation, store.session, incoming)
           setStore("session", reconcile(sessions, { key: "id" }))
         })
       },
