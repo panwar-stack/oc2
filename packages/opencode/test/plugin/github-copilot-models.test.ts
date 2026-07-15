@@ -8,6 +8,63 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
+test("uses the GitHub-provisioned client ID for device authorization and token polling", async () => {
+  const requests: Array<{ url: RequestInfo | URL; init?: RequestInit }> = []
+  globalThis.fetch = mock((url: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ url, init })
+    return Promise.resolve(
+      new Response(
+        JSON.stringify(
+          requests.length === 1
+            ? {
+                verification_uri: "https://github.com/login/device",
+                user_code: "ABCD-1234",
+                device_code: "device-code",
+                interval: 0,
+              }
+            : { access_token: "access-token" },
+        ),
+        { status: 200 },
+      ),
+    )
+  }) as unknown as typeof fetch
+
+  const hooks = await CopilotAuthPlugin({
+    client: {} as never,
+    project: {} as never,
+    directory: "",
+    worktree: "",
+    experimental_workspace: {
+      register() {},
+    },
+    serverUrl: new URL("https://example.com"),
+    $: {} as never,
+  })
+  const method = hooks.auth!.methods[0]
+  if (method.type !== "oauth") throw new Error("Expected OAuth method")
+
+  const authorization = await method.authorize({})
+  await authorization.callback("")
+
+  expect(requests.map((request) => [request.url, JSON.parse(request.init!.body as string)])).toEqual([
+    [
+      "https://github.com/login/device/code",
+      {
+        client_id: "Ov23li8tweQw6odWQebz",
+        scope: "read:user",
+      },
+    ],
+    [
+      "https://github.com/login/oauth/access_token",
+      {
+        client_id: "Ov23li8tweQw6odWQebz",
+        device_code: "device-code",
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      },
+    ],
+  ])
+})
+
 test("preserves temperature support from existing provider models", async () => {
   globalThis.fetch = mock(() =>
     Promise.resolve(
