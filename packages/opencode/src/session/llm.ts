@@ -61,7 +61,7 @@ export type StreamRequest = StreamInput & {
 type ProviderRunResult =
   | { type: "native"; stream: Stream.Stream<LLMEventType, unknown> }
   | { type: "event-stream"; stream: Stream.Stream<LLMEventType, unknown> }
-  | { type: "ai-sdk"; result: ReturnType<typeof streamText> }
+  | { type: "ai-sdk"; result: ReturnType<typeof streamText>; identity: LLMAISDK.UsageIdentity }
 
 export interface Interface {
   readonly stream: (input: StreamInput) => Stream.Stream<LLMEventType, unknown>
@@ -321,11 +321,18 @@ const live: Layer.Layer<
       )
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
+      const identity = {
+        providerID: String(input.model.providerID),
+        modelID: String(input.model.id),
+        apiPackage: input.model.api.npm,
+      }
       return {
         type: "ai-sdk" as const,
+        identity,
         result: streamText({
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
-          includeRawChunks: input.model.providerID.includes("github-copilot"),
+          includeRawChunks:
+            input.model.providerID.includes("github-copilot") || LLMAISDK.requiresRawChunks(identity),
           onError(error) {
             l.error("stream error", {
               error,
@@ -399,7 +406,7 @@ const live: Layer.Layer<
     const toEventStream = (result: ProviderRunResult) => {
       if (result.type === "native" || result.type === "event-stream") return result.stream
 
-      const state = LLMAISDK.adapterState()
+      const state = LLMAISDK.adapterState(result.identity)
       return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
         e instanceof Error ? e : new Error(String(e)),
       ).pipe(
@@ -515,7 +522,8 @@ export const langfuseTelemetryAttributes = (input: {
   const messages = [
     ...system.map((content): ModelMessage => ({ role: "system", content })),
     ...input.messages.filter(
-      (message) => message.role !== "system" || typeof message.content !== "string" || !system.includes(message.content),
+      (message) =>
+        message.role !== "system" || typeof message.content !== "string" || !system.includes(message.content),
     ),
   ]
   const langfuseInput = JSON.stringify({ messages })

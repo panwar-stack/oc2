@@ -168,7 +168,12 @@ const encodeWebSocketMessage = Schema.encodeSync(Schema.fromJsonString(OpenAIRes
 
 const OpenAIResponsesUsage = Schema.Struct({
   input_tokens: Schema.optional(Schema.Number),
-  input_tokens_details: optionalNull(Schema.Struct({ cached_tokens: Schema.optional(Schema.Number) })),
+  input_tokens_details: optionalNull(
+    Schema.Struct({
+      cached_tokens: Schema.optional(Schema.Number),
+      cache_write_tokens: optionalNull(Schema.Number),
+    }),
+  ),
   output_tokens: Schema.optional(Schema.Number),
   output_tokens_details: optionalNull(Schema.Struct({ reasoning_tokens: Schema.optional(Schema.Number) })),
   total_tokens: Schema.optional(Schema.Number),
@@ -228,9 +233,9 @@ const OpenAIResponsesEvent = Schema.Struct({
       [Schema.Record(Schema.String, Schema.Unknown)],
     ),
   ),
-  code: Schema.optional(Schema.String),
+  code: optionalNull(Schema.String),
   message: Schema.optional(Schema.String),
-  param: Schema.optional(Schema.String),
+  param: optionalNull(Schema.String),
 })
 type OpenAIResponsesEvent = Schema.Schema.Type<typeof OpenAIResponsesEvent>
 
@@ -240,7 +245,29 @@ interface ParserState {
   readonly lifecycle: Lifecycle.State
   readonly reasoningItems: Readonly<Record<string, ReasoningStreamItem>>
   readonly store: boolean | undefined
+  readonly usageProfile: OpenAIResponsesUsageProfile
 }
+
+interface OpenAIResponsesUsageProfile {
+  readonly providerMetadata: "openai" | "xai"
+  readonly outputTokens: "inclusive" | "exclusive"
+  readonly cacheInput: "inclusive" | "xai-conditional"
+}
+
+const OPENAI_RESPONSES_USAGE_PROFILE: OpenAIResponsesUsageProfile = {
+  providerMetadata: "openai",
+  outputTokens: "inclusive",
+  cacheInput: "inclusive",
+}
+
+const XAI_RESPONSES_USAGE_PROFILE: OpenAIResponsesUsageProfile = {
+  providerMetadata: "xai",
+  outputTokens: "exclusive",
+  cacheInput: "xai-conditional",
+}
+
+const openAIResponsesUsageProfile = (request: LLMRequest) =>
+  String(request.model.provider) === "xai" ? XAI_RESPONSES_USAGE_PROFILE : OPENAI_RESPONSES_USAGE_PROFILE
 
 type ReasoningSummaryStatus = "active" | "can-conclude" | "concluded"
 
@@ -498,26 +525,62 @@ const fromRequest: (request: LLMRequest) => Effect.Effect<OpenAIResponsesBody, L
 // =============================================================================
 // Stream Parsing
 // =============================================================================
-// OpenAI Responses reports `input_tokens` (inclusive total) with a
-// `cached_tokens` subset, and `output_tokens` (inclusive total) with a
-// `reasoning_tokens` subset. Pass the totals through and derive the
-// non-cached breakdown.
-const mapUsage = (usage: OpenAIResponsesUsage | null | undefined) => {
+const mapUsage = (profile: OpenAIResponsesUsageProfile, usage: OpenAIResponsesUsage | null | undefined) => {
   if (!usage) return undefined
   if (usage.input_tokens === undefined || usage.output_tokens === undefined) return undefined
   const cached = usage.input_tokens_details?.cached_tokens
+  const cacheWrite = usage.input_tokens_details?.cache_write_tokens ?? undefined
   const reasoning = usage.output_tokens_details?.reasoning_tokens
-  const nonCached = ProviderShared.subtractTokens(usage.input_tokens, cached)
+  const inputAfterCacheRead =
+    profile.cacheInput === "xai-conditional" && cached !== undefined && cached > usage.input_tokens
+      ? usage.input_tokens
+      : ProviderShared.subtractTokens(usage.input_tokens, cached)
+  const nonCached = ProviderShared.subtractTokens(inputAfterCacheRead, cacheWrite)
+  const sanitized = {
+    ...(usage.input_tokens === undefined ? {} : { input_tokens: usage.input_tokens }),
+    ...(usage.output_tokens === undefined ? {} : { output_tokens: usage.output_tokens }),
+    ...(usage.total_tokens === undefined ? {} : { total_tokens: usage.total_tokens }),
+    ...(usage.input_tokens_details === undefined
+      ? {}
+      : {
+          input_tokens_details:
+            usage.input_tokens_details === null
+              ? null
+              : usage.input_tokens_details.cached_tokens === undefined
+                ? usage.input_tokens_details.cache_write_tokens == null
+                  ? {}
+                  : { cache_write_tokens: usage.input_tokens_details.cache_write_tokens }
+                : {
+                    cached_tokens: usage.input_tokens_details.cached_tokens,
+                    ...(usage.input_tokens_details.cache_write_tokens == null
+                      ? {}
+                      : { cache_write_tokens: usage.input_tokens_details.cache_write_tokens }),
+                  },
+        }),
+    ...(usage.output_tokens_details === undefined
+      ? {}
+      : {
+          output_tokens_details:
+            usage.output_tokens_details === null
+              ? null
+              : usage.output_tokens_details.reasoning_tokens === undefined
+                ? {}
+                : { reasoning_tokens: usage.output_tokens_details.reasoning_tokens },
+        }),
+  }
   return ProviderShared.usage(
     {
       input: nonCached ?? 0,
-      output: ProviderShared.subtractTokens(usage.output_tokens, reasoning) ?? 0,
+      output:
+        profile.outputTokens === "exclusive"
+          ? usage.output_tokens
+          : (ProviderShared.subtractTokens(usage.output_tokens, reasoning) ?? 0),
       reasoning: reasoning ?? 0,
-      cache: { read: cached ?? 0, write: 0 },
+      cache: { read: cached ?? 0, write: cacheWrite ?? 0 },
       providerTotal: usage.total_tokens,
-      providerMetadata: { openai: usage },
+      providerMetadata: { [profile.providerMetadata]: sanitized },
     },
-    { cacheRead: cached !== undefined, reasoning: reasoning !== undefined },
+    { cacheRead: cached !== undefined, cacheWrite: cacheWrite !== undefined, reasoning: reasoning !== undefined },
   )
 }
 
@@ -607,11 +670,17 @@ type StepResult = readonly [ParserState, ReadonlyArray<LLMEvent>]
 
 const NO_EVENTS: StepResult["1"] = []
 
-// `response.completed` / `response.incomplete` are clean finishes that emit a
-// `finish` event; `response.failed` is a hard failure that emits a
-// `provider-error`. All three end the stream — kept in one set so `step` and
-// the protocol's `terminal` predicate stay in sync.
-const TERMINAL_TYPES = new Set(["response.completed", "response.incomplete", "response.failed"])
+// `response.done` / `response.completed` / `response.incomplete` are clean
+// finishes that emit a `finish` event; `response.failed` is a hard failure that
+// emits a `provider-error`. Kept in one set so `step` and the protocol's
+// `terminal` predicate stay in sync.
+const TERMINAL_TYPES = new Set([
+  "response.done",
+  "response.completed",
+  "response.incomplete",
+  "response.failed",
+  "error",
+])
 
 const onOutputTextDelta = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   if (!event.delta) return [state, NO_EVENTS]
@@ -877,7 +946,7 @@ const onResponseFinish = (state: ParserState, event: OpenAIResponsesEvent): Step
   const events: LLMEvent[] = []
   const lifecycle = Lifecycle.finish(state.lifecycle, events, {
     reason: mapFinishReason(event, state.hasFunctionCall),
-    usage: mapUsage(event.response?.usage),
+    usage: mapUsage(state.usageProfile, event.response?.usage),
     providerMetadata:
       event.response?.id || event.response?.service_tier
         ? openaiMetadata({
@@ -902,18 +971,19 @@ const providerErrorMessage = (event: OpenAIResponsesEvent, fallback: string): st
   return message || code || fallback
 }
 
-const providerError = (event: OpenAIResponsesEvent, fallback: string) => {
+const providerError = (event: OpenAIResponsesEvent, fallback: string, usage?: Usage) => {
   const code = event.code || event.response?.error?.code || undefined
   const message = providerErrorMessage(event, fallback)
   return LLMEvent.providerError({
     message,
     classification: code === "context_length_exceeded" || isContextOverflow(message) ? "context-overflow" : undefined,
+    usage,
   })
 }
 
 const onResponseFailed = (state: ParserState, event: OpenAIResponsesEvent): StepResult => [
   state,
-  [providerError(event, "OpenAI Responses response failed")],
+  [providerError(event, "OpenAI Responses response failed", mapUsage(state.usageProfile, event.response?.usage))],
 ]
 
 const onError = (state: ParserState, event: OpenAIResponsesEvent): StepResult => [
@@ -942,7 +1012,7 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
   if (event.type === "response.output_item.added") return Effect.succeed(onOutputItemAdded(state, event))
   if (event.type === "response.function_call_arguments.delta") return onFunctionCallArgumentsDelta(state, event)
   if (event.type === "response.output_item.done") return onOutputItemDone(state, event)
-  if (event.type === "response.completed" || event.type === "response.incomplete")
+  if (event.type === "response.done" || event.type === "response.completed" || event.type === "response.incomplete")
     return Effect.succeed(onResponseFinish(state, event))
   if (event.type === "response.failed") return Effect.succeed(onResponseFailed(state, event))
   if (event.type === "error") return Effect.succeed(onError(state, event))
@@ -971,6 +1041,7 @@ export const protocol = Protocol.make({
       lifecycle: Lifecycle.initial(),
       reasoningItems: {},
       store: OpenAIOptions.store(request),
+      usageProfile: openAIResponsesUsageProfile(request),
     }),
     step,
     terminal: (event) => TERMINAL_TYPES.has(event.type),

@@ -315,7 +315,11 @@ export async function compareParityRuns(input: {
     })
   const aiResult = streamText(input.aiSdk(aiReplay))
   const aiEvents: LLMEvent[] = []
-  const aiState = LLMAISDK.adapterState()
+  const aiState = LLMAISDK.adapterState({
+    providerID: String(nativeInput.model.providerID),
+    modelID: String(nativeInput.model.id),
+    apiPackage: nativeInput.model.api.npm,
+  })
   for await (const event of aiResult.fullStream)
     aiEvents.push(...(await Effect.runPromise(LLMAISDK.toLLMEvents(aiState, event))))
   aiReplay.assertConsumed()

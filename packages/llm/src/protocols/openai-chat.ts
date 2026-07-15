@@ -8,6 +8,7 @@ import {
   LLMEvent,
   type FinishReason,
   type LLMRequest,
+  type LLMError,
   type MediaPart,
   type ReasoningPart,
   type TextPart,
@@ -117,14 +118,27 @@ const OpenAIChatUsage = Schema.Struct({
   prompt_tokens: Schema.optional(Schema.Number),
   completion_tokens: Schema.optional(Schema.Number),
   total_tokens: Schema.optional(Schema.Number),
+  prompt_cache_hit_tokens: Schema.optional(Schema.Number),
+  prompt_cache_miss_tokens: Schema.optional(Schema.Number),
+  cost: optionalNull(Schema.Number),
+  is_byok: Schema.optional(Schema.Boolean),
+  cost_in_usd_ticks: Schema.optional(Schema.Number),
   prompt_tokens_details: optionalNull(
     Schema.Struct({
       cached_tokens: Schema.optional(Schema.Number),
+      cache_write_tokens: optionalNull(Schema.Number),
     }),
   ),
   completion_tokens_details: optionalNull(
     Schema.Struct({
       reasoning_tokens: Schema.optional(Schema.Number),
+    }),
+  ),
+  cost_details: optionalNull(
+    Schema.Struct({
+      upstream_inference_cost: optionalNull(Schema.Number),
+      upstream_inference_prompt_cost: optionalNull(Schema.Number),
+      upstream_inference_completions_cost: optionalNull(Schema.Number),
     }),
   ),
 })
@@ -163,8 +177,69 @@ interface ParserState {
   readonly tools: ToolStream.State<number>
   readonly toolCallEvents: ReadonlyArray<LLMEvent>
   readonly usage?: Usage
+  readonly usageProfile: OpenAIChatUsageProfile
   readonly finishReason?: FinishReason
   readonly lifecycle: Lifecycle.State
+}
+
+interface OpenAIChatUsageProfile {
+  readonly providerMetadata: string
+  readonly completionTokens: "inclusive" | "exclusive"
+  readonly cacheRead: "prompt-details" | "deepseek"
+  readonly cacheInput: "inclusive" | "xai-conditional"
+  readonly cacheWrite: boolean
+  readonly metadataShape: "direct" | "usage"
+}
+
+const OPENAI_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  providerMetadata: "openai",
+  completionTokens: "inclusive",
+  cacheRead: "prompt-details",
+  cacheInput: "inclusive",
+  cacheWrite: false,
+  metadataShape: "direct",
+}
+
+const XAI_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  ...OPENAI_USAGE_PROFILE,
+  providerMetadata: "xai",
+  completionTokens: "exclusive",
+  cacheInput: "xai-conditional",
+}
+
+const DEEPINFRA_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  ...OPENAI_USAGE_PROFILE,
+  providerMetadata: "deepinfra",
+}
+
+const DEEPINFRA_EXCLUDED_REASONING_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  ...DEEPINFRA_USAGE_PROFILE,
+  completionTokens: "exclusive",
+}
+
+const DEEPSEEK_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  ...OPENAI_USAGE_PROFILE,
+  providerMetadata: "deepseek",
+  cacheRead: "deepseek",
+}
+
+const OPENROUTER_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  ...OPENAI_USAGE_PROFILE,
+  providerMetadata: "openrouter",
+  cacheWrite: true,
+  metadataShape: "usage",
+}
+
+const openAIChatUsageProfile = (request: LLMRequest): OpenAIChatUsageProfile => {
+  const provider = String(request.model.provider)
+  if (provider === "xai") return XAI_USAGE_PROFILE
+  if (provider === "deepseek") return DEEPSEEK_USAGE_PROFILE
+  if (provider === "openrouter") return OPENROUTER_USAGE_PROFILE
+  if (provider !== "deepinfra") return OPENAI_USAGE_PROFILE
+  const model = String(request.model.id).toLowerCase()
+  return model.startsWith("google/gemini-") || model.startsWith("google/gemma-")
+    ? DEEPINFRA_EXCLUDED_REASONING_USAGE_PROFILE
+    : DEEPINFRA_USAGE_PROFILE
 }
 
 const invalid = ProviderShared.invalidRequest
@@ -378,38 +453,129 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
   return "unknown"
 }
 
-// OpenAI Chat reports `prompt_tokens` (inclusive total) with a
-// `cached_tokens` subset, and `completion_tokens` (inclusive total) with
-// a `reasoning_tokens` subset. We pass the inclusive totals through and
-// derive the non-cached breakdown so the `LLM.Usage` contract is
-// satisfied on both sides.
-const mapUsage = (usage: OpenAIChatEvent["usage"]): Usage | undefined => {
+const mapUsage = (profile: OpenAIChatUsageProfile, usage: OpenAIChatEvent["usage"]): Usage | undefined => {
   if (!usage) return undefined
   if (usage.prompt_tokens === undefined || usage.completion_tokens === undefined) return undefined
-  const cached = usage.prompt_tokens_details?.cached_tokens
+  const cached =
+    profile.cacheRead === "deepseek"
+      ? (usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens)
+      : usage.prompt_tokens_details?.cached_tokens
+  const cacheWrite = profile.cacheWrite ? (usage.prompt_tokens_details?.cache_write_tokens ?? undefined) : undefined
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
-  const nonCached = ProviderShared.subtractTokens(usage.prompt_tokens, cached)
+  const freshInput =
+    profile.cacheInput === "xai-conditional" && cached !== undefined && cached > usage.prompt_tokens
+      ? usage.prompt_tokens
+      : ProviderShared.subtractTokens(usage.prompt_tokens, cached)
+  const nonCached = ProviderShared.subtractTokens(freshInput, cacheWrite)
+  const sanitized = {
+    ...(usage.prompt_tokens === undefined ? {} : { prompt_tokens: usage.prompt_tokens }),
+    ...(usage.completion_tokens === undefined ? {} : { completion_tokens: usage.completion_tokens }),
+    ...(usage.total_tokens === undefined ? {} : { total_tokens: usage.total_tokens }),
+    ...(usage.prompt_cache_hit_tokens === undefined ? {} : { prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens }),
+    ...(usage.prompt_cache_miss_tokens === undefined
+      ? {}
+      : { prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens }),
+    ...(usage.cost === undefined ? {} : { cost: usage.cost }),
+    ...(usage.is_byok === undefined ? {} : { is_byok: usage.is_byok }),
+    ...(usage.cost_in_usd_ticks === undefined ? {} : { cost_in_usd_ticks: usage.cost_in_usd_ticks }),
+    ...(usage.prompt_tokens_details === undefined
+      ? {}
+      : {
+          prompt_tokens_details:
+            usage.prompt_tokens_details === null
+              ? null
+              : {
+                  ...(usage.prompt_tokens_details.cached_tokens === undefined
+                    ? {}
+                    : { cached_tokens: usage.prompt_tokens_details.cached_tokens }),
+                  ...(usage.prompt_tokens_details.cache_write_tokens == null
+                    ? {}
+                    : { cache_write_tokens: usage.prompt_tokens_details.cache_write_tokens }),
+                },
+        }),
+    ...(usage.completion_tokens_details === undefined
+      ? {}
+      : {
+          completion_tokens_details:
+            usage.completion_tokens_details === null
+              ? null
+              : usage.completion_tokens_details.reasoning_tokens === undefined
+                ? {}
+                : { reasoning_tokens: usage.completion_tokens_details.reasoning_tokens },
+        }),
+    ...(usage.cost_details === undefined
+      ? {}
+      : {
+          cost_details:
+            usage.cost_details === null
+              ? null
+              : {
+                  ...(usage.cost_details.upstream_inference_cost === undefined
+                    ? {}
+                    : { upstream_inference_cost: usage.cost_details.upstream_inference_cost }),
+                  ...(usage.cost_details.upstream_inference_prompt_cost === undefined
+                    ? {}
+                    : { upstream_inference_prompt_cost: usage.cost_details.upstream_inference_prompt_cost }),
+                  ...(usage.cost_details.upstream_inference_completions_cost === undefined
+                    ? {}
+                    : { upstream_inference_completions_cost: usage.cost_details.upstream_inference_completions_cost }),
+                },
+        }),
+  }
+  const providerMetadata =
+    profile.metadataShape === "usage"
+      ? { [profile.providerMetadata]: { usage: sanitized } }
+      : { [profile.providerMetadata]: sanitized }
   return ProviderShared.usage(
     {
       input: nonCached ?? 0,
-      output: ProviderShared.subtractTokens(usage.completion_tokens, reasoning) ?? 0,
+      output:
+        profile.completionTokens === "exclusive"
+          ? usage.completion_tokens
+          : (ProviderShared.subtractTokens(usage.completion_tokens, reasoning) ?? 0),
       reasoning: reasoning ?? 0,
-      cache: { read: cached ?? 0, write: 0 },
+      cache: { read: cached ?? 0, write: cacheWrite ?? 0 },
       providerTotal: usage.total_tokens,
-      providerMetadata: { openai: usage },
+      providerMetadata,
     },
-    { cacheRead: cached !== undefined, reasoning: reasoning !== undefined },
+    {
+      cacheRead: cached !== undefined,
+      cacheWrite: cacheWrite !== undefined,
+      reasoning: reasoning !== undefined,
+    },
   )
 }
 
 const step = (state: ParserState, event: OpenAIChatEvent) =>
   Effect.gen(function* () {
     const events: LLMEvent[] = []
-    const usage = mapUsage(event.usage) ?? state.usage
     const choice = event.choices[0]
-    const finishReason = choice?.finish_reason ? mapFinishReason(choice.finish_reason) : state.finishReason
+    const eventFinishReason = choice?.finish_reason ? mapFinishReason(choice.finish_reason) : undefined
     const delta = choice?.delta
     const toolDeltas = delta?.tool_calls ?? []
+    const hasOutput = Boolean(delta?.content || delta?.reasoning_content || toolDeltas.length)
+    const eventUsage = mapUsage(state.usageProfile, event.usage)
+
+    if (state.finishReason !== undefined) {
+      if (hasOutput)
+        return yield* Effect.fail(
+          ProviderShared.eventError(ADAPTER, "OpenAI Chat received content after its terminal event"),
+        )
+      if (eventFinishReason !== undefined && eventFinishReason !== state.finishReason)
+        return yield* Effect.fail(
+          ProviderShared.eventError(
+            ADAPTER,
+            `OpenAI Chat received conflicting terminal reason ${eventFinishReason} after ${state.finishReason}`,
+          ),
+        )
+      const expectedSupplement = event.choices.length === 0 || eventFinishReason === state.finishReason
+      if (state.usage === undefined && eventUsage && expectedSupplement)
+        return [{ ...state, usage: eventUsage }, events] as const
+      return [state, events] as const
+    }
+
+    const terminalUsage = event.choices.length === 0 || eventFinishReason !== undefined ? eventUsage : undefined
+    const finishReason = eventFinishReason ?? (terminalUsage && event.choices.length === 0 ? "stop" : undefined)
     let tools = state.tools
 
     let lifecycle = state.lifecycle
@@ -444,7 +610,8 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
       {
         tools: finished?.tools ?? tools,
         toolCallEvents: finished?.events ?? state.toolCallEvents,
-        usage,
+        usage: terminalUsage,
+        usageProfile: state.usageProfile,
         finishReason,
         lifecycle,
       },
@@ -460,6 +627,17 @@ const finishEvents = (state: ParserState): ReadonlyArray<LLMEvent> => {
   events.push(...state.toolCallEvents)
   if (reason) Lifecycle.finish(lifecycle, events, { reason, usage: state.usage })
   return events
+}
+
+const onFailure = (state: ParserState, error: LLMError): ReadonlyArray<LLMEvent> | undefined => {
+  if (error.reason._tag !== "InvalidProviderOutput" && error.reason._tag !== "Transport") return undefined
+  return [
+    LLMEvent.providerError({
+      message: error.reason.message,
+      retryable: true,
+      usage: state.usage,
+    }),
+  ]
 }
 
 // =============================================================================
@@ -479,9 +657,15 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: Protocol.jsonEvent(OpenAIChatEvent),
-    initial: () => ({ tools: ToolStream.empty<number>(), toolCallEvents: [], lifecycle: Lifecycle.initial() }),
+    initial: (request) => ({
+      tools: ToolStream.empty<number>(),
+      toolCallEvents: [],
+      usageProfile: openAIChatUsageProfile(request),
+      lifecycle: Lifecycle.initial(),
+    }),
     step,
     onHalt: finishEvents,
+    onFailure,
   },
 })
 

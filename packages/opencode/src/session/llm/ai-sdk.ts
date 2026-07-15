@@ -7,8 +7,45 @@ import { errorMessage } from "@/util/error"
 type Result = Awaited<ReturnType<typeof streamText>>
 type AISDKEvent = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
 
-export function adapterState() {
+export type UsageIdentity = {
+  readonly providerID: string
+  readonly modelID: string
+  readonly apiPackage: string
+}
+
+type UsageProfile = "standard" | "xai" | "deepinfra" | "deepinfra-exclusive" | "deepseek" | "openrouter"
+
+const usageProfile = (identity: UsageIdentity | undefined): UsageProfile => {
+  if (!identity?.modelID) return "standard"
+  if (identity.providerID === "xai") return "xai"
+  if (identity.providerID === "deepinfra") {
+    const model = identity.modelID.toLowerCase()
+    return model.startsWith("google/gemini-") || model.startsWith("google/gemma-")
+      ? "deepinfra-exclusive"
+      : "deepinfra"
+  }
+  if (identity.providerID === "deepseek") return "deepseek"
+  if (identity.providerID === "openrouter") return "openrouter"
+  return "standard"
+}
+
+// Profiled providers need raw terminal provenance because the AI SDK retains usage from non-terminal chunks.
+export const requiresRawChunks = (identity: UsageIdentity) => usageProfile(identity) !== "standard"
+
+const usageTotal = () => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
+
+export function adapterState(identity?: UsageIdentity) {
   return {
+    identity,
+    usageProfile: usageProfile(identity),
+    profileUsageTotal: usageTotal(),
+    profileUsageReported: { cacheRead: false, cacheWrite: false, reasoning: false },
+    profileUsageSteps: 0,
+    profileUsageComplete: true,
+    providerTotal: undefined as number | undefined,
+    providerTotalComplete: true,
+    profileRawSeen: false,
+    profileRawUsage: undefined as unknown,
     step: 0,
     text: 0,
     reasoning: 0,
@@ -92,6 +129,36 @@ function usageProviderMetadata(value: ProviderMetadata | undefined): ProviderMet
   return entries.length ? Object.fromEntries(entries) : undefined
 }
 
+type UsageValue = {
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+  readonly totalTokens?: number
+  readonly reasoningTokens?: number
+  readonly cachedInputTokens?: number
+  readonly inputTokenDetails?: {
+    readonly noCacheTokens?: number
+    readonly cacheReadTokens?: number
+    readonly cacheWriteTokens?: number
+  }
+  readonly outputTokenDetails?: { readonly textTokens?: number; readonly reasoningTokens?: number }
+  readonly raw?: unknown
+}
+
+type UsageTuple = {
+  readonly input: number
+  readonly output: number
+  readonly reasoning: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly providerTotal?: number
+  readonly providerMetadata?: ProviderMetadata
+  readonly reported: { readonly cacheRead: boolean; readonly cacheWrite: boolean; readonly reasoning: boolean }
+}
+
+type ProfileUsageObservation =
+  | { readonly status: "unprofiled" | "unknown" | "incomplete" }
+  | { readonly status: "complete"; readonly usage: UsageTuple }
+
 type AnthropicUsageIteration = {
   readonly type: "message" | "compaction" | "advisor_message"
   readonly model?: string
@@ -172,6 +239,138 @@ function pickUsageNumbers(value: unknown, fields: ReadonlyArray<string>): Record
   )
 }
 
+function profileUsage(profile: UsageProfile, value: unknown): ProfileUsageObservation {
+  if (profile === "standard") return { status: "unprofiled" }
+  if (value === undefined) return { status: "unknown" }
+  if (!isRecord(value)) return { status: "incomplete" }
+  const token = (record: Record<string, unknown>, field: string, allowNull = false) => {
+    if (!(field in record)) return { status: "absent" as const, value: undefined }
+    const item = record[field]
+    if (allowNull && item === null) return { status: "absent" as const, value: undefined }
+    return typeof item === "number" && Number.isFinite(item) && Number.isInteger(item) && item >= 0
+      ? { status: "valid" as const, value: item }
+      : { status: "invalid" as const, value: undefined }
+  }
+  const details = (field: string) => {
+    if (!(field in value)) return { status: "absent" as const, value: undefined }
+    const item = value[field]
+    if (item === null) return { status: "null" as const, value: undefined }
+    return isRecord(item)
+      ? { status: "valid" as const, value: item }
+      : { status: "invalid" as const, value: undefined }
+  }
+  const inputDetailsKey =
+    "input_tokens_details" in value
+      ? "input_tokens_details"
+      : "prompt_tokens_details" in value
+        ? "prompt_tokens_details"
+        : undefined
+  const outputDetailsKey =
+    "output_tokens_details" in value
+      ? "output_tokens_details"
+      : "completion_tokens_details" in value
+        ? "completion_tokens_details"
+        : undefined
+  const inputDetailsValue = inputDetailsKey === undefined ? undefined : value[inputDetailsKey]
+  const outputDetailsValue = outputDetailsKey === undefined ? undefined : value[outputDetailsKey]
+  const inputDetails = isRecord(inputDetailsValue) ? inputDetailsValue : undefined
+  const outputDetails = isRecord(outputDetailsValue) ? outputDetailsValue : undefined
+  const allowNullCacheWrite = profile === "openrouter" || profile === "xai"
+  const inputTokens = token(value, "input_tokens")
+  const promptTokens = token(value, "prompt_tokens")
+  const outputTokens = token(value, "output_tokens")
+  const completionTokens = token(value, "completion_tokens")
+  const totalTokens = token(value, "total_tokens")
+  const promptCacheHit = token(value, "prompt_cache_hit_tokens")
+  const promptCacheMiss = token(value, "prompt_cache_miss_tokens")
+  const inputDetailsObservations = [details("input_tokens_details"), details("prompt_tokens_details")]
+  const outputDetailsObservations = [details("output_tokens_details"), details("completion_tokens_details")]
+  const inputDetailTokens = inputDetailsObservations.flatMap((observation) =>
+    observation.status === "valid"
+      ? [
+          token(observation.value, "cached_tokens"),
+          token(observation.value, "cache_write_tokens", allowNullCacheWrite),
+        ]
+      : [],
+  )
+  const outputDetailTokens = outputDetailsObservations.flatMap((observation) =>
+    observation.status === "valid" ? [token(observation.value, "reasoning_tokens")] : [],
+  )
+  if (
+    [inputTokens, promptTokens, outputTokens, completionTokens, totalTokens, promptCacheHit, promptCacheMiss]
+      .concat(inputDetailTokens, outputDetailTokens)
+      .some((observation) => observation.status === "invalid") ||
+    inputDetailsObservations.some((observation) => observation.status === "invalid") ||
+    outputDetailsObservations.some((observation) => observation.status === "invalid")
+  )
+    return { status: "incomplete" }
+  const rawInput = inputTokens.value ?? promptTokens.value
+  const reportedOutput = outputTokens.value ?? completionTokens.value
+  if (rawInput === undefined || reportedOutput === undefined) return { status: "incomplete" }
+  const detailsCacheRead = inputDetails ? token(inputDetails, "cached_tokens").value : undefined
+  const cacheRead = profile === "deepseek" ? (promptCacheHit.value ?? detailsCacheRead) : detailsCacheRead
+  const cacheWrite = inputDetails
+    ? token(inputDetails, "cache_write_tokens", allowNullCacheWrite).value
+    : undefined
+  const reasoning = outputDetails ? token(outputDetails, "reasoning_tokens").value : undefined
+  const deepinfraExclusive = profile === "deepinfra-exclusive"
+  const reportedTotal = totalTokens.value
+  const sanitized = pickUsageNumbers(value, [
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
+    "cost",
+    "cost_in_usd_ticks",
+  ])
+  if (typeof value.is_byok === "boolean") sanitized.is_byok = value.is_byok
+  const sanitizedInputDetails = pickUsageNumbers(inputDetails, ["cached_tokens", "cache_write_tokens"])
+  const sanitizedOutputDetails = pickUsageNumbers(outputDetails, ["reasoning_tokens"])
+  const costDetails = pickUsageNumbers(value.cost_details, [
+    "upstream_inference_cost",
+    "upstream_inference_prompt_cost",
+    "upstream_inference_completions_cost",
+  ])
+  if (inputDetailsKey !== undefined && (inputDetailsValue === null || Object.keys(sanitizedInputDetails).length))
+    sanitized[inputDetailsKey] = inputDetailsValue === null ? null : sanitizedInputDetails
+  if (outputDetailsKey !== undefined && (outputDetailsValue === null || Object.keys(sanitizedOutputDetails).length))
+    sanitized[outputDetailsKey] = outputDetailsValue === null ? null : sanitizedOutputDetails
+  if (value.cost_details === null || Object.keys(costDetails).length)
+    sanitized.cost_details = value.cost_details === null ? null : costDetails
+  const providerMetadata =
+    profile === "openrouter"
+      ? { openrouter: { usage: sanitized } }
+      : { [profile.startsWith("deepinfra") ? "deepinfra" : profile]: sanitized }
+  const inputAfterCacheRead =
+    profile === "xai" && (cacheRead ?? 0) > rawInput ? rawInput : Math.max(0, rawInput - (cacheRead ?? 0))
+  return {
+    status: "complete",
+    usage: {
+      input:
+        profile === "xai"
+          ? Math.max(0, inputAfterCacheRead - (cacheWrite ?? 0))
+          : Math.max(0, rawInput - (cacheRead ?? 0) - (cacheWrite ?? 0)),
+      output:
+        profile === "xai" || deepinfraExclusive
+          ? reportedOutput
+          : Math.max(0, reportedOutput - (reasoning ?? 0)),
+      reasoning: reasoning ?? 0,
+      cacheRead: cacheRead ?? 0,
+      cacheWrite: cacheWrite ?? 0,
+      providerTotal: reportedTotal,
+      providerMetadata,
+      reported: {
+        cacheRead: cacheRead !== undefined,
+        cacheWrite: cacheWrite !== undefined,
+        reasoning: reasoning !== undefined,
+      },
+    },
+  }
+}
+
 function metadataCacheWrite(metadata: ProviderMetadata | undefined) {
   if (!metadata) return undefined
   const bedrockUsage = metadata.bedrock?.usage
@@ -215,23 +414,13 @@ function copilotTotalNanoAiu(value: unknown) {
   return total
 }
 
-function usage(
-  value: unknown,
-  metadata?: ProviderMetadata,
+function genericUsage(
+  item: UsageValue,
+  metadata: ProviderMetadata | undefined,
   cacheReadAdjustment?: number,
   cacheWriteAdjustment?: number,
   recoveredCacheWrite?: number,
-) {
-  if (!value || typeof value !== "object") return undefined
-  const item = value as {
-    inputTokens?: number
-    outputTokens?: number
-    totalTokens?: number
-    reasoningTokens?: number
-    cachedInputTokens?: number
-    inputTokenDetails?: { noCacheTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
-    outputTokenDetails?: { textTokens?: number; reasoningTokens?: number }
-  }
+): UsageTuple | undefined {
   const reasoning = item.outputTokenDetails?.reasoningTokens ?? item.reasoningTokens
   const baseCacheRead = item.inputTokenDetails?.cacheReadTokens ?? item.cachedInputTokens
   const iterationCacheRead = anthropicExecutorCache(metadata, "cache_read_input_tokens")
@@ -253,28 +442,126 @@ function usage(
     return undefined
   const metadataOnlyWrite =
     iterationCacheWrite === undefined && baseCacheWrite === undefined && metadataWrite !== undefined
-  const input =
-    metadataOnlyWrite && item.inputTokens !== undefined
-      ? Math.max(0, item.inputTokens - (cacheRead ?? 0) - metadataWrite)
-      : (item.inputTokenDetails?.noCacheTokens ??
-        (item.inputTokens === undefined ? 0 : Math.max(0, item.inputTokens - (cacheRead ?? 0) - (cacheWrite ?? 0))))
-  return ProviderShared.usage(
-    {
-      input,
-      output:
-        item.outputTokenDetails?.textTokens ??
-        (item.outputTokens === undefined ? 0 : Math.max(0, item.outputTokens - (reasoning ?? 0))),
-      reasoning: reasoning ?? 0,
-      cache: { read: cacheRead ?? 0, write: cacheWrite ?? 0 },
-      providerTotal: metadataProviderTotal(metadata),
-      providerMetadata: usageProviderMetadata(metadata),
-    },
-    {
+  return {
+    input:
+      metadataOnlyWrite && item.inputTokens !== undefined
+        ? Math.max(0, item.inputTokens - (cacheRead ?? 0) - metadataWrite)
+        : (item.inputTokenDetails?.noCacheTokens ??
+          (item.inputTokens === undefined ? 0 : Math.max(0, item.inputTokens - (cacheRead ?? 0) - (cacheWrite ?? 0)))),
+    output:
+      item.outputTokenDetails?.textTokens ??
+      (item.outputTokens === undefined ? 0 : Math.max(0, item.outputTokens - (reasoning ?? 0))),
+    reasoning: reasoning ?? 0,
+    cacheRead: cacheRead ?? 0,
+    cacheWrite: cacheWrite ?? 0,
+    providerTotal: metadataProviderTotal(metadata),
+    providerMetadata: usageProviderMetadata(metadata),
+    reported: {
       cacheRead: cacheRead !== undefined,
       cacheWrite: cacheWrite !== undefined,
       reasoning: reasoning !== undefined,
     },
+  }
+}
+
+function usage(
+  value: unknown,
+  options: {
+    readonly metadata?: ProviderMetadata
+    readonly profile: UsageProfile
+    readonly cacheReadAdjustment?: number
+    readonly cacheWriteAdjustment?: number
+    readonly recoveredCacheWrite?: number
+    readonly profileUsage?: ProfileUsageObservation
+  },
+) {
+  if (!value || typeof value !== "object") return undefined
+  const item = value as UsageValue
+  const observation = options.profileUsage ?? profileUsage(options.profile, item.raw)
+  if (observation.status === "unknown" || observation.status === "incomplete") return undefined
+  const raw = observation.status === "complete" ? observation.usage : undefined
+  const base =
+    raw ??
+    genericUsage(
+      item,
+      options.metadata,
+      options.cacheReadAdjustment,
+      options.cacheWriteAdjustment,
+      options.recoveredCacheWrite,
+    )
+  if (!base) return undefined
+  const metadata = { ...usageProviderMetadata(options.metadata), ...raw?.providerMetadata }
+  return ProviderShared.usage(
+    {
+      input: base.input,
+      output: base.output,
+      reasoning: base.reasoning,
+      cache: { read: base.cacheRead, write: base.cacheWrite },
+      providerTotal: raw?.providerTotal ?? base.providerTotal,
+      providerMetadata: Object.keys(metadata).length ? metadata : undefined,
+    },
+    {
+      cacheRead: base.reported.cacheRead,
+      cacheWrite: base.reported.cacheWrite,
+      reasoning: base.reported.reasoning,
+    },
   )
+}
+
+function recordProfileUsage(
+  state: ReturnType<typeof adapterState>,
+  value: UsageValue,
+) {
+  const observation = profileUsage(state.usageProfile, value.raw)
+  if (observation.status === "unprofiled") return observation
+  if (observation.status !== "complete") {
+    state.profileUsageComplete = false
+    return observation
+  }
+  const usage = observation.usage
+  state.profileUsageSteps += 1
+  state.profileUsageTotal.input += usage.input
+  state.profileUsageTotal.output += usage.output
+  state.profileUsageTotal.reasoning += usage.reasoning
+  state.profileUsageTotal.cacheRead += usage.cacheRead
+  state.profileUsageTotal.cacheWrite += usage.cacheWrite
+  state.profileUsageReported.cacheRead ||= usage.reported.cacheRead
+  state.profileUsageReported.cacheWrite ||= usage.reported.cacheWrite
+  state.profileUsageReported.reasoning ||= usage.reported.reasoning
+  if (usage.providerTotal === undefined) state.providerTotalComplete = false
+  else state.providerTotal = (state.providerTotal ?? 0) + usage.providerTotal
+  return observation
+}
+
+function cumulativeProfileUsage(state: ReturnType<typeof adapterState>) {
+  if (state.profileUsageSteps === 0 || !state.profileUsageComplete) return undefined
+  return ProviderShared.usage(
+    {
+      input: state.profileUsageTotal.input,
+      output: state.profileUsageTotal.output,
+      reasoning: state.profileUsageTotal.reasoning,
+      cache: { read: state.profileUsageTotal.cacheRead, write: state.profileUsageTotal.cacheWrite },
+      providerTotal: state.providerTotalComplete ? state.providerTotal : undefined,
+    },
+    state.profileUsageReported,
+  )
+}
+
+function terminalProfileUsage(value: unknown) {
+  if (!isRecord(value)) return { terminal: false as const, usage: undefined }
+  const response = isRecord(value.response) ? value.response : undefined
+  const usage = value.usage ?? response?.usage
+  const responseTerminal =
+    value.type === "response.done" ||
+    value.type === "response.completed" ||
+    value.type === "response.failed" ||
+    value.type === "response.incomplete"
+  const choices = Array.isArray(value.choices) ? value.choices : undefined
+  const finishTerminal = choices?.some((choice) => isRecord(choice) && choice.finish_reason != null) ?? false
+  const usageTerminal = choices?.length === 0 && usage !== undefined
+  return responseTerminal || finishTerminal || usageTerminal
+    ? { terminal: true as const, usage }
+    : { terminal: false as const, usage: undefined }
 }
 
 function currentTextID(state: ReturnType<typeof adapterState>, id: string | undefined) {
@@ -300,6 +587,7 @@ export function toLLMEvents(
 
     case "finish-step":
       return Effect.sync(() => {
+        const eventUsage = state.profileRawSeen ? { ...event.usage, raw: state.profileRawUsage } : event.usage
         const original = providerMetadata(event.providerMetadata)
         const metadata =
           state.copilotTotalNanoAiu === undefined
@@ -329,13 +617,17 @@ export function toLLMEvents(
             recoveredCacheWrite === undefined
               ? state.recoveredCacheWrite
               : (state.recoveredCacheWrite ?? 0) + recoveredCacheWrite
+        const profileUsage = recordProfileUsage(state, eventUsage)
+        state.profileRawSeen = false
+        state.profileRawUsage = undefined
         state.copilotTotalNanoAiu = undefined
+        const stepUsage = usage(eventUsage, { metadata, profile: state.usageProfile, profileUsage })
         return [
           LLMEvent.stepFinish({
             index: state.step++,
             reason: finishReason(event.finishReason),
-            usage: usage(event.usage, metadata),
-            providerMetadata: metadata,
+            usage: stepUsage,
+            providerMetadata: stepUsage?.providerMetadata ?? usageProviderMetadata(metadata),
           }),
         ]
       })
@@ -345,19 +637,21 @@ export function toLLMEvents(
         const events = [
           LLMEvent.finish({
             reason: finishReason(event.finishReason),
-            usage: usage(
-              event.totalUsage,
-              undefined,
-              state.cacheReadAdjustment,
-              state.cacheWriteAdjustment,
-              state.recoveredCacheWrite,
-            ),
+            usage:
+              state.usageProfile === "standard"
+                ? usage(event.totalUsage, {
+                    profile: state.usageProfile,
+                    cacheReadAdjustment: state.cacheReadAdjustment,
+                    cacheWriteAdjustment: state.cacheWriteAdjustment,
+                    recoveredCacheWrite: state.recoveredCacheWrite,
+                  })
+                : cumulativeProfileUsage(state),
             providerMetadata: undefined,
           }),
         ]
         // Reset so the adapter can be reused for a follow-up stream without leaking
         // counters or block IDs. adapterState() is the single source of truth for shape.
-        Object.assign(state, adapterState())
+        Object.assign(state, adapterState(state.identity))
         return events
       })
 
@@ -511,6 +805,12 @@ export function toLLMEvents(
 
     case "raw":
       return Effect.sync(() => {
+        if (state.usageProfile !== "standard") {
+          state.profileRawSeen = true
+          const observation = terminalProfileUsage(event.rawValue)
+          if (observation.terminal && observation.usage !== undefined && state.profileRawUsage === undefined)
+            state.profileRawUsage = observation.usage
+        }
         state.copilotTotalNanoAiu = copilotTotalNanoAiu(event.rawValue) ?? state.copilotTotalNanoAiu
         return []
       })

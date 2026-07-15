@@ -1,9 +1,12 @@
 import { describe, expect } from "bun:test"
 import { Effect, Schema, Stream } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
+import { CanonicalUsage, LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
+import * as OpenAICompatible from "../../src/providers/openai-compatible"
+import * as OpenRouter from "../../src/providers/openrouter"
+import * as XAI from "../../src/providers/xai"
 import * as OpenAIChat from "../../src/protocols/openai-chat"
 import { ProviderShared } from "../../src/protocols/shared"
 import { Auth, LLMClient } from "../../src/route"
@@ -27,6 +30,52 @@ const request = LLM.request({
   prompt: "Say hello.",
   generation: { maxTokens: 20, temperature: 0 },
 })
+
+const providerUsageFixtures = {
+  openai: {
+    prompt_tokens: 10,
+    completion_tokens: 12,
+    total_tokens: 22,
+    prompt_tokens_details: { cached_tokens: 2 },
+    completion_tokens_details: { reasoning_tokens: 7 },
+  },
+  xai: {
+    prompt_tokens: 32,
+    completion_tokens: 9,
+    total_tokens: 135,
+    prompt_tokens_details: { cached_tokens: 6 },
+    completion_tokens_details: { reasoning_tokens: 94 },
+    cost_in_usd_ticks: 420_000,
+  },
+  deepinfra: {
+    prompt_tokens: 19,
+    completion_tokens: 84,
+    total_tokens: 1184,
+    prompt_tokens_details: null,
+    completion_tokens_details: { reasoning_tokens: 1081 },
+  },
+  deepseek: {
+    prompt_tokens: 100,
+    completion_tokens: 20,
+    total_tokens: 120,
+    prompt_cache_hit_tokens: 40,
+    prompt_cache_miss_tokens: 60,
+  },
+  openrouter: {
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    total_tokens: 150,
+    cost: 0.01234,
+    is_byok: false,
+    prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+    completion_tokens_details: { reasoning_tokens: 20 },
+    cost_details: {
+      upstream_inference_cost: 0.01234,
+      upstream_inference_prompt_cost: 0.004,
+      upstream_inference_completions_cost: 0.00834,
+    },
+  },
+} as const
 
 describe("OpenAI Chat route", () => {
   it.effect("prepares OpenAI Chat payload", () =>
@@ -491,6 +540,331 @@ describe("OpenAI Chat route", () => {
           usage,
         },
       ])
+      expect(response.events.filter((event) => event.type === "finish")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("preserves the first terminal usage when an empty duplicate reports zeroes", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                choices: [{ delta: {}, finish_reason: "stop" }],
+                usage: providerUsageFixtures.openai,
+              },
+              usageChunk({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }),
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        nonCachedInputTokens: 8,
+        cacheReadInputTokens: 2,
+        outputTokens: 12,
+        providerTotalTokens: 22,
+      })
+      expect(response.events.filter((event) => event.type === "finish")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("rejects a conflicting terminal reason without replacing first-stop usage", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(deltaChunk({}, "stop"), {
+              choices: [{ delta: {}, finish_reason: "length" }],
+              usage: providerUsageFixtures.openai,
+            }),
+          ),
+        ),
+        Effect.flip,
+      )
+
+      expect(error.message).toContain("conflicting terminal reason length after stop")
+    }),
+  )
+
+  it.effect("rejects content after a usage-only terminal", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(sseEvents(usageChunk(providerUsageFixtures.openai), deltaChunk({ content: "too late" }))),
+        ),
+        Effect.flip,
+      )
+
+      expect(error.message).toContain("content after its terminal event")
+    }),
+  )
+
+  it.effect("keeps standard OpenAI completion tokens inclusive of reasoning", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(fixedResponse(sseEvents(deltaChunk({}, "stop"), usageChunk(providerUsageFixtures.openai)))),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 10,
+        outputTokens: 12,
+        nonCachedInputTokens: 8,
+        cacheReadInputTokens: 2,
+        reasoningTokens: 7,
+        totalTokens: 22,
+        providerTotalTokens: 22,
+        providerMetadata: { openai: providerUsageFixtures.openai },
+      })
+      expect(response.usage?.visibleOutputTokens).toBe(5)
+    }),
+  )
+
+  it.effect("adds xAI reasoning outside visible completion tokens", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).chat("grok-3-mini"),
+        }),
+      ).pipe(Effect.provide(fixedResponse(sseEvents(usageChunk(providerUsageFixtures.xai)))))
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 32,
+        outputTokens: 103,
+        nonCachedInputTokens: 26,
+        cacheReadInputTokens: 6,
+        reasoningTokens: 94,
+        totalTokens: 135,
+        providerTotalTokens: 135,
+        providerMetadata: { xai: providerUsageFixtures.xai },
+      })
+      expect(response.usage?.visibleOutputTokens).toBe(9)
+      expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "stop" })
+    }),
+  )
+
+  it.effect("matches xAI AI SDK cache semantics at equal and greater boundaries", () =>
+    Effect.gen(function* () {
+      for (const fixture of [
+        { cached: 32, input: 32, fresh: 0 },
+        { cached: 40, input: 72, fresh: 32 },
+      ]) {
+        const usage = {
+          prompt_tokens: 32,
+          completion_tokens: 9,
+          total_tokens: 41,
+          prompt_tokens_details: { cached_tokens: fixture.cached },
+          completion_tokens_details: { reasoning_tokens: 2 },
+        }
+        const response = yield* LLMClient.generate(
+          LLM.updateRequest(request, {
+            model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).chat("grok-3-mini"),
+          }),
+        ).pipe(Effect.provide(fixedResponse(sseEvents(usageChunk(usage)))))
+
+        expect(response.usage).toMatchObject({
+          inputTokens: fixture.input,
+          nonCachedInputTokens: fixture.fresh,
+          cacheReadInputTokens: fixture.cached,
+          outputTokens: 11,
+          reasoningTokens: 2,
+          totalTokens: 41,
+          providerTotalTokens: 41,
+        })
+      }
+    }),
+  )
+
+  it.effect("keeps the standard OpenAI cache-overflow behavior unchanged", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              usageChunk({
+                prompt_tokens: 32,
+                completion_tokens: 9,
+                total_tokens: 41,
+                prompt_tokens_details: { cached_tokens: 40 },
+              }),
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 40,
+        nonCachedInputTokens: 0,
+        cacheReadInputTokens: 40,
+        providerTotalTokens: 41,
+      })
+    }),
+  )
+
+  it.effect("adds excluded reasoning for affected DeepInfra Gemini and Gemma models", () =>
+    Effect.gen(function* () {
+      for (const modelID of ["google/gemini-2.5-pro", "google/gemma-2-9b-it"]) {
+        const response = yield* LLMClient.generate(
+          LLM.updateRequest(request, {
+            model: OpenAICompatible.deepinfra
+              .configure({ baseURL: "https://api.deepinfra.test/v1/openai", apiKey: "test" })
+              .model(modelID),
+          }),
+        ).pipe(
+          Effect.provide(fixedResponse(sseEvents(deltaChunk({}, "stop"), usageChunk(providerUsageFixtures.deepinfra)))),
+        )
+
+        expect(response.usage).toMatchObject({
+          inputTokens: 19,
+          outputTokens: 1165,
+          nonCachedInputTokens: 19,
+          reasoningTokens: 1081,
+          totalTokens: 1184,
+          providerTotalTokens: 1184,
+          providerMetadata: { deepinfra: providerUsageFixtures.deepinfra },
+        })
+        expect(response.usage?.visibleOutputTokens).toBe(84)
+      }
+    }),
+  )
+
+  it.effect("keeps other DeepInfra models on inclusive OpenAI semantics", () =>
+    Effect.gen(function* () {
+      const usage = {
+        ...providerUsageFixtures.deepinfra,
+        completion_tokens: 1165,
+        total_tokens: 1184,
+      }
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: OpenAICompatible.deepinfra
+            .configure({ baseURL: "https://api.deepinfra.test/v1/openai", apiKey: "test" })
+            .model("deepseek-ai/DeepSeek-R1"),
+        }),
+      ).pipe(Effect.provide(fixedResponse(sseEvents(deltaChunk({}, "stop"), usageChunk(usage)))))
+
+      expect(response.usage).toMatchObject({ outputTokens: 1165, reasoningTokens: 1081, totalTokens: 1184 })
+      expect(response.usage?.visibleOutputTokens).toBe(84)
+    }),
+  )
+
+  it.effect("reads DeepSeek prompt cache hits", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: OpenAICompatible.deepseek
+            .configure({ baseURL: "https://api.deepseek.test/v1", apiKey: "test" })
+            .model("deepseek-chat"),
+        }),
+      ).pipe(
+        Effect.provide(fixedResponse(sseEvents(deltaChunk({}, "stop"), usageChunk(providerUsageFixtures.deepseek)))),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 100,
+        outputTokens: 20,
+        nonCachedInputTokens: 60,
+        cacheReadInputTokens: 40,
+        totalTokens: 120,
+        providerTotalTokens: 120,
+        providerMetadata: { deepseek: providerUsageFixtures.deepseek },
+      })
+    }),
+  )
+
+  it.effect("preserves OpenRouter cache writes and provider cost", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: OpenRouter.configure({ baseURL: "https://openrouter.test/api/v1", apiKey: "test" }).model(
+            "anthropic/claude-sonnet-4",
+          ),
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(deltaChunk({}, "stop"), {
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: providerUsageFixtures.openrouter,
+            }),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 100,
+        outputTokens: 50,
+        nonCachedInputTokens: 60,
+        cacheReadInputTokens: 30,
+        cacheWriteInputTokens: 10,
+        reasoningTokens: 20,
+        totalTokens: 150,
+        providerTotalTokens: 150,
+        providerMetadata: { openrouter: { usage: providerUsageFixtures.openrouter } },
+      })
+      expect(response.usage?.providerMetadata?.openrouter).not.toHaveProperty("estimate")
+      expect(response.events.filter((event) => event.type === "finish")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("normalizes null and absent OpenRouter cache writes without losing totals or cost", () =>
+    Effect.gen(function* () {
+      for (const promptTokensDetails of [
+        { cached_tokens: 30, cache_write_tokens: null },
+        { cached_tokens: 30 },
+      ]) {
+        const usage = { ...providerUsageFixtures.openrouter, prompt_tokens_details: promptTokensDetails }
+        const response = yield* LLMClient.generate(
+          LLM.updateRequest(request, {
+            model: OpenRouter.configure({ baseURL: "https://openrouter.test/api/v1", apiKey: "test" }).model(
+              "anthropic/claude-sonnet-4",
+            ),
+          }),
+        ).pipe(Effect.provide(fixedResponse(sseEvents(usageChunk(usage)))))
+
+        expect(response.usage?.cacheWriteInputTokens).toBeUndefined()
+        expect(CanonicalUsage.fromUsage(response.usage)).toMatchObject({
+          input: 70,
+          cache: { read: 30, write: 0 },
+          providerTotal: 150,
+          providerMetadata: {
+            openrouter: {
+              usage: {
+                cost: 0.01234,
+                prompt_tokens_details: { cached_tokens: 30 },
+              },
+            },
+          },
+        })
+      }
+    }),
+  )
+
+  it.effect("does not manufacture OpenRouter usage from partial data with a null cache write", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: OpenRouter.configure({ baseURL: "https://openrouter.test/api/v1", apiKey: "test" }).model(
+            "anthropic/claude-sonnet-4",
+          ),
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              usageChunk({
+                prompt_tokens: 100,
+                total_tokens: 150,
+                cost: 0.01234,
+                prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: null },
+              }),
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toBeUndefined()
     }),
   )
 
@@ -502,6 +876,41 @@ describe("OpenAI Chat route", () => {
         ),
       )
 
+      expect(response.usage).toBeUndefined()
+      expect(response.events.flatMap((event) => ("usage" in event ? [event.usage] : [])).every((usage) => !usage)).toBe(
+        true,
+      )
+    }),
+  )
+
+  it.effect("does not treat partial usage-only chunks as terminal", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(fixedResponse(sseEvents(usageChunk({ prompt_tokens: 5, total_tokens: 7 })))),
+      )
+
+      expect(response.usage).toBeUndefined()
+      expect(response.events).toEqual([])
+    }),
+  )
+
+  it.effect("does not retain non-terminal cumulative usage observations", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                choices: [{ delta: { content: "Hello" }, finish_reason: null }],
+                usage: providerUsageFixtures.openai,
+              },
+              deltaChunk({}, "stop"),
+            ),
+          ),
+        ),
+      )
+
+      expect(response.text).toBe("Hello")
       expect(response.usage).toBeUndefined()
       expect(response.events.flatMap((event) => ("usage" in event ? [event.usage] : [])).every((usage) => !usage)).toBe(
         true,
@@ -605,14 +1014,48 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
-  it.effect("surfaces transport errors that occur mid-stream", () =>
+  it.effect("emits one provider error when transport fails before terminal usage", () =>
     Effect.gen(function* () {
-      const layer = truncatedStream([
-        `data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "Hello" }))}\n\n`,
-      ])
-      const error = yield* LLMClient.generate(request).pipe(Effect.provide(layer), Effect.flip)
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(truncatedStream([])))
 
-      expect(error.message).toContain("Failed to read openai/openai-chat stream")
+      expect(response.events).toMatchObject([
+        { type: "provider-error", message: "Failed to read openai/openai-chat stream", retryable: true },
+      ])
+      expect(response.events.filter((event) => event.type === "provider-error")).toHaveLength(1)
+      expect(response.events.some((event) => event.type === "finish" || event.type === "step-finish")).toBeFalse()
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("replaces a pending Chat terminal with one transport error carrying its usage", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          truncatedStream([
+            sseEvents({
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: providerUsageFixtures.openai,
+            }),
+          ]),
+        ),
+      )
+
+      expect(response.events).toMatchObject([
+        {
+          type: "provider-error",
+          message: "Failed to read openai/openai-chat stream",
+          retryable: true,
+          usage: {
+            nonCachedInputTokens: 8,
+            cacheReadInputTokens: 2,
+            reasoningTokens: 7,
+            providerTotalTokens: 22,
+          },
+        },
+      ])
+      expect(response.events.filter((event) => event.type === "provider-error")).toHaveLength(1)
+      expect(response.events.some((event) => event.type === "finish" || event.type === "step-finish")).toBeFalse()
+      expect(response.usage).toMatchObject({ nonCachedInputTokens: 8, providerTotalTokens: 22 })
     }),
   )
 

@@ -1,13 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { LLMEvent } from "@oc2-ai/llm"
+import { CanonicalUsage, LLM, LLMEvent } from "@oc2-ai/llm"
+import { OpenAICompatible, OpenRouter, XAI } from "@oc2-ai/llm/providers"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
 import type { HttpRecorder } from "@oc2-ai/http-recorder"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { createAnthropic } from "@ai-sdk/anthropic"
+import { createDeepInfra } from "@ai-sdk/deepinfra"
 import { createOpenAI } from "@ai-sdk/openai"
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
+import { createXai } from "@ai-sdk/xai"
+import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import type { Provider } from "@/provider/provider"
+import { LLMAISDK } from "@/session/llm/ai-sdk"
+import { streamText } from "ai"
 import { Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
 import {
   assertCassetteSafe,
   auditParityCassettes,
@@ -566,6 +574,435 @@ describe("provider parity replay and comparison", () => {
         reason: "stop",
         usage: { input: 14, output: 6, reasoning: 0, cache: { read: 5, write: 7 } },
       })
+    }),
+  )
+
+  it.effect("matches actual AI SDK and native profiled-provider usage", () =>
+    Effect.gen(function* () {
+      const fixtures = [
+        {
+          identity: { providerID: "xai", modelID: "grok-4", apiPackage: "@ai-sdk/xai" },
+          aiModel: (fetch: typeof globalThis.fetch) =>
+            createXai({ baseURL: "https://api.x.ai/v1", apiKey: "test", fetch }).responses("grok-4"),
+          model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).responses("grok-4"),
+          body: [
+            {
+              type: "response.done",
+              response: {
+                id: "response-parity",
+                created_at: 1,
+                model: "grok-4",
+                object: "response",
+                output: [],
+                status: "completed",
+                usage: {
+                  input_tokens: 32,
+                  input_tokens_details: { cached_tokens: 8, cache_write_tokens: 2 },
+                  output_tokens: 9,
+                  output_tokens_details: { reasoning_tokens: 110 },
+                  total_tokens: 151,
+                  prompt: "must not survive",
+                },
+              },
+            },
+            {
+              type: "response.completed",
+              response: {
+                id: "response-parity-duplicate",
+                created_at: 1,
+                model: "grok-4",
+                object: "response",
+                output: [],
+                status: "completed",
+                usage: {
+                  input_tokens: 0,
+                  input_tokens_details: { cached_tokens: 0 },
+                  output_tokens: 0,
+                  output_tokens_details: { reasoning_tokens: 0 },
+                  total_tokens: 0,
+                },
+              },
+            },
+          ],
+          expected: { input: 22, output: 9, reasoning: 110, cache: { read: 8, write: 2 }, providerTotal: 151 },
+        },
+        {
+          identity: { providerID: "xai", modelID: "grok-4", apiPackage: "@ai-sdk/xai" },
+          aiModel: (fetch: typeof globalThis.fetch) =>
+            createXai({ baseURL: "https://api.x.ai/v1", apiKey: "test", fetch }).responses("grok-4"),
+          model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).responses("grok-4"),
+          body: [
+            {
+              type: "response.completed",
+              response: {
+                id: "response-parity-null-write",
+                created_at: 1,
+                model: "grok-4",
+                object: "response",
+                output: [],
+                status: "completed",
+                usage: {
+                  input_tokens: 32,
+                  input_tokens_details: { cached_tokens: 8, cache_write_tokens: null },
+                  output_tokens: 9,
+                  output_tokens_details: { reasoning_tokens: 110 },
+                  total_tokens: 151,
+                  prompt: "must not survive",
+                },
+              },
+            },
+          ],
+          expected: { input: 24, output: 9, reasoning: 110, cache: { read: 8, write: 0 }, providerTotal: 151 },
+        },
+        ...[
+          {
+            modelID: "google/gemini-2.5-pro",
+            usage: {
+              prompt_tokens: 19,
+              completion_tokens: 84,
+              total_tokens: 113,
+              prompt_tokens_details: null,
+              completion_tokens_details: { reasoning_tokens: 10 },
+              prompt: "must not survive",
+            },
+            expected: { input: 19, output: 84, reasoning: 10, cache: { read: 0, write: 0 }, providerTotal: 113 },
+          },
+          {
+            modelID: "google/gemma-2-9b-it",
+            usage: {
+              prompt_tokens: 19,
+              completion_tokens: 84,
+              total_tokens: 1184,
+              prompt_tokens_details: null,
+              completion_tokens_details: { reasoning_tokens: 1081 },
+              prompt: "must not survive",
+            },
+            expected: {
+              input: 19,
+              output: 84,
+              reasoning: 1081,
+              cache: { read: 0, write: 0 },
+              providerTotal: 1184,
+            },
+          },
+          {
+            modelID: "deepseek-ai/DeepSeek-R1",
+            usage: {
+              prompt_tokens: 19,
+              completion_tokens: 1165,
+              total_tokens: 1184,
+              prompt_tokens_details: null,
+              completion_tokens_details: { reasoning_tokens: 1081 },
+              prompt: "must not survive",
+            },
+            expected: {
+              input: 19,
+              output: 84,
+              reasoning: 1081,
+              cache: { read: 0, write: 0 },
+              providerTotal: 1184,
+            },
+          },
+        ].map((fixture) => ({
+          identity: {
+            providerID: "deepinfra",
+            modelID: fixture.modelID,
+            apiPackage: "@ai-sdk/deepinfra",
+          },
+          aiModel: (fetch: typeof globalThis.fetch) =>
+            createDeepInfra({
+              baseURL: "https://api.deepinfra.test/v1/openai",
+              apiKey: "test",
+              fetch,
+            }).languageModel(fixture.modelID),
+          model: OpenAICompatible.deepinfra
+            .configure({ baseURL: "https://api.deepinfra.test/v1/openai", apiKey: "test" })
+            .model(fixture.modelID),
+          body: [{ choices: [], usage: fixture.usage }],
+          expected: fixture.expected,
+        })),
+        {
+          identity: {
+            providerID: "deepseek",
+            modelID: "deepseek-chat",
+            apiPackage: "@ai-sdk/openai-compatible",
+          },
+          aiModel: (fetch: typeof globalThis.fetch) =>
+            createOpenAICompatible({
+              name: "deepseek",
+              baseURL: "https://api.deepseek.test/v1",
+              apiKey: "test",
+              fetch,
+              includeUsage: true,
+            }).chatModel("deepseek-chat"),
+          model: OpenAICompatible.deepseek
+            .configure({ baseURL: "https://api.deepseek.test/v1", apiKey: "test" })
+            .model("deepseek-chat"),
+          body: [
+            {
+              choices: [],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                prompt_cache_hit_tokens: 40,
+                prompt_cache_miss_tokens: 60,
+                prompt: "must not survive",
+              },
+            },
+          ],
+          expected: { input: 60, output: 20, reasoning: 0, cache: { read: 40, write: 0 }, providerTotal: 120 },
+        },
+        {
+          identity: {
+            providerID: "deepseek",
+            modelID: "deepseek-chat",
+            apiPackage: "@ai-sdk/openai-compatible",
+          },
+          aiModel: (fetch: typeof globalThis.fetch) =>
+            createOpenAICompatible({
+              name: "deepseek",
+              baseURL: "https://api.deepseek.test/v1",
+              apiKey: "test",
+              fetch,
+              includeUsage: true,
+            }).chatModel("deepseek-chat"),
+          model: OpenAICompatible.deepseek
+            .configure({ baseURL: "https://api.deepseek.test/v1", apiKey: "test" })
+            .model("deepseek-chat"),
+          body: [
+            {
+              choices: [],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                prompt_tokens_details: { cached_tokens: 40 },
+              },
+            },
+          ],
+          expected: { input: 60, output: 20, reasoning: 0, cache: { read: 40, write: 0 }, providerTotal: 120 },
+        },
+        {
+          identity: {
+            providerID: "openrouter",
+            modelID: "anthropic/claude-sonnet-4",
+            apiPackage: "@openrouter/ai-sdk-provider",
+          },
+          aiModel: (fetch: typeof globalThis.fetch) =>
+            createOpenRouter({ baseURL: "https://openrouter.test/api/v1", apiKey: "test", fetch }).chat(
+              "anthropic/claude-sonnet-4",
+            ),
+          model: OpenRouter.configure({ baseURL: "https://openrouter.test/api/v1", apiKey: "test" }).model(
+            "anthropic/claude-sonnet-4",
+          ),
+          body: [
+            {
+              choices: [],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                total_tokens: 150,
+                cost: 0.01234,
+                prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+                completion_tokens_details: { reasoning_tokens: 20 },
+                cost_details: { upstream_inference_cost: 0.01234 },
+                prompt: "must not survive",
+              },
+            },
+          ],
+          expected: { input: 60, output: 30, reasoning: 20, cache: { read: 30, write: 10 }, providerTotal: 150 },
+        },
+        ...([null, undefined] as const).map((cacheWrite) => ({
+          identity: {
+            providerID: "openrouter",
+            modelID: "anthropic/claude-sonnet-4",
+            apiPackage: "@openrouter/ai-sdk-provider",
+          },
+          aiModel: (fetch: typeof globalThis.fetch) =>
+            createOpenRouter({ baseURL: "https://openrouter.test/api/v1", apiKey: "test", fetch }).chat(
+              "anthropic/claude-sonnet-4",
+            ),
+          model: OpenRouter.configure({ baseURL: "https://openrouter.test/api/v1", apiKey: "test" }).model(
+            "anthropic/claude-sonnet-4",
+          ),
+          body: [
+            {
+              choices: [],
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                total_tokens: 150,
+                cost: 0.01234,
+                prompt_tokens_details: {
+                  cached_tokens: 30,
+                  ...(cacheWrite === undefined ? {} : { cache_write_tokens: cacheWrite }),
+                },
+                completion_tokens_details: { reasoning_tokens: 20 },
+                cost_details: { upstream_inference_cost: 0.01234 },
+                prompt: "must not survive",
+              },
+            },
+          ],
+          expected: { input: 70, output: 30, reasoning: 20, cache: { read: 30, write: 0 }, providerTotal: 150 },
+        })),
+      ]
+
+      for (const fixture of fixtures) {
+        const fetch = Object.assign(
+          async () =>
+            new Response(
+              fixture.body
+                .map((event) => `data: ${JSON.stringify(event)}`)
+                .join("\n\n")
+                .concat("\n\n"),
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+          { preconnect: () => undefined },
+        ) satisfies typeof globalThis.fetch
+        const response = yield* LLMClient.generate(LLM.request({ model: fixture.model, prompt: "hello" })).pipe(
+          Effect.provideService(FetchHttpClient.Fetch, fetch),
+        )
+        const aiEvents = yield* Effect.promise(async () => {
+          const events: LLMEvent[] = []
+          const state = LLMAISDK.adapterState(fixture.identity)
+          for await (const event of streamText({
+            model: fixture.aiModel(fetch),
+            messages: [{ role: "user", content: "hello" }],
+            maxRetries: 0,
+            includeRawChunks: LLMAISDK.requiresRawChunks(fixture.identity),
+          }).fullStream)
+            events.push(...(await Effect.runPromise(LLMAISDK.toLLMEvents(state, event))))
+          return events
+        })
+        const nativeUsage = CanonicalUsage.fromUsage(response.usage)
+        const aiUsage = CanonicalUsage.fromUsage(aiEvents.find(LLMEvent.is.stepFinish)?.usage)
+        const aiFinishUsage = CanonicalUsage.fromUsage(aiEvents.find(LLMEvent.is.finish)?.usage)
+        expect(nativeUsage).toMatchObject(fixture.expected)
+        expect(aiUsage).toMatchObject(fixture.expected)
+        expect(aiFinishUsage).toMatchObject(fixture.expected)
+        expect(aiUsage).toMatchObject({
+          input: nativeUsage?.input,
+          output: nativeUsage?.output,
+          reasoning: nativeUsage?.reasoning,
+          cache: nativeUsage?.cache,
+          providerTotal: nativeUsage?.providerTotal,
+        })
+        expect(aiUsage?.providerMetadata).toEqual(nativeUsage?.providerMetadata)
+        if (fixture.identity.providerID === "openrouter") {
+          expect(nativeUsage?.providerMetadata).toMatchObject({ openrouter: { usage: { cost: 0.01234 } } })
+          expect(aiUsage?.providerMetadata).toMatchObject({ openrouter: { usage: { cost: 0.01234 } } })
+        }
+        expect(JSON.stringify(nativeUsage?.providerMetadata)).not.toContain("must not survive")
+        expect(JSON.stringify(aiUsage?.providerMetadata)).not.toContain("must not survive")
+      }
+    }),
+  )
+
+  it.effect("suppresses actual AI SDK and native DeepSeek partial usage", () =>
+    Effect.gen(function* () {
+      for (const partial of [
+        { prompt_tokens: 100, prompt_cache_hit_tokens: 40 },
+        { completion_tokens: 20, prompt_cache_hit_tokens: 40 },
+      ]) {
+        const fetch = Object.assign(
+          async () =>
+            new Response(
+              `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage: partial })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+          { preconnect: () => undefined },
+        ) satisfies typeof globalThis.fetch
+        const response = yield* LLMClient.generate(
+          LLM.request({
+            model: OpenAICompatible.deepseek
+              .configure({ baseURL: "https://api.deepseek.test/v1", apiKey: "test" })
+              .model("deepseek-chat"),
+            prompt: "hello",
+          }),
+        ).pipe(Effect.provideService(FetchHttpClient.Fetch, fetch))
+        const aiEvents = yield* Effect.promise(async () => {
+          const events: LLMEvent[] = []
+          const state = LLMAISDK.adapterState({
+            providerID: "deepseek",
+            modelID: "deepseek-chat",
+            apiPackage: "@ai-sdk/openai-compatible",
+          })
+          for await (const event of streamText({
+            model: createOpenAICompatible({
+              name: "deepseek",
+              baseURL: "https://api.deepseek.test/v1",
+              apiKey: "test",
+              fetch,
+              includeUsage: true,
+            }).chatModel("deepseek-chat"),
+            messages: [{ role: "user", content: "hello" }],
+            maxRetries: 0,
+          }).fullStream)
+            events.push(...(await Effect.runPromise(LLMAISDK.toLLMEvents(state, event))))
+          return events
+        })
+
+        expect(response.usage).toBeUndefined()
+        expect(aiEvents.filter((event) => event.type === "step-finish" || event.type === "finish")).toSatisfy(
+          (events) => events.length === 2 && events.every((event) => event.usage === undefined),
+        )
+      }
+    }),
+  )
+
+  it.effect("ignores non-terminal DeepSeek usage when the terminal has none", () =>
+    Effect.gen(function* () {
+      const body = [
+        {
+          choices: [{ delta: { content: "hello" }, finish_reason: null }],
+          usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]
+      const fetch = Object.assign(
+        async () =>
+          new Response(body.map((event) => `data: ${JSON.stringify(event)}`).join("\n\n").concat("\n\n"), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        { preconnect: () => undefined },
+      ) satisfies typeof globalThis.fetch
+      const identity = {
+        providerID: "deepseek",
+        modelID: "deepseek-chat",
+        apiPackage: "@ai-sdk/openai-compatible",
+      }
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model: OpenAICompatible.deepseek
+            .configure({ baseURL: "https://api.deepseek.test/v1", apiKey: "test" })
+            .model("deepseek-chat"),
+          prompt: "hello",
+        }),
+      ).pipe(Effect.provideService(FetchHttpClient.Fetch, fetch))
+      const aiEvents = yield* Effect.promise(async () => {
+        const events: LLMEvent[] = []
+        const state = LLMAISDK.adapterState(identity)
+        for await (const event of streamText({
+          model: createOpenAICompatible({
+            name: "deepseek",
+            baseURL: "https://api.deepseek.test/v1",
+            apiKey: "test",
+            fetch,
+            includeUsage: true,
+          }).chatModel("deepseek-chat"),
+          messages: [{ role: "user", content: "hello" }],
+          maxRetries: 0,
+          includeRawChunks: LLMAISDK.requiresRawChunks(identity),
+        }).fullStream)
+          events.push(...(await Effect.runPromise(LLMAISDK.toLLMEvents(state, event))))
+        return events
+      })
+
+      expect(response.usage).toBeUndefined()
+      expect(aiEvents.filter((event) => event.type === "step-finish" || event.type === "finish")).toSatisfy(
+        (events) => events.length === 2 && events.every((event) => event.usage === undefined),
+      )
     }),
   )
 

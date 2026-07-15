@@ -227,8 +227,8 @@ describe("session.llm.hasToolCalls", () => {
 describe("session.llm.ai-sdk adapter", () => {
   type AISDKAdapterEvent = Parameters<typeof LLMAISDK.toLLMEvents>[1]
 
-  const adapt = (events: ReadonlyArray<AISDKAdapterEvent>) => {
-    const state = LLMAISDK.adapterState()
+  const adapt = (events: ReadonlyArray<AISDKAdapterEvent>, identity?: LLMAISDK.UsageIdentity) => {
+    const state = LLMAISDK.adapterState(identity)
     return Effect.runPromise(
       Effect.forEach(events, (event) => LLMAISDK.toLLMEvents(state, event)).pipe(Effect.map((items) => items.flat())),
     )
@@ -340,7 +340,7 @@ describe("session.llm.ai-sdk adapter", () => {
           cacheReadInputTokens: 3,
           cacheWriteInputTokens: 2,
         },
-        providerMetadata: { openai: { step: true } },
+        providerMetadata: undefined,
       },
       {
         type: "finish",
@@ -744,6 +744,551 @@ describe("session.llm.ai-sdk adapter", () => {
       reasoning: 16,
       cache: { read: 20, write: 30 },
     })
+    expect(finishes[0]?.providerMetadata).toEqual(finishes[0]?.usage?.providerMetadata)
+    expect(finishes[1]?.providerMetadata).toEqual(finishes[1]?.usage?.providerMetadata)
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain("secret prompt")
+    expect(serialized).not.toContain("Bearer secret")
+    expect(serialized).not.toContain("secret billing payload")
+    expect(serialized).not.toContain('"authorization"')
+  })
+
+  test("corrects the installed xAI Responses usage conversion from raw usage", async () => {
+    const raw = {
+      input_tokens: 32,
+      input_tokens_details: { cached_tokens: 8 },
+      output_tokens: 9,
+      output_tokens_details: { reasoning_tokens: 110 },
+      total_tokens: 151,
+      prompt: "must not survive",
+    }
+    const sdkUsage = {
+      inputTokens: 32,
+      outputTokens: 9,
+      totalTokens: 41,
+      inputTokenDetails: { noCacheTokens: 24, cacheReadTokens: 8, cacheWriteTokens: undefined },
+      outputTokenDetails: { textTokens: -101, reasoningTokens: 110 },
+      raw,
+    }
+    const events = await adapt(
+      [
+        {
+          type: "finish-step",
+          response: { id: "xai-response", timestamp: new Date(0), modelId: "grok-4" },
+          finishReason: "stop",
+          rawFinishReason: "completed",
+          usage: sdkUsage,
+          providerMetadata: { xai: { prompt: "must not survive" } },
+        },
+        {
+          type: "finish",
+          finishReason: "stop",
+          rawFinishReason: "completed",
+          totalUsage: { ...sdkUsage, raw: undefined },
+        },
+      ],
+      { providerID: "xai", modelID: "grok-4", apiPackage: "@ai-sdk/xai" },
+    )
+
+    expect(events.map((event) => ("usage" in event ? CanonicalUsage.fromUsage(event.usage) : undefined))).toEqual([
+      {
+        input: 24,
+        output: 9,
+        reasoning: 110,
+        cache: { read: 8, write: 0 },
+        providerTotal: 151,
+        providerMetadata: {
+          xai: {
+            input_tokens: 32,
+            input_tokens_details: { cached_tokens: 8 },
+            output_tokens: 9,
+            output_tokens_details: { reasoning_tokens: 110 },
+            total_tokens: 151,
+          },
+        },
+      },
+      { input: 24, output: 9, reasoning: 110, cache: { read: 8, write: 0 }, providerTotal: 151 },
+    ])
+  })
+
+  test("recovers DeepSeek prompt cache hits from raw usage", async () => {
+    const raw = {
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      total_tokens: 120,
+      prompt_cache_hit_tokens: 40,
+      prompt_cache_miss_tokens: 60,
+      authorization: "must not survive",
+    }
+    const sdkUsage = {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: undefined },
+      outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+      raw,
+    }
+    const events = await adapt(
+      [
+        {
+          type: "finish-step",
+          response: { id: "deepseek-response", timestamp: new Date(0), modelId: "deepseek-chat" },
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          usage: sdkUsage,
+          providerMetadata: { deepseek: {} },
+        },
+        {
+          type: "finish",
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          totalUsage: { ...sdkUsage, raw: undefined },
+        },
+      ],
+      { providerID: "deepseek", modelID: "deepseek-chat", apiPackage: "@ai-sdk/openai-compatible" },
+    )
+
+    const canonical = events.map((event) => ("usage" in event ? CanonicalUsage.fromUsage(event.usage) : undefined))
+    expect(canonical).toMatchObject([
+      { input: 60, output: 20, reasoning: 0, cache: { read: 40, write: 0 }, providerTotal: 120 },
+      { input: 60, output: 20, reasoning: 0, cache: { read: 40, write: 0 }, providerTotal: 120 },
+    ])
+    expect(canonical[0]?.providerMetadata).toEqual({
+      deepseek: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        prompt_cache_hit_tokens: 40,
+        prompt_cache_miss_tokens: 60,
+      },
+    })
+  })
+
+  test("keeps the first terminal raw usage but fills usage after a usage-less finish", async () => {
+    const identity = {
+      providerID: "deepseek",
+      modelID: "deepseek-chat",
+      apiPackage: "@ai-sdk/openai-compatible",
+    }
+    const raw = {
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      total_tokens: 120,
+      prompt_cache_hit_tokens: 40,
+      prompt_cache_miss_tokens: 60,
+    }
+    const sdkUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      inputTokenDetails: { noCacheTokens: 0, cacheReadTokens: 0, cacheWriteTokens: undefined },
+      outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
+    }
+
+    for (const rawEvents of [
+      [
+        { type: "response.completed", response: { usage: raw } },
+        {
+          choices: [],
+          usage: {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            prompt_cache_hit_tokens: 0,
+            prompt_cache_miss_tokens: 0,
+          },
+        },
+      ],
+      [
+        { type: "response.completed", response: {} },
+        { choices: [], usage: raw },
+      ],
+    ]) {
+      const events = await adapt(
+        [
+          ...rawEvents.map((rawValue) => uncheckedAdapterEvent({ type: "raw", rawValue })),
+          {
+            type: "finish-step",
+            response: { id: "deepseek-terminal", timestamp: new Date(0), modelId: identity.modelID },
+            finishReason: "stop",
+            rawFinishReason: "stop",
+            usage: sdkUsage,
+            providerMetadata: undefined,
+          },
+          { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: sdkUsage },
+        ],
+        identity,
+      )
+
+      expect(
+        events.map((event) => ("usage" in event ? CanonicalUsage.fromUsage(event.usage) : undefined)),
+      ).toMatchObject([
+        { input: 60, output: 20, reasoning: 0, cache: { read: 40, write: 0 }, providerTotal: 120 },
+        { input: 60, output: 20, reasoning: 0, cache: { read: 40, write: 0 }, providerTotal: 120 },
+      ])
+    }
+  })
+
+  test("distinguishes unknown and incomplete raw usage at every provider profile boundary", async () => {
+    const identities: LLMAISDK.UsageIdentity[] = [
+      { providerID: "xai", modelID: "grok-4", apiPackage: "@ai-sdk/xai" },
+      { providerID: "deepinfra", modelID: "google/gemini-2.5-pro", apiPackage: "@ai-sdk/deepinfra" },
+      { providerID: "deepinfra", modelID: "deepseek-ai/DeepSeek-R1", apiPackage: "@ai-sdk/deepinfra" },
+      { providerID: "deepseek", modelID: "deepseek-chat", apiPackage: "@ai-sdk/openai-compatible" },
+      {
+        providerID: "openrouter",
+        modelID: "anthropic/claude-sonnet-4",
+        apiPackage: "@openrouter/ai-sdk-provider",
+      },
+    ]
+    const sdkUsage = {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: undefined },
+      outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+    }
+
+    for (const identity of identities) {
+      const unknown = await adapt(
+        [
+          {
+            type: "finish-step",
+            response: { id: "unknown", timestamp: new Date(0), modelId: identity.modelID },
+            finishReason: "stop",
+            rawFinishReason: "stop",
+            usage: sdkUsage,
+            providerMetadata: undefined,
+          },
+          { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: sdkUsage },
+        ],
+        identity,
+      )
+      const unknownUsage = unknown.map((event) =>
+        "usage" in event && event.usage ? CanonicalUsage.fromUsage(event.usage) : undefined,
+      )
+      expect(unknownUsage[0]).toBeUndefined()
+      expect(unknownUsage[1]).toBeUndefined()
+
+      const incomplete = await adapt(
+        [
+          {
+            type: "finish-step",
+            response: { id: "complete", timestamp: new Date(0), modelId: identity.modelID },
+            finishReason: "tool-calls",
+            rawFinishReason: "tool_calls",
+            usage: {
+              ...sdkUsage,
+              raw: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+            },
+            providerMetadata: undefined,
+          },
+          {
+            type: "finish-step",
+            response: { id: "incomplete", timestamp: new Date(0), modelId: identity.modelID },
+            finishReason: "stop",
+            rawFinishReason: "stop",
+            usage: { ...sdkUsage, outputTokens: 0, totalTokens: 100, raw: { prompt_tokens: 100 } },
+            providerMetadata: undefined,
+          },
+          { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: sdkUsage },
+        ],
+        identity,
+      )
+      const incompleteUsage = incomplete.map((event) =>
+        "usage" in event && event.usage ? CanonicalUsage.fromUsage(event.usage) : undefined,
+      )
+      expect(incompleteUsage[0]).toMatchObject({ input: 100, output: 20 })
+      expect(incompleteUsage[1]).toBeUndefined()
+      expect(incompleteUsage[2]).toBeUndefined()
+    }
+  })
+
+  test("rejects every malformed raw token observation without SDK fallback", async () => {
+    const identity = {
+      providerID: "openrouter",
+      modelID: "anthropic/claude-sonnet-4",
+      apiPackage: "@openrouter/ai-sdk-provider",
+    }
+    const base = {
+      prompt_tokens: 100,
+      completion_tokens: 50,
+      total_tokens: 150,
+      prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+      completion_tokens_details: { reasoning_tokens: 20 },
+    }
+    const mutations: ReadonlyArray<readonly [string, (value: unknown) => Record<string, unknown>]> = [
+      ["input", (value) => ({ ...base, prompt_tokens: value })],
+      ["output", (value) => ({ ...base, completion_tokens: value })],
+      [
+        "reasoning",
+        (value) => ({ ...base, completion_tokens_details: { reasoning_tokens: value } }),
+      ],
+      [
+        "cache read",
+        (value) => ({ ...base, prompt_tokens_details: { ...base.prompt_tokens_details, cached_tokens: value } }),
+      ],
+      [
+        "cache write",
+        (value) => ({ ...base, prompt_tokens_details: { ...base.prompt_tokens_details, cache_write_tokens: value } }),
+      ],
+      ["provider total", (value) => ({ ...base, total_tokens: value })],
+    ]
+
+    for (const [field, mutate] of mutations) {
+      const malformed = [-1, 1.5, Number.POSITIVE_INFINITY, "10", undefined]
+      for (const value of field === "cache write" ? malformed : [...malformed, null]) {
+        const events = await adapt(
+          [
+            uncheckedAdapterEvent({
+              type: "finish-step",
+              response: { id: `${field}-${String(value)}`, timestamp: new Date(0), modelId: identity.modelID },
+              finishReason: "stop",
+              rawFinishReason: "stop",
+              usage: {
+                inputTokens: 100,
+                outputTokens: 50,
+                totalTokens: 150,
+                inputTokenDetails: { noCacheTokens: 60, cacheReadTokens: 30, cacheWriteTokens: 10 },
+                outputTokenDetails: { textTokens: 30, reasoningTokens: 20 },
+                raw: mutate(value),
+              },
+              providerMetadata: undefined,
+            }),
+            uncheckedAdapterEvent({
+              type: "finish",
+              finishReason: "stop",
+              rawFinishReason: "stop",
+              totalUsage: {
+                inputTokens: 100,
+                outputTokens: 50,
+                totalTokens: 150,
+                inputTokenDetails: { noCacheTokens: 60, cacheReadTokens: 30, cacheWriteTokens: 10 },
+                outputTokenDetails: { textTokens: 30, reasoningTokens: 20 },
+              },
+            }),
+          ],
+          identity,
+        )
+        expect(events).toSatisfy(
+          (items) =>
+            items.length === 2 &&
+            items.every((event) =>
+              event.type === "step-finish" || event.type === "finish" ? event.usage === undefined : false,
+            ),
+        )
+      }
+    }
+  })
+
+  test("rejects malformed DeepSeek cache observations and accepts OpenRouter null cache writes", async () => {
+    for (const field of ["prompt_cache_hit_tokens", "prompt_cache_miss_tokens"] as const) {
+      const events = await adapt(
+        [
+          uncheckedAdapterEvent({
+            type: "finish-step",
+            response: { id: field, timestamp: new Date(0), modelId: "deepseek-chat" },
+            finishReason: "stop",
+            rawFinishReason: "stop",
+            usage: {
+              inputTokens: 100,
+              outputTokens: 20,
+              totalTokens: 120,
+              inputTokenDetails: { noCacheTokens: 60, cacheReadTokens: 40, cacheWriteTokens: undefined },
+              outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+              raw: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                prompt_cache_hit_tokens: 40,
+                prompt_cache_miss_tokens: 60,
+                [field]: null,
+              },
+            },
+            providerMetadata: undefined,
+          }),
+        ],
+        { providerID: "deepseek", modelID: "deepseek-chat", apiPackage: "@ai-sdk/openai-compatible" },
+      )
+      expect(events[0]).toMatchObject({ type: "step-finish", usage: undefined })
+    }
+
+    const openrouter = await adapt(
+      [
+        uncheckedAdapterEvent({
+          type: "finish-step",
+          response: { id: "null-write", timestamp: new Date(0), modelId: "anthropic/claude-sonnet-4" },
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          usage: {
+            inputTokens: 100,
+            outputTokens: 50,
+            totalTokens: 150,
+            inputTokenDetails: { noCacheTokens: 70, cacheReadTokens: 30, cacheWriteTokens: undefined },
+            outputTokenDetails: { textTokens: 30, reasoningTokens: 20 },
+            raw: {
+              prompt_tokens: 100,
+              completion_tokens: 50,
+              total_tokens: 150,
+              prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: null },
+              completion_tokens_details: { reasoning_tokens: 20 },
+            },
+          },
+          providerMetadata: undefined,
+        }),
+      ],
+      {
+        providerID: "openrouter",
+        modelID: "anthropic/claude-sonnet-4",
+        apiPackage: "@openrouter/ai-sdk-provider",
+      },
+    )
+    expect(CanonicalUsage.fromUsage(openrouter[0]?.type === "step-finish" ? openrouter[0].usage : undefined)).toMatchObject(
+      { input: 70, output: 30, reasoning: 20, cache: { read: 30, write: 0 }, providerTotal: 150 },
+    )
+  })
+
+  test("requires explicit provider totals on every complete profiled step and resets between turns", async () => {
+    const identity = {
+      providerID: "deepseek",
+      modelID: "deepseek-chat",
+      apiPackage: "@ai-sdk/openai-compatible",
+    }
+    const step = (id: string, providerTotal?: number) =>
+      uncheckedAdapterEvent({
+        type: "finish-step",
+        response: { id, timestamp: new Date(0), modelId: identity.modelID },
+        finishReason: "tool-calls",
+        rawFinishReason: "tool_calls",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          totalTokens: 120,
+          inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+          raw: {
+            prompt_tokens: 100,
+            completion_tokens: 20,
+            prompt_cache_hit_tokens: 40,
+            ...(providerTotal === undefined ? {} : { total_tokens: providerTotal }),
+          },
+        },
+        providerMetadata: undefined,
+      })
+    const finish = uncheckedAdapterEvent({
+      type: "finish",
+      finishReason: "stop",
+      rawFinishReason: "stop",
+      totalUsage: {
+        inputTokens: 200,
+        outputTokens: 40,
+        totalTokens: 240,
+        inputTokenDetails: { noCacheTokens: 200, cacheReadTokens: 0, cacheWriteTokens: undefined },
+        outputTokenDetails: { textTokens: 40, reasoningTokens: undefined },
+      },
+    })
+
+    const allTotals = await adapt([step("all-1", 120), step("all-2", 120), finish], identity)
+    const allTotalUsage = allTotals.flatMap((event) =>
+      event.type === "finish" && event.usage ? [CanonicalUsage.fromUsage(event.usage)] : [],
+    )
+    expect(allTotalUsage[0]).toEqual({
+      input: 120,
+      output: 40,
+      reasoning: 0,
+      cache: { read: 80, write: 0 },
+      providerTotal: 240,
+    })
+
+    const state = LLMAISDK.adapterState(identity)
+    const run = (events: ReadonlyArray<AISDKAdapterEvent>) =>
+      Effect.runPromise(
+        Effect.forEach(events, (event) => LLMAISDK.toLLMEvents(state, event)).pipe(Effect.map((items) => items.flat())),
+      )
+    const missingTotal = await run([step("missing-1", 120), step("missing-2"), finish])
+    const missingTotalUsage = missingTotal.flatMap((event) =>
+      event.type === "finish" && event.usage ? [CanonicalUsage.fromUsage(event.usage)] : [],
+    )
+    expect(missingTotalUsage[0]).toEqual({
+      input: 120,
+      output: 40,
+      reasoning: 0,
+      cache: { read: 80, write: 0 },
+    })
+
+    const reset = await run([step("reset", 120), finish])
+    const resetUsage = reset.flatMap((event) =>
+      event.type === "finish" && event.usage ? [CanonicalUsage.fromUsage(event.usage)] : [],
+    )
+    expect(resetUsage[0]).toEqual({
+      input: 60,
+      output: 20,
+      reasoning: 0,
+      cache: { read: 40, write: 0 },
+      providerTotal: 120,
+    })
+  })
+
+  test("recomputes OpenRouter fresh input when the SDK exposes cache writes", async () => {
+    const raw = {
+      prompt_tokens: 100,
+      completion_tokens: 50,
+      total_tokens: 150,
+      cost: 0.01234,
+      is_byok: false,
+      prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+      completion_tokens_details: { reasoning_tokens: 20 },
+      cost_details: {
+        upstream_inference_cost: 0.01234,
+        upstream_inference_prompt_cost: 0.004,
+        upstream_inference_completions_cost: 0.00834,
+      },
+      prompt: "must not survive",
+    }
+    const sdkUsage = {
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+      inputTokenDetails: { noCacheTokens: 70, cacheReadTokens: 30, cacheWriteTokens: 10 },
+      outputTokenDetails: { textTokens: 30, reasoningTokens: 20 },
+      raw,
+    }
+    const events = await adapt(
+      [
+        {
+          type: "finish-step",
+          response: { id: "openrouter-response", timestamp: new Date(0), modelId: "anthropic/claude-sonnet-4" },
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          usage: sdkUsage,
+          providerMetadata: { openrouter: { prompt: "must not survive" } },
+        },
+        {
+          type: "finish",
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          totalUsage: { ...sdkUsage, raw: undefined },
+        },
+      ],
+      {
+        providerID: "openrouter",
+        modelID: "anthropic/claude-sonnet-4",
+        apiPackage: "@openrouter/ai-sdk-provider",
+      },
+    )
+
+    const canonical = events.map((event) => ("usage" in event ? CanonicalUsage.fromUsage(event.usage) : undefined))
+    expect(canonical).toMatchObject([
+      { input: 60, output: 30, reasoning: 20, cache: { read: 30, write: 10 }, providerTotal: 150 },
+      { input: 60, output: 30, reasoning: 20, cache: { read: 30, write: 10 }, providerTotal: 150 },
+    ])
+    const { prompt, ...safeRaw } = raw
+    expect(prompt).toBe("must not survive")
+    expect(canonical[0]?.providerMetadata).toEqual({ openrouter: { usage: safeRaw } })
+    expect(canonical[1]?.providerMetadata).toBeUndefined()
+    expect(events[0]).toMatchObject({ type: "step-finish", providerMetadata: canonical[0]?.providerMetadata })
+    expect(events[1]).toMatchObject({ type: "finish", providerMetadata: undefined })
+    expect(JSON.stringify(events)).not.toContain("must not survive")
   })
 
   test("retains metadata-only cache writes in one-step cumulative finish usage", async () => {
@@ -925,7 +1470,7 @@ describe("session.llm.ai-sdk adapter", () => {
         copilot: { totalNanoAiu: 4_473_525_000 },
       },
     })
-    expect(events[1]).toMatchObject({ type: "step-finish", providerMetadata: { anthropic: {} } })
+    expect(events[1]).toMatchObject({ type: "step-finish", providerMetadata: undefined })
     if (events[1].type !== "step-finish") throw new Error("expected step-finish")
     expect(events[1].providerMetadata?.copilot).toBeUndefined()
   })

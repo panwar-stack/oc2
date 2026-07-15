@@ -5,6 +5,7 @@ import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
+import * as XAI from "../../src/providers/xai"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
 import * as ProviderShared from "../../src/protocols/shared"
 import { continuationRequest, nativeOpenAIResponsesContinuation } from "../continuation-scenarios"
@@ -23,6 +24,14 @@ const request = LLM.request({
   prompt: "Say hello.",
   generation: { maxTokens: 20, temperature: 0 },
 })
+
+const xaiUsageFixture = {
+  input_tokens: 32,
+  input_tokens_details: { cached_tokens: 8, cache_write_tokens: 2 },
+  output_tokens: 9,
+  output_tokens_details: { reasoning_tokens: 110 },
+  total_tokens: 151,
+} as const
 
 const configEnv = (env: Record<string, string>) => Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
 
@@ -640,7 +649,7 @@ describe("OpenAI Responses route", () => {
               input_tokens: 5,
               output_tokens: 2,
               total_tokens: 7,
-              input_tokens_details: { cached_tokens: 1 },
+              input_tokens_details: { cached_tokens: 1, cache_write_tokens: 2 },
               output_tokens_details: { reasoning_tokens: 0 },
             },
           },
@@ -650,8 +659,9 @@ describe("OpenAI Responses route", () => {
       const usage = new Usage({
         inputTokens: 5,
         outputTokens: 2,
-        nonCachedInputTokens: 4,
+        nonCachedInputTokens: 2,
         cacheReadInputTokens: 1,
+        cacheWriteInputTokens: 2,
         reasoningTokens: 0,
         totalTokens: 7,
         providerTotalTokens: 7,
@@ -660,7 +670,7 @@ describe("OpenAI Responses route", () => {
             input_tokens: 5,
             output_tokens: 2,
             total_tokens: 7,
-            input_tokens_details: { cached_tokens: 1 },
+            input_tokens_details: { cached_tokens: 1, cache_write_tokens: 2 },
             output_tokens_details: { reasoning_tokens: 0 },
           },
         },
@@ -690,12 +700,109 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("adds xAI reasoning outside visible Responses output tokens", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).responses("grok-4"),
+        }),
+      ).pipe(
+        Effect.provide(fixedResponse(sseEvents({ type: "response.completed", response: { usage: xaiUsageFixture } }))),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 32,
+        outputTokens: 119,
+        nonCachedInputTokens: 22,
+        cacheReadInputTokens: 8,
+        cacheWriteInputTokens: 2,
+        reasoningTokens: 110,
+        totalTokens: 151,
+        providerTotalTokens: 151,
+        providerMetadata: { xai: xaiUsageFixture },
+      })
+      expect(response.usage?.visibleOutputTokens).toBe(9)
+    }),
+  )
+
+  it.effect("treats xAI response.done as an authoritative terminal", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).responses("grok-4"),
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.done", response: { id: "resp_done", usage: xaiUsageFixture } },
+              {
+                type: "response.completed",
+                response: {
+                  id: "resp_duplicate",
+                  usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+                },
+              },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 32,
+        outputTokens: 119,
+        reasoningTokens: 110,
+        totalTokens: 151,
+        providerTotalTokens: 151,
+      })
+      expect(response.events.filter((event) => event.type === "step-finish")).toHaveLength(1)
+      expect(response.events.filter((event) => event.type === "finish")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("matches xAI AI SDK Responses cache semantics at equal and greater boundaries", () =>
+    Effect.gen(function* () {
+      for (const fixture of [
+        { cached: 32, input: 32, fresh: 0 },
+        { cached: 40, input: 72, fresh: 32 },
+      ]) {
+        const usage = {
+          input_tokens: 32,
+          input_tokens_details: { cached_tokens: fixture.cached },
+          output_tokens: 9,
+          output_tokens_details: { reasoning_tokens: 2 },
+          total_tokens: 41,
+        }
+        const response = yield* LLMClient.generate(
+          LLM.updateRequest(request, {
+            model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).responses("grok-4"),
+          }),
+        ).pipe(Effect.provide(fixedResponse(sseEvents({ type: "response.completed", response: { usage } }))))
+
+        expect(response.usage).toMatchObject({
+          inputTokens: fixture.input,
+          nonCachedInputTokens: fixture.fresh,
+          cacheReadInputTokens: fixture.cached,
+          outputTokens: 11,
+          reasoningTokens: 2,
+          totalTokens: 41,
+          providerTotalTokens: 41,
+        })
+      }
+    }),
+  )
+
   it.effect("keeps incomplete usage absent", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(request).pipe(
         Effect.provide(
           fixedResponse(
-            sseEvents({ type: "response.completed", response: { usage: { input_tokens: 5, total_tokens: 7 } } }),
+            sseEvents({
+              type: "response.completed",
+              response: {
+                usage: { input_tokens: 5, input_tokens_details: { cache_write_tokens: 2 }, total_tokens: 7 },
+              },
+            }),
           ),
         ),
       )
@@ -704,6 +811,46 @@ describe("OpenAI Responses route", () => {
       expect(response.events.flatMap((event) => ("usage" in event ? [event.usage] : [])).every((usage) => !usage)).toBe(
         true,
       )
+    }),
+  )
+
+  it.effect("accepts null cache writes without fabricating a reported write", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "response.completed",
+              response: {
+                usage: {
+                  input_tokens: 5,
+                  input_tokens_details: { cached_tokens: 1, cache_write_tokens: null },
+                  output_tokens: 2,
+                  total_tokens: 99,
+                },
+              },
+            }),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 5,
+        outputTokens: 2,
+        nonCachedInputTokens: 4,
+        cacheReadInputTokens: 1,
+        totalTokens: 99,
+        providerTotalTokens: 99,
+      })
+      expect(response.usage?.cacheWriteInputTokens).toBeUndefined()
+      expect(response.usage?.providerMetadata).toEqual({
+        openai: {
+          input_tokens: 5,
+          input_tokens_details: { cached_tokens: 1 },
+          output_tokens: 2,
+          total_tokens: 99,
+        },
+      })
     }),
   )
 
@@ -1290,6 +1437,55 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("accepts null top-level error code and param", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(sseEvents({ type: "error", code: null, message: "Unclassified failure", param: null })),
+        ),
+      )
+
+      expect(response.events).toEqual([{ type: "provider-error", message: "Unclassified failure" }])
+    }),
+  )
+
+  it.effect("treats a top-level error as terminal before response.completed", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "error", code: "server_error", message: "Stopped" },
+              { type: "response.completed", response: { usage: { input_tokens: 5, output_tokens: 1 } } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events).toEqual([{ type: "provider-error", message: "server_error: Stopped" }])
+    }),
+  )
+
+  it.effect("treats a top-level error as terminal before response.failed", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "error", code: "server_error", message: "Stopped" },
+              {
+                type: "response.failed",
+                response: { error: { code: "second_error", message: "Must be ignored" } },
+              },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events).toEqual([{ type: "provider-error", message: "server_error: Stopped" }])
+    }),
+  )
+
   it.effect("falls back to error code when no message is present", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(request).pipe(
@@ -1331,6 +1527,72 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(response.events).toEqual([{ type: "provider-error", message: "server_error: Upstream model unavailable" }])
+    }),
+  )
+
+  it.effect("preserves authoritative usage from response.failed", () =>
+    Effect.gen(function* () {
+      const usage = {
+        input_tokens: 13,
+        input_tokens_details: { cached_tokens: 3, cache_write_tokens: 2 },
+        output_tokens: 8,
+        output_tokens_details: { reasoning_tokens: 5 },
+        total_tokens: 21,
+      }
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "response.failed",
+              response: {
+                id: "resp_failed_usage",
+                error: { code: "server_error", message: "Upstream failed after inference" },
+                usage,
+              },
+            }),
+          ),
+        ),
+      )
+
+      expect(response.events).toEqual([
+        {
+          type: "provider-error",
+          message: "server_error: Upstream failed after inference",
+          usage: new Usage({
+            inputTokens: 13,
+            outputTokens: 8,
+            nonCachedInputTokens: 8,
+            cacheReadInputTokens: 3,
+            cacheWriteInputTokens: 2,
+            reasoningTokens: 5,
+            totalTokens: 21,
+            providerTotalTokens: 21,
+            providerMetadata: { openai: usage },
+          }),
+        },
+      ])
+      expect(response.usage).toMatchObject({ inputTokens: 13, outputTokens: 8, reasoningTokens: 5 })
+    }),
+  )
+
+  it.effect("keeps partial response.failed usage absent", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "response.failed",
+              response: {
+                error: { code: "server_error", message: "No terminal output count" },
+                usage: { input_tokens: 13, total_tokens: 21 },
+              },
+            }),
+          ),
+        ),
+      )
+
+      expect(response.usage).toBeUndefined()
+      expect(response.events).toEqual([{ type: "provider-error", message: "server_error: No terminal output count" }])
     }),
   )
 
