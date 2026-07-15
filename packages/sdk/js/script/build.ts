@@ -58,6 +58,24 @@ if (sseTypesPatched === sseTypesSource) {
 }
 await Bun.write(sseTypesPath, sseTypesPatched)
 
+// @hey-api emits a fixed one-item tuple for an array with a required first item
+// and repeatable items. Preserve the OpenAPI minItems constraint without limiting
+// Anthropic responses to exactly one billing iteration.
+const generatedTypesPath = "./src/v2/gen/types.gen.ts"
+const generatedTypesSource = await Bun.file(generatedTypesPath).text()
+const iterationTuple = /iterations\?: \[\s*AnthropicBillingIterationWrite,\s*AnthropicBillingIterationWrite\s*\];/g
+const iterationTupleCount = generatedTypesSource.match(iterationTuple)?.length ?? 0
+if (iterationTupleCount !== 4) {
+  throw new Error(`Anthropic iteration tuple patch found ${iterationTupleCount} matches (${generatedTypesPath})`)
+}
+await Bun.write(
+  generatedTypesPath,
+  generatedTypesSource.replace(
+    iterationTuple,
+    "iterations?: [AnthropicBillingIterationWrite, ...Array<AnthropicBillingIterationWrite>];",
+  ),
+)
+
 for (const sdkPath of ["./src/gen/sdk.gen.ts", "./src/v2/gen/sdk.gen.ts"]) {
   const sdkFile = Bun.file(sdkPath)
   const sdkSource = await sdkFile.text()
@@ -86,5 +104,6 @@ if (
 await Bun.write(v2SdkPath, v2SdkPatched)
 
 await $`rm -rf dist`
-await $`bun tsc`
+await $`bun tsc -p tsconfig.build.json`
+await $`rm -f tsconfig.build.tsbuildinfo`
 await $`rm openapi.json`

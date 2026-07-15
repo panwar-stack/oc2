@@ -4,7 +4,8 @@ import { Database } from "@oc2-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { expect } from "bun:test"
 import { tool } from "ai"
-import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import path from "path"
 import z from "zod"
 import type { Agent } from "../../src/agent/agent"
@@ -330,6 +331,87 @@ const mirrorUsageEnv = SessionProcessor.layer.pipe(
 )
 const itMirrorUsage = testEffect(mirrorUsageEnv)
 
+const retryUsage = (attempt: number) =>
+  Usage.from({
+    inputTokens: attempt + 10,
+    nonCachedInputTokens: attempt,
+    cacheReadInputTokens: 7,
+    cacheWriteInputTokens: 3,
+    outputTokens: attempt + 10,
+    totalTokens: attempt * 2 + 20,
+    providerTotalTokens: 1_000 + attempt,
+    providerMetadata: { openrouter: { usage: { cost: attempt / 100 } } },
+  })
+const conflictingRetryMetadata = {
+  openrouter: { usage: { cost: 99, promptTokens: 999 } },
+  custom: { secret: "must not persist" },
+}
+const retryThenSuccessLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) => {
+      const attempt = input.attempt ?? 1
+      return attempt === 1
+        ? timedStream(
+            [
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.providerError({
+                message: "temporary provider fault",
+                retryable: true,
+                usage: retryUsage(attempt),
+                providerMetadata: conflictingRetryMetadata,
+              }),
+            ],
+            [{ step: 0, started: 100, completed: 110, outcome: "error" }],
+          )
+        : timedStream(
+            [
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.stepFinish({ index: 0, reason: "stop", usage: retryUsage(attempt) }),
+              LLMEvent.finish({ reason: "stop" }),
+            ],
+            [{ step: 0, started: 200, completed: 220, outcome: "success" }],
+          )
+    },
+  }),
+)
+const retryThenSuccessEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(retryThenSuccessLLM),
+  Layer.provideMerge(deps),
+)
+const itRetryThenSuccess = testEffect(retryThenSuccessEnv)
+
+const retryFailureLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) => {
+      const attempt = input.attempt ?? 1
+      return timedStream(
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.providerError({
+            message: "rate limit",
+            usage: retryUsage(attempt),
+            providerMetadata: conflictingRetryMetadata,
+          }),
+        ],
+        [{ step: 0, started: attempt * 100, completed: attempt * 100 + 10, outcome: "error" }],
+      )
+    },
+  }),
+)
+const retryFailureEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(retryFailureLLM),
+  Layer.provideMerge(deps),
+)
+const itRetryFailure = testEffect(retryFailureEnv)
+
 const preStepFailureLLM = Layer.succeed(
   LLM.Service,
   LLM.Service.of({
@@ -356,7 +438,7 @@ const endedThenFailureLLM = Layer.succeed(
         [
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.stepFinish({ index: 0, reason: "stop", usage: mirrorUsage }),
-          LLMEvent.providerError({ message: "late stream failure" }),
+          LLMEvent.providerError({ message: "late stream failure", usage: retryUsage(99) }),
         ],
         [{ step: 0, started: 500, completed: 550, outcome: "success" }],
       ),
@@ -370,6 +452,14 @@ const endedThenFailureEnv = SessionProcessor.layer.pipe(
   Layer.provideMerge(deps),
 )
 const itEndedThenFailure = testEffect(endedThenFailureEnv)
+const endedThenFailureLegacyEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: false })),
+  Layer.provide(endedThenFailureLLM),
+  Layer.provideMerge(deps),
+)
+const itEndedThenFailureLegacy = testEffect(endedThenFailureLegacyEnv)
 
 const nextStepFailureLLM = Layer.succeed(
   LLM.Service,
@@ -610,6 +700,47 @@ itEndedThenFailure.live("session.processor effect tests do not fail an already e
         expect({ ended, failed }).toEqual({ ended: 1, failed: 0 })
         const persisted = (yield* session.messages({ sessionID: chat.id })).find((item) => item.info.id === msg.id)
         expect(persisted?.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+      }),
+    { config: cfg },
+  ),
+)
+
+itEndedThenFailureLegacy.live("session.processor ignores late billed error usage without v2 mirroring", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "legacy late failure")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        expect(
+          yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "legacy late failure" }],
+            tools: {},
+          }),
+        ).toBe("stop")
+
+        const parts = (yield* MessageV2.parts(msg.id)).filter(
+          (part): part is SessionV1.StepFinishPart => part.type === "step-finish",
+        )
+        expect(parts).toHaveLength(1)
+        expect(parts[0]?.reason).toBe("stop")
+        expect(parts[0]?.tokens.input).toBe(6)
       }),
     { config: cfg },
   ),
@@ -1207,6 +1338,173 @@ it.live("session.processor effect tests publish retry status updates", () =>
   ),
 )
 
+itRetryThenSuccess.effect("session.processor accounts failed usage once before retry success", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "retry accounting")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const retried: number[] = []
+        let failed = 0
+        const off = yield* events.listen((event) => {
+          if (Schema.is(SessionEvent.Retried)(event)) retried.push(event.data.attempt)
+          if (event.type === SessionEvent.Step.Failed.type) failed++
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+        const result = yield* handle
+          .process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "retry accounting" }],
+            tools: {},
+          })
+          .pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        yield* TestClock.adjust("2 seconds")
+        expect(handle.message.error).toBeUndefined()
+        expect(yield* Fiber.join(result)).toBe("continue")
+        yield* off
+
+        const parts = (yield* MessageV2.parts(msg.id)).filter(
+          (part): part is SessionV1.StepFinishPart => part.type === "step-finish",
+        )
+        expect(parts.map((part) => part.reason)).toEqual(["error", "stop"])
+        expect(parts.map((part) => part.tokens.input)).toEqual([1, 2])
+        expect(parts.map((part) => part.cost)).toEqual([0.01, 0])
+        expect(parts[0]).toMatchObject({
+          duration: 10,
+          tokens: {
+            total: 1_001,
+            input: 1,
+            output: 11,
+            reasoning: 0,
+            cache: { read: 7, write: 3 },
+          },
+          accounting: {
+            mode: "aggregate",
+            purpose: "assistant",
+            model: { id: ref.modelID, providerID: ref.providerID },
+            time: { started: 100, completed: 110, duration: 10 },
+            usage: {
+              source: "provider-error",
+              authoritative: {
+                input: 1,
+                output: 11,
+                reasoning: 0,
+                cache: { read: 7, write: 3 },
+                providerTotal: 1_001,
+                providerMetadata: { openrouter: { usage: { cost: 0.01, promptTokens: 999 } } },
+              },
+            },
+            pricing: {
+              source: "provider",
+              amount: 0.01,
+              providerAmount: 0.01,
+              estimateAmount: 0,
+              rate: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+            },
+          },
+        })
+        expect(parts[0]?.accounting?.usage.authoritative.providerMetadata).not.toHaveProperty("custom")
+        expect(retried).toEqual([1])
+        expect(failed).toBe(0)
+      }),
+    { config: cfg },
+  ),
+)
+
+itRetryFailure.effect("session.processor accounts eight failed attempts and publishes seven retries", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "terminal retry accounting")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const retried: number[] = []
+        const failed: Array<typeof SessionEvent.Step.Failed.Type> = []
+        const off = yield* events.listen((event) => {
+          if (Schema.is(SessionEvent.Retried)(event)) retried.push(event.data.attempt)
+          if (Schema.is(SessionEvent.Step.Failed)(event)) failed.push(event)
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+        const result = yield* handle
+          .process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "terminal retry accounting" }],
+            tools: {},
+          })
+          .pipe(Effect.forkChild)
+        for (const wait of [2, 4, 8, 16, 30, 30, 30]) {
+          yield* Effect.yieldNow
+          yield* TestClock.adjust(`${wait} seconds`)
+        }
+        expect(yield* Fiber.join(result)).toBe("stop")
+        yield* off
+
+        const persisted = yield* MessageV2.parts(msg.id)
+        const parts = persisted.filter(
+          (part): part is SessionV1.StepFinishPart => part.type === "step-finish",
+        )
+        expect(persisted.filter((part) => part.type === "step-start")).toHaveLength(8)
+        expect(parts).toHaveLength(8)
+        expect(parts.map((part) => part.tokens.input)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+        expect(parts.map((part) => part.cost)).toEqual([0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08])
+        expect(parts.every((part) => part.accounting?.usage.source === "provider-error")).toBe(true)
+        expect(retried).toEqual([1, 2, 3, 4, 5, 6, 7])
+        expect(failed).toHaveLength(1)
+        expect(failed[0]?.data.accounting?.usage?.authoritative.input).toBe(8)
+        expect(failed[0]?.data.accounting?.usage?.authoritative.providerTotal).toBe(1_008)
+        expect(failed[0]?.data.accounting?.usage?.authoritative.providerMetadata).toEqual({
+          openrouter: { usage: { cost: 0.08, promptTokens: 999 } },
+        })
+        expect(failed[0]?.data.accounting?.pricing?.amount).toBe(0.08)
+        expect(handle.message.cost).toBeCloseTo(0.36)
+        const aggregate = yield* session.get(chat.id)
+        expect(aggregate.cost).toBeCloseTo(0.36)
+        expect(aggregate).toMatchObject({
+          time: { processing: 80 },
+          tokens: {
+            input: 36,
+            output: 116,
+            reasoning: 0,
+            cache: { read: 56, write: 24 },
+          },
+        })
+      }),
+    { config: cfg },
+  ),
+)
+
 it.live("session.processor effect tests compact on structured context overflow", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
@@ -1567,7 +1865,7 @@ itProviderError.live("session.processor effect tests fail provider-executed erro
   ),
 )
 
-itFragmentFailure.live("session.processor effect tests flush partial v2 fragments before step failure", () =>
+itFragmentFailure.live("session.processor flushes partial fragments without an accounting part when usage is missing", () =>
   provideTmpdirInstance(
     (dir) =>
       Effect.gen(function* () {

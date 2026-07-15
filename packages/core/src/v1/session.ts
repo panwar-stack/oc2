@@ -1,6 +1,7 @@
 export * as SessionV1 from "./session"
 
 import { Effect, Schema, Types } from "effect"
+import { CanonicalUsage, ProviderMetadata } from "@oc2-ai/llm"
 import { EventV2 } from "../event"
 import { PermissionV1 } from "./permission"
 import { ProjectV2 } from "../project"
@@ -228,6 +229,335 @@ export const StepStartPart = Schema.Struct({
 }).annotate({ identifier: "StepStartPart" })
 export type StepStartPart = Types.DeepMutable<Schema.Schema.Type<typeof StepStartPart>>
 
+const StepFinishCanonicalUsage = Schema.Struct(CanonicalUsage.fields).annotate({
+  identifier: "StepFinishCanonicalUsage",
+})
+const profileNumbers = new Set([
+  "input_tokens",
+  "output_tokens",
+  "prompt_tokens",
+  "completion_tokens",
+  "total_tokens",
+  "prompt_cache_hit_tokens",
+  "prompt_cache_miss_tokens",
+  "cost",
+  "cost_in_usd_ticks",
+])
+const anthropicUsageNumbers = new Set([
+  "input_tokens",
+  "output_tokens",
+  "cache_creation_input_tokens",
+  "cache_read_input_tokens",
+])
+const googleNumbers = new Set([
+  "promptTokenCount",
+  "candidatesTokenCount",
+  "totalTokenCount",
+  "cachedContentTokenCount",
+  "thoughtsTokenCount",
+])
+const bedrockNumbers = new Set([
+  "inputTokens",
+  "outputTokens",
+  "totalTokens",
+  "cacheReadInputTokens",
+  "cacheWriteInputTokens",
+  "cacheCreationInputTokens",
+])
+const openrouterNumbers = new Set([
+  "inputTokens",
+  "outputTokens",
+  "promptTokens",
+  "completionTokens",
+  "reasoningTokens",
+  "totalTokens",
+  "cachedInputTokens",
+  "cost",
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function isBillingNumber(value: unknown, nullable = false) {
+  return (nullable && value === null) || (typeof value === "number" && Number.isFinite(value) && value >= 0)
+}
+
+function isNumberRecord(value: unknown, fields: ReadonlySet<string>, nullable: ReadonlySet<string> = new Set()) {
+  if (!isRecord(value) || Object.keys(value).length === 0) return false
+  return Object.entries(value).every(([key, item]) => fields.has(key) && isBillingNumber(item, nullable.has(key)))
+}
+
+function isBillingIteration(value: unknown) {
+  if (!isRecord(value)) return false
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "type") {
+      if (item !== "message" && item !== "compaction" && item !== "advisor_message") return false
+      continue
+    }
+    if (key === "model") {
+      if (typeof item !== "string") return false
+      continue
+    }
+    if (!anthropicUsageNumbers.has(key) || !isBillingNumber(item, key.startsWith("cache_"))) return false
+  }
+  if (
+    (value.type !== "message" && value.type !== "compaction" && value.type !== "advisor_message") ||
+    !isBillingNumber(value.input_tokens) ||
+    !isBillingNumber(value.output_tokens)
+  )
+    return false
+  return value.type === "advisor_message" ? typeof value.model === "string" : value.model === undefined
+}
+
+function isAnthropicUsage(value: unknown): boolean {
+  if (!isRecord(value) || Object.keys(value).length === 0) return false
+  for (const [key, item] of Object.entries(value)) {
+    if (anthropicUsageNumbers.has(key)) {
+      if (!isBillingNumber(item, key.startsWith("cache_"))) return false
+      continue
+    }
+    if (key === "iterations") {
+      if (!Array.isArray(item) || item.length === 0 || !item.every(isBillingIteration)) return false
+      continue
+    }
+    return false
+  }
+  return true
+}
+
+function isAnthropicBilling(value: unknown): boolean {
+  if (!isRecord(value) || Object.keys(value).length === 0) return false
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "usage") {
+      if (!isAnthropicUsage(item)) return false
+      continue
+    }
+    if (key === "cacheCreationInputTokens") {
+      if (!isBillingNumber(item)) return false
+      continue
+    }
+    if (!isAnthropicUsage({ [key]: item })) return false
+  }
+  return true
+}
+
+function isProfileBilling(value: unknown, openai = false): boolean {
+  if (!isRecord(value) || Object.keys(value).length === 0) return false
+  for (const [key, item] of Object.entries(value)) {
+    if (profileNumbers.has(key) || (openai && (key === "acceptedPredictionTokens" || key === "rejectedPredictionTokens"))) {
+      if (!isBillingNumber(item, key === "cost")) return false
+      continue
+    }
+    if (key === "is_byok") {
+      if (typeof item !== "boolean") return false
+      continue
+    }
+    if (key === "input_tokens_details" || key === "prompt_tokens_details") {
+      if (item !== null && !isNumberRecord(item, new Set(["cached_tokens", "cache_write_tokens"]), new Set(["cache_write_tokens"]))) return false
+      continue
+    }
+    if (key === "output_tokens_details" || key === "completion_tokens_details") {
+      if (item !== null && !isNumberRecord(item, new Set(["reasoning_tokens"]))) return false
+      continue
+    }
+    if (key === "cost_details") {
+      if (
+        item !== null &&
+        !isNumberRecord(
+          item,
+          new Set([
+            "upstream_inference_cost",
+            "upstream_inference_prompt_cost",
+            "upstream_inference_completions_cost",
+          ]),
+          new Set([
+            "upstream_inference_cost",
+            "upstream_inference_prompt_cost",
+            "upstream_inference_completions_cost",
+          ]),
+        )
+      )
+        return false
+      continue
+    }
+    return false
+  }
+  return true
+}
+
+function isOpenRouterBilling(value: unknown): boolean {
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !("usage" in value)) return false
+  const usage = value.usage
+  if (!isRecord(usage) || Object.keys(usage).length === 0) return false
+  for (const [key, item] of Object.entries(usage)) {
+    if (openrouterNumbers.has(key) || profileNumbers.has(key)) {
+      if (!isBillingNumber(item, key === "cost")) return false
+      continue
+    }
+    if (key === "costDetails") {
+      if (!isNumberRecord(item, new Set(["upstreamInferenceCost"]))) return false
+      continue
+    }
+    if (key === "promptTokensDetails") {
+      if (!isNumberRecord(item, new Set(["cachedTokens"]))) return false
+      continue
+    }
+    if (key === "completionTokensDetails") {
+      if (!isNumberRecord(item, new Set(["reasoningTokens"]))) return false
+      continue
+    }
+    if (key === "input_tokens_details" || key === "prompt_tokens_details") {
+      if (item !== null && !isNumberRecord(item, new Set(["cached_tokens", "cache_write_tokens"]), new Set(["cache_write_tokens"]))) return false
+      continue
+    }
+    if (key === "output_tokens_details" || key === "completion_tokens_details") {
+      if (item !== null && !isNumberRecord(item, new Set(["reasoning_tokens"]))) return false
+      continue
+    }
+    if (key === "cost_details") {
+      if (
+        item !== null &&
+        !isNumberRecord(
+          item,
+          new Set([
+            "upstream_inference_cost",
+            "upstream_inference_prompt_cost",
+            "upstream_inference_completions_cost",
+          ]),
+          new Set([
+            "upstream_inference_cost",
+            "upstream_inference_prompt_cost",
+            "upstream_inference_completions_cost",
+          ]),
+        )
+      )
+        return false
+      continue
+    }
+    if (key !== "is_byok" || typeof item !== "boolean") return false
+  }
+  return true
+}
+
+function isProviderBilling(provider: string, value: unknown) {
+  if (provider === "anthropic" || provider === "vertex") return isAnthropicBilling(value)
+  if (provider === "google" || provider === "google-vertex") {
+    if (!isRecord(value) || Object.keys(value).length === 0) return false
+    return Object.entries(value).every(([key, item]) =>
+      key === "usageMetadata" ? isNumberRecord(item, googleNumbers) : googleNumbers.has(key) && isBillingNumber(item),
+    )
+  }
+  if (provider === "bedrock" || provider === "venice") {
+    if (!isRecord(value) || Object.keys(value).length === 0) return false
+    return Object.entries(value).every(([key, item]) =>
+      key === "usage" ? isNumberRecord(item, bedrockNumbers) : bedrockNumbers.has(key) && isBillingNumber(item),
+    )
+  }
+  if (provider === "openrouter") return isOpenRouterBilling(value)
+  if (provider === "copilot") return isNumberRecord(value, new Set(["totalNanoAiu"]))
+  if (provider === "openai") return isProfileBilling(value, true)
+  if (provider === "xai" || provider === "deepinfra" || provider === "deepseek") return isProfileBilling(value)
+  return false
+}
+
+const BillingProviderMetadataWrite = ProviderMetadata.check(
+  Schema.makeFilter((metadata) =>
+    Object.keys(metadata).length > 0 && Object.entries(metadata).every(([provider, value]) => isProviderBilling(provider, value))
+      ? undefined
+      : "providerMetadata must contain only supported usage and billing fields",
+  ),
+).annotate({ identifier: "BillingProviderMetadataWrite" })
+const StepFinishCanonicalUsageWrite = Schema.Struct({
+  ...CanonicalUsage.fields,
+  providerMetadata: Schema.optional(BillingProviderMetadataWrite),
+})
+const stepFinishAccountingBase = {
+  mode: Schema.Literal("aggregate"),
+  purpose: Schema.Literal("assistant"),
+  model: ModelV2.Ref,
+  usage: Schema.Struct({
+    authoritative: StepFinishCanonicalUsage,
+    source: Schema.Literal("provider-error"),
+  }),
+}
+
+export const StepFinishAccounting = Schema.Struct({
+  ...stepFinishAccountingBase,
+  time: Schema.Struct({
+    started: Schema.Finite,
+    completed: Schema.Finite,
+    duration: Schema.Finite,
+  }),
+  pricing: Schema.Struct({
+    source: Schema.Literals(["provider", "catalog"]),
+    amount: Schema.Finite,
+    providerAmount: Schema.optional(Schema.Finite),
+    estimateAmount: Schema.optional(Schema.Finite),
+    rate: Schema.optional(ModelV2.Cost),
+  }).pipe(Schema.optional),
+}).annotate({ identifier: "StepFinishAccounting" })
+export type StepFinishAccounting = typeof StepFinishAccounting.Type
+
+const AccountingAmountWrite = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+const AccountingRateWrite = Schema.Struct({
+  tier: Schema.Struct({
+    type: Schema.Literal("context"),
+    size: NonNegativeInt,
+  }).pipe(Schema.optional),
+  input: AccountingAmountWrite,
+  output: AccountingAmountWrite,
+  cache: Schema.Struct({
+    read: AccountingAmountWrite,
+    write: AccountingAmountWrite,
+  }),
+})
+const AccountingPricingWrite = Schema.Struct({
+  source: Schema.Literals(["provider", "catalog"]),
+  amount: AccountingAmountWrite,
+  providerAmount: Schema.optional(AccountingAmountWrite),
+  estimateAmount: Schema.optional(AccountingAmountWrite),
+  rate: Schema.optional(AccountingRateWrite),
+}).check(
+  Schema.makeFilter((pricing) => {
+    if (pricing.source === "provider") {
+      if (pricing.providerAmount === undefined) return { path: ["providerAmount"], issue: "providerAmount is required" }
+      if (pricing.amount !== pricing.providerAmount) {
+        return { path: ["amount"], issue: "provider pricing amount must equal providerAmount" }
+      }
+      return
+    }
+    if (pricing.estimateAmount === undefined) return { path: ["estimateAmount"], issue: "estimateAmount is required" }
+    if (pricing.amount !== pricing.estimateAmount) {
+      return { path: ["amount"], issue: "catalog pricing amount must equal estimateAmount" }
+    }
+  }),
+)
+const StepFinishAccountingWrite = Schema.Struct({
+  ...stepFinishAccountingBase,
+  time: Schema.Struct({
+    started: NonNegativeInt,
+    completed: NonNegativeInt,
+    duration: NonNegativeInt,
+  }).check(
+    Schema.makeFilter((time) => {
+      const issues: Array<Schema.FilterIssue> = []
+      if (time.completed < time.started) {
+        issues.push({ path: ["completed"], issue: "completed must be greater than or equal to started" })
+      }
+      if (time.duration > time.completed - time.started) {
+        issues.push({ path: ["duration"], issue: "duration must not exceed completed minus started" })
+      }
+      return issues
+    }),
+  ),
+  usage: Schema.Struct({
+    authoritative: StepFinishCanonicalUsageWrite,
+    source: Schema.Literal("provider-error"),
+  }),
+  pricing: AccountingPricingWrite.pipe(Schema.optional),
+}).annotate({ identifier: "StepFinishAccountingWrite" })
+
 export const StepFinishPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("step-finish"),
@@ -245,8 +575,11 @@ export const StepFinishPart = Schema.Struct({
       write: Schema.Finite,
     }),
   }),
+  accounting: Schema.optional(StepFinishAccounting),
 }).annotate({ identifier: "StepFinishPart" })
-export type StepFinishPart = Types.DeepMutable<Schema.Schema.Type<typeof StepFinishPart>>
+export type StepFinishPart = Omit<Types.DeepMutable<Schema.Schema.Type<typeof StepFinishPart>>, "accounting"> & {
+  accounting?: StepFinishAccounting
+}
 
 const StepFinishPartWrite = Schema.Struct({
   ...partBase,
@@ -265,7 +598,36 @@ const StepFinishPartWrite = Schema.Struct({
       write: NonNegativeInt,
     }),
   }),
-}).annotate({ identifier: "StepFinishPartWrite" })
+  accounting: Schema.optional(StepFinishAccountingWrite),
+})
+  .check(
+    Schema.makeFilter((part) => {
+      const accounting = part.accounting
+      if (!accounting) return
+      const authoritative = accounting.usage.authoritative
+      const issues: Array<Schema.FilterIssue> = []
+      if (part.duration !== accounting.time.duration) {
+        issues.push({ path: ["duration"], issue: "duration must equal accounting time duration" })
+      }
+      if (part.cost !== (accounting.pricing?.amount ?? 0)) {
+        issues.push({ path: ["cost"], issue: "cost must equal accounting pricing amount" })
+      }
+      if (part.tokens.total !== authoritative.providerTotal) {
+        issues.push({ path: ["tokens", "total"], issue: "total must equal authoritative providerTotal" })
+      }
+      for (const [path, actual, expected] of [
+        [["tokens", "input"], part.tokens.input, authoritative.input],
+        [["tokens", "output"], part.tokens.output, authoritative.output],
+        [["tokens", "reasoning"], part.tokens.reasoning, authoritative.reasoning],
+        [["tokens", "cache", "read"], part.tokens.cache.read, authoritative.cache.read],
+        [["tokens", "cache", "write"], part.tokens.cache.write, authoritative.cache.write],
+      ] satisfies Array<[ReadonlyArray<PropertyKey>, number, number]>) {
+        if (actual !== expected) issues.push({ path, issue: "token value must equal authoritative accounting" })
+      }
+      return issues
+    }),
+  )
+  .annotate({ identifier: "StepFinishPartWrite" })
 
 export const ToolStatePending = Schema.Struct({
   status: Schema.Literal("pending"),

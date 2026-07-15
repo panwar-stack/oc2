@@ -129,6 +129,60 @@ function usageProviderMetadata(value: ProviderMetadata | undefined): ProviderMet
   return entries.length ? Object.fromEntries(entries) : undefined
 }
 
+function mergeRecords(left: Record<string, unknown>, right: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...left }
+  for (const [key, value] of Object.entries(right)) {
+    const previous = result[key]
+    result[key] = isRecord(previous) && isRecord(value) ? mergeRecords(previous, value) : value
+  }
+  return result
+}
+
+export function mergeUsageProviderMetadata(
+  metadata: ProviderMetadata | undefined,
+  usageMetadata: ProviderMetadata | undefined,
+): ProviderMetadata | undefined {
+  const result: Record<string, Record<string, unknown>> = {}
+  // Usage metadata is already protocol-sanitized and must win over raw top-level observations.
+  for (const value of [usageProviderMetadata(metadata), usageMetadata]) {
+    if (!value) continue
+    for (const [provider, fields] of Object.entries(value)) {
+      const previous = result[provider]
+      if (provider === "openrouter" && isRecord(previous?.usage) && isRecord(fields.usage)) {
+        const duplicates = new Set<string>()
+        for (const [camel, snake] of [
+          ["inputTokens", "input_tokens"],
+          ["outputTokens", "output_tokens"],
+          ["promptTokens", "prompt_tokens"],
+          ["completionTokens", "completion_tokens"],
+          ["totalTokens", "total_tokens"],
+          ["costDetails", "cost_details"],
+          ["promptTokensDetails", "prompt_tokens_details"],
+          ["completionTokensDetails", "completion_tokens_details"],
+        ])
+          if (snake in fields.usage) duplicates.add(camel)
+        if ("input_tokens_details" in fields.usage) {
+          duplicates.add("promptTokensDetails")
+          duplicates.add("cachedInputTokens")
+        }
+        if ("output_tokens_details" in fields.usage) {
+          duplicates.add("completionTokensDetails")
+          duplicates.add("reasoningTokens")
+        }
+        result[provider] = {
+          ...fields,
+          usage: Object.fromEntries(
+            Object.entries(mergeRecords(previous.usage, fields.usage)).filter(([key]) => !duplicates.has(key)),
+          ),
+        }
+        continue
+      }
+      result[provider] = mergeRecords(previous ?? {}, fields)
+    }
+  }
+  return Object.keys(result).length ? result : undefined
+}
+
 type UsageValue = {
   readonly inputTokens?: number
   readonly outputTokens?: number
@@ -490,7 +544,7 @@ function usage(
       options.recoveredCacheWrite,
     )
   if (!base) return undefined
-  const metadata = { ...usageProviderMetadata(options.metadata), ...raw?.providerMetadata }
+  const metadata = mergeUsageProviderMetadata(options.metadata, raw?.providerMetadata)
   return ProviderShared.usage(
     {
       input: base.input,
@@ -498,7 +552,7 @@ function usage(
       reasoning: base.reasoning,
       cache: { read: base.cacheRead, write: base.cacheWrite },
       providerTotal: raw?.providerTotal ?? base.providerTotal,
-      providerMetadata: Object.keys(metadata).length ? metadata : undefined,
+      providerMetadata: metadata,
     },
     {
       cacheRead: base.reported.cacheRead,

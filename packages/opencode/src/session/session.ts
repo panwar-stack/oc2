@@ -432,7 +432,9 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
   // AI SDK v6 normalized inputTokens to include cached tokens across all providers
   // (including Anthropic/Bedrock which previously excluded them). Always subtract cache
   // tokens to get the non-cached input count for separate cost calculation.
-  const adjustedInputTokens = safe(inputTokens - cacheReadInputTokens - cacheWriteInputTokens)
+  const adjustedInputTokens = safe(
+    input.usage.nonCachedInputTokens ?? inputTokens - cacheReadInputTokens - cacheWriteInputTokens,
+  )
 
   const total = input.usage.totalTokens
 

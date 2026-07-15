@@ -1,7 +1,7 @@
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
-import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -30,8 +30,9 @@ import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { CanonicalUsage, toolFileSourceFromUri, Usage, type LLMEvent } from "@oc2-ai/llm"
+import { CanonicalUsage, toolFileSourceFromUri, Usage, type LLMEvent, type ProviderErrorEvent } from "@oc2-ai/llm"
 import { ToolOutput } from "@oc2-ai/core/tool-output"
+import { LLMAISDK } from "./llm/ai-sdk"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
@@ -99,6 +100,14 @@ interface ProcessorContext extends Input {
   providerTiming: LLM.ProviderTiming | undefined
   providerEventStep: number | undefined
   providerStepTerminals: Map<number, "ended" | "failed">
+  providerFailure:
+    | {
+        step: number | undefined
+        timing: LLM.ProviderStepTiming | undefined
+        accounting: SessionV1.StepFinishAccounting | undefined
+      }
+    | undefined
+  v2FragmentsFlushed: boolean
 }
 
 type StreamEvent = LLMEvent
@@ -147,6 +156,8 @@ export const layer = Layer.effect(
         providerTiming: undefined,
         providerEventStep: undefined,
         providerStepTerminals: new Map(),
+        providerFailure: undefined,
+        v2FragmentsFlushed: false,
         reasoningMap: {},
         v2AssistantMessageID: undefined,
       }
@@ -291,7 +302,7 @@ export const layer = Layer.effect(
       })
 
       const flushV2Fragments = Effect.fn("SessionProcessor.flushV2Fragments")(function* () {
-        if (!mirrorAssistant) return
+        if (!mirrorAssistant || ctx.v2FragmentsFlushed) return
         if (!ctx.assistantMessage.summary && ctx.currentText && ctx.currentTextID) {
           yield* events.publish(SessionEvent.Text.Ended, {
             sessionID: ctx.sessionID,
@@ -315,6 +326,82 @@ export const layer = Layer.effect(
             ),
           ),
         )
+        ctx.v2FragmentsFlushed = true
+      })
+
+      const settleProviderFailure = Effect.fn("SessionProcessor.settleProviderFailure")(function* (
+        value: ProviderErrorEvent,
+      ) {
+        const step = ctx.providerTiming?.currentStep ?? ctx.providerEventStep
+        if (ctx.providerFailure || (step !== undefined && ctx.providerStepTerminals.has(step))) return
+        if (ctx.providerTiming?.active) LLM.finishProviderAttempt(ctx.providerTiming, "error")
+        const timing = LLM.takeCurrentProviderStep(ctx.providerTiming)
+        const usage = value.usage
+          ? Usage.from({
+              ...value.usage,
+              providerMetadata: LLMAISDK.mergeUsageProviderMetadata(
+                value.providerMetadata,
+                value.usage.providerMetadata,
+              ),
+            })
+          : undefined
+        const canonical = usage ? CanonicalUsage.fromUsage(usage) : undefined
+        const calculated =
+          canonical && usage
+            ? Session.getUsage({
+                model: ctx.model,
+                usage,
+                metadata: usage.providerMetadata,
+              })
+            : undefined
+        const completed = timing?.completed ?? Date.now()
+        const accounting: SessionV1.StepFinishAccounting | undefined =
+          canonical && calculated
+            ? SessionV1.StepFinishAccounting.make({
+                mode: "aggregate",
+                purpose: "assistant",
+                model: {
+                  id: ModelV2.ID.make(ctx.model.id),
+                  providerID: ProviderV2.ID.make(ctx.model.providerID),
+                  variant: ctx.assistantMessage.variant
+                    ? ModelV2.VariantID.make(ctx.assistantMessage.variant)
+                    : undefined,
+                },
+                time: {
+                  started: timing?.started ?? completed,
+                  completed,
+                  duration: timing?.duration ?? 0,
+                },
+                usage: { authoritative: canonical, source: "provider-error" },
+                ...(calculated.pricing ? { pricing: calculated.pricing } : {}),
+              })
+            : undefined
+
+        yield* flushV2Fragments()
+        if (accounting) {
+          const authoritative = accounting.usage.authoritative
+          const cost = accounting.pricing?.amount ?? 0
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: ctx.assistantMessage.id,
+            sessionID: ctx.sessionID,
+            type: "step-finish",
+            reason: "error",
+            duration: accounting.time.duration,
+            cost,
+            tokens: {
+              ...(authoritative.providerTotal === undefined ? {} : { total: authoritative.providerTotal }),
+              input: authoritative.input,
+              output: authoritative.output,
+              reasoning: authoritative.reasoning,
+              cache: authoritative.cache,
+            },
+            accounting,
+          })
+          ctx.assistantMessage.cost += cost
+          yield* session.updateMessage(ctx.assistantMessage)
+        }
+        ctx.providerFailure = { step, timing, accounting }
       })
 
       const ensureToolCall = Effect.fn("SessionProcessor.ensureToolCall")(function* (input: {
@@ -697,7 +784,8 @@ export const layer = Layer.effect(
           }
 
           case "provider-error":
-            throw new Error(value.message)
+            yield* settleProviderFailure(value)
+            throw value
 
           case "step-start":
             ctx.providerEventStep = value.index
@@ -766,10 +854,10 @@ export const layer = Layer.effect(
                     pricing: canonical ? usage.pricing : undefined,
                   },
                 })
-                ctx.providerStepTerminals.set(value.index, "ended")
                 ctx.v2AssistantMessageID = undefined
               }
             }
+            ctx.providerStepTerminals.set(value.index, "ended")
             ctx.assistantMessage.finish = value.reason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
@@ -997,13 +1085,14 @@ export const layer = Layer.effect(
         if (!ctx.assistantMessage.summary) {
           // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
           if (mirrorAssistant) {
-            const step = ctx.providerTiming?.currentStep ?? ctx.providerEventStep
+            const step = ctx.providerFailure?.step ?? ctx.providerTiming?.currentStep ?? ctx.providerEventStep
             if (ctx.providerTiming?.active) {
               LLM.finishProviderAttempt(ctx.providerTiming, aborted ? "interrupt" : "error")
             }
-            const timing = LLM.takeCurrentProviderStep(ctx.providerTiming)
+            const timing = ctx.providerFailure?.timing ?? LLM.takeCurrentProviderStep(ctx.providerTiming)
             if (step === undefined || !ctx.providerStepTerminals.has(step)) {
-              const completed = timing?.completed ?? Date.now()
+              const accounting = ctx.providerFailure?.accounting
+              const completed = accounting?.time.completed ?? timing?.completed ?? Date.now()
               yield* events.publish(SessionEvent.Step.Failed, {
                 sessionID: ctx.sessionID,
                 assistantMessageID: yield* ensureV2AssistantMessage(),
@@ -1012,7 +1101,7 @@ export const layer = Layer.effect(
                   message: errorMessage(e),
                 },
                 timestamp: DateTime.makeUnsafe(completed),
-                accounting: timing
+                accounting: timing || accounting
                   ? {
                       mode: "mirror",
                       purpose: "assistant",
@@ -1024,10 +1113,19 @@ export const layer = Layer.effect(
                           : undefined,
                       },
                       time: {
-                        started: DateTime.makeUnsafe(timing.started),
+                        started: DateTime.makeUnsafe(accounting?.time.started ?? timing?.started ?? completed),
                         completed: DateTime.makeUnsafe(completed),
-                        duration: timing.duration,
+                        duration: accounting?.time.duration ?? timing?.duration ?? 0,
                       },
+                      ...(accounting
+                        ? {
+                            usage: {
+                              ...accounting.usage,
+                              authoritative: CanonicalUsage.from(accounting.usage.authoritative),
+                            },
+                            ...(accounting.pricing ? { pricing: accounting.pricing } : {}),
+                          }
+                        : {}),
                     }
                   : undefined,
               })
@@ -1049,6 +1147,7 @@ export const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
         ctx.toolMayHaveTouchedFiles = false
+        const retryStartedAt = yield* Clock.currentTimeMillis
         let attempt = 1
 
         return yield* Effect.gen(function* () {
@@ -1061,6 +1160,8 @@ export const layer = Layer.effect(
             ctx.providerTiming = LLM.providerTiming(stream)
             ctx.providerEventStep = undefined
             ctx.providerStepTerminals.clear()
+            ctx.providerFailure = undefined
+            ctx.v2FragmentsFlushed = false
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
@@ -1084,6 +1185,7 @@ export const layer = Layer.effect(
               SessionRetry.policy({
                 provider: input.model.providerID,
                 parse,
+                startedAt: retryStartedAt,
                 set: (info) => {
                   attempt = info.attempt + 1
                   // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
@@ -1107,6 +1209,12 @@ export const layer = Layer.effect(
                         message: info.message,
                         action: info.action,
                         next: info.next,
+                      }),
+                    ),
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        ctx.providerFailure = undefined
+                        ctx.v2AssistantMessageID = undefined
                       }),
                     ),
                   )

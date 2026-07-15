@@ -8,10 +8,14 @@ type Method = "get" | "post" | "put" | "delete" | "patch"
 type OpenApiSchema = {
   readonly $ref?: string
   readonly anyOf?: ReadonlyArray<OpenApiSchema>
+  readonly items?: OpenApiSchema
+  readonly minItems?: number
   readonly oneOf?: ReadonlyArray<OpenApiSchema>
+  readonly prefixItems?: ReadonlyArray<OpenApiSchema>
   readonly type?: string
   readonly enum?: readonly unknown[]
   readonly minimum?: number
+  readonly additionalProperties?: OpenApiSchema | boolean
   readonly properties?: Record<string, OpenApiSchema>
   readonly required?: readonly string[]
 }
@@ -133,6 +137,8 @@ describe("PublicApi OpenAPI v2 errors", () => {
     ]?.schema
     const step = spec.components.schemas.StepFinishPartWrite
     const tokens = step?.properties?.tokens
+    const accounting = spec.components.schemas.StepFinishAccountingWrite
+    const metadata = spec.components.schemas.BillingProviderMetadataWrite
 
     expect(request?.$ref).toBe("#/components/schemas/PartWrite")
     expect(step?.properties?.cost?.minimum).toBe(0)
@@ -142,6 +148,61 @@ describe("PublicApi OpenAPI v2 errors", () => {
     expect(tokens?.properties?.total).toMatchObject({ type: "integer", minimum: 0 })
     expect(tokens?.properties?.cache?.properties?.read).toMatchObject({ type: "integer", minimum: 0 })
     expect(tokens?.properties?.cache?.properties?.write).toMatchObject({ type: "integer", minimum: 0 })
+    for (const field of ["started", "completed", "duration"]) {
+      expect(accounting?.properties?.time?.properties?.[field]).toMatchObject({ type: "integer", minimum: 0 })
+    }
+    for (const field of ["amount", "providerAmount", "estimateAmount"]) {
+      expect(accounting?.properties?.pricing?.properties?.[field]?.minimum).toBe(0)
+    }
+    const rate = accounting?.properties?.pricing?.properties?.rate
+    expect(rate?.properties?.input?.minimum).toBe(0)
+    expect(rate?.properties?.output?.minimum).toBe(0)
+    expect(rate?.properties?.cache?.properties?.read?.minimum).toBe(0)
+    expect(rate?.properties?.cache?.properties?.write?.minimum).toBe(0)
+    expect(rate?.properties?.tier?.properties?.size).toMatchObject({ type: "integer", minimum: 0 })
+    expect(metadata?.additionalProperties).toBe(false)
+    expect(Object.keys(metadata?.properties ?? {}).toSorted()).toEqual([
+      "anthropic",
+      "bedrock",
+      "copilot",
+      "deepinfra",
+      "deepseek",
+      "google",
+      "google-vertex",
+      "openai",
+      "openrouter",
+      "venice",
+      "vertex",
+      "xai",
+    ])
+    expect(metadata?.properties?.openrouter?.properties?.usage?.additionalProperties).toBe(false)
+    expect(metadata?.properties?.copilot?.properties).toEqual({ totalNanoAiu: { type: "number", minimum: 0 } })
+    const iterations = metadata?.properties?.anthropic?.properties?.iterations
+    const iteration = spec.components.schemas.AnthropicBillingIterationWrite
+    expect(iterations?.minItems).toBe(1)
+    expect(iterations?.prefixItems).toHaveLength(1)
+    expect(iterations?.items?.$ref).toBe("#/components/schemas/AnthropicBillingIterationWrite")
+    expect(iteration?.oneOf?.map((item) => item.required)).toEqual([
+      ["type", "input_tokens", "output_tokens"],
+      ["type", "input_tokens", "output_tokens"],
+      ["type", "model", "input_tokens", "output_tokens"],
+    ])
+    const nullable = (schema: OpenApiSchema | undefined) => schema?.anyOf?.some((item) => item.type === "null")
+    expect(nullable(metadata?.properties?.anthropic?.properties?.usage?.properties?.cache_creation_input_tokens)).toBe(
+      true,
+    )
+    for (const variant of iteration?.oneOf ?? []) {
+      expect(nullable(variant.properties?.cache_creation_input_tokens)).toBe(true)
+      expect(nullable(variant.properties?.cache_read_input_tokens)).toBe(true)
+    }
+    expect(nullable(metadata?.properties?.deepinfra?.properties?.prompt_tokens_details)).toBe(true)
+    const openrouter = metadata?.properties?.openrouter?.properties?.usage
+    expect(nullable(openrouter?.properties?.cost)).toBe(true)
+    expect(nullable(openrouter?.properties?.prompt_tokens_details)).toBe(true)
+    expect(nullable(openrouter?.properties?.completion_tokens_details)).toBe(true)
+    expect(nullable(openrouter?.properties?.cost_details)).toBe(true)
+    const costDetails = openrouter?.properties?.cost_details?.anyOf?.find((item) => item.type === "object")
+    expect(nullable(costDetails?.properties?.upstream_inference_cost)).toBe(true)
   })
 
   test("rejects malformed accounting writes without tightening legacy part reads", () => {

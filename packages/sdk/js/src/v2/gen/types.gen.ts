@@ -330,6 +330,59 @@ export type StepStartPart = {
   snapshot?: string
 }
 
+export type StepFinishCanonicalUsage = {
+  input: number
+  output: number
+  reasoning: number
+  cache: {
+    read: number
+    write: number
+  }
+  providerTotal?: number
+  providerMetadata?: {
+    [key: string]: {
+      [key: string]: unknown
+    }
+  }
+}
+
+export type StepFinishAccounting = {
+  mode: "aggregate"
+  purpose: "assistant"
+  model: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  usage: {
+    authoritative: StepFinishCanonicalUsage
+    source: "provider-error"
+  }
+  time: {
+    started: number
+    completed: number
+    duration: number
+  }
+  pricing?: {
+    source: "provider" | "catalog"
+    amount: number
+    providerAmount?: number
+    estimateAmount?: number
+    rate?: {
+      tier?: {
+        type: "context"
+        size: number
+      }
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+    }
+  }
+}
+
 export type StepFinishPart = {
   id: string
   sessionID: string
@@ -349,6 +402,7 @@ export type StepFinishPart = {
       write: number
     }
   }
+  accounting?: StepFinishAccounting
 }
 
 export type SnapshotPart = {
@@ -3293,6 +3347,324 @@ export type Session7 = {
   }
 }
 
+export type BillingProviderMetadataWrite = {
+  anthropic?: {
+    cacheCreationInputTokens?: number
+    input_tokens?: number
+    output_tokens?: number
+    cache_creation_input_tokens?: number | null
+    cache_read_input_tokens?: number | null
+    iterations?: [AnthropicBillingIterationWrite, ...Array<AnthropicBillingIterationWrite>]
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_creation_input_tokens?: number | null
+      cache_read_input_tokens?: number | null
+      iterations?: [AnthropicBillingIterationWrite, ...Array<AnthropicBillingIterationWrite>]
+    }
+  }
+  vertex?: {
+    cacheCreationInputTokens?: number
+    input_tokens?: number
+    output_tokens?: number
+    cache_creation_input_tokens?: number | null
+    cache_read_input_tokens?: number | null
+    iterations?: [AnthropicBillingIterationWrite, ...Array<AnthropicBillingIterationWrite>]
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_creation_input_tokens?: number | null
+      cache_read_input_tokens?: number | null
+      iterations?: [AnthropicBillingIterationWrite, ...Array<AnthropicBillingIterationWrite>]
+    }
+  }
+  google?: {
+    promptTokenCount?: number
+    candidatesTokenCount?: number
+    totalTokenCount?: number
+    cachedContentTokenCount?: number
+    thoughtsTokenCount?: number
+    usageMetadata?: {
+      promptTokenCount?: number
+      candidatesTokenCount?: number
+      totalTokenCount?: number
+      cachedContentTokenCount?: number
+      thoughtsTokenCount?: number
+    }
+  }
+  "google-vertex"?: {
+    promptTokenCount?: number
+    candidatesTokenCount?: number
+    totalTokenCount?: number
+    cachedContentTokenCount?: number
+    thoughtsTokenCount?: number
+    usageMetadata?: {
+      promptTokenCount?: number
+      candidatesTokenCount?: number
+      totalTokenCount?: number
+      cachedContentTokenCount?: number
+      thoughtsTokenCount?: number
+    }
+  }
+  openai?: {
+    input_tokens?: number
+    output_tokens?: number
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    prompt_cache_hit_tokens?: number
+    prompt_cache_miss_tokens?: number
+    cost?: number | null
+    cost_in_usd_ticks?: number
+    is_byok?: boolean
+    input_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    prompt_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    output_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    completion_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    cost_details?: {
+      upstream_inference_cost?: number | null
+      upstream_inference_prompt_cost?: number | null
+      upstream_inference_completions_cost?: number | null
+    } | null
+    acceptedPredictionTokens?: number
+    rejectedPredictionTokens?: number
+  }
+  copilot?: {
+    totalNanoAiu?: number
+  }
+  bedrock?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    cacheReadInputTokens?: number
+    cacheWriteInputTokens?: number
+    cacheCreationInputTokens?: number
+    usage?: {
+      inputTokens?: number
+      outputTokens?: number
+      totalTokens?: number
+      cacheReadInputTokens?: number
+      cacheWriteInputTokens?: number
+      cacheCreationInputTokens?: number
+    }
+  }
+  venice?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    cacheReadInputTokens?: number
+    cacheWriteInputTokens?: number
+    cacheCreationInputTokens?: number
+    usage?: {
+      inputTokens?: number
+      outputTokens?: number
+      totalTokens?: number
+      cacheReadInputTokens?: number
+      cacheWriteInputTokens?: number
+      cacheCreationInputTokens?: number
+    }
+  }
+  openrouter?: {
+    usage: {
+      inputTokens?: number
+      outputTokens?: number
+      promptTokens?: number
+      completionTokens?: number
+      reasoningTokens?: number
+      totalTokens?: number
+      cachedInputTokens?: number
+      input_tokens?: number
+      output_tokens?: number
+      prompt_tokens?: number
+      completion_tokens?: number
+      total_tokens?: number
+      prompt_cache_hit_tokens?: number
+      prompt_cache_miss_tokens?: number
+      cost?: number | null
+      cost_in_usd_ticks?: number
+      is_byok?: boolean
+      costDetails?: {
+        upstreamInferenceCost?: number
+      }
+      promptTokensDetails?: {
+        cachedTokens?: number
+      }
+      completionTokensDetails?: {
+        reasoningTokens?: number
+      }
+      input_tokens_details?: {
+        cached_tokens?: number
+        cache_write_tokens?: number | null
+      } | null
+      prompt_tokens_details?: {
+        cached_tokens?: number
+        cache_write_tokens?: number | null
+      } | null
+      output_tokens_details?: {
+        reasoning_tokens?: number
+      } | null
+      completion_tokens_details?: {
+        reasoning_tokens?: number
+      } | null
+      cost_details?: {
+        upstream_inference_cost?: number | null
+        upstream_inference_prompt_cost?: number | null
+        upstream_inference_completions_cost?: number | null
+      } | null
+    }
+  }
+  xai?: {
+    input_tokens?: number
+    output_tokens?: number
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    prompt_cache_hit_tokens?: number
+    prompt_cache_miss_tokens?: number
+    cost?: number | null
+    cost_in_usd_ticks?: number
+    is_byok?: boolean
+    input_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    prompt_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    output_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    completion_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    cost_details?: {
+      upstream_inference_cost?: number | null
+      upstream_inference_prompt_cost?: number | null
+      upstream_inference_completions_cost?: number | null
+    } | null
+  }
+  deepinfra?: {
+    input_tokens?: number
+    output_tokens?: number
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    prompt_cache_hit_tokens?: number
+    prompt_cache_miss_tokens?: number
+    cost?: number | null
+    cost_in_usd_ticks?: number
+    is_byok?: boolean
+    input_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    prompt_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    output_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    completion_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    cost_details?: {
+      upstream_inference_cost?: number | null
+      upstream_inference_prompt_cost?: number | null
+      upstream_inference_completions_cost?: number | null
+    } | null
+  }
+  deepseek?: {
+    input_tokens?: number
+    output_tokens?: number
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    prompt_cache_hit_tokens?: number
+    prompt_cache_miss_tokens?: number
+    cost?: number | null
+    cost_in_usd_ticks?: number
+    is_byok?: boolean
+    input_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    prompt_tokens_details?: {
+      cached_tokens?: number
+      cache_write_tokens?: number | null
+    } | null
+    output_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    completion_tokens_details?: {
+      reasoning_tokens?: number
+    } | null
+    cost_details?: {
+      upstream_inference_cost?: number | null
+      upstream_inference_prompt_cost?: number | null
+      upstream_inference_completions_cost?: number | null
+    } | null
+  }
+}
+
+export type StepFinishAccountingWrite = {
+  mode: "aggregate"
+  purpose: "assistant"
+  model: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  usage: {
+    authoritative: {
+      input: number
+      output: number
+      reasoning: number
+      cache: {
+        read: number
+        write: number
+      }
+      providerTotal?: number
+      providerMetadata?: BillingProviderMetadataWrite
+    }
+    source: "provider-error"
+  }
+  time: {
+    started: number
+    completed: number
+    duration: number
+  }
+  pricing?: {
+    source: "provider" | "catalog"
+    amount: number
+    providerAmount?: number
+    estimateAmount?: number
+    rate?: {
+      tier?: {
+        type: "context"
+        size: number
+      }
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+    }
+  }
+}
+
 export type StepFinishPartWrite = {
   id: string
   sessionID: string
@@ -3312,6 +3684,7 @@ export type StepFinishPartWrite = {
       write: number
     }
   }
+  accounting?: StepFinishAccountingWrite
 }
 
 export type PartWrite =
@@ -6121,6 +6494,30 @@ export type EventWorktreeReady = {
     branch?: string
   }
 }
+
+export type AnthropicBillingIterationWrite =
+  | {
+      type: "message"
+      input_tokens: number
+      output_tokens: number
+      cache_creation_input_tokens?: number | null
+      cache_read_input_tokens?: number | null
+    }
+  | {
+      type: "compaction"
+      input_tokens: number
+      output_tokens: number
+      cache_creation_input_tokens?: number | null
+      cache_read_input_tokens?: number | null
+    }
+  | {
+      type: "advisor_message"
+      model: string
+      input_tokens: number
+      output_tokens: number
+      cache_creation_input_tokens?: number | null
+      cache_read_input_tokens?: number | null
+    }
 
 export type BadRequestError = {
   name: "BadRequest"

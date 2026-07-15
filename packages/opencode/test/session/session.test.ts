@@ -224,12 +224,35 @@ describe("step-finish token propagation via event", () => {
           id: PartID.ascending(),
           messageID,
           sessionID: info.id,
-          type: "step-finish" as const,
+          type: "step-finish",
           reason: "stop",
           cost: 0.005,
           duration: 1234,
           tokens,
-        }
+          accounting: {
+            mode: "aggregate",
+            purpose: "assistant",
+            model: { id: ModelV2.ID.make("test"), providerID: ProviderV2.ID.make("test") },
+            time: { started: 100, completed: 1334, duration: 1234 },
+            usage: {
+              source: "provider-error",
+              authoritative: {
+                input: 500,
+                output: 800,
+                reasoning: 200,
+                cache: { read: 100, write: 50 },
+                providerTotal: 1500,
+                providerMetadata: { openrouter: { usage: { cost: 0.005 } } },
+              },
+            },
+            pricing: {
+              source: "catalog",
+              amount: 0.005,
+              estimateAmount: 0.005,
+              rate: { input: 1, output: 2, cache: { read: 0.1, write: 0.2 } },
+            },
+          },
+        } satisfies SessionV1.StepFinishPart
 
         yield* session.updatePart(partInput)
         const receivedPart = yield* awaitDeferred(received, "timed out waiting for message.part.updated")
@@ -244,10 +267,18 @@ describe("step-finish token propagation via event", () => {
         expect(finish.tokens.cache.write).toBe(50)
         expect(finish.cost).toBe(0.005)
         expect(finish.duration).toBe(1234)
+        expect(finish.accounting).toEqual(partInput.accounting)
         expect(receivedPart).not.toBe(partInput)
         expect((yield* session.get(info.id)).time.processing).toBe(1234)
+        expect(yield* session.getPart({ sessionID: info.id, messageID, partID: partInput.id })).toMatchObject({
+          accounting: partInput.accounting,
+        })
 
-        yield* session.updatePart({ ...partInput, duration: 2000 })
+        yield* session.updatePart({
+          ...partInput,
+          duration: 2000,
+          accounting: { ...partInput.accounting, time: { started: 100, completed: 2100, duration: 2000 } },
+        })
         expect((yield* session.get(info.id)).time.processing).toBe(2000)
 
         yield* session.updatePart({
@@ -261,7 +292,7 @@ describe("step-finish token propagation via event", () => {
         })
         expect((yield* session.get(info.id)).time.processing).toBe(0)
 
-        yield* session.updatePart({ ...partInput, duration: 500 })
+        yield* session.updatePart({ ...partInput, accounting: undefined, duration: 500 })
         expect((yield* session.get(info.id)).time.processing).toBe(500)
 
         const otherMessageID = MessageID.ascending()

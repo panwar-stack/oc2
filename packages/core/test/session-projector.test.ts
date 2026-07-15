@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Layer, Schema, Stream } from "effect"
+import { DateTime, Effect, Exit, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@oc2-ai/core/database/database"
 import { EventV2 } from "@oc2-ai/core/event"
@@ -18,7 +18,7 @@ import { SessionProjector } from "@oc2-ai/core/session/projector"
 import { SessionExecution } from "@oc2-ai/core/session/execution"
 import { SessionInput } from "@oc2-ai/core/session/input"
 import { SessionStore } from "@oc2-ai/core/session/store"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
+import { PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { CanonicalUsage } from "@oc2-ai/llm"
 import { testEffect } from "./lib/effect"
@@ -75,8 +75,8 @@ describe("SessionProjector", () => {
       yield* db.insert(SessionMessageTable).values(assistantRow(assistantMessageID, 0)).run().pipe(Effect.orDie)
       const events = yield* EventV2.Service
       const accounting = {
-        mode: "aggregate" as const,
-        purpose: "assistant" as const,
+        mode: "aggregate",
+        purpose: "assistant",
         model,
         time: { started: created, completed: DateTime.makeUnsafe(10), duration: 10 },
         usage: {
@@ -86,10 +86,10 @@ describe("SessionProjector", () => {
             reasoning: 3,
             cache: { read: 5, write: 2 },
           }),
-          source: "step-finish" as const,
+          source: "step-finish",
         },
-        pricing: { source: "catalog" as const, amount: 0.25 },
-      }
+        pricing: { source: "catalog", amount: 0.25 },
+      } satisfies SessionEvent.Step.Accounting
       const ended = {
         sessionID,
         assistantMessageID,
@@ -393,6 +393,529 @@ describe("SessionProjector", () => {
         tokens_cache_read: 3,
         tokens_cache_write: 1,
       })
+    }),
+  )
+
+  it.effect("projects and replaces V1 provenance instead of conflicting compatibility fields", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const events = yield* EventV2.Service
+      const messageID = SessionV1.MessageID.ascending()
+      const partID = SessionV1.PartID.ascending()
+      yield* events.publish(SessionV1.Event.MessageUpdated, {
+        sessionID,
+        info: {
+          id: messageID,
+          sessionID,
+          role: "user",
+          time: { created: 0 },
+          agent: "build",
+          model: { providerID: model.providerID, modelID: model.id },
+        },
+      })
+      yield* events.publish(SessionV1.Event.PartUpdated, {
+        sessionID,
+        time: 0,
+        part: {
+          id: partID,
+          messageID,
+          sessionID,
+          type: "step-finish",
+          reason: "error",
+          duration: 999,
+          cost: 99,
+          tokens: { input: 99, output: 99, reasoning: 99, cache: { read: 99, write: 99 } },
+          accounting: {
+            mode: "aggregate",
+            purpose: "assistant",
+            model,
+            time: { started: 10, completed: 20, duration: 10 },
+            usage: {
+              authoritative: {
+                input: 4,
+                output: 3,
+                reasoning: 2,
+                cache: { read: 1, write: 5 },
+                providerTotal: 15,
+                providerMetadata: { openrouter: { usage: { cost: 0.25 } } },
+              },
+              source: "provider-error",
+            },
+            pricing: { source: "provider", amount: 0.25, providerAmount: 0.25 },
+          },
+        },
+      })
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0.25,
+        time_processing: 10,
+        tokens_input: 4,
+        tokens_output: 3,
+        tokens_reasoning: 2,
+        tokens_cache_read: 1,
+        tokens_cache_write: 5,
+      })
+      expect(
+        yield* db.select().from(PartTable).where(eq(PartTable.id, partID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        data: {
+          accounting: {
+            usage: { authoritative: { providerTotal: 15 } },
+            pricing: { amount: 0.25 },
+          },
+        },
+      })
+
+      yield* events.publish(SessionV1.Event.PartUpdated, {
+        sessionID,
+        time: 1,
+        part: {
+          id: partID,
+          messageID,
+          sessionID,
+          type: "step-finish",
+          reason: "error",
+          duration: 999,
+          cost: 99,
+          tokens: { input: 99, output: 99, reasoning: 99, cache: { read: 99, write: 99 } },
+          accounting: {
+            mode: "aggregate",
+            purpose: "assistant",
+            model,
+            time: { started: 20, completed: 40, duration: 20 },
+            usage: {
+              authoritative: {
+                input: 8,
+                output: 6,
+                reasoning: 4,
+                cache: { read: 2, write: 10 },
+              },
+              source: "provider-error",
+            },
+            pricing: { source: "catalog", amount: 0.5 },
+          },
+        },
+      })
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0.5,
+        time_processing: 20,
+        tokens_input: 8,
+        tokens_output: 6,
+        tokens_reasoning: 4,
+        tokens_cache_read: 2,
+        tokens_cache_write: 10,
+      })
+    }),
+  )
+
+  it.effect("keeps V1 accounting reads permissive while validating strict PartWrite provenance", () =>
+    Effect.sync(() => {
+      const accounting = {
+        mode: "aggregate",
+        purpose: "assistant",
+        model,
+        time: { started: 100, completed: 110, duration: 5 },
+        usage: {
+          authoritative: {
+            input: 4,
+            output: 3,
+            reasoning: 2,
+            cache: { read: 1, write: 5 },
+            providerTotal: 15,
+            providerMetadata: { openrouter: { usage: { cost: 0.25 } } },
+          },
+          source: "provider-error",
+        },
+        pricing: {
+          source: "catalog",
+          amount: 0.25,
+          providerAmount: 0.2,
+          estimateAmount: 0.25,
+          rate: {
+            tier: { type: "context", size: 100 },
+            input: 0.125,
+            output: 0.25,
+            cache: { read: 0.0125, write: 0.05 },
+          },
+        },
+      } satisfies SessionV1.StepFinishAccounting
+      const part = {
+        id: SessionV1.PartID.ascending(),
+        messageID: SessionV1.MessageID.ascending(),
+        sessionID,
+        type: "step-finish",
+        reason: "error",
+        duration: 5,
+        cost: 0.25,
+        tokens: { total: 15, input: 4, output: 3, reasoning: 2, cache: { read: 1, write: 5 } },
+        accounting,
+      } satisfies typeof SessionV1.StepFinishPart.Type
+      const decodeWrite = Schema.decodeUnknownExit(SessionV1.PartWrite)
+      const decodeRead = Schema.decodeUnknownExit(SessionV1.Part)
+      const withTime = (time: { started: number; completed: number; duration: number }) => ({
+        ...part,
+        accounting: { ...accounting, time },
+      })
+
+      expect(Exit.isSuccess(decodeWrite(part))).toBe(true)
+      for (const providerMetadata of [
+        { anthropic: { usage: { input_tokens: 4, output_tokens: 3 } } },
+        {
+          anthropic: {
+            usage: {
+              input_tokens: 4,
+              output_tokens: 3,
+              cache_creation_input_tokens: null,
+              cache_read_input_tokens: null,
+              iterations: [
+                {
+                  type: "message",
+                  input_tokens: 4,
+                  output_tokens: 3,
+                  cache_creation_input_tokens: null,
+                  cache_read_input_tokens: null,
+                },
+              ],
+            },
+          },
+        },
+        {
+          anthropic: {
+            iterations: [
+              { type: "advisor_message", model: "advisor", input_tokens: 4, output_tokens: 3 },
+            ],
+          },
+        },
+        { google: { promptTokenCount: 4, candidatesTokenCount: 3 } },
+        { bedrock: { inputTokens: 4, outputTokens: 3 } },
+        { openai: { input_tokens: 4, output_tokens: 3 } },
+        { copilot: { totalNanoAiu: 25_000_000 } },
+        { xai: { input_tokens: 4, output_tokens: 3, is_byok: false } },
+        { deepinfra: { prompt_tokens: 4, completion_tokens: 3, prompt_tokens_details: null } },
+        { openrouter: { usage: { promptTokens: 4, completionTokens: 3, cost: 0.25 } } },
+        {
+          openrouter: {
+            usage: {
+              prompt_tokens: 4,
+              completion_tokens: 3,
+              cost: null,
+              prompt_tokens_details: null,
+              completion_tokens_details: null,
+              cost_details: { upstream_inference_cost: null },
+            },
+          },
+        },
+      ]) {
+        expect(
+          Exit.isSuccess(
+            decodeWrite({
+              ...part,
+              accounting: {
+                ...accounting,
+                usage: {
+                  ...accounting.usage,
+                  authoritative: { ...accounting.usage.authoritative, providerMetadata },
+                },
+              },
+            }),
+          ),
+        ).toBe(true)
+      }
+      expect(
+        Exit.isSuccess(
+          decodeWrite({
+            ...part,
+            cost: 0.2,
+            accounting: {
+              ...accounting,
+              pricing: {
+                ...accounting.pricing,
+                source: "provider",
+                amount: 0.2,
+                providerAmount: 0.2,
+                estimateAmount: 0.25,
+              },
+            },
+          }),
+        ),
+      ).toBe(true)
+      for (const time of [
+        { started: -1, completed: 110, duration: 5 },
+        { started: 100.5, completed: 110, duration: 5 },
+        { started: Number.POSITIVE_INFINITY, completed: 110, duration: 5 },
+        { started: 100, completed: 99, duration: 0 },
+        { started: 100, completed: 110, duration: 10.5 },
+        { started: 100, completed: 110, duration: 11 },
+      ]) {
+        expect(Exit.isFailure(decodeWrite(withTime(time)))).toBe(true)
+      }
+
+      for (const pricing of [
+        { ...accounting.pricing, amount: -0.1 },
+        { ...accounting.pricing, providerAmount: -0.1 },
+        { ...accounting.pricing, estimateAmount: -0.1 },
+        { ...accounting.pricing, amount: Number.POSITIVE_INFINITY },
+        { ...accounting.pricing, rate: { ...accounting.pricing.rate, input: -0.1 } },
+        {
+          ...accounting.pricing,
+          rate: { ...accounting.pricing.rate, cache: { ...accounting.pricing.rate.cache, read: -0.1 } },
+        },
+        {
+          ...accounting.pricing,
+          rate: { ...accounting.pricing.rate, tier: { type: "context", size: -1 } },
+        },
+        {
+          ...accounting.pricing,
+          rate: { ...accounting.pricing.rate, tier: { type: "context", size: 1.5 } },
+        },
+        {
+          ...accounting.pricing,
+          rate: {
+            ...accounting.pricing.rate,
+            tier: { type: "context", size: Number.POSITIVE_INFINITY },
+          },
+        },
+      ]) {
+        expect(
+          Exit.isFailure(decodeWrite({ ...part, accounting: { ...accounting, pricing } })),
+        ).toBe(true)
+      }
+
+      for (const invalid of [
+        { ...part, duration: 4 },
+        { ...part, cost: 0.5 },
+        { ...part, tokens: { ...part.tokens, total: 14 } },
+        { ...part, tokens: { ...part.tokens, input: 5 } },
+        { ...part, tokens: { ...part.tokens, cache: { ...part.tokens.cache, write: 6 } } },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            pricing: { ...accounting.pricing, source: "provider", amount: 0.25, providerAmount: undefined },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            pricing: { ...accounting.pricing, source: "provider", amount: 0.25, providerAmount: 0.2 },
+          },
+        },
+        {
+          ...part,
+          accounting: { ...accounting, pricing: { ...accounting.pricing, estimateAmount: undefined } },
+        },
+        {
+          ...part,
+          accounting: { ...accounting, pricing: { ...accounting.pricing, amount: 0.2 } },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { custom: { secret: "reject" } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { openrouter: { usage: { cost: 0.25, secret: "reject" } } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { openrouter: { inputTokens: 1 } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { copilot: { cost: 1 } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { openai: { usage: { usage: { usage: { cost: 1 } } } } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: { ...accounting.usage.authoritative, providerMetadata: { anthropic: {} } },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { anthropic: { usage: { usage: { usage: { input_tokens: 1 } } } } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { anthropic: { iterations: [{}] } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { anthropic: { iterations: [{ model: "secret" }] } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: {
+                  anthropic: {
+                    iterations: [{ type: "message", model: "invented", input_tokens: 1, output_tokens: 2 }],
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: {
+                  anthropic: { iterations: [{ type: "advisor_message", input_tokens: 1, output_tokens: 2 }] },
+                },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: { anthropic: { usage: { cacheCreationInputTokens: 1 } } },
+              },
+            },
+          },
+        },
+        {
+          ...part,
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: {
+                ...accounting.usage.authoritative,
+                providerMetadata: {
+                  anthropic: {
+                    iterations: [
+                      { type: "message", input_tokens: 1, output_tokens: 2, cacheCreationInputTokens: 1 },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      ]) {
+        expect(Exit.isFailure(decodeWrite(invalid))).toBe(true)
+      }
+
+      const legacy = {
+        ...part,
+        accounting: {
+          ...accounting,
+          time: { started: -2.5, completed: -1.25, duration: -3.5 },
+          pricing: {
+            ...accounting.pricing,
+            amount: -0.25,
+            providerAmount: -0.2,
+            estimateAmount: -0.25,
+            rate: {
+              ...accounting.pricing.rate,
+              tier: { type: "context", size: -100 },
+              input: -0.125,
+              cache: { read: -0.0125, write: -0.05 },
+            },
+          },
+        },
+      }
+      expect(Exit.isSuccess(decodeRead(legacy))).toBe(true)
+      expect(Exit.isFailure(decodeWrite(legacy))).toBe(true)
     }),
   )
 

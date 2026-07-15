@@ -2,6 +2,7 @@ import { EventV2 } from "@oc2-ai/core/event"
 import { SessionID, MessageID, PartID } from "./schema"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { ProviderV2 } from "@oc2-ai/core/provider"
+import { ProviderErrorEvent } from "@oc2-ai/llm"
 import {
   APIError,
   AbortedError,
@@ -643,6 +644,15 @@ export function fromError(
   e: unknown,
   ctx: { providerID: ProviderV2.ID; aborted?: boolean },
 ): NonNullable<Assistant["error"]> {
+  if (Schema.is(ProviderErrorEvent)(e)) {
+    if (e.classification === "context-overflow") {
+      return new ContextOverflowError({ message: e.message }, { cause: e }).toObject()
+    }
+    if (e.retryable !== undefined) {
+      return new APIError({ message: e.message, isRetryable: e.retryable }, { cause: e }).toObject()
+    }
+    return new NamedError.Unknown({ message: e.message }, { cause: e }).toObject()
+  }
   switch (true) {
     case e instanceof DOMException && e.name === "AbortError":
       return new AbortedError(

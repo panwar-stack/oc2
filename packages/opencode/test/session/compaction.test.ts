@@ -1809,6 +1809,26 @@ describe("SessionNs.getUsage", () => {
     expect(result.cost).toBe(0.9 + 0.4)
   })
 
+  test("preserves explicit non-cached input tokens", () => {
+    const result = SessionNs.getUsage({
+      model: createModel({
+        context: 100_000,
+        output: 32_000,
+        cost: { input: 1, output: 2, cache: { read: 0.1, write: 0.5 } },
+      }),
+      usage: usage({
+        inputTokens: 100,
+        nonCachedInputTokens: 40,
+        outputTokens: 0,
+        cacheReadInputTokens: 10,
+        cacheWriteInputTokens: 5,
+      }),
+    })
+
+    expect(result.tokens).toMatchObject({ input: 40, cache: { read: 10, write: 5 } })
+    expect(result.cost).toBe(0.0000435)
+  })
+
   test.each(["@ai-sdk/anthropic", "@ai-sdk/amazon-bedrock", "@ai-sdk/google-vertex/anthropic"])(
     "computes total from components for %s models",
     (npm) => {

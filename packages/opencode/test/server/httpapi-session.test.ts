@@ -1201,6 +1201,83 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "validates and round-trips strict failed-attempt accounting parts",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-oc2-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "part accounting" })
+        const message = yield* createTextMessage(session.id, "first")
+        const route = pathFor(SessionPaths.updatePart, {
+          sessionID: session.id,
+          messageID: message.info.id,
+          partID: message.part.id,
+        })
+        const valid = {
+          id: message.part.id,
+          sessionID: session.id,
+          messageID: message.info.id,
+          type: "step-finish",
+          reason: "error",
+          duration: 10,
+          cost: 0.25,
+          tokens: { total: 15, input: 4, output: 3, reasoning: 2, cache: { read: 1, write: 5 } },
+          accounting: {
+            mode: "aggregate",
+            purpose: "assistant",
+            model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+            time: { started: 100, completed: 110, duration: 10 },
+            usage: {
+              source: "provider-error",
+              authoritative: {
+                input: 4,
+                output: 3,
+                reasoning: 2,
+                cache: { read: 1, write: 5 },
+                providerTotal: 15,
+                providerMetadata: { openrouter: { usage: { cost: 0.25 } } },
+              },
+            },
+            pricing: { source: "provider", amount: 0.25, providerAmount: 0.25, estimateAmount: 0.2 },
+          },
+        } satisfies SessionV1.StepFinishPart
+
+        expect(
+          yield* requestJson<SessionV1.StepFinishPart>(route, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify(valid),
+          }),
+        ).toEqual(valid)
+
+        const secret = {
+          ...valid,
+          accounting: {
+            ...valid.accounting,
+            usage: {
+              ...valid.accounting.usage,
+              authoritative: {
+                ...valid.accounting.usage.authoritative,
+                providerMetadata: { openrouter: { usage: { cost: 0.25, secret: "reject" } } },
+              },
+            },
+          },
+        }
+        expect(
+          (yield* request(route, { method: "PATCH", headers, body: JSON.stringify(secret) })).status,
+        ).toBe(400)
+        expect(
+          (yield* request(route, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ ...valid, cost: 0.5 }),
+          })).status,
+        ).toBe(400)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "serves remaining non-LLM session mutation routes",
     () =>
       Effect.gen(function* () {

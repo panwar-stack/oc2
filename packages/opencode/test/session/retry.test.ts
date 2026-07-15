@@ -3,7 +3,8 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import type { NamedError } from "@oc2-ai/core/util/error"
 import { APICallError } from "ai"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Effect, Layer, Schedule, Schema } from "effect"
+import { Clock, Effect, Exit, Fiber, Layer, Schedule, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -12,6 +13,7 @@ import { SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@oc2-ai/core/provider"
+import { LLMEvent } from "@oc2-ai/llm"
 
 const providerID = ProviderV2.ID.make("test")
 const retryProvider = "test"
@@ -38,6 +40,15 @@ describe("session.retry.delay", () => {
     expect(delays).toStrictEqual([2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000])
   })
 
+  test.each([
+    ["empty", {}],
+    ["unrelated", { "x-request-id": "request" }],
+    ["invalid retry-after", { "retry-after": "invalid" }],
+    ["invalid retry-after-ms", { "retry-after-ms": "invalid" }],
+  ])("uses capped no-hint delay at attempt seven for %s headers", (_name, headers) => {
+    expect(SessionRetry.delay(7, apiError(headers))).toBe(SessionRetry.RETRY_MAX_DELAY_NO_HEADERS)
+  })
+
   test("prefers retry-after-ms when shorter than exponential", () => {
     const error = apiError({ "retry-after-ms": "1500" })
     expect(SessionRetry.delay(4, error)).toBe(1500)
@@ -56,9 +67,73 @@ describe("session.retry.delay", () => {
     expect(d).toBeLessThanOrEqual(20000)
   })
 
+  test("evaluates http-date retry-after against the policy clock", () => {
+    const error = apiError({ "retry-after": new Date(20_000).toUTCString() })
+    expect(SessionRetry.delay(1, error, 0)).toBe(20_000)
+  })
+
+  test.each([
+    "Sun, 06 Nov 1994 08:49:37 GMT",
+    "Sunday, 06-Nov-94 08:49:37 GMT",
+    "Sun Nov  6 08:49:37 1994",
+  ])("accepts RFC HTTP-date form %s", (value) => {
+    const target = Date.UTC(1994, 10, 6, 8, 49, 37)
+    expect(SessionRetry.delay(1, apiError({ "retry-after": value }), target - 1_000)).toBe(1_000)
+  })
+
+  test("applies RFC850 rolling 50-year interpretation", () => {
+    const now = Date.UTC(2026, 0, 1)
+    const target = Date.UTC(2075, 10, 6, 8, 49, 37)
+    expect(SessionRetry.delay(1, apiError({ "retry-after": "Wednesday, 06-Nov-75 08:49:37 GMT" }), now)).toBe(
+      SessionRetry.RETRY_MAX_DELAY,
+    )
+    expect(target - now).toBeGreaterThan(SessionRetry.RETRY_MAX_DELAY)
+  })
+
   test("ignores invalid retry hints", () => {
     const error = apiError({ "retry-after": "not-a-number" })
     expect(SessionRetry.delay(1, error)).toBe(2000)
+  })
+
+  test("ignores negative and non-finite numeric retry hints", () => {
+    expect(SessionRetry.delay(1, apiError({ "retry-after-ms": "-1" }))).toBe(2000)
+    expect(SessionRetry.delay(1, apiError({ "retry-after-ms": "-Infinity" }))).toBe(2000)
+    expect(SessionRetry.delay(1, apiError({ "retry-after": "-1" }))).toBe(2000)
+    expect(SessionRetry.delay(1, apiError({ "retry-after": "-Infinity" }))).toBe(2000)
+  })
+
+  test.each(["", " 1", "1 ", "+1", "-1", "0x10", "1e2", "1.5", ".5", "9".repeat(400)])(
+    "rejects non-RFC delay-seconds value %j",
+    (value) => {
+      expect(SessionRetry.delay(1, apiError({ "retry-after": value }))).toBe(2000)
+    },
+  )
+
+  test.each(["2026-01-01", "December 1, 2026", "01/02/2026", "Thu, 32 Jan 2026 00:00:00 GMT"])(
+    "rejects non-HTTP Date.parse value %j",
+    (value) => {
+      expect(SessionRetry.delay(10, apiError({ "retry-after": value }), 0)).toBe(SessionRetry.RETRY_MAX_DELAY_NO_HEADERS)
+    },
+  )
+
+  test.each([
+    "Mon, 31 Feb 2026 00:00:00 GMT",
+    "Monday, 31-Feb-26 00:00:00 GMT",
+    "Mon Feb 31 00:00:00 2026",
+    "Tue, 06 Nov 1994 08:49:37 GMT",
+  ])("rejects semantically invalid HTTP-date value %j", (value) => {
+    expect(SessionRetry.delay(10, apiError({ "retry-after": value }), 0)).toBe(
+      SessionRetry.RETRY_MAX_DELAY_NO_HEADERS,
+    )
+  })
+
+  test("uses normal capped fallback for invalid retry hints", () => {
+    expect(SessionRetry.delay(10, apiError({ "retry-after-ms": "invalid" }))).toBe(
+      SessionRetry.RETRY_MAX_DELAY_NO_HEADERS,
+    )
+    expect(SessionRetry.delay(10, apiError({ "retry-after": "invalid" }))).toBe(
+      SessionRetry.RETRY_MAX_DELAY_NO_HEADERS,
+    )
   })
 
   test("ignores malformed date retry hints", () => {
@@ -80,7 +155,7 @@ describe("session.retry.delay", () => {
     expect(SessionRetry.delay(1, longError)).toBe(700000)
   })
 
-  test("caps oversized header delays to the runtime timer limit", () => {
+  test("caps oversized header delays to the retry time budget", () => {
     const error = apiError({ "retry-after-ms": "999999999999" })
     expect(SessionRetry.delay(1, error)).toBe(SessionRetry.RETRY_MAX_DELAY)
   })
@@ -114,9 +189,97 @@ describe("session.retry.delay", () => {
       })
     }),
   )
+
+  it.effect("policy stops after eight total attempts", () =>
+    Effect.gen(function* () {
+      const retries: number[] = []
+      const error = apiError({ "retry-after-ms": "0" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) => Effect.sync(() => retries.push(info.attempt)),
+        }),
+      )
+
+      const exits = []
+      for (let attempt = 1; attempt <= SessionRetry.RETRY_MAX_ATTEMPTS; attempt++) {
+        exits.push(yield* Effect.exit(step(error)))
+      }
+
+      expect(retries).toEqual([1, 2, 3, 4, 5, 6, 7])
+      const last = exits.at(-1)
+      expect(last).toBeDefined()
+      if (last) expect(Exit.isFailure(last)).toBe(true)
+    }),
+  )
+
+  it.effect("policy stops before retry delay crosses fifteen minutes", () =>
+    Effect.gen(function* () {
+      const retries: number[] = []
+      const error = apiError({ "retry-after-ms": "600000" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) => Effect.sync(() => retries.push(info.attempt)),
+        }),
+      )
+
+      const first = yield* step(error).pipe(Effect.exit, Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust("10 minutes")
+      expect(Exit.isSuccess(yield* Fiber.join(first))).toBe(true)
+      expect(Exit.isFailure(yield* Effect.exit(step(error)))).toBe(true)
+      expect(retries).toEqual([1])
+    }),
+  )
+
+  it.effect("policy includes initial provider execution in elapsed limit", () =>
+    Effect.gen(function* () {
+      const retries: number[] = []
+      const now = yield* Clock.currentTimeMillis
+      const error = apiError({ "retry-after-ms": "120000" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) => Effect.sync(() => retries.push(info.attempt)),
+          startedAt: now - 14 * 60 * 1000,
+        }),
+      )
+
+      expect(Exit.isFailure(yield* Effect.exit(step(error)))).toBe(true)
+      expect(retries).toEqual([])
+    }),
+  )
 })
 
 describe("session.retry.retryable", () => {
+  test("honors explicit provider retryability independently of message heuristics", () => {
+    const retryable = MessageV2.fromError(
+      LLMEvent.providerError({ message: "temporary provider fault", retryable: true }),
+      { providerID },
+    )
+    const permanent = MessageV2.fromError(
+      LLMEvent.providerError({ message: "rate limit", retryable: false }),
+      { providerID },
+    )
+
+    expect(SessionRetry.retryable(retryable, retryProvider)).toEqual({ message: "temporary provider fault" })
+    expect(SessionRetry.retryable(permanent, retryProvider)).toBeUndefined()
+  })
+
+  test("preserves provider context-overflow classification", () => {
+    const error = MessageV2.fromError(
+      LLMEvent.providerError({ message: "provider-specific overflow", classification: "context-overflow" }),
+      { providerID },
+    )
+
+    expect(SessionV1.ContextOverflowError.isInstance(error)).toBe(true)
+    expect(SessionRetry.retryable(error, retryProvider)).toBeUndefined()
+  })
+
   test("maps too_many_requests json messages", () => {
     const error = wrap(JSON.stringify({ type: "error", error: { type: "too_many_requests" } }))
     expect(SessionRetry.retryable(error, retryProvider)).toEqual({ message: "Too Many Requests" })

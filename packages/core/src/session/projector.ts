@@ -40,6 +40,7 @@ function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] |
   if (typeof part !== "object" || part === null) return undefined
   const value = part as Record<string, unknown>
   if (value.type !== "step-finish") return undefined
+  if (Schema.is(SessionV1.StepFinishAccounting)(value.accounting)) return accountingUsage(value.accounting)
   if (!("cost" in value) || !("tokens" in value)) return undefined
   return {
     cost: value.cost as Usage["cost"],
@@ -132,7 +133,9 @@ function applyUsage(
     .pipe(Effect.orDie)
 }
 
-function accountingUsage(accounting: SessionEvent.Step.Accounting): Usage {
+function accountingUsage(
+  accounting: SessionEvent.Step.Accounting | typeof SessionV1.StepFinishAccounting.Type,
+): Usage {
   const tokens = accounting.usage?.authoritative
   return {
     cost: tokens ? (accounting.pricing?.amount ?? 0) : 0,

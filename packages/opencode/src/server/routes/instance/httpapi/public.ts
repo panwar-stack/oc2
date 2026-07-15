@@ -40,6 +40,8 @@ type OpenApiSchema = {
   enum?: Array<string | boolean>
   items?: OpenApiSchema
   maximum?: number
+  minItems?: number
+  minProperties?: number
   minimum?: number
   oneOf?: OpenApiSchema[]
   pattern?: string
@@ -100,6 +102,7 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
   }
   normalizeComponentNames(spec)
   collapseDuplicateComponents(spec)
+  applyBillingProviderMetadataSchema(spec)
   applyLegacySchemaOverrides(spec)
   normalizeComponentDescriptions(spec)
   addLegacyErrorSchemas(spec)
@@ -182,6 +185,141 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
   }
   deleteUnusedLegacyErrorComponents(spec)
   return input
+}
+
+function applyBillingProviderMetadataSchema(spec: OpenApiSpec) {
+  const schemas = spec.components?.schemas
+  if (!schemas) return
+  const number: OpenApiSchema = { type: "number", minimum: 0 }
+  const nullable = (schema: OpenApiSchema): OpenApiSchema => ({ anyOf: [schema, { type: "null" }] })
+  const nullableNumber = nullable(number)
+  const numeric = (fields: string[]) => Object.fromEntries(fields.map((field) => [field, number]))
+  const object = (properties: Record<string, OpenApiSchema>): OpenApiSchema => ({
+    type: "object",
+    additionalProperties: false,
+    minProperties: 1,
+    properties,
+  })
+  const profileNumbers = [
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
+    "cost",
+    "cost_in_usd_ticks",
+  ]
+  const inputDetails = object({ ...numeric(["cached_tokens"]), cache_write_tokens: nullableNumber })
+  const outputDetails = object(numeric(["reasoning_tokens"]))
+  const costDetails = object({
+    upstream_inference_cost: nullableNumber,
+    upstream_inference_prompt_cost: nullableNumber,
+    upstream_inference_completions_cost: nullableNumber,
+  })
+  const profile = object({
+    ...numeric(profileNumbers),
+    cost: nullableNumber,
+    is_byok: { type: "boolean" },
+    input_tokens_details: nullable(inputDetails),
+    prompt_tokens_details: nullable(inputDetails),
+    output_tokens_details: nullable(outputDetails),
+    completion_tokens_details: nullable(outputDetails),
+    cost_details: nullable(costDetails),
+  })
+  const iterationFields = numeric([
+    "input_tokens",
+    "output_tokens",
+  ])
+  iterationFields.cache_creation_input_tokens = nullableNumber
+  iterationFields.cache_read_input_tokens = nullableNumber
+  const iteration = {
+    oneOf: ["message", "compaction"].map((type) => {
+      const schema = object({ type: { type: "string", enum: [type] }, ...iterationFields })
+      schema.required = ["type", "input_tokens", "output_tokens"]
+      return schema
+    }),
+  } satisfies OpenApiSchema
+  const advisor = object({
+    type: { type: "string", enum: ["advisor_message"] },
+    model: { type: "string" },
+    ...iterationFields,
+  })
+  advisor.required = ["type", "model", "input_tokens", "output_tokens"]
+  iteration.oneOf?.push(advisor)
+  schemas.AnthropicBillingIterationWrite = iteration
+  const iterationRef = { $ref: "#/components/schemas/AnthropicBillingIterationWrite" }
+  const anthropicUsage = object({
+    ...numeric(["input_tokens", "output_tokens"]),
+    cache_creation_input_tokens: nullableNumber,
+    cache_read_input_tokens: nullableNumber,
+    iterations: { type: "array", items: iterationRef, prefixItems: [iterationRef], minItems: 1 },
+  })
+  const anthropic = object({
+    cacheCreationInputTokens: number,
+    ...anthropicUsage.properties,
+    usage: anthropicUsage,
+  })
+  const googleUsage = object(
+    numeric([
+      "promptTokenCount",
+      "candidatesTokenCount",
+      "totalTokenCount",
+      "cachedContentTokenCount",
+      "thoughtsTokenCount",
+    ]),
+  )
+  const google = object({ ...googleUsage.properties, usageMetadata: googleUsage })
+  const bedrockUsage = object(
+    numeric([
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "cacheReadInputTokens",
+      "cacheWriteInputTokens",
+      "cacheCreationInputTokens",
+    ]),
+  )
+  const bedrock = object({ ...bedrockUsage.properties, usage: bedrockUsage })
+  const openrouterUsage = object({
+    ...numeric([
+      "inputTokens",
+      "outputTokens",
+      "promptTokens",
+      "completionTokens",
+      "reasoningTokens",
+      "totalTokens",
+      "cachedInputTokens",
+      ...profileNumbers,
+    ]),
+    cost: nullableNumber,
+    is_byok: { type: "boolean" },
+    costDetails: object(numeric(["upstreamInferenceCost"])),
+    promptTokensDetails: object(numeric(["cachedTokens"])),
+    completionTokensDetails: object(numeric(["reasoningTokens"])),
+    input_tokens_details: nullable(inputDetails),
+    prompt_tokens_details: nullable(inputDetails),
+    output_tokens_details: nullable(outputDetails),
+    completion_tokens_details: nullable(outputDetails),
+    cost_details: nullable(costDetails),
+  })
+  const openrouter = object({ usage: openrouterUsage })
+  openrouter.required = ["usage"]
+  schemas.BillingProviderMetadataWrite = object({
+    anthropic,
+    vertex: anthropic,
+    google,
+    "google-vertex": google,
+    openai: object({ ...profile.properties, ...numeric(["acceptedPredictionTokens", "rejectedPredictionTokens"]) }),
+    copilot: object({ totalNanoAiu: number }),
+    bedrock,
+    venice: bedrock,
+    openrouter,
+    xai: profile,
+    deepinfra: profile,
+    deepseek: profile,
+  })
 }
 
 function isV2ApiPath(path: string) {
