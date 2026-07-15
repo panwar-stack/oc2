@@ -1123,13 +1123,24 @@ export default function Layout(props: ParentProps) {
     return commands
   })
 
-  function connectProvider() {
+  let providerConnectChecked = false
+
+  function connectProvider(automatic = false) {
+    if (!automatic) providerConnectChecked = true
     const run = ++dialogRun
     void import("@/components/dialog-select-provider").then((x) => {
-      if (dialogDead || dialogRun !== run) return
+      if (dialogDead || dialogRun !== run || (automatic && dialog.active)) return
       dialog.show(() => <x.DialogSelectProvider />)
     })
   }
+
+  createEffect(() => {
+    if (providerConnectChecked || !serverSync.ready) return
+    if (initialDirectory && !serverSync.child(initialDirectory)[0].provider_ready) return
+    providerConnectChecked = true
+    if (providers.connected().length > 0 || dialog.active) return
+    connectProvider(true)
+  })
 
   function openServer() {
     const run = ++dialogRun
@@ -2229,7 +2240,7 @@ export default function Layout(props: ParentProps) {
                 </div>
               </div>
               <div data-component="getting-started-actions">
-                <Button size="large" icon="plus-small" onClick={connectProvider}>
+                <Button size="large" icon="plus-small" onClick={() => connectProvider()}>
                   {language.t("command.provider.connect")}
                 </Button>
                 <Button size="large" variant="ghost" onClick={() => setStore("gettingStartedDismissed", true)}>

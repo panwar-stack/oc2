@@ -10,6 +10,10 @@ Investigate a repository, edit with permission gates, resume the session later, 
 
 </div>
 
+```
+curl -fsSL https://panwar-stack.github.io/oc2/install | bash
+``` 
+
 OC2 is an independent project based on and inspired by [opencode](https://github.com/anomalyco/opencode). It is not an official opencode distribution. The agent runtime, session orchestration, tools, and persistence run locally by default; model requests go to your configured provider and may leave your machine.
 
 ## From One Prompt To A Coordinated Job
