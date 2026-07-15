@@ -163,6 +163,21 @@ describe("acp usage", () => {
     })
   })
 
+  test("calculates ACP prompt usage from input and both cache categories only", () => {
+    expect(
+      UsageService.promptUsed({
+        cost: 0,
+        tokens: { input: 3, output: 100, reasoning: 200, cache: { read: 5, write: 7 } },
+      }),
+    ).toBe(15)
+    expect(
+      UsageService.promptUsed({
+        cost: 0,
+        tokens: { input: 0, output: 100, reasoning: 200, cache: { read: 0, write: 0 } },
+      }),
+    ).toBe(0)
+  })
+
   test("finds the latest assistant message", () => {
     expect(
       UsageService.latestAssistantMessage([assistant({ cost: 1, modelID: "older" }), user(), assistant({ cost: 2 })]),
@@ -219,7 +234,7 @@ describe("acp usage", () => {
           sessionId: "ses_1",
           update: {
             sessionUpdate: "usage_update",
-            used: 15,
+            used: 22,
             size: 128_000,
             cost: { amount: 3, currency: "USD" },
           },
@@ -235,8 +250,8 @@ describe("acp usage", () => {
               tokens: {
                 input: 10,
                 output: 20,
-                reasoning: 0,
-                cache: { read: 5, write: 0 },
+                reasoning: 30,
+                cache: { read: 5, write: 7 },
               },
             }),
           ]),

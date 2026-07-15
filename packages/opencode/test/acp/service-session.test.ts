@@ -144,7 +144,10 @@ const provider: Provider.Info = {
 describe("ACP service sessions", () => {
   const makeService = (
     messages: readonly { info: unknown; parts: readonly unknown[] }[] = [],
-    options?: { abort?: (input: { sessionID: string }) => Promise<{ data: boolean }> },
+    options?: {
+      abort?: (input: { sessionID: string }) => Promise<{ data: boolean }>
+      defaultUsage?: boolean
+    },
   ) => {
     const updates: SessionNotification[] = []
     const mcpAdds: string[] = []
@@ -259,7 +262,7 @@ describe("ACP service sessions", () => {
     })
 
     return {
-      service: ACPService.make({ sdk, connection, usage }),
+      service: options?.defaultUsage ? ACPService.make({ sdk, connection }) : ACPService.make({ sdk, connection, usage }),
       updates,
       mcpAdds,
       aborts,
@@ -992,6 +995,35 @@ describe("ACP service sessions", () => {
       _meta: {},
     })
     expect(usageUpdates).toEqual([session.sessionId])
+  })
+
+  it("fallback usage service reports input and cache prompt usage only", async () => {
+    const { service, updates } = makeService(
+      [
+        {
+          info: assistantInfo({
+            input: 3,
+            output: 100,
+            reasoning: 200,
+            cache: { read: 5, write: 7 },
+          }),
+          parts: [],
+        },
+      ],
+      { defaultUsage: true },
+    )
+    const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+    await Effect.runPromise(service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "hello" }] }))
+
+    expect(updates.find((item) => item.update.sessionUpdate === "usage_update")).toEqual({
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "usage_update",
+        used: 15,
+        size: 128_000,
+        cost: { amount: 0, currency: "USD" },
+      },
+    })
   })
 
   it("prompt maps assistant and user audience annotations", async () => {

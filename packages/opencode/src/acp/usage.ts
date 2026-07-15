@@ -98,6 +98,10 @@ export function buildUsage(message: AssistantTokenCost): Usage {
   }
 }
 
+export function promptUsed(message: AssistantTokenCost): number {
+  return message.tokens.input + message.tokens.cache.read + message.tokens.cache.write
+}
+
 export function latestAssistantMessage(messages: readonly SessionMessage[]): AssistantMessage | undefined {
   return messages
     .filter((message): message is { readonly info: AssistantMessage } => message.info.role === "assistant")
@@ -209,7 +213,7 @@ export const layer = Layer.effect(
             sessionId: input.sessionID,
             update: {
               sessionUpdate: "usage_update",
-              used: message.tokens.input + message.tokens.cache.read,
+              used: promptUsed(message),
               size,
               cost: { amount: totalSessionCost(messages), currency: "USD" },
             },

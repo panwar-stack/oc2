@@ -25,10 +25,18 @@ export function isOverflow(input: {
   model: Provider.Model
   outputTokenMax?: number
 }) {
+  if (
+    input.tokens.total !== undefined &&
+    (!Number.isFinite(input.tokens.total) || !Number.isInteger(input.tokens.total) || input.tokens.total < 0)
+  )
+    throw new Error("Invalid provider token total")
   if (input.cfg.compaction?.auto === false) return false
   if (input.model.limit.context === 0) return false
-
   const count =
-    input.tokens.total || input.tokens.input + input.tokens.output + input.tokens.cache.read + input.tokens.cache.write
+    input.tokens.input +
+    input.tokens.output +
+    input.tokens.reasoning +
+    input.tokens.cache.read +
+    input.tokens.cache.write
   return count >= usable(input)
 }

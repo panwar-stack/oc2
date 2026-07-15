@@ -422,6 +422,99 @@ describe("session.compaction.isOverflow", () => {
   )
 
   it.live(
+    "uses each disjoint token category exactly once and ignores valid provider totals",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 100_000, output: 32_000 })
+
+        expect(
+          yield* compact.isOverflow({
+            tokens: {
+              total: 999_999,
+              input: 13_000,
+              output: 13_000,
+              reasoning: 13_000,
+              cache: { read: 13_000, write: 13_000 },
+            },
+            model,
+          }),
+        ).toBe(false)
+        expect(
+          yield* compact.isOverflow({
+            tokens: {
+              total: 1,
+              input: 13_600,
+              output: 13_600,
+              reasoning: 13_600,
+              cache: { read: 13_600, write: 13_600 },
+            },
+            model,
+          }),
+        ).toBe(true)
+        expect(
+          yield* compact.isOverflow({
+            tokens: { input: 0, output: 0, reasoning: 68_000, cache: { read: 0, write: 0 } },
+            model,
+          }),
+        ).toBe(true)
+        expect(
+          yield* compact.isOverflow({
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 68_000 } },
+            model,
+          }),
+        ).toBe(true)
+      }),
+    ),
+  )
+
+  it.live(
+    "rejects invalid provider totals",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 100_000, output: 32_000 })
+        for (const total of [-1, 1.5, Number.POSITIVE_INFINITY, Number.NaN]) {
+          const exit = yield* compact
+            .isOverflow({
+              tokens: { total, input: 1, output: 1, reasoning: 1, cache: { read: 1, write: 1 } },
+              model,
+            })
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Invalid provider token total")
+          const contextDisabled = yield* compact
+            .isOverflow({
+              tokens: { total, input: 1, output: 1, reasoning: 1, cache: { read: 1, write: 1 } },
+              model: createModel({ context: 0, output: 0 }),
+            })
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(contextDisabled)).toBe(true)
+        }
+      }),
+    ),
+  )
+
+  it.live(
+    "rejects invalid provider totals when automatic compaction is disabled",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const exit = yield* compact
+            .isOverflow({
+              tokens: { total: -1, input: 1, output: 1, reasoning: 1, cache: { read: 1, write: 1 } },
+              model: createModel({ context: 100_000, output: 32_000 }),
+            })
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Invalid provider token total")
+        }),
+      { config: { compaction: { auto: false } } },
+    ),
+  )
+
+  it.live(
     "respects input limit for input caps",
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
