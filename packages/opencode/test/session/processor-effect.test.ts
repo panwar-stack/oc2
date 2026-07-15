@@ -32,7 +32,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { SessionEvent } from "@oc2-ai/core/session/event"
-import { LLMEvent } from "@oc2-ai/llm"
+import { LLMEvent, Usage } from "@oc2-ai/llm"
 
 void Log.init({ print: false })
 
@@ -133,6 +133,22 @@ const waitFor = <A>(check: Effect.Effect<A | undefined>, message: string) =>
     return yield* Effect.fail(new Error(message))
   })
 
+function timedStream(
+  events: LLMEvent[],
+  attempts: ReadonlyArray<{ step: number; started: number; completed: number; outcome: LLM.ProviderOutcome }>,
+) {
+  let now = 0
+  const timing = LLM.makeProviderTiming(() => now)
+  for (const attempt of attempts) {
+    LLM.beginProviderStep(timing, attempt.step)
+    now = attempt.started
+    LLM.beginProviderAttempt(timing)
+    now = attempt.completed
+    LLM.finishProviderAttempt(timing, attempt.outcome)
+  }
+  return LLM.withProviderTiming(Stream.fromIterable(events), timing)
+}
+
 const user = Effect.fn("TestSession.user")(function* (sessionID: SessionID, text: string) {
   const session = yield* Session.Service
   const msg = yield* session.updateMessage({
@@ -215,19 +231,22 @@ const providerErrorLLM = Layer.succeed(
   LLM.Service,
   LLM.Service.of({
     stream: () =>
-      Stream.make(
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.toolInputStart({ id: "call-1", name: "lookup" }),
-        LLMEvent.toolInputEnd({ id: "call-1", name: "lookup" }),
-        LLMEvent.toolCall({ id: "call-1", name: "lookup", input: {}, providerExecuted: true }),
-        LLMEvent.toolResult({
-          id: "call-1",
-          name: "lookup",
-          result: { type: "error", value: "provider boom" },
-          providerExecuted: true,
-        }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
+      timedStream(
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolInputStart({ id: "call-1", name: "lookup" }),
+          LLMEvent.toolInputEnd({ id: "call-1", name: "lookup" }),
+          LLMEvent.toolCall({ id: "call-1", name: "lookup", input: {}, providerExecuted: true }),
+          LLMEvent.toolResult({
+            id: "call-1",
+            name: "lookup",
+            result: { type: "error", value: "provider boom" },
+            providerExecuted: true,
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+        [{ step: 0, started: 100, completed: 150, outcome: "success" }],
       ),
   }),
 )
@@ -244,13 +263,16 @@ const fragmentFailureLLM = Layer.succeed(
   LLM.Service,
   LLM.Service.of({
     stream: () =>
-      Stream.make(
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.reasoningStart({ id: "reasoning-1" }),
-        LLMEvent.reasoningDelta({ id: "reasoning-1", text: "thinking" }),
-        LLMEvent.textStart({ id: "text-1" }),
-        LLMEvent.textDelta({ id: "text-1", text: "partial" }),
-        LLMEvent.providerError({ message: "provider boom" }),
+      timedStream(
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-1" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-1", text: "thinking" }),
+          LLMEvent.textStart({ id: "text-1" }),
+          LLMEvent.textDelta({ id: "text-1", text: "partial" }),
+          LLMEvent.providerError({ message: "Provider stream ended without a terminal event" }),
+        ],
+        [{ step: 0, started: 200, completed: 225, outcome: "eof" }],
       ),
   }),
 )
@@ -262,6 +284,127 @@ const fragmentFailureEnv = SessionProcessor.layer.pipe(
   Layer.provideMerge(deps),
 )
 const itFragmentFailure = testEffect(fragmentFailureEnv)
+
+const mirrorUsage = Usage.from({
+  inputTokens: 10,
+  outputTokens: 7,
+  nonCachedInputTokens: 6,
+  cacheReadInputTokens: 3,
+  cacheWriteInputTokens: 1,
+  reasoningTokens: 2,
+  totalTokens: 17,
+})
+const mirrorUsageLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      timedStream(
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "tool-calls",
+            usage: mirrorUsage,
+          }),
+          LLMEvent.stepStart({ index: 1 }),
+          LLMEvent.stepFinish({
+            index: 1,
+            reason: "stop",
+            usage: mirrorUsage,
+          }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+        [
+          { step: 0, started: 100, completed: 150, outcome: "success" },
+          { step: 1, started: 1_000, completed: 1_030, outcome: "success" },
+        ],
+      ),
+  }),
+)
+const mirrorUsageEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(mirrorUsageLLM),
+  Layer.provideMerge(deps),
+)
+const itMirrorUsage = testEffect(mirrorUsageEnv)
+
+const preStepFailureLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      Stream.fromEffect(Effect.sleep("20 millis")).pipe(
+        Stream.flatMap(() => Stream.fail(new Error("pre-step failure"))),
+      ),
+  }),
+)
+const preStepFailureEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(preStepFailureLLM),
+  Layer.provideMerge(deps),
+)
+const itPreStepFailure = testEffect(preStepFailureEnv)
+
+const endedThenFailureLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      timedStream(
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: mirrorUsage }),
+          LLMEvent.providerError({ message: "late stream failure" }),
+        ],
+        [{ step: 0, started: 500, completed: 550, outcome: "success" }],
+      ),
+  }),
+)
+const endedThenFailureEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(endedThenFailureLLM),
+  Layer.provideMerge(deps),
+)
+const itEndedThenFailure = testEffect(endedThenFailureEnv)
+
+const nextStepFailureLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) => {
+      const rejection = JSON.stringify(input.messages).includes("rejection")
+      const stream = timedStream(
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: mirrorUsage }),
+          ...(rejection ? [] : [LLMEvent.providerError({ message: "Provider stream ended without a terminal event" })]),
+        ],
+        [
+          { step: 0, started: 100, completed: 150, outcome: "success" },
+          { step: 1, started: 1_000, completed: 1_030, outcome: rejection ? "error" : "eof" },
+        ],
+      )
+      if (!rejection) return stream
+      const timing = LLM.providerTiming(stream)
+      if (!timing) throw new Error("missing test provider timing")
+      return LLM.withProviderTiming(
+        stream.pipe(Stream.concat(Stream.fail(new Error("step 1 rejected before first chunk")))),
+        timing,
+      )
+    },
+  }),
+)
+const nextStepFailureEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(nextStepFailureLLM),
+  Layer.provideMerge(deps),
+)
+const itNextStepFailure = testEffect(nextStepFailureEnv)
 
 const boot = Effect.fn("test.boot")(function* () {
   const processors = yield* SessionProcessor.Service
@@ -320,6 +463,211 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
       }),
     { config: (url) => providerCfg(url) },
   ),
+)
+
+itMirrorUsage.live("session.processor effect tests publish authoritative mirror accounting", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "mirror usage")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const settlements: Array<typeof SessionEvent.Step.Ended.Type> = []
+        let failure: string | undefined
+        const off = yield* events.listen((event) => {
+          if (event.type === SessionEvent.Step.Ended.type)
+            settlements.push(event as typeof SessionEvent.Step.Ended.Type)
+          if (event.type === SessionEvent.Step.Failed.type)
+            failure = (event.data as typeof SessionEvent.Step.Failed.data.Type).error.message
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "mirror usage" }],
+          tools: {},
+        })
+        yield* off
+
+        expect(failure).toBeUndefined()
+        expect(settlements).toHaveLength(2)
+        expect(settlements[1]?.data.accounting).toMatchObject({
+          mode: "mirror",
+          purpose: "assistant",
+          model: { id: ref.modelID, providerID: ref.providerID },
+          usage: {
+            source: "step-finish",
+            authoritative: { input: 6, output: 5, reasoning: 2, cache: { read: 3, write: 1 } },
+          },
+          pricing: { source: "catalog", amount: 0 },
+          time: { duration: 30 },
+        })
+        const persisted = (yield* session.messages({ sessionID: chat.id })).find((item) => item.info.id === msg.id)
+        expect(persisted?.parts.filter((part) => part.type === "step-finish").map((part) => part.duration)).toEqual([
+          50, 30,
+        ])
+      }),
+    { config: cfg },
+  ),
+)
+
+itPreStepFailure.live("session.processor effect tests leave pre-dispatch failures without accounting", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "pre-step failure")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        let accounting: SessionEvent.Step.Accounting | undefined
+        const off = yield* events.listen((event) => {
+          if (event.type === SessionEvent.Step.Failed.type)
+            accounting = (event.data as typeof SessionEvent.Step.Failed.data.Type).accounting
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "pre-step failure" }],
+          tools: {},
+        })
+        yield* off
+
+        expect(accounting).toBeUndefined()
+      }),
+    { config: cfg },
+  ),
+)
+
+itEndedThenFailure.live("session.processor effect tests do not fail an already ended provider step", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "late failure")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        let ended = 0
+        let failed = 0
+        const off = yield* events.listen((event) => {
+          if (event.type === SessionEvent.Step.Ended.type) ended++
+          if (event.type === SessionEvent.Step.Failed.type) failed++
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        expect(
+          yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "late failure" }],
+            tools: {},
+          }),
+        ).toBe("stop")
+        yield* off
+
+        expect({ ended, failed }).toEqual({ ended: 1, failed: 0 })
+        const persisted = (yield* session.messages({ sessionID: chat.id })).find((item) => item.info.id === msg.id)
+        expect(persisted?.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+      }),
+    { config: cfg },
+  ),
+)
+
+const nextStepFailure = (message: string) =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, message)
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const ended: Array<typeof SessionEvent.Step.Ended.Type> = []
+        const failed: Array<typeof SessionEvent.Step.Failed.Type> = []
+        const off = yield* events.listen((event) => {
+          if (event.type === SessionEvent.Step.Ended.type) ended.push(event as typeof SessionEvent.Step.Ended.Type)
+          if (event.type === SessionEvent.Step.Failed.type) failed.push(event as typeof SessionEvent.Step.Failed.Type)
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        expect(
+          yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: message }],
+            tools: {},
+          }),
+        ).toBe("stop")
+        yield* off
+
+        expect(ended).toHaveLength(1)
+        expect(failed).toHaveLength(1)
+        expect(failed[0]?.data.accounting?.time).toMatchObject({ duration: 30 })
+        const persisted = (yield* session.messages({ sessionID: chat.id })).find((item) => item.info.id === msg.id)
+        expect(persisted?.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+        expect(persisted?.info).toMatchObject({ finish: "error", error: {} })
+      }),
+    { config: cfg },
+  )
+
+itNextStepFailure.live("fails raw step 1 EOF before its first normalized chunk", () => nextStepFailure("step 1 eof"))
+
+itNextStepFailure.live("fails raw step 1 rejection before its first normalized chunk", () =>
+  nextStepFailure("step 1 rejection"),
 )
 
 it.live("session.processor effect tests persist and stream only fugu synthesizer output", () =>
@@ -1235,6 +1583,8 @@ itFragmentFailure.live("session.processor effect tests flush partial v2 fragment
         let reasoning: string | undefined
         const textDeltas: string[] = []
         const reasoningDeltas: string[] = []
+        let failedAccounting: SessionEvent.Step.Accounting | undefined
+        let ended = 0
         const off = yield* events.listen((event) => {
           seen.push(event.type)
           if (event.type === SessionEvent.Text.Delta.type)
@@ -1245,6 +1595,9 @@ itFragmentFailure.live("session.processor effect tests flush partial v2 fragment
             text = (event.data as typeof SessionEvent.Text.Ended.data.Type).text
           if (event.type === SessionEvent.Reasoning.Ended.type)
             reasoning = (event.data as typeof SessionEvent.Reasoning.Ended.data.Type).text
+          if (event.type === SessionEvent.Step.Failed.type)
+            failedAccounting = (event.data as typeof SessionEvent.Step.Failed.data.Type).accounting
+          if (event.type === SessionEvent.Step.Ended.type) ended++
           return Effect.void
         })
         const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
@@ -1277,6 +1630,17 @@ itFragmentFailure.live("session.processor effect tests flush partial v2 fragment
         expect(reasoningDeltas).toEqual(["thinking"])
         expect(text).toBe("partial")
         expect(reasoning).toBe("thinking")
+        expect(failedAccounting).toMatchObject({
+          mode: "mirror",
+          purpose: "assistant",
+          model: { id: ref.modelID, providerID: ref.providerID },
+        })
+        expect(failedAccounting).not.toHaveProperty("usage")
+        expect(failedAccounting).not.toHaveProperty("pricing")
+        expect(ended).toBe(0)
+        const persisted = (yield* session.messages({ sessionID: chat.id })).find((item) => item.info.id === msg.id)
+        expect(persisted?.parts.filter((part) => part.type === "step-finish")).toHaveLength(0)
+        expect(persisted?.info).toMatchObject({ finish: "error", error: {} })
       }),
     { config: cfg },
   ),

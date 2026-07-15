@@ -419,7 +419,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const updatePart = Effect.fn("SessionHttpApi.updatePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
-      payload: typeof SessionV1.Part.Type
+      payload: typeof SessionV1.PartWrite.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
       const payload = ctx.payload as SessionV1.Part
@@ -430,6 +430,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       ) {
         return yield* new HttpApiError.BadRequest({})
       }
+      if (!(yield* session.getPart(ctx.params))) return yield* new HttpApiError.BadRequest({})
       return yield* session.updatePart(payload)
     })
 

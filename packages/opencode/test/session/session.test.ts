@@ -3,6 +3,8 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Database } from "@oc2-ai/core/database/database"
 import { EventV2 } from "@oc2-ai/core/event"
 import { ProjectV2 } from "@oc2-ai/core/project"
+import { ModelV2 } from "@oc2-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ProjectTable } from "@oc2-ai/core/project/sql"
 import { AbsolutePath } from "@oc2-ai/core/schema"
 import { SessionProjector } from "@oc2-ai/core/session/projector"
@@ -191,7 +193,7 @@ describe("step-finish token propagation via event", () => {
           role: "user",
           time: { created: Date.now() },
           agent: "user",
-          model: { providerID: "test", modelID: "test" },
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
           tools: {},
           mode: "",
         } as unknown as SessionV1.Info)
@@ -260,6 +262,38 @@ describe("step-finish token propagation via event", () => {
         expect((yield* session.get(info.id)).time.processing).toBe(0)
 
         yield* session.updatePart({ ...partInput, duration: 500 })
+        expect((yield* session.get(info.id)).time.processing).toBe(500)
+
+        const otherMessageID = MessageID.ascending()
+        yield* session.updateMessage({
+          id: otherMessageID,
+          sessionID: info.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "user",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+        })
+        const ownershipChange = yield* session
+          .updatePart({ ...partInput, messageID: otherMessageID, duration: 1_000 })
+          .pipe(Effect.exit)
+        const wrongRemoval = yield* session
+          .removePart({ sessionID: info.id, messageID: otherMessageID, partID: partInput.id })
+          .pipe(Effect.exit)
+        const other = yield* session.create({})
+        const mismatchedEvent = yield* events
+          .publish(SessionV1.Event.PartUpdated, {
+            sessionID: info.id,
+            time: Date.now(),
+            part: { ...partInput, id: PartID.ascending(), sessionID: other.id },
+          })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(ownershipChange)).toBe(true)
+        expect(Exit.isFailure(wrongRemoval)).toBe(true)
+        expect(Exit.isFailure(mismatchedEvent)).toBe(true)
+        expect(yield* session.getPart({ sessionID: info.id, messageID, partID: partInput.id })).toMatchObject({
+          messageID,
+          duration: 500,
+        })
         expect((yield* session.get(info.id)).time.processing).toBe(500)
 
         yield* session.removePart({ sessionID: info.id, messageID, partID: partInput.id })

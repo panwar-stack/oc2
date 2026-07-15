@@ -59,6 +59,18 @@ const GlobalMessage = EventV2.define({
   },
 })
 
+const VersionedMessageV1 = EventV2.define({
+  type: "test.versioned",
+  sync: {
+    version: 1,
+    aggregate: "id",
+  },
+  schema: {
+    id: Schema.String,
+    legacy: Schema.String,
+  },
+})
+
 const VersionedMessage = EventV2.define({
   type: "test.versioned",
   sync: {
@@ -571,6 +583,47 @@ describe("EventV2", () => {
 
       expect(received[0]?.type).toBe(SyncMessage.type)
       expect(received[0]?.data).toEqual({ id: aggregateID, text: "hello" })
+    }),
+  )
+
+  it.effect("replays and reads an exact old sync version while retaining the logical type", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const eventID = EventV2.ID.create()
+      const received = new Array<EventV2.Payload>()
+      yield* events.project(VersionedMessage, (event) =>
+        Effect.sync(() => {
+          received.push(event)
+        }),
+      )
+      const serialized = {
+        id: eventID,
+        type: EventV2.versionedType(VersionedMessageV1.type, 1),
+        seq: 0,
+        aggregateID,
+        data: { id: aggregateID, legacy: "old" },
+      }
+
+      yield* events.replay(serialized)
+      yield* events.replay(serialized)
+      const read = yield* events.aggregateEvents({ aggregateID }).pipe(Stream.take(1), Stream.runCollect)
+      const row = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, aggregateID))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(received).toMatchObject([
+        { id: eventID, type: VersionedMessage.type, version: 1, data: { id: aggregateID, legacy: "old" } },
+      ])
+      expect(Array.from(read).map((item) => item.event)).toMatchObject([
+        { id: eventID, type: VersionedMessage.type, version: 1, data: { id: aggregateID, legacy: "old" } },
+      ])
+      expect(row).toMatchObject({ type: EventV2.versionedType(VersionedMessage.type, 1), data: serialized.data })
+      expect(EventV2.registry.get(VersionedMessage.type)).toBe(VersionedMessage)
     }),
   )
 

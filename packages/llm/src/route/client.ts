@@ -155,7 +155,10 @@ export interface Interface {
 }
 
 export interface StreamMethod {
-  (request: LLMRequest): Stream.Stream<LLMEvent, LLMError>
+  (
+    request: LLMRequest,
+    options?: { readonly onDispatch?: () => void; readonly onDispatchFailure?: () => void },
+  ): Stream.Stream<LLMEvent, LLMError>
 }
 
 export interface GenerateMethod {
@@ -390,13 +393,28 @@ const prepareWith = Effect.fn("LLMClient.prepare")(function* (request: LLMReques
   })
 })
 
-const streamRequestWith = (runtime: TransportRuntime) => (request: LLMRequest) =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const compiled = yield* compile(request)
-      return compiled.route.streamPrepared(compiled.prepared, compiled.request, runtime)
-    }),
-  )
+const streamRequestWith =
+  (runtime: TransportRuntime) =>
+  (request: LLMRequest, options?: { readonly onDispatch?: () => void; readonly onDispatchFailure?: () => void }) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const compiled = yield* compile(request)
+        const webSocket = runtime.webSocket
+        return compiled.route.streamPrepared(compiled.prepared, compiled.request, {
+          ...runtime,
+          http: {
+            execute: (request) =>
+              runtime.http.execute(request, {
+                onStart: () => options?.onDispatch?.(),
+                onFailure: () => options?.onDispatchFailure?.(),
+              }),
+          },
+          webSocket: webSocket
+            ? { open: (request) => webSocket.open(request, { onStart: () => options?.onDispatch?.() }) }
+            : undefined,
+        })
+      }),
+    )
 
 const generateWith = (stream: Interface["stream"]) =>
   Effect.fn("LLM.generate")(function* (request: LLMRequest) {
@@ -417,10 +435,13 @@ const generateWith = (stream: Interface["stream"]) =>
 export const prepare = <Body = unknown>(request: LLMRequest) =>
   prepareWith(request) as Effect.Effect<PreparedRequestOf<Body>, LLMError>
 
-export function stream(request: LLMRequest): Stream.Stream<LLMEvent, LLMError> {
+export function stream(
+  request: LLMRequest,
+  options?: { readonly onDispatch?: () => void; readonly onDispatchFailure?: () => void },
+): Stream.Stream<LLMEvent, LLMError> {
   return Stream.unwrap(
     Effect.gen(function* () {
-      return (yield* Service).stream(request)
+      return (yield* Service).stream(request, options)
     }),
   ) as Stream.Stream<LLMEvent, LLMError>
 }
@@ -431,10 +452,13 @@ export function generate(request: LLMRequest): Effect.Effect<LLMResponse, LLMErr
   }) as Effect.Effect<LLMResponse, LLMError>
 }
 
-export const streamRequest = (request: LLMRequest) =>
+export const streamRequest = (
+  request: LLMRequest,
+  options?: { readonly onDispatch?: () => void; readonly onDispatchFailure?: () => void },
+) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      return (yield* Service).stream(request)
+      return (yield* Service).stream(request, options)
     }),
   )
 

@@ -215,6 +215,7 @@ export const layerWith = (options?: LayerOptions) =>
       )
 
       function commitSyncEvent(
+        definition: SyncDefinition,
         event: Payload,
         input?: {
           readonly seq: number
@@ -225,8 +226,7 @@ export const layerWith = (options?: LayerOptions) =>
         commit?: (seq: number) => Effect.Effect<void>,
       ) {
         return Effect.gen(function* () {
-          const definition = registry.get(event.type)
-          const sync = definition?.sync
+          const sync = definition.sync
           if (sync) {
             if (event.version !== sync.version) {
               yield* Effect.die(
@@ -267,9 +267,7 @@ export const layerWith = (options?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
-                          const encoded = syncRegistry
-                            .get(versionedType(definition.type, sync.version))!
-                            .encode(event.data) as Record<string, unknown>
+                          const encoded = definition.encode(event.data) as Record<string, unknown>
                           if (input?.strictOwner && row?.ownerID && row.ownerID !== input.ownerID) {
                             yield* Effect.die(
                               new InvalidSyncEventError({
@@ -395,7 +393,12 @@ export const layerWith = (options?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(event as Payload, undefined, commit)
+            const committed = yield* commitSyncEvent(
+              registry.get(event.type) as SyncDefinition,
+              event as Payload,
+              undefined,
+              commit,
+            )
             if (committed) {
               event = { ...event, seq: committed.seq }
               yield* Effect.forEach(syncHandlers, (sync) => observe(event as Payload, "sync", sync), { discard: true })
@@ -472,7 +475,7 @@ export const layerWith = (options?: LayerOptions) =>
               data: definition.decode(event.data),
               replay: true,
             } as Payload
-            const committed = yield* commitSyncEvent(payload, {
+            const committed = yield* commitSyncEvent(definition, payload, {
               seq: event.seq,
               aggregateID: event.aggregateID,
               ownerID: options?.ownerID,

@@ -5,6 +5,7 @@ import { jsonSchema, tool, type ModelMessage, type Tool } from "ai"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import { LLMNative } from "@/session/llm/native-request"
 import { LLMNativeRuntime } from "@/session/llm/native-runtime"
+import { ProviderTimingLifecycle } from "@/session/llm/provider-timing"
 import type { Provider } from "@/provider/provider"
 
 import { OAUTH_DUMMY_KEY } from "@/auth"
@@ -610,16 +611,26 @@ describe("session.llm-native.request", () => {
           return { output: options.toolCallId }
         },
       } satisfies Tool
+      let now = 100
       const llmClient = {
         prepare: () => Effect.die("unused"),
-        stream: () =>
+        stream: (_request, options) =>
           Stream.fromIterable([
             LLMEvent.toolCall({ id: "call-1", name: "lookup", input: {} }),
             LLMEvent.toolCall({ id: "call-2", name: "lookup", input: {} }),
+            LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
             LLMEvent.finish({ reason: "tool-calls" }),
-          ]),
+          ]).pipe(
+            Stream.tap((event) =>
+              Effect.sync(() => {
+                if (event.type === "step-finish") now = 150
+              }),
+            ),
+            Stream.onStart(Effect.sync(() => options?.onDispatch?.())),
+          ),
         generate: () => Effect.die("unused"),
       } as LLMClientShape
+      const timing = ProviderTimingLifecycle.makeProviderTiming(() => now)
       const native = LLMNativeRuntime.stream({
         model: baseModel,
         provider: providerInfo,
@@ -629,6 +640,7 @@ describe("session.llm-native.request", () => {
         tools: { lookup },
         headers: {},
         abort: new AbortController().signal,
+        timing,
       })
       expect(native.type).toBe("supported")
       if (native.type === "unsupported") throw new Error(native.reason)
@@ -640,11 +652,184 @@ describe("session.llm-native.request", () => {
       yield* Effect.promise(() => bothStarted)
 
       expect(started).toEqual(["call-1", "call-2"])
-      expect(observed).toEqual(["tool-call", "tool-call", "finish"])
+      const provider = ProviderTimingLifecycle.takeProviderStep(timing, 0)
+      expect(provider).toEqual({
+        step: 0,
+        started: 100,
+        completed: 150,
+        duration: 50,
+        outcome: "success",
+      })
+      expect(observed).toEqual(["tool-call", "tool-call", "step-finish", "finish"])
 
       release?.()
       yield* Fiber.join(fiber)
-      expect(observed).toEqual(["tool-call", "tool-call", "finish", "tool-result", "tool-result"])
+      expect(provider).toEqual({
+        step: 0,
+        started: 100,
+        completed: 150,
+        duration: 50,
+        outcome: "success",
+      })
+      expect(observed).toEqual(["tool-call", "tool-call", "step-finish", "finish", "tool-result", "tool-result"])
+    }),
+  )
+
+  it.effect("emits one provider error for raw EOF before gated native tools settle", () =>
+    Effect.gen(function* () {
+      const observed: string[] = []
+      let release: (() => void) | undefined
+      let notifyFailure: (() => void) | undefined
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const failed = new Promise<void>((resolve) => {
+        notifyFailure = resolve
+      })
+      let now = 100
+      const timing = ProviderTimingLifecycle.makeProviderTiming(() => now)
+      const native = LLMNativeRuntime.stream({
+        model: baseModel,
+        provider: providerInfo,
+        auth: undefined,
+        llmClient: {
+          prepare: () => Effect.die("unused"),
+          stream: (_request, options) =>
+            Stream.make(LLMEvent.toolCall({ id: "call-eof", name: "lookup", input: {} })).pipe(
+              Stream.tap(() => Effect.sync(() => (now = 175))),
+              Stream.onStart(Effect.sync(() => options?.onDispatch?.())),
+            ),
+          generate: () => Effect.die("unused"),
+        } as LLMClientShape,
+        messages: [],
+        tools: {
+          lookup: {
+            description: "Lookup data",
+            inputSchema: jsonSchema({ type: "object" }),
+            execute: async () => {
+              await gate
+              return { output: "done" }
+            },
+          } satisfies Tool,
+        },
+        headers: {},
+        abort: new AbortController().signal,
+        timing,
+      })
+      expect(native.type).toBe("supported")
+      if (native.type === "unsupported") throw new Error(native.reason)
+
+      const fiber = yield* native.stream.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            observed.push(event.type)
+            if (event.type === "provider-error") notifyFailure?.()
+          }),
+        ),
+        Effect.forkScoped,
+      )
+      yield* Effect.promise(() => failed)
+
+      expect(observed).toEqual(["tool-call", "provider-error"])
+      expect(ProviderTimingLifecycle.takeProviderStep(timing, 0)).toEqual({
+        step: 0,
+        started: 100,
+        completed: 175,
+        duration: 75,
+        outcome: "eof",
+      })
+      release?.()
+      yield* Fiber.join(fiber)
+      expect(observed).toEqual(["tool-call", "provider-error", "tool-result"])
+    }),
+  )
+
+  it.effect("settles an active native transport attempt once on cancellation", () =>
+    Effect.gen(function* () {
+      let now = 100
+      let notifyDispatch: (() => void) | undefined
+      const dispatched = new Promise<void>((resolve) => {
+        notifyDispatch = resolve
+      })
+      const timing = ProviderTimingLifecycle.makeProviderTiming(() => now)
+      const native = LLMNativeRuntime.stream({
+        model: baseModel,
+        provider: providerInfo,
+        auth: undefined,
+        llmClient: {
+          prepare: () => Effect.die("unused"),
+          stream: (_request, options) =>
+            Stream.never.pipe(
+              Stream.onStart(
+                Effect.sync(() => {
+                  options?.onDispatch?.()
+                  notifyDispatch?.()
+                }),
+              ),
+            ),
+          generate: () => Effect.die("unused"),
+        } as LLMClientShape,
+        messages: [],
+        tools: {},
+        headers: {},
+        abort: new AbortController().signal,
+        timing,
+      })
+      expect(native.type).toBe("supported")
+      if (native.type === "unsupported") throw new Error(native.reason)
+
+      const fiber = yield* native.stream.pipe(Stream.runDrain, Effect.forkScoped)
+      yield* Effect.promise(() => dispatched)
+      now = 150
+      yield* Fiber.interrupt(fiber)
+
+      expect(ProviderTimingLifecycle.takeProviderStep(timing, 0)).toEqual({
+        step: 0,
+        started: 100,
+        completed: 150,
+        duration: 50,
+        outcome: "interrupt",
+      })
+    }),
+  )
+
+  it.effect("does not resettle a final transport failure exposed as provider-error", () =>
+    Effect.gen(function* () {
+      let now = 100
+      const timing = ProviderTimingLifecycle.makeProviderTiming(() => now)
+      const native = LLMNativeRuntime.stream({
+        model: baseModel,
+        provider: providerInfo,
+        auth: undefined,
+        llmClient: {
+          prepare: () => Effect.die("unused"),
+          stream: (_request, options) =>
+            Stream.suspend(() => {
+              options?.onDispatch?.()
+              now = 125
+              options?.onDispatchFailure?.()
+              return Stream.make(LLMEvent.providerError({ message: "transport failed" }))
+            }),
+          generate: () => Effect.die("unused"),
+        } as LLMClientShape,
+        messages: [],
+        tools: {},
+        headers: {},
+        abort: new AbortController().signal,
+        timing,
+      })
+      expect(native.type).toBe("supported")
+      if (native.type === "unsupported") throw new Error(native.reason)
+
+      const events = Array.from(yield* native.stream.pipe(Stream.runCollect))
+      expect(events).toMatchObject([{ type: "provider-error", message: "transport failed" }])
+      expect(ProviderTimingLifecycle.takeProviderStep(timing, 0)).toEqual({
+        step: 0,
+        started: 100,
+        completed: 125,
+        duration: 25,
+        outcome: "error",
+      })
     }),
   )
 

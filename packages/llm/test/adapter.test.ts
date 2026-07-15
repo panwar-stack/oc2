@@ -118,6 +118,18 @@ describe("llm route", () => {
     }),
   )
 
+  it.effect("notifies dispatch only when the prepared transport stream starts", () =>
+    Effect.gen(function* () {
+      const llm = yield* LLMClient.Service
+      const observed: string[] = []
+      const output = llm.stream(request, { onDispatch: () => observed.push("dispatch") })
+
+      expect(observed).toEqual([])
+      yield* output.pipe(Stream.runForEach((event) => Effect.sync(() => observed.push(event.type))))
+      expect(observed).toEqual(["dispatch", "text-delta", "finish"])
+    }),
+  )
+
   it.effect("selects routes by model route value", () =>
     Effect.gen(function* () {
       const llm = yield* LLMClient.Service

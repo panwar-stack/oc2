@@ -22,6 +22,8 @@ const encodeMessage = Schema.encodeSync(SessionMessage.Message)
 
 class PromptAlreadyProjected extends Error {}
 export class SessionAlreadyProjected extends Error {}
+export class PartOwnershipConflict extends Error {}
+export class MissingPartMessage extends Error {}
 
 type Usage = {
   cost: number
@@ -81,6 +83,20 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
   }
 }
 
+function sessionUpdateRow(info: SessionV1.SessionInfo) {
+  const {
+    cost: _,
+    tokens_input: __,
+    tokens_output: ___,
+    tokens_reasoning: ____,
+    tokens_cache_read: _____,
+    tokens_cache_write: ______,
+    time_processing: _______,
+    ...row
+  } = sessionRow(info)
+  return row
+}
+
 function messageData(
   info: (typeof SessionV1.Event.MessageUpdated.Type)["data"]["info"],
 ): typeof MessageTable.$inferInsert.data {
@@ -114,6 +130,20 @@ function applyUsage(
     .where(eq(SessionTable.id, sessionID))
     .run()
     .pipe(Effect.orDie)
+}
+
+function accountingUsage(accounting: SessionEvent.Step.Accounting): Usage {
+  const tokens = accounting.usage?.authoritative
+  return {
+    cost: tokens ? (accounting.pricing?.amount ?? 0) : 0,
+    duration: accounting.time.duration,
+    tokens: {
+      input: tokens?.input ?? 0,
+      output: tokens?.output ?? 0,
+      reasoning: tokens?.reasoning ?? 0,
+      cache: { read: tokens?.cache.read ?? 0, write: tokens?.cache.write ?? 0 },
+    },
+  }
 }
 
 function run(db: DatabaseService, event: SessionEvent.Event) {
@@ -215,6 +245,49 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
     .pipe(Effect.orDie)
 }
 
+function settle(
+  db: DatabaseService,
+  event: typeof SessionEvent.Step.Ended.Type | typeof SessionEvent.Step.Failed.Type,
+) {
+  return Effect.gen(function* () {
+    const row = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(
+        and(
+          eq(SessionMessageTable.id, event.data.assistantMessageID),
+          eq(SessionMessageTable.session_id, event.data.sessionID),
+          eq(SessionMessageTable.type, "assistant"),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)
+    const previous = row ? decodeMessage({ ...row.data, id: row.id, type: row.type }) : undefined
+    if (event.data.accounting?.mode === "aggregate" && previous?.type !== "assistant")
+      return yield* Effect.die(new SessionMessageUpdater.TerminalConflict())
+    yield* run(db, event)
+    if (event.data.accounting?.mode !== "aggregate") return
+    const before =
+      previous?.type === "assistant" && previous.accounting?.mode === "aggregate"
+        ? accountingUsage(previous.accounting)
+        : { cost: 0, duration: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+    const after = accountingUsage(event.data.accounting)
+    yield* applyUsage(db, event.data.sessionID, {
+      cost: after.cost - before.cost,
+      duration: after.duration - before.duration,
+      tokens: {
+        input: after.tokens.input - before.tokens.input,
+        output: after.tokens.output - before.tokens.output,
+        reasoning: after.tokens.reasoning - before.tokens.reasoning,
+        cache: {
+          read: after.tokens.cache.read - before.tokens.cache.read,
+          write: after.tokens.cache.write - before.tokens.cache.write,
+        },
+      },
+    })
+  })
+}
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
@@ -243,7 +316,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionV1.Event.Updated, (event) =>
       db
         .update(SessionTable)
-        .set(sessionRow(event.data.info))
+        .set(sessionUpdateRow(event.data.info))
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
         .pipe(Effect.orDie),
@@ -305,14 +378,22 @@ export const layer = Layer.effectDiscard(
         const row = yield* db
           .select()
           .from(PartTable)
-          .where(and(eq(PartTable.id, event.data.partID), eq(PartTable.session_id, event.data.sessionID)))
+          .where(eq(PartTable.id, event.data.partID))
           .get()
           .pipe(Effect.orDie)
+        if (row && (row.session_id !== event.data.sessionID || row.message_id !== event.data.messageID))
+          return yield* Effect.die(new PartOwnershipConflict())
         const previous = row && usage(row.data)
         if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
         yield* db
           .delete(PartTable)
-          .where(and(eq(PartTable.id, event.data.partID), eq(PartTable.session_id, event.data.sessionID)))
+          .where(
+            and(
+              eq(PartTable.id, event.data.partID),
+              eq(PartTable.session_id, event.data.sessionID),
+              eq(PartTable.message_id, event.data.messageID),
+            ),
+          )
           .run()
           .pipe(Effect.orDie)
       }),
@@ -322,8 +403,18 @@ export const layer = Layer.effectDiscard(
         const id = event.data.part.id
         const messageID = event.data.part.messageID
         const sessionID = event.data.part.sessionID
+        if (event.data.sessionID !== sessionID) return yield* Effect.die(new PartOwnershipConflict())
         const data = partData(event.data.part)
         const row = yield* db.select().from(PartTable).where(eq(PartTable.id, id)).get().pipe(Effect.orDie)
+        if (row && (row.session_id !== sessionID || row.message_id !== messageID))
+          return yield* Effect.die(new PartOwnershipConflict())
+        const message = yield* db
+          .select({ id: MessageTable.id })
+          .from(MessageTable)
+          .where(and(eq(MessageTable.id, messageID), eq(MessageTable.session_id, sessionID)))
+          .get()
+          .pipe(Effect.orDie)
+        if (!message) return yield* Effect.die(new MissingPartMessage())
         yield* db
           .insert(PartTable)
           .values({ id, message_id: messageID, session_id: sessionID, time_created: event.data.time, data })
@@ -428,8 +519,8 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Started, (event) => run(db, event))
-    yield* events.project(SessionEvent.Step.Ended, (event) => run(db, event))
-    yield* events.project(SessionEvent.Step.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.Step.Ended, (event) => (event.version === 1 ? Effect.void : settle(db, event)))
+    yield* events.project(SessionEvent.Step.Failed, (event) => (event.version === 1 ? Effect.void : settle(db, event)))
     yield* events.project(SessionEvent.Text.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Text.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Input.Started, (event) => run(db, event))

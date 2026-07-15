@@ -251,10 +251,15 @@ describe("RequestExecutor", () => {
   it.effect("retries retryable status responses before returning the stream", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
-      const response = yield* executor.execute(request)
+      const attempts: string[] = []
+      const response = yield* executor.execute(request, {
+        onStart: () => attempts.push("start"),
+        onFailure: () => attempts.push("failure"),
+      })
 
       expect(response.status).toBe(200)
       expect(yield* response.text).toBe("ok")
+      expect(attempts).toEqual(["start", "failure", "start"])
     }).pipe(
       Effect.provide(
         responsesLayer([
@@ -360,20 +365,30 @@ describe("RequestExecutor", () => {
       const attempts = yield* Ref.make(0)
       return yield* Effect.gen(function* () {
         const executor = yield* RequestExecutor.Service
-        const fiber = yield* executor.execute(request).pipe(Effect.forkChild)
+        const lifecycle: string[] = []
+        const fiber = yield* executor
+          .execute(request, {
+            onStart: () => lifecycle.push("start"),
+            onFailure: () => lifecycle.push("failure"),
+          })
+          .pipe(Effect.forkChild)
 
         yield* Effect.yieldNow
+        yield* Effect.yieldNow
         expect(yield* Ref.get(attempts)).toBe(1)
+        expect(lifecycle).toEqual(["start", "failure"])
 
         yield* TestClock.adjust(1_999)
         yield* Effect.yieldNow
         expect(yield* Ref.get(attempts)).toBe(1)
+        expect(lifecycle).toEqual(["start", "failure"])
 
         yield* TestClock.adjust(1)
         const response = yield* Fiber.join(fiber)
 
         expect(response.status).toBe(200)
         expect(yield* Ref.get(attempts)).toBe(2)
+        expect(lifecycle).toEqual(["start", "failure", "start"])
       }).pipe(
         Effect.provide(
           countedResponsesLayer(attempts, [
@@ -390,7 +405,13 @@ describe("RequestExecutor", () => {
       const attempts = yield* Ref.make(0)
       return yield* Effect.gen(function* () {
         const executor = yield* RequestExecutor.Service
-        const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+        const lifecycle: string[] = []
+        const fiber = yield* executor
+          .execute(request, {
+            onStart: () => lifecycle.push("start"),
+            onFailure: () => lifecycle.push("failure"),
+          })
+          .pipe(Effect.flip, Effect.forkChild)
 
         yield* Effect.yieldNow
         expect(yield* Ref.get(attempts)).toBe(1)
@@ -413,6 +434,7 @@ describe("RequestExecutor", () => {
         expectLLMError(error)
         expect(error.reason).toMatchObject({ _tag: "ProviderInternal" })
         expect(yield* Ref.get(attempts)).toBe(3)
+        expect(lifecycle).toEqual(["start", "failure", "start", "failure", "start", "failure"])
       }).pipe(
         Effect.provide(
           countedResponsesLayer(attempts, [

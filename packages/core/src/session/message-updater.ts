@@ -1,5 +1,6 @@
 import { castDraft, produce, type WritableDraft } from "immer"
 import { Effect } from "effect"
+import { isDeepStrictEqual } from "node:util"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 
@@ -14,6 +15,16 @@ export interface Adapter {
   readonly updateAssistant: (assistant: SessionMessage.Assistant) => Effect.Effect<void>
   readonly updateShell: (shell: SessionMessage.Shell) => Effect.Effect<void>
   readonly appendMessage: (message: SessionMessage.Message) => Effect.Effect<void>
+}
+
+export class TerminalConflict extends Error {
+  override readonly name = "SessionMessageUpdater.TerminalConflict"
+}
+export class ContentAfterTerminal extends Error {
+  override readonly name = "SessionMessageUpdater.ContentAfterTerminal"
+}
+export class AccountingMismatch extends Error {
+  override readonly name = "SessionMessageUpdater.AccountingMismatch"
 }
 
 export function memory(state: MemoryState): Adapter {
@@ -97,6 +108,46 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       const assistant = yield* adapter.getAssistant(messageID)
       if (assistant) yield* adapter.updateAssistant(produce(assistant, recipe))
     })
+
+  const updateProviderAssistant = (messageID: SessionMessage.ID, recipe: (draft: DraftAssistant) => void) =>
+    Effect.gen(function* () {
+      const assistant = yield* adapter.getAssistant(messageID)
+      if (!assistant) return
+      if (assistant.time.completed) return yield* Effect.die(new ContentAfterTerminal())
+      yield* adapter.updateAssistant(produce(assistant, recipe))
+    })
+
+  const settleAssistant = (messageID: SessionMessage.ID, recipe: (draft: DraftAssistant) => void) =>
+    Effect.gen(function* () {
+      const assistant = yield* adapter.getAssistant(messageID)
+      if (!assistant) return
+      const next = produce(assistant, recipe)
+      if (!assistant.time.completed) return yield* adapter.updateAssistant(next)
+      const terminal = (value: SessionMessage.Assistant) => ({
+        completed: value.time.completed,
+        finish: value.finish,
+        cost: value.cost,
+        tokens: value.tokens,
+        error: value.error,
+        snapshot: value.snapshot?.end,
+        accounting: value.accounting,
+      })
+      if (isDeepStrictEqual(terminal(assistant), terminal(next))) return
+      return yield* Effect.die(new TerminalConflict())
+    })
+
+  const accountingCompatibility = (accounting: SessionEvent.Step.Accounting) => {
+    const usage = accounting.usage?.authoritative
+    return {
+      cost: usage ? (accounting.pricing?.amount ?? 0) : 0,
+      tokens: {
+        input: usage?.input ?? 0,
+        output: usage?.output ?? 0,
+        reasoning: usage?.reasoning ?? 0,
+        cache: { read: usage?.cache.read ?? 0, write: usage?.cache.write ?? 0 },
+      },
+    }
+  }
 
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
@@ -210,42 +261,69 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.step.ended": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        const compatibility = event.data.accounting && accountingCompatibility(event.data.accounting)
+        const tokens = {
+          input: event.data.tokens.input,
+          output: event.data.tokens.output,
+          reasoning: event.data.tokens.reasoning,
+          cache: { read: event.data.tokens.cache.read, write: event.data.tokens.cache.write },
+        }
+        if (
+          compatibility &&
+          (compatibility.cost !== event.data.cost || !isDeepStrictEqual(compatibility.tokens, tokens))
+        )
+          return Effect.die(
+            new AccountingMismatch(
+              `Expected ${JSON.stringify(compatibility)}, got ${JSON.stringify({ cost: event.data.cost, tokens })}`,
+            ),
+          )
+        return settleAssistant(event.data.assistantMessageID, (draft) => {
           draft.time.completed = event.data.timestamp
           draft.finish = event.data.finish
           draft.cost = event.data.cost
           draft.tokens = event.data.tokens
-          if (event.data.snapshot) draft.snapshot = { ...draft.snapshot, end: event.data.snapshot }
+          draft.accounting = event.data.accounting
+          draft.snapshot = event.data.snapshot
+            ? { ...draft.snapshot, end: event.data.snapshot }
+            : draft.snapshot?.start
+              ? { start: draft.snapshot.start }
+              : undefined
         })
       },
       "session.next.step.failed": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        const compatibility = event.data.accounting?.usage && accountingCompatibility(event.data.accounting)
+        return settleAssistant(event.data.assistantMessageID, (draft) => {
           draft.time.completed = event.data.timestamp
           draft.finish = "error"
           draft.error = event.data.error
+          draft.accounting = event.data.accounting
+          if (compatibility) {
+            draft.cost = compatibility.cost
+            draft.tokens = compatibility.tokens
+          }
         })
       },
       "session.next.text.started": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
             castDraft(new SessionMessage.AssistantText({ type: "text", id: event.data.textID, text: "" })),
           )
         })
       },
       "session.next.text.delta": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestText(draft, event.data.textID)
           if (match) match.text += event.data.delta
         })
       },
       "session.next.text.ended": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestText(draft, event.data.textID)
           if (match) match.text = event.data.text
         })
       },
       "session.next.tool.input.started": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
             castDraft(
               new SessionMessage.AssistantTool({
@@ -261,13 +339,13 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.tool.input.delta": () => Effect.void,
       "session.next.tool.input.ended": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match && match.state.status === "pending") match.state.input = event.data.text
         })
       },
       "session.next.tool.called": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match) {
             match.provider = event.data.provider
@@ -293,7 +371,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.tool.success": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        const update = event.data.provider.executed ? updateProviderAssistant : updateOwnedAssistant
+        return update(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match && match.state.status === "running") {
             match.provider = {
@@ -316,7 +395,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.tool.failed": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        const update = event.data.provider.executed ? updateProviderAssistant : updateOwnedAssistant
+        return update(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match && (match.state.status === "pending" || match.state.status === "running")) {
             match.provider = {
@@ -339,7 +419,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.reasoning.started": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
             castDraft(
               new SessionMessage.AssistantReasoning({
@@ -353,13 +433,13 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.reasoning.delta": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestReasoning(draft, event.data.reasoningID)
           if (match) match.text += event.data.delta
         })
       },
       "session.next.reasoning.ended": (event) => {
-        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+        return updateProviderAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestReasoning(draft, event.data.reasoningID)
           if (match) {
             match.text = event.data.text

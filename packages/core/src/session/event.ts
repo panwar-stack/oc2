@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ProviderMetadata } from "@oc2-ai/llm"
+import { CanonicalUsage, ProviderMetadata } from "@oc2-ai/llm"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { NonNegativeInt } from "../schema"
@@ -174,6 +174,33 @@ export namespace Shell {
 }
 
 export namespace Step {
+  const Amount = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
+  export const Accounting = Schema.Struct({
+    mode: Schema.Literals(["aggregate", "mirror"]),
+    purpose: Schema.Literal("assistant"),
+    model: ModelV2.Ref,
+    time: Schema.Struct({
+      started: V2Schema.DateTimeUtcFromMillis,
+      completed: V2Schema.DateTimeUtcFromMillis,
+      duration: NonNegativeInt,
+    }),
+    usage: Schema.Struct({
+      authoritative: CanonicalUsage,
+      source: Schema.Literals(["step-finish", "finish-fallback", "provider-error"]),
+      finalObservation: CanonicalUsage.pipe(Schema.optional),
+      anomaly: Schema.Literal("final-usage-mismatch").pipe(Schema.optional),
+    }).pipe(Schema.optional),
+    pricing: Schema.Struct({
+      source: Schema.Literals(["provider", "catalog"]),
+      amount: Amount,
+      providerAmount: Amount.pipe(Schema.optional),
+      estimateAmount: Amount.pipe(Schema.optional),
+      rate: ModelV2.Cost.pipe(Schema.optional),
+    }).pipe(Schema.optional),
+  }).annotate({ identifier: "SessionStepAccounting" })
+  export type Accounting = typeof Accounting.Type
+
   export const Started = EventV2.define({
     type: "session.next.step.started",
     ...options,
@@ -186,6 +213,36 @@ export namespace Step {
     },
   })
   export type Started = typeof Started.Type
+
+  // Retain the synchronized v1 codecs so stored beta terminals remain replayable and non-owning.
+  export const EndedV1 = EventV2.define({
+    type: "session.next.step.ended",
+    ...options,
+    schema: {
+      ...Base,
+      finish: Schema.String,
+      cost: Schema.Finite,
+      tokens: Schema.Struct({
+        input: Schema.Finite,
+        output: Schema.Finite,
+        reasoning: Schema.Finite,
+        cache: Schema.Struct({
+          read: Schema.Finite,
+          write: Schema.Finite,
+        }),
+      }),
+      snapshot: Schema.String.pipe(Schema.optional),
+    },
+  })
+
+  export const FailedV1 = EventV2.define({
+    type: "session.next.step.failed",
+    ...options,
+    schema: {
+      ...Base,
+      error: UnknownError,
+    },
+  })
 
   export const Ended = EventV2.define({
     type: "session.next.step.ended",
@@ -205,6 +262,7 @@ export namespace Step {
         }),
       }),
       snapshot: Schema.String.pipe(Schema.optional),
+      accounting: Accounting.pipe(Schema.optional),
     },
   })
   export type Ended = typeof Ended.Type
@@ -216,6 +274,7 @@ export namespace Step {
       ...Base,
       assistantMessageID: SessionMessageID.ID,
       error: UnknownError,
+      accounting: Accounting.pipe(Schema.optional),
     },
   })
   export type Failed = typeof Failed.Type

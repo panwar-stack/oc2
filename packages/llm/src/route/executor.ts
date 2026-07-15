@@ -27,6 +27,10 @@ import { isContextOverflow } from "../provider-error"
 export interface Interface {
   readonly execute: (
     request: HttpClientRequest.HttpClientRequest,
+    observer?: {
+      readonly onStart: () => void
+      readonly onFailure: (error: LLMError) => void
+    },
   ) => Effect.Effect<HttpClientResponse.HttpClientResponse, LLMError>
 }
 
@@ -352,30 +356,40 @@ const retryDelay = (error: LLMError, attempt: number) => {
 
 const retryStatusFailures = <A, R>(
   effect: Effect.Effect<A, LLMError, R>,
+  observer?: { readonly onStart: () => void; readonly onFailure: (error: LLMError) => void },
   retries = MAX_RETRIES,
   attempt = 0,
 ): Effect.Effect<A, LLMError, R> =>
-  Effect.catchTag(effect, "LLM.Error", (error): Effect.Effect<A, LLMError, R> => {
-    if (!error.retryable || retries <= 0) return Effect.fail(error)
-    return retryDelay(error, attempt).pipe(
-      Effect.flatMap((delay) => Effect.sleep(delay)),
-      Effect.flatMap(() => retryStatusFailures(effect, retries - 1, attempt + 1)),
-    )
-  })
+  Effect.catchTag(
+    effect,
+    "LLM.Error",
+    (error): Effect.Effect<A, LLMError, R> =>
+      Effect.sync(() => observer?.onFailure(error)).pipe(
+        Effect.andThen(
+          !error.retryable || retries <= 0
+            ? Effect.fail(error)
+            : retryDelay(error, attempt).pipe(
+                Effect.flatMap((delay) => Effect.sleep(delay)),
+                Effect.flatMap(() => retryStatusFailures(effect, observer, retries - 1, attempt + 1)),
+              ),
+        ),
+      ),
+  )
 
 export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
-    const executeOnce = (request: HttpClientRequest.HttpClientRequest) =>
+    const executeOnce = (request: HttpClientRequest.HttpClientRequest, observer?: { readonly onStart: () => void }) =>
       Effect.gen(function* () {
         const redactedNames = yield* Headers.CurrentRedactedNames
+        yield* Effect.sync(() => observer?.onStart())
         return yield* http
           .execute(request)
           .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
       })
     return Service.of({
-      execute: (request) => retryStatusFailures(executeOnce(request)),
+      execute: (request, observer) => retryStatusFailures(executeOnce(request, observer), observer),
     })
   }),
 )

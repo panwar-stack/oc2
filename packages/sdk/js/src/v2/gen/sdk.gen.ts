@@ -125,11 +125,11 @@ import type {
   MemorySummaryResponses,
   MoveSessionDestination,
   OutputFormat,
-  Part as Part2,
   PartDeleteErrors,
   PartDeleteResponses,
   PartUpdateErrors,
   PartUpdateResponses,
+  PartWrite,
   PathGetErrors,
   PathGetResponses,
   PermissionListErrors,
@@ -4635,7 +4635,7 @@ export class Part extends HeyApiClient {
       partID: string
       directory?: string
       workspace?: string
-      part?: Part2
+      part?: PartWrite
     },
     options?: Options<never, ThrowOnError>,
   ) {

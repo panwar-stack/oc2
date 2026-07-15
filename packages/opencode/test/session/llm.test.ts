@@ -9,7 +9,7 @@ import { InstanceRef } from "../../src/effect/instance-ref"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
-import { CanonicalUsage, type LLMEvent as LLMEventType } from "@oc2-ai/llm"
+import { CanonicalUsage, LLMEvent, type LLMEvent as LLMEventType } from "@oc2-ai/llm"
 import type { EventV2 } from "@oc2-ai/core/event"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
 import { Auth } from "@/auth"
@@ -28,6 +28,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Permission } from "@/permission"
 import { LLMAISDK } from "@/session/llm/ai-sdk"
 import { LLMFugu } from "@/session/llm/fugu"
+import { ProviderTimingLifecycle } from "@/session/llm/provider-timing"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
@@ -86,6 +87,179 @@ const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
       ),
     )
   })
+
+describe("session.llm provider timing", () => {
+  test("measures dispatch intervals without including local time between provider steps", () => {
+    let now = 10
+    const timing = LLM.makeProviderTiming(() => now)
+    expect(LLM.takeCurrentProviderStep(timing)).toBeUndefined()
+
+    LLM.beginProviderStep(timing, 0)
+    now = 100
+    LLM.beginProviderAttempt(timing)
+    now = 150
+    LLM.finishProviderAttempt(timing, "success")
+    now = 1_000
+    expect(LLM.takeProviderStep(timing, 0)).toEqual({
+      step: 0,
+      started: 100,
+      completed: 150,
+      duration: 50,
+      outcome: "success",
+    })
+
+    LLM.beginProviderStep(timing, 1)
+    LLM.beginProviderAttempt(timing)
+    now = 1_030
+    LLM.finishProviderAttempt(timing, "success")
+    expect(LLM.takeProviderStep(timing, 1)).toEqual({
+      step: 1,
+      started: 1_000,
+      completed: 1_030,
+      duration: 30,
+      outcome: "success",
+    })
+  })
+
+  test("aggregates retries and leaves pre-dispatch failures untimed", () => {
+    let now = 10
+    const timing = LLM.makeProviderTiming(() => now)
+    expect(LLM.takeCurrentProviderStep(timing)).toBeUndefined()
+
+    LLM.beginProviderStep(timing, 0)
+    now = 100
+    LLM.beginProviderAttempt(timing)
+    now = 120
+    LLM.finishProviderAttempt(timing, "error")
+    now = 200
+    LLM.beginProviderAttempt(timing)
+    now = 250
+    LLM.finishProviderAttempt(timing, "success")
+    expect(LLM.takeCurrentProviderStep(timing)).toEqual({
+      step: 0,
+      started: 100,
+      completed: 250,
+      duration: 70,
+      outcome: "success",
+    })
+  })
+
+  test("rejects duplicate terminals and reuse of consumed step timing", () => {
+    let now = 100
+    const timing = LLM.makeProviderTiming(() => now)
+    LLM.beginProviderStep(timing, 0)
+    LLM.beginProviderAttempt(timing)
+    now = 110
+    LLM.finishProviderAttempt(timing, "success")
+
+    expect(() => LLM.finishProviderAttempt(timing, "error")).toThrow("no active dispatch")
+    expect(LLM.takeProviderStep(timing, 0)?.duration).toBe(10)
+    expect(() => LLM.beginProviderStep(timing, 0)).toThrow("already consumed")
+  })
+
+  test("settles raw AI SDK finish before normalized stream work", async () => {
+    let now = 100
+    const timing = LLM.makeProviderTiming(() => now)
+    LLM.beginProviderStep(timing, 0)
+    const output = await ProviderTimingLifecycle.middleware(timing).wrapStream!({
+      doGenerate: async () => {
+        throw new Error("unused")
+      },
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            now = 150
+            controller.enqueue({
+              type: "finish",
+              usage: {},
+              finishReason: { unified: "stop", raw: "stop" },
+            } as never)
+            controller.close()
+          },
+        }),
+      }),
+      params: {} as never,
+      model: {} as never,
+    })
+
+    expect((await output.stream.getReader().read()).value?.type).toBe("finish")
+    expect(LLM.takeProviderStep(timing, 0)).toEqual({
+      step: 0,
+      started: 100,
+      completed: 150,
+      duration: 50,
+      outcome: "success",
+    })
+  })
+
+  test("turns terminal-less raw AI SDK EOF into a typed stream error", async () => {
+    let now = 200
+    const timing = LLM.makeProviderTiming(() => now)
+    LLM.beginProviderStep(timing, 0)
+    const output = await ProviderTimingLifecycle.middleware(timing).wrapStream!({
+      doGenerate: async () => {
+        throw new Error("unused")
+      },
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            now = 225
+            controller.enqueue({ type: "text-delta", id: "text", delta: "partial" } as never)
+            controller.close()
+          },
+        }),
+      }),
+      params: {} as never,
+      model: {} as never,
+    })
+    const reader = output.stream.getReader()
+
+    expect((await reader.read()).value?.type).toBe("text-delta")
+    await expect(reader.read()).rejects.toBeInstanceOf(LLM.MissingProviderTerminalError)
+    expect(LLM.takeCurrentProviderStep(timing)).toEqual({
+      step: 0,
+      started: 200,
+      completed: 225,
+      duration: 25,
+      outcome: "eof",
+    })
+  })
+
+  test("settles provider rejection and cancellation exactly once", async () => {
+    let now = 300
+    const rejected = LLM.makeProviderTiming(() => now)
+    LLM.beginProviderStep(rejected, 0)
+    await expect(
+      ProviderTimingLifecycle.middleware(rejected).wrapStream!({
+        doGenerate: async () => {
+          throw new Error("unused")
+        },
+        doStream: async () => {
+          now = 320
+          throw new Error("provider rejected")
+        },
+        params: {} as never,
+        model: {} as never,
+      }),
+    ).rejects.toThrow("provider rejected")
+    expect(LLM.takeCurrentProviderStep(rejected)?.outcome).toBe("error")
+
+    now = 400
+    const cancelled = LLM.makeProviderTiming(() => now)
+    LLM.beginProviderStep(cancelled, 0)
+    const output = await ProviderTimingLifecycle.middleware(cancelled).wrapStream!({
+      doGenerate: async () => {
+        throw new Error("unused")
+      },
+      doStream: async () => ({ stream: new ReadableStream() }),
+      params: {} as never,
+      model: {} as never,
+    })
+    now = 430
+    await output.stream.cancel()
+    expect(LLM.takeCurrentProviderStep(cancelled)?.outcome).toBe("interrupt")
+  })
+})
 
 describe("session.llm.telemetry", () => {
   test("includes system prompt in Langfuse-compatible input and metadata", () => {
@@ -1020,10 +1194,7 @@ describe("session.llm.ai-sdk adapter", () => {
     const mutations: ReadonlyArray<readonly [string, (value: unknown) => Record<string, unknown>]> = [
       ["input", (value) => ({ ...base, prompt_tokens: value })],
       ["output", (value) => ({ ...base, completion_tokens: value })],
-      [
-        "reasoning",
-        (value) => ({ ...base, completion_tokens_details: { reasoning_tokens: value } }),
-      ],
+      ["reasoning", (value) => ({ ...base, completion_tokens_details: { reasoning_tokens: value } })],
       [
         "cache read",
         (value) => ({ ...base, prompt_tokens_details: { ...base.prompt_tokens_details, cached_tokens: value } }),
@@ -1143,9 +1314,9 @@ describe("session.llm.ai-sdk adapter", () => {
         apiPackage: "@openrouter/ai-sdk-provider",
       },
     )
-    expect(CanonicalUsage.fromUsage(openrouter[0]?.type === "step-finish" ? openrouter[0].usage : undefined)).toMatchObject(
-      { input: 70, output: 30, reasoning: 20, cache: { read: 30, write: 0 }, providerTotal: 150 },
-    )
+    expect(
+      CanonicalUsage.fromUsage(openrouter[0]?.type === "step-finish" ? openrouter[0].usage : undefined),
+    ).toMatchObject({ input: 70, output: 30, reasoning: 20, cache: { read: 30, write: 0 }, providerTotal: 150 })
   })
 
   test("requires explicit provider totals on every complete profiled step and resets between turns", async () => {
@@ -3137,10 +3308,11 @@ describe("session.llm.stream", () => {
         const executor = Layer.succeed(
           RequestExecutor.Service,
           RequestExecutor.Service.of({
-            execute: (request) =>
+            execute: (request, observer) =>
               Effect.gen(function* () {
                 const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
                 captured = (yield* Effect.promise(() => web.json())) as Record<string, unknown>
+                yield* Effect.sync(() => observer?.onStart())
                 return HttpClientResponse.fromWeb(request, createEventResponse(chunks, true))
               }),
           }),

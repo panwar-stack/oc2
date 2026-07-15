@@ -69,6 +69,22 @@ for (const sdkPath of ["./src/gen/sdk.gen.ts", "./src/v2/gen/sdk.gen.ts"]) {
 
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`
+
+// Keep the shipped high-level argument name while the PATCH body uses the stricter PartWrite schema.
+const v2SdkPath = "./src/v2/gen/sdk.gen.ts"
+const v2SdkSource = await Bun.file(v2SdkPath).text()
+const v2SdkPatched = v2SdkSource
+  .replace("partWrite?: PartWrite", "part?: PartWrite")
+  .replace('{ key: "partWrite", map: "body" }', '{ key: "part", map: "body" }')
+if (
+  v2SdkPatched === v2SdkSource ||
+  v2SdkPatched.includes("partWrite?: PartWrite") ||
+  v2SdkPatched.includes('{ key: "partWrite", map: "body" }')
+) {
+  throw new Error(`Part.update compatibility patch did not apply (${v2SdkPath})`)
+}
+await Bun.write(v2SdkPath, v2SdkPatched)
+
 await $`rm -rf dist`
 await $`bun tsc`
 await $`rm openapi.json`

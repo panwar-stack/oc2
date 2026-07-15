@@ -237,6 +237,47 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("notifies dispatch immediately before opening a WebSocket", () =>
+    Effect.gen(function* () {
+      const lifecycle: string[] = []
+      const deps = Layer.mergeAll(
+        Layer.succeed(
+          RequestExecutor.Service,
+          RequestExecutor.Service.of({ execute: () => Effect.die("unexpected HTTP request") }),
+        ),
+        Layer.succeed(
+          WebSocketExecutor.Service,
+          WebSocketExecutor.Service.of({
+            open: (_input, observer) =>
+              Effect.sync(() => {
+                observer?.onStart()
+                lifecycle.push("open")
+                return {
+                  sendText: () => Effect.void,
+                  messages: Stream.make(
+                    ProviderShared.encodeJson({ type: "response.completed", response: { id: "resp_ws" } }),
+                  ),
+                  close: Effect.void,
+                }
+              }),
+          }),
+        ),
+      )
+      const request = LLM.request({
+        model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responsesWebSocket(
+          "gpt-4.1-mini",
+        ),
+        prompt: "Say hello.",
+      })
+
+      yield* LLMClient.stream(request, { onDispatch: () => lifecycle.push("dispatch") }).pipe(
+        Stream.runDrain,
+        Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))),
+      )
+      expect(lifecycle).toEqual(["dispatch", "open"])
+    }),
+  )
+
   it.effect("fails immediately when WebSocket is already closed", () =>
     Effect.gen(function* () {
       const error = yield* WebSocketExecutor.fromWebSocket(

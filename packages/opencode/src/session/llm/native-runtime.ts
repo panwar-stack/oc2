@@ -8,16 +8,17 @@ import { Cause, Effect, FiberSet, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { FetchHttpClient } from "effect/unstable/http"
 import {
+  LLMEvent,
   LLMRequest,
   Tool as NativeTool,
   ToolFailure,
   ToolRuntime,
   toDefinitions,
   type JsonSchema,
-  type LLMEvent,
 } from "@oc2-ai/llm"
 import type { LLMClientShape } from "@oc2-ai/llm/route"
 import { LLMNative } from "./native-request"
+import { ProviderTimingLifecycle } from "./provider-timing"
 
 export type RuntimeStatus =
   | { readonly type: "supported"; readonly apiKey: string; readonly baseURL?: string }
@@ -41,6 +42,7 @@ type StreamInput = {
   readonly providerOptions?: Record<string, any>
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
+  readonly timing?: ProviderTimingLifecycle.ProviderTiming
 }
 
 export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
@@ -105,35 +107,92 @@ export function stream(input: StreamInput): StreamResult {
       Effect.gen(function* () {
         const settlements = yield* FiberSet.make<void>()
         const results = yield* Queue.unbounded<LLMEvent, Cause.Done>()
-        const provider = input.llmClient
-          .stream(
-            LLMRequest.update(request, {
-              tools: [...request.tools, ...toDefinitions(tools)],
-            }),
-          )
-          .pipe(
-            Stream.flatMap((event) =>
-              event.type !== "tool-call" || event.providerExecuted
-                ? Stream.make(event)
-                : Stream.make(event).pipe(
-                    Stream.concat(
-                      Stream.fromEffectDrain(
-                        ToolRuntime.dispatch(tools, event).pipe(
-                          Effect.flatMap((dispatched) => Queue.offerAll(results, dispatched.events)),
-                          Effect.catchCause((cause) => Queue.failCause(results, cause)),
-                          Effect.asVoid,
-                          FiberSet.run(settlements, { startImmediately: true }),
-                        ),
+        const provider = Stream.suspend(() => {
+          let terminal: "step-finish" | "provider-error" | undefined
+          let finish = false
+          ProviderTimingLifecycle.beginProviderStep(input.timing, 0)
+          return input.llmClient
+            .stream(
+              LLMRequest.update(request, {
+                tools: [...request.tools, ...toDefinitions(tools)],
+              }),
+              {
+                onDispatch: () => ProviderTimingLifecycle.beginProviderAttempt(input.timing),
+                onDispatchFailure: () => {
+                  if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "error")
+                },
+              },
+            )
+            .pipe(
+              Stream.mapEffect((event) =>
+                Effect.sync(() => {
+                  if (terminal) {
+                    if (terminal === "step-finish" && event.type === "finish" && !finish) {
+                      finish = true
+                      return event
+                    }
+                    throw new Error("Provider emitted content after a terminal event")
+                  }
+                  if (event.type === "step-finish") {
+                    if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "success")
+                    terminal = "step-finish"
+                  }
+                  if (event.type === "provider-error") {
+                    if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "error")
+                    terminal = "provider-error"
+                  }
+                  return event
+                }),
+              ),
+              Stream.concat(
+                Stream.suspend(() => {
+                  if (terminal) return Stream.empty
+                  if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "eof")
+                  terminal = "provider-error"
+                  return Stream.make(
+                    LLMEvent.providerError({ message: "Provider stream ended without a terminal event" }),
+                  )
+                }),
+              ),
+              Stream.onError((cause) =>
+                Effect.sync(() => {
+                  if (input.timing?.active) {
+                    ProviderTimingLifecycle.finishProviderAttempt(
+                      input.timing,
+                      Cause.hasInterruptsOnly(cause) ? "interrupt" : "error",
+                    )
+                  }
+                }),
+              ),
+              Stream.ensuring(
+                Effect.sync(() => {
+                  if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "interrupt")
+                }),
+              ),
+            )
+        }).pipe(
+          Stream.flatMap((event) =>
+            event.type !== "tool-call" || event.providerExecuted
+              ? Stream.make(event)
+              : Stream.make(event).pipe(
+                  Stream.concat(
+                    Stream.fromEffectDrain(
+                      ToolRuntime.dispatch(tools, event).pipe(
+                        Effect.flatMap((dispatched) => Queue.offerAll(results, dispatched.events)),
+                        Effect.catchCause((cause) => Queue.failCause(results, cause)),
+                        Effect.asVoid,
+                        FiberSet.run(settlements, { startImmediately: true }),
                       ),
                     ),
                   ),
+                ),
+          ),
+          Stream.concat(
+            Stream.fromEffectDrain(
+              FiberSet.awaitEmpty(settlements).pipe(Effect.andThen(Queue.end(results)), Effect.asVoid),
             ),
-            Stream.concat(
-              Stream.fromEffectDrain(
-                FiberSet.awaitEmpty(settlements).pipe(Effect.andThen(Queue.end(results)), Effect.asVoid),
-              ),
-            ),
-          )
+          ),
+        )
         return provider.pipe(Stream.concat(Stream.fromQueue(results)))
       }),
     ),

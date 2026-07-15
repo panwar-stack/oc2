@@ -163,6 +163,7 @@ export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistan
     }),
   }).pipe(Schema.optional),
   error: SessionEvent.Step.Failed.data.fields.error.pipe(Schema.optional),
+  accounting: SessionEvent.Step.Accounting.pipe(Schema.optional),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
     completed: V2Schema.DateTimeUtcFromMillis.pipe(Schema.optional),

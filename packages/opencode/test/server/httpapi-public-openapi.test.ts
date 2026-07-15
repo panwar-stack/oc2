@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { Schema } from "effect"
 import { OpenApi } from "effect/unstable/httpapi"
 import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
 
@@ -9,6 +11,7 @@ type OpenApiSchema = {
   readonly oneOf?: ReadonlyArray<OpenApiSchema>
   readonly type?: string
   readonly enum?: readonly unknown[]
+  readonly minimum?: number
   readonly properties?: Record<string, OpenApiSchema>
   readonly required?: readonly string[]
 }
@@ -121,6 +124,51 @@ describe("PublicApi OpenAPI v2 errors", () => {
     ]) {
       expect(spec.paths[path]?.post?.requestBody?.required, path).toBe(true)
     }
+  })
+
+  test("documents strict nonnegative integer accounting writes for part PATCH", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const request = spec.paths["/session/{sessionID}/message/{messageID}/part/{partID}"]?.patch?.requestBody?.content?.[
+      "application/json"
+    ]?.schema
+    const step = spec.components.schemas.StepFinishPartWrite
+    const tokens = step?.properties?.tokens
+
+    expect(request?.$ref).toBe("#/components/schemas/PartWrite")
+    expect(step?.properties?.cost?.minimum).toBe(0)
+    for (const field of ["input", "output", "reasoning"]) {
+      expect(tokens?.properties?.[field]).toMatchObject({ type: "integer", minimum: 0 })
+    }
+    expect(tokens?.properties?.total).toMatchObject({ type: "integer", minimum: 0 })
+    expect(tokens?.properties?.cache?.properties?.read).toMatchObject({ type: "integer", minimum: 0 })
+    expect(tokens?.properties?.cache?.properties?.write).toMatchObject({ type: "integer", minimum: 0 })
+  })
+
+  test("rejects malformed accounting writes without tightening legacy part reads", () => {
+    const base = {
+      id: "prt_write",
+      sessionID: "ses_write",
+      messageID: "msg_write",
+      type: "step-finish" as const,
+      reason: "stop",
+      cost: 1,
+      tokens: { total: 5, input: 1, output: 1, reasoning: 1, cache: { read: 1, write: 1 } },
+    }
+    const write = Schema.is(SessionV1.PartWrite)
+    const read = Schema.is(SessionV1.Part)
+
+    for (const value of [-1, 1.5, Number.POSITIVE_INFINITY]) {
+      for (const part of [
+        { ...base, tokens: { ...base.tokens, input: value } },
+        { ...base, tokens: { ...base.tokens, output: value } },
+        { ...base, tokens: { ...base.tokens, reasoning: value } },
+        { ...base, tokens: { ...base.tokens, cache: { ...base.tokens.cache, read: value } } },
+        { ...base, tokens: { ...base.tokens, cache: { ...base.tokens.cache, write: value } } },
+      ])
+        expect(write(part)).toBeFalse()
+    }
+    expect(read({ ...base, tokens: { ...base.tokens, input: -1.5 } })).toBeTrue()
+    expect(write({ ...base, tokens: { ...base.tokens, input: -1.5 } })).toBeFalse()
   })
 
   test("does not rewrite /api endpoint errors to legacy error components", () => {

@@ -685,6 +685,45 @@ export type Prompt = {
   references?: Array<PromptReferenceAttachment>
 }
 
+export type SessionStepAccounting = {
+  mode: "aggregate" | "mirror"
+  purpose: "assistant"
+  model: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  time: {
+    started: number
+    completed: number
+    duration: number
+  }
+  usage?: {
+    authoritative: LlmCanonicalUsage
+    source: "step-finish" | "finish-fallback" | "provider-error"
+    finalObservation?: LlmCanonicalUsage
+    anomaly?: "final-usage-mismatch"
+  }
+  pricing?: {
+    source: "provider" | "catalog"
+    amount: number
+    providerAmount?: number
+    estimateAmount?: number
+    rate?: {
+      tier?: {
+        type: "context"
+        size: number
+      }
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+    }
+  }
+}
+
 export type SessionStatus =
   | {
       type: "idle"
@@ -1347,6 +1386,7 @@ export type GlobalEvent = {
             }
           }
           snapshot?: string
+          accounting?: SessionStepAccounting
         }
       }
     | {
@@ -1357,6 +1397,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           error: SessionErrorUnknown
+          accounting?: SessionStepAccounting
         }
       }
     | {
@@ -3252,6 +3293,41 @@ export type Session7 = {
   }
 }
 
+export type StepFinishPartWrite = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "step-finish"
+  reason: string
+  snapshot?: string
+  duration?: number
+  cost: number
+  tokens: {
+    total?: number
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+}
+
+export type PartWrite =
+  | TextPart
+  | SubtaskPart
+  | ReasoningPart
+  | FilePart
+  | ToolPart
+  | StepStartPart
+  | StepFinishPartWrite
+  | SnapshotPart
+  | PatchPart
+  | AgentPart
+  | RetryPart
+  | CompactionPart
+
 export type TeamInfo = {
   id: string
   name: string
@@ -3789,6 +3865,22 @@ export type SessionNextRetryError = {
   }
 }
 
+export type LlmCanonicalUsage = {
+  input: number
+  output: number
+  reasoning: number
+  cache: {
+    read: number
+    write: number
+  }
+  providerTotal?: number
+  providerMetadata?: {
+    [key: string]: {
+      [key: string]: unknown
+    }
+  }
+}
+
 export type SessionErrorUnknown = {
   type: "unknown"
   message: string
@@ -4216,6 +4308,7 @@ export type SyncEventSessionNextStepEnded = {
         }
       }
       snapshot?: string
+      accounting?: SessionStepAccounting
     }
   }
 }
@@ -4233,6 +4326,7 @@ export type SyncEventSessionNextStepFailed = {
       sessionID: string
       assistantMessageID: string
       error: SessionErrorUnknown
+      accounting?: SessionStepAccounting
     }
   }
 }
@@ -4775,6 +4869,7 @@ export type SessionMessageAssistant = {
     }
   }
   error?: SessionErrorUnknown
+  accounting?: SessionStepAccounting
 }
 
 export type SessionMessageCompaction = {
@@ -5713,6 +5808,7 @@ export type EventSessionNextStepEnded = {
       }
     }
     snapshot?: string
+    accounting?: SessionStepAccounting
   }
 }
 
@@ -5724,6 +5820,7 @@ export type EventSessionNextStepFailed = {
     sessionID: string
     assistantMessageID: string
     error: SessionErrorUnknown
+    accounting?: SessionStepAccounting
   }
 }
 
@@ -9642,7 +9739,7 @@ export type PartDeleteResponses = {
 export type PartDeleteResponse = PartDeleteResponses[keyof PartDeleteResponses]
 
 export type PartUpdateData = {
-  body?: Part
+  body?: PartWrite
   path: {
     sessionID: string
     messageID: string

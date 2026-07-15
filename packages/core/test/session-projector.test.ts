@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Layer, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@oc2-ai/core/database/database"
 import { EventV2 } from "@oc2-ai/core/event"
@@ -19,6 +19,8 @@ import { SessionExecution } from "@oc2-ai/core/session/execution"
 import { SessionInput } from "@oc2-ai/core/session/input"
 import { SessionStore } from "@oc2-ai/core/session/store"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { CanonicalUsage } from "@oc2-ai/llm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -34,16 +36,414 @@ const assistantRow = (
   id: SessionMessage.ID,
   seq: number,
   time: { created: DateTime.Utc; completed?: DateTime.Utc } = { created },
+  content: SessionMessage.AssistantContent[] = [],
 ) => {
   const {
     id: _,
     type,
     ...data
-  } = encodeMessage(new SessionMessage.Assistant({ id, type: "assistant", agent: "build", model, content: [], time }))
+  } = encodeMessage(new SessionMessage.Assistant({ id, type: "assistant", agent: "build", model, content, time }))
   return { id, session_id: sessionID, type, seq, time_created: DateTime.toEpochMillis(time.created), data }
 }
 
+const seedSession = Effect.fnUntraced(function* (db: Database.Interface["db"]) {
+  yield* db
+    .insert(ProjectTable)
+    .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(SessionTable)
+    .values({
+      id: sessionID,
+      project_id: Project.ID.global,
+      slug: "test",
+      directory: "/project",
+      title: "test",
+      version: "test",
+    })
+    .run()
+    .pipe(Effect.orDie)
+})
+
 describe("SessionProjector", () => {
+  it.effect("applies aggregate terminal accounting once and rejects conflicting terminals", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const assistantMessageID = SessionMessage.ID.make("msg_accounted")
+      yield* db.insert(SessionMessageTable).values(assistantRow(assistantMessageID, 0)).run().pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      const accounting = {
+        mode: "aggregate" as const,
+        purpose: "assistant" as const,
+        model,
+        time: { started: created, completed: DateTime.makeUnsafe(10), duration: 10 },
+        usage: {
+          authoritative: CanonicalUsage.from({
+            input: 11,
+            output: 7,
+            reasoning: 3,
+            cache: { read: 5, write: 2 },
+          }),
+          source: "step-finish" as const,
+        },
+        pricing: { source: "catalog" as const, amount: 0.25 },
+      }
+      const ended = {
+        sessionID,
+        assistantMessageID,
+        timestamp: DateTime.makeUnsafe(10),
+        finish: "stop",
+        cost: 0.25,
+        tokens: { input: 11, output: 7, reasoning: 3, cache: { read: 5, write: 2 } },
+        accounting,
+      }
+
+      const mismatch = yield* events.publish(SessionEvent.Step.Ended, { ...ended, cost: 0.5 }).pipe(Effect.exit)
+      expect(String(mismatch)).toContain("AccountingMismatch")
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0,
+        time_processing: 0,
+        tokens_input: 0,
+      })
+      yield* events.publish(SessionEvent.Step.Ended, ended)
+      yield* events.publish(SessionEvent.Step.Ended, ended)
+
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0.25,
+        time_processing: 10,
+        tokens_input: 11,
+        tokens_output: 7,
+        tokens_reasoning: 3,
+        tokens_cache_read: 5,
+        tokens_cache_write: 2,
+      })
+
+      const changed = yield* events
+        .publish(SessionEvent.Step.Ended, {
+          ...ended,
+          tokens: { ...ended.tokens, input: 12 },
+          accounting: {
+            ...accounting,
+            usage: {
+              ...accounting.usage,
+              authoritative: CanonicalUsage.from({ ...accounting.usage.authoritative, input: 12 }),
+            },
+          },
+        })
+        .pipe(Effect.exit)
+      const retyped = yield* events
+        .publish(SessionEvent.Step.Failed, {
+          sessionID,
+          assistantMessageID,
+          timestamp: DateTime.makeUnsafe(10),
+          error: { type: "unknown", message: "failed" },
+          accounting: { ...accounting, usage: undefined, pricing: undefined },
+        })
+        .pipe(Effect.exit)
+      expect(String(changed)).toContain("TerminalConflict")
+      expect(String(retyped)).toContain("TerminalConflict")
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0.25,
+        time_processing: 10,
+        tokens_input: 11,
+      })
+    }),
+  )
+
+  it.effect("accounts failed aggregate duration without billing pricing that has no authoritative usage", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const assistantMessageID = SessionMessage.ID.make("msg_failed_accounting")
+      yield* db.insert(SessionMessageTable).values(assistantRow(assistantMessageID, 0)).run().pipe(Effect.orDie)
+      yield* (yield* EventV2.Service).publish(SessionEvent.Step.Failed, {
+        sessionID,
+        assistantMessageID,
+        timestamp: DateTime.makeUnsafe(20),
+        error: { type: "unknown", message: "failed" },
+        accounting: {
+          mode: "aggregate",
+          purpose: "assistant",
+          model,
+          time: { started: created, completed: DateTime.makeUnsafe(20), duration: 20 },
+          pricing: { source: "provider", amount: 0.5, providerAmount: 0.5 },
+        },
+      })
+
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0,
+        time_processing: 20,
+        tokens_input: 0,
+        tokens_output: 0,
+        tokens_reasoning: 0,
+        tokens_cache_read: 0,
+        tokens_cache_write: 0,
+      })
+      const message = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, assistantMessageID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(message?.data).not.toHaveProperty("cost")
+      expect(message?.data).not.toHaveProperty("tokens")
+    }),
+  )
+
+  it.effect("derives failed assistant compatibility fields from authoritative accounting", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const assistantMessageID = SessionMessage.ID.make("msg_failed_authoritative")
+      yield* db.insert(SessionMessageTable).values(assistantRow(assistantMessageID, 0)).run().pipe(Effect.orDie)
+      yield* (yield* EventV2.Service).publish(SessionEvent.Step.Failed, {
+        sessionID,
+        assistantMessageID,
+        timestamp: DateTime.makeUnsafe(30),
+        error: { type: "unknown", message: "failed" },
+        accounting: {
+          mode: "aggregate",
+          purpose: "assistant",
+          model,
+          time: { started: created, completed: DateTime.makeUnsafe(30), duration: 30 },
+          usage: {
+            authoritative: CanonicalUsage.from({
+              input: 11,
+              output: 7,
+              reasoning: 3,
+              cache: { read: 5, write: 2 },
+            }),
+            source: "provider-error",
+          },
+          pricing: { source: "provider", amount: 0.5, providerAmount: 0.5 },
+        },
+      })
+
+      const message = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, assistantMessageID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(message?.data).toMatchObject({
+        cost: 0.5,
+        tokens: { input: 11, output: 7, reasoning: 3, cache: { read: 5, write: 2 } },
+      })
+    }),
+  )
+
+  it.effect("replays stored v1 terminals and compaction as logical non-owning events", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const assistantMessageID = SessionMessage.ID.make("msg_v1_terminal")
+      yield* db.insert(SessionMessageTable).values(assistantRow(assistantMessageID, 0)).run().pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      const serialized = [
+        {
+          id: EventV2.ID.create(),
+          aggregateID: sessionID,
+          seq: 0,
+          type: EventV2.versionedType(SessionEvent.Step.EndedV1.type, 1),
+          data: {
+            sessionID,
+            timestamp: 10,
+            finish: "stop",
+            cost: 1,
+            tokens: { input: 2, output: 3, reasoning: 4, cache: { read: 5, write: 6 } },
+          },
+        },
+        {
+          id: EventV2.ID.create(),
+          aggregateID: sessionID,
+          seq: 1,
+          type: EventV2.versionedType(SessionEvent.Step.FailedV1.type, 1),
+          data: { sessionID, timestamp: 11, error: { type: "unknown", message: "old failure" } },
+        },
+        {
+          id: EventV2.ID.create(),
+          aggregateID: sessionID,
+          seq: 2,
+          type: EventV2.versionedType(SessionEvent.Compaction.EndedV1.type, 1),
+          data: { sessionID, timestamp: 12, text: "old compaction" },
+        },
+      ]
+
+      for (const event of serialized) yield* events.replay(event)
+      const read = yield* events.aggregateEvents({ aggregateID: sessionID }).pipe(Stream.take(3), Stream.runCollect)
+      const message = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, assistantMessageID))
+        .get()
+        .pipe(Effect.orDie)
+      const session = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(Array.from(read).map((item) => ({ type: item.event.type, version: item.event.version }))).toEqual([
+        { type: SessionEvent.Step.Ended.type, version: 1 },
+        { type: SessionEvent.Step.Failed.type, version: 1 },
+        { type: SessionEvent.Compaction.Ended.type, version: 1 },
+      ])
+      expect(message?.data).not.toHaveProperty("finish")
+      expect(message?.data).not.toHaveProperty("accounting")
+      expect(session).toMatchObject({ cost: 0, time_processing: 0, tokens_input: 0, tokens_output: 0 })
+    }),
+  )
+
+  it.effect("keeps mirror and unmarked terminals non-owning while legacy parts account once", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const assistantMessageID = SessionMessage.ID.make("msg_mirror")
+      const unmarkedMessageID = SessionMessage.ID.make("msg_unmarked")
+      yield* db
+        .insert(SessionMessageTable)
+        .values([assistantRow(assistantMessageID, 0), assistantRow(unmarkedMessageID, 1)])
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        assistantMessageID: unmarkedMessageID,
+        timestamp: DateTime.makeUnsafe(10),
+        finish: "stop",
+        cost: 99,
+        tokens: { input: 99, output: 99, reasoning: 99, cache: { read: 99, write: 99 } },
+      })
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        assistantMessageID,
+        timestamp: DateTime.makeUnsafe(10),
+        finish: "stop",
+        cost: 1,
+        tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
+        accounting: {
+          mode: "mirror",
+          purpose: "assistant",
+          model,
+          time: { started: created, completed: DateTime.makeUnsafe(10), duration: 10 },
+          usage: {
+            authoritative: CanonicalUsage.from({
+              input: 10,
+              output: 4,
+              reasoning: 2,
+              cache: { read: 3, write: 1 },
+            }),
+            source: "step-finish",
+          },
+          pricing: { source: "catalog", amount: 1 },
+        },
+      })
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0,
+        tokens_input: 0,
+      })
+
+      const messageID = SessionV1.MessageID.ascending()
+      yield* events.publish(SessionV1.Event.MessageUpdated, {
+        sessionID,
+        info: {
+          id: messageID,
+          sessionID,
+          role: "user",
+          time: { created: 0 },
+          agent: "build",
+          model: { providerID: model.providerID, modelID: model.id },
+        },
+      })
+      yield* events.publish(SessionV1.Event.PartUpdated, {
+        sessionID,
+        time: 0,
+        part: {
+          id: SessionV1.PartID.ascending(),
+          messageID,
+          sessionID,
+          type: "step-finish",
+          reason: "stop",
+          duration: 10,
+          cost: 1,
+          tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 1 } },
+        },
+      })
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 1,
+        time_processing: 10,
+        tokens_input: 10,
+        tokens_output: 4,
+        tokens_reasoning: 2,
+        tokens_cache_read: 3,
+        tokens_cache_write: 1,
+      })
+    }),
+  )
+
+  it.effect("prevents stale V1 session metadata from overwriting aggregate columns", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      yield* db
+        .update(SessionTable)
+        .set({
+          cost: 2,
+          time_processing: 30,
+          tokens_input: 11,
+          tokens_output: 12,
+          tokens_reasoning: 13,
+          tokens_cache_read: 14,
+          tokens_cache_write: 15,
+        })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* (yield* EventV2.Service).publish(SessionV1.Event.Updated, {
+        sessionID,
+        info: {
+          id: sessionID,
+          slug: "test",
+          projectID: Project.ID.global,
+          directory: "/project",
+          title: "updated",
+          version: "test",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, updated: 100, processing: 0 },
+        },
+      })
+
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        title: "updated",
+        time_updated: 100,
+        cost: 2,
+        time_processing: 30,
+        tokens_input: 11,
+        tokens_output: 12,
+        tokens_reasoning: 13,
+        tokens_cache_read: 14,
+        tokens_cache_write: 15,
+      })
+    }),
+  )
   it.effect("orders projected messages and context by durable aggregate sequence", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -545,7 +945,7 @@ describe("SessionProjector", () => {
     }),
   )
 
-  it.effect("does not revive a stale incomplete assistant projection", () =>
+  it.effect("rejects provider content after a terminal without reviving stale assistants", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
       yield* db
@@ -578,12 +978,15 @@ describe("SessionProjector", () => {
         .pipe(Effect.orDie)
 
       const service = yield* EventV2.Service
-      yield* service.publish(SessionEvent.Text.Started, {
-        sessionID,
-        assistantMessageID: SessionMessage.ID.make("msg_assistant_completed"),
-        timestamp: DateTime.makeUnsafe(3),
-        textID: "text-stale",
-      })
+      const exit = yield* service
+        .publish(SessionEvent.Text.Started, {
+          sessionID,
+          assistantMessageID: SessionMessage.ID.make("msg_assistant_completed"),
+          timestamp: DateTime.makeUnsafe(3),
+          textID: "text-stale",
+        })
+        .pipe(Effect.exit)
+      expect(String(exit)).toContain("ContentAfterTerminal")
 
       const rows = yield* db
         .select()
@@ -601,7 +1004,7 @@ describe("SessionProjector", () => {
           type: "assistant",
           agent: "build",
           model,
-          content: [new SessionMessage.AssistantText({ type: "text", id: "text-stale", text: "" })],
+          content: [],
           time: { created: DateTime.makeUnsafe(1), completed: DateTime.makeUnsafe(2) },
         }),
         new SessionMessage.Assistant({
@@ -613,6 +1016,158 @@ describe("SessionProjector", () => {
           time: { created },
         }),
       ])
+    }),
+  )
+
+  it.effect("allows local tool settlement after the provider terminal", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const assistantMessageID = SessionMessage.ID.make("msg_local_tool")
+      const failedMessageID = SessionMessage.ID.make("msg_local_tool_failed")
+      const localTool = (id: string) =>
+        new SessionMessage.AssistantTool({
+          type: "tool",
+          id,
+          name: "lookup",
+          provider: { executed: false },
+          time: { created, ran: created },
+          state: new SessionMessage.ToolStateRunning({
+            status: "running",
+            input: { query: "test" },
+            structured: {},
+            content: [],
+          }),
+        })
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          assistantRow(assistantMessageID, 0, { created, completed: DateTime.makeUnsafe(1) }, [localTool("call-1")]),
+          assistantRow(failedMessageID, 1, { created, completed: DateTime.makeUnsafe(1) }, [localTool("call-failed")]),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* (yield* EventV2.Service).publish(SessionEvent.Tool.Success, {
+        sessionID,
+        assistantMessageID,
+        timestamp: DateTime.makeUnsafe(2),
+        callID: "call-1",
+        structured: { ok: true },
+        content: [],
+        result: "done",
+        provider: { executed: false },
+      })
+      yield* (yield* EventV2.Service).publish(SessionEvent.Tool.Failed, {
+        sessionID,
+        assistantMessageID: failedMessageID,
+        timestamp: DateTime.makeUnsafe(2),
+        callID: "call-failed",
+        error: { type: "unknown", message: "local failed" },
+        provider: { executed: false },
+      })
+
+      const rows = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .orderBy(asc(SessionMessageTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      const messages = rows.map((row) =>
+        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row.data, id: row.id, type: row.type }),
+      )
+      expect(messages).toMatchObject([
+        {
+          type: "assistant",
+          time: { completed: DateTime.makeUnsafe(1) },
+          content: [{ type: "tool", state: { status: "completed", result: "done" } }],
+        },
+        {
+          type: "assistant",
+          time: { completed: DateTime.makeUnsafe(1) },
+          content: [{ type: "tool", state: { status: "error", error: { message: "local failed" } } }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("transactionally rejects provider tool settlement after the terminal", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const successID = SessionMessage.ID.make("msg_provider_tool_success")
+      const failedID = SessionMessage.ID.make("msg_provider_tool_failed")
+      const running = (id: string) =>
+        new SessionMessage.AssistantTool({
+          type: "tool",
+          id,
+          name: "lookup",
+          provider: { executed: true },
+          time: { created, ran: created },
+          state: new SessionMessage.ToolStateRunning({
+            status: "running",
+            input: { query: "test" },
+            structured: {},
+            content: [],
+          }),
+        })
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          assistantRow(successID, 0, { created, completed: DateTime.makeUnsafe(1) }, [running("call-success")]),
+          assistantRow(failedID, 1, { created, completed: DateTime.makeUnsafe(1) }, [running("call-failed")]),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+
+      const success = yield* events
+        .publish(SessionEvent.Tool.Success, {
+          sessionID,
+          assistantMessageID: successID,
+          timestamp: DateTime.makeUnsafe(2),
+          callID: "call-success",
+          structured: { ok: true },
+          content: [],
+          result: "done",
+          provider: { executed: true },
+        })
+        .pipe(Effect.exit)
+      const failed = yield* events
+        .publish(SessionEvent.Tool.Failed, {
+          sessionID,
+          assistantMessageID: failedID,
+          timestamp: DateTime.makeUnsafe(2),
+          callID: "call-failed",
+          error: { type: "unknown", message: "failed" },
+          provider: { executed: true },
+        })
+        .pipe(Effect.exit)
+      const rows = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .orderBy(asc(SessionMessageTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      const messages = rows.map((row) =>
+        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row.data, id: row.id, type: row.type }),
+      )
+      const eventRows = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+
+      expect(String(success)).toContain("ContentAfterTerminal")
+      expect(String(failed)).toContain("ContentAfterTerminal")
+      expect(messages.map((message) => (message.type === "assistant" ? message.content[0] : undefined))).toMatchObject([
+        { type: "tool", state: { status: "running" } },
+        { type: "tool", state: { status: "running" } },
+      ])
+      expect(eventRows).toHaveLength(0)
     }),
   )
 })

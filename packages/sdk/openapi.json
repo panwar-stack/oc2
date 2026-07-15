@@ -9075,7 +9075,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Part"
+                "$ref": "#/components/schemas/PartWrite"
               }
             }
           }
@@ -16034,6 +16034,182 @@
         ],
         "additionalProperties": false
       },
+      "SessionStepAccounting": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "aggregate",
+              "mirror"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "assistant"
+            ]
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "providerID": {
+                "type": "string"
+              },
+              "variant": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "providerID"
+            ],
+            "additionalProperties": false
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "started": {
+                "type": "number"
+              },
+              "completed": {
+                "type": "number"
+              },
+              "duration": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "started",
+              "completed",
+              "duration"
+            ],
+            "additionalProperties": false
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "authoritative": {
+                "$ref": "#/components/schemas/LLMCanonicalUsage"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "step-finish",
+                  "finish-fallback",
+                  "provider-error"
+                ]
+              },
+              "finalObservation": {
+                "$ref": "#/components/schemas/LLMCanonicalUsage"
+              },
+              "anomaly": {
+                "type": "string",
+                "enum": [
+                  "final-usage-mismatch"
+                ]
+              }
+            },
+            "required": [
+              "authoritative",
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          "pricing": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "provider",
+                  "catalog"
+                ]
+              },
+              "amount": {
+                "type": "number",
+                "minimum": 0
+              },
+              "providerAmount": {
+                "type": "number",
+                "minimum": 0
+              },
+              "estimateAmount": {
+                "type": "number",
+                "minimum": 0
+              },
+              "rate": {
+                "type": "object",
+                "properties": {
+                  "tier": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "context"
+                        ]
+                      },
+                      "size": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "size"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "input": {
+                    "type": "number"
+                  },
+                  "output": {
+                    "type": "number"
+                  },
+                  "cache": {
+                    "type": "object",
+                    "properties": {
+                      "read": {
+                        "type": "number"
+                      },
+                      "write": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "read",
+                      "write"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "input",
+                  "output",
+                  "cache"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "source",
+              "amount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "mode",
+          "purpose",
+          "model",
+          "time"
+        ],
+        "additionalProperties": false
+      },
       "SessionStatus": {
         "anyOf": [
           {
@@ -18980,6 +19156,9 @@
                       },
                       "snapshot": {
                         "type": "string"
+                      },
+                      "accounting": {
+                        "$ref": "#/components/schemas/SessionStepAccounting"
                       }
                     },
                     "required": [
@@ -19029,6 +19208,9 @@
                       },
                       "error": {
                         "$ref": "#/components/schemas/SessionErrorUnknown"
+                      },
+                      "accounting": {
+                        "$ref": "#/components/schemas/SessionStepAccounting"
                       }
                     },
                     "required": [
@@ -25893,6 +26075,139 @@
         ],
         "additionalProperties": false
       },
+      "StepFinishPartWrite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^prt"
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "messageID": {
+            "type": "string",
+            "pattern": "^msg"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "step-finish"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cost": {
+            "type": "number",
+            "minimum": 0
+          },
+          "tokens": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "input": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reasoning": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cache": {
+                "type": "object",
+                "properties": {
+                  "read": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "write": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "read",
+                  "write"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input",
+              "output",
+              "reasoning",
+              "cache"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "sessionID",
+          "messageID",
+          "type",
+          "reason",
+          "cost",
+          "tokens"
+        ],
+        "additionalProperties": false
+      },
+      "PartWrite": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TextPart"
+          },
+          {
+            "$ref": "#/components/schemas/SubtaskPart"
+          },
+          {
+            "$ref": "#/components/schemas/ReasoningPart"
+          },
+          {
+            "$ref": "#/components/schemas/FilePart"
+          },
+          {
+            "$ref": "#/components/schemas/ToolPart"
+          },
+          {
+            "$ref": "#/components/schemas/StepStartPart"
+          },
+          {
+            "$ref": "#/components/schemas/StepFinishPartWrite"
+          },
+          {
+            "$ref": "#/components/schemas/SnapshotPart"
+          },
+          {
+            "$ref": "#/components/schemas/PatchPart"
+          },
+          {
+            "$ref": "#/components/schemas/AgentPart"
+          },
+          {
+            "$ref": "#/components/schemas/RetryPart"
+          },
+          {
+            "$ref": "#/components/schemas/CompactionPart"
+          }
+        ]
+      },
       "TeamInfo": {
         "type": "object",
         "properties": {
@@ -28861,6 +29176,58 @@
         ],
         "additionalProperties": false
       },
+      "LLMCanonicalUsage": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reasoning": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cache": {
+            "type": "object",
+            "properties": {
+              "read": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "write": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "read",
+              "write"
+            ],
+            "additionalProperties": false
+          },
+          "providerTotal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "providerMetadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "input",
+          "output",
+          "reasoning",
+          "cache"
+        ],
+        "additionalProperties": false
+      },
       "SessionErrorUnknown": {
         "type": "object",
         "properties": {
@@ -30718,6 +31085,9 @@
                   },
                   "snapshot": {
                     "type": "string"
+                  },
+                  "accounting": {
+                    "$ref": "#/components/schemas/SessionStepAccounting"
                   }
                 },
                 "required": [
@@ -30796,6 +31166,9 @@
                   },
                   "error": {
                     "$ref": "#/components/schemas/SessionErrorUnknown"
+                  },
+                  "accounting": {
+                    "$ref": "#/components/schemas/SessionStepAccounting"
                   }
                 },
                 "required": [
@@ -32877,6 +33250,9 @@
           },
           "error": {
             "$ref": "#/components/schemas/SessionErrorUnknown"
+          },
+          "accounting": {
+            "$ref": "#/components/schemas/SessionStepAccounting"
           }
         },
         "required": [
@@ -36928,6 +37304,9 @@
               },
               "snapshot": {
                 "type": "string"
+              },
+              "accounting": {
+                "$ref": "#/components/schemas/SessionStepAccounting"
               }
             },
             "required": [
@@ -36977,6 +37356,9 @@
               },
               "error": {
                 "$ref": "#/components/schemas/SessionErrorUnknown"
+              },
+              "accounting": {
+                "$ref": "#/components/schemas/SessionStepAccounting"
               }
             },
             "required": [

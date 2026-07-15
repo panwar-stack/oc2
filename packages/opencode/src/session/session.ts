@@ -480,22 +480,29 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
           ? openrouterCost
           : undefined,
   })
+  const estimateAmount = pricing?.rate
+    ? safe(
+        new Decimal(0)
+          .add(new Decimal(tokens.input).mul(pricing.rate.input).div(1_000_000))
+          .add(new Decimal(tokens.output).mul(pricing.rate.output).div(1_000_000))
+          .add(new Decimal(tokens.cache.read).mul(pricing.rate.cache.read).div(1_000_000))
+          .add(new Decimal(tokens.cache.write).mul(pricing.rate.cache.write).div(1_000_000))
+          .add(new Decimal(tokens.reasoning).mul(pricing.rate.output).div(1_000_000))
+          .toNumber(),
+      )
+    : undefined
+  const cost = pricing?.source === "provider" ? pricing.amount : (estimateAmount ?? 0)
   return {
-    cost:
-      pricing?.source === "provider"
-        ? pricing.amount
-        : safe(
-            pricing?.rate
-              ? new Decimal(0)
-                  .add(new Decimal(tokens.input).mul(pricing.rate.input).div(1_000_000))
-                  .add(new Decimal(tokens.output).mul(pricing.rate.output).div(1_000_000))
-                  .add(new Decimal(tokens.cache.read).mul(pricing.rate.cache.read).div(1_000_000))
-                  .add(new Decimal(tokens.cache.write).mul(pricing.rate.cache.write).div(1_000_000))
-                  .add(new Decimal(tokens.reasoning).mul(pricing.rate.output).div(1_000_000))
-                  .toNumber()
-              : 0,
-          ),
+    cost,
     tokens,
+    pricing:
+      pricing === undefined
+        ? undefined
+        : {
+            ...pricing,
+            amount: cost,
+            ...(estimateAmount === undefined ? {} : { estimateAmount }),
+          },
   }
 }
 

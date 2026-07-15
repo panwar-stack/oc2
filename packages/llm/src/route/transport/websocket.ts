@@ -16,7 +16,10 @@ export interface WebSocketConnection {
 }
 
 export interface Interface {
-  readonly open: (input: WebSocketRequest) => Effect.Effect<WebSocketConnection, LLMError>
+  readonly open: (
+    input: WebSocketRequest,
+    observer?: { readonly onStart: () => void },
+  ) => Effect.Effect<WebSocketConnection, LLMError>
 }
 
 type WebSocketConstructorWithHeaders = new (
@@ -122,10 +125,14 @@ const webSocketUrl = (value: string) =>
       }),
   })
 
-export const open = (input: WebSocketRequest) =>
+export const open = (input: WebSocketRequest, observer?: { readonly onStart: () => void }) =>
   Effect.try({
-    try: () =>
-      new (globalThis.WebSocket as unknown as WebSocketConstructorWithHeaders)(input.url, { headers: input.headers }),
+    try: () => {
+      observer?.onStart()
+      return new (globalThis.WebSocket as unknown as WebSocketConstructorWithHeaders)(input.url, {
+        headers: input.headers,
+      })
+    },
     catch: (error) =>
       transportError("open", error instanceof Error ? error.message : "Failed to construct WebSocket", {
         url: input.url,

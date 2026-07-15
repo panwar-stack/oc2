@@ -30,7 +30,7 @@ import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { toolFileSourceFromUri, Usage, type LLMEvent } from "@oc2-ai/llm"
+import { CanonicalUsage, toolFileSourceFromUri, Usage, type LLMEvent } from "@oc2-ai/llm"
 import { ToolOutput } from "@oc2-ai/core/tool-output"
 
 const DOOM_LOOP_THRESHOLD = 3
@@ -96,7 +96,9 @@ interface ProcessorContext extends Input {
   currentTextID: string | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
   v2AssistantMessageID: SessionMessage.ID | undefined
-  currentStepStarted: number | undefined
+  providerTiming: LLM.ProviderTiming | undefined
+  providerEventStep: number | undefined
+  providerStepTerminals: Map<number, "ended" | "failed">
 }
 
 type StreamEvent = LLMEvent
@@ -142,7 +144,9 @@ export const layer = Layer.effect(
         needsCompaction: false,
         currentText: undefined,
         currentTextID: undefined,
-        currentStepStarted: undefined,
+        providerTiming: undefined,
+        providerEventStep: undefined,
+        providerStepTerminals: new Map(),
         reasoningMap: {},
         v2AssistantMessageID: undefined,
       }
@@ -696,7 +700,7 @@ export const layer = Layer.effect(
             throw new Error(value.message)
 
           case "step-start":
-            ctx.currentStepStarted = Date.now()
+            ctx.providerEventStep = value.index
             if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
@@ -714,8 +718,15 @@ export const layer = Layer.effect(
             return
 
           case "step-finish": {
-            const duration = ctx.currentStepStarted === undefined ? 0 : Date.now() - ctx.currentStepStarted
-            ctx.currentStepStarted = undefined
+            ctx.providerEventStep = value.index
+            const timing = LLM.takeProviderStep(ctx.providerTiming, value.index)
+            if (!timing) return yield* Effect.die("Provider terminal is missing dispatch timing")
+            if (timing.outcome !== "success") {
+              return yield* Effect.die(`Provider step ${value.index} has ${timing.outcome} timing`)
+            }
+            const completed = timing.completed
+            const started = timing.started
+            const duration = timing.duration
             const completedPrepared = yield* snapshot.trackDetailed()
             const completedSnapshot = completedPrepared.hash
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
@@ -724,6 +735,7 @@ export const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
+            const canonical = value.usage ? CanonicalUsage.fromUsage(value.usage) : undefined
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -734,8 +746,27 @@ export const layer = Layer.effect(
                   cost: usage.cost,
                   tokens: usage.tokens,
                   snapshot: completedSnapshot,
-                  timestamp: DateTime.makeUnsafe(Date.now()),
+                  timestamp: DateTime.makeUnsafe(completed),
+                  accounting: {
+                    mode: "mirror",
+                    purpose: "assistant",
+                    model: {
+                      id: ModelV2.ID.make(ctx.model.id),
+                      providerID: ProviderV2.ID.make(ctx.model.providerID),
+                      variant: ctx.assistantMessage.variant
+                        ? ModelV2.VariantID.make(ctx.assistantMessage.variant)
+                        : undefined,
+                    },
+                    time: {
+                      started: DateTime.makeUnsafe(started),
+                      completed: DateTime.makeUnsafe(completed),
+                      duration: Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0,
+                    },
+                    ...(canonical ? { usage: { authoritative: canonical, source: "step-finish" as const } } : {}),
+                    pricing: canonical ? usage.pricing : undefined,
+                  },
                 })
+                ctx.providerStepTerminals.set(value.index, "ended")
                 ctx.v2AssistantMessageID = undefined
               }
             }
@@ -876,7 +907,7 @@ export const layer = Layer.effect(
       })
 
       const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
-        ctx.currentStepStarted = undefined
+        ctx.providerTiming = undefined
         if (ctx.snapshot) {
           const patch = yield* snapshot.patch(ctx.snapshot)
           if (patch.files.length) {
@@ -966,18 +997,46 @@ export const layer = Layer.effect(
         if (!ctx.assistantMessage.summary) {
           // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
           if (mirrorAssistant) {
-            yield* events.publish(SessionEvent.Step.Failed, {
-              sessionID: ctx.sessionID,
-              assistantMessageID: yield* ensureV2AssistantMessage(),
-              error: {
-                type: "unknown",
-                message: errorMessage(e),
-              },
-              timestamp: DateTime.makeUnsafe(Date.now()),
-            })
+            const step = ctx.providerTiming?.currentStep ?? ctx.providerEventStep
+            if (ctx.providerTiming?.active) {
+              LLM.finishProviderAttempt(ctx.providerTiming, aborted ? "interrupt" : "error")
+            }
+            const timing = LLM.takeCurrentProviderStep(ctx.providerTiming)
+            if (step === undefined || !ctx.providerStepTerminals.has(step)) {
+              const completed = timing?.completed ?? Date.now()
+              yield* events.publish(SessionEvent.Step.Failed, {
+                sessionID: ctx.sessionID,
+                assistantMessageID: yield* ensureV2AssistantMessage(),
+                error: {
+                  type: "unknown",
+                  message: errorMessage(e),
+                },
+                timestamp: DateTime.makeUnsafe(completed),
+                accounting: timing
+                  ? {
+                      mode: "mirror",
+                      purpose: "assistant",
+                      model: {
+                        id: ModelV2.ID.make(ctx.model.id),
+                        providerID: ProviderV2.ID.make(ctx.model.providerID),
+                        variant: ctx.assistantMessage.variant
+                          ? ModelV2.VariantID.make(ctx.assistantMessage.variant)
+                          : undefined,
+                      },
+                      time: {
+                        started: DateTime.makeUnsafe(timing.started),
+                        completed: DateTime.makeUnsafe(completed),
+                        duration: timing.duration,
+                      },
+                    }
+                  : undefined,
+              })
+              if (step !== undefined) ctx.providerStepTerminals.set(step, "failed")
+            }
           }
         }
         ctx.assistantMessage.error = error
+        ctx.assistantMessage.finish = "error"
         yield* events.publish(Session.Event.Error, {
           sessionID: ctx.assistantMessage.sessionID,
           error: ctx.assistantMessage.error,
@@ -996,10 +1055,12 @@ export const layer = Layer.effect(
           yield* Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.currentTextID = undefined
-            ctx.currentStepStarted = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
             const stream = llm.stream({ ...streamInput, messageID: ctx.assistantMessage.id, attempt })
+            ctx.providerTiming = LLM.providerTiming(stream)
+            ctx.providerEventStep = undefined
+            ctx.providerStepTerminals.clear()
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),

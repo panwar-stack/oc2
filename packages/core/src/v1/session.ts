@@ -248,6 +248,25 @@ export const StepFinishPart = Schema.Struct({
 }).annotate({ identifier: "StepFinishPart" })
 export type StepFinishPart = Types.DeepMutable<Schema.Schema.Type<typeof StepFinishPart>>
 
+const StepFinishPartWrite = Schema.Struct({
+  ...partBase,
+  type: Schema.Literal("step-finish"),
+  reason: Schema.String,
+  snapshot: Schema.optional(Schema.String),
+  duration: Schema.optional(NonNegativeInt),
+  cost: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  tokens: Schema.Struct({
+    total: Schema.optional(NonNegativeInt),
+    input: NonNegativeInt,
+    output: NonNegativeInt,
+    reasoning: NonNegativeInt,
+    cache: Schema.Struct({
+      read: NonNegativeInt,
+      write: NonNegativeInt,
+    }),
+  }),
+}).annotate({ identifier: "StepFinishPartWrite" })
+
 export const ToolStatePending = Schema.Struct({
   status: Schema.Literal("pending"),
   input: Schema.Record(Schema.String, Schema.Any),
@@ -381,6 +400,22 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+
+export const PartWrite = Schema.Union([
+  TextPart,
+  SubtaskPart,
+  ReasoningPart,
+  FilePart,
+  ToolPart,
+  StepStartPart,
+  StepFinishPartWrite,
+  SnapshotPart,
+  PatchPart,
+  AgentPart,
+  RetryPart,
+  CompactionPart,
+]).annotate({ discriminator: "type", identifier: "PartWrite" })
+export type PartWrite = Types.DeepMutable<Schema.Schema.Type<typeof PartWrite>>
 
 const AssistantErrorSchema = Schema.Union([
   AuthError.EffectSchema,

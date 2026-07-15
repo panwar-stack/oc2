@@ -614,7 +614,7 @@ describe("HttpApi SDK", () => {
     ),
   )
 
-  serverPathParity("matches generated SDK session message and part routes", (serverPath) =>
+  serverPathParity("preserves the generated SDK part input name while enforcing PartWrite", (serverPath) =>
     withStandardProject(serverPath, ({ sdk, directory }) =>
       Effect.gen(function* () {
         const session = yield* capture(() => sdk.session.create({ title: "messages" }))

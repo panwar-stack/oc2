@@ -29,6 +29,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMFugu } from "./llm/fugu"
 import { LLMNativeRuntime } from "./llm/native-runtime"
+import { ProviderTimingLifecycle } from "./llm/provider-timing"
 import { LLMRequestPrep } from "./llm/request"
 import type { TaskPromptOps } from "@/tool/task"
 
@@ -56,7 +57,27 @@ export type StreamInput = {
 
 export type StreamRequest = StreamInput & {
   abort: AbortSignal
+  timing?: ProviderTiming
 }
+
+export type ProviderTiming = ProviderTimingLifecycle.ProviderTiming
+export type ProviderStepTiming = ProviderTimingLifecycle.ProviderStepTiming
+export type ProviderOutcome = ProviderTimingLifecycle.ProviderOutcome
+
+const streamTimings = new WeakMap<object, ProviderTiming>()
+
+export const makeProviderTiming = ProviderTimingLifecycle.makeProviderTiming
+export const beginProviderStep = ProviderTimingLifecycle.beginProviderStep
+export const beginProviderAttempt = ProviderTimingLifecycle.beginProviderAttempt
+export const finishProviderAttempt = ProviderTimingLifecycle.finishProviderAttempt
+export const takeProviderStep = ProviderTimingLifecycle.takeProviderStep
+export const takeCurrentProviderStep = ProviderTimingLifecycle.takeCurrentProviderStep
+export const providerTiming = (stream: object) => streamTimings.get(stream)
+export const withProviderTiming = <A extends object>(stream: A, timing: ProviderTiming) => {
+  streamTimings.set(stream, timing)
+  return stream
+}
+export const MissingProviderTerminalError = ProviderTimingLifecycle.MissingProviderTerminalError
 
 type ProviderRunResult =
   | { type: "native"; stream: Stream.Stream<LLMEventType, unknown> }
@@ -115,17 +136,18 @@ const live: Layer.Layer<
         //   tools: Object.keys(input.tools),
         // });
         const cfg = yield* config.get()
+        const stream = yield* LLMFugu.run(input, cfg.fugu, provider, executeProvider, (status) =>
+          events
+            .publish(SessionEvent.Fugu.Status, {
+              ...status,
+              sessionID: SessionID.make(input.sessionID),
+              timestamp: DateTime.makeUnsafe(Date.now()),
+            })
+            .pipe(Effect.asVoid),
+        )
         return {
           type: "event-stream" as const,
-          stream: yield* LLMFugu.run(input, cfg.fugu, provider, executeProvider, (status) =>
-            events
-              .publish(SessionEvent.Fugu.Status, {
-                ...status,
-                sessionID: SessionID.make(input.sessionID),
-                timestamp: DateTime.makeUnsafe(Date.now()),
-              })
-              .pipe(Effect.asVoid),
-          ),
+          stream,
         }
       }
 
@@ -287,6 +309,7 @@ const live: Layer.Layer<
           providerOptions: prepared.params.options,
           headers: prepared.headers,
           abort: input.abort,
+          timing: input.timing,
         })
         if (native.type === "supported") {
           yield* Effect.logInfo("llm runtime selected").pipe(
@@ -331,8 +354,7 @@ const live: Layer.Layer<
         identity,
         result: streamText({
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
-          includeRawChunks:
-            input.model.providerID.includes("github-copilot") || LLMAISDK.requiresRawChunks(identity),
+          includeRawChunks: input.model.providerID.includes("github-copilot") || LLMAISDK.requiresRawChunks(identity),
           onError(error) {
             l.error("stream error", {
               error,
@@ -371,6 +393,9 @@ const live: Layer.Layer<
           headers: prepared.headers,
           maxRetries: input.retries ?? 0,
           messages: prepared.messages,
+          experimental_onStepStart({ stepNumber }) {
+            ProviderTimingLifecycle.beginProviderStep(input.timing, stepNumber)
+          },
           model: wrapLanguageModel({
             model: language,
             middleware: [
@@ -388,6 +413,7 @@ const live: Layer.Layer<
                   return args.params
                 },
               },
+              ProviderTimingLifecycle.middleware(input.timing),
             ],
           }),
           experimental_telemetry: {
@@ -424,6 +450,7 @@ const live: Layer.Layer<
 
     const stream: Interface["stream"] = (input) => {
       const startedAt = Date.now()
+      const timing = ProviderTimingLifecycle.makeProviderTiming()
       let ttftMs: number | undefined
       let eventCount = 0
       let finishReason: string | undefined
@@ -435,7 +462,7 @@ const live: Layer.Layer<
         modelID: input.model.id,
         attempt: input.attempt ?? 1,
       }
-      return Stream.scoped(
+      const output = Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
             const ctrl = yield* Effect.acquireRelease(
@@ -443,7 +470,7 @@ const live: Layer.Layer<
               (ctrl) => Effect.sync(() => ctrl.abort()),
             )
 
-            const result = yield* run({ ...input, abort: ctrl.signal })
+            const result = yield* run({ ...input, abort: ctrl.signal, timing })
             return toEventStream(result)
           }),
         ),
@@ -479,16 +506,23 @@ const live: Layer.Layer<
           ),
         ),
         Stream.onError((cause) =>
-          Effect.sync(() =>
+          Effect.sync(() => {
+            if (timing.active) {
+              ProviderTimingLifecycle.finishProviderAttempt(
+                timing,
+                Cause.hasInterruptsOnly(cause) ? "interrupt" : "error",
+              )
+            }
             log.warn("stream.error", {
               ...fields,
               durationMs: Date.now() - startedAt,
               ttftMs,
               error: errorText(Cause.squash(cause)),
-            }),
-          ),
+            })
+          }),
         ),
       )
+      return withProviderTiming(output, timing)
     }
 
     return Service.of({ stream })
