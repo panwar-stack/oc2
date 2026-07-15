@@ -6,6 +6,7 @@ import {
   LLMEvent,
   type CacheHint,
   type FinishReason,
+  type LLMError,
   type LLMRequest,
   type ProviderMetadata,
   type ReasoningPart,
@@ -194,11 +195,14 @@ const BedrockEvent = Schema.Struct({
       metrics: Schema.optional(Schema.Unknown),
     }),
   ),
-  internalServerException: Schema.optional(Schema.Struct({ message: Schema.String })),
-  modelStreamErrorException: Schema.optional(Schema.Struct({ message: Schema.String })),
-  validationException: Schema.optional(Schema.Struct({ message: Schema.String })),
-  throttlingException: Schema.optional(Schema.Struct({ message: Schema.String })),
-  serviceUnavailableException: Schema.optional(Schema.Struct({ message: Schema.String })),
+  internalServerException: Schema.optional(Schema.Struct({ message: Schema.optional(Schema.String) })),
+  modelStreamErrorException: Schema.optional(Schema.Struct({ message: Schema.optional(Schema.String) })),
+  validationException: Schema.optional(Schema.Struct({ message: Schema.optional(Schema.String) })),
+  throttlingException: Schema.optional(Schema.Struct({ message: Schema.optional(Schema.String) })),
+  serviceUnavailableException: Schema.optional(Schema.Struct({ message: Schema.optional(Schema.String) })),
+  bedrockEventStreamError: Schema.optional(
+    Schema.Struct({ code: Schema.optional(Schema.String), message: Schema.String }),
+  ),
 })
 type BedrockEvent = Schema.Schema.Type<typeof BedrockEvent>
 
@@ -421,18 +425,14 @@ const mapFinishReason = (reason: string): FinishReason => {
   return "unknown"
 }
 
-// AWS Bedrock Converse reports `inputTokens` (inclusive total) with
-// `cacheReadInputTokens` and `cacheWriteInputTokens` as subsets. Pass
-// the total through and derive the non-cached breakdown. Bedrock does
-// not break reasoning out of `outputTokens` for any current model.
+// Bedrock reports fresh input separately from cache reads and writes.
+// Bedrock does not break reasoning out of `outputTokens` for any current model.
 const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
   if (!usage) return undefined
   if (usage.inputTokens === undefined || usage.outputTokens === undefined) return undefined
-  const cacheTotal = (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0)
-  const nonCached = ProviderShared.subtractTokens(usage.inputTokens, cacheTotal)
   return ProviderShared.usage(
     {
-      input: nonCached ?? 0,
+      input: usage.inputTokens,
       output: usage.outputTokens ?? 0,
       reasoning: 0,
       cache: { read: usage.cacheReadInputTokens ?? 0, write: usage.cacheWriteInputTokens ?? 0 },
@@ -452,6 +452,9 @@ interface ParserState {
   // `metadata` (carries usage). Hold the terminal event in state so `onHalt`
   // can emit exactly one finish after both chunks have had a chance to arrive.
   readonly pendingFinish: { readonly reason: FinishReason; readonly usage?: Usage } | undefined
+  readonly failed: boolean
+  readonly messageStopped: boolean
+  readonly metadataReceived: boolean
   readonly hasToolCalls: boolean
   readonly lifecycle: Lifecycle.State
   readonly reasoningSignatures: Readonly<Record<number, string>>
@@ -459,6 +462,82 @@ interface ParserState {
 
 const step = (state: ParserState, event: BedrockEvent) =>
   Effect.gen(function* () {
+    if (state.failed) return [state, []] as const
+
+    if (event.bedrockEventStreamError) {
+      return [
+        { ...state, failed: true, pendingFinish: undefined },
+        [
+          LLMEvent.providerError({
+            message: event.bedrockEventStreamError.code
+              ? `${event.bedrockEventStreamError.code}: ${event.bedrockEventStreamError.message}`
+              : event.bedrockEventStreamError.message,
+            retryable: true,
+            usage: state.pendingFinish?.usage,
+          }),
+        ],
+      ] as const
+    }
+
+    if (event.internalServerException || event.modelStreamErrorException || event.serviceUnavailableException) {
+      const message =
+        event.internalServerException?.message ??
+        event.modelStreamErrorException?.message ??
+        event.serviceUnavailableException?.message ??
+        "Bedrock Converse stream error"
+      return [
+        { ...state, failed: true, pendingFinish: undefined },
+        [LLMEvent.providerError({ message, retryable: true, usage: state.pendingFinish?.usage })],
+      ] as const
+    }
+
+    if (event.validationException || event.throttlingException) {
+      const message =
+        event.validationException?.message ?? event.throttlingException?.message ?? "Bedrock Converse error"
+      return [
+        { ...state, failed: true, pendingFinish: undefined },
+        [
+          LLMEvent.providerError({
+            message,
+            classification: event.validationException && isContextOverflow(message) ? "context-overflow" : undefined,
+            retryable: event.throttlingException !== undefined,
+            usage: state.pendingFinish?.usage,
+          }),
+        ],
+      ] as const
+    }
+
+    if (event.messageStop) {
+      return [
+        {
+          ...state,
+          messageStopped: true,
+          pendingFinish: state.messageStopped
+            ? state.pendingFinish
+            : { reason: mapFinishReason(event.messageStop.stopReason), usage: state.pendingFinish?.usage },
+        },
+        [],
+      ] as const
+    }
+
+    if (event.metadata) {
+      return [
+        state.metadataReceived
+          ? state
+          : {
+              ...state,
+              metadataReceived: true,
+              pendingFinish: {
+                reason: state.pendingFinish?.reason ?? "stop",
+                usage: mapUsage(event.metadata.usage),
+              },
+            },
+        [],
+      ] as const
+    }
+
+    if (state.messageStopped || state.metadataReceived) return [state, []] as const
+
     if (event.contentBlockStart?.start?.toolUse) {
       const index = event.contentBlockStart.contentBlockIndex
       const events: LLMEvent[] = []
@@ -562,52 +641,13 @@ const step = (state: ParserState, event: BedrockEvent) =>
       ] as const
     }
 
-    if (event.messageStop) {
-      return [
-        {
-          ...state,
-          pendingFinish: { reason: mapFinishReason(event.messageStop.stopReason), usage: state.pendingFinish?.usage },
-        },
-        [],
-      ] as const
-    }
-
-    if (event.metadata) {
-      const usage = mapUsage(event.metadata.usage)
-      return [{ ...state, pendingFinish: { reason: state.pendingFinish?.reason ?? "stop", usage } }, []] as const
-    }
-
-    if (event.internalServerException || event.modelStreamErrorException || event.serviceUnavailableException) {
-      const message =
-        event.internalServerException?.message ??
-        event.modelStreamErrorException?.message ??
-        event.serviceUnavailableException?.message ??
-        "Bedrock Converse stream error"
-      return [state, [LLMEvent.providerError({ message, retryable: true })]] as const
-    }
-
-    if (event.validationException || event.throttlingException) {
-      const message =
-        event.validationException?.message ?? event.throttlingException?.message ?? "Bedrock Converse error"
-      return [
-        state,
-        [
-          LLMEvent.providerError({
-            message,
-            classification: event.validationException && isContextOverflow(message) ? "context-overflow" : undefined,
-            retryable: event.throttlingException !== undefined,
-          }),
-        ],
-      ] as const
-    }
-
     return [state, []] as const
   })
 
 const framing = BedrockEventStream.framing(ADAPTER)
 
 const onHalt = (state: ParserState): ReadonlyArray<LLMEvent> =>
-  state.pendingFinish
+  state.messageStopped && state.pendingFinish && !state.failed
     ? (() => {
         const events: LLMEvent[] = []
         Lifecycle.finish(state.lifecycle, events, {
@@ -617,7 +657,28 @@ const onHalt = (state: ParserState): ReadonlyArray<LLMEvent> =>
         })
         return events
       })()
-    : []
+    : state.failed
+      ? []
+      : [
+          LLMEvent.providerError({
+            message: "Bedrock Converse stream ended before messageStop",
+            retryable: true,
+            usage: state.pendingFinish?.usage,
+          }),
+        ]
+
+const onFailure = (state: ParserState, error: LLMError): ReadonlyArray<LLMEvent> | undefined =>
+  error.reason._tag !== "InvalidProviderOutput"
+    ? undefined
+    : state.failed
+      ? []
+      : [
+          LLMEvent.providerError({
+            message: error.reason.message,
+            retryable: true,
+            usage: state.pendingFinish?.usage,
+          }),
+        ]
 
 // =============================================================================
 // Protocol And Bedrock Route
@@ -637,12 +698,16 @@ export const protocol = Protocol.make({
     initial: () => ({
       tools: ToolStream.empty<number>(),
       pendingFinish: undefined,
+      failed: false,
+      messageStopped: false,
+      metadataReceived: false,
       hasToolCalls: false,
       lifecycle: Lifecycle.initial(),
       reasoningSignatures: {},
     }),
     step,
     onHalt,
+    onFailure,
   },
 })
 

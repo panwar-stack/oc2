@@ -60,6 +60,8 @@ export interface ProtocolStream<Frame, Event, State> {
   readonly terminal?: (event: Event) => boolean
   /** Optional flush emitted when the framed stream ends. */
   readonly onHalt?: (state: State) => ReadonlyArray<LLMEvent>
+  /** Optional terminal emitted when reading transport frames fails. */
+  readonly onFailure?: (state: State, error: LLMError) => ReadonlyArray<LLMEvent> | undefined
 }
 
 /**

@@ -63,17 +63,26 @@ export const dynamicResponse = (handler: Handler) => runtimeLayer(handlerLayer(h
  * Layer that emits the supplied SSE chunks and then aborts mid-stream. Used to
  * exercise transport errors that surface during parsing.
  */
-export const truncatedStream = (chunks: ReadonlyArray<string>) =>
+export const truncatedStream = (
+  chunks: ReadonlyArray<string | Uint8Array>,
+  init: ResponseInit = { headers: SSE_HEADERS },
+) =>
   dynamicResponse((input) =>
     Effect.sync(() => {
       const encoder = new TextEncoder()
+      let index = 0
       const stream = new ReadableStream({
-        start(controller) {
-          for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+        pull(controller) {
+          const chunk = chunks[index]
+          if (chunk !== undefined) {
+            index += 1
+            controller.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : chunk)
+            return
+          }
           controller.error(new Error("connection reset"))
         },
       })
-      return input.respond(stream, { headers: SSE_HEADERS })
+      return input.respond(stream, init)
     }),
   )
 

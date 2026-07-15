@@ -6,7 +6,7 @@ import { Auth, LLMClient } from "../../src/route"
 import * as AnthropicMessages from "../../src/protocols/anthropic-messages"
 import { continuationRequest, nativeAnthropicMessagesContinuation } from "../continuation-scenarios"
 import { it } from "../lib/effect"
-import { dynamicResponse, fixedResponse } from "../lib/http"
+import { dynamicResponse, fixedResponse, truncatedStream } from "../lib/http"
 import { sseEvents } from "../lib/sse"
 
 const model = AnthropicMessages.route
@@ -446,6 +446,269 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("sums executor iterations and preserves advisor billing metadata", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                type: "message_start",
+                message: {
+                  usage: {
+                    input_tokens: 5,
+                    cache_read_input_tokens: 1,
+                    cache_creation_input_tokens: 2,
+                  },
+                },
+              },
+              {
+                type: "message_delta",
+                delta: { stop_reason: "end_turn" },
+                usage: {
+                  output_tokens: 2,
+                  iterations: [
+                    {
+                      type: "compaction",
+                      input_tokens: 7,
+                      output_tokens: 3,
+                      cache_read_input_tokens: 4,
+                      cache_creation_input_tokens: 5,
+                    },
+                    {
+                      type: "message",
+                      input_tokens: 5,
+                      output_tokens: 2,
+                      cache_read_input_tokens: 1,
+                      cache_creation_input_tokens: 2,
+                    },
+                    {
+                      type: "compaction",
+                      input_tokens: 2,
+                      output_tokens: 1,
+                      cache_read_input_tokens: null,
+                    },
+                    {
+                      type: "advisor_message",
+                      model: "claude-haiku-4-5",
+                      input_tokens: 100,
+                      output_tokens: 100,
+                      cache_read_input_tokens: 9,
+                      cache_creation_input_tokens: 10,
+                      prompt: "must not survive",
+                    },
+                  ],
+                },
+              },
+              { type: "message_stop" },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 26,
+        outputTokens: 6,
+        nonCachedInputTokens: 14,
+        cacheReadInputTokens: 5,
+        cacheWriteInputTokens: 7,
+        totalTokens: 32,
+      })
+      expect(CanonicalUsage.fromUsage(response.usage!)).toMatchObject({
+        input: 14,
+        output: 6,
+        reasoning: 0,
+        cache: { read: 5, write: 7 },
+        providerMetadata: {
+          anthropic: {
+            input_tokens: 5,
+            output_tokens: 2,
+            cache_read_input_tokens: 1,
+            cache_creation_input_tokens: 2,
+            iterations: [
+              {
+                type: "compaction",
+                input_tokens: 7,
+                output_tokens: 3,
+                cache_read_input_tokens: 4,
+                cache_creation_input_tokens: 5,
+              },
+              {
+                type: "message",
+                input_tokens: 5,
+                output_tokens: 2,
+                cache_read_input_tokens: 1,
+                cache_creation_input_tokens: 2,
+              },
+              {
+                type: "compaction",
+                input_tokens: 2,
+                output_tokens: 1,
+                cache_read_input_tokens: null,
+              },
+              {
+                type: "advisor_message",
+                model: "claude-haiku-4-5",
+                input_tokens: 100,
+                output_tokens: 100,
+                cache_read_input_tokens: 9,
+                cache_creation_input_tokens: 10,
+              },
+            ],
+          },
+        },
+      })
+    }),
+  )
+
+  it.effect("accepts nullable delta input tokens and iterations without double counting", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                type: "message_start",
+                message: {
+                  usage: { input_tokens: 5, cache_read_input_tokens: 1, cache_creation_input_tokens: 2 },
+                },
+              },
+              {
+                type: "message_delta",
+                delta: { stop_reason: "end_turn" },
+                usage: {
+                  input_tokens: null,
+                  output_tokens: 2,
+                  cache_read_input_tokens: null,
+                  cache_creation_input_tokens: null,
+                  iterations: null,
+                },
+              },
+              { type: "message_stop" },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 8,
+        outputTokens: 2,
+        nonCachedInputTokens: 5,
+        cacheReadInputTokens: 1,
+        cacheWriteInputTokens: 2,
+        totalTokens: 10,
+      })
+      expect(CanonicalUsage.fromUsage(response.usage!)).toMatchObject({
+        input: 5,
+        output: 2,
+        reasoning: 0,
+        cache: { read: 1, write: 2 },
+      })
+    }),
+  )
+
+  it.effect("falls back to top-level cache usage per missing iteration category", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                type: "message_start",
+                message: {
+                  usage: { input_tokens: 5, cache_read_input_tokens: 1, cache_creation_input_tokens: 2 },
+                },
+              },
+              {
+                type: "message_delta",
+                delta: { stop_reason: "end_turn" },
+                usage: {
+                  output_tokens: 2,
+                  iterations: [
+                    { type: "compaction", input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 4 },
+                    { type: "message", input_tokens: 5, output_tokens: 2, cache_read_input_tokens: 1 },
+                  ],
+                },
+              },
+              { type: "message_stop" },
+            ),
+          ),
+        ),
+      )
+
+      expect(CanonicalUsage.fromUsage(response.usage!)).toMatchObject({
+        input: 12,
+        output: 5,
+        reasoning: 0,
+        cache: { read: 5, write: 2 },
+      })
+    }),
+  )
+
+  it.effect("does not manufacture usage from executor iterations without complete top-level usage", () =>
+    Effect.gen(function* () {
+      for (const usage of [
+        {
+          input_tokens: null,
+          output_tokens: 2,
+          iterations: [{ type: "compaction", input_tokens: 7, output_tokens: 3 }],
+        },
+        {
+          input_tokens: 5,
+          iterations: [{ type: "message", input_tokens: 5, output_tokens: 2 }],
+        },
+      ]) {
+        const response = yield* LLMClient.generate(request).pipe(
+          Effect.provide(
+            fixedResponse(
+              sseEvents({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage }, { type: "message_stop" }),
+            ),
+          ),
+        )
+
+        expect(response.usage).toBeUndefined()
+      }
+    }),
+  )
+
+  it.effect("rejects invalid executor and advisor iteration usage", () =>
+    Effect.gen(function* () {
+      const iterations = [
+        {
+          type: "compaction",
+          output_tokens: 3,
+        },
+        {
+          type: "message",
+          input_tokens: 7,
+        },
+        { type: "unknown", input_tokens: 7, output_tokens: 3 },
+        { type: "advisor_message", input_tokens: 7, output_tokens: 3 },
+      ]
+
+      for (const iteration of iterations) {
+        const error = yield* LLMClient.generate(request).pipe(
+          Effect.provide(
+            fixedResponse(
+              sseEvents(
+                { type: "message_start", message: { usage: { input_tokens: 5 } } },
+                {
+                  type: "message_delta",
+                  delta: { stop_reason: "end_turn" },
+                  usage: { output_tokens: 2, iterations: [iteration] },
+                },
+                { type: "message_stop" },
+              ),
+            ),
+          ),
+          Effect.flip,
+        )
+
+        expect(error.message).toContain("Invalid anthropic/anthropic-messages stream event")
+      }
+    }),
+  )
+
   it.effect("assembles streamed tool call input", () =>
     Effect.gen(function* () {
       const body = sseEvents(
@@ -455,6 +718,7 @@ describe("Anthropic Messages route", () => {
         { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: ':"weather"}' } },
         { type: "content_block_stop", index: 0 },
         { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
       )
       const response = yield* LLMClient.generate(
         LLM.updateRequest(request, {
@@ -510,13 +774,245 @@ describe("Anthropic Messages route", () => {
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(request).pipe(
         Effect.provide(
-          fixedResponse(sseEvents({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })),
+          fixedResponse(
+            sseEvents(
+              { type: "message_start", message: { usage: { input_tokens: 5, output_tokens: 0 } } },
+              { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+            ),
+          ),
         ),
       )
 
       // Prefix the error type so consumers can distinguish overloads, rate
       // limits, and quota errors without parsing the message string.
       expect(response.events).toEqual([{ type: "provider-error", message: "overloaded_error: Overloaded" }])
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("emits one usage-free error when the stream ends after partial content", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "message_start", message: { usage: { input_tokens: 5 } } },
+              { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+              { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        { type: "provider-error", message: "Anthropic Messages stream ended before message_stop" },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("emits one usage-free error for message_stop without message_delta", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({ type: "message_start", message: { usage: { input_tokens: 5 } } }, { type: "message_stop" }),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        { type: "provider-error", message: "Anthropic Messages stream ended before message_delta" },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("fails EOF after message_delta while preserving authoritative usage", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "message_start", message: { usage: { input_tokens: 5 } } },
+              { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "Anthropic Messages stream ended before message_stop",
+          usage: expect.objectContaining({ inputTokens: 5, outputTokens: 2, totalTokens: 7 }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toMatchObject({ inputTokens: 5, outputTokens: 2, totalTokens: 7 })
+    }),
+  )
+
+  it.effect("emits one usage-free error when the upstream stream fails before terminal usage", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          truncatedStream([
+            sseEvents(
+              { type: "message_start", message: { usage: { input_tokens: 5 } } },
+              { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } },
+            ),
+          ]),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        {
+          type: "provider-error",
+          message: "Failed to read anthropic/anthropic-messages stream",
+          retryable: true,
+        },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("preserves pending usage in one error when the upstream stream fails", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          truncatedStream([
+            sseEvents(
+              {
+                type: "message_start",
+                message: {
+                  usage: { input_tokens: 5, cache_read_input_tokens: 1, cache_creation_input_tokens: 2 },
+                },
+              },
+              { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+            ),
+          ]),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "Failed to read anthropic/anthropic-messages stream",
+          retryable: true,
+          usage: expect.objectContaining({
+            inputTokens: 8,
+            outputTokens: 3,
+            nonCachedInputTokens: 5,
+            cacheReadInputTokens: 1,
+            cacheWriteInputTokens: 2,
+            totalTokens: 11,
+          }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toMatchObject({ inputTokens: 8, outputTokens: 3, totalTokens: 11 })
+    }),
+  )
+
+  it.effect("ignores content after message_stop and emits one finish", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "message_start", message: { usage: { input_tokens: 5 } } },
+              { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+              { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "done" } },
+              { type: "content_block_stop", index: 0 },
+              { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+              { type: "message_stop" },
+              { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " ignored" } },
+              { type: "error", error: { type: "overloaded_error", message: "late" } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.text).toBe("done")
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({ type: "finish", reason: "stop" }),
+      ])
+    }),
+  )
+
+  it.effect("preserves authoritative terminal usage on a later provider error", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                type: "message_start",
+                message: {
+                  usage: {
+                    input_tokens: 5,
+                    cache_read_input_tokens: 1,
+                    cache_creation_input_tokens: 2,
+                  },
+                },
+              },
+              {
+                type: "message_delta",
+                delta: { stop_reason: "end_turn" },
+                usage: {
+                  output_tokens: 3,
+                  iterations: [
+                    {
+                      type: "compaction",
+                      input_tokens: 7,
+                      output_tokens: 4,
+                      cache_read_input_tokens: 2,
+                      cache_creation_input_tokens: 3,
+                    },
+                    {
+                      type: "message",
+                      input_tokens: 5,
+                      output_tokens: 3,
+                      cache_read_input_tokens: 1,
+                      cache_creation_input_tokens: 2,
+                    },
+                  ],
+                },
+              },
+              { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+              { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ignored" } },
+              { type: "message_stop" },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "overloaded_error: Overloaded",
+          usage: expect.objectContaining({
+            inputTokens: 20,
+            outputTokens: 7,
+            nonCachedInputTokens: 12,
+            cacheReadInputTokens: 3,
+            cacheWriteInputTokens: 5,
+            totalTokens: 27,
+          }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.events.some((event) => event.type === "text-delta")).toBe(false)
+      expect(CanonicalUsage.fromUsage(response.usage!)).toMatchObject({
+        input: 12,
+        output: 7,
+        reasoning: 0,
+        cache: { read: 3, write: 5 },
+      })
     }),
   )
 
@@ -610,6 +1106,7 @@ describe("Anthropic Messages route", () => {
         { type: "content_block_delta", index: 2, delta: { type: "text_delta", text: "Found it." } },
         { type: "content_block_stop", index: 2 },
         { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 8 } },
+        { type: "message_stop" },
       )
       const response = yield* LLMClient.generate(
         LLM.updateRequest(request, {
@@ -661,6 +1158,7 @@ describe("Anthropic Messages route", () => {
         },
         { type: "content_block_stop", index: 1 },
         { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
       )
       const response = yield* LLMClient.generate(
         LLM.updateRequest(request, {

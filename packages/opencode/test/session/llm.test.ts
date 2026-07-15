@@ -565,6 +565,104 @@ describe("session.llm.ai-sdk adapter", () => {
     expect(result.tokens.cache.read).toBe(200)
   })
 
+  test("normalizes Anthropic executor iteration caches without billing advisor usage", async () => {
+    const iterations = [
+      {
+        type: "compaction",
+        input_tokens: 7,
+        output_tokens: 3,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 5,
+      },
+      {
+        type: "message",
+        input_tokens: 5,
+        output_tokens: 2,
+        cache_read_input_tokens: 1,
+        cache_creation_input_tokens: 2,
+      },
+      {
+        type: "compaction",
+        input_tokens: 2,
+        output_tokens: 1,
+        cache_read_input_tokens: null,
+      },
+      {
+        type: "advisor_message",
+        model: "claude-haiku-4-5",
+        input_tokens: 100,
+        output_tokens: 100,
+        cache_read_input_tokens: 9,
+        cache_creation_input_tokens: 10,
+        prompt: "must not survive",
+      },
+    ]
+    const usage = {
+      inputTokens: 17,
+      outputTokens: 6,
+      totalTokens: 23,
+      inputTokenDetails: { noCacheTokens: 14, cacheReadTokens: 1, cacheWriteTokens: 2 },
+      outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+    }
+    const events = await adapt([
+      {
+        type: "finish-step",
+        response: { id: "iteration-step", timestamp: new Date(0), modelId: "claude-sonnet-4-6" },
+        finishReason: "stop",
+        rawFinishReason: "end_turn",
+        usage,
+        providerMetadata: {
+          anthropic: {
+            usage: {
+              input_tokens: 5,
+              output_tokens: 2,
+              cache_read_input_tokens: 1,
+              cache_creation_input_tokens: 2,
+              iterations,
+              prompt: "must not survive",
+            },
+            iterations: ["must not survive"],
+          },
+        },
+      },
+      { type: "finish", finishReason: "stop", rawFinishReason: "end_turn", totalUsage: usage },
+    ])
+
+    const canonical = events.map((event) =>
+      "usage" in event && event.usage ? CanonicalUsage.fromUsage(event.usage) : undefined,
+    )
+    expect(canonical[0]).toMatchObject({
+      input: 14,
+      output: 6,
+      reasoning: 0,
+      cache: { read: 5, write: 7 },
+    })
+    expect(canonical[1]).toEqual({ input: 14, output: 6, reasoning: 0, cache: { read: 5, write: 7 } })
+    expect(canonical[0]?.providerMetadata).toEqual({
+      anthropic: {
+        usage: {
+          input_tokens: 5,
+          output_tokens: 2,
+          cache_read_input_tokens: 1,
+          cache_creation_input_tokens: 2,
+          iterations: [
+            iterations[0],
+            iterations[1],
+            iterations[2],
+            {
+              type: "advisor_message",
+              model: "claude-haiku-4-5",
+              input_tokens: 100,
+              output_tokens: 100,
+              cache_read_input_tokens: 9,
+              cache_creation_input_tokens: 10,
+            },
+          ],
+        },
+      },
+    })
+  })
+
   test("applies AI SDK usage precedence and whitelists reconciliation metadata", async () => {
     const metadata = {
       anthropic: {

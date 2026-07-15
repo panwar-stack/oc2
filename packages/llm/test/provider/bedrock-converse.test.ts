@@ -2,12 +2,12 @@ import { EventStreamCodec } from "@smithy/eventstream-codec"
 import { fromUtf8, toUtf8 } from "@smithy/util-utf8"
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
-import { CacheHint, LLM, Message, ToolCallPart, ToolChoice } from "../../src"
+import { CacheHint, CanonicalUsage, LLM, Message, ToolCallPart, ToolChoice } from "../../src"
 import { LLMClient } from "../../src/route"
 import { AmazonBedrock } from "../../src/providers"
 import * as BedrockConverse from "../../src/protocols/bedrock-converse"
 import { it } from "../lib/effect"
-import { fixedResponse } from "../lib/http"
+import { fixedResponse, truncatedStream } from "../lib/http"
 import {
   eventSummary,
   expectWeatherToolLoop,
@@ -32,6 +32,26 @@ const eventFrame = (type: string, payload: object) =>
       ":content-type": { type: "string", value: "application/json" },
     },
     body: utf8Encoder.encode(JSON.stringify(payload)),
+  })
+
+const exceptionFrame = (type: string, payload: object) =>
+  codec.encode({
+    headers: {
+      ":message-type": { type: "string", value: "exception" },
+      ":exception-type": { type: "string", value: type },
+      ":content-type": { type: "string", value: "application/json" },
+    },
+    body: utf8Encoder.encode(JSON.stringify(payload)),
+  })
+
+const errorFrame = (code: string, message: string) =>
+  codec.encode({
+    headers: {
+      ":message-type": { type: "string", value: "error" },
+      ":error-code": { type: "string", value: code },
+      ":error-message": { type: "string", value: message },
+    },
+    body: new Uint8Array(0),
   })
 
 const concat = (frames: ReadonlyArray<Uint8Array>) => {
@@ -230,7 +250,18 @@ describe("Bedrock Converse route", () => {
         ["contentBlockDelta", { contentBlockIndex: 0, delta: { text: "!" } }],
         ["contentBlockStop", { contentBlockIndex: 0 }],
         ["messageStop", { stopReason: "end_turn" }],
-        ["metadata", { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } }],
+        [
+          "metadata",
+          {
+            usage: {
+              inputTokens: 5,
+              outputTokens: 2,
+              totalTokens: 12,
+              cacheReadInputTokens: 3,
+              cacheWriteInputTokens: 2,
+            },
+          },
+        ],
       )
       const response = yield* LLMClient.generate(baseRequest).pipe(Effect.provide(fixedBytes(body)))
 
@@ -242,10 +273,22 @@ describe("Bedrock Converse route", () => {
       expect(finishes).toHaveLength(1)
       expect(finishes[0]).toMatchObject({ type: "finish", reason: "stop" })
       expect(response.usage).toMatchObject({
-        inputTokens: 5,
+        inputTokens: 10,
         outputTokens: 2,
-        totalTokens: 7,
-        providerTotalTokens: 7,
+        nonCachedInputTokens: 5,
+        cacheReadInputTokens: 3,
+        cacheWriteInputTokens: 2,
+        totalTokens: 12,
+        providerTotalTokens: 12,
+        providerMetadata: {
+          bedrock: {
+            inputTokens: 5,
+            outputTokens: 2,
+            totalTokens: 12,
+            cacheReadInputTokens: 3,
+            cacheWriteInputTokens: 2,
+          },
+        },
       })
     }),
   )
@@ -359,10 +402,10 @@ describe("Bedrock Converse route", () => {
 
   it.effect("emits provider-error for throttlingException", () =>
     Effect.gen(function* () {
-      const body = eventStreamBody(
-        ["messageStart", { role: "assistant" }],
-        ["throttlingException", { message: "Slow down" }],
-      )
+      const body = concat([
+        eventFrame("messageStart", { role: "assistant" }),
+        exceptionFrame("throttlingException", { message: "Slow down" }),
+      ])
       const response = yield* LLMClient.generate(baseRequest).pipe(Effect.provide(fixedBytes(body)))
 
       expect(response.events.find((event) => event.type === "provider-error")).toEqual({
@@ -373,11 +416,337 @@ describe("Bedrock Converse route", () => {
     }),
   )
 
+  it.effect("emits only an error when a failure follows pending success", () =>
+    Effect.gen(function* () {
+      const body = concat([
+        eventFrame("messageStart", { role: "assistant" }),
+        eventFrame("messageStop", { stopReason: "end_turn" }),
+        eventFrame("metadata", { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } }),
+        exceptionFrame("throttlingException", { message: "Slow down" }),
+      ])
+      const response = yield* LLMClient.generate(baseRequest).pipe(Effect.provide(fixedBytes(body)))
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "Slow down",
+          retryable: true,
+          usage: expect.objectContaining({
+            inputTokens: 5,
+            outputTokens: 2,
+            nonCachedInputTokens: 5,
+            totalTokens: 7,
+          }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(CanonicalUsage.fromUsage(response.usage!)).toMatchObject({
+        input: 5,
+        output: 2,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      })
+    }),
+  )
+
+  it.effect("decodes a Smithy error frame as exactly one failure terminal", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            concat([
+              eventFrame("messageStart", { role: "assistant" }),
+              errorFrame("InternalFailure", "Connection lost"),
+              eventFrame("messageStop", { stopReason: "end_turn" }),
+              eventFrame("metadata", { usage: { inputTokens: 99, outputTokens: 99, totalTokens: 198 } }),
+            ]),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        {
+          type: "provider-error",
+          message: "InternalFailure: Connection lost",
+          retryable: true,
+        },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("preserves pending authoritative usage on a Smithy error frame", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            concat([
+              eventFrame("messageStart", { role: "assistant" }),
+              eventFrame("messageStop", { stopReason: "end_turn" }),
+              eventFrame("metadata", {
+                usage: {
+                  inputTokens: 5,
+                  outputTokens: 2,
+                  totalTokens: 12,
+                  cacheReadInputTokens: 3,
+                  cacheWriteInputTokens: 2,
+                },
+              }),
+              errorFrame("ServiceUnavailable", "Try again"),
+            ]),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "ServiceUnavailable: Try again",
+          retryable: true,
+          usage: expect.objectContaining({
+            inputTokens: 10,
+            outputTokens: 2,
+            nonCachedInputTokens: 5,
+            cacheReadInputTokens: 3,
+            cacheWriteInputTokens: 2,
+            totalTokens: 12,
+          }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toMatchObject({ inputTokens: 10, outputTokens: 2, totalTokens: 12 })
+    }),
+  )
+
+  it.effect("emits one provider error for a modeled exception without a message", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(fixedBytes(exceptionFrame("throttlingException", {}))),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        {
+          type: "provider-error",
+          message: "Bedrock Converse error",
+          retryable: true,
+        },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+    }),
+  )
+
+  it.effect("fails a truncated binary frame before metadata without emitting pending success", () =>
+    Effect.gen(function* () {
+      const metadata = eventFrame("metadata", { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } })
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            concat([
+              eventFrame("messageStart", { role: "assistant" }),
+              eventFrame("messageStop", { stopReason: "end_turn" }),
+              metadata.subarray(0, -1),
+            ]),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        {
+          type: "provider-error",
+          message: "Bedrock Converse event stream ended with an incomplete binary frame",
+          retryable: true,
+        },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("fails a truncated binary frame after metadata and preserves authoritative usage", () =>
+    Effect.gen(function* () {
+      const trailing = eventFrame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "ignored" } })
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            concat([
+              eventFrame("messageStart", { role: "assistant" }),
+              eventFrame("messageStop", { stopReason: "end_turn" }),
+              eventFrame("metadata", { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } }),
+              trailing.subarray(0, -1),
+            ]),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "Bedrock Converse event stream ended with an incomplete binary frame",
+          retryable: true,
+          usage: expect.objectContaining({ inputTokens: 5, outputTokens: 2, totalTokens: 7 }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toMatchObject({ inputTokens: 5, outputTokens: 2, totalTokens: 7 })
+    }),
+  )
+
+  it.effect("emits one usage-free error when the stream ends after partial content", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            eventStreamBody(
+              ["messageStart", { role: "assistant" }],
+              ["contentBlockDelta", { contentBlockIndex: 0, delta: { text: "partial" } }],
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        {
+          type: "provider-error",
+          message: "Bedrock Converse stream ended before messageStop",
+          retryable: true,
+        },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("fails metadata-only EOF while preserving authoritative usage", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            eventStreamBody(
+              ["messageStart", { role: "assistant" }],
+              ["metadata", { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } }],
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "Bedrock Converse stream ended before messageStop",
+          usage: expect.objectContaining({ inputTokens: 5, outputTokens: 2, totalTokens: 7 }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toMatchObject({ inputTokens: 5, outputTokens: 2, totalTokens: 7 })
+    }),
+  )
+
+  it.effect("emits one usage-free error when the upstream stream fails before terminal usage", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          truncatedStream(
+            [
+              eventStreamBody(
+                ["messageStart", { role: "assistant" }],
+                ["contentBlockDelta", { contentBlockIndex: 0, delta: { text: "partial" } }],
+              ),
+            ],
+            { headers: { "content-type": "application/vnd.amazon.eventstream" } },
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        {
+          type: "provider-error",
+          message: "Failed to read amazon-bedrock/bedrock-converse stream",
+          retryable: true,
+        },
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toBeUndefined()
+    }),
+  )
+
+  it.effect("preserves pending usage in one error when the upstream stream fails", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          truncatedStream(
+            [
+              eventStreamBody(
+                ["messageStart", { role: "assistant" }],
+                ["messageStop", { stopReason: "end_turn" }],
+                [
+                  "metadata",
+                  {
+                    usage: {
+                      inputTokens: 5,
+                      outputTokens: 2,
+                      totalTokens: 12,
+                      cacheReadInputTokens: 3,
+                      cacheWriteInputTokens: 2,
+                    },
+                  },
+                ],
+              ),
+            ],
+            { headers: { "content-type": "application/vnd.amazon.eventstream" } },
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({
+          type: "provider-error",
+          message: "Failed to read amazon-bedrock/bedrock-converse stream",
+          retryable: true,
+          usage: expect.objectContaining({
+            inputTokens: 10,
+            outputTokens: 2,
+            nonCachedInputTokens: 5,
+            cacheReadInputTokens: 3,
+            cacheWriteInputTokens: 2,
+            totalTokens: 12,
+          }),
+        }),
+      ])
+      expect(response.events.some((event) => event.type === "step-finish")).toBe(false)
+      expect(response.usage).toMatchObject({ inputTokens: 10, outputTokens: 2, totalTokens: 12 })
+    }),
+  )
+
+  it.effect("ignores content after messageStop and emits one finish", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(
+          fixedBytes(
+            eventStreamBody(
+              ["messageStart", { role: "assistant" }],
+              ["contentBlockDelta", { contentBlockIndex: 0, delta: { text: "done" } }],
+              ["contentBlockStop", { contentBlockIndex: 0 }],
+              ["messageStop", { stopReason: "end_turn" }],
+              ["contentBlockDelta", { contentBlockIndex: 0, delta: { text: " ignored" } }],
+              ["metadata", { usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6 } }],
+            ),
+          ),
+        ),
+      )
+
+      expect(response.text).toBe("done")
+      expect(response.events.filter((event) => event.type === "finish" || event.type === "provider-error")).toEqual([
+        expect.objectContaining({ type: "finish", reason: "stop" }),
+      ])
+    }),
+  )
+
   it.effect("classifies input-too-long validation exceptions", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(baseRequest).pipe(
         Effect.provide(
-          fixedBytes(eventStreamBody(["validationException", { message: "Input is too long for requested model" }])),
+          fixedBytes(exceptionFrame("validationException", { message: "Input is too long for requested model" })),
         ),
       )
 

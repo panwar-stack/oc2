@@ -4,6 +4,7 @@ import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route
 import type { HttpRecorder } from "@oc2-ai/http-recorder"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
+import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
 import type { Provider } from "@/provider/provider"
 import { Effect, Layer } from "effect"
@@ -152,6 +153,24 @@ const nativeProvider: Provider.Info = {
   models: {},
 }
 
+const anthropicModel: Provider.Model = {
+  ...nativeModel,
+  id: ModelV2.ID.make("claude-sonnet-4-6"),
+  providerID: ProviderV2.ID.make("anthropic"),
+  api: { id: "claude-sonnet-4-6", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+  name: "Claude Sonnet 4.6",
+  capabilities: { ...nativeModel.capabilities, reasoning: false },
+  limit: { context: 200_000, input: 200_000, output: 64 },
+}
+
+const anthropicMessages = [
+  {
+    role: "user" as const,
+    content: "hello",
+    providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+  },
+]
+
 const runtimeCassette = (): ProviderParityCassette => ({
   version: 1,
   interactions: [
@@ -208,6 +227,101 @@ const runtimeCassette = (): ProviderParityCassette => ({
           .map((chunk) => `data: ${JSON.stringify(chunk)}`)
           .join("\n\n")
           .concat("\n\ndata: [DONE]\n\n"),
+      },
+    },
+  ],
+})
+
+const anthropicRuntimeCassette = (): ProviderParityCassette => ({
+  version: 1,
+  interactions: [
+    {
+      transport: "http",
+      request: {
+        method: "POST",
+        url: "https://api.anthropic.com/v1/messages",
+        headers: {
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+          "x-api-key": "test-anthropic-key",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 64,
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "hello", cache_control: { type: "ephemeral" } }],
+            },
+          ],
+          stream: true,
+        }),
+      },
+      response: {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_parity",
+              type: "message",
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: {
+                input_tokens: 5,
+                output_tokens: 0,
+                cache_read_input_tokens: 1,
+                cache_creation_input_tokens: 2,
+              },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: {
+              input_tokens: null,
+              output_tokens: 2,
+              cache_read_input_tokens: null,
+              cache_creation_input_tokens: null,
+              iterations: [
+                {
+                  type: "compaction",
+                  input_tokens: 7,
+                  output_tokens: 3,
+                  cache_read_input_tokens: 4,
+                  cache_creation_input_tokens: 5,
+                },
+                {
+                  type: "message",
+                  input_tokens: 5,
+                  output_tokens: 2,
+                  cache_read_input_tokens: 1,
+                  cache_creation_input_tokens: 2,
+                },
+                { type: "compaction", input_tokens: 2, output_tokens: 1 },
+                {
+                  type: "advisor_message",
+                  model: "claude-haiku-4-5",
+                  input_tokens: 100,
+                  output_tokens: 100,
+                  cache_read_input_tokens: 9,
+                  cache_creation_input_tokens: 10,
+                },
+              ],
+            },
+          },
+          { type: "message_stop" },
+        ]
+          .map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}`)
+          .join("\n\n")
+          .concat("\n\n"),
       },
     },
   ],
@@ -413,6 +527,45 @@ describe("provider parity replay and comparison", () => {
       )
       expect(result.aiSdk).toEqual(result.native)
       expect(result.aiSdk.events).toContainEqual({ type: "text", text: "hello" })
+    }),
+  )
+
+  it.effect("keeps Anthropic compaction cache usage in five-category parity", () =>
+    Effect.gen(function* () {
+      const llmClient = yield* LLMClient.Service
+      const result = yield* Effect.promise(() =>
+        compareParityRuns({
+          cassette: anthropicRuntimeCassette(),
+          aiSdk: (replay) => ({
+            model: createAnthropic({ apiKey: "test-anthropic-key", fetch: replay.fetch })("claude-sonnet-4-6"),
+            messages: anthropicMessages,
+            maxOutputTokens: 64,
+            maxRetries: 0,
+          }),
+          nativeDirect: (replay) => ({
+            model: anthropicModel,
+            provider: {
+              ...nativeProvider,
+              options: { apiKey: "test-anthropic-key", fetch: replay.fetch },
+            },
+            auth: { type: "oauth", refresh: "fixture", access: "fixture", expires: 1 },
+            llmClient,
+            messages: anthropicMessages,
+            tools: {},
+            maxOutputTokens: 64,
+            headers: {},
+            abort: new AbortController().signal,
+          }),
+        }),
+      )
+
+      expect(result.aiSdk).toEqual(result.native)
+      expect(result.aiSdk.events).toContainEqual({
+        type: "step-finish",
+        index: 0,
+        reason: "stop",
+        usage: { input: 14, output: 6, reasoning: 0, cache: { read: 5, write: 7 } },
+      })
     }),
   )
 

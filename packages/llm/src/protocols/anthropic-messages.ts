@@ -8,6 +8,7 @@ import {
   LLMEvent,
   type CacheHint,
   type FinishReason,
+  type LLMError,
   type LLMRequest,
   type MediaPart,
   type ProviderMetadata,
@@ -168,11 +169,35 @@ const AnthropicBodyFields = {
 const AnthropicMessagesBody = Schema.Struct(AnthropicBodyFields)
 export type AnthropicMessagesBody = Schema.Schema.Type<typeof AnthropicMessagesBody>
 
-const AnthropicUsage = Schema.Struct({
-  input_tokens: Schema.optional(Schema.Number),
+const AnthropicUsageFields = {
+  input_tokens: optionalNull(Schema.Number),
   output_tokens: Schema.optional(Schema.Number),
   cache_creation_input_tokens: optionalNull(Schema.Number),
   cache_read_input_tokens: optionalNull(Schema.Number),
+}
+
+const AnthropicExecutorUsageIteration = Schema.Struct({
+  type: Schema.Literals(["message", "compaction"]),
+  input_tokens: Schema.Number,
+  output_tokens: Schema.Number,
+  cache_creation_input_tokens: optionalNull(Schema.Number),
+  cache_read_input_tokens: optionalNull(Schema.Number),
+})
+
+const AnthropicAdvisorUsageIteration = Schema.Struct({
+  type: Schema.Literal("advisor_message"),
+  model: Schema.String,
+  input_tokens: Schema.Number,
+  output_tokens: Schema.Number,
+  cache_creation_input_tokens: optionalNull(Schema.Number),
+  cache_read_input_tokens: optionalNull(Schema.Number),
+})
+
+const AnthropicUsage = Schema.Struct({
+  ...AnthropicUsageFields,
+  iterations: optionalNull(
+    Schema.Array(Schema.Union([AnthropicExecutorUsageIteration, AnthropicAdvisorUsageIteration])),
+  ),
 })
 type AnthropicUsage = Schema.Schema.Type<typeof AnthropicUsage>
 
@@ -221,6 +246,12 @@ type AnthropicEvent = Schema.Schema.Type<typeof AnthropicEvent>
 interface ParserState {
   readonly tools: ToolStream.State<number>
   readonly usage?: AnthropicUsage
+  readonly pendingFinish?: {
+    readonly reason: FinishReason
+    readonly usage?: Usage
+    readonly providerMetadata?: ProviderMetadata
+  }
+  readonly terminal: boolean
   readonly lifecycle: Lifecycle.State
 }
 
@@ -559,17 +590,27 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // inclusive `inputTokens` the rest of the contract expects. Extended
 // thinking tokens are *not* broken out by Anthropic — they're billed as
 // part of `output_tokens`, so `reasoningTokens` stays `undefined` and
-// `outputTokens` carries the combined total.
+// `outputTokens` carries the combined total. When Anthropic reports executor
+// iterations, summing message and compaction entries yields the complete
+// executor usage. Advisor iterations are billed under their own model and are
+// retained only as metadata.
 const mapUsage = (usage: AnthropicUsage | undefined): Usage | undefined => {
-  if (!usage || usage.input_tokens === undefined || usage.output_tokens === undefined) return undefined
-  const nonCached = usage.input_tokens
-  const cacheRead = usage.cache_read_input_tokens ?? undefined
-  const cacheWrite = usage.cache_creation_input_tokens ?? undefined
-  const inputTokens = ProviderShared.sumTokens(nonCached, cacheRead, cacheWrite)
+  if (!usage || usage.input_tokens == null || usage.output_tokens === undefined) return undefined
+  const executor = (usage.iterations ?? []).filter((item) => item.type !== "advisor_message")
+  const nonCached = executor.length ? executor.reduce((sum, item) => sum + item.input_tokens, 0) : usage.input_tokens
+  const output = executor.length ? executor.reduce((sum, item) => sum + item.output_tokens, 0) : usage.output_tokens
+  const iterationCacheRead = executor.map((item) => item.cache_read_input_tokens).filter((item) => item != null)
+  const iterationCacheWrite = executor.map((item) => item.cache_creation_input_tokens).filter((item) => item != null)
+  const cacheRead = iterationCacheRead.length
+    ? ProviderShared.sumTokens(...iterationCacheRead)
+    : (usage.cache_read_input_tokens ?? undefined)
+  const cacheWrite = iterationCacheWrite.length
+    ? ProviderShared.sumTokens(...iterationCacheWrite)
+    : (usage.cache_creation_input_tokens ?? undefined)
   return ProviderShared.usage(
     {
-      input: nonCached ?? 0,
-      output: usage.output_tokens ?? 0,
+      input: nonCached,
+      output,
       reasoning: 0,
       cache: { read: cacheRead ?? 0, write: cacheWrite ?? 0 },
       providerTotal: undefined,
@@ -586,14 +627,13 @@ const mergeUsage = (left: AnthropicUsage | undefined, right: AnthropicUsage | un
   if (!left) return right
   if (!right) return left
   return {
-    input_tokens: right.input_tokens === undefined ? left.input_tokens : right.input_tokens,
+    input_tokens: right.input_tokens == null ? left.input_tokens : right.input_tokens,
     output_tokens: right.output_tokens === undefined ? left.output_tokens : right.output_tokens,
     cache_read_input_tokens:
-      right.cache_read_input_tokens === undefined ? left.cache_read_input_tokens : right.cache_read_input_tokens,
+      right.cache_read_input_tokens == null ? left.cache_read_input_tokens : right.cache_read_input_tokens,
     cache_creation_input_tokens:
-      right.cache_creation_input_tokens === undefined
-        ? left.cache_creation_input_tokens
-        : right.cache_creation_input_tokens,
+      right.cache_creation_input_tokens == null ? left.cache_creation_input_tokens : right.cache_creation_input_tokens,
+    iterations: right.iterations == null ? left.iterations : right.iterations,
   }
 }
 
@@ -762,16 +802,33 @@ const onContentBlockStop = Effect.fn("AnthropicMessages.onContentBlockStop")(fun
 
 const onMessageDelta = (state: ParserState, event: AnthropicEvent): StepResult => {
   const merged = mergeUsage(state.usage, event.usage)
-  const usage = mapUsage(merged)
+  const usage = event.usage?.output_tokens === undefined ? undefined : mapUsage(merged)
+  return [
+    {
+      ...state,
+      usage: merged,
+      pendingFinish: {
+        reason: mapFinishReason(event.delta?.stop_reason),
+        usage,
+        providerMetadata: event.delta?.stop_sequence
+          ? anthropicMetadata({ stopSequence: event.delta.stop_sequence })
+          : undefined,
+      },
+    },
+    NO_EVENTS,
+  ]
+}
+
+const onMessageStop = (state: ParserState): StepResult => {
+  if (!state.pendingFinish) {
+    return [
+      { ...state, terminal: true },
+      [LLMEvent.providerError({ message: "Anthropic Messages stream ended before message_delta" })],
+    ]
+  }
   const events: LLMEvent[] = []
-  const lifecycle = Lifecycle.finish(state.lifecycle, events, {
-    reason: mapFinishReason(event.delta?.stop_reason),
-    usage,
-    providerMetadata: event.delta?.stop_sequence
-      ? anthropicMetadata({ stopSequence: event.delta.stop_sequence })
-      : undefined,
-  })
-  return [{ ...state, lifecycle, usage: merged }, events]
+  const lifecycle = Lifecycle.finish(state.lifecycle, events, state.pendingFinish)
+  return [{ ...state, lifecycle, pendingFinish: undefined, terminal: true }, events]
 }
 
 // Prefix `error.type` so overloads, rate limits, and quota errors are visible
@@ -784,24 +841,50 @@ const providerErrorMessage = (event: AnthropicEvent): string => {
 }
 
 const onError = (state: ParserState, event: AnthropicEvent): StepResult => [
-  state,
+  { ...state, pendingFinish: undefined, terminal: true },
   [
     LLMEvent.providerError({
       message: providerErrorMessage(event),
       classification: isContextOverflow(event.error?.message ?? "") ? "context-overflow" : undefined,
+      usage: state.pendingFinish?.usage,
     }),
   ],
 ]
 
 const step = (state: ParserState, event: AnthropicEvent) => {
+  if (state.terminal) return Effect.succeed<StepResult>([state, NO_EVENTS])
   if (event.type === "message_start") return Effect.succeed(onMessageStart(state, event))
   if (event.type === "content_block_start") return Effect.succeed(onContentBlockStart(state, event))
   if (event.type === "content_block_delta") return onContentBlockDelta(state, event)
   if (event.type === "content_block_stop") return onContentBlockStop(state, event)
   if (event.type === "message_delta") return Effect.succeed(onMessageDelta(state, event))
+  if (event.type === "message_stop") return Effect.succeed(onMessageStop(state))
   if (event.type === "error") return Effect.succeed(onError(state, event))
   return Effect.succeed<StepResult>([state, NO_EVENTS])
 }
+
+const onHalt = (state: ParserState): ReadonlyArray<LLMEvent> => {
+  if (state.terminal) return []
+  return [
+    LLMEvent.providerError({
+      message: "Anthropic Messages stream ended before message_stop",
+      usage: state.pendingFinish?.usage,
+    }),
+  ]
+}
+
+const onFailure = (state: ParserState, error: LLMError): ReadonlyArray<LLMEvent> | undefined =>
+  error.reason._tag !== "InvalidProviderOutput"
+    ? undefined
+    : state.terminal
+      ? []
+      : [
+          LLMEvent.providerError({
+            message: error.reason.message,
+            retryable: true,
+            usage: state.pendingFinish?.usage,
+          }),
+        ]
 
 // =============================================================================
 // Protocol And Anthropic Route
@@ -819,8 +902,15 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: Protocol.jsonEvent(AnthropicEvent),
-    initial: () => ({ tools: ToolStream.empty<number>(), lifecycle: Lifecycle.initial() }),
+    initial: () => ({
+      tools: ToolStream.empty<number>(),
+      terminal: false,
+      lifecycle: Lifecycle.initial(),
+    }),
     step,
+    terminal: (event) => event.type === "message_stop" || event.type === "error",
+    onHalt,
+    onFailure,
   },
 })
 

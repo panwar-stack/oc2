@@ -16,6 +16,8 @@ export function adapterState() {
     currentReasoningID: undefined as string | undefined,
     toolNames: {} as Record<string, string>,
     copilotTotalNanoAiu: undefined as number | undefined,
+    cacheReadAdjustment: undefined as number | undefined,
+    cacheWriteAdjustment: undefined as number | undefined,
     recoveredCacheWrite: undefined as number | undefined,
   }
 }
@@ -39,12 +41,7 @@ function usageProviderMetadata(value: ProviderMetadata | undefined): ProviderMet
   for (const provider of ["anthropic", "vertex"] as const) {
     const metadata = value[provider]
     const fields = pickUsageNumbers(metadata, ["cacheCreationInputTokens"])
-    const usage = pickUsageNumbers(metadata?.usage, [
-      "input_tokens",
-      "output_tokens",
-      "cache_creation_input_tokens",
-      "cache_read_input_tokens",
-    ])
+    const usage = anthropicUsage(metadata?.usage)
     if (Object.keys(usage).length) fields.usage = usage
     if (Object.keys(fields).length) entries.push([provider, fields])
   }
@@ -95,6 +92,76 @@ function usageProviderMetadata(value: ProviderMetadata | undefined): ProviderMet
   return entries.length ? Object.fromEntries(entries) : undefined
 }
 
+type AnthropicUsageIteration = {
+  readonly type: "message" | "compaction" | "advisor_message"
+  readonly model?: string
+  readonly input_tokens: number
+  readonly output_tokens: number
+  readonly cache_creation_input_tokens?: number | null
+  readonly cache_read_input_tokens?: number | null
+}
+
+function anthropicUsage(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {}
+  const usage = pickUsageNumbers(value, ["input_tokens", "output_tokens"])
+  for (const field of ["cache_creation_input_tokens", "cache_read_input_tokens"] as const) {
+    const item = value[field]
+    if (item === null || (typeof item === "number" && Number.isFinite(item) && item >= 0)) usage[field] = item
+  }
+  if (!Array.isArray(value.iterations)) return usage
+  const iterations = value.iterations.flatMap((item): ReadonlyArray<AnthropicUsageIteration> => {
+    if (!isRecord(item)) return []
+    if (item.type !== "message" && item.type !== "compaction" && item.type !== "advisor_message") return []
+    const model = typeof item.model === "string" ? item.model : undefined
+    if (item.type === "advisor_message" && model === undefined) return []
+    if (
+      typeof item.input_tokens !== "number" ||
+      !Number.isFinite(item.input_tokens) ||
+      item.input_tokens < 0 ||
+      typeof item.output_tokens !== "number" ||
+      !Number.isFinite(item.output_tokens) ||
+      item.output_tokens < 0
+    )
+      return []
+    const cacheCreation = item.cache_creation_input_tokens
+    const cacheRead = item.cache_read_input_tokens
+    return [
+      {
+        type: item.type,
+        ...(item.type === "advisor_message" ? { model } : {}),
+        input_tokens: item.input_tokens,
+        output_tokens: item.output_tokens,
+        ...(cacheCreation === null ||
+        (typeof cacheCreation === "number" && Number.isFinite(cacheCreation) && cacheCreation >= 0)
+          ? { cache_creation_input_tokens: cacheCreation }
+          : {}),
+        ...(cacheRead === null || (typeof cacheRead === "number" && Number.isFinite(cacheRead) && cacheRead >= 0)
+          ? { cache_read_input_tokens: cacheRead }
+          : {}),
+      },
+    ]
+  })
+  if (iterations.length) usage.iterations = iterations
+  return usage
+}
+
+function anthropicExecutorCache(
+  metadata: ProviderMetadata | undefined,
+  field: "cache_creation_input_tokens" | "cache_read_input_tokens",
+) {
+  if (!metadata) return undefined
+  for (const provider of ["anthropic", "vertex"] as const) {
+    const usage = anthropicUsage(metadata[provider]?.usage)
+    if (!Array.isArray(usage.iterations)) continue
+    const executor = usage.iterations.filter(
+      (item): item is AnthropicUsageIteration => isRecord(item) && item.type !== "advisor_message",
+    )
+    const values = executor.flatMap((item) => (typeof item[field] === "number" ? [item[field]] : []))
+    if (values.length) return values.reduce((sum, item) => sum + item, 0)
+  }
+  return undefined
+}
+
 function pickUsageNumbers(value: unknown, fields: ReadonlyArray<string>): Record<string, unknown> {
   if (!isRecord(value)) return {}
   return Object.fromEntries(
@@ -123,7 +190,7 @@ function metadataCacheWrite(metadata: ProviderMetadata | undefined) {
 
 function metadataProviderTotal(metadata: ProviderMetadata | undefined) {
   if (!metadata) return undefined
-  const total = (value: unknown) => (isRecord(value) ? value.totalTokenCount ?? value.totalTokens : undefined)
+  const total = (value: unknown) => (isRecord(value) ? (value.totalTokenCount ?? value.totalTokens) : undefined)
   const values = [
     total(metadata.google?.usageMetadata),
     total(metadata["google-vertex"]?.usageMetadata),
@@ -148,7 +215,13 @@ function copilotTotalNanoAiu(value: unknown) {
   return total
 }
 
-function usage(value: unknown, metadata?: ProviderMetadata, recoveredCacheWrite?: number) {
+function usage(
+  value: unknown,
+  metadata?: ProviderMetadata,
+  cacheReadAdjustment?: number,
+  cacheWriteAdjustment?: number,
+  recoveredCacheWrite?: number,
+) {
   if (!value || typeof value !== "object") return undefined
   const item = value as {
     inputTokens?: number
@@ -160,15 +233,26 @@ function usage(value: unknown, metadata?: ProviderMetadata, recoveredCacheWrite?
     outputTokenDetails?: { textTokens?: number; reasoningTokens?: number }
   }
   const reasoning = item.outputTokenDetails?.reasoningTokens ?? item.reasoningTokens
-  const cacheRead = item.inputTokenDetails?.cacheReadTokens ?? item.cachedInputTokens
+  const baseCacheRead = item.inputTokenDetails?.cacheReadTokens ?? item.cachedInputTokens
+  const iterationCacheRead = anthropicExecutorCache(metadata, "cache_read_input_tokens")
+  const cacheRead =
+    iterationCacheRead ??
+    (cacheReadAdjustment === undefined ? baseCacheRead : Math.max(0, (baseCacheRead ?? 0) + cacheReadAdjustment))
   const metadataWrite = metadataCacheWrite(metadata) ?? recoveredCacheWrite
-  const cacheWrite = item.inputTokenDetails?.cacheWriteTokens ?? metadataWrite
+  const baseCacheWrite = item.inputTokenDetails?.cacheWriteTokens
+  const iterationCacheWrite = anthropicExecutorCache(metadata, "cache_creation_input_tokens")
+  const cacheWrite =
+    iterationCacheWrite ??
+    (cacheWriteAdjustment === undefined
+      ? (baseCacheWrite ?? metadataWrite)
+      : Math.max(0, (baseCacheWrite ?? 0) + cacheWriteAdjustment))
   if (
     (item.inputTokens === undefined && item.inputTokenDetails?.noCacheTokens === undefined) ||
     (item.outputTokens === undefined && item.outputTokenDetails?.textTokens === undefined)
   )
     return undefined
-  const metadataOnlyWrite = item.inputTokenDetails?.cacheWriteTokens === undefined && metadataWrite !== undefined
+  const metadataOnlyWrite =
+    iterationCacheWrite === undefined && baseCacheWrite === undefined && metadataWrite !== undefined
   const input =
     metadataOnlyWrite && item.inputTokens !== undefined
       ? Math.max(0, item.inputTokens - (cacheRead ?? 0) - metadataWrite)
@@ -228,8 +312,23 @@ export function toLLMEvents(
                 },
               }
         const recoveredCacheWrite = metadataCacheWrite(metadata)
-        if (event.usage.inputTokenDetails.cacheWriteTokens === undefined && recoveredCacheWrite !== undefined)
-          state.recoveredCacheWrite = (state.recoveredCacheWrite ?? 0) + recoveredCacheWrite
+        const iterationCacheRead = anthropicExecutorCache(metadata, "cache_read_input_tokens")
+        const iterationCacheWrite = anthropicExecutorCache(metadata, "cache_creation_input_tokens")
+        if (iterationCacheRead !== undefined)
+          state.cacheReadAdjustment =
+            (state.cacheReadAdjustment ?? 0) +
+            iterationCacheRead -
+            (event.usage.inputTokenDetails.cacheReadTokens ?? event.usage.cachedInputTokens ?? 0)
+        if (iterationCacheWrite !== undefined)
+          state.cacheWriteAdjustment =
+            (state.cacheWriteAdjustment ?? 0) +
+            iterationCacheWrite -
+            (event.usage.inputTokenDetails.cacheWriteTokens ?? 0)
+        if (iterationCacheWrite === undefined && event.usage.inputTokenDetails.cacheWriteTokens === undefined)
+          state.recoveredCacheWrite =
+            recoveredCacheWrite === undefined
+              ? state.recoveredCacheWrite
+              : (state.recoveredCacheWrite ?? 0) + recoveredCacheWrite
         state.copilotTotalNanoAiu = undefined
         return [
           LLMEvent.stepFinish({
@@ -246,7 +345,13 @@ export function toLLMEvents(
         const events = [
           LLMEvent.finish({
             reason: finishReason(event.finishReason),
-            usage: usage(event.totalUsage, undefined, state.recoveredCacheWrite),
+            usage: usage(
+              event.totalUsage,
+              undefined,
+              state.cacheReadAdjustment,
+              state.cacheWriteAdjustment,
+              state.recoveredCacheWrite,
+            ),
             providerMetadata: undefined,
           }),
         ]

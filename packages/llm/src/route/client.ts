@@ -271,17 +271,43 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
         }),
       streamPrepared: (prepared: Prepared, request: LLMRequest, runtime: TransportRuntime) => {
         const route = `${request.model.provider}/${request.model.route.id}`
-        const events = routeInput.transport
-          .frames(prepared, request, runtime)
-          .pipe(
-            Stream.mapEffect(decodeEvent(route)),
-            protocol.stream.terminal ? Stream.takeUntil(protocol.stream.terminal) : (stream) => stream,
-          )
+        type FramedInput =
+          | { readonly type: "frame"; readonly value: Frame }
+          | { readonly type: "end" }
+          | { readonly type: "failure"; readonly error: LLMError }
+        type ParserInput =
+          | { readonly type: "event"; readonly value: Event }
+          | { readonly type: "end" }
+          | { readonly type: "failure"; readonly error: LLMError }
+
+        const frames = routeInput.transport.frames(prepared, request, runtime).pipe(
+          Stream.map((value): FramedInput => ({ type: "frame", value })),
+          Stream.concat(Stream.succeed<FramedInput>({ type: "end" })),
+          Stream.catchCause((cause) =>
+            Stream.succeed<FramedInput>({
+              type: "failure",
+              error: streamError(route, `Failed to read ${route} stream`, cause),
+            }),
+          ),
+        )
+        const terminal = protocol.stream.terminal
+        const events = frames.pipe(
+          Stream.mapEffect((input): Effect.Effect<ParserInput, LLMError> => {
+            if (input.type !== "frame") return Effect.succeed(input)
+            return decodeEvent(route)(input.value).pipe(Effect.map((value): ParserInput => ({ type: "event", value })))
+          }),
+          terminal ? Stream.takeUntil((input) => input.type === "event" && terminal(input.value)) : (stream) => stream,
+        )
         return events.pipe(
           Stream.mapAccumEffect(
             () => protocol.stream.initial(request),
-            protocol.stream.step,
-            protocol.stream.onHalt ? { onHalt: protocol.stream.onHalt } : undefined,
+            (state, input) => {
+              if (input.type === "event") return protocol.stream.step(state, input.value)
+              if (input.type === "end") return Effect.succeed([state, protocol.stream.onHalt?.(state) ?? []] as const)
+              const failure = protocol.stream.onFailure?.(state, input.error)
+              if (failure !== undefined) return Effect.succeed([state, failure] as const)
+              return Effect.fail(input.error)
+            },
           ),
           Stream.catchCause((cause) => Stream.fail(streamError(route, `Failed to read ${route} stream`, cause))),
         )
