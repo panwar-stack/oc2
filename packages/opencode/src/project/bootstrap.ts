@@ -43,11 +43,9 @@ export const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         yield* Effect.logInfo("bootstrapping").pipe(Effect.annotateLogs("directory", ctx.directory))
         // everything depends on config so eager load it for nice traces
-        if (!automationSafe) {
-          yield* log.info("startup stage", { directory: ctx.directory, stage: "config.get", status: "started" })
-          yield* config.get()
-          yield* log.info("startup stage", { directory: ctx.directory, stage: "config.get", status: "completed" })
-        }
+        yield* log.info("startup stage", { directory: ctx.directory, stage: "config.get", status: "started" })
+        yield* config.get()
+        yield* log.info("startup stage", { directory: ctx.directory, stage: "config.get", status: "completed" })
         // in 99% of use cases user that is opened opencode at certain directory will
         // conduct a file search in this direcotry, it could be switched later but
         // mostly always we will need a file picker for cwd

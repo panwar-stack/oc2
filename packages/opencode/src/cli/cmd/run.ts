@@ -24,6 +24,8 @@ import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@oc2-a
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { sniffAttachmentMime } from "@/util/media"
+import { isIssueAutomationName } from "@/agent/issue-automation"
+import { markAutomationSafe } from "@/server/automation-safe-request"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -147,7 +149,7 @@ export const RunCommand = effectCmd({
   instance: (args) =>
     args.attach === undefined &&
     !(args.automation && (args.session !== undefined || args.continue || args.fork)),
-  automationSafe: (args) => args.automation,
+  automationSafe: (args) => args.automation || (args.agent !== undefined && isIssueAutomationName(args.agent)),
   // For --dir without --attach, load instance for the resolved target dir.
   // The handler also chdirs (preserving the legacy order: chdir → file resolution).
   directory: (args) => (args.dir && !args.attach ? path.resolve(process.cwd(), args.dir) : process.cwd()),
@@ -1099,7 +1101,9 @@ export const RunCommand = effectCmd({
         const { runInteractiveLocalMode } = await import("./run/runtime")
         const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
           const { Server } = await import("@/server/server")
-          const request = new Request(input, init)
+          const request = localInstance?.automationSafe
+            ? markAutomationSafe(new Request(input, init))
+            : new Request(input, init)
           return Server.Default().app.fetch(request)
         }) as typeof globalThis.fetch
 
@@ -1133,7 +1137,9 @@ export const RunCommand = effectCmd({
 
       const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const { Server } = await import("@/server/server")
-        const request = new Request(input, init)
+        const request = localInstance?.automationSafe
+          ? markAutomationSafe(new Request(input, init))
+          : new Request(input, init)
         return Server.Default().app.fetch(request)
       }) as typeof globalThis.fetch
       const sdk = createOpencodeClient({

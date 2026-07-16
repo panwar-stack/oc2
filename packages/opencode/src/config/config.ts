@@ -401,6 +401,7 @@ export const layer = Layer.effect(
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
       function* (ctx: InstanceContext) {
+        const automationSafe = ctx.automationSafe === true
         const auth = yield* authSvc.all().pipe(Effect.orDie)
 
         let result: Info = { experimental: { agent_teams: true } }
@@ -491,7 +492,7 @@ export const layer = Layer.effect(
         }
 
         const plan = yield* ConfigPaths.plan(ctx.directory, ctx.worktree).pipe(Effect.orDie)
-        for (const file of plan.direct) {
+        for (const file of automationSafe ? [] : plan.direct) {
           yield* merge(file, yield* loadFile(file, authEnv), "local")
         }
 
@@ -499,7 +500,9 @@ export const layer = Layer.effect(
         result.mode = result.mode || {}
         result.plugin = result.plugin || []
 
-        const directories = plan.directories
+        const directories = automationSafe
+          ? plan.directories.filter((dir) => !plan.project.some((file) => path.dirname(file) === dir))
+          : plan.directories
 
         if (Flag.OC2_CONFIG_DIR) {
           log.debug("loading config from OC2_CONFIG_DIR", { path: Flag.OC2_CONFIG_DIR })
@@ -519,30 +522,32 @@ export const layer = Layer.effect(
             }
           }
 
-          yield* ensureGitignore(dir).pipe(Effect.orDie)
+          if (!automationSafe) {
+            yield* ensureGitignore(dir).pipe(Effect.orDie)
 
-          const dep = yield* npmSvc
-            .install(dir, {
-              add: [
-                {
-                  name: "@oc2-ai/plugin",
-                  version: InstallationLocal ? undefined : InstallationVersion,
-                },
-              ],
-            })
-            .pipe(
-              Effect.exit,
-              Effect.tap((exit) =>
-                Exit.isFailure(exit)
-                  ? Effect.sync(() => {
-                      log.warn("background dependency install failed", { dir, error: String(exit.cause) })
-                    })
-                  : Effect.void,
-              ),
-              Effect.asVoid,
-              Effect.forkDetach,
-            )
-          deps.push(dep)
+            const dep = yield* npmSvc
+              .install(dir, {
+                add: [
+                  {
+                    name: "@oc2-ai/plugin",
+                    version: InstallationLocal ? undefined : InstallationVersion,
+                  },
+                ],
+              })
+              .pipe(
+                Effect.exit,
+                Effect.tap((exit) =>
+                  Exit.isFailure(exit)
+                    ? Effect.sync(() => {
+                        log.warn("background dependency install failed", { dir, error: String(exit.cause) })
+                      })
+                    : Effect.void,
+                ),
+                Effect.asVoid,
+                Effect.forkDetach,
+              )
+            deps.push(dep)
+          }
 
           result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
@@ -649,12 +654,10 @@ export const layer = Layer.effect(
     )
 
     const get = Effect.fn("Config.get")(function* () {
-      if ((yield* InstanceState.context).automationSafe) return yield* getGlobal()
       return yield* InstanceState.use(state, (s) => s.config)
     })
 
     const directories = Effect.fn("Config.directories")(function* () {
-      if ((yield* InstanceState.context).automationSafe) return []
       return yield* InstanceState.use(state, (s) => s.directories)
     })
 
@@ -663,7 +666,6 @@ export const layer = Layer.effect(
     })
 
     const waitForDependencies = Effect.fn("Config.waitForDependencies")(function* () {
-      if ((yield* InstanceState.context).automationSafe) return
       yield* InstanceState.useEffect(state, (s) =>
         Effect.forEach(s.deps, Fiber.join, { concurrency: "unbounded" }).pipe(Effect.asVoid),
       )

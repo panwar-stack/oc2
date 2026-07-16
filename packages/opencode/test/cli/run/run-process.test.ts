@@ -187,6 +187,17 @@ describe("opencode run (non-interactive subprocess)", () => {
             },
           }),
         }
+        yield* llm.text("identity-derived automation completed")
+        const identityDerived = yield* opencode.run("do identity-derived work", {
+          agent: "issue-task",
+          model: testModelID,
+          variant: "high",
+          env,
+        })
+        opencode.expectExit(identityDerived, 0)
+        expect(yield* Effect.promise(() => Bun.file(path.join(home, ".oc2", ".gitignore")).exists())).toBe(false)
+        expect(skillHits.value).toBe(0)
+
         const rejected = yield* opencode.run("reject unsafe identity", {
           automation: true,
           agent: "build",

@@ -26,6 +26,9 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { type DeepMutable } from "@oc2-ai/core/schema"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { isIssueAutomationName, issueAutomationNames } from "./issue-automation"
+
+export { isIssueAutomationName } from "./issue-automation"
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -79,7 +82,6 @@ type State = Omit<Interface, "generate">
 export class Service extends Context.Service<Service, Interface>()("@opencode/Agent") {}
 
 export const use = serviceUse(Service)
-const issueAutomationAgents = new Set(["issue-task", "issue-planner", "issue-implementer"])
 const issueAutomationIdentity = new WeakSet<Info>()
 
 const issueRead = {
@@ -185,10 +187,6 @@ export function isIssueAutomation(agent: Info) {
   return issueAutomationIdentity.has(agent)
 }
 
-export function isIssueAutomationName(name: string) {
-  return issueAutomationAgents.has(name)
-}
-
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -199,8 +197,8 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
 
     const automationAgents: Record<string, Info> = {}
-    for (const name of issueAutomationAgents) {
-      const definition = issueAutomationDefinitions[name as keyof typeof issueAutomationDefinitions]
+    for (const name of issueAutomationNames) {
+      const definition = issueAutomationDefinitions[name]
       const agent = deepFreeze<Info>({
         name,
         description: definition.description,
@@ -411,7 +409,7 @@ export const layer = Layer.effect(
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }
 
-        for (const name of issueAutomationAgents) {
+        for (const name of issueAutomationNames) {
           agents[name] = automationAgents[name]
         }
 

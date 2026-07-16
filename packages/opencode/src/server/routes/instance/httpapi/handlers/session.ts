@@ -40,6 +40,7 @@ import {
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 import type { SessionRootID } from "@/session/schema"
+import { InstanceState } from "@/effect/instance-state"
 
 const log = EffectLogger.create({ service: "session.http" })
 
@@ -82,6 +83,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
+    })
+
+    const requireAutomationSafeInstance = Effect.fnUntraced(function* (input: {
+      automation?: boolean
+      agent?: string
+    }) {
+      if (!input.automation && !Agent.isIssueAutomationName(input.agent ?? "")) return
+      if ((yield* InstanceState.context).automationSafe) return
+      return yield* new HttpApiError.BadRequest({})
     })
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -318,6 +328,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* requireAutomationSafeInstance(ctx.payload)
       const message = yield* promptSvc
         .prompt({
           ...ctx.payload,
@@ -334,6 +345,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* requireAutomationSafeInstance(ctx.payload)
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -356,6 +368,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof CommandPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* requireAutomationSafeInstance(ctx.payload)
       return yield* promptSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))

@@ -1757,7 +1757,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
       }
       const cmd = yield* commands.get(input.command, { automation: automationSafe })
       if (!cmd) {
-        const available = (yield* commands.list()).map((c) => c.name)
+        const available = automationSafe ? [] : (yield* commands.list()).map((c) => c.name)
         const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
