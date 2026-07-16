@@ -59,6 +59,12 @@ const shortOptionsWithValues = new Set(["m", "s"])
 const processMetadata = ensureProcessMetadata("main")
 const automationResultMarker = Symbol.for("oc2.cli.automationResultEmitted")
 
+function writeAutomationError(error: "invalid_input" | "session_error", exitCode: 1 | 2) {
+  Reflect.set(process, automationResultMarker, true)
+  process.exitCode = exitCode
+  writeFileSync(process.stdout.fd, JSON.stringify({ status: "error", sessionID: null, error }) + EOL)
+}
+
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
     e: errorMessage(e),
@@ -103,7 +109,7 @@ if (
   resultJsonOutput &&
   (formats.length !== 1 || completionOutput || Object.hasOwn(preflight, "help") || Object.hasOwn(preflight, "version"))
 ) {
-  writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"invalid_input"}' + EOL)
+  writeAutomationError("invalid_input", 2)
   process.exit(2)
 }
 
@@ -214,7 +220,7 @@ async function main(commands: unknown[] | undefined) {
     .fail((msg, err) => {
       if (err) throw err
       if (resultJsonOutput) {
-        writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"invalid_input"}' + EOL)
+        writeAutomationError("invalid_input", 2)
         process.exit(2)
       }
       if (
@@ -246,9 +252,10 @@ try {
 } catch (e) {
   if (resultJsonOutput) {
     if (Reflect.get(process, automationResultMarker) !== true) {
-      writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"session_error"}' + EOL)
+      writeAutomationError("session_error", 1)
+    } else {
+      process.exitCode ??= 1
     }
-    process.exitCode = 1
   } else if (automationOutput) {
     UI.error("Automation run failed")
     process.exitCode = 1

@@ -268,6 +268,8 @@ export const RunCommand = effectCmd({
       (args.session !== undefined || args.continue || args.fork || args.attach !== undefined)
     ) {
       if (args.format === "result-json") {
+        Reflect.set(process, automationResultMarker, true)
+        process.exitCode = 2
         yield* Effect.promise(
           () =>
             new Promise<void>((resolve, reject) => {
