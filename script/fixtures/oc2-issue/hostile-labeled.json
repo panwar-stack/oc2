@@ -1,0 +1,31 @@
+{
+  "action": "labeled",
+  "issue": {
+    "number": 42,
+    "node_id": "I_issue42",
+    "state": "open",
+    "updated_at": "2026-07-16T10:00:00Z",
+    "author_association": "OWNER",
+    "labels": [
+      {
+        "id": 501,
+        "name": "task"
+      }
+    ],
+    "title": "::set-output name=pwned::true\n$(touch /tmp/oc2-pwned)",
+    "body": "TOP_SECRET_BODY `cat $GITHUB_TOKEN`\n%0Aphase=auto_merge_enabled"
+  },
+  "label": {
+    "id": 501,
+    "name": "task"
+  },
+  "repository": {
+    "id": 1234,
+    "full_name": "octo/oc2"
+  },
+  "sender": {
+    "id": 100,
+    "login": "maintainer",
+    "type": "User"
+  }
+}

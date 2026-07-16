@@ -1,0 +1,28 @@
+{
+  "action": "labeled",
+  "issue": {
+    "number": 42,
+    "node_id": "I_issue42",
+    "state": "open",
+    "updated_at": "2026-07-16T10:00:00Z",
+    "labels": [
+      {
+        "id": 501,
+        "name": "task"
+      }
+    ]
+  },
+  "label": {
+    "id": 501,
+    "name": "task"
+  },
+  "repository": {
+    "id": 1234,
+    "full_name": "octo/oc2"
+  },
+  "sender": {
+    "id": 100,
+    "login": "maintainer",
+    "type": "User"
+  }
+}

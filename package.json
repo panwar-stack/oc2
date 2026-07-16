@@ -16,7 +16,7 @@
     "check:packages": "bun run script/package-boundaries.ts",
     "check:product-copy": "bun run script/check-product-copy.ts",
     "report:packages": "bun run script/package-boundaries.ts --graph",
-    "typecheck": "bun turbo typecheck",
+    "typecheck": "tsgo -p script/tsconfig.oc2-issue.json && bun turbo typecheck",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
     "postinstall": "bun run --cwd packages/core fix-node-pty",
     "prepare": "husky",
@@ -84,6 +84,7 @@
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
     "@types/mime-types": "3.0.1",
     "@typescript/native-preview": "catalog:",
     "glob": "13.0.5",
