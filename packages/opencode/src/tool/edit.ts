@@ -70,6 +70,7 @@ export const EditTool = Tool.define(
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
+          const automationSafe = ctx.extra?.["automationSafe"] === true
           if (!params.filePath) {
             throw new Error("filePath is required")
           }
@@ -109,7 +110,7 @@ export const EditTool = Tool.define(
                   },
                 })
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
-                if (yield* format.file(filePath)) {
+                if (!automationSafe && (yield* format.file(filePath))) {
                   contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
                 }
                 yield* events.publish(FileSystem.Event.Edited, { file: filePath })
@@ -153,7 +154,7 @@ export const EditTool = Tool.define(
               })
 
               yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
-              if (yield* format.file(filePath)) {
+              if (!automationSafe && (yield* format.file(filePath))) {
                 contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
               }
               yield* events.publish(FileSystem.Event.Edited, { file: filePath })
@@ -194,11 +195,14 @@ export const EditTool = Tool.define(
           })
 
           let output = "Edit applied successfully."
-          yield* lsp.touchFile(filePath, "document", resolved.root)
-          const diagnostics = yield* lsp.diagnostics()
-          const normalizedFilePath = FSUtil.normalizePath(filePath)
-          const block = LSP.Diagnostic.report(filePath, diagnostics[normalizedFilePath] ?? [])
-          if (block) output += `\n\nLSP errors detected in this file, please fix:\n${block}`
+          const diagnostics = automationSafe
+            ? {}
+            : yield* lsp.touchFile(filePath, "document", resolved.root).pipe(Effect.andThen(lsp.diagnostics()))
+          if (!automationSafe) {
+            const normalizedFilePath = FSUtil.normalizePath(filePath)
+            const block = LSP.Diagnostic.report(filePath, diagnostics[normalizedFilePath] ?? [])
+            if (block) output += `\n\nLSP errors detected in this file, please fix:\n${block}`
+          }
 
           return {
             metadata: {

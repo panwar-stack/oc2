@@ -176,16 +176,17 @@ function createSummaryAssistantMessage(sessionID: SessionID, parentID: MessageID
   )
 }
 
-function createCompactionMarker(sessionID: SessionID) {
+function createCompactionMarker(sessionID: SessionID, options?: { automation?: boolean; variant?: string }) {
   return SessionNs.Service.use((ssn) =>
     Effect.gen(function* () {
       const msg = yield* ssn.updateMessage({
         id: MessageID.ascending(),
         role: "user",
-        model: ref,
+        model: { ...ref, variant: options?.variant },
         sessionID,
         agent: "build",
         time: { created: Date.now() },
+        ...(options?.automation ? { automation: true } : {}),
       })
       yield* ssn.updatePart({
         id: PartID.ascending(),
@@ -1046,6 +1047,56 @@ describe("session.compaction.process", () => {
         plugin: pluginLayer,
         captureProcessor(input) {
           processorSafe = input.automationSafe
+        },
+      }),
+    )
+  })
+
+  itCompaction.instance("keeps the selected model and variant for automated compaction", () => {
+    let captured: Parameters<SessionProcessorModule.SessionProcessor.Interface["create"]>[0] | undefined
+    const selected = ProviderTest.model({ id: ref.modelID, providerID: ref.providerID })
+    const configured = ProviderTest.model({ id: ModelV2.ID.make("configured-model"), providerID: ref.providerID })
+    const provider = ProviderTest.fake({
+      model: selected,
+      getModel: Effect.fn("TestProvider.getModel")((_providerID, modelID) =>
+        Effect.succeed(modelID === configured.id ? configured : selected),
+      ),
+    })
+    const base = Schema.decodeUnknownSync(ConfigV1.Info)({}) as ConfigV1.Info
+    const config = TestConfig.layer({
+      get: () =>
+        Effect.succeed({
+          ...base,
+          agent: { compaction: { model: `${ref.providerID}/${configured.id}`, variant: "configured" } },
+        }),
+    })
+
+    return Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const compact = yield* SessionCompaction.Service
+      const session = yield* ssn.create({})
+      yield* createCompactionMarker(session.id, { automation: true, variant: "selected" })
+      const messages = yield* ssn.messages({ sessionID: session.id })
+      const marker = messages.at(-1)
+      if (!marker || marker.info.role !== "user") throw new Error("missing compaction marker")
+
+      yield* compact.process({
+        parentID: marker.info.id,
+        messages,
+        sessionID: session.id,
+        auto: false,
+      })
+
+      expect(captured?.model.id).toBe(selected.id)
+      expect(captured?.assistantMessage.modelID).toBe(selected.id)
+      expect(captured?.assistantMessage.providerID).toBe(selected.providerID)
+      expect(captured?.assistantMessage.variant).toBe("selected")
+    }).pipe(
+      withCompaction({
+        provider,
+        config,
+        captureProcessor(input) {
+          captured = input
         },
       }),
     )

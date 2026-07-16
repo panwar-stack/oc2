@@ -385,6 +385,83 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
+    "automation rejects session reuse before project bootstrap",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const marker = path.join(home, "rejected-automation-bootstrap")
+        const plugin = path.join(home, "rejected-automation-plugin.ts")
+        yield* Effect.promise(() =>
+          Bun.write(
+            plugin,
+            `export default async () => { await Bun.write(${JSON.stringify(marker)}, "initialized"); return {} }`,
+          ),
+        )
+        const base = [
+          "run",
+          "--automation",
+          "--agent",
+          "build",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "--format",
+          "result-json",
+          "do work",
+        ]
+        const env = {
+          OC2_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            plugin: [pathToFileURL(plugin).href],
+          }),
+        }
+
+        for (const flags of [["--session", "ses_existing"], ["--continue"], ["--fork"]]) {
+          const result = yield* opencode.spawn([...base, ...flags], { env })
+          opencode.expectExit(result, 2)
+          expect(result.stderr).toBe("")
+          expect(automationResult(result.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_input",
+          })
+        }
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "plain automation redacts unexpected bootstrap errors",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const secret = "CONFIG_BOOTSTRAP_SECRET"
+        const result = yield* opencode.spawn([
+          "run",
+          "--automation",
+          "--agent",
+          "build",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "hello",
+        ], {
+          env: { OC2_CONFIG_CONTENT: `{${secret}` },
+        })
+
+        opencode.expectExit(result, 2)
+        expect(result.stdout).toBe("")
+        expect(result.stderr).toContain("Invalid automation invocation")
+        expect(result.stderr).not.toContain(secret)
+        expect(result.stderr).not.toContain("SyntaxError")
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
     "completion rejects result-json before emitting its script",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
@@ -865,31 +942,35 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "automation exits nonzero when a permission request is rejected",
-    ({ llm, opencode }) =>
+    "automation classifies a rejected edit permission",
+    ({ llm, opencode, home }) =>
       Effect.gen(function* () {
-        yield* llm.tool("bash", {
-          command: "pwd",
-          description: "Inspect the working directory path",
-        })
+        const target = path.join(home, "permission-target.txt")
+        yield* Effect.promise(() => Bun.write(target, "before"))
+        yield* llm.tool("edit", { filePath: target, oldString: "before", newString: "after" })
+        yield* llm.text("POST_PERMISSION_SECRET")
         const result = yield* opencode.run("request permission", {
           automation: true,
           agent: "build",
           variant: "high",
+          format: "result-json",
           env: {
             OC2_CONFIG_CONTENT: JSON.stringify({
               ...testProviderConfig(llm.url),
-              permission: { bash: "ask" },
+              permission: { edit: "ask" },
             }),
           },
         })
-        expect(result.exitCode).not.toBe(0)
+        opencode.expectExit(result, 1)
+        expect(automationResult(result.stdout)).toMatchObject({ status: "error", error: "permission_denied" })
+        expect(result.stdout).not.toContain("POST_PERMISSION_SECRET")
+        expect(yield* Effect.promise(() => Bun.file(target).text())).toBe("before")
       }),
     60_000,
   )
 
   cliIt.live(
-    "automation exits nonzero when a tool times out",
+    "automation classifies unavailable bash as a tool error",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
         yield* llm.push(
@@ -904,9 +985,12 @@ describe("opencode run (non-interactive subprocess)", () => {
           automation: true,
           agent: "build",
           variant: "high",
+          format: "result-json",
         })
         opencode.expectExit(result, 1)
-        expect(result.stdout).toBe("")
+        expect(automationResult(result.stdout)).toMatchObject({ status: "error", error: "tool_error" })
+        expect(result.stdout).not.toContain("PRE_TOOL_PROGRESS")
+        expect(result.stdout).not.toContain("continued after tool failure")
       }),
     60_000,
   )

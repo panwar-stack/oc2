@@ -246,6 +246,9 @@ try {
   if (resultJsonOutput) {
     writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"session_error"}' + EOL)
     process.exitCode = 1
+  } else if (automationOutput) {
+    UI.error("Automation run failed")
+    process.exitCode = 1
   } else {
     let data: Record<string, any> = {}
     if (e instanceof Error) {

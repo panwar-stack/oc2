@@ -379,7 +379,7 @@ export const layer = Layer.effect(
 
       const agent = yield* agents.get("compaction")
       const automationSafe = userMessage.automation === true
-      const model = agent.model
+      const model = !automationSafe && agent.model
         ? yield* provider.getModel(agent.model.providerID, agent.model.modelID, { automationSafe }).pipe(Effect.orDie)
         : yield* provider
             .getModel(userMessage.model.providerID, userMessage.model.modelID, { automationSafe })

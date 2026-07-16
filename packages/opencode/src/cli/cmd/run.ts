@@ -142,7 +142,7 @@ export const RunCommand = effectCmd({
   describe: "run oc2 with a message",
   // --attach connects to a remote server (no local instance needed); the
   // default path runs an in-process server and needs the project instance.
-  instance: (args) => !args.attach,
+  instance: (args) => !args.attach && !(args.automation && (args.session || args.continue || args.fork)),
   automationSafe: (args) => args.automation,
   // For --dir without --attach, load instance for the resolved target dir.
   // The handler also chdirs (preserving the legacy order: chdir → file resolution).
@@ -259,6 +259,21 @@ export const RunCommand = effectCmd({
         describe: "enable direct interactive demo slash commands; pass one as the message to run it immediately",
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
+    if (args.automation && (args.session || args.continue || args.fork)) {
+      if (args.format === "result-json") {
+        yield* Effect.promise(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              process.stdout.write(
+                JSON.stringify({ status: "error", sessionID: null, error: "invalid_input" }) + EOL,
+                (error) => (error ? reject(error) : resolve()),
+              )
+            }),
+        )
+      } else UI.error("--automation cannot be used with --session, --continue, or --fork")
+      process.exit(2)
+    }
+
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
     const { EffectBridge } = yield* Effect.promise(() => import("@/effect/bridge"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
@@ -1083,7 +1098,7 @@ export const RunCommand = effectCmd({
       await execute(sdk)
     }).pipe(
       Effect.catch((error) => {
-        if (!resultJson || automationResultEmitted) return Effect.fail(error)
+        if (!args.automation || automationResultEmitted) return Effect.fail(error)
         return Effect.promise(() => failAutomation(executionError(error)))
       }),
     )
