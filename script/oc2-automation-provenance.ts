@@ -332,7 +332,14 @@ export function validateRepositorySettings(input: {
   if (main.length !== 1 || main[0]!.bypassActors.length !== 0) throw new Error("auto-merge settings unavailable")
 
   const mainRules = main.flatMap((ruleset) => ruleset.rules)
-  const expectedMainTypes = ["deletion", "merge_queue", "non_fast_forward", "pull_request", "required_status_checks"]
+  const expectedMainTypes = [
+    "deletion",
+    "merge_queue",
+    "non_fast_forward",
+    "pull_request",
+    "required_status_checks",
+    "workflows",
+  ]
   if (
     mainRules
       .map((rule) => rule.type)
@@ -388,6 +395,25 @@ export function validateRepositorySettings(input: {
   if (
     contexts.length !== requiredStatusContexts.length ||
     [...contexts].sort().join("\n") !== [...requiredStatusContexts].sort().join("\n")
+  )
+    throw new Error("auto-merge settings unavailable")
+  const workflowRules = mainRules.filter((rule) => rule.type === "workflows")
+  const workflowParameters = workflowRules[0]?.parameters
+  if (
+    workflowRules.length !== 1 ||
+    !workflowParameters ||
+    !exactKeys(workflowParameters, ["do_not_enforce_on_create", "workflows"]) ||
+    workflowParameters.do_not_enforce_on_create !== false
+  )
+    throw new Error("auto-merge settings unavailable")
+  const workflows = array(workflowParameters.workflows, "auto-merge settings unavailable")
+  if (workflows.length !== 1) throw new Error("auto-merge settings unavailable")
+  const workflow = record(workflows[0], "auto-merge settings unavailable")
+  if (
+    !exactKeys(workflow, ["path", "ref", "repository_id"]) ||
+    workflow.path !== ".github/workflows/oc2-provenance.yml" ||
+    workflow.ref !== "refs/heads/main" ||
+    workflow.repository_id !== input.repositoryId
   )
     throw new Error("auto-merge settings unavailable")
 

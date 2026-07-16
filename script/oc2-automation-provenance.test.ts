@@ -104,6 +104,19 @@ function rulesets(): Ruleset[] {
             })),
           },
         },
+        {
+          type: "workflows",
+          parameters: {
+            do_not_enforce_on_create: false,
+            workflows: [
+              {
+                path: ".github/workflows/oc2-provenance.yml",
+                ref: "refs/heads/main",
+                repository_id: repositoryId,
+              },
+            ],
+          },
+        },
       ],
     },
     {
@@ -367,6 +380,14 @@ describe("repository settings gate", () => {
     fetchAndMerge[1]!.rules.find((rule) => rule.type === "update")!.parameters = {
       update_allows_fetch_and_merge: true,
     }
+    const candidateWorkflow = rulesets()
+    ;(
+      candidateWorkflow[0]!.rules.find((rule) => rule.type === "workflows")!.parameters!.workflows as Array<{
+        path: string
+        ref: string
+        repository_id: number
+      }>
+    )[0]!.ref = "refs/heads/feature"
     for (const input of [
       { repository: settings({ defaultBranch: "trunk" }), rulesets: rulesets() },
       { repository: settings({ allowAutoMerge: false }), rulesets: rulesets() },
@@ -380,6 +401,7 @@ describe("repository settings gate", () => {
       { repository: settings(), rulesets: extraMethod },
       { repository: settings(), rulesets: wrongIntegration },
       { repository: settings(), rulesets: fetchAndMerge },
+      { repository: settings(), rulesets: candidateWorkflow },
     ]) {
       expect(() =>
         validateRepositorySettings({

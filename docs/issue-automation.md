@@ -11,7 +11,7 @@ As of July 16, 2026, the `panwar-stack/oc2` repository is not ready to enable th
 - `OC2_AUTOMATION_ENABLED` is not configured and therefore defaults to false.
 - the App, marker bot user ID, and publisher bot user ID are not configured in the repository;
 - repository auto-merge is disabled;
-- `main` does not yet require the complete check set or merge queue;
+- `main` does not yet require the complete check set, trusted provenance workflow, or merge queue;
 - there is no App-only ruleset for `oc2/issue-*` branches; and
 - merge-group ancestry discovery has not been demonstrated against a live queue event.
 
@@ -121,7 +121,7 @@ oc2/issue-<issue-number>-<first-12-hex-of-idempotency-key>
 
 The App must own the branch commit and the pull request. The fixed PR title and body bind issue number, source workflow run and attempt, base SHA, head SHA, and patch SHA-256. Issue or model text is never copied into the PR.
 
-The `oc2 provenance` workflow runs with top-level `permissions: {}` and read-only job permissions. It executes only the exact `github.workflow_sha` that supplied the trusted workflow, verifies the checkout commit, and treats the PR base and merge-group commits as data. It never checks out or executes a candidate PR or synthetic queue tree. For an automation PR it requires:
+The `oc2 provenance` workflow runs with top-level `permissions: {}` and read-only job permissions. The `main` ruleset must require this workflow from `.github/workflows/oc2-provenance.yml` at `refs/heads/main`; that server-enforced workflow-source rule, rather than a candidate-triggered check name, makes `github.workflow_sha` trusted. The job verifies that checkout commit and treats the PR base and merge-group commits as data. It never checks out or executes a candidate PR or synthetic queue tree. For an automation PR it requires:
 
 - the exact same-repository branch pattern, App bot user ID, base `main`, current API head, and fixed metadata. When GitHub returns `performed_via_github_app`, its ID must also match; the PR REST endpoint normally omits it, so the bot identity and App-only branch ruleset are the durable ownership evidence;
 - the successful `verify` job from the exact active `.github/workflows/oc2-issue.yml` workflow ID, run, and attempt in this repository;
@@ -144,6 +144,7 @@ The `main` ruleset must target `refs/heads/main` or the default branch and inclu
 - pull requests required with REBASE as the only allowed method;
 - deletion and non-fast-forward updates blocked;
 - merge queue required with merge method `REBASE` and grouping strategy `ALLGREEN`;
+- one required-workflow rule with `do_not_enforce_on_create: false` and exactly `.github/workflows/oc2-provenance.yml` from this repository's numeric ID at `refs/heads/main`;
 - one strict, up-to-date required status rule containing exactly the six contexts below; and
 - no bypass entry for the publishing App.
 
@@ -160,7 +161,7 @@ Require these exact check contexts after confirming their names from real runs. 
 
 The separate automation-branch ruleset must target exactly `refs/heads/oc2/issue-*`, have no exclusions, and contain exactly creation, update, deletion, and non-fast-forward restrictions. Configure update with `update_allows_fetch_and_merge: false`. Its only bypass actor must be the configured App integration ID with `always` mode. Do not add users, teams, repository roles, administrators, deploy keys, another App, or another active automation-branch rule.
 
-Repository settings must keep `main` as the default branch, allow auto-merge, and allow rebase merges. Before mutation the trusted helper paginates and reads every active ruleset, checks these settings and exact PR head, repeats the complete settings and ruleset check immediately before mutation, and rejects every `main` bypass. It then performs only:
+Repository settings must keep `main` as the default branch, allow auto-merge, and allow rebase merges. Before mutation the trusted helper paginates and reads every active ruleset, checks the server-enforced trusted workflow rule, repository settings, and exact PR head, repeats the complete settings and ruleset check immediately before mutation, and rejects every `main` bypass. It then performs only:
 
 ```sh
 gh pr merge PR_NUMBER --repo OWNER/REPOSITORY --auto --rebase --match-head-commit HEAD_SHA
@@ -238,7 +239,7 @@ The provenance and normal CI workflows should remain enabled while issue admissi
 1. Release and independently verify the exact OC2 installer, archive, and verifier image digests.
 2. Create the repository-only App, record all current numeric identities, and store the private key.
 3. Configure variables with `OC2_AUTOMATION_ENABLED=false`.
-4. Create both rulesets, enable REBASE auto-merge and merge queue, and confirm the six exact check contexts on ordinary and synthetic queue commits.
+4. Create both rulesets, add the exact trusted required-workflow rule, enable REBASE auto-merge and merge queue, and confirm the six exact check contexts on ordinary and synthetic queue commits.
 5. Run provenance fixtures for protected paths, malformed metadata, wrong App ownership, exact-head races, pagination, and failed source verification.
 6. Exercise a live merge queue and prove that complete pagination plus the exact `baseCommit` to synthetic `headCommit` chain selects every and only member and preserves each `pullRequest.headRefOid`.
 7. Run one non-sensitive `task` issue in a controlled repository configuration and inspect cleanup, artifacts, logs, PR metadata, queue state, and audit records.
