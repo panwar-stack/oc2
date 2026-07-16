@@ -711,6 +711,9 @@ export const RunCommand = effectCmd({
           .catch(() => undefined)
 
         if (!modes) {
+          if (Agent.isIssueAutomationName(name)) {
+            return die(`agent "${name}" not found or disabled`, "invalid_agent", 2)
+          }
           UI.println(
             UI.Style.TEXT_WARNING_BOLD + "!",
             UI.Style.TEXT_NORMAL,
@@ -721,6 +724,9 @@ export const RunCommand = effectCmd({
 
         const agent = modes.find((a) => a.name === name)
         if (!agent) {
+          if (Agent.isIssueAutomationName(name)) {
+            return die(`agent "${name}" not found or disabled`, "invalid_agent", 2)
+          }
           UI.println(
             UI.Style.TEXT_WARNING_BOLD + "!",
             UI.Style.TEXT_NORMAL,
@@ -730,6 +736,9 @@ export const RunCommand = effectCmd({
         }
 
         if (agent.mode === "subagent") {
+          if (Agent.isIssueAutomationName(name)) {
+            return die(`agent "${name}" is not a trusted automation agent`, "invalid_agent", 2)
+          }
           UI.println(
             UI.Style.TEXT_WARNING_BOLD + "!",
             UI.Style.TEXT_NORMAL,

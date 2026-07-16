@@ -892,6 +892,19 @@ describe("opencode run (non-interactive subprocess)", () => {
             }),
           },
         })
+        const remote = yield* opencode.serve({
+          env: {
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              agent: { "issue-task": { disable: true } },
+            }),
+          },
+        })
+        const remotelyDisabled = yield* opencode.run("hello", {
+          agent: "issue-task",
+          variant: "high",
+          extraArgs: ["--attach", remote.url],
+        })
         const renamed = yield* opencode.run("hello", {
           automation: true,
           agent: "renamed-key",
@@ -913,6 +926,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(subagent.exitCode).not.toBe(0)
         opencode.expectExit(disabled, 2)
         opencode.expectExit(implicitlyDisabled, 2)
+        opencode.expectExit(remotelyDisabled, 2)
         expect(automationResult(disabled.stdout)).toEqual({
           status: "error",
           sessionID: expect.any(String),
