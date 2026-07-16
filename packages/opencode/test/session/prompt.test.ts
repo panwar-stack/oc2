@@ -1725,7 +1725,7 @@ it.instance(
         command: "literal-subtask",
         arguments: "",
         automation: true,
-        agent: "issue-task",
+        agent: "build",
         model: "test/test-model",
         parts: [
           {

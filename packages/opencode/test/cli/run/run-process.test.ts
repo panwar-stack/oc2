@@ -599,7 +599,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         const text = `Inspect @checkout-secret.txt @~/home-secret.txt @docs and !\`touch ${shellMarker}\``
         const result = yield* opencode.run(text, {
           automation: true,
-          agent: "issue-task",
+          agent: "build",
           variant: "high",
           format: "result-json",
           env: {
