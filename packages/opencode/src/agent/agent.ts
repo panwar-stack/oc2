@@ -113,6 +113,8 @@ const issueEdit = {
   "**/CODEOWNERS": "deny",
   "package.json": "deny",
   "**/package.json": "deny",
+  "bunfig.toml": "deny",
+  "**/bunfig.toml": "deny",
   "*lock*": "deny",
   "turbo.json": "deny",
   "**/turbo.json": "deny",
@@ -120,6 +122,8 @@ const issueEdit = {
   "**/tsconfig*.json": "deny",
   "script/oc2-issue*": "deny",
   "script/oc2-verify*": "deny",
+  "script/oc2-automation*": "deny",
+  "specs/secure-issue-driven-oc2-automation.md": "deny",
 } as const
 const issueAutomationDefinitions = {
   "issue-task": {

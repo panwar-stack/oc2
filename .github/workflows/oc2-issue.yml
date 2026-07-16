@@ -1,0 +1,380 @@
+name: oc2 issue
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions: {}
+
+concurrency:
+  group: oc2-issue-${{ github.repository_id }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  admit:
+    if: github.repository == 'panwar-stack/oc2' && vars.OC2_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    outputs:
+      state: ${{ steps.gate.outputs.state }}
+      execute: ${{ steps.gate.outputs.execute }}
+      key: ${{ steps.gate.outputs.key }}
+      base_sha: ${{ steps.gate.outputs.base_sha }}
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Admit issue event
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MARKER_BOT_ID: ${{ vars.OC2_MARKER_BOT_ID }}
+          PUBLISHER_BOT_ID: ${{ vars.OC2_PUBLISHER_BOT_ID }}
+          ALLOWED_BOT_IDS: ${{ vars.OC2_ALLOWED_BOT_IDS }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$MARKER_BOT_ID" =~ ^[1-9][0-9]*$ ]] || [[ ! "$PUBLISHER_BOT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "invalid automation bot identity configuration" >&2
+            exit 1
+          fi
+          args=(
+            admit
+            --event-file "$GITHUB_EVENT_PATH"
+            --result-file "$RUNNER_TEMP/admission.json"
+            --bot-id "$MARKER_BOT_ID"
+            --publisher-bot-id "$PUBLISHER_BOT_ID"
+          )
+          if [ -n "$ALLOWED_BOT_IDS" ]; then
+            if [[ ! "$ALLOWED_BOT_IDS" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]; then
+              echo "invalid automation bot allowlist configuration" >&2
+              exit 1
+            fi
+            IFS=, read -r -a ids <<< "$ALLOWED_BOT_IDS"
+            declare -A seen=()
+            for id in "${ids[@]}"; do
+              if [[ -n "${seen[$id]:-}" ]]; then
+                echo "invalid automation bot allowlist configuration" >&2
+                exit 1
+              fi
+              seen[$id]=1
+              args+=(--allow-bot-id "$id")
+            done
+          fi
+          bun --config=/dev/null --no-env-file --no-install script/oc2-issue.ts "${args[@]}"
+
+      - name: Validate admission gate
+        id: gate
+        shell: bash
+        env:
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-workflow.ts admission \
+            --admission "$RUNNER_TEMP/admission.json" \
+            --event-file "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload admission artifact
+        if: steps.gate.outputs.execute == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oc2-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/admission.json
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 1
+
+      - name: Delete admission state
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/admission.json"
+
+  ingest:
+    needs: admit
+    if: github.repository == 'panwar-stack/oc2' && vars.OC2_AUTOMATION_ENABLED == 'true' && needs.admit.outputs.execute == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    outputs:
+      state: ${{ steps.gate.outputs.state }}
+      execute: ${{ steps.gate.outputs.execute }}
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Download admission artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/admission
+
+      - name: Revalidate admission artifact
+        shell: bash
+        env:
+          ADMISSION_KEY: ${{ needs.admit.outputs.key }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-workflow.ts validate-admission \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --event-file "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --base-sha "$BASE_SHA" \
+            --key "$ADMISSION_KEY"
+
+      - name: Ingest admitted issue snapshot
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-issue.ts ingest \
+            --event-file "$GITHUB_EVENT_PATH" \
+            --admission-file "$RUNNER_TEMP/admission/admission.json" \
+            --bundle-dir "$RUNNER_TEMP/issue-bundle" \
+            --result-file "$RUNNER_TEMP/ingest.json"
+
+      - name: Validate ingestion gate
+        id: gate
+        shell: bash
+        env:
+          ADMISSION_KEY: ${{ needs.admit.outputs.key }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-workflow.ts ingest \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --bundle-dir "$RUNNER_TEMP/issue-bundle" \
+            --result "$RUNNER_TEMP/ingest.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --base-sha "$BASE_SHA" \
+            --key "$ADMISSION_KEY" \
+            --checkout "$GITHUB_WORKSPACE" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload issue bundle
+        if: steps.gate.outputs.execute == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oc2-issue-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue-bundle/**
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 1
+
+      - name: Delete ingestion state
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/admission" "$RUNNER_TEMP/ingest.json" "$RUNNER_TEMP/issue-bundle"
+
+  generate:
+    needs: [admit, ingest]
+    if: github.repository == 'panwar-stack/oc2' && vars.OC2_AUTOMATION_ENABLED == 'true' && needs.admit.outputs.execute == 'true' && needs.ingest.outputs.execute == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      state: ${{ steps.finalize.outputs.state }}
+      execute: ${{ steps.finalize.outputs.execute }}
+    steps:
+      - name: Checkout exact admitted base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.admit.outputs.base_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Download admission artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/admission
+
+      - name: Download issue bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-issue-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue-bundle
+
+      - name: Revalidate generation inputs
+        shell: bash
+        env:
+          ADMISSION_KEY: ${{ needs.admit.outputs.key }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-workflow.ts validate-input \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --bundle-dir "$RUNNER_TEMP/issue-bundle" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --base-sha "$BASE_SHA" \
+            --key "$ADMISSION_KEY" \
+            --checkout "$GITHUB_WORKSPACE"
+
+      - name: Install verified OC2 release
+        shell: bash
+        env:
+          OC2_VERSION: ${{ vars.OC2_VERSION }}
+          OC2_INSTALLER_SHA256: ${{ vars.OC2_INSTALLER_SHA256 }}
+          OC2_ASSET_SHA256_LINUX_X64: ${{ vars.OC2_ASSET_SHA256_LINUX_X64 }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-workflow.ts config \
+            --version "$OC2_VERSION" \
+            --installer-sha256 "$OC2_INSTALLER_SHA256" \
+            --asset-sha256 "$OC2_ASSET_SHA256_LINUX_X64"
+          state="$RUNNER_TEMP/oc2-state"
+          installer="$RUNNER_TEMP/oc2-installer"
+          mkdir -p \
+            "$state/home" \
+            "$state/tmp" \
+            "$state/xdg-cache" \
+            "$state/xdg-config" \
+            "$state/xdg-data" \
+            "$state/xdg-state"
+          chmod 700 \
+            "$state" \
+            "$state/home" \
+            "$state/tmp" \
+            "$state/xdg-cache" \
+            "$state/xdg-config" \
+            "$state/xdg-data" \
+            "$state/xdg-state"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --proto '=https' \
+            --proto-redir '=https' \
+            --tlsv1.2 \
+            --max-redirs 3 \
+            --connect-timeout 10 \
+            --max-time 120 \
+            --retry 2 \
+            --retry-all-errors \
+            --output "$installer" \
+            "https://raw.githubusercontent.com/panwar-stack/oc2/v${OC2_VERSION}/install"
+          printf '%s  %s\n' "$OC2_INSTALLER_SHA256" "$installer" > "$RUNNER_TEMP/oc2-installer.sha256"
+          sha256sum --check --status "$RUNNER_TEMP/oc2-installer.sha256"
+          HOME="$state/home" \
+          XDG_CACHE_HOME="$state/xdg-cache" \
+          XDG_CONFIG_HOME="$state/xdg-config" \
+          XDG_DATA_HOME="$state/xdg-data" \
+          XDG_STATE_HOME="$state/xdg-state" \
+          TMPDIR="$state/tmp" \
+          OC2_ASSET_SHA256="$OC2_ASSET_SHA256_LINUX_X64" \
+            bash "$installer" --version "$OC2_VERSION" --no-modify-path \
+              > "$state/installer.stdout" 2> "$state/installer.stderr"
+          actual_version=$(HOME="$state/home" "$state/home/.oc2/bin/oc2" --version 2> "$state/version.stderr")
+          if [ "$actual_version" != "$OC2_VERSION" ]; then
+            echo "installed OC2 version mismatch" >&2
+            exit 1
+          fi
+
+      - name: Run isolated OC2 generation
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OC2_OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-workflow.ts run \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --bundle-dir "$RUNNER_TEMP/issue-bundle" \
+            --checkout "$GITHUB_WORKSPACE" \
+            --oc2 "$RUNNER_TEMP/oc2-state/home/.oc2/bin/oc2" \
+            --state-dir "$RUNNER_TEMP/oc2-state"
+
+      - name: Build generation artifact
+        id: finalize
+        shell: bash
+        env:
+          OC2_VERSION: ${{ vars.OC2_VERSION }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-workflow.ts finalize \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --checkout "$GITHUB_WORKSPACE" \
+            --cli-version "$OC2_VERSION" \
+            --output-dir "$RUNNER_TEMP/generation" \
+            --state-dir "$RUNNER_TEMP/oc2-state" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Validate generated patch
+        if: steps.finalize.outputs.execute == 'true'
+        shell: bash
+        env:
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-verify.ts validate \
+            --generation "$RUNNER_TEMP/generation/generation.json" \
+            --patch "$RUNNER_TEMP/generation/changes.patch" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --base-sha "$BASE_SHA"
+
+      - name: Upload generation artifact
+        if: steps.finalize.outputs.execute == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oc2-generation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/generation/generation.json
+            ${{ runner.temp }}/generation/changes.patch
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 1
+
+      - name: Delete all generation state
+        if: always()
+        shell: bash
+        run: |
+          rm -rf -- \
+            "$RUNNER_TEMP/admission" \
+            "$RUNNER_TEMP/issue-bundle" \
+            "$RUNNER_TEMP/generation" \
+            "$RUNNER_TEMP/oc2-state"
+          rm -f -- "$RUNNER_TEMP/oc2-installer" "$RUNNER_TEMP/oc2-installer.sha256"

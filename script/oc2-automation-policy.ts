@@ -1,4 +1,4 @@
-const protectedNames = new Set(["agents.md", "codeowners", "package.json", "turbo.json"])
+const protectedNames = new Set(["agents.md", "bunfig.toml", "codeowners", "package.json", "turbo.json"])
 
 export function normalizeRepositoryPath(path: string) {
   if (

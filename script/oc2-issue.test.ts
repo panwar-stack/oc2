@@ -25,6 +25,13 @@ import {
   type GitHubSnapshotComment,
   type IssueMarker,
 } from "./oc2-issue"
+import {
+  decodeAdmission,
+  finalizeGeneration,
+  parseAutomationResult,
+  validateReleaseConfig,
+} from "./oc2-automation-workflow"
+import { validatePatch } from "./oc2-verify"
 
 const botId = 9001
 const publisherBotId = 9002
@@ -1861,5 +1868,162 @@ describe("native fetch GitHub client and CLI", () => {
     expect(output).not.toContain("TOP_SECRET_TOKEN")
     expect(await Bun.file(join(bundleDir, "issue.json")).text()).toContain("PRIVATE_BODY")
     await rm(root, { recursive: true, force: true })
+  })
+})
+
+async function gitFixture() {
+  const root = await mkdtemp(join(tmpdir(), "oc2-generation-"))
+  const checkout = join(root, "checkout")
+  await mkdir(checkout)
+  const git = async (...args: string[]) => {
+    const child = Bun.spawn(["git", ...args], { cwd: checkout, stdout: "pipe", stderr: "pipe" })
+    const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()])
+    if (exitCode !== 0) throw new Error("test Git command failed")
+    return stdout.trim()
+  }
+  await git("init", "--initial-branch=main")
+  await Bun.write(join(checkout, "tracked.txt"), "before\n")
+  await git("add", "tracked.txt")
+  await git("-c", "user.name=OC2 Test", "-c", "user.email=oc2@example.com", "commit", "-m", "base")
+  return { baseSha: await git("rev-parse", "HEAD"), checkout, root }
+}
+
+describe("trusted issue workflow glue", () => {
+  test("strictly decodes admission and one canonical result-json object", () => {
+    const admission = admissionArtifact()
+    expect(decodeAdmission(`${JSON.stringify(admission)}\n`)).toEqual(admission)
+    expect(() => decodeAdmission(JSON.stringify({ ...admission, extra: true }))).toThrow("invalid admission")
+    expect(parseAutomationResult('{"status":"ok","sessionID":"ses_safe123","text":"bounded markdown"}\n')).toEqual({
+      status: "ok",
+      text: "bounded markdown",
+    })
+    expect(parseAutomationResult('{"status":"ok","sessionID":"ses_safe123","text":"safe\\u2028line"}\n')).toEqual({
+      status: "ok",
+      text: "safe\u2028line",
+    })
+    expect(() =>
+      parseAutomationResult(
+        '{"status":"ok","sessionID":"ses_safe123","text":"first"}\n{"status":"ok","sessionID":"ses_second","text":"second"}\n',
+      ),
+    ).toThrow("invalid automation result")
+  })
+
+  test("requires canonical release versions and lowercase digests", () => {
+    expect(() => validateReleaseConfig("1.2.3-rc.1", "a".repeat(64), "b".repeat(64))).not.toThrow()
+    expect(() => validateReleaseConfig("1.2.3-01", "a".repeat(64), "b".repeat(64))).toThrow(
+      "invalid release configuration",
+    )
+    expect(() => validateReleaseConfig("1.2.3", "A".repeat(64), "b".repeat(64))).toThrow(
+      "invalid release configuration",
+    )
+  })
+
+  test("emits the canonical PR7 generation contract including untracked files", async () => {
+    const fixture = await gitFixture()
+    const stateDir = join(fixture.root, "state")
+    const outputDir = join(fixture.root, "generation")
+    const githubOutput = join(fixture.root, "github-output")
+    await mkdir(stateDir)
+    await Bun.write(githubOutput, "")
+    await Bun.write(join(fixture.checkout, "tracked.txt"), "after\n")
+    await Bun.write(join(fixture.checkout, "created.txt"), "created\n")
+    const admission = admissionArtifact({
+      repository: { id: 1234, nameWithOwner: "octo/oc2", baseBranch: "main", baseSha: fixture.baseSha },
+    })
+    await finalizeGeneration({
+      admission,
+      checkout: fixture.checkout,
+      cliVersion: "1.2.3",
+      outputDir,
+      stateDir,
+      githubOutput,
+    })
+    expect(await Bun.file(githubOutput).text()).toBe("state=generated\nexecute=true\n")
+    const manifest = JSON.parse(await Bun.file(join(outputDir, "generation.json")).text())
+    expect(manifest).toMatchObject({
+      version: 1,
+      repository: { id: 1234, nameWithOwner: "octo/oc2" },
+      issue: { number: 42, label: "task", labelEventNodeId: "LE_label42" },
+      baseSha: fixture.baseSha,
+      cliVersion: "1.2.3",
+      model: "openai/gpt-5.6-sol",
+      variant: "high",
+      patch: { fileCount: 2 },
+    })
+    await expect(
+      validatePatch({
+        generationPath: join(outputDir, "generation.json"),
+        patchPath: join(outputDir, "changes.patch"),
+        repository: "octo/oc2",
+        repositoryId: 1234,
+        baseSha: fixture.baseSha,
+        cwd: fixture.checkout,
+      }),
+    ).resolves.toMatchObject({ paths: ["created.txt", "tracked.txt"] })
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
+  test("rejects model changes to protected automation paths", async () => {
+    const fixture = await gitFixture()
+    const stateDir = join(fixture.root, "state")
+    await mkdir(stateDir)
+    await Bun.write(join(fixture.checkout, "bunfig.toml"), 'preload = ["./attacker.ts"]\n')
+    await Bun.write(join(fixture.checkout, "attacker.ts"), 'console.log("host execution")\n')
+    const failure = finalizeGeneration({
+      admission: admissionArtifact({
+        repository: { id: 1234, nameWithOwner: "octo/oc2", baseBranch: "main", baseSha: fixture.baseSha },
+      }),
+      checkout: fixture.checkout,
+      cliVersion: "1.2.3",
+      outputDir: join(fixture.root, "generation"),
+      stateDir,
+      githubOutput: join(fixture.root, "github-output"),
+    }).then(
+      () => "unexpected success",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    )
+    expect(await failure).toBe("patch changes a protected path")
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
+  test("classifies a feature planner file without implementation edits as no changes", async () => {
+    const fixture = await gitFixture()
+    const stateDir = join(fixture.root, "state")
+    const githubOutput = join(fixture.root, "github-output")
+    await mkdir(stateDir)
+    await mkdir(join(fixture.checkout, "specs"))
+    await Bun.write(join(fixture.checkout, "specs", "issue-42.md"), "# Plan only\n")
+    await Bun.write(githubOutput, "")
+    const base = admissionArtifact()
+    await finalizeGeneration({
+      admission: {
+        ...base,
+        repository: { ...base.repository, baseSha: fixture.baseSha },
+        issue: { ...base.issue, label: "feature" },
+      },
+      checkout: fixture.checkout,
+      cliVersion: "1.2.3",
+      outputDir: join(fixture.root, "generation"),
+      stateDir,
+      githubOutput,
+    })
+    expect(await Bun.file(githubOutput).text()).toBe("state=no_changes\nexecute=false\n")
+    expect(await Bun.file(join(fixture.root, "generation")).exists()).toBe(false)
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
+  test("workflow pins actions and exposes the provider secret only to generation", async () => {
+    const workflow = await Bun.file(join(import.meta.dir, "..", ".github", "workflows", "oc2-issue.yml")).text()
+    expect(workflow).toContain("permissions: {}")
+    expect(workflow).toContain("group: oc2-issue-${{ github.repository_id }}-${{ github.event.issue.number }}")
+    expect(workflow).toContain("cancel-in-progress: false")
+    expect(workflow.match(/OC2_OPENAI_API_KEY/g)).toHaveLength(1)
+    expect(workflow).not.toContain("dangerously-skip-permissions")
+    expect(workflow).not.toContain("--format json")
+    expect(workflow).not.toMatch(/\bbun script\//)
+    expect(workflow.match(/bun --config=\/dev\/null --no-env-file --no-install/g)).toHaveLength(10)
+    for (const line of workflow.split("\n").filter((line) => line.trim().startsWith("uses:"))) {
+      expect(line).toMatch(/uses: [^@]+@[0-9a-f]{40}(?: # v[^ ]+)?$/)
+    }
   })
 })

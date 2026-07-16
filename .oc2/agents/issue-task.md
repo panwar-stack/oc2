@@ -34,6 +34,8 @@ permission:
     "**/CODEOWNERS": deny
     "package.json": deny
     "**/package.json": deny
+    "bunfig.toml": deny
+    "**/bunfig.toml": deny
     "*lock*": deny
     "turbo.json": deny
     "**/turbo.json": deny
