@@ -137,16 +137,15 @@ GitHub's live merge queue must demonstrate the exact GraphQL chain and nullable-
 
 ## Branch Rules And Merge Queue
 
-Create exactly two active repository branch rulesets before enabling the workflow. Disabled evaluation rules may remain, but any additional active branch ruleset makes auto-merge unavailable because overlapping ref patterns and bypasses cannot be proven harmless.
+Create exactly three effective active branch rulesets before enabling the workflow: two repository rulesets and one organization or enterprise ruleset. Disabled evaluation rules may remain, but any additional active branch ruleset makes auto-merge unavailable because overlapping ref patterns and bypasses cannot be proven harmless.
 
 The `main` ruleset must target `refs/heads/main` or the default branch and include:
 
 - pull requests required with REBASE as the only allowed method;
 - deletion and non-fast-forward updates blocked;
 - merge queue required with merge method `REBASE` and grouping strategy `ALLGREEN`;
-- one required-workflow rule with `do_not_enforce_on_create: false` and exactly `.github/workflows/oc2-provenance.yml` from this repository's numeric ID at `refs/heads/main`;
 - one strict, up-to-date required status rule containing exactly the six contexts below; and
-- no bypass entry for the publishing App.
+- no bypass actors.
 
 Require these exact check contexts after confirming their names from real runs. Bind every context to the GitHub Actions App integration ID `15368` and re-confirm that public App ID before rollout:
 
@@ -158,6 +157,8 @@ Require these exact check contexts after confirming their names from real runs. 
 | `e2e (linux)`            |
 | `e2e (windows)`          |
 | `provenance/path-policy` |
+
+The organization or enterprise `main` ruleset must target the same exact branch, have no bypass actors, and contain only one required-workflow rule. Configure `do_not_enforce_on_create: false` and exactly `.github/workflows/oc2-provenance.yml` from this repository's numeric ID at `refs/heads/main`. GitHub does not support combining this organization-level workflow rule with the repository-level merge-queue rule.
 
 The separate automation-branch ruleset must target exactly `refs/heads/oc2/issue-*`, have no exclusions, and contain exactly creation, update, deletion, and non-fast-forward restrictions. Configure update with `update_allows_fetch_and_merge: false`. Its only bypass actor must be the configured App integration ID with `always` mode. Do not add users, teams, repository roles, administrators, deploy keys, another App, or another active automation-branch rule.
 
@@ -239,7 +240,7 @@ The provenance and normal CI workflows should remain enabled while issue admissi
 1. Release and independently verify the exact OC2 installer, archive, and verifier image digests.
 2. Create the repository-only App, record all current numeric identities, and store the private key.
 3. Configure variables with `OC2_AUTOMATION_ENABLED=false`.
-4. Create both rulesets, add the exact trusted required-workflow rule, enable REBASE auto-merge and merge queue, and confirm the six exact check contexts on ordinary and synthetic queue commits.
+4. Create the two repository rulesets and separate organization or enterprise trusted-workflow ruleset, enable REBASE auto-merge and merge queue, and confirm the six exact check contexts on ordinary and synthetic queue commits.
 5. Run provenance fixtures for protected paths, malformed metadata, wrong App ownership, exact-head races, pagination, and failed source verification.
 6. Exercise a live merge queue and prove that complete pagination plus the exact `baseCommit` to synthetic `headCommit` chain selects every and only member and preserves each `pullRequest.headRefOid`.
 7. Run one non-sensitive `task` issue in a controlled repository configuration and inspect cleanup, artifacts, logs, PR metadata, queue state, and audit records.

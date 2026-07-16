@@ -55,6 +55,7 @@ export interface RepositorySettings {
 
 export interface Ruleset {
   id: number
+  sourceType: string
   target: string
   enforcement: string
   bypassActors: Array<{ actorId: number | null; actorType: string; bypassMode: string }>
@@ -293,6 +294,7 @@ export function decodeRuleset(value: unknown): Ruleset {
   })
   return {
     id: positiveInteger(item.id, "invalid repository ruleset"),
+    sourceType: boundedString(item.source_type, 64, "invalid repository ruleset"),
     target: boundedString(item.target, 64, "invalid repository ruleset"),
     enforcement: boundedString(item.enforcement, 64, "invalid repository ruleset"),
     bypassActors,
@@ -321,7 +323,7 @@ export function validateRepositorySettings(input: {
     throw new Error("auto-merge settings unavailable")
 
   const active = input.rulesets.filter((ruleset) => ruleset.target === "branch" && ruleset.enforcement === "active")
-  if (active.length !== 2 || new Set(active.map((ruleset) => ruleset.id)).size !== active.length)
+  if (active.length !== 3 || new Set(active.map((ruleset) => ruleset.id)).size !== active.length)
     throw new Error("auto-merge settings unavailable")
   const main = active.filter(
     (ruleset) =>
@@ -329,17 +331,20 @@ export function validateRepositorySettings(input: {
       (ruleset.conditions.include[0] === "~DEFAULT_BRANCH" || ruleset.conditions.include[0] === "refs/heads/main") &&
       ruleset.conditions.exclude.length === 0,
   )
-  if (main.length !== 1 || main[0]!.bypassActors.length !== 0) throw new Error("auto-merge settings unavailable")
+  const repositoryMain = main.filter((ruleset) => ruleset.sourceType === "Repository")
+  const trustedWorkflow = main.filter(
+    (ruleset) => ruleset.sourceType === "Organization" || ruleset.sourceType === "Enterprise",
+  )
+  if (
+    repositoryMain.length !== 1 ||
+    trustedWorkflow.length !== 1 ||
+    repositoryMain[0]!.bypassActors.length !== 0 ||
+    trustedWorkflow[0]!.bypassActors.length !== 0
+  )
+    throw new Error("auto-merge settings unavailable")
 
-  const mainRules = main.flatMap((ruleset) => ruleset.rules)
-  const expectedMainTypes = [
-    "deletion",
-    "merge_queue",
-    "non_fast_forward",
-    "pull_request",
-    "required_status_checks",
-    "workflows",
-  ]
+  const mainRules = repositoryMain[0]!.rules
+  const expectedMainTypes = ["deletion", "merge_queue", "non_fast_forward", "pull_request", "required_status_checks"]
   if (
     mainRules
       .map((rule) => rule.type)
@@ -397,10 +402,11 @@ export function validateRepositorySettings(input: {
     [...contexts].sort().join("\n") !== [...requiredStatusContexts].sort().join("\n")
   )
     throw new Error("auto-merge settings unavailable")
-  const workflowRules = mainRules.filter((rule) => rule.type === "workflows")
+  const workflowRules = trustedWorkflow[0]!.rules
   const workflowParameters = workflowRules[0]?.parameters
   if (
     workflowRules.length !== 1 ||
+    workflowRules[0]!.type !== "workflows" ||
     !workflowParameters ||
     !exactKeys(workflowParameters, ["do_not_enforce_on_create", "workflows"]) ||
     workflowParameters.do_not_enforce_on_create !== false
@@ -419,6 +425,7 @@ export function validateRepositorySettings(input: {
 
   const automation = active.filter(
     (ruleset) =>
+      ruleset.sourceType === "Repository" &&
       ruleset.conditions.include.length === 1 &&
       ruleset.conditions.include[0] === "refs/heads/oc2/issue-*" &&
       ruleset.conditions.exclude.length === 0,

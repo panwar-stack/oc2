@@ -74,6 +74,7 @@ function rulesets(): Ruleset[] {
   return [
     {
       id: 1,
+      sourceType: "Repository",
       target: "branch",
       enforcement: "active",
       bypassActors: [],
@@ -104,6 +105,30 @@ function rulesets(): Ruleset[] {
             })),
           },
         },
+      ],
+    },
+    {
+      id: 2,
+      sourceType: "Repository",
+      target: "branch",
+      enforcement: "active",
+      bypassActors: [{ actorId: appId, actorType: "Integration", bypassMode: "always" }],
+      conditions: { include: ["refs/heads/oc2/issue-*"], exclude: [] },
+      rules: [
+        { type: "creation" },
+        { type: "update", parameters: { update_allows_fetch_and_merge: false } },
+        { type: "deletion" },
+        { type: "non_fast_forward" },
+      ],
+    },
+    {
+      id: 3,
+      sourceType: "Organization",
+      target: "branch",
+      enforcement: "active",
+      bypassActors: [],
+      conditions: { include: ["refs/heads/main"], exclude: [] },
+      rules: [
         {
           type: "workflows",
           parameters: {
@@ -117,19 +142,6 @@ function rulesets(): Ruleset[] {
             ],
           },
         },
-      ],
-    },
-    {
-      id: 2,
-      target: "branch",
-      enforcement: "active",
-      bypassActors: [{ actorId: appId, actorType: "Integration", bypassMode: "always" }],
-      conditions: { include: ["refs/heads/oc2/issue-*"], exclude: [] },
-      rules: [
-        { type: "creation" },
-        { type: "update", parameters: { update_allows_fetch_and_merge: false } },
-        { type: "deletion" },
-        { type: "non_fast_forward" },
       ],
     },
   ]
@@ -382,12 +394,14 @@ describe("repository settings gate", () => {
     }
     const candidateWorkflow = rulesets()
     ;(
-      candidateWorkflow[0]!.rules.find((rule) => rule.type === "workflows")!.parameters!.workflows as Array<{
+      candidateWorkflow[2]!.rules.find((rule) => rule.type === "workflows")!.parameters!.workflows as Array<{
         path: string
         ref: string
         repository_id: number
       }>
     )[0]!.ref = "refs/heads/feature"
+    const repositoryWorkflow = rulesets()
+    repositoryWorkflow[2]!.sourceType = "Repository"
     for (const input of [
       { repository: settings({ defaultBranch: "trunk" }), rulesets: rulesets() },
       { repository: settings({ allowAutoMerge: false }), rulesets: rulesets() },
@@ -402,6 +416,7 @@ describe("repository settings gate", () => {
       { repository: settings(), rulesets: wrongIntegration },
       { repository: settings(), rulesets: fetchAndMerge },
       { repository: settings(), rulesets: candidateWorkflow },
+      { repository: settings(), rulesets: repositoryWorkflow },
     ]) {
       expect(() =>
         validateRepositorySettings({
