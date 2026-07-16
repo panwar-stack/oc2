@@ -9,6 +9,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
 
 const log = Log.create({ service: "permission" })
+const basenamePatternPrefix = "basename:"
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -40,15 +41,21 @@ function evaluateResource(
   ...rulesets: PermissionV1.Ruleset[]
 ): PermissionV1.Rule {
   const resource = caseInsensitive ? pattern.toLowerCase() : pattern
+  const matchResource = (candidate: string) => {
+    const rule = caseInsensitive ? candidate.toLowerCase() : candidate
+    if (!rule.startsWith(basenamePatternPrefix)) return Wildcard.match(resource, rule)
+    return Wildcard.match(
+      resource.replaceAll("\\", "/").split("/").at(-1) ?? resource,
+      rule.slice(basenamePatternPrefix.length),
+    )
+  }
   const matches = (rule: PermissionV1.Rule) =>
-    Wildcard.match(permission, rule.permission) &&
-    Wildcard.match(resource, caseInsensitive ? rule.pattern.toLowerCase() : rule.pattern)
+    Wildcard.match(permission, rule.permission) && matchResource(rule.pattern)
   const rules = rulesets.flat()
   const match = (next: string) =>
     rules.findLast(
       (rule) =>
-        Wildcard.match(next, rule.permission) &&
-        Wildcard.match(resource, caseInsensitive ? rule.pattern.toLowerCase() : rule.pattern),
+        Wildcard.match(next, rule.permission) && matchResource(rule.pattern),
     )
   if (permission === "write" || permission === "apply_patch") {
     const deny = rules.findLast((rule) => rule.action === "deny" && matches(rule))

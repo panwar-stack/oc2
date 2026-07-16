@@ -137,6 +137,7 @@ it.instance(
           "packages/core/src/ordinary.ts",
           "packages/opencode/test/ordinary.test.ts",
           "script/ordinary.ts",
+          "packages/clock/src/file.ts",
           "docs/guide.md",
           "specs/feature.md",
         ]) {
@@ -169,6 +170,7 @@ it.instance(
           "packages/app/package.json",
           "bun.lock",
           "packages/app/package-lock.json",
+          "packages/app/custom-lock-state.txt",
           "turbo.json",
           "packages/app/tsconfig.build.json",
           "script/oc2-issue-generate.ts",

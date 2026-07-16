@@ -36,8 +36,7 @@ permission:
     "**/package.json": deny
     "bunfig.toml": deny
     "**/bunfig.toml": deny
-    "*lock*": deny
-    "**/*lock*": deny
+    "basename:*lock*": deny
     "turbo.json": deny
     "**/turbo.json": deny
     "tsconfig*.json": deny

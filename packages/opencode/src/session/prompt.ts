@@ -755,7 +755,7 @@ export const layer = Layer.effect(
         throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
       }
       const agentName = input.agent ?? (yield* agents.defaultAgent())
-      const ag = yield* agents.get(agentName)
+      const ag = yield* (input.automation ? agents.getAutomation(agentName) : agents.get(agentName))
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -1744,7 +1744,9 @@ Do not create a team for trivial one step requests or when the user explicitly a
       if (input.automation && (!input.agent || !Agent.isIssueAutomationName(input.agent))) {
         throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
       }
-      const requestedAgent = input.agent ? yield* agents.get(input.agent) : undefined
+      const requestedAgent = input.agent
+        ? yield* (input.automation ? agents.getAutomation(input.agent) : agents.get(input.agent))
+        : undefined
       const trustedAutomation = requestedAgent ? Agent.isIssueAutomation(requestedAgent) : false
       if (input.automation && !trustedAutomation) {
         throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
@@ -1770,7 +1772,8 @@ Do not create a team for trivial one step requests or when the user explicitly a
       }
       if (automationSafe && !Command.validAutomationArguments(input.command, input.arguments)) {
         const error = new NamedError.Unknown({
-          message: 'Automation command "spec:implement" requires exactly one spec path and one positive integer slice.',
+          message:
+            'Automation command "spec:implement" requires one spec path and accepts one optional positive integer slice.',
         })
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error

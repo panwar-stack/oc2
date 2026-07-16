@@ -1445,6 +1445,41 @@ it.instance("trusted issue prompts reject MCP resource parts without a raw autom
   }),
 )
 
+it.instance("automation prompt and command admission honor a disabled reserved agent", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: { "issue-task": { disable: true } },
+    }))
+    const { prompt, chat } = yield* boot()
+
+    const direct = yield* prompt
+      .prompt({
+        sessionID: chat.id,
+        agent: "issue-task",
+        model: ref,
+        automation: true,
+        noReply: true,
+        parts: [{ type: "text", text: "must not execute" }],
+      })
+      .pipe(Effect.exit)
+    const command = yield* prompt
+      .command({
+        sessionID: chat.id,
+        command: "custom",
+        arguments: "must not execute",
+        automation: true,
+        agent: "issue-task",
+        model: "test/test-model",
+      })
+      .pipe(Effect.exit)
+
+    expect(Exit.isFailure(direct)).toBe(true)
+    expect(Exit.isFailure(command)).toBe(true)
+    expect(yield* llm.calls).toBe(0)
+  }),
+)
+
 it.instance("automation command admission rejects untrusted agents and skips shell preprocessing", () =>
   Effect.gen(function* () {
     const { directory } = yield* TestInstance

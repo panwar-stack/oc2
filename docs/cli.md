@@ -130,7 +130,7 @@ Interactive mode requires a TTY on stdout. It cannot be combined with `--command
 
 Automation mode requires explicit `--agent`, `--model`, and `--variant` values. It rejects `--dangerously-skip-permissions` and raw `--format json`, and suppresses `--print-logs` output. Configured-command arguments are treated literally: shell/backtick execution and implicit `@file` expansion are disabled. Repeatable `--file` options are the trusted caller's explicit attachment admission boundary and are the only files forwarded without ambient expansion; supported image and PDF types are detected from file bytes rather than trusted filename extensions.
 
-Automation binds `spec:planner` to `issue-planner` and `spec:implement` to `issue-implementer`. The implementation command requires exactly one specification path and one positive integer slice number. Other automation commands use `issue-task`.
+Automation binds `spec:planner` to `issue-planner` and `spec:implement` to `issue-implementer`. The implementation command requires exactly one specification path and accepts one optional positive integer slice number. Other automation commands use `issue-task`.
 
 `--format result-json` is automation-only and writes exactly one terminal-safe JSON object. It suppresses progress, reasoning, tools, UI output, and raw provider or tool errors:
 

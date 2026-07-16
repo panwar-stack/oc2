@@ -496,6 +496,13 @@ test("evaluateFilesystem - compares resources and configured patterns case-insen
   ).toBe("allow")
 })
 
+test("evaluate - basename patterns do not match parent directory names", () => {
+  const rules = Permission.fromConfig({ edit: { "*": "allow", "basename:*lock*": "deny" } })
+  expect(Permission.evaluate("edit", "packages/clock/src/file.ts", rules).action).toBe("allow")
+  expect(Permission.evaluate("edit", "packages/app/custom-lock-state.txt", rules).action).toBe("deny")
+  expect(Permission.evaluate("edit", "bun.lock", rules).action).toBe("deny")
+})
+
 test("evaluateFilesystemUnknown - denies either interpretation and requires both to allow", () => {
   const protectedRules: PermissionV1.Ruleset = [
     { permission: "edit", pattern: "*", action: "allow" },
