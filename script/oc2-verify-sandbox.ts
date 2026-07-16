@@ -23,7 +23,6 @@ export const sandboxChecks = [
   {
     argv: ["turbo", "test:ci", "--log-order=stream", "--log-prefix=task"],
     timeoutMs: 30 * 60_000,
-    readonly: true,
   },
 ] as const
 
@@ -66,14 +65,12 @@ export async function runSandboxChecks(
   checks: ReadonlyArray<{
     readonly argv: ReadonlyArray<string>
     readonly timeoutMs: number
-    readonly readonly?: boolean
   }> = sandboxChecks,
-  assertReadonly: (root?: string) => Promise<void> = assertSourceReadOnly,
+  workspace = "/workspace",
 ) {
   for (const check of checks) {
-    if (check.readonly) await assertReadonly()
     const child = spawn([process.execPath, ...check.argv], {
-      cwd: check.readonly ? "/source" : "/workspace",
+      cwd: workspace,
       env: sandboxEnvironment,
       stdin: "ignore",
       stdout: "ignore",
@@ -88,6 +85,18 @@ export async function runSandboxChecks(
     clearTimeout(timer)
     if (timedOut || exitCode !== 0) throw new Error("verification check failed")
   }
+}
+
+export async function runSandboxEntrypoint(
+  source = "/source",
+  workspace = "/workspace",
+  spawn: SandboxSpawn = (argv, options) => Bun.spawn(argv, options),
+  checks: ReadonlyArray<{ readonly argv: ReadonlyArray<string>; readonly timeoutMs: number }> = sandboxChecks,
+  assertReadonly: (root?: string) => Promise<void> = assertSourceReadOnly,
+) {
+  await assertReadonly(source)
+  await materializeSandboxWorkspace(source, workspace)
+  await runSandboxChecks(spawn, checks, workspace)
 }
 
 export async function assertSourceReadOnly(root = "/source") {
@@ -119,8 +128,7 @@ export async function materializeSandboxWorkspace(source = "/source", target = "
 }
 
 export async function main() {
-  await materializeSandboxWorkspace()
-  await runSandboxChecks()
+  await runSandboxEntrypoint()
 }
 
 if (import.meta.main) {

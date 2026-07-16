@@ -14,6 +14,7 @@ import {
   assertSourceReadOnly,
   materializeSandboxWorkspace,
   runSandboxChecks,
+  runSandboxEntrypoint,
   sandboxChecks,
   type SandboxChild,
   type SandboxSpawn,
@@ -622,7 +623,6 @@ describe("verification sandbox", () => {
       `type=bind,src=${fixture.dependencyDir},dst=/source/node_modules,readonly`,
       expect.stringMatching(/dst=\/opt\/oc2\/oc2-verify-sandbox\.ts,readonly$/),
     ])
-    expect(create).toContain("/source/packages/app/.artifacts:rw,noexec,nosuid,nodev,size=67108864")
     expect(create).toContain("TURBO_CACHE_DIR=/tmp/turbo-cache")
     expect(commands.find((item) => item.argv[1] === "rm")!.argv).toContain("--volumes")
     expect(commands.find((item) => item.argv[1] === "wait")!.timeoutMs).toBe(65 * 60_000)
@@ -717,15 +717,10 @@ describe("verification sandbox", () => {
       invocations.push({ argv, cwd: options.cwd, stdout: options.stdout, stderr: options.stderr })
       return { exited: Promise.resolve(0), kill() {} }
     }
-    let probed = false
-    await runSandboxChecks(spawn, sandboxChecks, async () => {
-      probed = true
-    })
+    await runSandboxChecks(spawn, sandboxChecks)
     expect(invocations.map((item) => item.argv.slice(1))).toEqual(sandboxChecks.map((check) => [...check.argv]))
     expect(invocations.every((item) => item.stdout === "ignore" && item.stderr === "ignore")).toBeTrue()
-    expect(invocations.slice(0, -1).every((item) => item.cwd === "/workspace")).toBeTrue()
-    expect(invocations.at(-1)?.cwd).toBe("/source")
-    expect(probed).toBeTrue()
+    expect(invocations.every((item) => item.cwd === "/workspace")).toBeTrue()
 
     let killed = false
     let finish = (_code: number) => {}
@@ -759,6 +754,37 @@ describe("verification sandbox", () => {
     expect(await Bun.file(join(target, "source.txt")).text()).toBe("candidate\n")
     expect(await Bun.file(join(target, ".git")).exists()).toBeFalse()
     expect(await Bun.file(join(target, "node_modules")).exists()).toBeFalse()
+  })
+
+  test("entrypoint runs a real cache-cold build in the disposable workspace without mutating source", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "oc2-entrypoint-test-")))
+    roots.push(root)
+    const source = join(root, "source")
+    const workspace = join(root, "workspace")
+    await Promise.all([mkdir(source), mkdir(workspace)])
+    await writeFile(join(source, "source.txt"), "candidate\n")
+    await writeFile(
+      join(source, "package.json"),
+      JSON.stringify({ private: true, scripts: { "fake:build": `${process.execPath} run fake-build.ts` } }),
+    )
+    await writeFile(
+      join(source, "fake-build.ts"),
+      'import { mkdir, writeFile } from "node:fs/promises"\nawait mkdir("dist", { recursive: true })\nawait writeFile("dist/output.txt", await Bun.file("source.txt").text())\n',
+    )
+    let probed = false
+    await runSandboxEntrypoint(
+      source,
+      workspace,
+      (argv, options) => Bun.spawn(argv, options),
+      [{ argv: ["run", "fake:build"], timeoutMs: 5_000 }],
+      async (root) => {
+        probed = root === source
+      },
+    )
+    expect(probed).toBeTrue()
+    expect(await Bun.file(join(workspace, "dist", "output.txt")).text()).toBe("candidate\n")
+    expect(await Bun.file(join(source, "source.txt")).text()).toBe("candidate\n")
+    expect(await Bun.file(join(source, "dist")).exists()).toBeFalse()
   })
 
   test("entrypoint rejects a writable candidate source mount", async () => {

@@ -211,7 +211,7 @@ describe("automation pull request provenance", () => {
     ).toThrow("provenance")
   })
 
-  test("binds same-repository App ownership, branch issue, base, and exact head", () => {
+  test("binds same-repository App ownership, branch issue, base ref, and exact head", () => {
     expect(
       requireAutomationPullRequest({
         pullRequest: pullRequest(),
@@ -226,6 +226,17 @@ describe("automation pull request provenance", () => {
     expect(() =>
       requireAutomationPullRequest({
         pullRequest: pullRequest({ performedViaAppId: undefined }),
+        repositoryId,
+        repository,
+        publisherBotId,
+        appId,
+        expectedNumber: 17,
+        expectedHeadSha: headSha,
+      }),
+    ).not.toThrow()
+    expect(() =>
+      requireAutomationPullRequest({
+        pullRequest: pullRequest({ baseSha: "7".repeat(40) }),
         repositoryId,
         repository,
         publisherBotId,
@@ -471,7 +482,7 @@ describe("exact-head auto-merge transaction", () => {
     return {
       getPublisherIdentity: unused,
       getRepository: async () => settings(),
-      getRef: async (ref) => (ref === branch ? headSha : ref === "main" ? baseSha : undefined),
+      getRef: async (ref) => (ref === branch ? headSha : undefined),
       getCommit: unused,
       listOpenPullRequests: unused,
       createPullRequest: unused,
@@ -507,6 +518,36 @@ describe("exact-head auto-merge transaction", () => {
         merge: async (input) => {
           merged = true
           expect(input).toMatchObject({ repository, prNumber: 17, headSha })
+          return true
+        },
+      }),
+    ).toEqual({ phase: "auto_merge_enabled" })
+    expect(merged).toBeTrue()
+  })
+
+  test("allows main and the live PR base SHA to advance after publication", async () => {
+    const advancedMain = "7".repeat(40)
+    let merged = false
+    expect(
+      await enablePreparedAutoMerge({
+        repository,
+        repositoryId,
+        appId,
+        publisherBotId,
+        prId: 99,
+        prNumber: 17,
+        branch,
+        headSha,
+        token: "mutation-token",
+        settingsToken: "settings-read-token",
+        api: api([
+          pullRequest({ baseSha: advancedMain }),
+          pullRequest({ baseSha: advancedMain }),
+          pullRequest({ baseSha: advancedMain }),
+        ]),
+        merge: async (input) => {
+          merged = true
+          expect(input.token).toBe("mutation-token")
           return true
         },
       }),

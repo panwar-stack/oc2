@@ -585,14 +585,6 @@ export async function runVerificationSandbox(
     imageEnvironment.add(name)
   }
 
-  const artifactDirs: string[] = []
-  for await (const manifest of new Bun.Glob("packages/**/package.json").scan({ cwd: input.cwd, onlyFiles: true })) {
-    const path = join(input.cwd, dirname(manifest), ".artifacts")
-    await mkdir(path, { recursive: true, mode: 0o700 })
-    if ((await realpath(path)) !== path || !path.startsWith(`${input.cwd}${sep}`))
-      throw new Error("invalid sandbox artifact directory")
-    artifactDirs.push(path)
-  }
   const containerName = `oc2-verify-${randomBytes(12).toString("hex")}`
   let cleanupRequired = false
   let failure: Error | undefined
@@ -649,10 +641,6 @@ export async function runVerificationSandbox(
         `type=bind,src=${nodeModules},dst=/source/node_modules,readonly`,
         "--mount",
         `type=bind,src=${sandboxEntrypoint},dst=/opt/oc2/oc2-verify-sandbox.ts,readonly`,
-        ...artifactDirs.flatMap((path) => [
-          "--tmpfs",
-          `/source/${relative(input.cwd, path)}:rw,noexec,nosuid,nodev,size=67108864`,
-        ]),
         ...sandboxEnvironment.flatMap((entry) => ["--env", entry]),
         "--entrypoint",
         "bun",
@@ -675,7 +663,6 @@ export async function runVerificationSandbox(
     exitCode: 1,
     stdout: new Uint8Array(),
   }))
-  await Promise.all(artifactDirs.map((path) => rm(path, { recursive: true, force: true })))
   if (cleanupRequired && removed.exitCode !== 0) throw new Error("verification container cleanup failed")
   if (failure) throw failure
 }

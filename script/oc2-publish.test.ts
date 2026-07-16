@@ -55,6 +55,7 @@ function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
 
 function states(overrides: Partial<PublicationStateInput> = {}): PublicationStateInput {
   return {
+    admitResult: "success",
     ingestResult: "success",
     ingestState: "running",
     generateResult: "success",
@@ -310,6 +311,7 @@ describe("fixed status phase precedence", () => {
         }),
       ),
     ).toBe("tool_failed")
+    expect(deriveStatusPhase(states({ admitResult: "failure", ingestResult: "skipped" }))).toBe("tool_failed")
     expect(() => deriveStatusPhase(states({ publishResult: "timed_out" }))).toThrow("invalid job result")
   })
 })
@@ -322,7 +324,28 @@ describe("workflow secret boundaries", () => {
     expect(workflow).toContain("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349")
     expect(workflow).toContain("permission-contents: write")
     expect(workflow).toContain("permission-pull-requests: write")
-    expect(workflow).toContain("permission-administration: write")
+    expect(workflow).toContain("permission-administration: read")
+    expect(workflow).not.toContain("permission-administration: write")
+    const publicationToken = workflow.slice(
+      workflow.indexOf("      - name: Create repository-scoped publisher token"),
+      workflow.indexOf("      - name: Publish verified change"),
+    )
+    expect(publicationToken).toContain("permission-contents: write")
+    expect(publicationToken).toContain("permission-pull-requests: write")
+    expect(publicationToken).not.toContain("permission-administration:")
+    const settingsToken = workflow.slice(
+      workflow.indexOf("      - name: Create ruleset settings App token"),
+      workflow.indexOf("      - name: Create exact auto-merge App token"),
+    )
+    expect(settingsToken).toContain("permission-administration: read")
+    expect(settingsToken).not.toContain("permission-administration: write")
+    expect(workflow).toContain("if: always() && github.repository == 'panwar-stack/oc2'")
+    expect(workflow).toContain("ref: ${{ github.sha }}")
+    const status = workflow.slice(workflow.indexOf("  status:"))
+    expect(status).not.toContain("download-artifact")
+    expect(status).not.toContain("needs.admit.outputs.execute")
+    expect(status).toContain('--run-id "$RUN_ID"')
+    expect(status).toContain('--admit-result "$ADMIT_RESULT"')
     expect(helper).toContain('"--auto"')
     expect(helper).toContain('"--rebase"')
     expect(helper).toContain('"--match-head-commit"')

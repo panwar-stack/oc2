@@ -226,7 +226,6 @@ export function requireAutomationPullRequest(input: {
     input.pullRequest.baseRef !== "main" ||
     input.pullRequest.headSha !== (input.expectedHeadSha ?? input.pullRequest.headSha) ||
     input.pullRequest.headSha !== text.headSha ||
-    input.pullRequest.baseSha !== text.baseSha ||
     Number(branch[1]) !== text.issueNumber
   )
     throw new Error("invalid pull request provenance")

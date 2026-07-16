@@ -12,6 +12,7 @@ import {
   main,
   parseIssueMarker,
   updateIssueMarker,
+  updateRunIssueMarker,
   type Admission,
   type GitHubActionsRun,
   type GitHubActor,
@@ -1047,6 +1048,115 @@ describe("durable marker state", () => {
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     )
     expect(await casError).toBe("marker compare-and-swap failed")
+  })
+
+  test("status recovery locates only this run reservation and no-ops when it is absent", async () => {
+    const status = {
+      event: event(),
+      repository: "octo/oc2",
+      repositoryId: 1234,
+      runId: 800,
+      runAttempt: 1,
+      botId,
+      phase: "tool_failed" as const,
+      now,
+    }
+    const absent = fakeGitHub()
+    expect(await updateRunIssueMarker(status, absent.api)).toBeUndefined()
+    expect(absent.state.writes).toEqual([])
+
+    const different = fakeGitHub({
+      comments: [
+        {
+          id: 700,
+          userId: botId,
+          body: formatIssueMarker({
+            attempt: 1,
+            key: markerKey,
+            phase: "running",
+            runId: 799,
+            updatedAt: now.toISOString(),
+          }),
+        },
+      ],
+    })
+    expect(await updateRunIssueMarker(status, different.api)).toBeUndefined()
+    expect(different.state.writes).toEqual([])
+
+    const exact = fakeGitHub({
+      comments: [
+        {
+          id: 700,
+          userId: botId,
+          body: formatIssueMarker({
+            attempt: 1,
+            key: markerKey,
+            phase: "running",
+            runId: 800,
+            updatedAt: now.toISOString(),
+          }),
+        },
+      ],
+    })
+    expect(await updateRunIssueMarker(status, exact.api)).toMatchObject({
+      attempt: 1,
+      key: markerKey,
+      phase: "tool_failed",
+      runId: 800,
+    })
+    expect(exact.state.writes).toHaveLength(1)
+  })
+
+  test("status recovery fails closed on malformed, multiple, or concurrently changed bot markers", async () => {
+    const status = {
+      event: event(),
+      repository: "octo/oc2",
+      repositoryId: 1234,
+      runId: 800,
+      runAttempt: 1,
+      botId,
+      phase: "tool_failed" as const,
+      now,
+    }
+    const canonical = formatIssueMarker({
+      attempt: 1,
+      key: markerKey,
+      phase: "running",
+      runId: 800,
+      updatedAt: now.toISOString(),
+    })
+    await expect(
+      updateRunIssueMarker(
+        status,
+        fakeGitHub({ comments: [{ id: 700, userId: botId, body: "<!-- oc2-issue-state:broken -->" }] }).api,
+      ),
+    ).rejects.toThrow("malformed bot-owned issue marker")
+    await expect(
+      updateRunIssueMarker(
+        status,
+        fakeGitHub({
+          comments: [
+            { id: 700, userId: botId, body: canonical },
+            { id: 701, userId: botId, body: canonical },
+          ],
+        }).api,
+      ),
+    ).rejects.toThrow("multiple bot-owned issue markers")
+
+    const changed = fakeGitHub({ comments: [{ id: 700, userId: botId, body: canonical }] })
+    const originalGet = changed.api.getIssueComment
+    changed.api.getIssueComment = async (commentId) => ({
+      ...(await originalGet(commentId)),
+      body: formatIssueMarker({
+        attempt: 2,
+        key: markerKey,
+        phase: "running",
+        runId: 800,
+        updatedAt: now.toISOString(),
+      }),
+    })
+    await expect(updateRunIssueMarker(status, changed.api)).rejects.toThrow("marker compare-and-swap failed")
+    expect(changed.state.writes).toEqual([])
   })
 })
 

@@ -224,6 +224,18 @@ export interface MarkerUpdateInput {
   now?: Date
 }
 
+export interface RunMarkerUpdateInput {
+  event: unknown
+  repository: string
+  repositoryId: number
+  runId: number
+  runAttempt: number
+  botId: number
+  phase: IssuePhase
+  prId?: number
+  now?: Date
+}
+
 export interface GitHubApiOptions {
   token: string
   repository: string
@@ -627,13 +639,66 @@ export function parseIssueMarker(body: string): IssueMarker | undefined {
 }
 
 export async function updateIssueMarker(input: MarkerUpdateInput, api: GitHubApi) {
-  const current = await api.getIssueComment(input.admission.marker.commentId)
+  return compareAndSwapIssueMarker(
+    {
+      commentId: input.admission.marker.commentId,
+      botId: input.botId,
+      key: input.admission.key,
+      runId: input.admission.run.id,
+      runAttempt: input.admission.run.attempt,
+      phase: input.phase,
+      ...(input.prId === undefined ? {} : { prId: input.prId }),
+      ...(input.now === undefined ? {} : { now: input.now }),
+    },
+    api,
+  )
+}
+
+export async function updateRunIssueMarker(input: RunMarkerUpdateInput, api: GitHubApi) {
+  const event = decodeIssueEvent(input.event)
+  const repositoryId = positiveInteger(input.repositoryId)
+  const botId = positiveInteger(input.botId)
+  const runId = positiveInteger(input.runId)
+  const runAttempt = positiveInteger(input.runAttempt)
+  if (event.repository.id !== repositoryId || event.repository.nameWithOwner !== input.repository)
+    throw new Error("status event identity mismatch")
+  const found = findBotMarker(await api.listIssueComments(event.issue.number), botId)
+  if (!found || found.marker.runId !== runId || found.marker.attempt !== runAttempt) return undefined
+  return compareAndSwapIssueMarker(
+    {
+      commentId: found.comment.id,
+      botId,
+      key: found.marker.key,
+      runId,
+      runAttempt,
+      phase: input.phase,
+      ...(input.prId === undefined ? {} : { prId: input.prId }),
+      ...(input.now === undefined ? {} : { now: input.now }),
+    },
+    api,
+  )
+}
+
+async function compareAndSwapIssueMarker(
+  input: {
+    commentId: number
+    botId: number
+    key: string
+    runId: number
+    runAttempt: number
+    phase: IssuePhase
+    prId?: number
+    now?: Date
+  },
+  api: GitHubApi,
+) {
+  const current = await api.getIssueComment(input.commentId)
   const marker = current.userId === input.botId ? parseIssueMarker(current.body) : undefined
   if (
     !marker ||
-    marker.key !== input.admission.key ||
-    marker.runId !== input.admission.run.id ||
-    marker.attempt !== input.admission.run.attempt ||
+    marker.key !== input.key ||
+    marker.runId !== input.runId ||
+    marker.attempt !== input.runAttempt ||
     !new Set<IssuePhase>(["running", "pr_opened"]).has(marker.phase)
   )
     throw new Error("marker compare-and-swap failed")

@@ -6,7 +6,7 @@ import { appendFile, chmod, link, lstat, mkdir, mkdtemp, open, realpath, rm } fr
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
-import { decodeAdmission, validateAdmissionEvent } from "./oc2-automation-workflow"
+import { decodeAdmission } from "./oc2-automation-workflow"
 import {
   decodeProvenancePullRequest,
   decodeRuleset,
@@ -16,7 +16,7 @@ import {
   type RepositorySettings,
   type Ruleset,
 } from "./oc2-automation-provenance"
-import { createGitHubApi, updateIssueMarker, type Admission, type IssuePhase } from "./oc2-issue"
+import { createGitHubApi, updateRunIssueMarker, type Admission, type IssuePhase } from "./oc2-issue"
 import { validatePatch, type ValidatedPatch } from "./oc2-verify"
 
 const shaPattern = /^[0-9a-f]{40}$/
@@ -88,6 +88,7 @@ export interface PublisherApi {
 }
 
 export interface PublicationStateInput {
+  admitResult: string
   ingestResult: string
   ingestState: string
   generateResult: string
@@ -474,7 +475,6 @@ function ownedPullRequest(
     publisherBotId: number
     repositoryId: number
     branch: string
-    baseSha: string
     headSha: string
     title: string
     body: string
@@ -486,7 +486,6 @@ function ownedPullRequest(
     pullRequest.headRef === expected.branch &&
     pullRequest.headSha === expected.headSha &&
     pullRequest.baseRef === "main" &&
-    pullRequest.baseSha === expected.baseSha &&
     pullRequest.baseRepositoryId === expected.repositoryId &&
     pullRequest.title === expected.title &&
     pullRequest.body === expected.body
@@ -540,7 +539,6 @@ export function requireBranchLease(input: {
       publisherBotId: input.publisherBotId,
       repositoryId: input.repositoryId,
       branch: input.branch,
-      baseSha: input.baseSha,
       headSha: input.branchSha,
       ...text,
     })
@@ -986,6 +984,17 @@ export async function publishPrepared(input: {
     changedPullRequest = before[0]
       ? await api.updatePullRequest({ number: before[0].number, ...text })
       : await api.createPullRequest({ branch, ...text })
+    if (changedPullRequest.baseSha !== manifest.baseSha) throw new PublicationStopped("stale_base")
+    if (
+      !ownedPullRequest(changedPullRequest, {
+        publisherBotId: input.publisherBotId,
+        repositoryId: manifest.repository.id,
+        branch,
+        headSha: candidate.commitSha,
+        ...text,
+      })
+    )
+      throw new PublicationStopped("push_race")
     const final = await api.listOpenPullRequests(branch)
     if (
       final.length !== 1 ||
@@ -994,13 +1003,11 @@ export async function publishPrepared(input: {
         publisherBotId: input.publisherBotId,
         repositoryId: manifest.repository.id,
         branch,
-        baseSha: manifest.baseSha,
         headSha: candidate.commitSha,
         ...text,
       })
     )
       throw new PublicationStopped("push_race")
-    if ((await api.getRef("main")) !== manifest.baseSha) throw new PublicationStopped("stale_base")
     return {
       phase: "pr_opened" as const,
       prId: final[0]!.id,
@@ -1033,7 +1040,6 @@ export async function publishPrepared(input: {
           publisherBotId: input.publisherBotId,
           repositoryId: manifest.repository.id,
           branch,
-          baseSha: manifest.baseSha,
           headSha: candidate.commitSha,
           ...text,
         })
@@ -1161,14 +1167,12 @@ export async function enablePreparedAutoMerge(input: {
     appId: input.appId,
     rulesets,
   })
-  const provenance = requireExactAutoMergePullRequest({ ...input, pullRequest })
-  const mainSha = await api.getRef("main")
-  if (branchSha !== input.headSha || mainSha !== provenance.baseSha) throw new Error("auto-merge ref changed")
+  requireExactAutoMergePullRequest({ ...input, pullRequest })
+  if (branchSha !== input.headSha) throw new Error("auto-merge ref changed")
 
-  const [current, currentBranchSha, currentMainSha, currentRepository, currentRulesets] = await Promise.all([
+  const [current, currentBranchSha, currentRepository, currentRulesets] = await Promise.all([
     api.getPullRequest(input.prNumber),
     api.getRef(input.branch),
-    api.getRef("main"),
     api.getRepository(),
     api.listRulesets(),
   ])
@@ -1180,8 +1184,7 @@ export async function enablePreparedAutoMerge(input: {
     appId: input.appId,
     rulesets: currentRulesets,
   })
-  if (currentBranchSha !== input.headSha || currentMainSha !== provenance.baseSha)
-    throw new Error("auto-merge ref changed")
+  if (currentBranchSha !== input.headSha) throw new Error("auto-merge ref changed")
   if (!(await (input.merge ?? runGhAutoMerge)(input))) throw new Error("auto-merge command rejected")
 
   const [final, finalBranchSha, state, finalRepository, finalRulesets] = await Promise.all([
@@ -1223,6 +1226,7 @@ export async function enablePreparedAutoMerge(input: {
 export function deriveStatusPhase(input: PublicationStateInput): IssuePhase {
   const jobResults = new Set(["success", "failure", "cancelled", "skipped"])
   if (
+    !jobResults.has(input.admitResult) ||
     !jobResults.has(input.ingestResult) ||
     !jobResults.has(input.generateResult) ||
     !jobResults.has(input.verifyResult) ||
@@ -1230,6 +1234,7 @@ export function deriveStatusPhase(input: PublicationStateInput): IssuePhase {
     !jobResults.has(input.autoMergeResult)
   )
     throw new Error("invalid job result")
+  if (input.admitResult !== "success") return "tool_failed"
   if (input.ingestState === "input_too_large" || input.ingestState === "attachment_rejected") return input.ingestState
   if (input.ingestResult !== "success") return "tool_failed"
   if (
@@ -1379,13 +1384,13 @@ export async function main(argv: ReadonlyArray<string> = process.argv.slice(2)) 
   }
   if (argv[0] === "status") {
     const value = options(argv, [
-      "--admission",
       "--event-file",
       "--repository",
       "--repository-id",
-      "--base-sha",
-      "--key",
+      "--run-id",
+      "--run-attempt",
       "--bot-id",
+      "--admit-result",
       "--ingest-result",
       "--ingest-state",
       "--generate-result",
@@ -1398,17 +1403,9 @@ export async function main(argv: ReadonlyArray<string> = process.argv.slice(2)) 
       "--auto-merge-state",
       "--pr-id",
     ])
-    const admission = admitted(decoder.decode(await readRegular(value.admission!, maximumJsonBytes)))
     const repositoryId = positiveInteger(Number(value.repository_id))
-    if (
-      admission.repository.nameWithOwner !== value.repository ||
-      admission.repository.id !== repositoryId ||
-      admission.repository.baseSha !== sha(value.base_sha) ||
-      admission.key !== sha256(value.key)
-    )
-      throw new Error("status admission mismatch")
-    await validateAdmissionEvent(admission, value.event_file!, value.repository!, repositoryId)
     const phase = deriveStatusPhase({
+      admitResult: value.admit_result!,
       ingestResult: value.ingest_result!,
       ingestState: value.ingest_state!,
       generateResult: value.generate_result!,
@@ -1422,15 +1419,24 @@ export async function main(argv: ReadonlyArray<string> = process.argv.slice(2)) 
     })
     const prId = value.pr_id === "none" ? undefined : positiveInteger(Number(value.pr_id))
     if (
-      new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "auto_merge_unavailable"]).has(phase) !==
-      (prId !== undefined)
+      prId !== undefined &&
+      !new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "auto_merge_unavailable"]).has(phase)
     )
       throw new Error("invalid status PR identity")
-    await updateIssueMarker(
-      { admission, botId: positiveInteger(Number(value.bot_id)), phase, ...(prId === undefined ? {} : { prId }) },
+    await updateRunIssueMarker(
+      {
+        event: parseJson(await readRegular(value.event_file!, 2 * 1024 * 1024)),
+        repository: value.repository!,
+        repositoryId,
+        runId: positiveInteger(Number(value.run_id)),
+        runAttempt: positiveInteger(Number(value.run_attempt)),
+        botId: positiveInteger(Number(value.bot_id)),
+        phase,
+        ...(prId === undefined ? {} : { prId }),
+      },
       createGitHubApi({
         token: process.env.GITHUB_TOKEN ?? "",
-        repository: process.env.GITHUB_REPOSITORY ?? "",
+        repository: value.repository!,
         baseUrl: process.env.GITHUB_API_URL,
       }),
     )
