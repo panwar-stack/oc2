@@ -590,13 +590,14 @@ jobs:
 
       - name: Revalidate and seal publication inputs
         shell: bash
+        working-directory: ${{ runner.temp }}
         env:
           ADMISSION_KEY: ${{ needs.admit.outputs.key }}
           BASE_SHA: ${{ needs.admit.outputs.base_sha }}
           REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
-          bun --no-env-file "$RUNNER_TEMP/trusted/oc2-publish.js" prepare \
+          bun --config=/dev/null --no-env-file --no-install "$RUNNER_TEMP/trusted/oc2-publish.js" prepare \
             --admission "$RUNNER_TEMP/admission/admission.json" \
             --generation "$RUNNER_TEMP/generation/generation.json" \
             --patch "$RUNNER_TEMP/generation/changes.patch" \
@@ -622,6 +623,7 @@ jobs:
       - name: Publish verified change
         id: publish
         shell: bash
+        working-directory: ${{ runner.temp }}
         env:
           OC2_PUBLISH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
@@ -629,7 +631,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          bun --no-env-file "$RUNNER_TEMP/trusted/oc2-publish.js" publish \
+          bun --config=/dev/null --no-env-file --no-install "$RUNNER_TEMP/trusted/oc2-publish.js" publish \
             --publication "$RUNNER_TEMP/publication.json" \
             --admission "$RUNNER_TEMP/admission/admission.json" \
             --generation "$RUNNER_TEMP/generation/generation.json" \
@@ -674,6 +676,7 @@ jobs:
 
       - name: Update fixed terminal status
         shell: bash
+        working-directory: ${{ runner.temp }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           MARKER_BOT_ID: ${{ vars.OC2_MARKER_BOT_ID }}
@@ -691,7 +694,7 @@ jobs:
           PUBLISH_STATE: ${{ needs.publish.outputs.state }}
         run: |
           set -euo pipefail
-          bun --no-env-file "$RUNNER_TEMP/trusted/oc2-publish.js" status \
+          bun --config=/dev/null --no-env-file --no-install "$RUNNER_TEMP/trusted/oc2-publish.js" status \
             --admission "$RUNNER_TEMP/admission/admission.json" \
             --event-file "$GITHUB_EVENT_PATH" \
             --repository "$GITHUB_REPOSITORY" \

@@ -163,6 +163,7 @@ it.instance(
           "packages/app/tsconfig.build.json",
           "script/oc2-issue-generate.ts",
           "script/oc2-verify-slice.ts",
+          "script/oc2-publish.ts",
         ]) {
           expect(Permission.evaluate("edit", file, agent!.permission).action).toBe("deny")
           expect(Permission.evaluate("apply_patch", file, agent!.permission).action).toBe("deny")

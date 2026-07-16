@@ -28,7 +28,7 @@ export function isProtectedAutomationPath(path: string) {
   if (segments.some((segment) => segment === "oc2.json" || segment === "oc2.jsonc")) return true
   if (folded.includes("lock")) return true
   if (folded === "specs/secure-issue-driven-oc2-automation.md") return true
-  return /^script\/oc2-(issue|verify|automation)/.test(folded)
+  return /^script\/oc2-(issue|verify|automation|publish)/.test(folded)
 }
 
 export function validateChangedPaths(paths: ReadonlyArray<string>) {

@@ -47,15 +47,23 @@ export interface PullRequest {
   headRef: string
   headRepositoryId: number
   baseRef: string
+  baseSha: string
+  baseRepositoryId: number
 }
 
 export interface PublisherApi {
-  getAuthenticatedUserId(): Promise<number>
+  getPublisherIdentity(appSlug: string): Promise<{ id: number; login: string; type: string }>
   getRepository(): Promise<{ id: number; nameWithOwner: string; defaultBranch: string }>
   getRef(branch: string): Promise<string | undefined>
+  getCommit(sha: string): Promise<{
+    message: string
+    author: { name: string; email: string }
+    committer: { name: string; email: string }
+  }>
   listOpenPullRequests(branch: string): Promise<PullRequest[]>
   createPullRequest(input: { title: string; body: string; branch: string }): Promise<PullRequest>
   updatePullRequest(input: { number: number; title: string; body: string }): Promise<PullRequest>
+  closePullRequest(number: number): Promise<PullRequest>
 }
 
 export interface PublicationStateInput {
@@ -378,6 +386,10 @@ export function branchName(issueNumber: number, key: string) {
   return `oc2/issue-${issueNumber}-${key.slice(0, 12)}`
 }
 
+function commitMessage(issueNumber: number, key: string) {
+  return `OC2 issue #${positiveInteger(issueNumber)}\n\nAutomation-Key: ${sha256(key)}\n`
+}
+
 export function pushArguments(remote: string, branch: string, commitSha: string | undefined, expectedSha?: string) {
   if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(remote))
     throw new Error("invalid publication remote")
@@ -418,6 +430,7 @@ function ownedPullRequest(
     publisherBotId: number
     repositoryId: number
     branch: string
+    baseSha: string
     headSha: string
     title: string
     body: string
@@ -429,6 +442,8 @@ function ownedPullRequest(
     pullRequest.headRef === expected.branch &&
     pullRequest.headSha === expected.headSha &&
     pullRequest.baseRef === "main" &&
+    pullRequest.baseSha === expected.baseSha &&
+    pullRequest.baseRepositoryId === expected.repositoryId &&
     pullRequest.title === expected.title &&
     pullRequest.body === expected.body
   )
@@ -457,18 +472,31 @@ export function requireBranchLease(input: {
   runUrl: string
   baseSha: string
   patchSha256: string
+  key: string
+  appSlug: string
+  commit?: { message: string; author: { name: string; email: string }; committer: { name: string; email: string } }
 }) {
   if (input.branchSha === undefined) {
     if (input.pullRequests.length !== 0) throw new PublicationStopped("push_race")
     return undefined
   }
   const text = pullRequestText(input.issueNumber, input.runUrl, input.baseSha, input.branchSha, input.patchSha256)
+  const name = `${input.appSlug}[bot]`
+  const email = `${positiveInteger(input.publisherBotId)}+${name}@users.noreply.github.com`
+  const message = commitMessage(input.issueNumber, input.key)
   if (
+    !input.commit ||
+    (input.commit.message !== message && input.commit.message !== message.slice(0, -1)) ||
+    input.commit.author.name !== name ||
+    input.commit.author.email !== email ||
+    input.commit.committer.name !== name ||
+    input.commit.committer.email !== email ||
     input.pullRequests.length !== 1 ||
     !ownedPullRequest(input.pullRequests[0]!, {
       publisherBotId: input.publisherBotId,
       repositoryId: input.repositoryId,
       branch: input.branch,
+      baseSha: input.baseSha,
       headSha: input.branchSha,
       ...text,
     })
@@ -495,6 +523,8 @@ function decodePullRequest(value: unknown): PullRequest {
     headRef: boundedString(head?.ref, 256),
     headRepositoryId: positiveInteger(headRepo?.id),
     baseRef: boundedString(base?.ref, 256),
+    baseSha: sha(base?.sha),
+    baseRepositoryId: positiveInteger((base?.repo as Record<string, unknown> | undefined)?.id),
   }
 }
 
@@ -502,7 +532,7 @@ export function createPublisherApi(input: {
   token: string
   repository: string
   baseUrl?: string
-  fetch?: typeof globalThis.fetch
+  fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 }): PublisherApi {
   if (!input.token || !repositoryPattern.test(input.repository)) throw new Error("invalid publisher configuration")
   const baseUrl = new URL(input.baseUrl ?? "https://api.github.com")
@@ -537,10 +567,13 @@ export function createPublisherApi(input: {
   }
 
   return {
-    async getAuthenticatedUserId() {
-      const value = await call("/user")
+    async getPublisherIdentity(appSlug) {
+      if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(appSlug)) throw new Error("invalid publisher identity")
+      const login = `${appSlug}[bot]`
+      const value = await call(`/users/${encodeURIComponent(login)}`)
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid publisher identity")
-      return positiveInteger((value as Record<string, unknown>).id)
+      const item = value as Record<string, unknown>
+      return { id: positiveInteger(item.id), login: boundedString(item.login), type: boundedString(item.type) }
     },
     async getRepository() {
       const value = await call(repositoryPath)
@@ -559,6 +592,26 @@ export function createPublisherApi(input: {
       const object = (value as Record<string, unknown>).object
       if (!object || typeof object !== "object" || Array.isArray(object)) throw new Error("invalid ref response")
       return sha((object as Record<string, unknown>).sha)
+    },
+    async getCommit(commitSha) {
+      const value = await call(`${repositoryPath}/git/commits/${sha(commitSha)}`)
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid commit response")
+      const item = value as Record<string, unknown>
+      const author = item.author as Record<string, unknown> | undefined
+      const committer = item.committer as Record<string, unknown> | undefined
+      const message = item.message
+      if (
+        typeof message !== "string" ||
+        message.length < 1 ||
+        message.length > 1024 ||
+        /[\u0000\r\u007f]/.test(message)
+      )
+        throw new Error("invalid commit response")
+      return {
+        message,
+        author: { name: boundedString(author?.name), email: boundedString(author?.email) },
+        committer: { name: boundedString(committer?.name), email: boundedString(committer?.email) },
+      }
     },
     async listOpenPullRequests(branch) {
       const owner = input.repository.split("/")[0]!
@@ -581,6 +634,14 @@ export function createPublisherApi(input: {
         await call(`${repositoryPath}/pulls/${positiveInteger(value.number)}`, {
           method: "PATCH",
           body: { title: value.title, body: value.body, base: "main" },
+        }),
+      )
+    },
+    async closePullRequest(number) {
+      return decodePullRequest(
+        await call(`${repositoryPath}/pulls/${positiveInteger(number)}`, {
+          method: "PATCH",
+          body: { state: "closed" },
         }),
       )
     },
@@ -611,7 +672,7 @@ async function reproduceCandidate(input: {
   const email = `${positiveInteger(input.publisherBotId)}+${name}@users.noreply.github.com`
   const commitSha = (
     await git(root, temporary, ["commit-tree", treeSha, "-p", input.manifest.baseSha], {
-      input: `OC2 issue #${input.manifest.issue.number}\n\nAutomation-Key: ${input.manifest.key}\n`,
+      input: commitMessage(input.manifest.issue.number, input.manifest.key),
       env: {
         GIT_AUTHOR_NAME: name,
         GIT_AUTHOR_EMAIL: email,
@@ -721,12 +782,17 @@ export async function publishPrepared(input: {
   })
 
   const api = input.api ?? createPublisherApi({ token: input.token, repository: manifest.repository.nameWithOwner })
-  const [publisherId, repository, mainSha] = await Promise.all([
-    api.getAuthenticatedUserId(),
+  const [publisher, repository, mainSha] = await Promise.all([
+    api.getPublisherIdentity(input.appSlug),
     api.getRepository(),
     api.getRef("main"),
   ])
-  if (publisherId !== positiveInteger(input.publisherBotId)) throw new Error("publisher identity mismatch")
+  if (
+    publisher.id !== positiveInteger(input.publisherBotId) ||
+    publisher.login !== `${input.appSlug}[bot]` ||
+    publisher.type !== "Bot"
+  )
+    throw new Error("publisher identity mismatch")
   requireRepositoryBase(
     { repositoryId: manifest.repository.id, repository: manifest.repository.nameWithOwner, baseSha: manifest.baseSha },
     { ...repository, mainSha },
@@ -739,13 +805,20 @@ export async function publishPrepared(input: {
     appSlug: input.appSlug,
     publisherBotId: input.publisherBotId,
   })
+  let branch = ""
+  let remote = ""
+  let previousSha: string | undefined
+  let before: PullRequest[] = []
+  let pushed = false
+  let changedPullRequest: PullRequest | undefined
   try {
-    const branch = branchName(manifest.issue.number, manifest.key)
-    const remote = `https://github.com/${manifest.repository.nameWithOwner}.git`
-    const previousSha = await api.getRef(branch)
-    const before = await api.listOpenPullRequests(branch)
+    branch = branchName(manifest.issue.number, manifest.key)
+    remote = `https://github.com/${manifest.repository.nameWithOwner}.git`
+    previousSha = await api.getRef(branch)
+    before = await api.listOpenPullRequests(branch)
     requireBranchLease({
       branchSha: previousSha,
+      commit: previousSha === undefined ? undefined : await api.getCommit(previousSha),
       pullRequests: before,
       publisherBotId: input.publisherBotId,
       repositoryId: manifest.repository.id,
@@ -754,33 +827,26 @@ export async function publishPrepared(input: {
       runUrl: input.runUrl,
       baseSha: manifest.baseSha,
       patchSha256: manifest.patchSha256,
+      key: manifest.key,
+      appSlug: input.appSlug,
     })
-    if (
-      previousSha !== candidate.commitSha &&
-      !(await pushWithLease({
-        cwd: candidate.root,
-        home: candidate.temporary,
-        remote,
-        branch,
-        commitSha: candidate.commitSha,
-        expectedSha: previousSha,
-        token: input.token,
-      }))
-    )
-      throw new PublicationStopped("push_race")
-    if ((await api.getRef(branch)) !== candidate.commitSha) throw new PublicationStopped("push_race")
-    if ((await api.getRef("main")) !== manifest.baseSha) {
-      await rollbackBranch({
-        cwd: candidate.root,
-        home: candidate.temporary,
-        remote,
-        branch,
-        currentSha: candidate.commitSha,
-        previousSha,
-        token: input.token,
-      })
-      throw new PublicationStopped("stale_base")
+    if (previousSha !== candidate.commitSha) {
+      if (
+        !(await pushWithLease({
+          cwd: candidate.root,
+          home: candidate.temporary,
+          remote,
+          branch,
+          commitSha: candidate.commitSha,
+          expectedSha: previousSha,
+          token: input.token,
+        }))
+      )
+        throw new PublicationStopped("push_race")
+      pushed = true
     }
+    if ((await api.getRef(branch)) !== candidate.commitSha) throw new PublicationStopped("push_race")
+    if ((await api.getRef("main")) !== manifest.baseSha) throw new PublicationStopped("stale_base")
 
     const text = pullRequestText(
       manifest.issue.number,
@@ -798,26 +864,72 @@ export async function publishPrepared(input: {
           current[0]!.headRepositoryId !== manifest.repository.id ||
           current[0]!.headRef !== branch ||
           current[0]!.headSha !== candidate.commitSha ||
-          current[0]!.baseRef !== "main"))
+          current[0]!.baseRef !== "main" ||
+          current[0]!.baseSha !== manifest.baseSha ||
+          current[0]!.baseRepositoryId !== manifest.repository.id))
     )
       throw new PublicationStopped("push_race")
-    const pullRequest = before[0]
+    changedPullRequest = before[0]
       ? await api.updatePullRequest({ number: before[0].number, ...text })
       : await api.createPullRequest({ branch, ...text })
     const final = await api.listOpenPullRequests(branch)
     if (
       final.length !== 1 ||
-      final[0]!.id !== pullRequest.id ||
+      final[0]!.id !== changedPullRequest.id ||
       !ownedPullRequest(final[0]!, {
         publisherBotId: input.publisherBotId,
         repositoryId: manifest.repository.id,
         branch,
+        baseSha: manifest.baseSha,
         headSha: candidate.commitSha,
         ...text,
       })
     )
       throw new PublicationStopped("push_race")
+    if ((await api.getRef("main")) !== manifest.baseSha) throw new PublicationStopped("stale_base")
     return { phase: "pr_opened" as const, prId: final[0]!.id, prNumber: final[0]!.number, prUrl: final[0]!.url }
+  } catch (error) {
+    if (changedPullRequest) {
+      if (before[0]) {
+        await api
+          .updatePullRequest({ number: before[0].number, title: before[0].title, body: before[0].body })
+          .catch(() => undefined)
+      } else {
+        await api.closePullRequest(changedPullRequest.number).catch(() => undefined)
+      }
+    } else if (before.length === 0 && branch) {
+      const text = pullRequestText(
+        manifest.issue.number,
+        input.runUrl,
+        manifest.baseSha,
+        candidate.commitSha,
+        manifest.patchSha256,
+      )
+      const created = await api.listOpenPullRequests(branch).catch(() => [])
+      if (
+        created.length === 1 &&
+        ownedPullRequest(created[0]!, {
+          publisherBotId: input.publisherBotId,
+          repositoryId: manifest.repository.id,
+          branch,
+          baseSha: manifest.baseSha,
+          headSha: candidate.commitSha,
+          ...text,
+        })
+      )
+        await api.closePullRequest(created[0]!.number).catch(() => undefined)
+    }
+    if (pushed)
+      await rollbackBranch({
+        cwd: candidate.root,
+        home: candidate.temporary,
+        remote,
+        branch,
+        currentSha: candidate.commitSha,
+        previousSha,
+        token: input.token,
+      }).catch(() => false)
+    throw error
   } finally {
     await rm(candidate.temporary, { recursive: true, force: true })
   }

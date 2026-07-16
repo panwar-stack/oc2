@@ -232,6 +232,7 @@ describe("canonical automation path policy", () => {
       "src/clock.ts",
       "script/OC2-VERIFY-extra.ts",
       "script/oc2-automation-policy.ts",
+      "script/oc2-publish.ts",
       "specs/secure-issue-driven-oc2-automation.md",
     ])
       expect(isProtectedAutomationPath(path)).toBeTrue()

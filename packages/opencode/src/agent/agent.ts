@@ -123,6 +123,7 @@ const issueEdit = {
   "script/oc2-issue*": "deny",
   "script/oc2-verify*": "deny",
   "script/oc2-automation*": "deny",
+  "script/oc2-publish*": "deny",
   "specs/secure-issue-driven-oc2-automation.md": "deny",
 } as const
 const issueAutomationDefinitions = {

@@ -3,6 +3,7 @@ import { join } from "node:path"
 
 import {
   branchName,
+  createPublisherApi,
   decodeVerification,
   deriveStatusPhase,
   pullRequestText,
@@ -21,6 +22,17 @@ const patchSha256 = "4".repeat(64)
 const key = "5".repeat(64)
 const runUrl = "https://github.com/octo/oc2/actions/runs/800/attempts/1"
 const branch = branchName(42, key)
+const appSlug = "oc2-publisher"
+
+function commit(overrides: Partial<{ message: string; author: { name: string; email: string } }> = {}) {
+  const identity = { name: `${appSlug}[bot]`, email: `9002+${appSlug}[bot]@users.noreply.github.com` }
+  return {
+    message: `OC2 issue #42\n\nAutomation-Key: ${key}`,
+    author: identity,
+    committer: identity,
+    ...overrides,
+  }
+}
 
 function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
   const text = pullRequestText(42, runUrl, baseSha, headSha, patchSha256)
@@ -35,6 +47,8 @@ function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
     headRef: branch,
     headRepositoryId: 1234,
     baseRef: "main",
+    baseSha,
+    baseRepositoryId: 1234,
     ...overrides,
   }
 }
@@ -54,6 +68,26 @@ function states(overrides: Partial<PublicationStateInput> = {}): PublicationStat
 }
 
 describe("publication repository and ref gates", () => {
+  test("resolves the App bot identity without using the user-token endpoint", async () => {
+    const requested: string[] = []
+    const api = createPublisherApi({
+      token: "installation-token",
+      repository: "octo/oc2",
+      baseUrl: "https://api.github.test",
+      fetch: async (request) => {
+        requested.push(String(request))
+        return Response.json({ id: 9002, login: "oc2-publisher[bot]", type: "Bot" })
+      },
+    })
+    expect(await api.getPublisherIdentity("oc2-publisher")).toEqual({
+      id: 9002,
+      login: "oc2-publisher[bot]",
+      type: "Bot",
+    })
+    expect(new URL(requested[0]!).pathname).toBe("/users/oc2-publisher%5Bbot%5D")
+    expect(requested[0]).not.toEndWith("/user")
+  })
+
   test("aborts when the default branch or admitted main SHA moved", () => {
     expect(() =>
       requireRepositoryBase(
@@ -81,6 +115,8 @@ describe("publication repository and ref gates", () => {
         runUrl,
         baseSha,
         patchSha256,
+        key,
+        appSlug,
       }),
     ).toBeUndefined()
     expect(pushArguments("https://github.com/octo/oc2.git", branch, headSha)).toEqual([
@@ -103,6 +139,9 @@ describe("publication repository and ref gates", () => {
         runUrl,
         baseSha,
         patchSha256,
+        key,
+        appSlug,
+        commit: commit(),
       }),
     ).toBe(headSha)
     expect(pushArguments("https://github.com/octo/oc2.git", branch, baseSha, headSha)[1]).toBe(
@@ -125,6 +164,9 @@ describe("publication repository and ref gates", () => {
           runUrl,
           baseSha,
           patchSha256,
+          key,
+          appSlug,
+          commit: commit(),
         }),
       ).toThrow("push_race")
     }
@@ -146,9 +188,28 @@ describe("publication repository and ref gates", () => {
           runUrl,
           baseSha,
           patchSha256,
+          key,
+          appSlug,
+          commit: input.branchSha === undefined ? undefined : commit(),
         }),
       ).toThrow("push_race")
     }
+    expect(() =>
+      requireBranchLease({
+        branchSha: headSha,
+        pullRequests: [pullRequest()],
+        publisherBotId: 9002,
+        repositoryId: 1234,
+        branch,
+        issueNumber: 42,
+        runUrl,
+        baseSha,
+        patchSha256,
+        key,
+        appSlug,
+        commit: commit({ message: `OC2 issue #42\n\nAutomation-Key: ${"6".repeat(64)}` }),
+      }),
+    ).toThrow("push_race")
   })
 })
 

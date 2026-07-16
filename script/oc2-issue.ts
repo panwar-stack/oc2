@@ -198,6 +198,7 @@ export interface AdmissionInput {
   triggeringActor: string
   botId: number
   publisherBotId: number
+  workflowSha: string
   allowedBotIds?: ReadonlySet<number>
   now?: Date
 }
@@ -496,6 +497,7 @@ export async function admitIssue(input: AdmissionInput, api: GitHubApi): Promise
   )
     return rejected("stale_base")
   const baseSha = await api.getBranchSha("main")
+  if (baseSha !== sha(input.workflowSha)) return rejected("stale_base")
   const key = new Bun.CryptoHasher("sha256")
     .update(JSON.stringify([repository.id, event.issue.nodeId, event.label.id, labelEvent.nodeId]))
     .digest("hex")
@@ -802,6 +804,7 @@ export async function main(
       triggeringActor: requiredEnvironment(env, "GITHUB_TRIGGERING_ACTOR"),
       botId,
       publisherBotId,
+      workflowSha: requiredEnvironment(env, "GITHUB_SHA"),
       allowedBotIds: new Set(options.allowedBotIds.map((value) => positiveInteger(Number(value)))),
       now: dependencies.now,
     },

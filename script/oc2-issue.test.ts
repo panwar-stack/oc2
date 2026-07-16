@@ -187,6 +187,7 @@ function input(eventValue: unknown, overrides: Partial<Parameters<typeof admitIs
     triggeringActor: "maintainer",
     botId,
     publisherBotId,
+    workflowSha: baseSha,
     now,
     ...overrides,
   }
@@ -589,6 +590,16 @@ describe("issue admission", () => {
       await admitIssue(input(event({ updatedAt: "2026-07-16T11:00:00Z", labelId: 501 }), { runId: 801 }), relabel.api),
     )
     expect(relabelResult.key).not.toBe(firstResult.key)
+  })
+
+  test("rejects when live main moved beyond the trusted workflow source", async () => {
+    const github = fakeGitHub()
+    expect(await admitIssue(input(event(), { workflowSha: "2".repeat(40) }), github.api)).toEqual({
+      version: 1,
+      status: "rejected",
+      phase: "stale_base",
+    })
+    expect(github.state.writes).toEqual([])
   })
 })
 
@@ -1720,6 +1731,7 @@ describe("native fetch GitHub client and CLI", () => {
         env: {
           GITHUB_API_URL: "https://api.github.test",
           GITHUB_REPOSITORY: "octo/oc2",
+          GITHUB_SHA: baseSha,
           GITHUB_RUN_ATTEMPT: "1",
           GITHUB_RUN_ID: "800",
           GITHUB_TOKEN: "TOP_SECRET_TOKEN",
@@ -2021,7 +2033,7 @@ describe("trusted issue workflow glue", () => {
     expect(workflow).not.toContain("dangerously-skip-permissions")
     expect(workflow).not.toContain("--format json")
     expect(workflow).not.toMatch(/\bbun script\//)
-    expect(workflow.match(/bun --config=\/dev\/null --no-env-file --no-install/g)).toHaveLength(11)
+    expect(workflow.match(/bun --config=\/dev\/null --no-env-file --no-install/g)).toHaveLength(14)
     for (const line of workflow.split("\n").filter((line) => line.trim().startsWith("uses:"))) {
       expect(line).toMatch(/uses: [^@]+@[0-9a-f]{40}(?: # v[^ ]+)?$/)
     }
