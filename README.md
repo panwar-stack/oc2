@@ -10,9 +10,23 @@ Investigate a repository, edit with permission gates, resume the session later, 
 
 </div>
 
+Download the installer to a file and verify it before execution. Set `VERSION`
+and the installer and platform archive digests from a trusted source independent
+of the download location:
+
+```sh
+VERSION="RELEASE_VERSION"
+INSTALLER_SHA256="TRUSTED_INSTALLER_SHA256"
+ASSET_SHA256="TRUSTED_PLATFORM_ASSET_SHA256"
+INSTALLER=$(mktemp)
+trap 'rm -f "$INSTALLER"' EXIT
+curl -fsSLo "$INSTALLER" https://panwar-stack.github.io/oc2/install
+test "$(openssl dgst -sha256 "$INSTALLER" | awk '{print $NF}')" = "$INSTALLER_SHA256"
+OC2_ASSET_SHA256="$ASSET_SHA256" bash "$INSTALLER" --version "$VERSION"
 ```
-curl -fsSL https://panwar-stack.github.io/oc2/install | bash
-``` 
+
+See the [GitHub Release guide](docs/github-releases.md#verify-a-release) for
+published archive names, checksum verification, and the trust model.
 
 OC2 is an independent project based on and inspired by [opencode](https://github.com/anomalyco/opencode). It is not an official opencode distribution. The agent runtime, session orchestration, tools, and persistence run locally by default; model requests go to your configured provider and may leave your machine.
 

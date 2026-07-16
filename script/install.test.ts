@@ -28,7 +28,7 @@ beforeAll(async () => {
   )
   await Bun.write(
     join(bin, "curl"),
-    '#!/bin/sh\ncase " $* " in *" -sI "*) printf "200"; exit 0;; esac\noutput=""\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "-o" ]; then output=$2; shift 2; continue; fi\n  shift\ndone\ncp "$TEST_ARCHIVE" "$output"\n',
+    '#!/bin/sh\ncase " $* " in *" -sI "*) printf "200"; exit 0;; esac\noutput=""\ntrace=""\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "-o" ]; then output=$2; shift 2; continue; fi\n  if [ "$1" = "--trace-ascii" ]; then trace=$2; shift 2; continue; fi\n  shift\ndone\nif [ -n "$trace" ]; then : > "$trace"; fi\ncp "$TEST_ARCHIVE" "$output"\n',
   )
   await chmod(join(bin, "uname"), 0o755)
   await chmod(join(bin, "curl"), 0o755)
@@ -38,16 +38,26 @@ afterAll(async () => {
   await rm(root, { recursive: true, force: true })
 })
 
-async function runInstaller(expectedSHA256: string, preinstallSameVersion = false) {
+async function runInstaller(expectedSHA256: string, preinstallSameVersion = false, hostileTemporary = false) {
   const home = await mkdtemp(join(root, "home-"))
-  const temporary = await mkdtemp(join(root, "tmp-"))
+  const marker = join(root, "trap-injected")
+  const temporary = hostileTemporary
+    ? join(root, 'tmp-$(touch "$TEST_MARKER")')
+    : await mkdtemp(join(root, "tmp-"))
+  if (hostileTemporary) await mkdir(temporary)
   if (preinstallSameVersion) {
     const installed = join(home, ".oc2/bin/oc2")
     await mkdir(join(home, ".oc2/bin"), { recursive: true })
     await Bun.write(installed, "#!/bin/sh\nprintf '1.2.3\\n'\n# stale installation\n")
     await chmod(installed, 0o755)
   }
-  const process = Bun.spawnSync(["/bin/bash", join(repository, "install"), "--version", "1.2.3", "--no-modify-path"], {
+  const installer = ["/bin/bash", join(repository, "install"), "--version", "1.2.3", "--no-modify-path"]
+  const command = hostileTemporary
+    ? process.platform === "darwin"
+      ? ["script", "-q", "/dev/null", ...installer]
+      : ["script", "-q", "-e", "-c", '/bin/bash "$TEST_INSTALLER" --version 1.2.3 --no-modify-path', "/dev/null"]
+    : installer
+  const child = Bun.spawnSync(command, {
     env: {
       ...Bun.env,
       HOME: home,
@@ -55,6 +65,8 @@ async function runInstaller(expectedSHA256: string, preinstallSameVersion = fals
       PATH: `${join(root, "bin")}:/usr/bin:/bin`,
       SHELL: "/bin/sh",
       TEST_ARCHIVE: archive,
+      TEST_INSTALLER: join(repository, "install"),
+      TEST_MARKER: marker,
       TMPDIR: temporary,
     },
     stdout: "pipe",
@@ -62,8 +74,9 @@ async function runInstaller(expectedSHA256: string, preinstallSameVersion = fals
   })
   return {
     home,
-    status: process.exitCode,
-    output: `${process.stdout.toString()}${process.stderr.toString()}`,
+    marker,
+    status: child.exitCode,
+    output: `${child.stdout.toString()}${child.stderr.toString()}`,
   }
 }
 
@@ -102,5 +115,11 @@ describe("release archive verification", () => {
     expect(result.status).toBe(0)
     const binary = join(result.home, ".oc2/bin/oc2")
     expect(await Bun.file(binary).text()).toBe("#!/bin/sh\nprintf '1.2.3\\n'\n")
+  })
+
+  test("does not evaluate shell syntax from TMPDIR during cleanup", async () => {
+    const result = await runInstaller(digest, false, true)
+    expect(result.status).toBe(0)
+    expect(await Bun.file(result.marker).exists()).toBe(false)
   })
 })

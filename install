@@ -284,7 +284,7 @@ download_with_progress() {
     # Hide cursor
     printf "\033[?25l" >&4
 
-    trap "trap - RETURN; rm -rf \"$progress_dir\"; printf '\033[?25h' >&4; exec 4>&-" RETURN
+    trap 'trap - RETURN; rm -rf -- "$progress_dir"; printf "\033[?25h" >&4; exec 4>&-' RETURN
 
     (
         curl --trace-ascii "$tracefile" -s -L -o "$output" "$url"
