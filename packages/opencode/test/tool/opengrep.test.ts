@@ -345,6 +345,54 @@ describe("tool.opengrep", () => {
     ),
   )
 
+  testEffect(
+    toolLayer(() =>
+      Effect.succeed({
+        code: 0,
+        stdout: JSON.stringify({
+          results: [
+            {
+              path: "./linked-secret.txt",
+              start: { line: 1, col: 1 },
+              extra: { lines: "EXTERNAL_OPENGREP_SECRET" },
+            },
+          ],
+        }),
+      }),
+    ),
+  ).instance("authorizes canonical result files before exposing snippets", () =>
+    withOpengrepBinary(
+      Effect.gen(function* () {
+        if (process.platform === "win32") return
+        const test = yield* TestInstance
+        const outside = yield* tmpdirScoped()
+        const secret = path.join(outside, "secret.txt")
+        yield* Effect.promise(() => Bun.write(secret, "EXTERNAL_OPENGREP_SECRET"))
+        yield* Effect.promise(() => fs.symlink(secret, path.join(test.directory, "linked-secret.txt"), "file"))
+        const requests: Parameters<Tool.Context["ask"]>[0][] = []
+        const opengrep = yield* (yield* OpengrepTool).init()
+        const exit = yield* opengrep
+          .execute(
+            { pattern: "secret" },
+            {
+              ...ctx,
+              ask: (request) => {
+                requests.push(request)
+                if (request.permission === "external_directory") return Effect.die(new Error("denied"))
+                return Effect.void
+              },
+            },
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).not.toContain("EXTERNAL_OPENGREP_SECRET")
+        expect(requests.find((request) => request.permission === "external_directory")).toBeDefined()
+        expect(requests.find((request) => request.permission === "read")).toBeUndefined()
+      }),
+    ),
+  )
+
   testEffect(toolLayer(() => Effect.succeed({ code: 0, stdout: JSON.stringify({ results: [] }) }))).instance(
     "does not request external permission for registered roots",
     () =>
@@ -398,6 +446,84 @@ describe("tool.opengrep", () => {
           )
 
           expect(requests.find((request) => request.permission === "external_directory")).toBeDefined()
+        }),
+      ),
+  )
+
+  testEffect(toolLayer(() => Effect.die("opengrep should not spawn"))).instance(
+    "does not materialize configured references before external access is authorized",
+    () =>
+      Effect.gen(function* () {
+        yield* TestInstance
+        const outside = yield* tmpdirScoped()
+        const reference = yield* Reference.Service
+        const calls = { ensure: 0 }
+        const info = yield* OpengrepTool.pipe(
+          Effect.provideService(
+            Reference.Service,
+            Reference.Service.of({
+              ...reference,
+              contains: () => Effect.succeed(true),
+              ensure: () =>
+                Effect.sync(() => {
+                  calls.ensure++
+                }),
+            }),
+          ),
+        )
+        const opengrep = yield* info.init()
+        const exit = yield* opengrep
+          .execute(
+            { pattern: "foo", path: path.join(outside, "missing") },
+            {
+              ...ctx,
+              ask: (request) =>
+                request.permission === "external_directory" ? Effect.die(new Error("denied")) : Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(calls.ensure).toBe(0)
+      }),
+  )
+
+  testEffect(toolLayer(() => Effect.succeed({ code: 0, stdout: JSON.stringify({ results: [] }) }))).instance(
+    "preserves configured reference search after authorization",
+    () =>
+      withOpengrepBinary(
+        Effect.gen(function* () {
+          yield* TestInstance
+          const outside = yield* tmpdirScoped()
+          const reference = yield* Reference.Service
+          const events: string[] = []
+          const info = yield* OpengrepTool.pipe(
+            Effect.provideService(
+              Reference.Service,
+              Reference.Service.of({
+                ...reference,
+                contains: () => Effect.succeed(true),
+                ensure: () =>
+                  Effect.sync(() => {
+                    events.push("ensure")
+                  }),
+              }),
+            ),
+          )
+          const opengrep = yield* info.init()
+          const result = yield* opengrep.execute(
+            { pattern: "foo", path: path.join(outside, "missing") },
+            {
+              ...ctx,
+              ask: (request) =>
+                Effect.sync(() => {
+                  events.push(request.permission)
+                }),
+            },
+          )
+
+          expect(result.output).toBe("[]")
+          expect(events).toEqual(["opengrep", "external_directory", "ensure"])
         }),
       ),
   )

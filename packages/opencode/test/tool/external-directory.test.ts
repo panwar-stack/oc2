@@ -13,6 +13,7 @@ import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-polic
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Session } from "@/session/session"
 import { testEffect } from "../lib/effect"
+import { CanonicalPath } from "@/util/canonical-path"
 
 const it = testEffect(Layer.mergeAll(CrossSpawnSpawner.defaultLayer, Session.defaultLayer, testInstanceStoreLayer))
 
@@ -55,7 +56,15 @@ function evaluatingCtx(ruleset: PermissionV1.Ruleset): Tool.Context {
     ...baseCtx,
     ask: (request) => {
       const denied = request.patterns.find(
-        (pattern) => Permission.evaluate(request.permission, pattern, ruleset).action !== "allow",
+        (pattern) =>
+          (Array.isArray(request.metadata["filesystemCaseUnknown"]) &&
+          request.metadata["filesystemCaseUnknown"].includes(pattern)
+            ? Permission.evaluateFilesystemUnknown(request.permission, pattern, ruleset)
+            : Array.isArray(request.metadata["filesystemCaseInsensitive"]) &&
+                request.metadata["filesystemCaseInsensitive"].includes(pattern)
+              ? Permission.evaluateFilesystem(request.permission, pattern, ruleset)
+              : Permission.evaluate(request.permission, pattern, ruleset)
+          ).action !== "allow",
       )
       if (denied) return Effect.die(new PermissionV1.DeniedError({ ruleset }))
       return Effect.void
@@ -84,7 +93,7 @@ describe("tool.assertExternalDirectory", () => {
     }),
   )
 
-  it.live("does not disable edit tools when broad deny has a temp-specific allow", () =>
+  it.live("keeps scratch write and edit available while apply_patch stays denied", () =>
     Effect.gen(function* () {
       const primary = yield* tmpdirScoped({ git: true })
       const tempDir = yield* tmpdirScoped()
@@ -94,7 +103,7 @@ describe("tool.assertExternalDirectory", () => {
           ["write", "edit", "apply_patch", "team_create"],
           scratchRules(primary, { type: "judge", tempDir }),
         ),
-      ).toEqual(new Set([]))
+      ).toEqual(new Set(["apply_patch"]))
 
       expect(
         Permission.disabled(
@@ -104,7 +113,7 @@ describe("tool.assertExternalDirectory", () => {
             root: primary,
           }),
         ),
-      ).toEqual(new Set(["local_fusion"]))
+      ).toEqual(new Set(["apply_patch", "local_fusion"]))
     }),
   )
 
@@ -272,6 +281,83 @@ describe("tool.assertExternalDirectory", () => {
       expect(requests.length).toBe(0)
     }),
   )
+
+  it.instance("fails closed when a path cannot be canonicalized", () =>
+    Effect.gen(function* () {
+      const { requests, ctx } = makeCtx()
+
+      const exit = yield* assertExternalDirectoryEffect(ctx, "invalid\0path").pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.instance("fails closed on dangling symlinks instead of treating them as missing files", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const test = yield* TestInstance
+      const outside = yield* tmpdirScoped()
+      const target = path.join(outside, "missing.txt")
+      const link = path.join(test.directory, "dangling.txt")
+      yield* Effect.promise(() => fs.symlink(target, link, "file"))
+      const { requests, ctx } = makeCtx()
+
+      const exit = yield* assertExternalDirectoryEffect(ctx, link).pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      expect(requests).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(target).exists())).toBe(false)
+    }),
+  )
+
+  if (process.platform === "darwin") {
+    it.live("matches external directory globs case-insensitively", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const outside = yield* tmpdirScoped()
+        const rule = path.join(outside.toUpperCase(), "*").replaceAll("\\", "/")
+        const ruleset = Permission.fromConfig({ external_directory: { [rule]: "allow" } })
+
+        yield* provideInstance(primary)(
+          assertExternalDirectoryEffect(evaluatingCtx(ruleset), path.join(outside, "Missing.txt")),
+        )
+      }),
+    )
+
+    it.live("does not infer a case-insensitive volume from a differently-cased symlink", () =>
+      Effect.gen(function* () {
+        const root = yield* tmpdirScoped()
+        const actual = path.join(root, "CaseProbe")
+        const alias = path.join(root, "caseProbe")
+        yield* Effect.promise(() => fs.mkdir(actual))
+        const linked = yield* Effect.promise(() =>
+          fs.symlink(actual, alias, "dir").then(
+            () => true,
+            () => false,
+          ),
+        )
+        if (!linked) {
+          expect((yield* CanonicalPath.resolveInfo(actual)).caseInsensitive).toBe(true)
+          return
+        }
+
+        const resolved = yield* CanonicalPath.resolveInfo(path.join(actual, "missing.txt"))
+
+        expect(resolved.caseInsensitive).toBe(false)
+      }),
+    )
+
+    it.live("marks a missing target at a volume root as case-unknown", () =>
+      Effect.gen(function* () {
+        const root = path.parse(process.cwd()).root
+        const resolved = yield* CanonicalPath.resolveInfo(path.join(root, `.OC2-missing-${Date.now()}`))
+
+        expect(resolved.caseInsensitive).toBe(false)
+        expect(resolved.caseUnknown).toBe(true)
+      }),
+    )
+  }
 
   if (process.platform === "win32") {
     it.instance(

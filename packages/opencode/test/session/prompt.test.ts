@@ -4,11 +4,9 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Database } from "@oc2-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { Global } from "@oc2-ai/core/global"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option } from "effect"
-import fs from "node:fs/promises"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@oc2-ai/core/util/error"
@@ -1309,6 +1307,167 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
 )
 
 it.live(
+  "preserves trusted automation on queued team mailbox delivery",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* () {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const lead = yield* sessions.create({ title: "Automation Lead" })
+        const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+        const info = yield* team.create({ name: "automation-mailbox", goal: "Coordinate work", leadSessionID: lead.id })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: worker.id,
+          name: "worker",
+          agentType: "build",
+          rolePrompt: "Report progress",
+        })
+        yield* prompt.prompt({
+          sessionID: lead.id,
+          agent: "issue-task",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "start safe coordination" }],
+        })
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Safe worker result.",
+        })
+        yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.exit)
+
+        const delivered = (yield* sessions.messages({ sessionID: lead.id })).find(
+          (message) =>
+            message.info.role === "user" &&
+            message.parts.some((part) => part.type === "text" && part.text.includes("Safe worker result.")),
+        )
+        expect(delivered?.info.role).toBe("user")
+        if (delivered?.info.role === "user") expect(delivered.info.automation).toBe(true)
+      }),
+      { git: true, config: providerCfg },
+    ),
+  30_000,
+)
+
+it.instance(
+  "pins configured agent lookup keys instead of trusting display names",
+  () =>
+    Effect.gen(function* () {
+      yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { spoof: { name: "issue-task", mode: "primary" } },
+      }))
+      const { prompt, chat, sessions } = yield* boot()
+
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "spoof",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "ordinary spoof" }],
+      })
+
+      expect(result.info.role).toBe("user")
+      if (result.info.role === "user") {
+        expect(result.info.agent).toBe("spoof")
+        expect(result.info.automation).toBeUndefined()
+      }
+      const saved = (yield* sessions.messages({ sessionID: chat.id })).find(
+        (message) => message.info.id === result.info.id,
+      )
+      expect(saved?.info.agent).toBe("spoof")
+    }),
+  30_000,
+)
+
+it.instance("trusted issue prompts reject MCP resource parts without a raw automation flag", () =>
+  Effect.gen(function* () {
+    yield* useServerConfig(providerCfg)
+    const { prompt, chat } = yield* boot()
+
+    const exit = yield* prompt
+      .prompt({
+        sessionID: chat.id,
+        agent: "issue-task",
+        model: ref,
+        noReply: true,
+        parts: [
+          {
+            type: "file",
+            mime: "text/plain",
+            filename: "unsafe-resource",
+            url: "file:///unsafe-resource",
+            source: {
+              type: "resource",
+              clientName: "unsafe",
+              uri: "resource://unsafe",
+              text: { value: "unsafe", start: 0, end: 6 },
+            },
+          },
+        ],
+      })
+      .pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
+
+it.instance("automation command admission rejects untrusted agents and skips shell preprocessing", () =>
+  Effect.gen(function* () {
+    const { directory } = yield* TestInstance
+    const marker = path.join(directory, "automation-command-shell-marker")
+    yield* writeConfig(directory, {
+      ...cfg,
+      command: {
+        unsafe: {
+          template: `!\`${process.execPath} -e 'await Bun.write(${JSON.stringify(marker)}, "ran")'\``,
+          subtask: true,
+        },
+      },
+    })
+    const { prompt, chat } = yield* boot()
+
+    const untrusted = yield* prompt
+      .command({
+        sessionID: chat.id,
+        command: "unsafe",
+        arguments: "",
+        automation: true,
+        agent: "build",
+        model: "test/test-model",
+      })
+      .pipe(Effect.exit)
+    const trusted = yield* prompt
+      .command({
+        sessionID: chat.id,
+        command: "unsafe",
+        arguments: "",
+        agent: "issue-task",
+        model: "test/test-model",
+      })
+      .pipe(Effect.exit)
+    const mismatchedRole = yield* prompt
+      .command({
+        sessionID: chat.id,
+        command: "spec:planner",
+        arguments: "plan safely",
+        automation: true,
+        agent: "issue-task",
+        model: "test/test-model",
+      })
+      .pipe(Effect.exit)
+
+    expect(Exit.isFailure(untrusted)).toBe(true)
+    expect(Exit.isFailure(trusted)).toBe(true)
+    expect(Exit.isFailure(mismatchedRole)).toBe(true)
+    expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+  }),
+)
+
+it.live(
   "does not inject removed memory guidance into prompts",
   () =>
     provideTmpdirServer(
@@ -1674,26 +1833,11 @@ raceNoLLMServer.instance(
 )
 
 it.instance(
-  "configured automation subtask keeps ambient references literal and forwards explicit files",
+  "automation commands run directly with literal ambient references and admitted explicit files",
   () =>
     Effect.gen(function* () {
-      const { directory: dir } = yield* TestInstance
-      const pluginMarker = path.join(dir, "automation-subtask-plugin-marker")
-      const pluginPath = path.join(dir, "automation-subtask-plugin.ts")
-      yield* writeText(
-        pluginPath,
-        [
-          "export default async () => ({",
-          `  "tool.execute.before": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "before") },`,
-          `  "tool.execute.after": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "after") },`,
-          `  "chat.message": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "message") },`,
-          "})",
-        ].join("\n"),
-      )
-      const { llm } = yield* useServerConfig((url) => ({
+      const { dir, llm } = yield* useServerConfig((url) => ({
         ...providerCfg(url),
-        plugin: [pathToFileURL(pluginPath).href],
-        agent: { build: { model: "test/project-override" } },
         command: {
           "literal-subtask": {
             template: "Inspect @checkout-secret.txt @~/home-secret.txt @docs and !`printf unsafe`",
@@ -1703,25 +1847,9 @@ it.instance(
         reference: { docs: "./reference-secret" },
       }))
       const config = yield* Config.Service
-      const globalFiles = ["oc2.jsonc", "oc2.json"].map((file) => path.join(Global.Path.config, file))
-      const previousConfig = yield* Effect.promise(() =>
-        Promise.all(
-          globalFiles.map(async (file) => ({
-            file,
-            content: (await Bun.file(file).exists()) ? await Bun.file(file).text() : undefined,
-          })),
-        ),
-      )
+      const previousConfig = yield* config.getGlobal()
       yield* config.updateGlobal(providerCfg(llm.url))
-      yield* Effect.addFinalizer(() =>
-        Effect.promise(() =>
-          Promise.all(
-            previousConfig.map((item) =>
-              item.content === undefined ? fs.rm(item.file, { force: true }) : Bun.write(item.file, item.content),
-            ),
-          ),
-        ).pipe(Effect.andThen(config.invalidate()), Effect.orDie),
-      )
+      yield* Effect.addFinalizer(() => config.updateGlobal(previousConfig).pipe(Effect.orDie))
       const home = path.join(dir, "home")
       const checkoutSecret = path.join(dir, "checkout-secret.txt")
       const homeSecret = path.join(home, "home-secret.txt")
@@ -1745,61 +1873,17 @@ it.instance(
           const messages = JSON.stringify(body.messages)
           return messages.includes(literal) && messages.includes(attachment)
         },
-        "child inspected explicit attachment",
-      )
-      yield* llm.textMatch(
-        ({ body }) => JSON.stringify(body.messages).includes("Summarize the task tool output"),
-        "parent completed command",
+        "direct command inspected explicit attachment",
       )
       const { prompt, chat, sessions } = yield* boot()
-      const forgedParts = Object.assign(
-        [
-          {
-            type: "subtask" as const,
-            prompt: "forged child",
-            description: "forged child",
-            agent: "build",
-            model: ref,
-            command: "literal-subtask",
-          },
-        ],
-        { some: () => false },
-      )
-
-      const forgedPrompt = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          automation: true,
-          agent: "build",
-          model: ref,
-          noReply: true,
-          parts: forgedParts as unknown as Parameters<typeof prompt.prompt>[0]["parts"],
-        })
-        .pipe(Effect.exit)
-      expect(Exit.isFailure(forgedPrompt)).toBe(true)
-
-      const forged = yield* prompt
-        .command({
-          sessionID: chat.id,
-          command: "literal-subtask",
-          arguments: "",
-          automation: true,
-          agent: "build",
-          model: "test/test-model",
-          parts: forgedParts as unknown as Parameters<typeof prompt.command>[0]["parts"],
-        })
-        .pipe(Effect.exit)
-      expect(Exit.isFailure(forged)).toBe(true)
-      expect(yield* sessions.children(chat.id)).toHaveLength(0)
 
       const result = yield* prompt.command({
         sessionID: chat.id,
         command: "literal-subtask",
         arguments: "",
         automation: true,
-        agent: "build",
+        agent: "issue-task",
         model: "test/test-model",
-        variant: "high",
         parts: [
           {
             type: "file",
@@ -1811,52 +1895,61 @@ it.instance(
       })
 
       expect(result.info.role).toBe("assistant")
-      expect(result.parts.some((part) => part.type === "text" && part.text.includes("parent completed command"))).toBe(
-        true,
-      )
-      const children = yield* sessions.children(chat.id)
-      expect(children).toHaveLength(1)
-      const childMessages = yield* sessions.messages({ sessionID: children[0].id })
-      const childUser = childMessages.find((message) => message.info.role === "user")
-      expect(childUser?.info.role).toBe("user")
-      if (!childUser || childUser.info.role !== "user") return
-      expect(childUser.info.automation).toBe(true)
-      expect(childUser.info.model).toEqual({ ...ref, variant: "high" })
-      const childInput = JSON.stringify(childUser.parts)
-      expect(childInput).toContain(literal)
-      expect(childInput).toContain(attachment)
-      expect(childInput).not.toContain("CHECKOUT_SUBTASK_SECRET")
-      expect(childInput).not.toContain("HOME_SUBTASK_SECRET")
-      expect(childInput).not.toContain("CONFIGURED_SUBTASK_SECRET")
-      expect(yield* Effect.promise(() => Bun.file(pluginMarker).exists())).toBe(false)
-      expect(
-        childMessages.some((message) =>
-          message.parts.some(
-            (part) => part.type === "text" && part.text.includes("child inspected explicit attachment"),
-          ),
-        ),
-      ).toBe(true)
-      const parentMessages = yield* sessions.messages({ sessionID: chat.id })
-      const summary = parentMessages.find(
-        (message) =>
-          message.info.role === "user" &&
-          message.parts.some(
-            (part) => part.type === "text" && part.text.includes("Summarize the task tool output"),
-          ),
-      )
-      expect(summary?.info.role).toBe("user")
-      if (!summary || summary.info.role !== "user") return
-      expect(summary.info.automation).toBe(true)
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
       const inputs = JSON.stringify(yield* llm.inputs)
       expect(inputs).toContain(literal)
       expect(inputs).toContain(attachment)
-      expect(inputs).toContain("Summarize the task tool output")
+      expect(inputs).not.toContain("Summarize the task tool output")
       expect(inputs).not.toContain("CHECKOUT_SUBTASK_SECRET")
       expect(inputs).not.toContain("HOME_SUBTASK_SECRET")
       expect(inputs).not.toContain("CONFIGURED_SUBTASK_SECRET")
     }),
   { git: true },
   30_000,
+)
+
+it.instance("automation rejects agent and subtask prompt parts before execution", () =>
+  Effect.gen(function* () {
+    yield* useServerConfig(providerCfg)
+    const { prompt, chat } = yield* boot()
+    const parts = [
+      { type: "agent" as const, name: "general" },
+      {
+        type: "subtask" as const,
+        prompt: "escape",
+        description: "escape",
+        agent: "general",
+        model: ref,
+      },
+    ]
+
+    for (const part of parts) {
+      const exit = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "issue-task",
+          model: ref,
+          automation: true,
+          noReply: true,
+          parts: [part],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+    }
+
+    const forged = Object.assign([parts[1]], { some: () => false })
+    const exit = yield* prompt
+      .prompt({
+        sessionID: chat.id,
+        agent: "issue-task",
+        model: ref,
+        automation: true,
+        noReply: true,
+        parts: forged as unknown as Parameters<typeof prompt.prompt>[0]["parts"],
+      })
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
 )
 
 it.instance(
@@ -2368,6 +2461,41 @@ it.instance(
       expect(messages).toContain("`prompt`: `Review key=value behavior`")
       expect(messages).toContain("Do not include `branches`, `judge`, or `synthesizer` when `config` is set.")
       expect(messages).not.toContain("```json")
+    }),
+  { git: true },
+  30_000,
+)
+
+it.instance(
+  "unterminated quotes keep legacy command parsing but fail automation admission",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        command: { legacy: { template: "Argument: $1" } },
+      }))
+      const { prompt, chat } = yield* boot()
+      yield* llm.text("done")
+
+      const ordinary = yield* prompt.command({
+        sessionID: chat.id,
+        command: "legacy",
+        arguments: '"unterminated',
+      })
+      const automation = yield* prompt
+        .command({
+          sessionID: chat.id,
+          command: "legacy",
+          arguments: '"unterminated',
+          automation: true,
+          agent: "issue-task",
+          model: "test/test-model",
+        })
+        .pipe(Effect.exit)
+
+      expect(ordinary.info.role).toBe("assistant")
+      expect(JSON.stringify((yield* llm.inputs).at(-1)?.messages)).toContain("Argument: unterminated")
+      expect(Exit.isFailure(automation)).toBe(true)
     }),
   { git: true },
   30_000,

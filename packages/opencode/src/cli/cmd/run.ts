@@ -284,12 +284,14 @@ export const RunCommand = effectCmd({
     }
 
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
+    const { Command } = yield* Effect.promise(() => import("@/command"))
     const { EffectBridge } = yield* Effect.promise(() => import("@/effect/bridge"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
     const { InstanceRef } = yield* Effect.promise(() => import("@/effect/instance-ref"))
     const { Provider } = yield* Effect.promise(() => import("@/provider/provider"))
     const { ServerAuth } = yield* Effect.promise(() => import("@/server/auth"))
     const agentSvc = yield* Agent.Service
+    const commandSvc = yield* Command.Service
     const providerSvc = yield* Provider.Service
     const bridge = yield* EffectBridge.make()
     const flags = yield* RuntimeFlags.Service
@@ -497,6 +499,18 @@ export const RunCommand = effectCmd({
 
       if (message.trim().length === 0 && !args.command && !args.interactive) {
         await die("You must provide a message or a command")
+      }
+
+      if (args.automation && args.command && !Command.validAutomationRole(args.command, args.agent!)) {
+        await die(`agent "${args.agent}" cannot run automation command "${args.command}"`, "invalid_agent")
+      }
+
+      if (args.automation && args.command && !Command.validAutomationArguments(args.command, message)) {
+        await die(
+          args.command === Command.Default.IMPLEMENT_SPEC_PR
+            ? 'Automation command "spec:implement" requires exactly one spec path and one positive integer slice.'
+            : `Automation command "${args.command}" has malformed quoted arguments.`,
+        )
       }
 
       if (args.fork && !args.continue && !args.session) {
@@ -725,7 +739,10 @@ export const RunCommand = effectCmd({
         return localAgent()
       }
 
-      async function automationIdentity(sdk: OpencodeClient) {
+      async function automationIdentity() {
+        if (!Agent.isIssueAutomationName(args.agent!)) {
+          return die(`agent "${args.agent}" is not a trusted automation agent`, "invalid_agent")
+        }
         const model = pick(args.model)
         if (!model) {
           return die(`model "${args.model}" not found`, "invalid_model")
@@ -738,16 +755,19 @@ export const RunCommand = effectCmd({
           return die("--automation requires --variant", "invalid_variant")
         }
 
-        const [agent, providers, commandResult] = await Promise.all([
+        const [agent, providers, command] = await Promise.all([
           bridge.promise(agentSvc.get(args.agent!)),
           bridge.promise(providerSvc.listAutomation()),
-          args.command ? sdk.command.list(undefined, { throwOnError: true }) : undefined,
+          args.command ? bridge.promise(commandSvc.get(args.command, { automation: true })) : undefined,
         ])
-        if (!agent || agent.name !== args.agent) {
+        if (!agent) {
           return die(`agent "${args.agent}" not found or disabled`, "invalid_agent")
         }
-        if (agent.mode === "subagent") {
-          return die(`agent "${args.agent}" is a subagent, not a primary agent`, "invalid_agent")
+        if (!Agent.isIssueAutomation(agent)) {
+          return die(`agent "${args.agent}" is not a trusted automation agent`, "invalid_agent")
+        }
+        if (args.command && !Command.validAutomationRole(args.command, args.agent!)) {
+          return die(`agent "${args.agent}" cannot run automation command "${args.command}"`, "invalid_agent")
         }
 
         const provider = Object.values(providers).find((item) => item.id === model.providerID)
@@ -759,7 +779,7 @@ export const RunCommand = effectCmd({
           return die(`variant "${variant}" not found for model "${args.model}"`, "invalid_variant")
         }
 
-        if (args.command && !commandResult?.data?.some((item) => item.name === args.command)) {
+        if (args.command && !command) {
           return die(`command "${args.command}" not found`, "invalid_command")
         }
 
@@ -800,6 +820,16 @@ export const RunCommand = effectCmd({
           return Object.hasOwn(part.state.metadata, "exit") && part.state.metadata.exit !== 0
         }
 
+        function toolFailure(part: ToolPart): AutomationError {
+          if (
+            part.state.status === "error" &&
+            part.state.error.includes("The user has specified a rule which prevents you from using this specific tool call")
+          ) {
+            return "permission_denied"
+          }
+          return "tool_error"
+        }
+
         // Consume one subscribed event stream for the active session and mirror it
         // to stdout/UI. `client` is passed explicitly because attach mode may
         // rebind the SDK to the session's directory after the subscription is
@@ -836,7 +866,7 @@ export const RunCommand = effectCmd({
                   await tool(part)
                   continue
                 }
-                failure ??= "tool_error"
+                failure ??= toolFailure(part)
                 if (args.automation) continue
                 await toolError(part)
                 UI.error(part.state.error)
@@ -945,7 +975,7 @@ export const RunCommand = effectCmd({
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
 
-        const identity = args.automation ? await automationIdentity(client) : undefined
+        const identity = args.automation ? await automationIdentity() : undefined
         const agent = identity?.agent ?? (await pickAgent(client))
         const model = identity?.model ?? pick(args.model)
 

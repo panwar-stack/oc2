@@ -1,5 +1,5 @@
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Command } from "../../src/command"
 import { provideTmpdirInstance } from "../fixture/fixture"
@@ -60,27 +60,16 @@ describe("command", () => {
           const template = yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))
 
           expect(implementSpecPr.hints).toEqual(["$1", "$2"])
-          expect(template).toContain("Resolve and read $1 before creating any worktree.")
-          expect(template).toContain("Treat the checkout that invoked this command as read-only.")
-          expect(template).toContain("record its committed HEAD as base_sha")
-          expect(template).toContain("one unique implementation branch")
-          expect(template).toContain("one dedicated git worktree outside the invoking checkout")
-          expect(template).toContain("every edit, generation step, test, review, and commit from the isolated worktree")
-          expect(template).toContain(
-            "Do not stash, reset, clean, switch, edit, merge into, or cherry-pick into the invoking checkout.",
-          )
-          expect(template).toContain("If implementation depends on other uncommitted source changes, stop")
-          expect(template).toContain("If PR #$2 is provided, implement only that pull request from $1.")
-          expect(template).toContain("If PR #$2 is missing")
-          expect(template).toContain("one pull request at a time in the same isolated worktree")
-          expect(template).toContain("each committed slice becomes the base for the next")
-          expect(template).toContain(
-            "Cleanup, merge, cherry-pick, or other integration requires a separate explicit request.",
-          )
-          expect(template).toContain("verify that the invoking checkout's status still matches the recorded status")
-          expect(template).toContain(
-            "Report the isolated worktree path, branch, base_sha, created commits, verification results, and remaining worktree status.",
-          )
+          expect(template).toContain("Resolve and read the specification at $1 before editing.")
+          expect(template).toContain("Implement exactly pull-request slice $2")
+          expect(template).toContain("Work only in the supplied Location.")
+          expect(template).toContain("Do not create or switch branches or git worktrees")
+          expect(template).toContain("do not commit, merge, rebase, cherry-pick, push, or integrate changes")
+          expect(template).toContain("Never edit another Location or an external directory.")
+          expect(template).toContain("Both arguments are required.")
+          expect(template).toContain("Never infer an omitted slice, implement every slice, or accept an all-slices form.")
+          expect(template).toContain("Perform the work directly without delegating to agents, subtasks, or teams.")
+          expect(template).toContain("Do not perform git integration or cleanup.")
           expect(yield* command.get("spec-implement")).toBeUndefined()
 
           const learn = yield* command.get("learn")
@@ -118,6 +107,37 @@ describe("command", () => {
     ),
   )
 
+  it.live("keeps protected built-in commands immutable only for automation", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const command = yield* Command.Service
+          const configuredPlanner = yield* command.get("spec:planner")
+          const configuredImplementer = yield* command.get("spec:implement")
+          const automationPlanner = yield* command.get("spec:planner", { automation: true })
+          const automationImplementer = yield* command.get("spec:implement", { automation: true })
+
+          expect(configuredPlanner?.template).toBe("PROJECT PLANNER OVERRIDE")
+          expect(configuredImplementer?.template).toBe("PROJECT IMPLEMENTER OVERRIDE")
+          expect(configuredImplementer?.variant).toBe("project-variant")
+          expect(automationPlanner?.template).toContain("Requirements To Spec")
+          expect(automationPlanner?.template).toContain("Do not ask questions during this command.")
+          expect(automationPlanner?.template).toContain("review the plan directly without delegating work")
+          expect(automationPlanner?.template).toContain("Do not write repository files.")
+          expect(automationImplementer?.template).toContain("Work only in the supplied Location.")
+          expect(automationImplementer?.variant).toBeUndefined()
+        }),
+      {
+        config: {
+          command: {
+            "spec:planner": { template: "PROJECT PLANNER OVERRIDE" },
+            "spec:implement": { template: "PROJECT IMPLEMENTER OVERRIDE", variant: "project-variant" },
+          },
+        },
+      },
+    ),
+  )
+
   it.live("includes merged init command", () =>
     provideTmpdirInstance(
       (dir) =>
@@ -151,4 +171,19 @@ describe("command", () => {
       { git: true },
     ),
   )
+})
+
+test("command arguments preserve quoted paths and reject malformed quotes", () => {
+  expect(Command.parseArguments('"specs/path with spaces.md" 4')).toEqual(["specs/path with spaces.md", "4"])
+  expect(Command.parseArguments("[Image 1] describe it")).toEqual(["[Image 1]", "describe", "it"])
+  expect(Command.validAutomationArguments("spec:implement", '"specs/path with spaces.md" 4')).toBe(true)
+  expect(Command.validAutomationArguments("spec:implement", '" " 4')).toBe(false)
+  expect(Command.validAutomationArguments("spec:implement", "specs/feature.md all")).toBe(false)
+  expect(Command.validAutomationArguments("spec:implement", '"specs/feature.md 4')).toBe(false)
+  expect(Command.validAutomationArguments("custom", '"unterminated')).toBe(false)
+  expect(Command.validAutomationRole("spec:planner", "issue-planner")).toBe(true)
+  expect(Command.validAutomationRole("spec:planner", "issue-task")).toBe(false)
+  expect(Command.validAutomationRole("spec:implement", "issue-implementer")).toBe(true)
+  expect(Command.validAutomationRole("spec:implement", "issue-task")).toBe(false)
+  expect(Command.validAutomationRole("custom", "issue-task")).toBe(true)
 })

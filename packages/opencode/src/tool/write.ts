@@ -52,12 +52,14 @@ export const WriteTool = Tool.define(
 
           const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
           yield* ctx.ask({
-            permission: "edit",
-            patterns: [resolved.relative],
+            permission: "write",
+            patterns: [resolved.permission],
             always: ["*"],
             metadata: {
               filepath,
               diff,
+              filesystemCaseInsensitive: resolved.caseInsensitive ? [resolved.permission] : [],
+              filesystemCaseUnknown: resolved.caseUnknown ? [resolved.permission] : [],
             },
           })
 

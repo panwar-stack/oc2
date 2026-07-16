@@ -128,7 +128,9 @@ Piped stdin becomes the message. When message arguments are also present, their 
 
 Interactive mode requires a TTY on stdout. It cannot be combined with `--command`, `--automation`, or `--format json`; `--replay-limit` and `--demo` require interactive mode. Only use `--dangerously-skip-permissions` in a trusted environment.
 
-Automation mode requires explicit `--agent`, `--model`, and `--variant` values. It rejects `--dangerously-skip-permissions` and raw `--format json`, and suppresses `--print-logs` output. Configured-command arguments are treated literally: shell/backtick execution and implicit `@file` expansion are disabled. Use repeatable `--file` options for explicit attachments; supported image and PDF types are detected from file bytes rather than trusted filename extensions.
+Automation mode requires explicit `--agent`, `--model`, and `--variant` values. It rejects `--dangerously-skip-permissions` and raw `--format json`, and suppresses `--print-logs` output. Configured-command arguments are treated literally: shell/backtick execution and implicit `@file` expansion are disabled. Repeatable `--file` options are the trusted caller's explicit attachment admission boundary and are the only files forwarded without ambient expansion; supported image and PDF types are detected from file bytes rather than trusted filename extensions.
+
+Automation binds `spec:planner` to `issue-planner` and `spec:implement` to `issue-implementer`. The implementation command requires exactly one specification path and one positive integer slice number. Other automation commands use `issue-task`.
 
 `--format result-json` is automation-only and writes exactly one terminal-safe JSON object. It suppresses progress, reasoning, tools, UI output, and raw provider or tool errors:
 
@@ -164,7 +166,7 @@ oc2 run -f src/index.ts -f package.json "Review these files"
 oc2 run --session ses_abc123 "Continue the investigation"
 oc2 run --attach http://localhost:4096 --dir /repo "Run the tests"
 oc2 run --command spec:planner "Plan a retry policy for provider requests"
-OC2_DISABLE_EXTERNAL_SKILLS=1 oc2 run --automation --pure --agent build --model anthropic/claude-sonnet-4-5 --variant high --format result-json -- "Inspect this repository"
+OC2_DISABLE_EXTERNAL_SKILLS=1 oc2 run --automation --pure --agent issue-task --model openai/gpt-5.6-sol --variant high --format result-json -- "Inspect this repository"
 ```
 
 ## Attach

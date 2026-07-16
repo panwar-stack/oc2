@@ -57,12 +57,18 @@ export const ApplyPatchTool = Tool.define(
       const fileChanges: Array<{
         filePath: string
         relativePath: string
+        permissionPath: string
+        caseInsensitive: boolean
+        caseUnknown: boolean
         oldContent: string
         newContent: string
         type: "add" | "update" | "delete" | "move"
         root: ToolPath.Root
         movePath?: string
         moveRelativePath?: string
+        movePermissionPath?: string
+        moveCaseInsensitive?: boolean
+        moveCaseUnknown?: boolean
         moveRoot?: ToolPath.Root
         diff: string
         additions: number
@@ -95,6 +101,9 @@ export const ApplyPatchTool = Tool.define(
             fileChanges.push({
               filePath,
               relativePath: resolved.relative,
+              permissionPath: resolved.permission,
+              caseInsensitive: resolved.caseInsensitive,
+              caseUnknown: resolved.caseUnknown,
               oldContent,
               newContent: next.text,
               type: "add",
@@ -152,12 +161,18 @@ export const ApplyPatchTool = Tool.define(
             fileChanges.push({
               filePath,
               relativePath: resolved.relative,
+              permissionPath: resolved.permission,
+              caseInsensitive: resolved.caseInsensitive,
+              caseUnknown: resolved.caseUnknown,
               oldContent,
               newContent,
               type: hunk.move_path ? "move" : "update",
               root: resolved.root,
               movePath,
               moveRelativePath: move?.relative,
+              movePermissionPath: move?.permission,
+              moveCaseInsensitive: move?.caseInsensitive,
+              moveCaseUnknown: move?.caseUnknown,
               moveRoot: move?.root,
               diff,
               additions,
@@ -187,6 +202,9 @@ export const ApplyPatchTool = Tool.define(
             fileChanges.push({
               filePath,
               relativePath: resolved.relative,
+              permissionPath: resolved.permission,
+              caseInsensitive: resolved.caseInsensitive,
+              caseUnknown: resolved.caseUnknown,
               oldContent: contentToDelete,
               newContent: "",
               type: "delete",
@@ -218,7 +236,7 @@ export const ApplyPatchTool = Tool.define(
       const relativePaths = Array.from(
         new Set(
           fileChanges.flatMap((change) =>
-            [change.relativePath, change.moveRelativePath].filter((path) => path !== undefined),
+            [change.permissionPath, change.movePermissionPath].filter((path) => path !== undefined),
           ),
         ),
       )
@@ -226,6 +244,14 @@ export const ApplyPatchTool = Tool.define(
         filepath: relativePaths.join(", "),
         diff: totalDiff,
         files,
+        filesystemCaseInsensitive: fileChanges.flatMap((change) => [
+          ...(change.caseInsensitive ? [change.permissionPath] : []),
+          ...(change.moveCaseInsensitive && change.movePermissionPath ? [change.movePermissionPath] : []),
+        ]),
+        filesystemCaseUnknown: fileChanges.flatMap((change) => [
+          ...(change.caseUnknown ? [change.permissionPath] : []),
+          ...(change.moveCaseUnknown && change.movePermissionPath ? [change.movePermissionPath] : []),
+        ]),
       }
       yield* ctx.ask({
         permission: "apply_patch",

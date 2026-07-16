@@ -71,7 +71,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.text("automation completed")
         const result = yield* opencode.run("do the work", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
         })
         opencode.expectExit(result, 0)
@@ -81,7 +81,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "automation avoids project bootstrap and instruction side effects",
+    "automation bootstrap does not initialize plugins or prefetch references",
     ({ llm, opencode, home }) =>
       Effect.gen(function* () {
         const marker = path.join(home, "plugin-initialized")
@@ -167,13 +167,21 @@ describe("opencode run (non-interactive subprocess)", () => {
             },
           }),
         }
+        const rejected = yield* opencode.run("reject unsafe identity", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          env,
+        })
+        opencode.expectExit(rejected, 2)
 
         yield* llm.tool("read", { filePath: target })
         yield* llm.tool("edit", { filePath: target, oldString: "before", newString: "after" })
         yield* llm.text("safe automation completed")
         const result = yield* opencode.run("do safe work", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "result-json",
           env,
@@ -210,7 +218,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.push(reply().reason("REASONING_SECRET").text(text).stop())
         const result = yield* opencode.run("return a hostile-looking result", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "result-json",
           printLogs: true,
@@ -256,7 +264,7 @@ describe("opencode run (non-interactive subprocess)", () => {
           "run",
           "--automation",
           "--agent",
-          "build",
+          "issue-task",
           "--model",
           testModelID,
           "--variant",
@@ -280,7 +288,7 @@ describe("opencode run (non-interactive subprocess)", () => {
           "run",
           "--automation",
           "--agent",
-          "build",
+          "issue-task",
           "--model",
           testModelID,
           "--variant",
@@ -329,7 +337,7 @@ describe("opencode run (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const result = yield* opencode.run("continue missing session", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "result-json",
           extraArgs: ["--session", "ses_missing"],
@@ -439,6 +447,261 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
+    "completion rejects result-json before emitting its script",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const positional = yield* opencode.spawn(["completion", "--automation", "--format", "result-json"])
+        const shell = yield* opencode.spawn(["completion", "bash", "--automation", "--format=result-json"])
+
+        for (const invalid of [positional, shell]) {
+          opencode.expectExit(invalid, 2)
+          expect(invalid.stderr).toBe("")
+          expect(automationResult(invalid.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_input",
+          })
+          expect(invalid.stdout).not.toContain("yargs command completion script")
+        }
+
+        const ordinary = yield* opencode.spawn(["completion"])
+        opencode.expectExit(ordinary, 0)
+        expect(ordinary.stderr).toBe("")
+        expect(ordinary.stdout).toContain("###-begin-oc2-completions-###")
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "ordinary automation keeps checkout, home, and configured references literal",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const checkoutSecret = path.join(home, "checkout-secret.txt")
+        const homeSecret = path.join(home, "home-secret.txt")
+        const referenceSecret = path.join(home, "reference-secret", "README.md")
+        const shellMarker = path.join(home, "ordinary-shell-marker")
+        yield* Effect.promise(() =>
+          Promise.all([
+            Bun.write(checkoutSecret, "CHECKOUT_REFERENCE_SECRET"),
+            Bun.write(homeSecret, "HOME_REFERENCE_SECRET"),
+            Bun.write(referenceSecret, "CONFIGURED_REFERENCE_SECRET"),
+          ]),
+        )
+        yield* llm.text("ordinary references stayed literal")
+
+        const text = `Inspect @checkout-secret.txt @~/home-secret.txt @docs and !\`touch ${shellMarker}\``
+        const result = yield* opencode.run(text, {
+          automation: true,
+          agent: "issue-task",
+          variant: "high",
+          format: "result-json",
+          env: {
+            OC2_EXPERIMENTAL_REFERENCES: "true",
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              reference: { docs: "./reference-secret" },
+            }),
+          },
+        })
+
+        opencode.expectExit(result, 0)
+        expect(automationResult(result.stdout)).toMatchObject({
+          status: "ok",
+          text: "ordinary references stayed literal",
+        })
+        expect(yield* Effect.promise(() => Bun.file(shellMarker).exists())).toBe(false)
+        const input = JSON.stringify(yield* llm.inputs)
+        expect(input).toContain(text)
+        expect(input).not.toContain("CHECKOUT_REFERENCE_SECRET")
+        expect(input).not.toContain("HOME_REFERENCE_SECRET")
+        expect(input).not.toContain("CONFIGURED_REFERENCE_SECRET")
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "automation treats hostile command arguments literally without ambient file inclusion",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const secret = path.join(home, "ambient-secret.txt")
+        const marker = path.join(home, "shell-expansion-marker")
+        yield* Effect.promise(() => Bun.write(secret, "AMBIENT_FILE_SECRET"))
+        yield* llm.text("hostile arguments stayed literal")
+
+        const literalReplacementPatterns = "literal-$&-$'-$`"
+        const result = yield* opencode.run(`!\`touch ${marker}\` @ambient-secret.txt ${literalReplacementPatterns}`, {
+          automation: true,
+          agent: "issue-task",
+          variant: "high",
+          format: "result-json",
+          command: "hostile-arguments",
+          env: {
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              command: { "hostile-arguments": { template: "$ARGUMENTS" } },
+            }),
+          },
+        })
+
+        opencode.expectExit(result, 0)
+        expect(automationResult(result.stdout)).toMatchObject({
+          status: "ok",
+          text: "hostile arguments stayed literal",
+        })
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        const input = JSON.stringify(yield* llm.inputs)
+        expect(input).toContain("@ambient-secret.txt")
+        expect(input).toContain(literalReplacementPatterns)
+        expect(input).not.toContain("AMBIENT_FILE_SECRET")
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "explicit file parts reach ordinary and configured-command runs",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const attachment = path.join(home, "context.txt")
+        yield* Effect.promise(() => Bun.write(attachment, "EXPLICIT_ATTACHMENT_CONTEXT"))
+
+        yield* llm.text("ordinary attachment accepted")
+        const ordinary = yield* opencode.run("inspect the explicit attachment", {
+          automation: true,
+          agent: "issue-task",
+          variant: "high",
+          format: "result-json",
+          file: [attachment],
+        })
+        opencode.expectExit(ordinary, 0)
+
+        yield* llm.text("command attachment accepted")
+        const command = yield* opencode.run("inspect the explicit attachment", {
+          automation: true,
+          agent: "issue-task",
+          variant: "high",
+          format: "result-json",
+          command: "attachment-test",
+          file: [attachment],
+          env: {
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              command: { "attachment-test": { template: "$ARGUMENTS" } },
+            }),
+          },
+        })
+        opencode.expectExit(command, 0)
+
+        expect(automationResult(ordinary.stdout)).toMatchObject({ status: "ok", text: "ordinary attachment accepted" })
+        expect(automationResult(command.stdout)).toMatchObject({ status: "ok", text: "command attachment accepted" })
+        const inputs = JSON.stringify(yield* llm.inputs)
+        expect(inputs.match(/EXPLICIT_ATTACHMENT_CONTEXT/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "explicit file MIME is sniffed from bytes instead of the filename",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const fakePng = path.join(home, "plain-text.png")
+        const fakePdf = path.join(home, "plain-text.pdf")
+        const realPng = path.join(home, "pixel.bin")
+        yield* Effect.promise(() => Bun.write(fakePng, "PLAIN_TEXT_NAMED_PNG"))
+        yield* Effect.promise(() => Bun.write(fakePdf, "PLAIN_TEXT_NAMED_PDF"))
+        yield* Effect.promise(() =>
+          Bun.write(
+            realPng,
+            Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+              "base64",
+            ),
+          ),
+        )
+        const config = testProviderConfig(llm.url)
+        const trustedConfig = {
+          ...config,
+          provider: {
+            ...config.provider,
+            test: {
+              ...config.provider.test,
+              models: {
+                ...config.provider.test.models,
+                "test-model": {
+                  ...config.provider.test.models["test-model"],
+                  attachment: true,
+                  modalities: { input: ["text", "image"], output: ["text"] },
+                },
+              },
+            },
+          },
+        }
+
+        for (const file of [fakePng, fakePdf, realPng]) {
+          yield* llm.text("attachment accepted")
+          const result = yield* opencode.run("inspect the attachment", {
+            automation: true,
+            agent: "issue-task",
+            variant: "high",
+            format: "result-json",
+            file: [file],
+            trustedConfig,
+          })
+          opencode.expectExit(result, 0)
+        }
+
+        const inputs = JSON.stringify(yield* llm.inputs)
+        expect(inputs).toContain("PLAIN_TEXT_NAMED_PNG")
+        expect(inputs).toContain("PLAIN_TEXT_NAMED_PDF")
+        expect(inputs).toContain('"image_url"')
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "automation requires explicit agent, model, and variant flags",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const missingAgent = yield* opencode.spawn([
+          "run",
+          "--automation",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "hello",
+        ])
+        const missingModel = yield* opencode.spawn([
+          "run",
+          "--automation",
+          "--agent",
+          "issue-task",
+          "--variant",
+          "high",
+          "hello",
+        ])
+        const missingVariant = yield* opencode.spawn([
+          "run",
+          "--automation",
+          "--agent",
+          "issue-task",
+          "--model",
+          testModelID,
+          "hello",
+        ])
+
+        expect(missingAgent.exitCode).not.toBe(0)
+        expect(missingAgent.stderr).toContain("--automation requires --agent")
+        expect(missingModel.exitCode).not.toBe(0)
+        expect(missingModel.stderr).toContain("--automation requires --model")
+        expect(missingVariant.exitCode).not.toBe(0)
+        expect(missingVariant.stderr).toContain("--automation requires --variant")
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
     "automation rejects session continuation, forking, and unsafe attach before execution",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
@@ -446,7 +709,7 @@ describe("opencode run (non-interactive subprocess)", () => {
           "run",
           "--automation",
           "--agent",
-          "build",
+          "issue-task",
           "--model",
           testModelID,
           "--variant",
@@ -553,261 +816,6 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "completion rejects result-json before emitting its script",
-    ({ llm, opencode }) =>
-      Effect.gen(function* () {
-        const positional = yield* opencode.spawn(["completion", "--automation", "--format", "result-json"])
-        const shell = yield* opencode.spawn(["completion", "bash", "--automation", "--format=result-json"])
-
-        for (const invalid of [positional, shell]) {
-          opencode.expectExit(invalid, 2)
-          expect(invalid.stderr).toBe("")
-          expect(automationResult(invalid.stdout)).toEqual({
-            status: "error",
-            sessionID: null,
-            error: "invalid_input",
-          })
-          expect(invalid.stdout).not.toContain("yargs command completion script")
-        }
-
-        const ordinary = yield* opencode.spawn(["completion"])
-        opencode.expectExit(ordinary, 0)
-        expect(ordinary.stderr).toBe("")
-        expect(ordinary.stdout).toContain("###-begin-oc2-completions-###")
-        expect(yield* llm.calls).toBe(0)
-      }),
-    60_000,
-  )
-
-  cliIt.live(
-    "ordinary automation keeps checkout, home, and configured references literal",
-    ({ llm, opencode, home }) =>
-      Effect.gen(function* () {
-        const checkoutSecret = path.join(home, "checkout-secret.txt")
-        const homeSecret = path.join(home, "home-secret.txt")
-        const referenceSecret = path.join(home, "reference-secret", "README.md")
-        const shellMarker = path.join(home, "ordinary-shell-marker")
-        yield* Effect.promise(() =>
-          Promise.all([
-            Bun.write(checkoutSecret, "CHECKOUT_REFERENCE_SECRET"),
-            Bun.write(homeSecret, "HOME_REFERENCE_SECRET"),
-            Bun.write(referenceSecret, "CONFIGURED_REFERENCE_SECRET"),
-          ]),
-        )
-        yield* llm.text("ordinary references stayed literal")
-
-        const text = `Inspect @checkout-secret.txt @~/home-secret.txt @docs and !\`touch ${shellMarker}\``
-        const result = yield* opencode.run(text, {
-          automation: true,
-          agent: "build",
-          variant: "high",
-          format: "result-json",
-          env: {
-            OC2_EXPERIMENTAL_REFERENCES: "true",
-            OC2_CONFIG_CONTENT: JSON.stringify({
-              ...testProviderConfig(llm.url),
-              reference: { docs: "./reference-secret" },
-            }),
-          },
-        })
-
-        opencode.expectExit(result, 0)
-        expect(automationResult(result.stdout)).toMatchObject({
-          status: "ok",
-          text: "ordinary references stayed literal",
-        })
-        expect(yield* Effect.promise(() => Bun.file(shellMarker).exists())).toBe(false)
-        const input = JSON.stringify(yield* llm.inputs)
-        expect(input).toContain(text)
-        expect(input).not.toContain("CHECKOUT_REFERENCE_SECRET")
-        expect(input).not.toContain("HOME_REFERENCE_SECRET")
-        expect(input).not.toContain("CONFIGURED_REFERENCE_SECRET")
-      }),
-    60_000,
-  )
-
-  cliIt.live(
-    "automation treats hostile command arguments literally without ambient file inclusion",
-    ({ llm, opencode, home }) =>
-      Effect.gen(function* () {
-        const secret = path.join(home, "ambient-secret.txt")
-        const marker = path.join(home, "shell-expansion-marker")
-        yield* Effect.promise(() => Bun.write(secret, "AMBIENT_FILE_SECRET"))
-        yield* llm.text("hostile arguments stayed literal")
-
-        const literalReplacementPatterns = "literal-$&-$'-$`"
-        const result = yield* opencode.run(`!\`touch ${marker}\` @ambient-secret.txt ${literalReplacementPatterns}`, {
-          automation: true,
-          agent: "build",
-          variant: "high",
-          format: "result-json",
-          command: "hostile-arguments",
-          env: {
-            OC2_CONFIG_CONTENT: JSON.stringify({
-              ...testProviderConfig(llm.url),
-              command: { "hostile-arguments": { template: "$ARGUMENTS" } },
-            }),
-          },
-        })
-
-        opencode.expectExit(result, 0)
-        expect(automationResult(result.stdout)).toMatchObject({
-          status: "ok",
-          text: "hostile arguments stayed literal",
-        })
-        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
-        const input = JSON.stringify(yield* llm.inputs)
-        expect(input).toContain("@ambient-secret.txt")
-        expect(input).toContain(literalReplacementPatterns)
-        expect(input).not.toContain("AMBIENT_FILE_SECRET")
-      }),
-    60_000,
-  )
-
-  cliIt.live(
-    "explicit file parts reach ordinary and configured-command runs",
-    ({ llm, opencode, home }) =>
-      Effect.gen(function* () {
-        const attachment = path.join(home, "context.txt")
-        yield* Effect.promise(() => Bun.write(attachment, "EXPLICIT_ATTACHMENT_CONTEXT"))
-
-        yield* llm.text("ordinary attachment accepted")
-        const ordinary = yield* opencode.run("inspect the explicit attachment", {
-          automation: true,
-          agent: "build",
-          variant: "high",
-          format: "result-json",
-          file: [attachment],
-        })
-        opencode.expectExit(ordinary, 0)
-
-        yield* llm.text("command attachment accepted")
-        const command = yield* opencode.run("inspect the explicit attachment", {
-          automation: true,
-          agent: "build",
-          variant: "high",
-          format: "result-json",
-          command: "attachment-test",
-          file: [attachment],
-          env: {
-            OC2_CONFIG_CONTENT: JSON.stringify({
-              ...testProviderConfig(llm.url),
-              command: { "attachment-test": { template: "$ARGUMENTS" } },
-            }),
-          },
-        })
-        opencode.expectExit(command, 0)
-
-        expect(automationResult(ordinary.stdout)).toMatchObject({ status: "ok", text: "ordinary attachment accepted" })
-        expect(automationResult(command.stdout)).toMatchObject({ status: "ok", text: "command attachment accepted" })
-        const inputs = JSON.stringify(yield* llm.inputs)
-        expect(inputs.match(/EXPLICIT_ATTACHMENT_CONTEXT/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
-      }),
-    60_000,
-  )
-
-  cliIt.live(
-    "explicit file MIME is sniffed from bytes instead of the filename",
-    ({ llm, opencode, home }) =>
-      Effect.gen(function* () {
-        const fakePng = path.join(home, "plain-text.png")
-        const fakePdf = path.join(home, "plain-text.pdf")
-        const realPng = path.join(home, "pixel.bin")
-        yield* Effect.promise(() => Bun.write(fakePng, "PLAIN_TEXT_NAMED_PNG"))
-        yield* Effect.promise(() => Bun.write(fakePdf, "PLAIN_TEXT_NAMED_PDF"))
-        yield* Effect.promise(() =>
-          Bun.write(
-            realPng,
-            Buffer.from(
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-              "base64",
-            ),
-          ),
-        )
-        const config = testProviderConfig(llm.url)
-        const trustedConfig = {
-          ...config,
-          provider: {
-            ...config.provider,
-            test: {
-              ...config.provider.test,
-              models: {
-                ...config.provider.test.models,
-                "test-model": {
-                  ...config.provider.test.models["test-model"],
-                  attachment: true,
-                  modalities: { input: ["text", "image"], output: ["text"] },
-                },
-              },
-            },
-          },
-        }
-
-        for (const file of [fakePng, fakePdf, realPng]) {
-          yield* llm.text("attachment accepted")
-          const result = yield* opencode.run("inspect the attachment", {
-            automation: true,
-            agent: "build",
-            variant: "high",
-            format: "result-json",
-            file: [file],
-            trustedConfig,
-          })
-          opencode.expectExit(result, 0)
-        }
-
-        const inputs = JSON.stringify(yield* llm.inputs)
-        expect(inputs).toContain("PLAIN_TEXT_NAMED_PNG")
-        expect(inputs).toContain("PLAIN_TEXT_NAMED_PDF")
-        expect(inputs).toContain('"image_url"')
-      }),
-    60_000,
-  )
-
-  cliIt.live(
-    "automation requires explicit agent, model, and variant flags",
-    ({ llm, opencode }) =>
-      Effect.gen(function* () {
-        const missingAgent = yield* opencode.spawn([
-          "run",
-          "--automation",
-          "--model",
-          testModelID,
-          "--variant",
-          "high",
-          "hello",
-        ])
-        const missingModel = yield* opencode.spawn([
-          "run",
-          "--automation",
-          "--agent",
-          "build",
-          "--variant",
-          "high",
-          "hello",
-        ])
-        const missingVariant = yield* opencode.spawn([
-          "run",
-          "--automation",
-          "--agent",
-          "build",
-          "--model",
-          testModelID,
-          "hello",
-        ])
-
-        expect(missingAgent.exitCode).not.toBe(0)
-        expect(missingAgent.stderr).toContain("--automation requires --agent")
-        expect(missingModel.exitCode).not.toBe(0)
-        expect(missingModel.stderr).toContain("--automation requires --model")
-        expect(missingVariant.exitCode).not.toBe(0)
-        expect(missingVariant.stderr).toContain("--automation requires --variant")
-        expect(yield* llm.calls).toBe(0)
-      }),
-    60_000,
-  )
-
-  cliIt.live(
     "automation rejects missing, disabled, subagent, and inexact agents without fallback",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
@@ -843,11 +851,17 @@ describe("opencode run (non-interactive subprocess)", () => {
             }),
           },
         })
+        const untrusted = yield* opencode.run("hello", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+        })
 
         expect(unknown.exitCode).not.toBe(0)
         expect(subagent.exitCode).not.toBe(0)
         expect(disabled.exitCode).not.toBe(0)
         expect(renamed.exitCode).not.toBe(0)
+        expect(untrusted.exitCode).not.toBe(0)
         expect(yield* llm.calls).toBe(0)
       }),
     90_000,
@@ -859,18 +873,18 @@ describe("opencode run (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const model = yield* opencode.run("hello", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           model: "test/missing",
           variant: "high",
         })
         const variant = yield* opencode.run("hello", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "missing",
         })
         const command = yield* opencode.run("hello", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           command: "missing",
         })
@@ -884,23 +898,32 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "explicit automation identity overrides configured command agent and model",
+    "explicit automation identity overrides configured command and default identity",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
         yield* llm.text("explicit identity won")
         const result = yield* opencode.run("hello", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           command: "automation-test",
           env: {
             OC2_CONFIG_CONTENT: JSON.stringify({
               ...testProviderConfig(llm.url),
+              model: "test/missing-model",
+              default_agent: "plan",
+              agent: {
+                "issue-task": {
+                  model: "test/missing-model",
+                  variant: "missing",
+                },
+              },
               command: {
                 "automation-test": {
                   template: "$ARGUMENTS",
                   agent: "missing-agent",
                   model: "test/missing-model",
+                  variant: "missing",
                 },
               },
             }),
@@ -911,6 +934,140 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(result.stdout).toContain("explicit identity won")
       }),
     60_000,
+  )
+
+  cliIt.live(
+    "automation spec implementation accepts exactly one path and positive integer slice",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const base = [
+          "run",
+          "--automation",
+          "--agent",
+          "issue-implementer",
+          "--model",
+          testModelID,
+          "--variant",
+          "xhigh",
+          "--format",
+          "result-json",
+          "--command",
+          "spec:implement",
+        ]
+        for (const values of [
+          [],
+          ["specs/feature.md"],
+          ["specs/feature.md", "all"],
+          ["specs/feature.md", "0"],
+          ["specs/feature.md", "1.5"],
+          ["specs/feature.md", "4", "extra"],
+          ['"specs/feature.md', "4"],
+        ]) {
+          const result = yield* opencode.spawn([...base, ...values])
+          opencode.expectExit(result, 2)
+          expect(result.stderr).toBe("")
+          expect(automationResult(result.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_input",
+          })
+        }
+        expect(yield* llm.calls).toBe(0)
+
+        yield* llm.text("one slice completed")
+        const valid = yield* opencode.spawn([...base, "specs/path with spaces.md", "4"])
+        opencode.expectExit(valid, 0)
+        expect(automationResult(valid.stdout)).toMatchObject({ status: "ok", text: "one slice completed" })
+        expect(yield* llm.calls).toBeGreaterThan(0)
+      }),
+    120_000,
+  )
+
+  cliIt.live(
+    "automation uses protected built-in spec commands instead of config overrides",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const env = {
+          OC2_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            command: {
+              "spec:planner": {
+                template: "PROJECT_PLANNER_OVERRIDE",
+                agent: "missing-agent",
+                model: "test/missing-model",
+                variant: "missing",
+              },
+              "spec:implement": {
+                template: "PROJECT_IMPLEMENTER_OVERRIDE",
+                agent: "missing-agent",
+                model: "test/missing-model",
+                variant: "missing",
+              },
+            },
+          }),
+        }
+
+        for (const [command, agent, message] of [
+          ["spec:planner", "issue-task", "plan a narrow change"],
+          ["spec:implement", "issue-planner", "specs/feature.md 4"],
+        ] as const) {
+          const mismatch = yield* opencode.run(message, {
+            automation: true,
+            agent,
+            variant: "xhigh",
+            format: "result-json",
+            command,
+            env,
+          })
+          opencode.expectExit(mismatch, 2)
+          expect(automationResult(mismatch.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_agent",
+          })
+        }
+        expect(yield* llm.calls).toBe(0)
+
+        yield* llm.text("planner used built-in")
+        const planner = yield* opencode.run("plan a narrow change", {
+          automation: true,
+          agent: "issue-planner",
+          variant: "xhigh",
+          format: "result-json",
+          command: "spec:planner",
+          env,
+        })
+        opencode.expectExit(planner, 0)
+
+        yield* llm.text("implementer used built-in")
+        const implementer = yield* opencode.spawn(
+          [
+            "run",
+            "--automation",
+            "--agent",
+            "issue-implementer",
+            "--model",
+            testModelID,
+            "--variant",
+            "xhigh",
+            "--format",
+            "result-json",
+            "--command",
+            "spec:implement",
+            "specs/feature.md",
+            "4",
+          ],
+          { env },
+        )
+        opencode.expectExit(implementer, 0)
+
+        const inputs = JSON.stringify(yield* llm.inputs)
+        expect(inputs).toContain("Requirements To Spec")
+        expect(inputs).toContain("Work only in the supplied Location")
+        expect(inputs).not.toContain("PROJECT_PLANNER_OVERRIDE")
+        expect(inputs).not.toContain("PROJECT_IMPLEMENTER_OVERRIDE")
+      }),
+    90_000,
   )
 
   cliIt.live(
@@ -946,13 +1103,13 @@ describe("opencode run (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const skipped = yield* opencode.run("hello", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           extraArgs: ["--dangerously-skip-permissions"],
         })
         const raw = yield* opencode.run("hello", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "json",
         })
@@ -1007,7 +1164,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.push(reply().text("PARTIAL_SECRET").streamError("upstream provider exploded mid-stream"))
         const result = yield* opencode.run("trigger midstream error", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           timeoutMs: 30_000,
         })
@@ -1024,7 +1181,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.error(400, { error: { message: "provider rejected request" } })
         const result = yield* opencode.run("trigger provider error", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "result-json",
         })
@@ -1043,7 +1200,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.text("RECOVERED_SECRET")
         const result = yield* opencode.run("retry provider request", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
         })
         opencode.expectExit(result, 1)
@@ -1061,7 +1218,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         const config = testProviderConfig(llm.url)
         const result = yield* opencode.run("retry stalled stream", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           trustedConfig: {
             ...config,
@@ -1083,13 +1240,13 @@ describe("opencode run (non-interactive subprocess)", () => {
     "automation classifies a rejected edit permission",
     ({ llm, opencode, home }) =>
       Effect.gen(function* () {
-        const target = path.join(home, "permission-target.txt")
+        const target = path.join(home, "AGENTS.md")
         yield* Effect.promise(() => Bun.write(target, "before"))
         yield* llm.tool("edit", { filePath: target, oldString: "before", newString: "after" })
         yield* llm.text("POST_PERMISSION_SECRET")
         const result = yield* opencode.run("request permission", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "result-json",
           env: {
@@ -1121,7 +1278,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.text("continued after tool failure")
         const result = yield* opencode.run("trigger tool timeout", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "result-json",
         })
@@ -1145,7 +1302,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* llm.text("POST_TOOL_SECRET")
         const result = yield* opencode.run("call an unavailable tool", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           format: "result-json",
         })
@@ -1176,7 +1333,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         const config = testProviderConfig(llm.url)
         const result = yield* opencode.run("call an MCP tool that reports failure", {
           automation: true,
-          agent: "build",
+          agent: "issue-task",
           variant: "high",
           env: {
             OC2_CONFIG_CONTENT: JSON.stringify({

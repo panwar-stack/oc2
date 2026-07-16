@@ -37,6 +37,7 @@ export const Info = Schema.Struct({
   description: Schema.optional(Schema.String),
   agent: Schema.optional(Schema.String),
   model: Schema.optional(Schema.String),
+  variant: Schema.optional(Schema.String),
   source: Schema.optional(Schema.Literals(["command", "mcp", "skill"])),
   // Some command templates are lazy promises from MCP prompt resolution.
   template: Schema.Unknown,
@@ -72,7 +73,7 @@ export const Model = {
 } as const
 
 export interface Interface {
-  readonly get: (name: string) => Effect.Effect<Info | undefined>
+  readonly get: (name: string, options?: { automation?: boolean }) => Effect.Effect<Info | undefined>
   readonly list: () => Effect.Effect<Info[]>
 }
 
@@ -84,6 +85,44 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const mcp = yield* MCP.Service
     const skill = yield* Skill.Service
+
+    const automationState = yield* InstanceState.make<Record<string, Info>>(
+      Effect.fn("Command.automationState")(function* () {
+        const cfg = yield* config.get()
+        const commands: Record<string, Info> = Object.fromEntries(
+          Object.entries(cfg.command ?? {}).map(([name, command]) => [
+            name,
+            {
+              name,
+              agent: command.agent,
+              model: command.model,
+              variant: command.variant,
+              description: command.description,
+              source: "command" as const,
+              template: command.template,
+              subtask: command.subtask,
+              hints: hints(command.template),
+            },
+          ]),
+        )
+        commands[Default.SPEC_PLANNER] = {
+          name: Default.SPEC_PLANNER,
+          description:
+            "Convert rough requirements, feature ideas, bug themes, or implementation goals into concrete engineering specs.",
+          source: "command",
+          template: PROMPT_SPEC_PLANNER,
+          hints: hints(PROMPT_SPEC_PLANNER),
+        }
+        commands[Default.IMPLEMENT_SPEC_PR] = {
+          name: Default.IMPLEMENT_SPEC_PR,
+          description: "Understand a specification thoroughly and implement only the requested PR slice.",
+          source: "command",
+          template: PROMPT_IMPLEMENT_SPEC_PR,
+          hints: hints(PROMPT_IMPLEMENT_SPEC_PR),
+        }
+        return commands
+      }),
+    )
 
     const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
       const cfg = yield* config.get()
@@ -170,6 +209,7 @@ export const layer = Layer.effect(
           name,
           agent: command.agent,
           model: command.model,
+          variant: command.variant,
           description: command.description,
           source: "command",
           get template() {
@@ -229,7 +269,8 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>((ctx) => init(ctx))
 
-    const get = Effect.fn("Command.get")(function* (name: string) {
+    const get = Effect.fn("Command.get")(function* (name: string, options?: { automation?: boolean }) {
+      if (options?.automation) return yield* InstanceState.use(automationState, (commands) => commands[name])
       const s = yield* InstanceState.get(state)
       return s.commands[name]
     })
@@ -248,5 +289,66 @@ export const defaultLayer = layer.pipe(
   Layer.provide(MCP.defaultLayer),
   Layer.provide(Skill.defaultLayer),
 )
+
+export function parseArguments(input: string) {
+  const result: string[] = []
+  let current = ""
+  let quote: "\"" | "'" | undefined
+  let token = false
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i]
+    if (quote) {
+      if (char === "\\" && input[i + 1] === quote) {
+        current += quote
+        i++
+        continue
+      }
+      if (char === quote) {
+        quote = undefined
+        continue
+      }
+      current += char
+      continue
+    }
+    if (char === "\"" || char === "'") {
+      quote = char
+      token = true
+      continue
+    }
+    if (!token && char === "[") {
+      const image = input.slice(i).match(/^\[Image\s+\d+\]/i)?.[0]
+      if (image) {
+        result.push(image)
+        i += image.length - 1
+        continue
+      }
+    }
+    if (/\s/.test(char)) {
+      if (!token) continue
+      result.push(current)
+      current = ""
+      token = false
+      continue
+    }
+    current += char
+    token = true
+  }
+  if (quote) return undefined
+  if (token) result.push(current)
+  return result
+}
+
+export function validAutomationArguments(name: string, input: string) {
+  const args = parseArguments(input)
+  if (!args) return false
+  if (name !== Default.IMPLEMENT_SPEC_PR) return true
+  return args?.length === 2 && args[0].trim().length > 0 && /^[1-9]\d*$/.test(args[1])
+}
+
+export function validAutomationRole(name: string, agent: string) {
+  if (name === Default.SPEC_PLANNER) return agent === "issue-planner"
+  if (name === Default.IMPLEMENT_SPEC_PR) return agent === "issue-implementer"
+  return agent === "issue-task"
+}
 
 export * as Command from "."

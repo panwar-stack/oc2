@@ -186,7 +186,7 @@ describe("tool.glob", () => {
   )
 
   references.instance(
-    "does not ask for external_directory permission inside configured git references",
+    "authorizes external_directory before searching configured git references",
     () =>
       Effect.gen(function* () {
         yield* TestInstance
@@ -215,7 +215,7 @@ describe("tool.glob", () => {
 
         expect(result.metadata.count).toBe(1)
         expect(full(result.output)).toContain(full(path.join(cache, "src", "index.ts")))
-        expect(items.find((item) => item.permission === "external_directory")).toBeUndefined()
+        expect(items.find((item) => item.permission === "external_directory")).toBeDefined()
       }),
     {
       config: {
@@ -224,5 +224,42 @@ describe("tool.glob", () => {
         },
       },
     },
+    15_000,
+  )
+
+  it.instance("does not materialize configured references before external access is authorized", () =>
+    Effect.gen(function* () {
+      yield* TestInstance
+      const outside = yield* tmpdirScoped()
+      const reference = yield* Reference.Service
+      const calls = { ensure: 0 }
+      const info = yield* GlobTool.pipe(
+        Effect.provideService(
+          Reference.Service,
+          Reference.Service.of({
+            ...reference,
+            contains: () => Effect.succeed(true),
+            ensure: () =>
+              Effect.sync(() => {
+                calls.ensure++
+              }),
+          }),
+        ),
+      )
+      const glob = yield* info.init()
+      const exit = yield* glob
+        .execute(
+          { pattern: "*.ts", path: path.join(outside, "missing") },
+          {
+            ...ctx,
+            ask: (request) =>
+              request.permission === "external_directory" ? Effect.die(new Error("denied")) : Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls.ensure).toBe(0)
+    }),
   )
 })

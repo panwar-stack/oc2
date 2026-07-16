@@ -12,7 +12,7 @@ import type { LLMClientService } from "@oc2-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
 import { Config } from "@/config/config"
-import type { Agent } from "@/agent/agent"
+import { Agent } from "@/agent/agent"
 import type { MessageV2 } from "./message-v2"
 import { Plugin } from "@/plugin"
 import { Permission } from "@/permission"
@@ -129,7 +129,7 @@ const live: Layer.Layer<
         providerID: input.model.providerID,
       })
 
-      const automationSafe = input.user.automation === true
+      const automationSafe = input.user.automation === true || Agent.isIssueAutomation(input.agent)
       if (LLMFugu.isSelected(input.model)) {
         if (automationSafe) return yield* Effect.fail(new Error("Fugu is unavailable for automation-safe execution"))
         // log.info("INPUT", {

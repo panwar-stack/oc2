@@ -470,6 +470,50 @@ test("evaluate - merges multiple rulesets", () => {
   expect(result.action).toBe("deny")
 })
 
+test("evaluate - write inherits edit rules unless explicitly denied", () => {
+  expect(
+    Permission.evaluate("write", "src/index.ts", [{ permission: "edit", pattern: "*", action: "allow" }]).action,
+  ).toBe("allow")
+  expect(
+    Permission.evaluate("write", "src/index.ts", [
+      { permission: "edit", pattern: "*", action: "allow" },
+      { permission: "write", pattern: "*", action: "deny" },
+    ]).action,
+  ).toBe("deny")
+})
+
+test("evaluateFilesystem - compares resources and configured patterns case-insensitively", () => {
+  expect(
+    Permission.evaluateFilesystem("edit", "agents.md", [
+      { permission: "edit", pattern: "*", action: "allow" },
+      { permission: "edit", pattern: "AGENTS.md", action: "deny" },
+    ]).action,
+  ).toBe("deny")
+  expect(
+    Permission.evaluateFilesystem("external_directory", "/tmp/mixedcase/*", [
+      { permission: "external_directory", pattern: "/TMP/MixedCase/*", action: "allow" },
+    ]).action,
+  ).toBe("allow")
+})
+
+test("evaluateFilesystemUnknown - denies either interpretation and requires both to allow", () => {
+  const protectedRules: PermissionV1.Ruleset = [
+    { permission: "edit", pattern: "*", action: "allow" },
+    { permission: "edit", pattern: ".oc2/**", action: "deny" },
+  ]
+  expect(Permission.evaluateFilesystemUnknown("edit", ".OC2/config.json", protectedRules).action).toBe("deny")
+  expect(
+    Permission.evaluateFilesystemUnknown("external_directory", "/TMP/MixedCase/*", [
+      { permission: "external_directory", pattern: "/tmp/mixedcase/*", action: "allow" },
+    ]).action,
+  ).toBe("ask")
+  expect(
+    Permission.evaluateFilesystemUnknown("edit", "src/index.ts", [
+      { permission: "edit", pattern: "*", action: "allow" },
+    ]).action,
+  ).toBe("allow")
+})
+
 // disabled tests
 
 test("disabled - returns empty set when all tools allowed", () => {
@@ -502,6 +546,18 @@ test("disabled - disables edit/write/apply_patch when edit denied", () => {
   expect(result.has("write")).toBe(true)
   expect(result.has("apply_patch")).toBe(true)
   expect(result.has("bash")).toBe(false)
+})
+
+test("disabled - explicit write and apply_patch denies override edit availability", () => {
+  const result = Permission.disabled(
+    ["edit", "write", "apply_patch"],
+    [
+      { permission: "edit", pattern: "*", action: "allow" },
+      { permission: "write", pattern: "*", action: "deny" },
+      { permission: "apply_patch", pattern: "*", action: "deny" },
+    ],
+  )
+  expect(result).toEqual(new Set(["write", "apply_patch"]))
 })
 
 test("disabled - does not disable when partially denied", () => {
@@ -823,6 +879,42 @@ it.instance(
         ruleset: [],
       })
       expect(result).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
+  "immutable agent policy ignores cross-session ambient approvals",
+  () =>
+    Effect.gen(function* () {
+      for (const [index, permission] of ["edit", "read", "external_directory"].entries()) {
+        const pattern = permission === "external_directory" ? `/tmp/immutable-${index}/*` : `immutable-${index}.txt`
+        const id = PermissionV1.ID.make(`per_ambient_${index}`)
+        const approval = yield* ask({
+          id,
+          sessionID: SessionID.make(`session_ordinary_${index}`),
+          permission,
+          patterns: [pattern],
+          metadata: {},
+          always: [pattern],
+          ruleset: [],
+        }).pipe(Effect.forkScoped)
+        yield* waitForPending(1)
+        yield* reply({ requestID: id, reply: "always" })
+        yield* Fiber.join(approval)
+
+        const error = yield* fail(
+          ask({
+            sessionID: SessionID.make(`session_automation_${index}`),
+            permission,
+            patterns: [pattern],
+            metadata: { immutableAgentPolicy: true },
+            always: [],
+            ruleset: [{ permission, pattern: "*", action: "deny" }],
+          }),
+        )
+        expect(error).toBeInstanceOf(PermissionV1.DeniedError)
+      }
     }),
   { git: true },
 )

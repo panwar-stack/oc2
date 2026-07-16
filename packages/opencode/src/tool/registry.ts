@@ -395,7 +395,7 @@ export const layer: Layer.Layer<
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
-      if (input.automationSafe) {
+      if (input.automationSafe || Agent.isIssueAutomation(input.agent)) {
         const safe = yield* Effect.all({
           read: Tool.init(read),
           glob: Tool.init(globtool),

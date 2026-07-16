@@ -24,6 +24,14 @@ import { ModelV2 } from "@oc2-ai/core/model"
 
 const log = Log.create({ service: "session.tools" })
 
+export function permissionRuleset(agent: Agent.Info, session: Permission.Ruleset = []) {
+  if (!Agent.isIssueAutomation(agent)) return Permission.merge(agent.permission, session)
+  return Permission.merge(
+    agent.permission,
+    session.filter((rule) => rule.action !== "allow"),
+  )
+}
+
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
@@ -36,9 +44,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 }) {
   using _ = log.time("resolveTools")
   const tools: Record<string, AITool> = {}
-  const automationSafe = input.automationSafe === true
+  const trustedIssueAgent = Agent.isIssueAutomation(input.agent)
+  const issueAutomation = input.automationSafe === true || trustedIssueAgent
   const run = yield* EffectBridge.make()
-  const plugin = automationSafe ? undefined : yield* Plugin.Service
+  const plugin = issueAutomation ? undefined : yield* Plugin.Service
   const permission = yield* Permission.Service
   const registry = yield* ToolRegistry.Service
   const truncate = yield* Truncate.Service
@@ -52,7 +61,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       model: input.model,
       bypassAgentCheck: input.bypassAgentCheck,
       promptOps: input.promptOps,
-      automationSafe,
+      automationSafe: issueAutomation,
     },
     agent: input.agent.name,
     messages: input.messages,
@@ -74,9 +83,13 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       permission
         .ask({
           ...req,
+          metadata: {
+            ...req.metadata,
+            ...(trustedIssueAgent ? { immutableAgentPolicy: true } : {}),
+          },
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+          ruleset: permissionRuleset(input.agent, input.session.permission),
         })
         .pipe(Effect.orDie),
   })
@@ -85,7 +98,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     modelID: ModelV2.ID.make(input.model.api.id),
     providerID: input.model.providerID,
     agent: input.agent,
-    automationSafe,
+    automationSafe: issueAutomation,
   })) {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     tools[item.id] = tool({
@@ -129,7 +142,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
-  const mcpTools = automationSafe ? {} : yield* (yield* MCP.Service).tools()
+  const mcpTools = issueAutomation ? {} : yield* (yield* MCP.Service).tools()
   for (const [key, item] of Object.entries(mcpTools)) {
     if (!plugin) continue
     const execute = item.execute

@@ -5,6 +5,7 @@ import type * as Tool from "./tool"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
+import { CanonicalPath } from "@/util/canonical-path"
 
 type Kind = "file" | "directory"
 
@@ -30,9 +31,10 @@ export const assertExternalDirectoryWithSession = Effect.fn("Tool.assertExternal
 ) {
   if (!target) return
 
+  const resolved = yield* CanonicalPath.resolveInfo(target)
+  const full = resolved.path
   if (options?.bypass) return
 
-  const full = process.platform === "win32" ? FSUtil.normalizePath(target) : target
   if (yield* ToolPath.insideWithSession(session, ctx, full)) return
 
   const kind = options?.kind ?? "file"
@@ -41,14 +43,17 @@ export const assertExternalDirectoryWithSession = Effect.fn("Tool.assertExternal
     process.platform === "win32"
       ? FSUtil.normalizePathPattern(path.join(dir, "*"))
       : path.join(dir, "*").replaceAll("\\", "/")
+  const permission = glob
 
   yield* ctx.ask({
     permission: "external_directory",
-    patterns: [glob],
-    always: [glob],
+    patterns: [permission],
+    always: [permission],
     metadata: {
       filepath: full,
       parentDir: dir,
+      filesystemCaseInsensitive: resolved.caseInsensitive ? [permission] : [],
+      filesystemCaseUnknown: resolved.caseUnknown ? [permission] : [],
     },
   })
 })

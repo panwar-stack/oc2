@@ -245,12 +245,12 @@ export const ReadTool = Tool.define<
       params: Schema.Schema.Type<typeof Parameters>,
       ctx: Tool.Context<Metadata>,
     ) {
+      const automationSafe = ctx.extra?.["automationSafe"] === true
       const resolved = yield* ToolPath.resolveWithSession(session, ctx, params.filePath)
       const filepath = resolved.path
-      yield* reference.ensure(filepath)
       const title = resolved.relative
-
-      const stat = yield* fs.stat(filepath).pipe(
+      const configuredReference = automationSafe ? false : yield* reference.contains(filepath)
+      const existing = yield* fs.stat(filepath).pipe(
         Effect.catchIf(
           (err) => "reason" in err && err.reason._tag === "NotFound",
           () => Effect.succeed(undefined),
@@ -258,16 +258,22 @@ export const ReadTool = Tool.define<
       )
 
       yield* assertExternalDirectoryWithSession(session, ctx, filepath, {
-        bypass: Boolean(ctx.extra?.["bypassCwdCheck"]) || (yield* reference.contains(filepath)),
-        kind: stat?.type === "Directory" ? "directory" : "file",
+        bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
+        kind: existing?.type === "Directory" ? "directory" : "file",
       })
 
       yield* ctx.ask({
         permission: "read",
-        patterns: [resolved.relative],
+        patterns: [resolved.permission],
         always: ["*"],
-        metadata: {},
+        metadata: {
+          filesystemCaseInsensitive: resolved.caseInsensitive ? [resolved.permission] : [],
+          filesystemCaseUnknown: resolved.caseUnknown ? [resolved.permission] : [],
+        },
       })
+
+      if (configuredReference) yield* reference.ensure(filepath)
+      const stat = existing ?? (yield* fs.stat(filepath).pipe(Effect.catch(() => Effect.succeed(undefined))))
 
       if (!stat) return yield* miss(filepath)
 
@@ -363,7 +369,7 @@ export const ReadTool = Tool.define<
       }
       output += "\n</content>"
 
-      yield* warm(filepath, resolved.root)
+      if (!automationSafe) yield* warm(filepath, resolved.root)
 
       if (loaded.length > 0) {
         output += `\n\n<system-reminder>\n${loaded.map((item) => item.content).join("\n\n")}\n</system-reminder>`
@@ -403,7 +409,11 @@ export const ReadTool = Tool.define<
         sessionID: ctx.sessionID,
         durationMs,
         resultCount:
-          display?.type === "directory" ? display.totalEntries : display?.type === "file" ? display.totalLines : undefined,
+          display?.type === "directory"
+            ? display.totalEntries
+            : display?.type === "file"
+              ? display.totalLines
+              : undefined,
         truncated: metadata?.truncated,
         status: Exit.isSuccess(exit) ? "success" : "error",
       })

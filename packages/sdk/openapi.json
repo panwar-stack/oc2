@@ -23373,6 +23373,9 @@
           "model": {
             "type": "string"
           },
+          "variant": {
+            "type": "string"
+          },
           "source": {
             "type": "string",
             "enum": [

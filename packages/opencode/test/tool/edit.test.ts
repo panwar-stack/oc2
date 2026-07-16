@@ -82,7 +82,15 @@ function permissionCtx(ruleset: PermissionV1.Ruleset): Tool.Context {
     ...ctx,
     ask: (request) => {
       const denied = request.patterns.find(
-        (pattern) => Permission.evaluate(request.permission, pattern, ruleset).action !== "allow",
+        (pattern) =>
+          (Array.isArray(request.metadata["filesystemCaseUnknown"]) &&
+          request.metadata["filesystemCaseUnknown"].includes(pattern)
+            ? Permission.evaluateFilesystemUnknown(request.permission, pattern, ruleset)
+            : Array.isArray(request.metadata["filesystemCaseInsensitive"]) &&
+                request.metadata["filesystemCaseInsensitive"].includes(pattern)
+              ? Permission.evaluateFilesystem(request.permission, pattern, ruleset)
+              : Permission.evaluate(request.permission, pattern, ruleset)
+          ).action !== "allow",
       )
       if (denied) return Effect.die(new PermissionV1.DeniedError({ ruleset }))
       return Effect.void
@@ -277,6 +285,108 @@ describe("tool.edit", () => {
       expect(requests.find((request) => request.permission === "edit")?.patterns).toEqual(["edit.txt"])
     }),
   )
+
+  it.live("denies edits through an internal symlink to an external directory", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const primary = yield* tmpdirScoped({ git: true })
+      const outside = yield* tmpdirScoped()
+      const filepath = path.join(outside, "secret.txt")
+      yield* put(filepath, "old secret")
+      yield* Effect.promise(() => fs.symlink(outside, path.join(primary, "linked"), "dir"))
+      const requests: Parameters<Tool.Context["ask"]>[0][] = []
+
+      const exit = yield* provideInstance(primary)(
+        run(
+          { filePath: path.join(primary, "linked", "secret.txt"), oldString: "old", newString: "new" },
+          {
+            ...ctx,
+            ask: (request) => {
+              requests.push(request)
+              if (request.permission === "external_directory") return Effect.die(new Error("denied"))
+              return Effect.void
+            },
+          },
+        ).pipe(Effect.exit),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(yield* load(filepath)).toBe("old secret")
+      expect(requests.find((request) => request.permission === "external_directory")?.patterns).toEqual([
+        path.join(yield* Effect.promise(() => fs.realpath(outside)), "*").replaceAll("\\", "/"),
+      ])
+      expect(requests.find((request) => request.permission === "edit")).toBeUndefined()
+    }),
+  )
+
+  if (process.platform === "darwin") {
+    it.live("uses canonical casing for edit authorization", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const filepath = path.join(primary, "MixedCase", "File.txt")
+        yield* put(filepath, "old value")
+        const requests: Parameters<Tool.Context["ask"]>[0][] = []
+
+        yield* provideInstance(primary)(
+          run(
+            { filePath: path.join(primary, "mixedcase", "file.txt"), oldString: "old", newString: "new" },
+            {
+              ...ctx,
+              ask: (request) =>
+                Effect.sync(() => {
+                  requests.push(request)
+                }),
+            },
+          ),
+        )
+
+        expect(yield* load(filepath)).toBe("new value")
+        expect(requests.find((request) => request.permission === "external_directory")).toBeUndefined()
+        expect(requests.find((request) => request.permission === "edit")?.patterns).toEqual([
+          path.join("mixedcase", "file.txt"),
+        ])
+      }),
+    )
+
+    it.live("denies missing mixed-case protected directories", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const target = path.join(primary, "packages", "app", ".OC2", "plugin.ts")
+        const ruleset: PermissionV1.Ruleset = [
+          { permission: "edit", pattern: "*", action: "allow" },
+          { permission: "edit", pattern: "**/.oc2/**", action: "deny" },
+        ]
+
+        const exit = yield* provideInstance(primary)(
+          run({ filePath: target, oldString: "", newString: "malicious" }, permissionCtx(ruleset)).pipe(Effect.exit),
+        )
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect((yield* Effect.promise(() => fs.stat(target)).pipe(Effect.exit))._tag).toBe("Failure")
+      }),
+    )
+
+    it.live("matches uppercase protected filenames case-insensitively", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const target = path.join(primary, "AGENTS.md")
+        yield* put(target, "protected")
+        const ruleset: PermissionV1.Ruleset = [
+          { permission: "edit", pattern: "*", action: "allow" },
+          { permission: "edit", pattern: "AGENTS.md", action: "deny" },
+        ]
+
+        const exit = yield* provideInstance(primary)(
+          run({ filePath: path.join(primary, "agents.md"), oldString: "protected", newString: "changed" }, permissionCtx(ruleset)).pipe(
+            Effect.exit,
+          ),
+        )
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(yield* load(target)).toBe("protected")
+      }),
+    )
+  }
 
   describe("creating new files", () => {
     it.instance("creates new file when oldString is empty", () =>

@@ -651,7 +651,7 @@ describe("session compound runner", () => {
           ["write", "edit", "apply_patch", "team_create", "team_spawn", "local_fusion"],
           [...childPermission],
         ),
-      ).toEqual(new Set(["team_create", "team_spawn", "local_fusion"]))
+      ).toEqual(new Set(["apply_patch", "team_create", "team_spawn", "local_fusion"]))
     }),
   )
 

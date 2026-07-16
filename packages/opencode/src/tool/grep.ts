@@ -77,12 +77,12 @@ export const GrepTool = Tool.define<
 
             const resolved = yield* ToolPath.resolveWithSession(session, ctx, params.path)
             const requested = resolved.path
-            yield* reference.ensure(requested)
+            const configuredReference = yield* reference.contains(requested)
             const requestedInfo = yield* fs.stat(requested).pipe(Effect.catch(() => Effect.succeed(undefined)))
             yield* assertExternalDirectoryWithSession(session, ctx, requested, {
-              bypass: yield* reference.contains(requested),
               kind: requestedInfo?.type === "Directory" ? "directory" : "file",
             })
+            if (configuredReference) yield* reference.ensure(requested)
 
             const search = FSUtil.resolve(requested)
             const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
@@ -100,11 +100,37 @@ export const GrepTool = Tool.define<
               return empty({ resultCount: 0, truncated: result.hasNextPage, partial: result.partial })
             }
 
-            const rows = result.items.map((item) => ({
-              path: FSUtil.resolve(path.isAbsolute(item.path.text) ? item.path.text : path.join(cwd, item.path.text)),
-              line: item.line_number,
-              text: item.lines.text,
-            }))
+            const targets = yield* Effect.forEach(result.items, (item) =>
+              ToolPath.resolveWithSession(
+                session,
+                ctx,
+                path.isAbsolute(item.path.text) ? item.path.text : path.join(cwd, item.path.text),
+              ),
+            )
+            const matchedFiles = new Map(targets.map((target) => [target.path, target]))
+            yield* Effect.forEach(matchedFiles.values(), (target) =>
+              Effect.gen(function* () {
+                yield* assertExternalDirectoryWithSession(session, ctx, target.path)
+                yield* ctx.ask({
+                  permission: "read",
+                  patterns: [target.permission],
+                  always: ["*"],
+                  metadata: {
+                    filesystemCaseInsensitive: target.caseInsensitive ? [target.permission] : [],
+                    filesystemCaseUnknown: target.caseUnknown ? [target.permission] : [],
+                  },
+                })
+              }),
+            )
+
+            const seen = new Set<string>()
+            const rows = result.items.flatMap((item, index) => {
+              const target = targets[index]
+              const key = `${target.path}\0${item.line_number}\0${item.lines.text}`
+              if (seen.has(key)) return []
+              seen.add(key)
+              return [{ path: target.path, line: item.line_number, text: item.lines.text }]
+            })
 
             const limit = 100
             const truncated = rows.length > limit

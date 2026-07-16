@@ -352,17 +352,13 @@ export const layer = Layer.effect(
           ) ?? []
       const promptOps = {
         ...basePromptOps,
-        prompt: (input: PromptInput) =>
-          basePromptOps.prompt({ ...input, automation: input.automation || lastUser.automation }),
         resolvePromptParts: (template: string) =>
           lastUser.automation
             ? Effect.succeed([{ type: "text" as const, text: template }, ...forwardedParts])
             : basePromptOps.resolvePromptParts(template).pipe(Effect.map((parts) => [...parts, ...forwardedParts])),
       } satisfies TaskPromptOps
       const { task: taskTool } = yield* registry.named()
-      const taskModel = task.model
-        ? yield* getModel(task.model.providerID, task.model.modelID, sessionID, lastUser.automation === true)
-        : model
+      const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
       const isSpawnCommand = task.command === Command.Default.SPAWN
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
@@ -403,13 +399,11 @@ export const layer = Layer.effect(
         subagent_type: task.agent,
         command: task.command,
       }
-      if (!lastUser.automation) {
-        yield* plugin.trigger(
-          "tool.execute.before",
-          { tool: TaskTool.id, sessionID, callID: part.id },
-          { args: taskArgs },
-        )
-      }
+      yield* plugin.trigger(
+        "tool.execute.before",
+        { tool: TaskTool.id, sessionID, callID: part.id },
+        { args: taskArgs },
+      )
 
       const taskAgent = yield* agents.get(task.agent)
       if (!taskAgent) {
@@ -432,7 +426,6 @@ export const layer = Layer.effect(
           extra: {
             bypassAgentCheck: true,
             promptOps,
-            automationSafe: lastUser.automation === true,
             ...(isSpawnCommand ? { background: true, notify: false } : {}),
           },
           messages: msgs,
@@ -489,13 +482,11 @@ export const layer = Layer.effect(
         messageID: assistantMessage.id,
       }))
 
-      if (!lastUser.automation) {
-        yield* plugin.trigger(
-          "tool.execute.after",
-          { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
-          result,
-        )
-      }
+      yield* plugin.trigger(
+        "tool.execute.after",
+        { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
+        result,
+      )
 
       assistantMessage.finish = isSpawnCommand ? "stop" : "tool-calls"
       assistantMessage.time.completed = Date.now()
@@ -544,7 +535,6 @@ export const layer = Layer.effect(
         time: { created: Date.now() },
         agent: lastUser.agent,
         model: lastUser.model,
-        automation: lastUser.automation,
       }
       yield* sessions.updateMessage(summaryUserMsg)
       yield* sessions.updatePart({
@@ -760,13 +750,12 @@ export const layer = Layer.effect(
     })
 
     type InternalPromptInput = PromptInput & { resolveReferences?: boolean }
-    const automationSubtask = Symbol("automation-subtask")
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
-      input: InternalPromptInput,
-      capability?: typeof automationSubtask,
-    ) {
-      const agentName = input.agent
-      const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: InternalPromptInput) {
+      if (input.automation && (!input.agent || !Agent.isIssueAutomationName(input.agent))) {
+        throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
+      }
+      const agentName = input.agent ?? (yield* agents.defaultAgent())
+      const ag = yield* agents.get(agentName)
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -775,13 +764,17 @@ export const layer = Layer.effect(
         throw error
       }
 
-      const automationSafe = input.automation === true
+      const trustedAutomation = Agent.isIssueAutomation(ag)
+      if (input.automation && !trustedAutomation) {
+        throw new NamedError.Unknown({ message: `Agent "${agentName}" is not a trusted automation agent` })
+      }
+      const automationSafe = input.automation === true || trustedAutomation
       if (
         automationSafe &&
         input.parts.some(
           (part) =>
             part.type === "agent" ||
-            (part.type === "subtask" && capability !== automationSubtask) ||
+            part.type === "subtask" ||
             (part.type === "file" && part.source?.type === "resource"),
         )
       ) {
@@ -812,7 +805,7 @@ export const layer = Layer.effect(
         sessionID: input.sessionID,
         time: { created: Date.now() },
         tools: input.tools,
-        agent: ag.name,
+        agent: agentName,
         model: {
           providerID: model.providerID,
           modelID: model.modelID,
@@ -947,7 +940,7 @@ export const layer = Layer.effect(
                   .execute(args, {
                     sessionID: input.sessionID,
                     abort: controller.signal,
-                    agent: ag.name,
+                    agent: agentName,
                     messageID: info.id,
                     extra: { bypassCwdCheck: true, automationSafe, ...extra },
                     messages: [],
@@ -1290,13 +1283,14 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const promptInternal = Effect.fn("SessionPrompt.promptInternal")(function* (
-      input: InternalPromptInput,
-      capability?: typeof automationSubtask,
-    ) {
+    const prompt = Effect.fn("SessionPrompt.prompt")(function* (untrusted: InternalPromptInput) {
+      const input = {
+        ...Schema.decodeUnknownSync(PromptInput)(untrusted),
+        resolveReferences: untrusted.resolveReferences,
+      }
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
-      const message = yield* createUserMessage(input, capability)
+      const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []
@@ -1315,10 +1309,6 @@ export const layer = Layer.effect(
 
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
-    })
-
-    const prompt = Effect.fn("SessionPrompt.prompt")(function* (input: InternalPromptInput) {
-      return yield* promptInternal(Schema.decodeUnknownSync(PromptInput)(input))
     })
 
     function hasPathScopedEditPermission(permission: PermissionV1.Ruleset) {
@@ -1425,7 +1415,7 @@ Variant policy: use lower reasoning effort only for simple precise work; default
 
 Use daemon teammates only for monitoring, sentinels, rolling checklists, or other long lived tasks. Give them specific reporting criteria and shut down the team when monitoring ends.
 
-Do not create a team for trivial one step requests or when the user explicitly asks you to work alone.`
+Do not create a team for trivial one step requests or when the user explicitly asks you to work alone.`,
       ]
 
       if (Option.isNone(context)) return guidance.join("\n")
@@ -1511,10 +1501,10 @@ Do not create a team for trivial one step requests or when the user explicitly a
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
-          const automationSafe = lastUser.automation === true
+          const issueAutomation = lastUser.automation === true || Agent.isIssueAutomation(agent)
 
           step++
-          if (step === 1 && !automationSafe)
+          if (step === 1 && !issueAutomation)
             yield* title({
               session,
               modelID: lastUser.model.modelID,
@@ -1522,12 +1512,12 @@ Do not create a team for trivial one step requests or when the user explicitly a
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID, automationSafe)
+          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID, issueAutomation)
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
-            if (automationSafe && !task.command) {
-              throw new NamedError.Unknown({ message: "Automation prompts cannot execute external subtasks" })
+            if (issueAutomation) {
+              throw new NamedError.Unknown({ message: "Automation prompts cannot execute subtasks" })
             }
             yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
             continue
@@ -1594,7 +1584,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
               assistantMessage: msg,
               sessionID,
               model,
-              automationSafe,
+              automationSafe: issueAutomation,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
@@ -1610,7 +1600,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
               bypassAgentCheck,
               messages: msgs,
               promptOps,
-              automationSafe,
+              automationSafe: issueAutomation,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),
@@ -1649,7 +1639,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
               }
             }
 
-            if (!automationSafe) {
+            if (!issueAutomation) {
               yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
             }
 
@@ -1657,8 +1647,8 @@ Do not create a team for trivial one step requests or when the user explicitly a
             const [skills, env, teamLead, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model, roots),
-              automationSafe ? Effect.succeed(undefined) : teamLeadSystemPrompt({ session, agent }),
-              automationSafe ? Effect.succeed([]) : instruction.system().pipe(Effect.orDie),
+              issueAutomation ? Effect.succeed(undefined) : teamLeadSystemPrompt({ session, agent }),
+              issueAutomation ? Effect.succeed([]) : instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const memoryRule = tools.memory_search_commit ? MEMORY_WORKFLOW_SYSTEM_PROMPT : undefined
@@ -1745,8 +1735,21 @@ Do not create a team for trivial one step requests or when the user explicitly a
     const command = Effect.fn("SessionPrompt.command")(function* (untrusted: CommandInput) {
       const input = Schema.decodeUnknownSync(CommandInput)(untrusted)
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
-      const automationSafe = input.automation === true
-      const cmd = yield* commands.get(input.command)
+      if (input.automation && (!input.agent || !Agent.isIssueAutomationName(input.agent))) {
+        throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
+      }
+      const requestedAgent = input.agent ? yield* agents.get(input.agent) : undefined
+      const trustedAutomation = requestedAgent ? Agent.isIssueAutomation(requestedAgent) : false
+      if (input.automation && !trustedAutomation) {
+        throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
+      }
+      const automationSafe = input.automation === true || trustedAutomation
+      if (automationSafe && !Command.validAutomationRole(input.command, input.agent!)) {
+        throw new NamedError.Unknown({
+          message: `Agent "${input.agent}" cannot run automation command "${input.command}"`,
+        })
+      }
+      const cmd = yield* commands.get(input.command, { automation: automationSafe })
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)
         const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
@@ -1754,10 +1757,18 @@ Do not create a team for trivial one step requests or when the user explicitly a
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
+      if (automationSafe && !Command.validAutomationArguments(input.command, input.arguments)) {
+        const error = new NamedError.Unknown({
+          message: 'Automation command "spec:implement" requires exactly one spec path and one positive integer slice.',
+        })
+        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        throw error
+      }
       const agentName = automationSafe ? input.agent : (cmd.agent ?? input.agent)
 
-      const raw = input.arguments.match(argsRegex) ?? []
-      const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
+      const args = automationSafe
+        ? Command.parseArguments(input.arguments) ?? []
+        : (input.arguments.match(argsRegex) ?? []).map((arg) => arg.replace(quoteTrimRegex, ""))
       const templateCommand = yield* Effect.promise(async () => cmd.template)
 
       const placeholders = templateCommand.match(placeholderRegex) ?? []
@@ -1813,9 +1824,13 @@ Do not create a team for trivial one step requests or when the user explicitly a
         if (input.model) return Provider.parseModel(input.model)
         return yield* currentModel(input.sessionID)
       })
+      const variant = automationSafe ? (input.variant ?? cmd.variant) : (cmd.variant ?? input.variant)
+
       yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID, automationSafe)
 
-      const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
+      const resolvedAgentName = agentName ?? (yield* agents.defaultAgent())
+      const agent =
+        requestedAgent && resolvedAgentName === input.agent ? requestedAgent : yield* agents.get(resolvedAgentName)
       if (!agent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -1827,12 +1842,14 @@ Do not create a team for trivial one step requests or when the user explicitly a
       const templateParts = automationSafe
         ? [{ type: "text" as const, text: template }]
         : yield* resolvePromptParts(template)
-      const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
+      const isSubtask = automationSafe
+        ? false
+        : (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
       const parts = isSubtask
         ? [
             {
               type: "subtask" as const,
-              agent: agent.name,
+              agent: resolvedAgentName,
               description: cmd.description ?? "",
               command: input.command,
               model: { providerID: taskModel.providerID, modelID: taskModel.modelID },
@@ -1840,9 +1857,13 @@ Do not create a team for trivial one step requests or when the user explicitly a
             },
             ...(input.parts ?? []),
           ]
-        : [...templateParts, ...(input.parts ?? [])]
+        : [
+            ...templateParts,
+            // CommandInput.parts are explicit caller-admitted attachments; automation disables ambient expansion above.
+            ...(input.parts ?? []),
+          ]
 
-      const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultInfo()).name) : agent.name
+      const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultAgent())) : resolvedAgentName
       const userModel = isSubtask
         ? input.model
           ? Provider.parseModel(input.model)
@@ -1857,19 +1878,16 @@ Do not create a team for trivial one step requests or when the user explicitly a
         )
       }
 
-      const result = yield* promptInternal(
-        {
-          sessionID: input.sessionID,
-          messageID: input.messageID,
-          model: userModel,
-          agent: userAgent,
-          parts,
-          variant: input.variant,
-          resolveReferences: !automationSafe,
-          automation: automationSafe,
-        },
-        automationSafe && isSubtask ? automationSubtask : undefined,
-      )
+      const result = yield* prompt({
+        sessionID: input.sessionID,
+        messageID: input.messageID,
+        model: userModel,
+        agent: userAgent,
+        parts,
+        variant,
+        resolveReferences: !automationSafe,
+        automation: automationSafe,
+      })
       yield* events.publish(Command.Event.Executed, {
         name: input.command,
         sessionID: input.sessionID,
@@ -2025,7 +2043,7 @@ export function createStructuredOutputTool(input: {
   })
 }
 const bashRegex = /!`([^`]+)`/g
-// Match [Image N] as single token, quoted strings, or non-space sequences
+// Match [Image N] as single token, quoted strings, or non-space sequences.
 const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
 const placeholderRegex = /\$(\d+)/g
 const quoteTrimRegex = /^["']|["']$/g

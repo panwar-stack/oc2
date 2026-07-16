@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { Session } from "@/session/session"
+import { CanonicalPath } from "@/util/canonical-path"
 import type * as Tool from "./tool"
 
 export type Root = Pick<Session.RootInfo, "directory" | "worktree" | "primary">
@@ -11,11 +12,14 @@ export type Resolved = {
   path: string
   root: Root
   relative: string
+  permission: string
+  caseInsensitive: boolean
+  caseUnknown: boolean
 }
 
 export const roots = Effect.fn("ToolPath.roots")(function* (session: Session.Interface, ctx: Tool.Context) {
   const instance = yield* InstanceState.context
-  return yield* session.listRoots(ctx.sessionID).pipe(
+  const list = yield* session.listRoots(ctx.sessionID).pipe(
     Effect.catch(() =>
       Effect.succeed([
         {
@@ -25,6 +29,9 @@ export const roots = Effect.fn("ToolPath.roots")(function* (session: Session.Int
         },
       ]),
     ),
+  )
+  return yield* Effect.forEach(list, (root) =>
+    CanonicalPath.resolve(root.directory).pipe(Effect.map((directory) => ({ ...root, directory }))),
   )
 })
 
@@ -58,7 +65,7 @@ export const containingRootWithSession = Effect.fn("ToolPath.containingRootWithS
   ctx: Tool.Context,
   target: string,
 ) {
-  const filepath = normalize(target)
+  const filepath = yield* canonical(target)
   return (yield* roots(session, ctx)).find((root) => contains(root.directory, filepath))
 })
 
@@ -85,17 +92,24 @@ export const resolveWithSession = Effect.fn("ToolPath.resolveWithSession")(funct
   ctx: Tool.Context,
   target?: string,
 ) {
-  const root = yield* primaryWithSession(session, ctx)
-  const filepath = normalize(
+  const list = yield* roots(session, ctx)
+  const root = list.find((item) => item.primary) ?? list[0]
+  if (!root) throw new Error("Session has no filesystem root")
+  const targetInfo = yield* CanonicalPath.resolveInfo(
     path.isAbsolute(target ?? root.directory)
       ? (target ?? root.directory)
       : path.resolve(root.directory, target ?? "."),
   )
-  const match = (yield* containingRootWithSession(session, ctx, filepath)) ?? root
+  const filepath = targetInfo.path
+  const match = list.find((item) => contains(item.directory, filepath)) ?? root
+  const resource = relative(match, filepath)
   return {
     path: filepath,
     root: match,
-    relative: relative(match, filepath),
+    relative: resource,
+    permission: targetInfo.caseInsensitive ? resource.toLowerCase() : resource,
+    caseInsensitive: targetInfo.caseInsensitive,
+    caseUnknown: targetInfo.caseUnknown,
   }
 })
 
@@ -106,6 +120,8 @@ export function relative(root: Root, target: string) {
 export function normalize(target: string) {
   return process.platform === "win32" ? FSUtil.normalizePath(target) : target
 }
+
+export const canonical = CanonicalPath.resolve
 
 function contains(base: string, target: string) {
   return FSUtil.contains(normalize(base), target)

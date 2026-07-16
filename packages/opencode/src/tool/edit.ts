@@ -102,11 +102,13 @@ export const EditTool = Tool.define(
                 diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
                 yield* ctx.ask({
                   permission: "edit",
-                  patterns: [resolved.relative],
+                  patterns: [resolved.permission],
                   always: ["*"],
                   metadata: {
                     filepath: filePath,
                     diff,
+                    filesystemCaseInsensitive: resolved.caseInsensitive ? [resolved.permission] : [],
+                    filesystemCaseUnknown: resolved.caseUnknown ? [resolved.permission] : [],
                   },
                 })
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
@@ -145,11 +147,13 @@ export const EditTool = Tool.define(
               )
               yield* ctx.ask({
                 permission: "edit",
-                patterns: [resolved.relative],
+                patterns: [resolved.permission],
                 always: ["*"],
                 metadata: {
                   filepath: filePath,
                   diff,
+                  filesystemCaseInsensitive: resolved.caseInsensitive ? [resolved.permission] : [],
+                  filesystemCaseUnknown: resolved.caseUnknown ? [resolved.permission] : [],
                 },
               })
 

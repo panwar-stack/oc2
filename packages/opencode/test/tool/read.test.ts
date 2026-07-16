@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import fs from "fs/promises"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
@@ -306,6 +307,54 @@ describe("tool.read external_directory permission", () => {
     }),
   )
 
+  it.live("denies reads through an internal symlink to an external file without leaking content", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const dir = yield* tmpdirScoped({ git: true })
+      const outside = yield* tmpdirScoped()
+      const secret = path.join(outside, "secret.txt")
+      yield* put(secret, "never disclose this")
+      yield* Effect.promise(() => fs.symlink(outside, path.join(dir, "linked"), "dir"))
+      const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+      const exit = yield* exec(
+        dir,
+        { filePath: path.join(dir, "linked", "secret.txt") },
+        {
+          ...ctx,
+          ask: (request) => {
+            requests.push(request)
+            if (request.permission === "external_directory") return Effect.die(new Error("denied"))
+            return Effect.void
+          },
+        },
+      ).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests.find((request) => request.permission === "external_directory")?.patterns).toEqual([
+        glob(path.join(yield* Effect.promise(() => fs.realpath(outside)), "*")),
+      ])
+      expect(requests.find((request) => request.permission === "read")).toBeUndefined()
+    }),
+  )
+
+  if (process.platform === "darwin") {
+    it.live("uses canonical casing for read authorization", () =>
+      Effect.gen(function* () {
+        const dir = yield* tmpdirScoped({ git: true })
+        yield* put(path.join(dir, "MixedCase", "Secret.txt"), "content")
+        const { items, next } = asks()
+
+        const result = yield* exec(dir, { filePath: path.join(dir, "mixedcase", "secret.txt") }, next)
+
+        expect(result.output).toContain("content")
+        expect(items.find((item) => item.permission === "external_directory")).toBeUndefined()
+        expect(items.find((item) => item.permission === "read")?.patterns).toEqual([
+          path.join("mixedcase", "secret.txt"),
+        ])
+      }),
+    )
+  }
+
   it.live("does not ask for external_directory permission when reading inside project", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
@@ -319,41 +368,81 @@ describe("tool.read external_directory permission", () => {
     }),
   )
 
-  references.live("does not ask for external_directory permission when reading configured references", () =>
-    Effect.gen(function* () {
-      const fs = yield* FSUtil.Service
-      const cache = path.join(Global.Path.repos, "github.com", "opencode-read-reference", "repo")
-      yield* fs.remove(cache, { recursive: true }).pipe(Effect.ignore)
-      yield* Effect.addFinalizer(() => fs.remove(cache, { recursive: true }).pipe(Effect.ignore))
+  references.live(
+    "authorizes external_directory before reading configured references",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const cache = path.join(Global.Path.repos, "github.com", "opencode-read-reference", "repo")
+        yield* fs.remove(cache, { recursive: true }).pipe(Effect.ignore)
+        yield* Effect.addFinalizer(() => fs.remove(cache, { recursive: true }).pipe(Effect.ignore))
 
-      const source = yield* tmpdirScoped({ git: true })
-      const remoteRoot = yield* tmpdirScoped()
-      const remoteDir = path.join(remoteRoot, "opencode-read-reference")
-      const remoteRepo = path.join(remoteDir, "repo.git")
-      yield* put(path.join(source, "notes.md"), "reference notes")
-      yield* git(source, ["add", "."])
-      yield* git(source, ["commit", "-m", "add notes"])
-      yield* fs.makeDirectory(remoteDir, { recursive: true }).pipe(Effect.orDie)
-      yield* git(remoteRoot, ["clone", "--bare", source, remoteRepo])
+        const source = yield* tmpdirScoped({ git: true })
+        const remoteRoot = yield* tmpdirScoped()
+        const remoteDir = path.join(remoteRoot, "opencode-read-reference")
+        const remoteRepo = path.join(remoteDir, "repo.git")
+        yield* put(path.join(source, "notes.md"), "reference notes")
+        yield* git(source, ["add", "."])
+        yield* git(source, ["commit", "-m", "add notes"])
+        yield* fs.makeDirectory(remoteDir, { recursive: true }).pipe(Effect.orDie)
+        yield* git(remoteRoot, ["clone", "--bare", source, remoteRepo])
 
-      const dir = yield* tmpdirScoped({
-        git: true,
-        config: {
-          reference: {
-            docs: "opencode-read-reference/repo",
+        const dir = yield* tmpdirScoped({
+          git: true,
+          config: {
+            reference: {
+              docs: "opencode-read-reference/repo",
+            },
           },
-        },
-      })
+        })
 
-      const { items, next } = asks()
-      const result = yield* githubBase(
-        `file://${remoteRoot}/`,
-        exec(dir, { filePath: path.join(cache, "notes.md") }, next),
+        const { items, next } = asks()
+        const result = yield* githubBase(
+          `file://${remoteRoot}/`,
+          exec(dir, { filePath: path.join(cache, "notes.md") }, next),
+        )
+        const ext = items.find((item) => item.permission === "external_directory")
+
+        expect(result.output).toContain("reference notes")
+        expect(ext?.patterns).toEqual([glob(path.join(yield* fs.realPath(cache), "*"))])
+      }),
+    15_000,
+  )
+
+  it.instance("does not materialize configured references before external access is authorized", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const outside = yield* tmpdirScoped()
+      const reference = yield* Reference.Service
+      const calls = { ensure: 0 }
+      const info = yield* ReadTool.pipe(
+        Effect.provideService(
+          Reference.Service,
+          Reference.Service.of({
+            ...reference,
+            contains: () => Effect.succeed(true),
+            ensure: () =>
+              Effect.sync(() => {
+                calls.ensure++
+              }),
+          }),
+        ),
       )
-      const ext = items.find((item) => item.permission === "external_directory")
+      const read = yield* info.init()
+      const exit = yield* read
+        .execute(
+          { filePath: path.join(outside, "missing.txt") },
+          {
+            ...ctx,
+            ask: (request) =>
+              request.permission === "external_directory" ? Effect.die(new Error("denied")) : Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
 
-      expect(result.output).toContain("reference notes")
-      expect(ext).toBeUndefined()
+      expect(test.directory).toBeTruthy()
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls.ensure).toBe(0)
     }),
   )
 })
@@ -387,7 +476,14 @@ describe("tool.read env file permissions", () => {
                   ask: (req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) =>
                     Effect.sync(() => {
                       for (const pattern of req.patterns) {
-                        const rule = Permission.evaluate(req.permission, pattern, info.permission)
+                        const rule =
+                          Array.isArray(req.metadata["filesystemCaseUnknown"]) &&
+                          req.metadata["filesystemCaseUnknown"].includes(pattern)
+                            ? Permission.evaluateFilesystemUnknown(req.permission, pattern, info.permission)
+                            : Array.isArray(req.metadata["filesystemCaseInsensitive"]) &&
+                                req.metadata["filesystemCaseInsensitive"].includes(pattern)
+                              ? Permission.evaluateFilesystem(req.permission, pattern, info.permission)
+                              : Permission.evaluate(req.permission, pattern, info.permission)
                         if (rule.action === "ask" && req.permission === "read") {
                           asked = true
                         }

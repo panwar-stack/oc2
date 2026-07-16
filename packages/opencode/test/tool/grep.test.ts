@@ -3,7 +3,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { GrepTool } from "../../src/tool/grep"
 import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -185,6 +185,73 @@ describe("tool.grep", () => {
     }),
   )
 
+  it.instance("authorizes canonical matched files before exposing any grep snippets", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const test = yield* TestInstance
+      const outside = yield* tmpdirScoped()
+      const external = path.join(outside, "secret.txt")
+      yield* Effect.promise(() => Bun.write(external, "EXTERNAL_SENTINEL"))
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, ".env"), "ENV_SENTINEL"))
+      yield* Effect.promise(() => fs.symlink(external, path.join(test.directory, "alias.txt"), "file"))
+      const search = yield* Search.Service
+      const item = (file: string, text: string) => ({
+        path: { text: file },
+        lines: { text },
+        line_number: 1,
+        absolute_offset: 0,
+        submatches: [],
+      })
+      const requests: Parameters<Tool.Context["ask"]>[0][] = []
+      const info = yield* GrepTool.pipe(
+        Effect.provideService(
+          Search.Service,
+          Search.Service.of({
+            ...search,
+            search: () =>
+              Effect.succeed({
+                items: [
+                  item("alias.txt", "EXTERNAL_SENTINEL"),
+                  item(external, "EXTERNAL_SENTINEL"),
+                  item(".env", "ENV_SENTINEL"),
+                ],
+                partial: false,
+                hasNextPage: false,
+                engine: "ripgrep" as const,
+              }),
+          }),
+        ),
+      )
+      const grep = yield* info.init()
+      const exit = yield* grep
+        .execute(
+          { pattern: "SENTINEL", path: test.directory },
+          {
+            ...ctx,
+            ask: (request) => {
+              requests.push(request)
+              if (request.permission === "read" && request.patterns.includes(".env")) {
+                return Effect.die(new Error("read denied"))
+              }
+              return Effect.void
+            },
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(Cause.pretty(exit.cause)).not.toContain("EXTERNAL_SENTINEL")
+        expect(Cause.pretty(exit.cause)).not.toContain("ENV_SENTINEL")
+      }
+      expect(requests.filter((request) => request.permission === "external_directory")).toHaveLength(1)
+      expect(requests.filter((request) => request.permission === "read").map((request) => request.patterns[0])).toEqual([
+        path.relative(test.directory, yield* Effect.promise(() => fs.realpath(external))),
+        ".env",
+      ])
+    }),
+  )
+
   it.instance("supports exact file paths", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
@@ -205,7 +272,7 @@ describe("tool.grep", () => {
     }),
   )
 
-  it.instance("does not ask for external_directory when alias path is allowed", () =>
+  it.instance("canonicalizes alias paths before external_directory authorization", () =>
     Effect.gen(function* () {
       if (process.platform === "win32") return
 
@@ -232,7 +299,15 @@ describe("tool.grep", () => {
         ask: (req) =>
           Effect.sync(() => {
             const needsAsk = req.patterns.some(
-              (pattern) => Permission.evaluate(req.permission, pattern, ruleset).action !== "allow",
+              (pattern) =>
+                (Array.isArray(req.metadata["filesystemCaseUnknown"]) &&
+                req.metadata["filesystemCaseUnknown"].includes(pattern)
+                  ? Permission.evaluateFilesystemUnknown(req.permission, pattern, ruleset)
+                  : Array.isArray(req.metadata["filesystemCaseInsensitive"]) &&
+                      req.metadata["filesystemCaseInsensitive"].includes(pattern)
+                    ? Permission.evaluateFilesystem(req.permission, pattern, ruleset)
+                    : Permission.evaluate(req.permission, pattern, ruleset)
+                ).action !== "allow",
             )
             if (needsAsk) requests.push(req)
           }),
@@ -250,12 +325,14 @@ describe("tool.grep", () => {
       )
 
       expect(result.metadata.matches).toBe(1)
-      expect(requests.find((req) => req.permission === "external_directory")).toBeUndefined()
+      expect(requests.find((req) => req.permission === "external_directory")?.patterns).toEqual([
+        path.join(yield* Effect.promise(() => fs.realpath(real)), "*").replaceAll("\\", "/"),
+      ])
     }),
   )
 
   references.instance(
-    "does not ask for external_directory permission inside configured git references",
+    "authorizes external_directory before searching configured git references",
     () =>
       Effect.gen(function* () {
         yield* TestInstance
@@ -292,7 +369,7 @@ describe("tool.grep", () => {
 
         expect(result.metadata.matches).toBe(1)
         expect(full(result.output)).toContain(full(path.join(cache, "src", "notes.md")))
-        expect(requests.find((req) => req.permission === "external_directory")).toBeUndefined()
+        expect(requests.find((req) => req.permission === "external_directory")).toBeDefined()
       }),
     {
       config: {
@@ -301,5 +378,42 @@ describe("tool.grep", () => {
         },
       },
     },
+    15_000,
+  )
+
+  it.instance("does not materialize configured references before external access is authorized", () =>
+    Effect.gen(function* () {
+      yield* TestInstance
+      const outside = yield* tmpdirScoped()
+      const reference = yield* Reference.Service
+      const calls = { ensure: 0 }
+      const info = yield* GrepTool.pipe(
+        Effect.provideService(
+          Reference.Service,
+          Reference.Service.of({
+            ...reference,
+            contains: () => Effect.succeed(true),
+            ensure: () =>
+              Effect.sync(() => {
+                calls.ensure++
+              }),
+          }),
+        ),
+      )
+      const grep = yield* info.init()
+      const exit = yield* grep
+        .execute(
+          { pattern: "needle", path: path.join(outside, "missing") },
+          {
+            ...ctx,
+            ask: (request) =>
+              request.permission === "external_directory" ? Effect.die(new Error("denied")) : Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls.ensure).toBe(0)
+    }),
   )
 })

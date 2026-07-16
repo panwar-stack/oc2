@@ -21,7 +21,7 @@ import { ModelsDev } from "@oc2-ai/core/models-dev"
 import { Plugin } from "@/plugin"
 
 import { testEffect } from "../lib/effect"
-import type { Agent } from "../../src/agent/agent"
+import { Agent } from "../../src/agent/agent"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -59,6 +59,9 @@ const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: stri
 }
 
 const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, EventV2Bridge.defaultLayer))
+const agentIt = testEffect(
+  Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, EventV2Bridge.defaultLayer, Agent.defaultLayer),
+)
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
 const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
@@ -2033,6 +2036,19 @@ describe("session.llm.stream", () => {
         ...input,
         user: { ...input.user, automation: true },
       }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(Cause.pretty(exit.cause)).toContain("Fugu is unavailable for automation-safe execution")
+      }
+      expect(state.queue).toHaveLength(0)
+    }),
+  )
+
+  agentIt.instance("rejects Fugu for a trusted issue agent without a raw automation flag", () =>
+    Effect.gen(function* () {
+      const agent = yield* (yield* Agent.Service).get("issue-task")
+      const exit = yield* collect(fuguInput(fuguRuntimeModel(), { agent })).pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {

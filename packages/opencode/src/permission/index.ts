@@ -33,6 +33,35 @@ export type Request = PermissionV1.Request
 export type Rule = PermissionV1.Rule
 export type Ruleset = PermissionV1.Ruleset
 
+function evaluateResource(
+  permission: string,
+  pattern: string,
+  caseInsensitive: boolean,
+  ...rulesets: PermissionV1.Ruleset[]
+): PermissionV1.Rule {
+  const resource = caseInsensitive ? pattern.toLowerCase() : pattern
+  const matches = (rule: PermissionV1.Rule) =>
+    Wildcard.match(permission, rule.permission) &&
+    Wildcard.match(resource, caseInsensitive ? rule.pattern.toLowerCase() : rule.pattern)
+  const rules = rulesets.flat()
+  const match = (next: string) =>
+    rules.findLast(
+      (rule) =>
+        Wildcard.match(next, rule.permission) &&
+        Wildcard.match(resource, caseInsensitive ? rule.pattern.toLowerCase() : rule.pattern),
+    )
+  if (permission === "write" || permission === "apply_patch") {
+    const deny = rules.findLast((rule) => rule.action === "deny" && matches(rule))
+    if (deny) return deny
+    const editRule = match("edit")
+    if (editRule?.action === "deny") return editRule
+    const allow = rules.findLast((rule) => rule.action === "allow" && matches(rule))
+    if (allow) return allow
+    return editRule ?? { action: "ask", permission, pattern: "*" }
+  }
+  return match(permission) ?? { action: "ask", permission, pattern: "*" }
+}
+
 interface PendingEntry {
   info: PermissionV1.Request
   deferred: Deferred.Deferred<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>
@@ -44,37 +73,28 @@ interface State {
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
-  const rules = rulesets.flat()
-  const match = (next: string) =>
-    rules.findLast((rule) => Wildcard.match(next, rule.permission) && Wildcard.match(pattern, rule.pattern))
-  if (permission === "apply_patch") {
-    const deny = rules.findLast(
-      (rule) =>
-        rule.action === "deny" && Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern),
-    )
-    if (deny) return deny
-    const editRule = match("edit")
-    if (editRule?.action === "deny") return editRule
-    const allow = rules.findLast(
-      (rule) =>
-        rule.action === "allow" && Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern),
-    )
-    if (allow) return allow
-    return (
-      editRule ?? {
-        action: "ask",
-        permission,
-        pattern: "*",
-      }
-    )
-  }
-  const rule = match(permission)
-  if (rule) return rule
-  return {
-    action: "ask",
-    permission,
-    pattern: "*",
-  }
+  return evaluateResource(permission, pattern, false, ...rulesets)
+}
+
+export function evaluateFilesystem(
+  permission: string,
+  pattern: string,
+  ...rulesets: PermissionV1.Ruleset[]
+): PermissionV1.Rule {
+  return evaluateResource(permission, pattern, true, ...rulesets)
+}
+
+export function evaluateFilesystemUnknown(
+  permission: string,
+  pattern: string,
+  ...rulesets: PermissionV1.Ruleset[]
+): PermissionV1.Rule {
+  const exact = evaluateResource(permission, pattern, false, ...rulesets)
+  const folded = evaluateResource(permission, pattern, true, ...rulesets)
+  if (exact.action === "deny") return exact
+  if (folded.action === "deny") return folded
+  if (exact.action === "allow" && folded.action === "allow") return exact
+  return { action: "ask", permission, pattern: "*" }
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
@@ -108,9 +128,20 @@ export const layer = Layer.effect(
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
       let needsAsk = false
+      const ambient = request.metadata["immutableAgentPolicy"] === true ? [] : approved
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const unknown = Array.isArray(request.metadata["filesystemCaseUnknown"])
+          ? request.metadata["filesystemCaseUnknown"].includes(pattern)
+          : false
+        const insensitive = Array.isArray(request.metadata["filesystemCaseInsensitive"])
+          ? request.metadata["filesystemCaseInsensitive"].includes(pattern)
+          : false
+        const rule = unknown
+          ? evaluateFilesystemUnknown(request.permission, pattern, ruleset, ambient)
+          : insensitive
+            ? evaluateFilesystem(request.permission, pattern, ruleset, ambient)
+            : evaluate(request.permission, pattern, ruleset, ambient)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
@@ -192,9 +223,22 @@ export const layer = Layer.effect(
 
       for (const [id, item] of pending.entries()) {
         if (item.info.sessionID !== existing.info.sessionID) continue
-        const ok = item.info.patterns.every(
-          (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
-        )
+        if (item.info.metadata["immutableAgentPolicy"] === true) continue
+        const ok = item.info.patterns.every((pattern) => {
+          const unknown =
+            Array.isArray(item.info.metadata["filesystemCaseUnknown"]) &&
+            item.info.metadata["filesystemCaseUnknown"].includes(pattern)
+          if (unknown) return evaluateFilesystemUnknown(item.info.permission, pattern, approved).action === "allow"
+          const insensitive =
+            Array.isArray(item.info.metadata["filesystemCaseInsensitive"]) &&
+            item.info.metadata["filesystemCaseInsensitive"].includes(pattern)
+          return (
+            (insensitive
+              ? evaluateFilesystem(item.info.permission, pattern, approved)
+              : evaluate(item.info.permission, pattern, approved)
+            ).action === "allow"
+          )
+        })
         if (!ok) continue
         pending.delete(id)
         yield* events.publish(Event.Replied, {
@@ -246,6 +290,8 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   return new Set(
     tools.filter((tool) => {
       const permission = edits.includes(tool) ? "edit" : tool
+      const explicit = ruleset.findLast((rule) => rule.permission === tool)
+      if (tool !== permission && explicit?.pattern === "*" && explicit.action === "deny") return true
       const rule = ruleset.findLast((rule) => Wildcard.match(permission, rule.permission))
       return rule?.pattern === "*" && rule.action === "deny"
     }),

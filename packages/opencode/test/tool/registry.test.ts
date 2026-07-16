@@ -326,7 +326,7 @@ describe("tool.registry", () => {
   )
 
   withOpengrepDownload.instance(
-    "filters automation tools before opengrep and custom tool initialization",
+    "filters issue agents before opengrep and custom tool initialization",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
@@ -346,20 +346,28 @@ describe("tool.registry", () => {
             ].join("\n"),
           ),
         )
-        const agent = yield* (yield* Agent.Service).defaultInfo()
+        const agents = yield* Agent.Service
+        const base = yield* agents.defaultInfo()
+        const writer = yield* agents.get("issue-task")
+        const planner = yield* agents.get("issue-planner")
 
         yield* withOpengrepPaths(
           { bin, path: search },
           Effect.gen(function* () {
             const registry = yield* ToolRegistry.Service
-            const safeIDs = (yield* registry.tools({
+            const writerIDs = (yield* registry.tools({
               providerID: ProviderV2.ID.openai,
               modelID: ModelV2.ID.make("gpt-5"),
-              agent,
-              automationSafe: true,
+              agent: writer,
+            })).map((tool) => tool.id)
+            const plannerIDs = (yield* registry.tools({
+              providerID: ProviderV2.ID.openai,
+              modelID: ModelV2.ID.make("gpt-5"),
+              agent: planner,
             })).map((tool) => tool.id)
 
-            expect(safeIDs).toEqual(["read", "glob", "grep", "edit"])
+            expect(writerIDs).toEqual(["read", "glob", "grep", "edit"])
+            expect(plannerIDs).toEqual(["read", "glob", "grep"])
             expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
             expect(
               yield* Effect.promise(() =>
@@ -370,9 +378,11 @@ describe("tool.registry", () => {
             const ordinary = (yield* registry.tools({
               providerID: ProviderV2.ID.openai,
               modelID: ModelV2.ID.make("gpt-5"),
-              agent,
+              agent: base,
             })).map((tool) => tool.id)
             expect(ordinary).toContain("apply_patch")
+            expect(ordinary).not.toContain("edit")
+            expect(ordinary).not.toContain("write")
             expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(true)
           }),
         )

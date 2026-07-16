@@ -6,6 +6,7 @@ import { testEffect } from "../lib/effect"
 import { Agent } from "../../src/agent/agent"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
+import { ConfigAgent } from "../../src/config/agent"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { Global } from "@oc2-ai/core/global"
 import { Permission } from "../../src/permission"
@@ -14,6 +15,7 @@ import { Plugin } from "../../src/plugin"
 import { Provider } from "../../src/provider/provider"
 import { Skill } from "../../src/skill"
 import { Truncate } from "../../src/tool/truncate"
+import { SessionTools } from "../../src/session/tools"
 
 const agentLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Agent.layer.pipe(
@@ -26,6 +28,7 @@ const agentLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   )
 
 const it = testEffect(agentLayer())
+const issueAgentConfig = await ConfigAgent.load(path.resolve(import.meta.dir, "../../../../.oc2"))
 
 // Helper to evaluate permission for a tool with wildcard pattern
 function evalPerm(agent: Agent.Info | undefined, permission: string): PermissionV1.Action | undefined {
@@ -59,6 +62,178 @@ it.instance("returns default native agents when no config", () =>
     expect(names).toContain("title")
     expect(names).toContain("summary")
   }),
+)
+
+it.instance(
+  "issue automation agents are hidden primary identities with effective least privilege",
+  () =>
+    Effect.gen(function* () {
+      const agents = yield* load((svc) => svc.list())
+      const issueAgents = agents.filter((agent) => agent.name.startsWith("issue-"))
+      expect(issueAgents.map((agent) => agent.name)).toEqual(["issue-implementer", "issue-planner", "issue-task"])
+
+      for (const agent of issueAgents) {
+        const descriptor = issueAgentConfig[agent.name]
+        expect(descriptor).toBeDefined()
+        expect(agent.description).toBe(descriptor.description)
+        expect(agent.prompt).toBe(descriptor.prompt)
+        expect(agent.mode).toBe(descriptor.mode!)
+        expect(agent.hidden).toBe(descriptor.hidden)
+        expect(agent.permission).toEqual(Permission.fromConfig(descriptor.permission ?? {}))
+        expect(agent.hidden).toBe(true)
+        expect(agent.mode).toBe("primary")
+        expect(Permission.evaluate("read", "src/index.ts", agent.permission).action).toBe("allow")
+        expect(Permission.evaluate("glob", "*", agent.permission).action).toBe("allow")
+        expect(Permission.evaluate("grep", "*", agent.permission).action).toBe("allow")
+        expect(Permission.evaluate("read", ".env", agent.permission).action).toBe("deny")
+        expect(Permission.evaluate("read", "packages/app/.env.local", agent.permission).action).toBe("deny")
+        expect(Permission.evaluate("external_directory", "/outside/checkout/file.ts", agent.permission).action).toBe(
+          "deny",
+        )
+        expect(Permission.evaluate("external_directory", Truncate.GLOB, agent.permission).action).toBe("deny")
+        for (const permission of [
+          "bash",
+          "shell",
+          "network",
+          "sandbox_network",
+          "web",
+          "webfetch",
+          "websearch",
+          "task",
+          "team_create",
+          "team_spawn",
+          "team_send_message",
+          "skill",
+          "question",
+          "lsp",
+          "opengrep",
+          "list",
+          "local_fusion",
+          "todowrite",
+          "write",
+          "apply_patch",
+          "custom-project-tool",
+          "plugin:untrusted",
+        ]) {
+          expect(Permission.evaluate(permission, "*", agent.permission).action).toBe("deny")
+        }
+      }
+
+      const planner = issueAgents.find((agent) => agent.name === "issue-planner")
+      expect(Permission.evaluate("edit", "src/index.ts", planner!.permission).action).toBe("deny")
+      expect(Permission.evaluate("apply_patch", "src/index.ts", planner!.permission).action).toBe("deny")
+      expect(
+        Permission.disabled(
+          ["read", "glob", "grep", "edit", "write", "apply_patch", "custom-project-tool"],
+          planner!.permission,
+        ),
+      ).toEqual(new Set(["edit", "write", "apply_patch", "custom-project-tool"]))
+
+      for (const name of ["issue-task", "issue-implementer"]) {
+        const agent = issueAgents.find((item) => item.name === name)
+        expect(Permission.evaluate("edit", "src/index.ts", agent!.permission).action).toBe("allow")
+        expect(Permission.evaluate("write", "src/index.ts", agent!.permission).action).toBe("deny")
+        expect(Permission.evaluate("apply_patch", "src/index.ts", agent!.permission).action).toBe("deny")
+        expect(Permission.disabled(["edit", "write", "apply_patch", "custom-project-tool"], agent!.permission)).toEqual(
+          new Set(["write", "apply_patch", "custom-project-tool"]),
+        )
+        for (const file of [
+          ".github",
+          ".github/workflows/issue.yml",
+          "packages/app/.github",
+          "packages/app/.github/workflows/issue.yml",
+          ".oc2",
+          ".oc2/agents/issue-task.md",
+          "packages/app/.oc2",
+          "packages/app/.oc2/agents/injected.md",
+          "oc2.json",
+          "packages/app/oc2.jsonc",
+          ".gitignore",
+          "packages/app/.gitattributes",
+          ".env.production",
+          "packages/app/.env",
+          "AGENTS.md",
+          "packages/app/AGENTS.md",
+          ".github/CODEOWNERS",
+          "package.json",
+          "packages/app/package.json",
+          "bun.lock",
+          "packages/app/package-lock.json",
+          "turbo.json",
+          "packages/app/tsconfig.build.json",
+          "script/oc2-issue-generate.ts",
+          "script/oc2-verify-slice.ts",
+        ]) {
+          expect(Permission.evaluate("edit", file, agent!.permission).action).toBe("deny")
+          expect(Permission.evaluate("apply_patch", file, agent!.permission).action).toBe("deny")
+        }
+      }
+    }),
+  { config: { agent: issueAgentConfig } },
+)
+
+it.instance(
+  "issue automation identity and security floor override project spoofing",
+  () =>
+    Effect.gen(function* () {
+      const agents = yield* load((svc) => svc.list())
+      for (const name of ["issue-task", "issue-planner", "issue-implementer"]) {
+        const agent = agents.find((item) => item.name === name)
+        expect(agent).toBeDefined()
+        expect(Agent.isIssueAutomation(agent!)).toBe(true)
+        expect(Agent.isIssueAutomation({ ...agent! })).toBe(false)
+        expect(Object.isFrozen(agent)).toBe(true)
+        expect(Object.isFrozen(agent?.permission)).toBe(true)
+        expect(() => agent?.permission.push({ permission: "*", pattern: "*", action: "allow" })).toThrow()
+        expect(agent?.mode).toBe("primary")
+        expect(agent?.hidden).toBe(true)
+        expect(agent?.prompt).not.toContain("PROJECT OVERRIDE")
+        expect(Permission.evaluate("write", "src/index.ts", agent?.permission ?? []).action).toBe("deny")
+        expect(Permission.evaluate("apply_patch", "src/index.ts", agent?.permission ?? []).action).toBe("deny")
+        expect(
+          Permission.evaluate(
+            "edit",
+            "AGENTS.md",
+            Permission.merge([{ permission: "edit", pattern: "*", action: "allow" }], agent?.permission ?? []),
+          ).action,
+        ).toBe("deny")
+      }
+      const task = agents.find((item) => item.name === "issue-task")
+      const planner = agents.find((item) => item.name === "issue-planner")
+      expect(Permission.evaluate("edit", "src/index.ts", task?.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("edit", "src/index.ts", planner?.permission ?? []).action).toBe("deny")
+
+      const effective = SessionTools.permissionRuleset(task!, [
+        { permission: "edit", pattern: "AGENTS.md", action: "allow" },
+        { permission: "read", pattern: "src/private.ts", action: "deny" },
+      ])
+      expect(Permission.evaluate("edit", "AGENTS.md", effective).action).toBe("deny")
+      expect(Permission.evaluate("read", "src/private.ts", effective).action).toBe("deny")
+
+      const spoof = yield* load((svc) => svc.get("spoof"))
+      expect(spoof.name).toBe("issue-task")
+      expect(Agent.isIssueAutomation(spoof)).toBe(false)
+    }),
+  {
+    config: {
+      agent: {
+        "issue-task": {
+          name: "spoofed-task",
+          mode: "subagent",
+          hidden: false,
+          prompt: "PROJECT OVERRIDE",
+          permission: { "*": "allow" },
+        },
+        "issue-planner": {
+          hidden: false,
+          prompt: "PROJECT OVERRIDE",
+          permission: { edit: "allow", write: "allow", apply_patch: "allow" },
+        },
+        "issue-implementer": { disable: true },
+        spoof: { name: "issue-task", permission: { "*": "allow" } },
+      },
+    },
+  },
 )
 
 it.instance("build agent has correct default properties", () =>

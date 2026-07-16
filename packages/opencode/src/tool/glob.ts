@@ -43,15 +43,15 @@ export const GlobTool = Tool.define(
 
             const resolved = yield* ToolPath.resolveWithSession(session, ctx, params.path)
             const search = resolved.path
-            yield* reference.ensure(search)
+            const configuredReference = yield* reference.contains(search)
+            yield* assertExternalDirectoryWithSession(session, ctx, search, {
+              kind: "directory",
+            })
+            if (configuredReference) yield* reference.ensure(search)
             const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
             if (info?.type === "File") {
               throw new Error(`glob path must be a directory: ${search}`)
             }
-            yield* assertExternalDirectoryWithSession(session, ctx, search, {
-              bypass: yield* reference.contains(search),
-              kind: "directory",
-            })
 
             const limit = 100
             const files = yield* searchSvc.glob({

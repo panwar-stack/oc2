@@ -17,6 +17,7 @@ import { Session } from "@/session/session"
 import { testEffect } from "../lib/effect"
 import { Permission } from "../../src/permission"
 import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
+import type * as Tool from "../../src/tool/tool"
 
 const it = testEffect(
   Layer.mergeAll(
@@ -44,11 +45,13 @@ const baseCtx = {
 
 type AskInput = {
   permission: string
-  patterns: string[]
-  always: string[]
+  patterns: readonly string[]
+  always: readonly string[]
   metadata: {
     diff: string
     filepath: string
+    filesystemCaseInsensitive?: string[]
+    filesystemCaseUnknown?: string[]
     files: Array<{
       filePath: string
       relativePath: string
@@ -97,7 +100,15 @@ const permissionCtx = (ruleset: PermissionV1.Ruleset): ToolCtx => ({
   ...baseCtx,
   ask: (request) => {
     const denied = request.patterns.find(
-      (pattern) => Permission.evaluate(request.permission, pattern, ruleset).action !== "allow",
+      (pattern) =>
+        (Array.isArray(request.metadata["filesystemCaseUnknown"]) &&
+        request.metadata["filesystemCaseUnknown"].includes(pattern)
+          ? Permission.evaluateFilesystemUnknown(request.permission, pattern, ruleset)
+          : Array.isArray(request.metadata["filesystemCaseInsensitive"]) &&
+              request.metadata["filesystemCaseInsensitive"].includes(pattern)
+            ? Permission.evaluateFilesystem(request.permission, pattern, ruleset)
+            : Permission.evaluate(request.permission, pattern, ruleset)
+        ).action !== "allow",
     )
     if (denied) return Effect.die(new PermissionV1.DeniedError({ ruleset }))
     return Effect.void
@@ -151,6 +162,102 @@ describe("tool.apply_patch freeform", () => {
       expect(requests.find((request) => request.permission === "apply_patch")?.patterns).toEqual(["added.txt"])
     }),
   )
+
+  it.live("denies patches through an internal symlink to an external directory", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const primary = yield* tmpdirScoped({ git: true })
+      const outside = yield* tmpdirScoped()
+      yield* Effect.promise(() => fs.symlink(outside, path.join(primary, "linked"), "dir"))
+      const requests: Parameters<Tool.Context["ask"]>[0][] = []
+      const tool = yield* (yield* ApplyPatchTool).init()
+
+      const exit = yield* provideInstance(primary)(
+        tool
+          .execute(
+            {
+              patchText: ["*** Begin Patch", "*** Add File: linked/created.txt", "+secret", "*** End Patch"].join("\n"),
+            },
+            {
+              ...baseCtx,
+              ask: (request) => {
+                requests.push(request)
+                if (request.permission === "external_directory") return Effect.die(new Error("denied"))
+                return Effect.void
+              },
+            },
+          )
+          .pipe(Effect.exit),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      yield* expectReadFailure(path.join(outside, "created.txt"))
+      expect(requests.find((request) => request.permission === "external_directory")?.patterns).toEqual([
+        path.join(yield* Effect.promise(() => fs.realpath(outside)), "*").replaceAll("\\", "/"),
+      ])
+      expect(requests.find((request) => request.permission === "apply_patch")).toBeUndefined()
+    }),
+  )
+
+  if (process.platform === "darwin") {
+    it.live("uses canonical parent casing for patch authorization", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        yield* makeDir(path.join(primary, "MixedCase"))
+        const requests: Parameters<Tool.Context["ask"]>[0][] = []
+        const tool = yield* (yield* ApplyPatchTool).init()
+
+        yield* provideInstance(primary)(
+          tool.execute(
+            {
+              patchText: ["*** Begin Patch", "*** Add File: mixedcase/New.txt", "+content", "*** End Patch"].join("\n"),
+            },
+            {
+              ...baseCtx,
+              ask: (request) =>
+                Effect.sync(() => {
+                  requests.push(request)
+                }),
+            },
+          ),
+        )
+
+        expect(yield* readText(path.join(primary, "MixedCase", "New.txt"))).toBe("content\n")
+        expect(requests.find((request) => request.permission === "external_directory")).toBeUndefined()
+        expect(requests.find((request) => request.permission === "apply_patch")?.patterns).toEqual([
+          path.join("mixedcase", "new.txt"),
+        ])
+      }),
+    )
+
+    it.live("denies missing mixed-case protected directories", () =>
+      Effect.gen(function* () {
+        const primary = yield* tmpdirScoped({ git: true })
+        const target = path.join(primary, "packages", "app", ".OC2", "plugin.ts")
+        const ruleset: PermissionV1.Ruleset = [
+          { permission: "apply_patch", pattern: "*", action: "allow" },
+          { permission: "apply_patch", pattern: "**/.oc2/**", action: "deny" },
+        ]
+
+        const exit = yield* provideInstance(primary)(
+          execute(
+            {
+              patchText: [
+                "*** Begin Patch",
+                "*** Add File: packages/app/.OC2/plugin.ts",
+                "+malicious",
+                "*** End Patch",
+              ].join("\n"),
+            },
+            permissionCtx(ruleset),
+          ).pipe(Effect.exit),
+        )
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        yield* expectReadFailure(target)
+      }),
+    )
+  }
 
   it.live("requires patchText", () =>
     Effect.gen(function* () {

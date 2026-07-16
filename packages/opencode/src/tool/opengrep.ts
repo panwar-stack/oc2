@@ -53,12 +53,12 @@ export const OpengrepTool = Tool.define(
 
           const resolved = yield* ToolPath.resolveWithSession(session, ctx, params.path)
           const requested = resolved.path
-          yield* reference.ensure(requested)
+          const configuredReference = yield* reference.contains(requested)
           const requestedInfo = yield* fs.stat(requested).pipe(Effect.catch(() => Effect.succeed(undefined)))
           yield* assertExternalDirectoryWithSession(session, ctx, requested, {
-            bypass: yield* reference.contains(requested),
             kind: requestedInfo?.type === "Directory" ? "directory" : "file",
           })
+          if (configuredReference) yield* reference.ensure(requested)
 
           const search = FSUtil.resolve(requested)
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
@@ -73,9 +73,30 @@ export const OpengrepTool = Tool.define(
             file,
             signal: ctx.abort,
           })
-          const items = result.items.map((item) => ({
+          const targets = yield* Effect.forEach(result.items, (item) =>
+            ToolPath.resolveWithSession(
+              session,
+              ctx,
+              path.isAbsolute(item.file) ? item.file : path.join(cwd, item.file),
+            ),
+          )
+          yield* Effect.forEach(new Map(targets.map((target) => [target.path, target])).values(), (target) =>
+            Effect.gen(function* () {
+              yield* assertExternalDirectoryWithSession(session, ctx, target.path)
+              yield* ctx.ask({
+                permission: "read",
+                patterns: [target.permission],
+                always: ["*"],
+                metadata: {
+                  filesystemCaseInsensitive: target.caseInsensitive ? [target.permission] : [],
+                  filesystemCaseUnknown: target.caseUnknown ? [target.permission] : [],
+                },
+              })
+            }),
+          )
+          const items = result.items.map((item, index) => ({
             ...item,
-            file: FSUtil.resolve(path.isAbsolute(item.file) ? item.file : path.join(cwd, item.file)),
+            file: targets[index].path,
           }))
 
           return {

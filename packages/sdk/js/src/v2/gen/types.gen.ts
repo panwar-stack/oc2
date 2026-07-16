@@ -2577,6 +2577,7 @@ export type Command = {
   description?: string
   agent?: string
   model?: string
+  variant?: string
   source?: "command" | "mcp" | "skill"
   template: string
   subtask?: boolean

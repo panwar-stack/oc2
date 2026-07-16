@@ -8,6 +8,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { parseRepositoryReference, repositoryCachePath, type RemoteReference } from "@/util/repository"
 import { RepositoryCache } from "./repository-cache"
+import { CanonicalPath } from "@/util/canonical-path"
 
 export type Resolved =
   | {
@@ -118,7 +119,10 @@ const materializers = Effect.fn("Reference.materializers")(function* (
   return yield* Effect.forEach(
     uniqueGitReferences(references),
     Effect.fnUntraced(function* (reference) {
-      return { path: reference.path, run: yield* Effect.cached(materializeReference(cache, reference)) }
+      return {
+        path: yield* CanonicalPath.resolve(reference.path),
+        run: yield* Effect.cached(materializeReference(cache, reference)),
+      }
     }),
     { concurrency: "unbounded" },
   )
@@ -139,8 +143,8 @@ function materializeByPath(materializers: Materializer[], target: string) {
   return materializers.find((item) => containsReferencePath(item.path, target))?.run ?? Effect.void
 }
 
-function containsGitReferencePath(references: Resolved[], target: string) {
-  return references.some((reference) => reference.kind === "git" && containsReferencePath(reference.path, target))
+function containsGitReferencePath(materializers: Materializer[], target: string) {
+  return materializers.some((item) => containsReferencePath(item.path, target))
 }
 
 export function resolve(input: {
@@ -224,7 +228,7 @@ export const layer = Layer.effect(
         if (!flags.experimentalReferences) return false
         const full = normalizedTarget(target)
         if (!full) return false
-        return yield* InstanceState.use(state, (s) => containsGitReferencePath(s.references, full))
+        return yield* InstanceState.use(state, (s) => containsGitReferencePath(s.materializeByPath, full))
       }),
     })
   }),
