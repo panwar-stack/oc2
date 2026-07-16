@@ -91,6 +91,14 @@ jobs:
             --repository-id "$REPOSITORY_ID" \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Build trusted publication helper
+        if: steps.gate.outputs.execute == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trusted"
+          bun build script/oc2-publish.ts --target=bun --outfile "$RUNNER_TEMP/trusted/oc2-publish.js"
+
       - name: Upload admission artifact
         if: steps.gate.outputs.execute == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -101,10 +109,20 @@ jobs:
           include-hidden-files: false
           retention-days: 1
 
+      - name: Upload trusted publication helper
+        if: steps.gate.outputs.execute == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oc2-trusted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trusted/oc2-publish.js
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 1
+
       - name: Delete admission state
         if: always()
         shell: bash
-        run: rm -f -- "$RUNNER_TEMP/admission.json"
+        run: rm -rf -- "$RUNNER_TEMP/admission.json" "$RUNNER_TEMP/trusted"
 
   ingest:
     needs: admit
@@ -208,8 +226,8 @@ jobs:
       actions: read
       contents: read
     outputs:
-      state: ${{ steps.finalize.outputs.state }}
-      execute: ${{ steps.finalize.outputs.execute }}
+      state: ${{ steps.outcome.outputs.state }}
+      execute: ${{ steps.outcome.outputs.execute }}
     steps:
       - name: Checkout exact admitted base
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -252,7 +270,13 @@ jobs:
             --key "$ADMISSION_KEY" \
             --checkout "$GITHUB_WORKSPACE"
 
+      - name: Initialize generation phase
+        shell: bash
+        run: printf '%s\n' install_failed > "$RUNNER_TEMP/generation-phase"
+
       - name: Install verified OC2 release
+        id: install
+        continue-on-error: true
         shell: bash
         env:
           OC2_VERSION: ${{ vars.OC2_VERSION }}
@@ -313,7 +337,15 @@ jobs:
             exit 1
           fi
 
+      - name: Initialize model phase
+        if: steps.install.outcome == 'success'
+        shell: bash
+        run: printf '%s\n' model_failed > "$RUNNER_TEMP/generation-phase"
+
       - name: Run isolated OC2 generation
+        id: model
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OC2_OPENAI_API_KEY }}
@@ -324,10 +356,13 @@ jobs:
             --bundle-dir "$RUNNER_TEMP/issue-bundle" \
             --checkout "$GITHUB_WORKSPACE" \
             --oc2 "$RUNNER_TEMP/oc2-state/home/.oc2/bin/oc2" \
-            --state-dir "$RUNNER_TEMP/oc2-state"
+            --state-dir "$RUNNER_TEMP/oc2-state" \
+            --phase-file "$RUNNER_TEMP/generation-phase"
 
       - name: Build generation artifact
         id: finalize
+        if: steps.model.outcome == 'success'
+        continue-on-error: true
         shell: bash
         env:
           OC2_VERSION: ${{ vars.OC2_VERSION }}
@@ -342,7 +377,9 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
       - name: Validate generated patch
-        if: steps.finalize.outputs.execute == 'true'
+        id: validate
+        if: steps.finalize.outcome == 'success' && steps.finalize.outputs.execute == 'true'
+        continue-on-error: true
         shell: bash
         env:
           BASE_SHA: ${{ needs.admit.outputs.base_sha }}
@@ -356,8 +393,49 @@ jobs:
             --repository-id "$REPOSITORY_ID" \
             --base-sha "$BASE_SHA"
 
+      - name: Classify generation outcome
+        id: outcome
+        if: always()
+        shell: bash
+        env:
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          MODEL_OUTCOME: ${{ steps.model.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.finalize.outcome }}
+          FINALIZE_STATE: ${{ steps.finalize.outputs.state }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          set -euo pipefail
+          state=patch_rejected
+          if [ "$INSTALL_OUTCOME" != success ]; then
+            state=install_failed
+          elif [ "$MODEL_OUTCOME" != success ]; then
+            state=$(cat "$RUNNER_TEMP/generation-phase")
+            case "$state" in
+              permission_denied|tool_failed|model_failed) ;;
+              *) state=model_failed ;;
+            esac
+          elif [ "$FINALIZE_OUTCOME" != success ]; then
+            state=patch_rejected
+          elif [ "$FINALIZE_STATE" = no_changes ]; then
+            state=no_changes
+          elif [ "$VALIDATE_OUTCOME" != success ]; then
+            state=patch_rejected
+          else
+            state=generated
+          fi
+          printf 'state=%s\n' "$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = generated ]; then
+            printf 'execute=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'execute=false\n' >> "$GITHUB_OUTPUT"
+          fi
+          case "$state" in
+            generated|no_changes) ;;
+            *) exit 1 ;;
+          esac
+
       - name: Upload generation artifact
-        if: steps.finalize.outputs.execute == 'true'
+        if: steps.outcome.outputs.execute == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oc2-generation-${{ github.run_id }}-${{ github.run_attempt }}
@@ -377,4 +455,261 @@ jobs:
             "$RUNNER_TEMP/issue-bundle" \
             "$RUNNER_TEMP/generation" \
             "$RUNNER_TEMP/oc2-state"
-          rm -f -- "$RUNNER_TEMP/oc2-installer" "$RUNNER_TEMP/oc2-installer.sha256"
+          rm -f -- "$RUNNER_TEMP/oc2-installer" "$RUNNER_TEMP/oc2-installer.sha256" "$RUNNER_TEMP/generation-phase"
+
+  verify:
+    needs: [admit, generate]
+    if: github.repository == 'panwar-stack/oc2' && vars.OC2_AUTOMATION_ENABLED == 'true' && needs.admit.outputs.execute == 'true' && needs.generate.outputs.execute == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      state: ${{ steps.outcome.outputs.state }}
+      execute: ${{ steps.outcome.outputs.execute }}
+    steps:
+      - name: Checkout exact admitted base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.admit.outputs.base_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Download exact generation artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-generation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/generation
+
+      - name: Verify generated patch
+        id: verify
+        continue-on-error: true
+        shell: bash
+        env:
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          VERIFY_IMAGE: ${{ vars.OC2_VERIFY_IMAGE }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/verification"
+          bun --config=/dev/null --no-env-file --no-install script/oc2-verify.ts verify \
+            --generation "$RUNNER_TEMP/generation/generation.json" \
+            --patch "$RUNNER_TEMP/generation/changes.patch" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --base-sha "$BASE_SHA" \
+            --image "$VERIFY_IMAGE" \
+            --output "$RUNNER_TEMP/verification/verification.json"
+
+      - name: Classify verification outcome
+        id: outcome
+        if: always()
+        shell: bash
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$VERIFY_OUTCOME" = success ]; then
+            printf 'state=verified\nexecute=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'state=verification_failed\nexecute=false\n' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Upload verification artifact
+        if: steps.outcome.outputs.execute == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oc2-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verification/verification.json
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 1
+
+      - name: Delete verification state
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/generation" "$RUNNER_TEMP/verification"
+
+  publish:
+    needs: [admit, generate, verify]
+    if: github.repository == 'panwar-stack/oc2' && vars.OC2_AUTOMATION_ENABLED == 'true' && needs.admit.outputs.execute == 'true' && needs.generate.outputs.execute == 'true' && needs.verify.outputs.execute == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      state: ${{ steps.publish.outputs.state }}
+      execute: ${{ steps.publish.outputs.execute }}
+      pr_id: ${{ steps.publish.outputs.pr_id }}
+      pr_number: ${{ steps.publish.outputs.pr_number }}
+      pr_url: ${{ steps.publish.outputs.pr_url }}
+    steps:
+      - name: Checkout exact admitted base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.admit.outputs.base_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Download exact admission artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/admission
+
+      - name: Download exact generation artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-generation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/generation
+
+      - name: Download exact verification artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verification
+
+      - name: Download trusted publication helper
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-trusted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trusted
+
+      - name: Revalidate and seal publication inputs
+        shell: bash
+        env:
+          ADMISSION_KEY: ${{ needs.admit.outputs.key }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          bun --no-env-file "$RUNNER_TEMP/trusted/oc2-publish.js" prepare \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --generation "$RUNNER_TEMP/generation/generation.json" \
+            --patch "$RUNNER_TEMP/generation/changes.patch" \
+            --verification "$RUNNER_TEMP/verification/verification.json" \
+            --output "$RUNNER_TEMP/publication.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --base-sha "$BASE_SHA" \
+            --key "$ADMISSION_KEY" \
+            --checkout "$GITHUB_WORKSPACE"
+
+      - name: Create repository-scoped publisher token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.OC2_APP_ID }}
+          private-key: ${{ secrets.OC2_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Publish verified change
+        id: publish
+        shell: bash
+        env:
+          OC2_PUBLISH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          PUBLISHER_BOT_ID: ${{ vars.OC2_PUBLISHER_BOT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          bun --no-env-file "$RUNNER_TEMP/trusted/oc2-publish.js" publish \
+            --publication "$RUNNER_TEMP/publication.json" \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --generation "$RUNNER_TEMP/generation/generation.json" \
+            --patch "$RUNNER_TEMP/generation/changes.patch" \
+            --verification "$RUNNER_TEMP/verification/verification.json" \
+            --checkout "$GITHUB_WORKSPACE" \
+            --run-url "$RUN_URL" \
+            --app-slug "$APP_SLUG" \
+            --publisher-bot-id "$PUBLISHER_BOT_ID" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Delete publication state
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/admission" "$RUNNER_TEMP/generation" "$RUNNER_TEMP/verification" "$RUNNER_TEMP/trusted" "$RUNNER_TEMP/publication.json"
+
+  status:
+    needs: [admit, ingest, generate, verify, publish]
+    if: always() && github.repository == 'panwar-stack/oc2' && vars.OC2_AUTOMATION_ENABLED == 'true' && needs.admit.outputs.execute == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Download exact admission artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/admission
+
+      - name: Download trusted status helper
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: oc2-trusted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trusted
+
+      - name: Update fixed terminal status
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MARKER_BOT_ID: ${{ vars.OC2_MARKER_BOT_ID }}
+          ADMISSION_KEY: ${{ needs.admit.outputs.key }}
+          BASE_SHA: ${{ needs.admit.outputs.base_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          PR_ID: ${{ needs.publish.outputs.pr_id || 'none' }}
+          INGEST_RESULT: ${{ needs.ingest.result }}
+          INGEST_STATE: ${{ needs.ingest.outputs.state }}
+          GENERATE_RESULT: ${{ needs.generate.result }}
+          GENERATE_STATE: ${{ needs.generate.outputs.state }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          VERIFY_STATE: ${{ needs.verify.outputs.state }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          PUBLISH_STATE: ${{ needs.publish.outputs.state }}
+        run: |
+          set -euo pipefail
+          bun --no-env-file "$RUNNER_TEMP/trusted/oc2-publish.js" status \
+            --admission "$RUNNER_TEMP/admission/admission.json" \
+            --event-file "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --base-sha "$BASE_SHA" \
+            --key "$ADMISSION_KEY" \
+            --bot-id "$MARKER_BOT_ID" \
+            --ingest-result "$INGEST_RESULT" \
+            --ingest-state "${INGEST_STATE:-none}" \
+            --generate-result "$GENERATE_RESULT" \
+            --generate-state "${GENERATE_STATE:-none}" \
+            --verify-result "$VERIFY_RESULT" \
+            --verify-state "${VERIFY_STATE:-none}" \
+            --publish-result "$PUBLISH_RESULT" \
+            --publish-state "${PUBLISH_STATE:-none}" \
+            --pr-id "$PR_ID"
+
+      - name: Delete status state
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/admission" "$RUNNER_TEMP/trusted"

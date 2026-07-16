@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto"
 import { constants } from "node:fs"
-import { appendFile, lstat, mkdir, open, readdir, realpath } from "node:fs/promises"
+import { appendFile, lstat, mkdir, open, readdir, realpath, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 import { validateChangedPaths } from "./oc2-automation-policy"
@@ -35,6 +35,12 @@ const resultErrors = new Set([
   "cancelled",
   "timeout",
 ])
+
+class AutomationExecutionError extends Error {
+  constructor(readonly phase: "permission_denied" | "tool_failed" | "model_failed") {
+    super("automation execution failed")
+  }
+}
 const mediaExtensions = new Map([
   ["image/png", "png"],
   ["image/jpeg", "jpg"],
@@ -194,7 +200,7 @@ function admitted(value: AdmissionResult): Admission {
   return value
 }
 
-async function validateAdmissionEvent(
+export async function validateAdmissionEvent(
   admission: AdmissionResult,
   eventPath: string,
   repository: string,
@@ -384,7 +390,13 @@ export function parseAutomationResult(source: string) {
     typeof value.error === "string" &&
     resultErrors.has(value.error)
   )
-    throw new Error("automation execution failed")
+    throw new AutomationExecutionError(
+      value.error === "permission_denied"
+        ? "permission_denied"
+        : value.error === "tool_error"
+          ? "tool_failed"
+          : "model_failed",
+    )
   throw new Error("invalid automation result")
 }
 
@@ -439,7 +451,10 @@ export async function runGeneration(input: {
   checkout: string
   oc2: string
   stateDir: string
+  phaseFile: string
 }) {
+  const phaseParent = await realpath(dirname(input.phaseFile))
+  const phaseFile = join(phaseParent, basename(input.phaseFile))
   const checkout = await realpath(input.checkout)
   const stateDir = await realpath(input.stateDir)
   const bundleDir = await realpath(input.bundleDir)
@@ -464,77 +479,90 @@ export async function runGeneration(input: {
     "--format",
     "result-json",
   ]
-  if (input.admission.issue.label === "task") {
+  try {
+    if (input.admission.issue.label === "task") {
+      await runOc2(
+        input.oc2,
+        [
+          ...common,
+          "--agent",
+          "issue-task",
+          "--variant",
+          "high",
+          ...fileArgs,
+          "--",
+          "Implement the admitted task from the attached issue snapshot.",
+        ],
+        checkout,
+        stateDir,
+        "task",
+        105 * 60_000,
+      )
+      await writeFile(phaseFile, "generated\n", { encoding: "utf8" })
+      return
+    }
+    const plan = await runOc2(
+      input.oc2,
+      [
+        ...common,
+        "--agent",
+        "issue-planner",
+        "--variant",
+        "xhigh",
+        ...fileArgs,
+        "--command",
+        "spec:planner",
+        "--",
+        "Plan the admitted feature from the attached issue snapshot as exactly one implementation slice.",
+      ],
+      checkout,
+      stateDir,
+      "planner",
+      20 * 60_000,
+    )
+    const planBytes = Buffer.byteLength(plan.text)
+    if (
+      planBytes < 1 ||
+      planBytes > maximumPlanBytes ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(plan.text)
+    )
+      throw new Error("invalid feature plan")
+    const specs = await realpath(join(checkout, "specs"))
+    if (!specs.startsWith(`${checkout}${sep}`) || !(await lstat(specs)).isDirectory())
+      throw new Error("invalid specs directory")
+    const planName = `issue-${input.admission.issue.number}.md`
+    const planFile = await open(
+      join(specs, planName),
+      constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY,
+      0o600,
+    )
+    await planFile.writeFile(plan.text.endsWith("\n") ? plan.text : `${plan.text}\n`).finally(() => planFile.close())
     await runOc2(
       input.oc2,
       [
         ...common,
         "--agent",
-        "issue-task",
+        "issue-implementer",
         "--variant",
-        "high",
-        ...fileArgs,
+        "xhigh",
+        "--command",
+        "spec:implement",
         "--",
-        "Implement the admitted task from the attached issue snapshot.",
+        `specs/${planName}`,
+        "1",
       ],
       checkout,
       stateDir,
-      "task",
-      105 * 60_000,
+      "implementer",
+      85 * 60_000,
     )
-    return
+    await writeFile(phaseFile, "generated\n", { encoding: "utf8" })
+  } catch (error) {
+    await writeFile(phaseFile, `${error instanceof AutomationExecutionError ? error.phase : "model_failed"}\n`, {
+      encoding: "utf8",
+    })
+    throw error
   }
-  const plan = await runOc2(
-    input.oc2,
-    [
-      ...common,
-      "--agent",
-      "issue-planner",
-      "--variant",
-      "xhigh",
-      ...fileArgs,
-      "--command",
-      "spec:planner",
-      "--",
-      "Plan the admitted feature from the attached issue snapshot as exactly one implementation slice.",
-    ],
-    checkout,
-    stateDir,
-    "planner",
-    20 * 60_000,
-  )
-  const planBytes = Buffer.byteLength(plan.text)
-  if (planBytes < 1 || planBytes > maximumPlanBytes || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(plan.text))
-    throw new Error("invalid feature plan")
-  const specs = await realpath(join(checkout, "specs"))
-  if (!specs.startsWith(`${checkout}${sep}`) || !(await lstat(specs)).isDirectory())
-    throw new Error("invalid specs directory")
-  const planName = `issue-${input.admission.issue.number}.md`
-  const planFile = await open(
-    join(specs, planName),
-    constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY,
-    0o600,
-  )
-  await planFile.writeFile(plan.text.endsWith("\n") ? plan.text : `${plan.text}\n`).finally(() => planFile.close())
-  await runOc2(
-    input.oc2,
-    [
-      ...common,
-      "--agent",
-      "issue-implementer",
-      "--variant",
-      "xhigh",
-      "--command",
-      "spec:implement",
-      "--",
-      `specs/${planName}`,
-      "1",
-    ],
-    checkout,
-    stateDir,
-    "implementer",
-    85 * 60_000,
-  )
 }
 
 function gitEnvironment(home: string, indexFile?: string) {
@@ -805,13 +833,14 @@ export async function main(argv: ReadonlyArray<string> = process.argv.slice(2)) 
     return
   }
   if (argv[0] === "run") {
-    const values = options(argv, ["--admission", "--bundle-dir", "--checkout", "--oc2", "--state-dir"])
+    const values = options(argv, ["--admission", "--bundle-dir", "--checkout", "--oc2", "--state-dir", "--phase-file"])
     await runGeneration({
       admission: admitted(decodeAdmission(await readRegularUtf8(values.admission!, maximumAdmissionBytes))),
       bundleDir: values.bundle_dir!,
       checkout: values.checkout!,
       oc2: values.oc2!,
       stateDir: values.state_dir!,
+      phaseFile: values.phase_file!,
     })
     return
   }

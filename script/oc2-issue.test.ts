@@ -2021,7 +2021,7 @@ describe("trusted issue workflow glue", () => {
     expect(workflow).not.toContain("dangerously-skip-permissions")
     expect(workflow).not.toContain("--format json")
     expect(workflow).not.toMatch(/\bbun script\//)
-    expect(workflow.match(/bun --config=\/dev\/null --no-env-file --no-install/g)).toHaveLength(10)
+    expect(workflow.match(/bun --config=\/dev\/null --no-env-file --no-install/g)).toHaveLength(11)
     for (const line of workflow.split("\n").filter((line) => line.trim().startsWith("uses:"))) {
       expect(line).toMatch(/uses: [^@]+@[0-9a-f]{40}(?: # v[^ ]+)?$/)
     }
