@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { deflateSync } from "node:zlib"
 
 import {
   admitIssue,
@@ -17,6 +18,7 @@ import {
   type GitHubApi,
   type GitHubIssue,
   type GitHubIssueComment,
+  type GitHubIngestApi,
   type GitHubLabeledEvent,
   type GitHubPullRequest,
   type GitHubFetch,
@@ -106,7 +108,7 @@ function fakeGitHub(overrides: Partial<FakeState> = {}) {
     writes: [],
     ...overrides,
   }
-  const api: GitHubApi = {
+  const api: GitHubApi & GitHubIngestApi = {
     async createIssueComment(_issueNumber, body) {
       state.writes.push({ method: "create", body })
       const comment = { id: state.nextCommentId++, userId: botId, body }
@@ -233,6 +235,64 @@ function attachmentUrl(index = 1, host = "github.com") {
   return `https://${host}/user-attachments/assets/00000000-0000-4000-8000-${suffix}`
 }
 
+function bytes(...parts: Uint8Array[]) {
+  const value = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0))
+  let offset = 0
+  for (const part of parts) {
+    value.set(part, offset)
+    offset += part.byteLength
+  }
+  return value
+}
+
+function pngChunk(type: string, data: Uint8Array) {
+  const typeBytes = new TextEncoder().encode(type)
+  const value = new Uint8Array(12 + data.byteLength)
+  const view = new DataView(value.buffer)
+  view.setUint32(0, data.byteLength)
+  value.set(typeBytes, 4)
+  value.set(data, 8)
+  view.setUint32(8 + data.byteLength, Bun.hash.crc32(bytes(typeBytes, data)) >>> 0)
+  return value
+}
+
+function pngAttachment() {
+  const header = new Uint8Array(13)
+  const view = new DataView(header.buffer)
+  view.setUint32(0, 1)
+  view.setUint32(4, 1)
+  header[8] = 8
+  return bytes(
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", deflateSync(new Uint8Array([0, 0]))),
+    pngChunk("IEND", new Uint8Array()),
+  )
+}
+
+function jpegAttachment() {
+  return new Uint8Array([
+    0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0x3f, 0, 0, 0xff, 0xd9,
+  ])
+}
+
+function gifAttachment() {
+  return bytes(
+    new TextEncoder().encode("GIF89a"),
+    new Uint8Array([1, 0, 1, 0, 0, 0, 0]),
+    new Uint8Array([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3b]),
+  )
+}
+
+function webpAttachment() {
+  return bytes(
+    new TextEncoder().encode("RIFF"),
+    new Uint8Array([18, 0, 0, 0]),
+    new TextEncoder().encode("WEBPVP8L"),
+    new Uint8Array([6, 0, 0, 0, 0x2f, 0, 0, 0, 0, 0]),
+  )
+}
+
 function requestHref(request: string | URL | Request) {
   return typeof request === "string" ? request : request instanceof URL ? request.href : request.url
 }
@@ -258,6 +318,7 @@ async function ingestFixture(
       {
         admission: options.admission ?? admissionArtifact(),
         bundleDir,
+        bundleRoot: root,
         checkoutDir: import.meta.dir,
         repository: options.repository ?? "octo/oc2",
         event:
@@ -936,6 +997,22 @@ describe("deterministic issue ingestion", () => {
     await rm(fixture.root, { recursive: true, force: true })
   })
 
+  test("applies the specified inclusive cutoff to creation and update timestamps", async () => {
+    const comment = snapshotComment("IC_cutoff", "included at cutoff", "2026-07-16T10:00:00Z", "2026-07-16T10:00:00Z")
+    const fixture = await ingestFixture({ comments: [comment] })
+    const snapshot = JSON.parse(await Bun.file(join(fixture.bundleDir, "issue.json")).text())
+    expect(snapshot.comments).toEqual([
+      {
+        nodeId: "IC_cutoff",
+        author: "commenter",
+        createdAt: "2026-07-16T10:00:00Z",
+        updatedAt: "2026-07-16T10:00:00Z",
+        body: "included at cutoff",
+      },
+    ])
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
   test("fails closed when comment pagination or visibility is incomplete", async () => {
     const root = await mkdtemp(join(tmpdir(), "oc2-issue-incomplete-"))
     const github = fakeGitHub({ snapshotComments: [snapshotComment("IC_one", "one")] })
@@ -943,6 +1020,7 @@ describe("deterministic issue ingestion", () => {
       {
         admission: admissionArtifact(),
         bundleDir: join(root, "bundle"),
+        bundleRoot: root,
         checkoutDir: import.meta.dir,
         repository: "octo/oc2",
         event: event({ title: "Title", body: "Body", commentCount: 2 }),
@@ -1038,6 +1116,7 @@ describe("deterministic issue ingestion", () => {
       {
         admission: admissionArtifact(),
         bundleDir: join(root, "bundle"),
+        bundleRoot: root,
         checkoutDir: import.meta.dir,
         repository: "octo/oc2",
         event: event({ title: `![x](${attachmentUrl()})`, body: "", commentCount: 0 }),
@@ -1145,10 +1224,14 @@ describe("bounded attachment ingestion", () => {
             status: 302,
             headers: { Location: `https://objects.githubusercontent.com/object/${seen.length}?signature=private` },
           })
-        return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+        return new Response(pngAttachment())
       },
     })
-    expect(fixture.result).toMatchObject({ status: "ok", attachmentCount: 1, attachmentBytes: 8 })
+    expect(fixture.result).toMatchObject({
+      status: "ok",
+      attachmentCount: 1,
+      attachmentBytes: pngAttachment().byteLength,
+    })
     expect(seen).toHaveLength(4)
     for (const request of seen) {
       const headers = new Headers(request.init?.headers)
@@ -1199,6 +1282,9 @@ describe("bounded attachment ingestion", () => {
       },
       async () => new Response("private response", { status: 404 }),
       async () => new Response(null, { status: 302 }),
+      async () => new Response("partial", { status: 206 }),
+      async () => new Response("partial", { headers: { "Content-Range": "bytes 0-6/100" } }),
+      async () => new Response("x", { headers: { "Content-Length": "2" } }),
     ]
     for (const fetch of fetchers) {
       const fixture = await ingestFixture({
@@ -1305,10 +1391,10 @@ describe("bounded attachment ingestion", () => {
 
   test("sniffs allowed bytes independently of names and declared MIME", async () => {
     const contents = [
-      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      new Uint8Array([0xff, 0xd8, 0xff]),
-      new TextEncoder().encode("GIF89a"),
-      new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]),
+      pngAttachment(),
+      jpegAttachment(),
+      gifAttachment(),
+      webpAttachment(),
       new TextEncoder().encode('{"safe":true}'),
     ]
     let index = 0
@@ -1330,12 +1416,20 @@ describe("bounded attachment ingestion", () => {
 
     const markdown = await ingestFixture({
       body: `![asset](${attachmentUrl().replace(/-[0-9a-f]{12}$/, "-000000000099")})`,
-      fetch: async () => new Response("# Markdown", { headers: { "Content-Type": "text/markdown; charset=utf-8" } }),
+      fetch: async () => new Response("# Markdown", { headers: { "Content-Type": "application/pdf" } }),
     })
     const markdownSnapshot = JSON.parse(await Bun.file(join(markdown.bundleDir, "issue.json")).text())
     expect(markdownSnapshot.attachments[0]).toMatchObject({ mediaType: "text/markdown" })
     expect(markdownSnapshot.attachments[0].path).toEndWith(".md")
     await rm(markdown.root, { recursive: true, force: true })
+
+    const ignoredMime = await ingestFixture({
+      body: `![asset](${attachmentUrl(100)})`,
+      fetch: async () => new Response(pngAttachment(), { headers: { "Content-Type": "text/html" } }),
+    })
+    const ignoredMimeSnapshot = JSON.parse(await Bun.file(join(ignoredMime.bundleDir, "issue.json")).text())
+    expect(ignoredMimeSnapshot.attachments[0]).toMatchObject({ mediaType: "image/png" })
+    await rm(ignoredMime.root, { recursive: true, force: true })
   })
 
   test.each([
@@ -1347,7 +1441,8 @@ describe("bounded attachment ingestion", () => {
     ["shebang", new TextEncoder().encode("#!/bin/sh"), null],
     ["malformed UTF-8", new Uint8Array([0xc3, 0x28]), "text/plain"],
     ["unknown control binary", new Uint8Array([0, 1, 2, 3]), "text/plain"],
-    ["MIME-confused image", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), "text/html"],
+    ["truncated PNG", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), "image/png"],
+    ["image polyglot", bytes(pngAttachment(), new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/png"],
   ])("rejects %s bytes regardless of extension or content type", async (_name, content, contentType) => {
     const fixture = await ingestFixture({
       body: `![asset](${attachmentUrl()})`,
@@ -1387,6 +1482,7 @@ describe("bounded attachment ingestion", () => {
       {
         admission: admissionArtifact(),
         bundleDir: join(import.meta.dir, "forbidden-bundle"),
+        bundleRoot: import.meta.dir,
         checkoutDir: import.meta.dir,
         repository: "octo/oc2",
         event: event({ title: "Title", body: "Body", commentCount: 0 }),
@@ -1572,6 +1668,62 @@ describe("native fetch GitHub client and CLI", () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  test("CLI rejects result overlap and cleans its bundle when result publication fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "oc2-issue-result-cli-"))
+    const eventFile = join(root, "event.json")
+    const admissionFile = join(root, "admission.json")
+    const bundleDir = join(root, "bundle")
+    await Bun.write(eventFile, JSON.stringify(event({ title: "Title", body: "Body", commentCount: 0 })))
+    await Bun.write(admissionFile, JSON.stringify(admissionArtifact()))
+    const apiFetch: GitHubFetch = async (request) => {
+      const requestUrl = new URL(requestHref(request))
+      if (requestUrl.pathname.endsWith("/timeline"))
+        return Response.json([
+          {
+            event: "labeled",
+            node_id: "LE_label42",
+            created_at: "2026-07-16T10:00:00Z",
+            actor: { id: 100, login: "maintainer", type: "User" },
+            label: { name: "task" },
+          },
+        ])
+      if (requestUrl.pathname.endsWith("/comments")) return Response.json([])
+      throw new Error("unexpected API route")
+    }
+    const run = (resultFile: string) =>
+      main(
+        [
+          "ingest",
+          "--event-file",
+          eventFile,
+          "--admission-file",
+          admissionFile,
+          "--bundle-dir",
+          bundleDir,
+          "--result-file",
+          resultFile,
+        ],
+        {
+          fetch: apiFetch,
+          bundleRoot: root,
+          checkoutDir: import.meta.dir,
+          env: {
+            GITHUB_API_URL: "https://api.github.test",
+            GITHUB_REPOSITORY: "octo/oc2",
+            GITHUB_TOKEN: "token",
+          },
+        },
+      ).then(
+        () => "unexpected success",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      )
+    expect(await run(join(bundleDir, "issue.json"))).toBe("ingestion result must be outside bundle")
+    expect(await Bun.file(bundleDir).exists()).toBe(false)
+    expect(await run(root)).toBe("failed to write ingestion result")
+    expect(await Bun.file(bundleDir).exists()).toBe(false)
+    await rm(root, { recursive: true, force: true })
+  })
+
   test("CLI writes a safe ingest result and keeps attachment requests uncredentialed", async () => {
     const root = await mkdtemp(join(tmpdir(), "oc2-issue-ingest-cli-"))
     const eventFile = join(root, "event.json")
@@ -1624,6 +1776,7 @@ describe("native fetch GitHub client and CLI", () => {
           expect(headers.has("cookie")).toBe(false)
           return new Response("attachment body")
         },
+        bundleRoot: root,
         checkoutDir: import.meta.dir,
         env: {
           GITHUB_API_URL: "https://api.github.test",

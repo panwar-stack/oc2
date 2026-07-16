@@ -2,6 +2,7 @@
 
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { inflateSync } from "node:zlib"
 
 const authorizedPermissions = new Set(["write", "maintain", "admin"])
 const markerPrefix = "<!-- oc2-issue-state:v1 "
@@ -132,10 +133,14 @@ export interface GitHubApi {
   getIssueComment(commentId: number): Promise<GitHubIssueComment>
   getRepository(): Promise<GitHubRepository>
   listIssueComments(issueNumber: number): Promise<GitHubIssueComment[]>
-  listSnapshotComments(issueNumber: number): Promise<GitHubSnapshotComment[]>
   listLabeledEvents(issueNumber: number): Promise<GitHubLabeledEvent[]>
   listOpenPullRequests(): Promise<GitHubPullRequest[]>
   updateIssueComment(commentId: number, body: string): Promise<GitHubIssueComment>
+}
+
+export interface GitHubIngestApi {
+  listLabeledEvents(issueNumber: number): Promise<GitHubLabeledEvent[]>
+  listSnapshotComments(issueNumber: number): Promise<GitHubSnapshotComment[]>
 }
 
 export type AdmissionResult =
@@ -217,7 +222,8 @@ export type GitHubFetch = (input: string | URL | Request, init?: RequestInit) =>
 export interface IngestInput {
   admission: unknown
   bundleDir: string
-  checkoutDir?: string
+  bundleRoot: string
+  checkoutDir: string
   event: unknown
   repository: string
 }
@@ -257,7 +263,7 @@ export type IngestResult =
       phase: "input_too_large" | "attachment_rejected"
     }
 
-export function createGitHubApi(options: GitHubApiOptions): GitHubApi {
+export function createGitHubApi(options: GitHubApiOptions): GitHubApi & GitHubIngestApi {
   if (!options.token) throw new Error("GitHub token is required")
   const repository = parseRepositoryName(options.repository)
   const baseUrl = new URL(options.baseUrl ?? "https://api.github.com")
@@ -636,7 +642,7 @@ export async function updateIssueMarker(input: MarkerUpdateInput, api: GitHubApi
 
 export async function ingestIssue(
   input: IngestInput,
-  api: GitHubApi,
+  api: GitHubIngestApi,
   attachmentFetch: GitHubFetch = globalThis.fetch,
 ): Promise<IngestResult> {
   const admission = decodeAdmission(input.admission)
@@ -669,7 +675,7 @@ export async function ingestIssue(
     .filter((comment) => Date.parse(comment.updatedAt) <= cutoff)
     .sort(
       (left, right) =>
-        Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.nodeId.localeCompare(right.nodeId),
+        Date.parse(left.createdAt) - Date.parse(right.createdAt) || compareText(left.nodeId, right.nodeId),
     )
     .map((comment) => ({
       nodeId: comment.nodeId,
@@ -717,9 +723,9 @@ export async function ingestIssue(
         size: download.content.byteLength,
         sha256: download.sha256,
       }))
-      .sort((left, right) => left.sha256.localeCompare(right.sha256)),
+      .sort((left, right) => compareText(left.sha256, right.sha256)),
   }
-  const bundleDir = await prepareBundleDirectory(input.bundleDir, input.checkoutDir ?? process.cwd())
+  const bundleDir = await prepareBundleDirectory(input.bundleDir, input.bundleRoot, input.checkoutDir)
   try {
     if (downloads.length > 0) await mkdir(join(bundleDir, "attachments"), { mode: 0o700 })
     for (const download of downloads) {
@@ -749,6 +755,7 @@ export async function main(
     fetch?: GitHubFetch
     attachmentFetch?: GitHubFetch
     now?: Date
+    bundleRoot?: string
     checkoutDir?: string
   } = {},
 ) {
@@ -763,18 +770,25 @@ export async function main(
     fetch: dependencies.fetch,
   })
   if (options.command === "ingest") {
+    const checkoutDir = dependencies.checkoutDir ?? requiredEnvironment(env, "GITHUB_WORKSPACE")
+    const bundleRoot = dependencies.bundleRoot ?? requiredEnvironment(env, "RUNNER_TEMP")
+    const resultFile = await validateSeparatePath(options.resultFile, options.bundleDir)
     const result = await ingestIssue(
       {
         admission: parseJson(await readBoundedUtf8File(options.admissionFile, maximumAdmissionBytes, "admission")),
         bundleDir: options.bundleDir,
-        checkoutDir: dependencies.checkoutDir,
+        bundleRoot,
+        checkoutDir,
         event,
         repository,
       },
       api,
       dependencies.attachmentFetch ?? globalThis.fetch,
     )
-    await Bun.write(options.resultFile, `${JSON.stringify(result)}\n`)
+    await writeFile(resultFile, `${JSON.stringify(result)}\n`, { flag: "wx", mode: 0o600 }).catch(async () => {
+      if (result.status === "ok") await rm(options.bundleDir, { recursive: true, force: true })
+      throw new Error("failed to write ingestion result")
+    })
     return 0
   }
   const botId = positiveInteger(Number(options.botId))
@@ -1286,7 +1300,7 @@ async function downloadAttachment(source: URL, request: GitHubFetch) {
         url = validateAttachmentUrl(location, false, url)
         continue
       }
-      if (!response.ok || !response.body) rejectAttachment()
+      if (response.status !== 200 || response.headers.has("content-range") || !response.body) rejectAttachment()
       const contentEncoding = response.headers.get("content-encoding")?.trim().toLowerCase()
       if (contentEncoding && contentEncoding !== "identity") rejectAttachment()
       const declaredLength = response.headers.get("content-length")
@@ -1311,7 +1325,8 @@ async function downloadAttachment(source: URL, request: GitHubFetch) {
         content.set(chunk, offset)
         offset += chunk.byteLength
       }
-      return { content, ...sniffAttachment(content, response.headers.get("content-type")) }
+      if (declaredLength !== null && Number(declaredLength) !== content.byteLength) rejectAttachment()
+      return { content, ...sniffAttachment(content) }
     }
     return rejectAttachment()
   } finally {
@@ -1319,37 +1334,18 @@ async function downloadAttachment(source: URL, request: GitHubFetch) {
   }
 }
 
-function sniffAttachment(content: Uint8Array, contentType: string | null) {
-  const declared = contentType?.split(";", 1)[0]?.trim().toLowerCase()
+function sniffAttachment(content: Uint8Array) {
+  if (isPng(content)) return { extension: "png", mediaType: "image/png" }
+  if (isJpeg(content)) return { extension: "jpg", mediaType: "image/jpeg" }
+  if (isGif(content)) return { extension: "gif", mediaType: "image/gif" }
+  if (isWebp(content)) return { extension: "webp", mediaType: "image/webp" }
   if (
-    declared &&
-    new Set([
-      "application/gzip",
-      "application/pdf",
-      "application/x-7z-compressed",
-      "application/x-executable",
-      "application/x-rar-compressed",
-      "application/x-tar",
-      "application/zip",
-      "image/svg+xml",
-      "text/html",
-      "application/xhtml+xml",
-    ]).has(declared)
+    startsWithBytes(content, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) ||
+    startsWithBytes(content, [0xff, 0xd8, 0xff]) ||
+    startsWithBytes(content, [0x47, 0x49, 0x46, 0x38]) ||
+    (startsWithBytes(content, [0x52, 0x49, 0x46, 0x46]) && new TextDecoder().decode(content.slice(8, 12)) === "WEBP")
   )
     rejectAttachment()
-  if (startsWithBytes(content, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-    return { extension: "png", mediaType: "image/png" }
-  if (startsWithBytes(content, [0xff, 0xd8, 0xff])) return { extension: "jpg", mediaType: "image/jpeg" }
-  if (
-    new TextDecoder().decode(content.slice(0, 6)) === "GIF87a" ||
-    new TextDecoder().decode(content.slice(0, 6)) === "GIF89a"
-  )
-    return { extension: "gif", mediaType: "image/gif" }
-  if (
-    new TextDecoder().decode(content.slice(0, 4)) === "RIFF" &&
-    new TextDecoder().decode(content.slice(8, 12)) === "WEBP"
-  )
-    return { extension: "webp", mediaType: "image/webp" }
   if (isRejectedBinary(content)) rejectAttachment()
   let text: string
   try {
@@ -1368,15 +1364,262 @@ function sniffAttachment(content: Uint8Array, contentType: string | null) {
     )
   )
     rejectAttachment()
-  try {
-    JSON.parse(text)
-    return { extension: "json", mediaType: "application/json" }
-  } catch {
-    if (declared === "application/json") rejectAttachment()
-  }
-  return declared === "text/markdown" || declared === "text/x-markdown"
+  if (isJsonText(text)) return { extension: "json", mediaType: "application/json" }
+  return looksLikeMarkdown(text)
     ? { extension: "md", mediaType: "text/markdown" }
     : { extension: "txt", mediaType: "text/plain" }
+}
+
+function isPng(content: Uint8Array) {
+  if (!startsWithBytes(content, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return false
+  const view = new DataView(content.buffer, content.byteOffset, content.byteLength)
+  const idat: Uint8Array[] = []
+  let offset = 8
+  let expectedBytes = 0
+  let sawHeader = false
+  let sawPalette = false
+  let sawData = false
+  let endedData = false
+  let indexed = false
+  while (offset + 12 <= content.byteLength) {
+    const length = view.getUint32(offset)
+    const dataStart = offset + 8
+    const dataEnd = dataStart + length
+    const next = dataEnd + 4
+    if (dataEnd < dataStart || next > content.byteLength) return false
+    const type = new TextDecoder().decode(content.slice(offset + 4, offset + 8))
+    if (!/^[A-Za-z]{4}$/.test(type)) return false
+    if (Bun.hash.crc32(content.subarray(offset + 4, dataEnd)) >>> 0 !== view.getUint32(dataEnd)) return false
+    if (!sawHeader && type !== "IHDR") return false
+    if (type === "IHDR") {
+      if (sawHeader || length !== 13) return false
+      const width = view.getUint32(dataStart)
+      const height = view.getUint32(dataStart + 4)
+      const bitDepth = content[dataStart + 8]
+      const colorType = content[dataStart + 9]
+      const channels = colorType === 0 ? 1 : colorType === 2 ? 3 : colorType === 3 ? 1 : colorType === 4 ? 2 : 4
+      const validDepths =
+        colorType === 0 ? new Set([1, 2, 4, 8, 16]) : colorType === 3 ? new Set([1, 2, 4, 8]) : new Set([8, 16])
+      if (
+        !width ||
+        !height ||
+        !new Set([0, 2, 3, 4, 6]).has(colorType ?? -1) ||
+        !validDepths.has(bitDepth ?? -1) ||
+        content[dataStart + 10] !== 0 ||
+        content[dataStart + 11] !== 0 ||
+        content[dataStart + 12] !== 0
+      )
+        return false
+      indexed = colorType === 3
+      expectedBytes = (Math.ceil((width * channels * (bitDepth ?? 0)) / 8) + 1) * height
+      if (!Number.isSafeInteger(expectedBytes) || expectedBytes > maximumTotalAttachmentBytes) return false
+      sawHeader = true
+    } else if (type === "PLTE") {
+      if (sawData || !length || length % 3 !== 0 || length > 768) return false
+      sawPalette = true
+    } else if (type === "IDAT") {
+      if (!sawHeader || endedData || !length) return false
+      sawData = true
+      idat.push(content.subarray(dataStart, dataEnd))
+    } else if (type === "IEND") {
+      if (length !== 0 || !sawHeader || !sawData || next !== content.byteLength) return false
+      if (indexed && !sawPalette) return false
+      const compressed = new Uint8Array(idat.reduce((total, chunk) => total + chunk.byteLength, 0))
+      let compressedOffset = 0
+      for (const chunk of idat) {
+        compressed.set(chunk, compressedOffset)
+        compressedOffset += chunk.byteLength
+      }
+      let decoded: Uint8Array
+      try {
+        decoded = inflateSync(compressed, { maxOutputLength: expectedBytes })
+      } catch {
+        return false
+      }
+      if (decoded.byteLength !== expectedBytes) return false
+      const height = view.getUint32(20)
+      const rowBytes = expectedBytes / height
+      return (
+        Number.isInteger(rowBytes) &&
+        Array.from({ length: height }, (_, row) => decoded[row * rowBytes]).every((filter) => (filter ?? 5) <= 4)
+      )
+    } else if ((type[0] ?? "a") === (type[0] ?? "a").toUpperCase()) {
+      return false
+    } else if (sawData) {
+      endedData = true
+    }
+    offset = next
+  }
+  return false
+}
+
+function isJpeg(content: Uint8Array) {
+  if (!startsWithBytes(content, [0xff, 0xd8, 0xff])) return false
+  let offset = 2
+  let sawFrame = false
+  let sawScan = false
+  let scanBytes = 0
+  while (offset < content.byteLength) {
+    if (content[offset] !== 0xff) return false
+    while (content[offset] === 0xff) offset++
+    const marker = content[offset++]
+    if (
+      marker === undefined ||
+      marker === 0 ||
+      marker === 0xd8 ||
+      marker === 0x01 ||
+      (marker >= 0xd0 && marker <= 0xd7)
+    )
+      return false
+    if (marker === 0xd9) return sawFrame && sawScan && scanBytes > 0 && offset === content.byteLength
+    if (offset + 2 > content.byteLength) return false
+    const length = ((content[offset] ?? 0) << 8) | (content[offset + 1] ?? 0)
+    if (length < 2 || offset + length > content.byteLength) return false
+    const dataStart = offset + 2
+    const end = offset + length
+    if (new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]).has(marker)) {
+      const components = content[dataStart + 5]
+      if (
+        sawFrame ||
+        !components ||
+        length !== 8 + components * 3 ||
+        (((content[dataStart + 1] ?? 0) << 8) | (content[dataStart + 2] ?? 0)) === 0 ||
+        (((content[dataStart + 3] ?? 0) << 8) | (content[dataStart + 4] ?? 0)) === 0
+      )
+        return false
+      sawFrame = true
+    }
+    if (marker !== 0xda) {
+      offset = end
+      continue
+    }
+    const scanComponents = content[dataStart]
+    if (!sawFrame || !scanComponents || length !== 6 + scanComponents * 2) return false
+    sawScan = true
+    offset = end
+    while (offset < content.byteLength) {
+      if (content[offset] !== 0xff) {
+        scanBytes++
+        offset++
+        continue
+      }
+      let markerOffset = offset
+      while (content[markerOffset] === 0xff) markerOffset++
+      const scanMarker = content[markerOffset]
+      if (scanMarker === 0) {
+        scanBytes++
+        offset = markerOffset + 1
+        continue
+      }
+      if (scanMarker !== undefined && scanMarker >= 0xd0 && scanMarker <= 0xd7) {
+        offset = markerOffset + 1
+        continue
+      }
+      break
+    }
+  }
+  return false
+}
+
+function isGif(content: Uint8Array) {
+  const header = new TextDecoder().decode(content.slice(0, 6))
+  if ((header !== "GIF87a" && header !== "GIF89a") || content.byteLength < 14) return false
+  const view = new DataView(content.buffer, content.byteOffset, content.byteLength)
+  if (!view.getUint16(6, true) || !view.getUint16(8, true)) return false
+  let offset = 13
+  if ((content[10] ?? 0) & 0x80) offset += 3 * 2 ** (((content[10] ?? 0) & 0x07) + 1)
+  let sawImage = false
+  while (offset < content.byteLength) {
+    const marker = content[offset++]
+    if (marker === 0x3b) return sawImage && offset === content.byteLength
+    if (marker === 0x21) {
+      if (content[offset++] === undefined) return false
+      offset = skipGifBlocks(content, offset)
+      if (offset < 0) return false
+      continue
+    }
+    if (marker !== 0x2c || offset + 9 > content.byteLength) return false
+    if (!view.getUint16(offset + 4, true) || !view.getUint16(offset + 6, true)) return false
+    const packed = content[offset + 8] ?? 0
+    offset += 9
+    if (packed & 0x80) offset += 3 * 2 ** ((packed & 0x07) + 1)
+    const codeSize = content[offset++]
+    if (codeSize === undefined || codeSize < 2 || codeSize > 12) return false
+    if (content[offset] === 0) return false
+    offset = skipGifBlocks(content, offset)
+    if (offset < 0) return false
+    sawImage = true
+  }
+  return false
+}
+
+function skipGifBlocks(content: Uint8Array, start: number) {
+  let offset = start
+  while (offset < content.byteLength) {
+    const length = content[offset++]
+    if (length === undefined) return -1
+    if (length === 0) return offset
+    offset += length
+    if (offset > content.byteLength) return -1
+  }
+  return -1
+}
+
+function isWebp(content: Uint8Array) {
+  if (
+    content.byteLength < 26 ||
+    new TextDecoder().decode(content.slice(0, 4)) !== "RIFF" ||
+    new TextDecoder().decode(content.slice(8, 12)) !== "WEBP"
+  )
+    return false
+  const view = new DataView(content.buffer, content.byteOffset, content.byteLength)
+  if (view.getUint32(4, true) + 8 !== content.byteLength) return false
+  let offset = 12
+  let images = 0
+  while (offset + 8 <= content.byteLength) {
+    const type = new TextDecoder().decode(content.slice(offset, offset + 4))
+    const length = view.getUint32(offset + 4, true)
+    const dataStart = offset + 8
+    const dataEnd = dataStart + length
+    const next = dataEnd + (length % 2)
+    if (!/^[\x20-\x7e]{4}$/.test(type) || dataEnd < dataStart || next > content.byteLength) return false
+    if (!new Set(["VP8 ", "VP8L", "VP8X", "ALPH"]).has(type)) return false
+    if (type === "VP8 ") {
+      if (
+        length < 10 ||
+        ((content[dataStart] ?? 1) & 1) !== 0 ||
+        !startsWithBytes(content.subarray(dataStart + 3), [0x9d, 0x01, 0x2a]) ||
+        (view.getUint16(dataStart + 6, true) & 0x3fff) === 0 ||
+        (view.getUint16(dataStart + 8, true) & 0x3fff) === 0
+      )
+        return false
+      images++
+    } else if (type === "VP8L") {
+      if (length < 6 || content[dataStart] !== 0x2f || ((content[dataStart + 4] ?? 0) & 0xe0) !== 0) return false
+      images++
+    } else if (type === "VP8X") {
+      if (length !== 10) return false
+    } else if (type === "ALPH" && length < 2) {
+      return false
+    }
+    offset = next
+  }
+  return offset === content.byteLength && images === 1
+}
+
+function isJsonText(text: string) {
+  try {
+    JSON.parse(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function looksLikeMarkdown(text: string) {
+  return /(?:^|\n)(?: {0,3}#{1,6}\s| {0,3}(?:[-+*]|\d+[.)])\s| {0,3}>\s| {0,3}```)|!?\[[^\]\n]+\]\([^\n)]+\)|(?:^|\n) {0,3}(?:[-*_]\s*){3,}(?:\n|$)/m.test(
+    text,
+  )
 }
 
 function startsWithBytes(content: Uint8Array, prefix: number[]) {
@@ -1400,17 +1643,40 @@ function isRejectedBinary(content: Uint8Array) {
   )
 }
 
-async function prepareBundleDirectory(bundleDir: string, checkoutDir: string) {
+async function prepareBundleDirectory(bundleDir: string, bundleRoot: string, checkoutDir: string) {
   if (!isAbsolute(bundleDir) || resolve(bundleDir) !== bundleDir) throw new Error("invalid issue bundle path")
-  const requestedParent = dirname(bundleDir)
-  const parent = await realpath(requestedParent)
+  const root = await realpath(bundleRoot)
+  const parent = await realpath(dirname(bundleDir))
   const bundle = join(parent, basename(bundleDir))
   const checkout = await realpath(checkoutDir)
+  const fromRoot = relative(root, bundle)
   const fromCheckout = relative(checkout, bundle)
+  if (!fromRoot || fromRoot.startsWith("..") || isAbsolute(fromRoot)) throw new Error("invalid issue bundle path")
   if (!fromCheckout || (!fromCheckout.startsWith("..") && !isAbsolute(fromCheckout)))
     throw new Error("issue bundle must be outside checkout")
   await mkdir(bundle, { mode: 0o700 })
+  if ((await realpath(bundle)) !== bundle) {
+    await rm(bundle, { recursive: true, force: true })
+    throw new Error("invalid issue bundle path")
+  }
   return bundle
+}
+
+async function validateSeparatePath(resultFile: string, bundleDir: string) {
+  if (!isAbsolute(resultFile) || resolve(resultFile) !== resultFile) throw new Error("invalid ingestion result path")
+  const fromRequestedBundle = relative(bundleDir, resultFile)
+  if (!fromRequestedBundle || (!fromRequestedBundle.startsWith("..") && !isAbsolute(fromRequestedBundle)))
+    throw new Error("ingestion result must be outside bundle")
+  const result = join(await realpath(dirname(resultFile)), basename(resultFile))
+  const bundle = join(await realpath(dirname(bundleDir)), basename(bundleDir))
+  const fromBundle = relative(bundle, result)
+  if (!fromBundle || (!fromBundle.startsWith("..") && !isAbsolute(fromBundle)))
+    throw new Error("ingestion result must be outside bundle")
+  return result
+}
+
+function compareText(left: string, right: string) {
+  return left < right ? -1 : left > right ? 1 : 0
 }
 
 async function readBoundedUtf8File(path: string, limit: number, name: string) {
