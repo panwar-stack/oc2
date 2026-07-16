@@ -1348,6 +1348,7 @@ export const layer = Layer.effect(
 
       const guidance = [
         "Agent team orchestration is enabled.",
+        "MANDATE: Lead session MUST use agent team (team_create, team_spawn, team_task_create, team_broadcast, team_report).",
         `Current teammate model: ${current.providerID}/${current.modelID}`,
         ...variantGuidance,
        `For non trivial tasks, call team_create early, decompose work into shared tasks, and use team_spawn before local implementation. Default to delegation for independent searches, file reads, investigation, implementation slices, review, verification, and new subtasks that emerge. Spawn teammates in parallel unless one result truly blocks another.

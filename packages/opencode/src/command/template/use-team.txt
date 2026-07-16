@@ -2,4 +2,4 @@ Use an agent team for this work:
 
 $ARGUMENTS
 
-First understand the request, relevant code, and success criteria. Break the work into clear tasks, identify independent pieces, and parallelize them across teammates where it is safe. Coordinate findings and dependencies, keep teammates focused, verify the integrated result with targeted checks, then report what changed and how it was verified.
+First understand the request, relevant code, and success criteria. MANDATE: lead session MUST use agent team. Break the work into clear tasks, identify independent pieces, and parallelize them across teammates where it is safe. Coordinate findings and dependencies, keep teammates focused, verify the integrated result with targeted checks, then report what changed and how it was verified.
