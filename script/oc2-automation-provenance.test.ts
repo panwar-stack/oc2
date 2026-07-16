@@ -517,7 +517,7 @@ describe("exact-head auto-merge transaction", () => {
         api: api([pullRequest(), pullRequest(), pullRequest()]),
         merge: async (input) => {
           merged = true
-          expect(input).toMatchObject({ repository, prNumber: 17, headSha })
+          expect(input).toEqual({ token: "installation-token", repository, prNumber: 17, headSha })
           return true
         },
       }),
@@ -547,7 +547,7 @@ describe("exact-head auto-merge transaction", () => {
         ]),
         merge: async (input) => {
           merged = true
-          expect(input.token).toBe("mutation-token")
+          expect(input).toEqual({ token: "mutation-token", repository, prNumber: 17, headSha })
           return true
         },
       }),

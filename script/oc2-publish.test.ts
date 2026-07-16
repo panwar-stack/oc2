@@ -287,6 +287,12 @@ describe("fixed status phase precedence", () => {
     ["stale base", { publishState: "stale_base" }, "stale_base"],
     ["push race", { publishResult: "failure", publishState: "push_race" }, "push_race"],
     ["auto-merge enabled", {}, "auto_merge_enabled"],
+    ["post-enrollment cleanup failure", { autoMergeResult: "failure" }, "auto_merge_enabled"],
+    [
+      "post-publication cleanup failure",
+      { publishResult: "failure", autoMergeResult: "skipped", autoMergeState: "none" },
+      "auto_merge_unavailable",
+    ],
     [
       "auto-merge unavailable",
       { autoMergeResult: "failure", autoMergeState: "auto_merge_unavailable" },

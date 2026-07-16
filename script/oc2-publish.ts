@@ -1185,7 +1185,15 @@ export async function enablePreparedAutoMerge(input: {
     rulesets: currentRulesets,
   })
   if (currentBranchSha !== input.headSha) throw new Error("auto-merge ref changed")
-  if (!(await (input.merge ?? runGhAutoMerge)(input))) throw new Error("auto-merge command rejected")
+  if (
+    !(await (input.merge ?? runGhAutoMerge)({
+      token: input.token,
+      repository: input.repository,
+      prNumber: input.prNumber,
+      headSha: input.headSha,
+    }))
+  )
+    throw new Error("auto-merge command rejected")
 
   const [final, finalBranchSha, state, finalRepository, finalRulesets] = await Promise.all([
     api.getPullRequest(input.prNumber),
@@ -1250,8 +1258,8 @@ export function deriveStatusPhase(input: PublicationStateInput): IssuePhase {
   if (input.verifyState === "verification_failed" || input.verifyResult !== "success") return "verification_failed"
   if (input.verifyState !== "verified") return "verification_failed"
   if (input.publishState === "stale_base" || input.publishState === "push_race") return input.publishState
-  if (input.publishResult !== "success" || input.publishState !== "pr_opened") return "push_race"
-  if (input.autoMergeResult === "success" && input.autoMergeState === "auto_merge_enabled") return "auto_merge_enabled"
+  if (input.publishState !== "pr_opened") return "push_race"
+  if (input.autoMergeState === "auto_merge_enabled") return "auto_merge_enabled"
   return "auto_merge_unavailable"
 }
 
