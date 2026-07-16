@@ -1743,6 +1743,15 @@ Do not create a team for trivial one step requests or when the user explicitly a
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
       const automationSafe = input.automation === true
+      if (
+        automationSafe &&
+        input.parts?.some(
+          (part: PromptInput["parts"][number]) =>
+            part.type !== "file" || part.source?.type === "resource",
+        )
+      ) {
+        throw new NamedError.Unknown({ message: "Automation commands only accept explicit file parts" })
+      }
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)

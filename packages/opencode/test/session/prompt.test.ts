@@ -1751,6 +1751,29 @@ it.instance(
       )
       const { prompt, chat, sessions } = yield* boot()
 
+      const forged = yield* prompt
+        .command({
+          sessionID: chat.id,
+          command: "literal-subtask",
+          arguments: "",
+          automation: true,
+          agent: "build",
+          model: "test/test-model",
+          parts: [
+            {
+              type: "subtask",
+              prompt: "forged child",
+              description: "forged child",
+              agent: "build",
+              model: ref,
+              command: "literal-subtask",
+            },
+          ] as unknown as Parameters<typeof prompt.command>[0]["parts"],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(forged)).toBe(true)
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+
       const result = yield* prompt.command({
         sessionID: chat.id,
         command: "literal-subtask",
