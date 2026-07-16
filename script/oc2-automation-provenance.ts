@@ -58,6 +58,8 @@ export interface Ruleset {
   sourceType: string
   target: string
   enforcement: string
+  bypassActorsVisible: boolean
+  currentUserCanBypass: string
   bypassActors: Array<{ actorId: number | null; actorType: string; bypassMode: string }>
   conditions: { include: string[]; exclude: string[] }
   rules: Array<{ type: string; parameters?: Record<string, unknown> }>
@@ -277,14 +279,17 @@ export function decodeRuleset(value: unknown): Ruleset {
   const item = record(value, "invalid repository ruleset")
   const conditions = record(item.conditions, "invalid repository ruleset")
   const refName = record(conditions.ref_name, "invalid repository ruleset")
-  const bypassActors = array(item.bypass_actors, "invalid repository ruleset").map((value) => {
-    const actor = record(value, "invalid repository ruleset")
-    return {
-      actorId: actor.actor_id === null ? null : positiveInteger(actor.actor_id, "invalid repository ruleset"),
-      actorType: boundedString(actor.actor_type, 64, "invalid repository ruleset"),
-      bypassMode: boundedString(actor.bypass_mode, 64, "invalid repository ruleset"),
-    }
-  })
+  const bypassActorsVisible = item.bypass_actors !== undefined
+  const bypassActors = (bypassActorsVisible ? array(item.bypass_actors, "invalid repository ruleset") : []).map(
+    (value) => {
+      const actor = record(value, "invalid repository ruleset")
+      return {
+        actorId: actor.actor_id === null ? null : positiveInteger(actor.actor_id, "invalid repository ruleset"),
+        actorType: boundedString(actor.actor_type, 64, "invalid repository ruleset"),
+        bypassMode: boundedString(actor.bypass_mode, 64, "invalid repository ruleset"),
+      }
+    },
+  )
   const rules = array(item.rules, "invalid repository ruleset").map((value) => {
     const rule = record(value, "invalid repository ruleset")
     return {
@@ -297,6 +302,8 @@ export function decodeRuleset(value: unknown): Ruleset {
     sourceType: boundedString(item.source_type, 64, "invalid repository ruleset"),
     target: boundedString(item.target, 64, "invalid repository ruleset"),
     enforcement: boundedString(item.enforcement, 64, "invalid repository ruleset"),
+    bypassActorsVisible,
+    currentUserCanBypass: boundedString(item.current_user_can_bypass, 64, "invalid repository ruleset"),
     bypassActors,
     conditions: {
       include: stringArray(refName.include),
@@ -338,8 +345,10 @@ export function validateRepositorySettings(input: {
   if (
     repositoryMain.length !== 1 ||
     trustedWorkflow.length !== 1 ||
+    !repositoryMain[0]!.bypassActorsVisible ||
     repositoryMain[0]!.bypassActors.length !== 0 ||
-    trustedWorkflow[0]!.bypassActors.length !== 0
+    repositoryMain[0]!.currentUserCanBypass !== "never" ||
+    trustedWorkflow[0]!.currentUserCanBypass !== "never"
   )
     throw new Error("auto-merge settings unavailable")
 
@@ -433,6 +442,8 @@ export function validateRepositorySettings(input: {
   if (automation.length !== 1) throw new Error("auto-merge settings unavailable")
   const bypass = automation[0]!.bypassActors
   if (
+    !automation[0]!.bypassActorsVisible ||
+    automation[0]!.currentUserCanBypass !== "always" ||
     bypass.length !== 1 ||
     bypass[0]!.actorType !== "Integration" ||
     bypass[0]!.actorId !== input.appId ||

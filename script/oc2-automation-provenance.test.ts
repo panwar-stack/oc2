@@ -5,6 +5,7 @@ import { join } from "node:path"
 
 import {
   createProvenanceApi,
+  decodeRuleset,
   githubActionsAppId,
   parseAutomationPullRequestText,
   requireAutomationPullRequest,
@@ -77,6 +78,8 @@ function rulesets(): Ruleset[] {
       sourceType: "Repository",
       target: "branch",
       enforcement: "active",
+      bypassActorsVisible: true,
+      currentUserCanBypass: "never",
       bypassActors: [],
       conditions: { include: ["refs/heads/main"], exclude: [] },
       rules: [
@@ -112,6 +115,8 @@ function rulesets(): Ruleset[] {
       sourceType: "Repository",
       target: "branch",
       enforcement: "active",
+      bypassActorsVisible: true,
+      currentUserCanBypass: "always",
       bypassActors: [{ actorId: appId, actorType: "Integration", bypassMode: "always" }],
       conditions: { include: ["refs/heads/oc2/issue-*"], exclude: [] },
       rules: [
@@ -126,6 +131,8 @@ function rulesets(): Ruleset[] {
       sourceType: "Organization",
       target: "branch",
       enforcement: "active",
+      bypassActorsVisible: false,
+      currentUserCanBypass: "never",
       bypassActors: [],
       conditions: { include: ["refs/heads/main"], exclude: [] },
       rules: [
@@ -346,6 +353,25 @@ describe("automation pull request provenance", () => {
 })
 
 describe("repository settings gate", () => {
+  test("decodes an inherited workflow ruleset without hidden bypass actors", () => {
+    expect(
+      decodeRuleset({
+        id: 3,
+        source_type: "Organization",
+        target: "branch",
+        enforcement: "active",
+        current_user_can_bypass: "never",
+        conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
+        rules: rulesets()[2]!.rules.map((rule) => ({ type: rule.type, parameters: rule.parameters })),
+      }),
+    ).toMatchObject({
+      sourceType: "Organization",
+      bypassActorsVisible: false,
+      currentUserCanBypass: "never",
+      bypassActors: [],
+    })
+  })
+
   test("accepts strict queue checks and an App-only automation branch ruleset", () => {
     expect(() =>
       validateRepositorySettings({
@@ -402,6 +428,8 @@ describe("repository settings gate", () => {
     )[0]!.ref = "refs/heads/feature"
     const repositoryWorkflow = rulesets()
     repositoryWorkflow[2]!.sourceType = "Repository"
+    const inheritedAppBypass = rulesets()
+    inheritedAppBypass[2]!.currentUserCanBypass = "always"
     for (const input of [
       { repository: settings({ defaultBranch: "trunk" }), rulesets: rulesets() },
       { repository: settings({ allowAutoMerge: false }), rulesets: rulesets() },
@@ -417,6 +445,7 @@ describe("repository settings gate", () => {
       { repository: settings(), rulesets: fetchAndMerge },
       { repository: settings(), rulesets: candidateWorkflow },
       { repository: settings(), rulesets: repositoryWorkflow },
+      { repository: settings(), rulesets: inheritedAppBypass },
     ]) {
       expect(() =>
         validateRepositorySettings({

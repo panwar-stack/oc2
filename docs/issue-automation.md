@@ -59,14 +59,14 @@ Create a dedicated GitHub App for this workflow. Install it only on `panwar-stac
 
 The App needs these repository permissions:
 
-| Permission     | Level | Purpose                                                         |
-| -------------- | ----- | --------------------------------------------------------------- |
-| Metadata       | Read  | Implicit repository identity                                    |
-| Contents       | Write | Create or lease-update only the App-owned automation branch     |
-| Pull requests  | Write | Open the fixed PR and request exact-head REBASE auto-merge      |
-| Administration | Write | Read full ruleset bypass details; never used by the merge token |
+| Permission     | Level | Purpose                                                     |
+| -------------- | ----- | ----------------------------------------------------------- |
+| Metadata       | Read  | Implicit repository identity                                |
+| Contents       | Write | Create or lease-update only the App-owned automation branch |
+| Pull requests  | Write | Open the fixed PR and request exact-head REBASE auto-merge  |
+| Administration | Write | Read repository bypass details and parent bypass capability |
 
-The publication token is created for the current repository only. Auto-merge uses two more repository-scoped tokens: a settings token with Administration write, Contents read, and Pull requests read, and a distinct mutation token with Contents read and Pull requests write. GitHub returns ruleset bypass actors only to a caller with ruleset write access; the trusted helper uses that elevated token only for reads and never gives it to `gh`. This permission is a deliberate first-slice tradeoff. The App private key is provided only to the pinned token actions. Installation tokens are not put in remote URLs, artifacts, comments, generated files, or logs, and action post-processing revokes them.
+The publication token is created for the current repository only. Auto-merge uses two more repository-scoped tokens: a settings token with Administration write, Contents read, and Pull requests read, and a distinct mutation token with Contents read and Pull requests write. GitHub returns complete bypass actors for repository-owned rulesets, but hides inherited organization or enterprise actors from a repository-scoped token. For the inherited trusted-workflow rule, the helper instead requires `current_user_can_bypass: never`, directly proving that this App cannot bypass it. The trusted helper uses the elevated settings token only for reads and never gives it to `gh`. This permission is a deliberate first-slice tradeoff. The App private key is provided only to the pinned token actions. Installation tokens are not put in remote URLs, artifacts, comments, generated files, or logs, and action post-processing revokes them.
 
 The workflow's ordinary `GITHUB_TOKEN` updates the marker comment and reads provenance. It is not used to publish a branch or enable auto-merge.
 
@@ -158,7 +158,7 @@ Require these exact check contexts after confirming their names from real runs. 
 | `e2e (windows)`          |
 | `provenance/path-policy` |
 
-The organization or enterprise `main` ruleset must target the same exact branch, have no bypass actors, and contain only one required-workflow rule. Configure `do_not_enforce_on_create: false` and exactly `.github/workflows/oc2-provenance.yml` from this repository's numeric ID at `refs/heads/main`. GitHub does not support combining this organization-level workflow rule with the repository-level merge-queue rule.
+The organization or enterprise `main` ruleset must target the same exact branch, have no bypass actors, and contain only one required-workflow rule. Configure `do_not_enforce_on_create: false` and exactly `.github/workflows/oc2-provenance.yml` from this repository's numeric ID at `refs/heads/main`. The settings API must report that the publishing App's `current_user_can_bypass` is `never`; operators must separately confirm the configured ruleset has no other bypass actors because GitHub hides that inherited list from repository-scoped tokens. GitHub does not support combining this organization-level workflow rule with the repository-level merge-queue rule.
 
 The separate automation-branch ruleset must target exactly `refs/heads/oc2/issue-*`, have no exclusions, and contain exactly creation, update, deletion, and non-fast-forward restrictions. Configure update with `update_allows_fetch_and_merge: false`. Its only bypass actor must be the configured App integration ID with `always` mode. Do not add users, teams, repository roles, administrators, deploy keys, another App, or another active automation-branch rule.
 
