@@ -84,6 +84,8 @@ type AutomationResult =
   | { status: "ok"; sessionID: string; text: string }
   | { status: "error"; sessionID: string | null; error: AutomationError }
 
+const automationResultMarker = Symbol.for("oc2.cli.automationResultEmitted")
+
 function inline(info: Inline) {
   const suffix = info.description ? UI.Style.TEXT_DIM + ` ${info.description}` + UI.Style.TEXT_NORMAL : ""
   UI.println(UI.Style.TEXT_NORMAL + info.icon, UI.Style.TEXT_NORMAL + info.title + suffix)
@@ -295,13 +297,18 @@ export const RunCommand = effectCmd({
     let automationResultEmitted = false
     const emitAutomationResult = async (result: AutomationResult) => {
       if (automationResultEmitted) return
+      automationResultEmitted = true
+      Reflect.set(process, automationResultMarker, true)
       const safe = JSON.stringify(result).replace(/[\u007f-\u009f\u2028\u2029]/g, (char) => {
         return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`
       })
       await new Promise<void>((resolve, reject) => {
-        process.stdout.write(safe + EOL, (error) => (error ? reject(error) : resolve()))
+        process.stdout.write(safe + EOL, (error) => {
+          if (!error) return resolve()
+          process.exitCode = 1
+          reject(error)
+        })
       })
-      automationResultEmitted = true
     }
     const executionError = (error: unknown): AutomationError => {
       const value = typeof error === "object" && error !== null ? error : undefined

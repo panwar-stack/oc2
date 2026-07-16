@@ -542,9 +542,9 @@ describe("opencode run (non-interactive subprocess)", () => {
           env: { OC2_CONFIG_CONTENT: `{${secret}` },
         })
 
-        opencode.expectExit(result, 2)
+        opencode.expectExit(result, 1)
         expect(result.stdout).toBe("")
-        expect(result.stderr).toContain("Invalid automation invocation")
+        expect(result.stderr).toContain("Automation run failed")
         expect(result.stderr).not.toContain(secret)
         expect(result.stderr).not.toContain("SyntaxError")
         expect(yield* llm.calls).toBe(0)

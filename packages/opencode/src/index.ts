@@ -57,6 +57,7 @@ const optionsWithValues = new Set([
 const shortOptionsWithValues = new Set(["m", "s"])
 
 const processMetadata = ensureProcessMetadata("main")
+const automationResultMarker = Symbol.for("oc2.cli.automationResultEmitted")
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -153,8 +154,8 @@ function show(out: string) {
   process.stderr.write(out)
 }
 
-async function main() {
-  const commands = await loadCommands()
+async function main(commands: unknown[] | undefined) {
+  const loaded = commands ?? (await loadCommands())
   const cli = yargs(args)
     .parserConfiguration({ "populate--": true })
     .scriptName("oc2")
@@ -207,10 +208,11 @@ async function main() {
     .usage("")
     .completion("completion", "generate shell completion script")
   const registerCommand = cli.command as (command: unknown) => unknown
-  for (const command of commands) registerCommand.call(cli, command)
+  for (const command of loaded) registerCommand.call(cli, command)
 
   cli
     .fail((msg, err) => {
+      if (err) throw err
       if (resultJsonOutput) {
         writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"invalid_input"}' + EOL)
         process.exit(2)
@@ -220,14 +222,8 @@ async function main() {
         msg?.startsWith("Not enough non-option arguments") ||
         msg?.startsWith("Invalid values:")
       ) {
-        if (err) throw err
         cli.showHelp(show)
       }
-      if (err && automationOutput) {
-        UI.error("Invalid automation invocation")
-        process.exit(2)
-      }
-      if (err) throw err
       process.exit(automationOutput ? 2 : 1)
     })
     .strict()
@@ -243,11 +239,15 @@ async function main() {
   }
 }
 
+const commands = safeAutomationOutput ? undefined : await loadCommands()
+
 try {
-  await main()
+  await main(commands)
 } catch (e) {
   if (resultJsonOutput) {
-    writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"session_error"}' + EOL)
+    if (Reflect.get(process, automationResultMarker) !== true) {
+      writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"session_error"}' + EOL)
+    }
     process.exitCode = 1
   } else if (automationOutput) {
     UI.error("Automation run failed")
