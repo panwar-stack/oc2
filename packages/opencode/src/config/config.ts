@@ -649,10 +649,12 @@ export const layer = Layer.effect(
     )
 
     const get = Effect.fn("Config.get")(function* () {
+      if ((yield* InstanceState.context).automationSafe) return yield* getGlobal()
       return yield* InstanceState.use(state, (s) => s.config)
     })
 
     const directories = Effect.fn("Config.directories")(function* () {
+      if ((yield* InstanceState.context).automationSafe) return []
       return yield* InstanceState.use(state, (s) => s.directories)
     })
 
@@ -661,6 +663,7 @@ export const layer = Layer.effect(
     })
 
     const waitForDependencies = Effect.fn("Config.waitForDependencies")(function* () {
+      if ((yield* InstanceState.context).automationSafe) return
       yield* InstanceState.useEffect(state, (s) =>
         Effect.forEach(s.deps, Fiber.join, { concurrency: "unbounded" }).pipe(Effect.asVoid),
       )

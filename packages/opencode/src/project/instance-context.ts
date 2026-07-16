@@ -6,6 +6,7 @@ export interface InstanceContext {
   directory: string
   worktree: string
   project: Project.Info
+  automationSafe?: boolean
 }
 
 export const context = LocalContext.create<InstanceContext>("instance")

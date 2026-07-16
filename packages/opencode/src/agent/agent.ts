@@ -198,6 +198,23 @@ export const layer = Layer.effect(
     const skill = yield* Skill.Service
     const provider = yield* Provider.Service
 
+    const automationAgents: Record<string, Info> = {}
+    for (const name of issueAutomationAgents) {
+      const definition = issueAutomationDefinitions[name as keyof typeof issueAutomationDefinitions]
+      const agent = deepFreeze<Info>({
+        name,
+        description: definition.description,
+        mode: "primary",
+        native: true,
+        hidden: true,
+        options: {},
+        permission: Permission.fromConfig(definition.permission),
+        prompt: definition.prompt,
+      })
+      automationAgents[name] = agent
+      issueAutomationIdentity.add(agent)
+    }
+
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
         const cfg = yield* config.get()
@@ -395,19 +412,7 @@ export const layer = Layer.effect(
         }
 
         for (const name of issueAutomationAgents) {
-          const definition = issueAutomationDefinitions[name as keyof typeof issueAutomationDefinitions]
-          const agent: Info = {
-            name,
-            description: definition.description,
-            mode: "primary",
-            native: true,
-            hidden: true,
-            options: {},
-            permission: Permission.fromConfig(definition.permission),
-            prompt: definition.prompt,
-          }
-          agents[name] = deepFreeze(agent)
-          issueAutomationIdentity.add(agent)
+          agents[name] = automationAgents[name]
         }
 
         // Ensure Truncate.GLOB is allowed unless explicitly configured
@@ -472,6 +477,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       get: Effect.fn("Agent.get")(function* (agent: string) {
+        if (isIssueAutomationName(agent)) return automationAgents[agent]
         return yield* InstanceState.useEffect(state, (s) => s.get(agent))
       }),
       list: Effect.fn("Agent.list")(function* () {

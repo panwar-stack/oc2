@@ -55,12 +55,14 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
                 directory: input.directory,
                 worktree: input.worktree,
                 project: input.project,
+                automationSafe: input.automationSafe,
               }
             : yield* project.fromDirectory(input.directory).pipe(
                 Effect.map((result) => ({
                   directory: input.directory,
                   worktree: result.sandbox,
                   project: result.project,
+                  automationSafe: input.automationSafe,
                 })),
               )
         yield* log.info("startup stage", {

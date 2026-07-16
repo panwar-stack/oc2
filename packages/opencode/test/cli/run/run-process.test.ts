@@ -104,10 +104,29 @@ describe("opencode run (non-interactive subprocess)", () => {
           ),
           (server) => Effect.sync(() => server.stop(true)),
         )
+        const skillHits = { value: 0 }
+        const skillServer = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.serve({
+              hostname: "127.0.0.1",
+              port: 0,
+              fetch() {
+                skillHits.value++
+                return Response.json({ skills: [] })
+              },
+            }),
+          ),
+          (server) => Effect.sync(() => server.stop(true)),
+        )
+        yield* Effect.promise(() => fs.mkdir(path.join(home, ".oc2"), { recursive: true }))
         yield* Effect.promise(() =>
           Promise.all([
             Bun.write(path.join(home, "AGENTS.md"), "PROJECT_INSTRUCTION_SECRET"),
             Bun.write(localInstruction, "LOCAL_INSTRUCTION_SECRET"),
+            Bun.write(
+              path.join(home, ".oc2", "oc2.json"),
+              JSON.stringify({ skills: { urls: [skillServer.url.toString()] } }),
+            ),
             Bun.write(
               plugin,
               [
@@ -135,6 +154,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         yield* Effect.promise(() => Bun.write(target, "before"))
         const env = {
           OC2_PURE: "false",
+          OC2_DISABLE_PROJECT_CONFIG: "false",
           OC2_EXPERIMENTAL_REFERENCES: "true",
           OC2_REPO_CLONE_GITHUB_BASE_URL: `file://${remoteRoot}/`,
           OC2_CONFIG_CONTENT: JSON.stringify({
@@ -192,8 +212,18 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(yield* Effect.promise(() => Bun.file(mcpMarker).exists())).toBe(false)
         expect(yield* Effect.promise(() => Bun.file(lspMarker).exists())).toBe(false)
         expect(yield* Effect.promise(() => Bun.file(formatterMarker).exists())).toBe(false)
+        expect(yield* Effect.promise(() => Bun.file(path.join(home, ".oc2", ".gitignore")).exists())).toBe(false)
+        expect(
+          yield* Effect.promise(() =>
+            fs.stat(path.join(home, ".oc2", "node_modules")).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        ).toBe(false)
         expect(yield* Effect.promise(() => Bun.file(target).text())).toBe("after")
         expect(instructionHits.value).toBe(0)
+        expect(skillHits.value).toBe(0)
         const inputs = JSON.stringify(yield* llm.inputs)
         expect(inputs).not.toContain("PROJECT_INSTRUCTION_SECRET")
         expect(inputs).not.toContain("LOCAL_INSTRUCTION_SECRET")
