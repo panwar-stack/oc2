@@ -616,6 +616,59 @@ itMirrorUsage.live("session.processor effect tests publish authoritative mirror 
   ),
 )
 
+itMirrorUsage.live("automation-safe processor never creates snapshots", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const snapshot = yield* Snapshot.Service
+        const original = { track: snapshot.track, trackDetailed: snapshot.trackDetailed }
+        Object.assign(snapshot, {
+          track: () => Effect.die("automation called snapshot.track"),
+          trackDetailed: () => Effect.die("automation called snapshot.trackDetailed"),
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => Object.assign(snapshot, original)))
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "safe processing")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+          automationSafe: true,
+        })
+
+        const result = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+            automation: true,
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "safe processing" }],
+          tools: {},
+        })
+
+        expect(result).toBe("continue")
+        const parts = yield* MessageV2.parts(msg.id)
+        expect(
+          parts
+            .filter((part) => part.type === "step-start" || part.type === "step-finish")
+            .every((part) => part.snapshot === undefined),
+        ).toBe(true)
+      }),
+    { config: cfg },
+  ),
+)
+
 itPreStepFailure.live("session.processor effect tests leave pre-dispatch failures without accounting", () =>
   provideTmpdirInstance(
     (dir) =>

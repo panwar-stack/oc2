@@ -65,7 +65,7 @@ export const layer = Layer.effect(
         // its per-instance state scope. We just await materialization here.
         yield* log.info("startup stage", { directory: ctx.directory, stage: "service.init", status: "started" })
         yield* Effect.forEach(
-          [...(automationSafe ? [] : [reference, lsp, format]), vcs, snapshot, project],
+          [...(automationSafe ? [] : [reference, lsp, format, snapshot]), vcs, project],
           (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
           { concurrency: "unbounded", discard: true },
         ).pipe(Effect.withSpan("InstanceBootstrap.init"))

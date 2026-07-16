@@ -141,7 +141,7 @@ export const layer = Layer.effect(
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
-      const initialSnapshot = yield* snapshot.track()
+      const initialSnapshot = input.automationSafe ? undefined : yield* snapshot.track()
       const ctx: ProcessorContext = {
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
@@ -795,7 +795,7 @@ export const layer = Layer.effect(
 
           case "step-start":
             ctx.providerEventStep = value.index
-            if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
+            if (!ctx.automationSafe && !ctx.snapshot) ctx.snapshot = yield* snapshot.track()
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -821,8 +821,8 @@ export const layer = Layer.effect(
             const completed = timing.completed
             const started = timing.started
             const duration = timing.duration
-            const completedPrepared = yield* snapshot.trackDetailed()
-            const completedSnapshot = completedPrepared.hash
+            const completedPrepared = ctx.automationSafe ? undefined : yield* snapshot.trackDetailed()
+            const completedSnapshot = completedPrepared?.hash
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             const usage = Session.getUsage({
               model: ctx.model,
@@ -879,7 +879,7 @@ export const layer = Layer.effect(
               duration: Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0,
             })
             yield* session.updateMessage(ctx.assistantMessage)
-            if (ctx.snapshot) {
+            if (ctx.snapshot && completedPrepared) {
               if (!ctx.toolMayHaveTouchedFiles && completedPrepared.candidates.all.length === 0) {
                 ctx.snapshot = undefined
               } else {
