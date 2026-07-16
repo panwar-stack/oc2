@@ -101,6 +101,17 @@ function boundedString(value: unknown, maximum = 1024) {
   return value
 }
 
+function boundedBody(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 2048 ||
+    /[\u0000-\u0009\u000b-\u001f\u007f]/.test(value)
+  )
+    throw new Error("invalid publication input")
+  return value
+}
+
 function sha(value: unknown) {
   const result = boundedString(value)
   if (!shaPattern.test(result)) throw new Error("invalid publication input")
@@ -518,7 +529,7 @@ function decodePullRequest(value: unknown): PullRequest {
     url: boundedString(item.html_url),
     userId: positiveInteger(user?.id),
     title: boundedString(item.title, 256),
-    body: boundedString(item.body, 2048),
+    body: boundedBody(item.body),
     headSha: sha(head?.sha),
     headRef: boundedString(head?.ref, 256),
     headRepositoryId: positiveInteger(headRepo?.id),

@@ -88,6 +88,29 @@ describe("publication repository and ref gates", () => {
     expect(requested[0]).not.toEndWith("/user")
   })
 
+  test("decodes the fixed multiline PR body returned by GitHub", async () => {
+    const text = pullRequestText(42, runUrl, baseSha, headSha, patchSha256)
+    const api = createPublisherApi({
+      token: "installation-token",
+      repository: "octo/oc2",
+      baseUrl: "https://api.github.test",
+      fetch: async () =>
+        Response.json([
+          {
+            id: 90,
+            number: 12,
+            html_url: "https://github.com/octo/oc2/pull/12",
+            user: { id: 9002 },
+            title: text.title,
+            body: text.body,
+            head: { sha: headSha, ref: branch, repo: { id: 1234 } },
+            base: { sha: baseSha, ref: "main", repo: { id: 1234 } },
+          },
+        ]),
+    })
+    expect(await api.listOpenPullRequests(branch)).toEqual([pullRequest()])
+  })
+
   test("aborts when the default branch or admitted main SHA moved", () => {
     expect(() =>
       requireRepositoryBase(
