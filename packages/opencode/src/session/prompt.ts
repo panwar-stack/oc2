@@ -432,6 +432,7 @@ export const layer = Layer.effect(
           extra: {
             bypassAgentCheck: true,
             promptOps,
+            automationSafe: lastUser.automation === true,
             ...(isSpawnCommand ? { background: true, notify: false } : {}),
           },
           messages: msgs,
@@ -543,6 +544,7 @@ export const layer = Layer.effect(
         time: { created: Date.now() },
         agent: lastUser.agent,
         model: lastUser.model,
+        automation: lastUser.automation,
       }
       yield* sessions.updateMessage(summaryUserMsg)
       yield* sessions.updatePart({
@@ -1316,7 +1318,7 @@ export const layer = Layer.effect(
     })
 
     const prompt = Effect.fn("SessionPrompt.prompt")(function* (input: InternalPromptInput) {
-      return yield* promptInternal(input)
+      return yield* promptInternal(Schema.decodeUnknownSync(PromptInput)(input))
     })
 
     function hasPathScopedEditPermission(permission: PermissionV1.Ruleset) {
@@ -1740,18 +1742,10 @@ Do not create a team for trivial one step requests or when the user explicitly a
       return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
     })
 
-    const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+    const command = Effect.fn("SessionPrompt.command")(function* (raw: CommandInput) {
+      const input = Schema.decodeUnknownSync(CommandInput)(raw)
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
       const automationSafe = input.automation === true
-      if (
-        automationSafe &&
-        input.parts?.some(
-          (part: PromptInput["parts"][number]) =>
-            part.type !== "file" || part.source?.type === "resource",
-        )
-      ) {
-        throw new NamedError.Unknown({ message: "Automation commands only accept explicit file parts" })
-      }
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)

@@ -1686,12 +1686,14 @@ it.instance(
           "export default async () => ({",
           `  "tool.execute.before": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "before") },`,
           `  "tool.execute.after": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "after") },`,
+          `  "chat.message": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "message") },`,
           "})",
         ].join("\n"),
       )
       const { llm } = yield* useServerConfig((url) => ({
         ...providerCfg(url),
         plugin: [pathToFileURL(pluginPath).href],
+        agent: { build: { model: "test/project-override" } },
         command: {
           "literal-subtask": {
             template: "Inspect @checkout-secret.txt @~/home-secret.txt @docs and !`printf unsafe`",
@@ -1750,6 +1752,31 @@ it.instance(
         "parent completed command",
       )
       const { prompt, chat, sessions } = yield* boot()
+      const forgedParts = Object.assign(
+        [
+          {
+            type: "subtask" as const,
+            prompt: "forged child",
+            description: "forged child",
+            agent: "build",
+            model: ref,
+            command: "literal-subtask",
+          },
+        ],
+        { some: () => false },
+      )
+
+      const forgedPrompt = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          automation: true,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: forgedParts as unknown as Parameters<typeof prompt.prompt>[0]["parts"],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(forgedPrompt)).toBe(true)
 
       const forged = yield* prompt
         .command({
@@ -1759,16 +1786,7 @@ it.instance(
           automation: true,
           agent: "build",
           model: "test/test-model",
-          parts: [
-            {
-              type: "subtask",
-              prompt: "forged child",
-              description: "forged child",
-              agent: "build",
-              model: ref,
-              command: "literal-subtask",
-            },
-          ] as unknown as Parameters<typeof prompt.command>[0]["parts"],
+          parts: forgedParts as unknown as Parameters<typeof prompt.command>[0]["parts"],
         })
         .pipe(Effect.exit)
       expect(Exit.isFailure(forged)).toBe(true)
@@ -1781,6 +1799,7 @@ it.instance(
         automation: true,
         agent: "build",
         model: "test/test-model",
+        variant: "high",
         parts: [
           {
             type: "file",
@@ -1802,6 +1821,7 @@ it.instance(
       expect(childUser?.info.role).toBe("user")
       if (!childUser || childUser.info.role !== "user") return
       expect(childUser.info.automation).toBe(true)
+      expect(childUser.info.model).toEqual({ ...ref, variant: "high" })
       const childInput = JSON.stringify(childUser.parts)
       expect(childInput).toContain(literal)
       expect(childInput).toContain(attachment)
@@ -1816,6 +1836,17 @@ it.instance(
           ),
         ),
       ).toBe(true)
+      const parentMessages = yield* sessions.messages({ sessionID: chat.id })
+      const summary = parentMessages.find(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some(
+            (part) => part.type === "text" && part.text.includes("Summarize the task tool output"),
+          ),
+      )
+      expect(summary?.info.role).toBe("user")
+      if (!summary || summary.info.role !== "user") return
+      expect(summary.info.automation).toBe(true)
       const inputs = JSON.stringify(yield* llm.inputs)
       expect(inputs).toContain(literal)
       expect(inputs).toContain(attachment)

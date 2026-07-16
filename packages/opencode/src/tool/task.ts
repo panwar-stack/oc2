@@ -163,11 +163,15 @@ export const TaskTool = Tool.define(
       )
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
+      const automationSafe = ctx.extra?.automationSafe === true
 
-      const model = next.model ?? {
-        modelID: msg.info.modelID,
-        providerID: msg.info.providerID,
-      }
+      const model =
+        !automationSafe && next.model
+          ? next.model
+          : {
+              modelID: msg.info.modelID,
+              providerID: msg.info.providerID,
+            }
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
@@ -192,7 +196,7 @@ export const TaskTool = Tool.define(
             modelID: model.modelID,
             providerID: model.providerID,
           },
-          variant: next.model ? undefined : variant,
+          variant: !automationSafe && next.model ? undefined : variant,
           agent: next.name,
           tools: {
             ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
