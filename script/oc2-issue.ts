@@ -1355,15 +1355,18 @@ function sniffAttachment(content: Uint8Array) {
   }
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(text)) rejectAttachment()
   let start = text.trimStart().toLowerCase()
-  while (start.startsWith("<!--") && start.includes("-->")) start = start.slice(start.indexOf("-->") + 3).trimStart()
-  if (
-    start.startsWith("%pdf-") ||
-    start.startsWith("<?xml") ||
-    /^<(?:!doctype\s+html|svg|html|head|body|script|iframe|object|embed|form|div|span|p|a|img|table|style|link|meta|title|template|h[1-6])(?:\s|\/?>)/.test(
-      start,
-    )
-  )
-    rejectAttachment()
+  while (true) {
+    if (start.startsWith("<!--") && start.includes("-->")) {
+      start = start.slice(start.indexOf("-->") + 3).trimStart()
+      continue
+    }
+    if (start.startsWith("<?") && start.includes("?>")) {
+      start = start.slice(start.indexOf("?>") + 2).trimStart()
+      continue
+    }
+    break
+  }
+  if (start.startsWith("#!") || /^<(?:!doctype|[a-z])/.test(start)) rejectAttachment()
   if (isJsonText(text)) return { extension: "json", mediaType: "application/json" }
   return looksLikeMarkdown(text)
     ? { extension: "md", mediaType: "text/markdown" }
@@ -1432,7 +1435,10 @@ function isPng(content: Uint8Array) {
       }
       let decoded: Uint8Array
       try {
-        decoded = inflateSync(compressed, { maxOutputLength: expectedBytes })
+        const inflated: unknown = inflateSync(compressed, { info: true, maxOutputLength: expectedBytes })
+        if (!isRecord(inflated) || !(inflated.buffer instanceof Uint8Array) || !isRecord(inflated.engine)) return false
+        if (inflated.engine.bytesWritten !== compressed.byteLength) return false
+        decoded = inflated.buffer
       } catch {
         return false
       }
@@ -1638,9 +1644,17 @@ function isRejectedBinary(content: Uint8Array) {
     startsWithBytes(content, [0x7f, 0x45, 0x4c, 0x46]) ||
     startsWithBytes(content, [0x4d, 0x5a]) ||
     startsWithBytes(content, [0x23, 0x21]) ||
+    findBytes(content.subarray(0, 1024), [0x25, 0x50, 0x44, 0x46, 0x2d]) >= 0 ||
     new Set(["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe"]).has(magic) ||
     (content.byteLength >= 262 && new TextDecoder().decode(content.slice(257, 262)) === "ustar")
   )
+}
+
+function findBytes(content: Uint8Array, needle: number[]) {
+  for (let offset = 0; offset + needle.length <= content.byteLength; offset++) {
+    if (needle.every((value, index) => content[offset + index] === value)) return offset
+  }
+  return -1
 }
 
 async function prepareBundleDirectory(bundleDir: string, bundleRoot: string, checkoutDir: string) {

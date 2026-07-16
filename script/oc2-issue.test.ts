@@ -256,7 +256,7 @@ function pngChunk(type: string, data: Uint8Array) {
   return value
 }
 
-function pngAttachment() {
+function pngAttachment(idatSuffix = new Uint8Array()) {
   const header = new Uint8Array(13)
   const view = new DataView(header.buffer)
   view.setUint32(0, 1)
@@ -265,7 +265,7 @@ function pngAttachment() {
   return bytes(
     new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     pngChunk("IHDR", header),
-    pngChunk("IDAT", deflateSync(new Uint8Array([0, 0]))),
+    pngChunk("IDAT", bytes(deflateSync(new Uint8Array([0, 0])), idatSuffix)),
     pngChunk("IEND", new Uint8Array()),
   )
 }
@@ -1436,6 +1436,7 @@ describe("bounded attachment ingestion", () => {
     ["SVG", new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>'), null],
     ["HTML", new TextEncoder().encode("<!doctype html><html></html>"), "image/png"],
     ["PDF", new TextEncoder().encode("%PDF-1.7"), null],
+    ["PDF after preamble", new TextEncoder().encode("safe preamble\n%PDF-1.7"), "text/plain"],
     ["archive", new Uint8Array([0x50, 0x4b, 0x03, 0x04]), null],
     ["executable", new Uint8Array([0x7f, 0x45, 0x4c, 0x46]), null],
     ["shebang", new TextEncoder().encode("#!/bin/sh"), null],
@@ -1443,6 +1444,8 @@ describe("bounded attachment ingestion", () => {
     ["unknown control binary", new Uint8Array([0, 1, 2, 3]), "text/plain"],
     ["truncated PNG", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), "image/png"],
     ["image polyglot", bytes(pngAttachment(), new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/png"],
+    ["embedded PNG archive", pngAttachment(new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/png"],
+    ["prolog SVG", new TextEncoder().encode("<?safe?> <!-- comment --> <svg></svg>"), "text/plain"],
   ])("rejects %s bytes regardless of extension or content type", async (_name, content, contentType) => {
     const fixture = await ingestFixture({
       body: `![asset](${attachmentUrl()})`,
