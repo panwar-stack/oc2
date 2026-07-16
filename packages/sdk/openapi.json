@@ -7450,6 +7450,9 @@
                   "variant": {
                     "type": "string"
                   },
+                  "automation": {
+                    "type": "boolean"
+                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -8197,6 +8200,9 @@
                   "variant": {
                     "type": "string"
                   },
+                  "automation": {
+                    "type": "boolean"
+                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -8346,6 +8352,9 @@
                   },
                   "variant": {
                     "type": "string"
+                  },
+                  "automation": {
+                    "type": "boolean"
                   },
                   "parts": {
                     "type": "array",
@@ -15519,6 +15528,9 @@
             "additionalProperties": {
               "type": "boolean"
             }
+          },
+          "automation": {
+            "type": "boolean"
           }
         },
         "required": [

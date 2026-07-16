@@ -534,6 +534,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  automation?: boolean
 }
 
 export type ProviderAuthError = {
