@@ -14,6 +14,7 @@ import {
   type GitHubActionsRun,
   type GitHubActor,
   type GitHubApi,
+  type GitHubIssue,
   type GitHubIssueComment,
   type GitHubLabeledEvent,
   type GitHubPullRequest,
@@ -22,6 +23,7 @@ import {
 } from "./oc2-issue"
 
 const botId = 9001
+const publisherBotId = 9002
 const now = new Date("2026-07-16T12:00:00.000Z")
 const baseSha = "1".repeat(40)
 const markerKey = "a".repeat(64)
@@ -30,6 +32,7 @@ interface FakeState {
   actionsRuns: Map<string, GitHubActionsRun>
   actors: Map<string, GitHubActor>
   comments: GitHubIssueComment[]
+  currentIssue: GitHubIssue
   labeledEvents: GitHubLabeledEvent[]
   nextCommentId: number
   pullRequests: GitHubPullRequest[]
@@ -76,6 +79,11 @@ function fakeGitHub(overrides: Partial<FakeState> = {}) {
       ["rerunner", { id: 101, login: "rerunner", permission: "maintain", type: "User" }],
     ]),
     comments: [],
+    currentIssue: {
+      labels: [{ id: 501, name: "task" }],
+      nodeId: "I_issue42",
+      state: "open",
+    },
     labeledEvents: [
       {
         actor: { id: 100, login: "maintainer", type: "User" },
@@ -110,6 +118,10 @@ function fakeGitHub(overrides: Partial<FakeState> = {}) {
     async getBranchSha() {
       state.reads++
       return baseSha
+    },
+    async getIssue() {
+      state.reads++
+      return state.currentIssue
     },
     async getIssueComment(commentId) {
       state.reads++
@@ -153,6 +165,7 @@ function input(eventValue: unknown, overrides: Partial<Parameters<typeof admitIs
     runAttempt: 1,
     triggeringActor: "maintainer",
     botId,
+    publisherBotId,
     now,
     ...overrides,
   }
@@ -244,6 +257,33 @@ describe("issue admission", () => {
       phase: "rejected_actor",
     })
   })
+
+  test.each([
+    ["closed", { labels: [{ id: 501, name: "task" }], nodeId: "I_issue42", state: "closed" }],
+    ["unlabeled", { labels: [], nodeId: "I_issue42", state: "open" }],
+    [
+      "ambiguously labeled",
+      {
+        labels: [
+          { id: 501, name: "task" },
+          { id: 502, name: "feature" },
+        ],
+        nodeId: "I_issue42",
+        state: "open",
+      },
+    ],
+    ["identity changed", { labels: [{ id: 501, name: "task" }], nodeId: "I_replaced", state: "open" }],
+  ] satisfies Array<[string, GitHubIssue]>)(
+    "rejects a currently %s issue even when the webhook was admissible",
+    async (_name, currentIssue) => {
+      const github = fakeGitHub({ currentIssue })
+      expect(await admitIssue(input(event()), github.api)).toMatchObject({
+        status: "rejected",
+        phase: "ambiguous_label",
+      })
+      expect(github.state.writes).toEqual([])
+    },
+  )
 
   test("allows only an exact allowlisted App bot identity", async () => {
     const sender = { id: 200, login: "trusted-app[bot]", type: "Bot" }
@@ -555,6 +595,81 @@ describe("durable marker state", () => {
     expect(github.state.writes).toEqual([])
   })
 
+  test("does not recover a failed marker without an exact failed run, even after the stale window", async () => {
+    const github = fakeGitHub()
+    const first = admitted(await admitIssue(input(event()), github.api))
+    github.state.comments[0] = {
+      id: first.marker.commentId,
+      userId: botId,
+      body: formatIssueMarker({
+        attempt: 1,
+        key: first.key,
+        phase: "model_failed",
+        runId: 800,
+        updatedAt: "2026-07-16T01:00:00.000Z",
+      }),
+    }
+    github.state.writes.length = 0
+    expect(await admitIssue(input(event(), { runAttempt: 2 }), github.api)).toMatchObject({ status: "duplicate" })
+    expect(github.state.writes).toEqual([])
+  })
+
+  test("never reclaims a recorded successful run based on age", async () => {
+    const github = fakeGitHub()
+    const first = admitted(await admitIssue(input(event()), github.api))
+    github.state.comments[0] = {
+      id: first.marker.commentId,
+      userId: botId,
+      body: formatIssueMarker({
+        attempt: 1,
+        key: first.key,
+        phase: "running",
+        runId: 800,
+        updatedAt: "2026-07-16T01:00:00.000Z",
+      }),
+    }
+    github.state.actionsRuns.set("800/1", {
+      id: 800,
+      attempt: 1,
+      status: "completed",
+      conclusion: "success",
+      updatedAt: "2026-07-16T01:01:00.000Z",
+    })
+    github.state.writes.length = 0
+    expect(await admitIssue(input(event(), { runAttempt: 2 }), github.api)).toMatchObject({ status: "duplicate" })
+    expect(github.state.writes).toEqual([])
+  })
+
+  test("permits a new relabel key after completed work when no publisher App PR is open", async () => {
+    const github = fakeGitHub({
+      comments: [
+        {
+          id: 600,
+          userId: botId,
+          body: formatIssueMarker({
+            attempt: 1,
+            key: markerKey,
+            phase: "no_changes",
+            runId: 700,
+            updatedAt: "2026-07-16T10:00:00.000Z",
+          }),
+        },
+      ],
+      labeledEvents: [
+        {
+          actor: { id: 100, login: "maintainer", type: "User" },
+          createdAt: "2026-07-16T11:00:00Z",
+          label: "task",
+          nodeId: "LE_relabel",
+        },
+      ],
+    })
+    expect(
+      await admitIssue(input(event({ updatedAt: "2026-07-16T11:00:00Z" }), { runId: 801 }), github.api),
+    ).toMatchObject({ status: "admitted" })
+    expect(github.state.writes).toHaveLength(1)
+  })
+
   test("rejects relabeling while an exact App-owned issue PR is open", async () => {
     const oldMarker = formatIssueMarker({
       attempt: 1,
@@ -573,7 +688,7 @@ describe("durable marker state", () => {
           nodeId: "LE_relabel",
         },
       ],
-      pullRequests: [{ id: 99, userId: botId, headRepositoryId: 1234, headRef: "oc2/issue-42-abcdef012345" }],
+      pullRequests: [{ id: 99, userId: publisherBotId, headRepositoryId: 1234, headRef: "oc2/issue-42-abcdef012345" }],
     })
     github.state.actionsRuns.set("700/1", {
       id: 700,
@@ -586,6 +701,43 @@ describe("durable marker state", () => {
       await admitIssue(input(event({ updatedAt: "2026-07-16T11:00:00Z" }), { runId: 801 }), github.api),
     ).toMatchObject({ status: "duplicate" })
     expect(github.state.writes).toEqual([])
+  })
+
+  test("does not confuse the marker bot with the publishing App PR owner", async () => {
+    const github = fakeGitHub({
+      comments: [
+        {
+          id: 600,
+          userId: botId,
+          body: formatIssueMarker({
+            attempt: 1,
+            key: markerKey,
+            phase: "verification_failed",
+            runId: 700,
+            updatedAt: "2026-07-16T10:00:00.000Z",
+          }),
+        },
+      ],
+      labeledEvents: [
+        {
+          actor: { id: 100, login: "maintainer", type: "User" },
+          createdAt: "2026-07-16T11:00:00Z",
+          label: "task",
+          nodeId: "LE_relabel",
+        },
+      ],
+      pullRequests: [{ id: 99, userId: botId, headRepositoryId: 1234, headRef: "oc2/issue-42-not-the-app" }],
+    })
+    github.state.actionsRuns.set("700/1", {
+      id: 700,
+      attempt: 1,
+      status: "completed",
+      conclusion: "failure",
+      updatedAt: "2026-07-16T10:01:00.000Z",
+    })
+    expect(
+      await admitIssue(input(event({ updatedAt: "2026-07-16T11:00:00Z" }), { runId: 801 }), github.api),
+    ).toMatchObject({ status: "admitted" })
   })
 
   test("status update uses key, run, attempt, bot ownership, and read-back CAS", async () => {
@@ -628,6 +780,19 @@ describe("native fetch GitHub client and CLI", () => {
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     )
     expect(await failure).not.toContain("TOP_SECRET_API_RESPONSE")
+  })
+
+  test("rejects an oversized API response before decoding it", async () => {
+    const api = createGitHubApi({
+      token: "token",
+      repository: "octo/oc2",
+      fetch: async () => new Response("x", { headers: { "Content-Length": String(8 * 1024 * 1024 + 1) } }),
+    })
+    const failure = api.getRepository().then(
+      () => "unexpected success",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    )
+    expect(await failure).toBe("GitHub API response too large")
   })
 
   test("uses bounded page-number pagination and fetches the page after an exact full page", async () => {
@@ -682,6 +847,12 @@ describe("native fetch GitHub client and CLI", () => {
       const method = init?.method ?? "GET"
       if (url.pathname === "/users/maintainer") return Response.json({ id: 100, login: "maintainer", type: "User" })
       if (url.pathname.endsWith("/collaborators/maintainer/permission")) return Response.json({ permission: "write" })
+      if (url.pathname.endsWith("/issues/42"))
+        return Response.json({
+          node_id: "I_issue42",
+          state: "open",
+          labels: [{ id: 501, name: "task" }],
+        })
       if (url.pathname.endsWith("/timeline"))
         return Response.json([
           {
@@ -711,7 +882,17 @@ describe("native fetch GitHub client and CLI", () => {
       throw new Error(`unexpected safe test route ${method} ${url.pathname}`)
     }
     const code = await main(
-      ["admit", "--event-file", eventFile, "--result-file", resultFile, "--bot-id", String(botId)],
+      [
+        "admit",
+        "--event-file",
+        eventFile,
+        "--result-file",
+        resultFile,
+        "--bot-id",
+        String(botId),
+        "--publisher-bot-id",
+        String(publisherBotId),
+      ],
       {
         now,
         fetch: fetcher,

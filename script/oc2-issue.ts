@@ -4,6 +4,9 @@ const authorizedPermissions = new Set(["write", "maintain", "admin"])
 const markerPrefix = "<!-- oc2-issue-state:v1 "
 const pageSize = 100
 const maximumPages = 100
+const maximumResponseBytes = 8 * 1024 * 1024
+const maximumPaginatedBytes = 16 * 1024 * 1024
+const maximumEventBytes = 2 * 1024 * 1024
 
 export const issueWorkflowTimeoutMinutes = 360
 export const issueStaleGraceMinutes = 30
@@ -73,6 +76,12 @@ export interface GitHubIssueComment {
   userId: number
 }
 
+export interface GitHubIssue {
+  labels: Array<{ id: number; name: string }>
+  nodeId: string
+  state: string
+}
+
 export interface GitHubActionsRun {
   attempt: number
   conclusion: string | null
@@ -93,6 +102,7 @@ export interface GitHubApi {
   getActionsRunAttempt(runId: number, attempt: number): Promise<GitHubActionsRun | undefined>
   getActor(login: string): Promise<GitHubActor>
   getBranchSha(branch: string): Promise<string>
+  getIssue(issueNumber: number): Promise<GitHubIssue>
   getIssueComment(commentId: number): Promise<GitHubIssueComment>
   getRepository(): Promise<GitHubRepository>
   listIssueComments(issueNumber: number): Promise<GitHubIssueComment[]>
@@ -155,6 +165,7 @@ export interface AdmissionInput {
   runAttempt: number
   triggeringActor: string
   botId: number
+  publisherBotId: number
   allowedBotIds?: ReadonlySet<number>
   now?: Date
 }
@@ -187,10 +198,38 @@ export function createGitHubApi(options: GitHubApiOptions): GitHubApi {
   const repositoryPath = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`
 
   async function responseJson(response: Response) {
-    const body = await response.text().catch(() => {
-      throw new Error("GitHub API response failed")
-    })
-    return parseJson(body)
+    const declaredLength = response.headers.get("content-length")
+    if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maximumResponseBytes))
+      throw new Error("GitHub API response too large")
+    if (!response.body) throw new Error("invalid GitHub API response")
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let bytes = 0
+    while (true) {
+      const chunk = await reader.read().catch(() => {
+        throw new Error("GitHub API response failed")
+      })
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > maximumResponseBytes) {
+        await reader.cancel().catch(() => {})
+        throw new Error("GitHub API response too large")
+      }
+      chunks.push(chunk.value)
+    }
+    const content = new Uint8Array(bytes)
+    let offset = 0
+    for (const chunk of chunks) {
+      content.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    let body: string
+    try {
+      body = new TextDecoder("utf-8", { fatal: true }).decode(content)
+    } catch {
+      throw new Error("invalid GitHub API response encoding")
+    }
+    return { value: parseJson(body), bytes }
   }
 
   async function read(path: string, allowMissing = false) {
@@ -206,7 +245,7 @@ export function createGitHubApi(options: GitHubApiOptions): GitHubApi {
     })
     if (allowMissing && response.status === 404) return undefined
     if (!response.ok) throw new Error("GitHub API request failed")
-    return { value: await responseJson(response), headers: response.headers }
+    return { ...(await responseJson(response)), headers: response.headers }
   }
 
   async function get(path: string, allowMissing = false) {
@@ -228,17 +267,20 @@ export function createGitHubApi(options: GitHubApiOptions): GitHubApi {
       throw new Error("GitHub API request failed")
     })
     if (!response.ok) throw new Error("GitHub API request failed")
-    return decodeComment(await responseJson(response))
+    return decodeComment((await responseJson(response)).value)
   }
 
   async function pages(path: string) {
     const items: unknown[] = []
+    let bytes = 0
     for (let page = 1; page <= maximumPages; page++) {
       const separator = path.includes("?") ? "&" : "?"
       const response = await read(`${path}${separator}per_page=${pageSize}&page=${page}`)
       if (!response) throw new Error("invalid GitHub API response")
       const value = response.value
       if (!Array.isArray(value)) throw new Error("invalid GitHub API response")
+      bytes += response.bytes
+      if (bytes > maximumPaginatedBytes) throw new Error("GitHub API pagination too large")
       validateNextPage(response.headers.get("link"), root, path, page, value.length)
       items.push(...value)
       if (value.length < pageSize) return items
@@ -271,6 +313,9 @@ export function createGitHubApi(options: GitHubApiOptions): GitHubApi {
     async getBranchSha(branch) {
       const value = record(await get(`${repositoryPath}/git/ref/heads/${encodeURIComponent(branch)}`))
       return sha(record(value.object).sha)
+    },
+    async getIssue(issueNumber) {
+      return decodeIssue(await get(`${repositoryPath}/issues/${positiveInteger(issueNumber)}`))
     },
     async getIssueComment(commentId) {
       return decodeComment(await get(`${repositoryPath}/issues/comments/${positiveInteger(commentId)}`))
@@ -330,12 +375,24 @@ export async function admitIssue(input: AdmissionInput, api: GitHubApi): Promise
     return rejected("ambiguous_label")
 
   const allowedBotIds = new Set(input.allowedBotIds ?? [])
-  allowedBotIds.add(positiveInteger(input.botId))
+  positiveInteger(input.botId)
+  positiveInteger(input.publisherBotId)
   const actor = await api.getActor(event.sender.login)
   if (!authorizeActor(event.sender, actor, allowedBotIds)) return rejected("rejected_actor")
   const triggeringActor =
     input.triggeringActor === actor.login ? actor : await api.getActor(parseLogin(input.triggeringActor))
   if (!authorizeActor(undefined, triggeringActor, allowedBotIds)) return rejected("rejected_actor")
+
+  const currentIssue = await api.getIssue(event.issue.number)
+  const currentLabels = currentIssue.labels.filter((label) => isExecutionLabel(label.name))
+  if (
+    currentIssue.nodeId !== event.issue.nodeId ||
+    currentIssue.state !== "open" ||
+    currentLabels.length !== 1 ||
+    currentLabels[0]?.name !== event.label.name ||
+    currentLabels[0].id !== event.label.id
+  )
+    return rejected("ambiguous_label")
 
   const matches = (await api.listLabeledEvents(event.issue.number)).filter(
     (item) =>
@@ -366,7 +423,7 @@ export async function admitIssue(input: AdmissionInput, api: GitHubApi): Promise
   const botMarker = findBotMarker(comments, input.botId)
   const openBotPullRequest = (await api.listOpenPullRequests()).find(
     (pullRequest) =>
-      pullRequest.userId === input.botId &&
+      pullRequest.userId === input.publisherBotId &&
       pullRequest.headRepositoryId === repository.id &&
       pullRequest.headRef.startsWith(`oc2/issue-${event.issue.number}-`),
   )
@@ -480,7 +537,8 @@ export async function updateIssueMarker(input: MarkerUpdateInput, api: GitHubApi
     !marker ||
     marker.key !== input.admission.key ||
     marker.runId !== input.admission.run.id ||
-    marker.attempt !== input.admission.run.attempt
+    marker.attempt !== input.admission.run.attempt ||
+    !new Set<IssuePhase>(["running", "pr_opened"]).has(marker.phase)
   )
     throw new Error("marker compare-and-swap failed")
   const next: IssueMarker = {
@@ -507,9 +565,12 @@ export async function main(
 ) {
   const env = dependencies.env ?? process.env
   const options = parseCli(args)
-  const event = parseJson(await Bun.file(options.eventFile).text())
+  const eventFile = Bun.file(options.eventFile)
+  if (eventFile.size > maximumEventBytes) throw new Error("GitHub event is too large")
+  const event = parseJson(await eventFile.text())
   const repository = requiredEnvironment(env, "GITHUB_REPOSITORY")
   const botId = positiveInteger(Number(options.botId))
+  const publisherBotId = positiveInteger(Number(options.publisherBotId))
   const result = await admitIssue(
     {
       event,
@@ -518,7 +579,8 @@ export async function main(
       runAttempt: positiveInteger(Number(requiredEnvironment(env, "GITHUB_RUN_ATTEMPT"))),
       triggeringActor: requiredEnvironment(env, "GITHUB_TRIGGERING_ACTOR"),
       botId,
-      allowedBotIds: new Set([botId, ...options.allowedBotIds.map((value) => positiveInteger(Number(value)))]),
+      publisherBotId,
+      allowedBotIds: new Set(options.allowedBotIds.map((value) => positiveInteger(Number(value)))),
       now: dependencies.now,
     },
     createGitHubApi({
@@ -613,6 +675,18 @@ function decodeComment(value: unknown): GitHubIssueComment {
   }
 }
 
+function decodeIssue(value: unknown): GitHubIssue {
+  const issue = record(value)
+  return {
+    labels: array(issue.labels, "issue labels").map((value) => {
+      const label = record(value)
+      return { id: positiveInteger(label.id), name: nonemptyString(label.name, "issue label") }
+    }),
+    nodeId: nonemptyString(issue.node_id, "issue node ID"),
+    state: nonemptyString(issue.state, "issue state"),
+  }
+}
+
 function decodeActionsRun(value: unknown): GitHubActionsRun {
   const run = record(value)
   const conclusion = run.conclusion === null ? null : nonemptyString(run.conclusion, "Actions run conclusion")
@@ -671,11 +745,12 @@ function findBotMarker(comments: GitHubIssueComment[], botId: number) {
 }
 
 async function canReplaceMarker(previous: IssueMarker, next: IssueMarker, input: AdmissionInput, api: GitHubApi) {
-  if (new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "no_changes"]).has(previous.phase)) return false
-  if (previous.key === next.key) {
+  const sameKey = previous.key === next.key
+  if (sameKey) {
+    if (new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "no_changes"]).has(previous.phase)) return false
     if (previous.runId !== next.runId || next.attempt <= previous.attempt) return false
-  } else if (new Set<IssuePhase>(["running", "pr_opened", "auto_merge_enabled", "no_changes"]).has(previous.phase)) {
-    return false
+  } else if (new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "no_changes"]).has(previous.phase)) {
+    return true
   }
   const run = await api.getActionsRunAttempt(previous.runId, previous.attempt)
   if (run && (run.id !== previous.runId || run.attempt !== previous.attempt))
@@ -683,10 +758,11 @@ async function canReplaceMarker(previous: IssueMarker, next: IssueMarker, input:
   const terminated =
     run?.status === "completed" &&
     run.conclusion !== null &&
-    new Set(["failure", "cancelled", "timed_out"]).has(run.conclusion)
+    new Set(["failure", "cancelled", "timed_out", "startup_failure", "stale"]).has(run.conclusion)
+  if (terminated) return true
+  if (run?.status === "completed") return false
   const lastUpdate = Math.max(Date.parse(previous.updatedAt), run === undefined ? 0 : Date.parse(run.updatedAt))
-  const stale = (input.now ?? new Date()).getTime() - lastUpdate > staleAfterMs
-  return terminated || stale
+  return previous.phase === "running" && (input.now ?? new Date()).getTime() - lastUpdate > staleAfterMs
 }
 
 function validateNextPage(link: string | null, root: string, path: string, page: number, itemCount: number) {
@@ -729,7 +805,8 @@ function rejected(phase: "rejected_actor" | "ambiguous_label" | "stale_base"): A
 }
 
 function parseCli(args: string[]) {
-  if (args[0] !== "admit") throw new Error("usage: oc2-issue admit --event-file PATH --result-file PATH --bot-id ID")
+  if (args[0] !== "admit")
+    throw new Error("usage: oc2-issue admit --event-file PATH --result-file PATH --bot-id ID --publisher-bot-id ID")
   const values = new Map<string, string>()
   const allowedBotIds: string[] = []
   for (let index = 1; index < args.length; index += 2) {
@@ -740,15 +817,16 @@ function parseCli(args: string[]) {
       allowedBotIds.push(value)
       continue
     }
-    if (!new Set(["--event-file", "--result-file", "--bot-id"]).has(name) || values.has(name))
+    if (!new Set(["--event-file", "--result-file", "--bot-id", "--publisher-bot-id"]).has(name) || values.has(name))
       throw new Error("invalid oc2-issue option")
     values.set(name, value)
   }
   const eventFile = values.get("--event-file")
   const resultFile = values.get("--result-file")
   const botId = values.get("--bot-id")
-  if (!eventFile || !resultFile || !botId) throw new Error("missing oc2-issue option")
-  return { eventFile, resultFile, botId, allowedBotIds }
+  const publisherBotId = values.get("--publisher-bot-id")
+  if (!eventFile || !resultFile || !botId || !publisherBotId) throw new Error("missing oc2-issue option")
+  return { eventFile, resultFile, botId, publisherBotId, allowedBotIds }
 }
 
 function parseRepositoryName(value: string) {
@@ -816,8 +894,7 @@ function timestamp(value: unknown) {
 }
 
 function isTimestamp(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value))
-    return false
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false
   const parsed = Date.parse(value)
   if (!Number.isFinite(parsed)) return false
   return new Date(parsed).toISOString() === (value.includes(".") ? value : value.replace("Z", ".000Z"))
