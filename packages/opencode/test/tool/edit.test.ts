@@ -286,6 +286,46 @@ describe("tool.edit", () => {
     }),
   )
 
+  it.live("automation-safe edits treat registered secondary roots as external", () =>
+    Effect.gen(function* () {
+      const primary = yield* tmpdirScoped({ git: true })
+      const secondary = yield* tmpdirScoped({ git: true })
+      const filepath = path.join(secondary, "edit.txt")
+      const requests: Parameters<Tool.Context["ask"]>[0][] = []
+      yield* put(filepath, "old value")
+
+      const info = yield* provideInstance(primary)(
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const info = yield* session.create({ title: "automation roots" })
+          yield* session.addRoot({ sessionID: info.id, directory: secondary })
+          return info
+        }),
+      )
+
+      const exit = yield* provideInstance(primary)(
+        run(
+          { filePath: filepath, oldString: "old", newString: "new" },
+          {
+            ...ctx,
+            sessionID: info.id,
+            extra: { automationSafe: true },
+            ask: (request) => {
+              requests.push(request)
+              if (request.permission === "external_directory") return Effect.die(new Error("denied"))
+              return Effect.void
+            },
+          },
+        ).pipe(Effect.exit),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(yield* load(filepath)).toBe("old value")
+      expect(requests.find((request) => request.permission === "external_directory")).toBeDefined()
+      expect(requests.find((request) => request.permission === "edit")).toBeUndefined()
+    }),
+  )
+
   it.live("denies edits through an internal symlink to an external directory", () =>
     Effect.gen(function* () {
       if (process.platform === "win32") return

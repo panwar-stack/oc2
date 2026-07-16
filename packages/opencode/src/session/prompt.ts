@@ -1460,7 +1460,18 @@ Do not create a team for trivial one step requests or when the user explicitly a
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
           const primaryLastUserMsg = msgs.findLast((msg) => msg.info.role === "user" && msg.info.id === lastUser.id)
-          if (yield* deliverTeamMessages({ session, lastUser }).pipe(Effect.orDie)) continue
+          if (lastUser.automation !== true && (yield* deliverTeamMessages({ session, lastUser }).pipe(Effect.orDie))) {
+            continue
+          }
+          const agent = yield* agents.get(lastUser.agent)
+          if (!agent) {
+            const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+            throw error
+          }
+          const issueAutomation = lastUser.automation === true || Agent.isIssueAutomation(agent)
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1492,16 +1503,6 @@ Do not create a team for trivial one step requests or when the user explicitly a
             yield* slog.info("exiting loop")
             break
           }
-
-          const agent = yield* agents.get(lastUser.agent)
-          if (!agent) {
-            const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-            throw error
-          }
-          const issueAutomation = lastUser.automation === true || Agent.isIssueAutomation(agent)
 
           step++
           if (step === 1 && !issueAutomation)
@@ -1644,9 +1645,10 @@ Do not create a team for trivial one step requests or when the user explicitly a
             }
 
             const roots = yield* sessions.listRoots(sessionID).pipe(Effect.catch(() => Effect.succeed([])))
+            const environmentRoots = issueAutomation ? roots.filter((root) => root.primary).slice(0, 1) : roots
             const [skills, env, teamLead, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
-              sys.environment(model, roots),
+              sys.environment(model, environmentRoots),
               issueAutomation ? Effect.succeed(undefined) : teamLeadSystemPrompt({ session, agent }),
               issueAutomation ? Effect.succeed([]) : instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),

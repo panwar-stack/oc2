@@ -30,9 +30,11 @@ export const roots = Effect.fn("ToolPath.roots")(function* (session: Session.Int
       ]),
     ),
   )
-  return yield* Effect.forEach(list, (root) =>
+  const canonical = yield* Effect.forEach(list, (root) =>
     CanonicalPath.resolve(root.directory).pipe(Effect.map((directory) => ({ ...root, directory }))),
   )
+  if (ctx.extra?.automationSafe !== true) return canonical
+  return canonical.filter((root) => root.primary).slice(0, 1)
 })
 
 export const primary = Effect.fn("ToolPath.primary")(function* (ctx: Tool.Context) {

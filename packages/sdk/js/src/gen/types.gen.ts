@@ -1423,6 +1423,7 @@ export type Command = {
   description?: string
   agent?: string
   model?: string
+  variant?: string
   template: string
   subtask?: boolean
 }

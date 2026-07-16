@@ -777,6 +777,26 @@ describe("tool.read loaded instructions", () => {
       expect(result.metadata.loaded).toContain(path.join(dir, "subdir", "AGENTS.md"))
     }),
   )
+
+  it.live("automation-safe reads do not load ambient instruction files", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const dir = yield* tmpdirScoped()
+      const outside = yield* tmpdirScoped()
+      const secret = path.join(outside, ".env")
+      const source = path.join(dir, "subdir", "nested", "test.txt")
+      yield* put(secret, "AMBIENT_INSTRUCTION_SECRET")
+      yield* put(source, "safe source")
+      yield* Effect.promise(() => fs.symlink(secret, path.join(dir, "subdir", "AGENTS.md"), "file"))
+
+      const result = yield* exec(dir, { filePath: source }, { ...ctx, extra: { automationSafe: true } })
+
+      expect(result.output).toContain("safe source")
+      expect(result.output).not.toContain("AMBIENT_INSTRUCTION_SECRET")
+      expect(result.output).not.toContain("system-reminder")
+      expect(result.metadata.loaded).toEqual([])
+    }),
+  )
 })
 
 describe("tool.read binary detection", () => {

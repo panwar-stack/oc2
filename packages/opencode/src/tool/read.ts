@@ -313,7 +313,7 @@ export const ReadTool = Tool.define<
         }
       }
 
-      const loaded = yield* instruction.resolve(ctx.messages, filepath, ctx.messageID)
+      const loaded = automationSafe ? [] : yield* instruction.resolve(ctx.messages, filepath, ctx.messageID)
       const sample = yield* readSample(filepath, Number(stat.size), SAMPLE_BYTES)
 
       const mime = sniffAttachmentMime(

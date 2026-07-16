@@ -58,7 +58,7 @@ import { Opengrep } from "@oc2-ai/core/filesystem/opengrep"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
-import { provideTmpdirInstance, provideTmpdirServer, TestInstance } from "../fixture/fixture"
+import { provideTmpdirInstance, provideTmpdirServer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -1307,7 +1307,7 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
 )
 
 it.live(
-  "preserves trusted automation on queued team mailbox delivery",
+  "trusted automation ignores queued team mailbox delivery",
   () =>
     provideTmpdirServer(
       Effect.fnUntraced(function* () {
@@ -1344,8 +1344,36 @@ it.live(
             message.info.role === "user" &&
             message.parts.some((part) => part.type === "text" && part.text.includes("Safe worker result.")),
         )
-        expect(delivered?.info.role).toBe("user")
-        if (delivered?.info.role === "user") expect(delivered.info.automation).toBe(true)
+        expect(delivered).toBeUndefined()
+        expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(1)
+      }),
+      { git: true, config: providerCfg },
+    ),
+  30_000,
+)
+
+it.live(
+  "trusted automation hides registered secondary roots from the model",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const config = yield* Config.Service
+        const previousConfig = yield* config.getGlobal()
+        yield* config.updateGlobal(providerCfg(llm.url))
+        yield* Effect.addFinalizer(() => config.updateGlobal(previousConfig).pipe(Effect.orDie))
+        const { prompt, chat, sessions } = yield* boot()
+        const secondary = yield* tmpdirScoped()
+        yield* sessions.addRoot({ sessionID: chat.id, directory: secondary })
+        yield* llm.text("completed inside primary root")
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "issue-task",
+          model: ref,
+          parts: [{ type: "text", text: "inspect the supplied location" }],
+        })
+
+        expect(JSON.stringify(yield* llm.inputs)).not.toContain(secondary)
       }),
       { git: true, config: providerCfg },
     ),
