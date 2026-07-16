@@ -350,6 +350,7 @@ describe("workflow secret boundaries", () => {
     const status = workflow.slice(workflow.indexOf("  status:"))
     expect(status).not.toContain("download-artifact")
     expect(status).not.toContain("needs.admit.outputs.execute")
+    expect(status).toContain('"$GITHUB_WORKSPACE/script/oc2-publish.ts" status')
     expect(status).toContain('--run-id "$RUN_ID"')
     expect(status).toContain('--admit-result "$ADMIT_RESULT"')
     expect(helper).toContain('"--auto"')

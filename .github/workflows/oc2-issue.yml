@@ -771,7 +771,7 @@ jobs:
           AUTO_MERGE_STATE: ${{ needs.auto_merge.outputs.state }}
         run: |
           set -euo pipefail
-          bun --config=/dev/null --no-env-file --no-install script/oc2-publish.ts status \
+          bun --config=/dev/null --no-env-file --no-install "$GITHUB_WORKSPACE/script/oc2-publish.ts" status \
             --event-file "$GITHUB_EVENT_PATH" \
             --repository "$GITHUB_REPOSITORY" \
             --repository-id "$REPOSITORY_ID" \
