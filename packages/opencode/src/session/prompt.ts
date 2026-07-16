@@ -352,13 +352,17 @@ export const layer = Layer.effect(
           ) ?? []
       const promptOps = {
         ...basePromptOps,
+        prompt: (input: PromptInput) =>
+          basePromptOps.prompt({ ...input, automation: input.automation || lastUser.automation }),
         resolvePromptParts: (template: string) =>
           lastUser.automation
             ? Effect.succeed([{ type: "text" as const, text: template }, ...forwardedParts])
             : basePromptOps.resolvePromptParts(template).pipe(Effect.map((parts) => [...parts, ...forwardedParts])),
       } satisfies TaskPromptOps
       const { task: taskTool } = yield* registry.named()
-      const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
+      const taskModel = task.model
+        ? yield* getModel(task.model.providerID, task.model.modelID, sessionID, lastUser.automation === true)
+        : model
       const isSpawnCommand = task.command === Command.Default.SPAWN
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
@@ -399,11 +403,13 @@ export const layer = Layer.effect(
         subagent_type: task.agent,
         command: task.command,
       }
-      yield* plugin.trigger(
-        "tool.execute.before",
-        { tool: TaskTool.id, sessionID, callID: part.id },
-        { args: taskArgs },
-      )
+      if (!lastUser.automation) {
+        yield* plugin.trigger(
+          "tool.execute.before",
+          { tool: TaskTool.id, sessionID, callID: part.id },
+          { args: taskArgs },
+        )
+      }
 
       const taskAgent = yield* agents.get(task.agent)
       if (!taskAgent) {
@@ -482,11 +488,13 @@ export const layer = Layer.effect(
         messageID: assistantMessage.id,
       }))
 
-      yield* plugin.trigger(
-        "tool.execute.after",
-        { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
-        result,
-      )
+      if (!lastUser.automation) {
+        yield* plugin.trigger(
+          "tool.execute.after",
+          { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
+          result,
+        )
+      }
 
       assistantMessage.finish = isSpawnCommand ? "stop" : "tool-calls"
       assistantMessage.time.completed = Date.now()
@@ -749,7 +757,10 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    type InternalPromptInput = PromptInput & { resolveReferences?: boolean }
+    type InternalPromptInput = PromptInput & {
+      resolveReferences?: boolean
+      allowAutomationSubtask?: boolean
+    }
     const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: InternalPromptInput) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
@@ -767,7 +778,7 @@ export const layer = Layer.effect(
         input.parts.some(
           (part) =>
             part.type === "agent" ||
-            part.type === "subtask" ||
+            (part.type === "subtask" && !input.allowAutomationSubtask) ||
             (part.type === "file" && part.source?.type === "resource"),
         )
       ) {
@@ -1505,8 +1516,8 @@ Do not create a team for trivial one step requests or when the user explicitly a
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
-            if (automationSafe) {
-              throw new NamedError.Unknown({ message: "Automation prompts cannot execute subtasks" })
+            if (automationSafe && !task.command) {
+              throw new NamedError.Unknown({ message: "Automation prompts cannot execute external subtasks" })
             }
             yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
             continue
@@ -1844,6 +1855,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
         variant: input.variant,
         resolveReferences: !automationSafe,
         automation: automationSafe,
+        allowAutomationSubtask: automationSafe && isSubtask,
       })
       yield* events.publish(Command.Event.Executed, {
         name: input.command,

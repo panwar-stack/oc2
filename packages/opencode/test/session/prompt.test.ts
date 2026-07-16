@@ -4,9 +4,11 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Database } from "@oc2-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Global } from "@oc2-ai/core/global"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option } from "effect"
+import fs from "node:fs/promises"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@oc2-ai/core/util/error"
@@ -1675,8 +1677,16 @@ it.instance(
   "configured automation subtask keeps ambient references literal and forwards explicit files",
   () =>
     Effect.gen(function* () {
-      const { dir, llm } = yield* useServerConfig((url) => ({
+      const { directory: dir } = yield* TestInstance
+      const pluginMarker = path.join(dir, "automation-subtask-plugin-marker")
+      const pluginPath = path.join(dir, "automation-subtask-plugin.ts")
+      yield* writeText(
+        pluginPath,
+        `export default async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "initialized"); return {} }`,
+      )
+      const { llm } = yield* useServerConfig((url) => ({
         ...providerCfg(url),
+        plugin: [pathToFileURL(pluginPath).href],
         command: {
           "literal-subtask": {
             template: "Inspect @checkout-secret.txt @~/home-secret.txt @docs and !`printf unsafe`",
@@ -1686,9 +1696,25 @@ it.instance(
         reference: { docs: "./reference-secret" },
       }))
       const config = yield* Config.Service
-      const previousConfig = yield* config.getGlobal()
+      const globalFiles = ["oc2.jsonc", "oc2.json"].map((file) => path.join(Global.Path.config, file))
+      const previousConfig = yield* Effect.promise(() =>
+        Promise.all(
+          globalFiles.map(async (file) => ({
+            file,
+            content: (await Bun.file(file).exists()) ? await Bun.file(file).text() : undefined,
+          })),
+        ),
+      )
       yield* config.updateGlobal(providerCfg(llm.url))
-      yield* Effect.addFinalizer(() => config.updateGlobal(previousConfig).pipe(Effect.orDie))
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          Promise.all(
+            previousConfig.map((item) =>
+              item.content === undefined ? fs.rm(item.file, { force: true }) : Bun.write(item.file, item.content),
+            ),
+          ),
+        ).pipe(Effect.andThen(config.invalidate()), Effect.orDie),
+      )
       const home = path.join(dir, "home")
       const checkoutSecret = path.join(dir, "checkout-secret.txt")
       const homeSecret = path.join(home, "home-secret.txt")
@@ -1718,7 +1744,7 @@ it.instance(
         ({ body }) => JSON.stringify(body.messages).includes("Summarize the task tool output"),
         "parent completed command",
       )
-      const { prompt, chat } = yield* boot()
+      const { prompt, chat, sessions } = yield* boot()
 
       const result = yield* prompt.command({
         sessionID: chat.id,
@@ -1738,6 +1764,30 @@ it.instance(
       })
 
       expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text.includes("parent completed command"))).toBe(
+        true,
+      )
+      const children = yield* sessions.children(chat.id)
+      expect(children).toHaveLength(1)
+      const childMessages = yield* sessions.messages({ sessionID: children[0].id })
+      const childUser = childMessages.find((message) => message.info.role === "user")
+      expect(childUser?.info.role).toBe("user")
+      if (!childUser || childUser.info.role !== "user") return
+      expect(childUser.info.automation).toBe(true)
+      const childInput = JSON.stringify(childUser.parts)
+      expect(childInput).toContain(literal)
+      expect(childInput).toContain(attachment)
+      expect(childInput).not.toContain("CHECKOUT_SUBTASK_SECRET")
+      expect(childInput).not.toContain("HOME_SUBTASK_SECRET")
+      expect(childInput).not.toContain("CONFIGURED_SUBTASK_SECRET")
+      expect(yield* Effect.promise(() => Bun.file(pluginMarker).exists())).toBe(false)
+      expect(
+        childMessages.some((message) =>
+          message.parts.some(
+            (part) => part.type === "text" && part.text.includes("child inspected explicit attachment"),
+          ),
+        ),
+      ).toBe(true)
       const inputs = JSON.stringify(yield* llm.inputs)
       expect(inputs).toContain(literal)
       expect(inputs).toContain(attachment)
