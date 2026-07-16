@@ -233,20 +233,38 @@ describe("canonical automation path policy", () => {
       "nested/AGENTS.md",
       "nested/Package.JSON",
       "nested/tsconfig.build.json",
-      "src/clock.ts",
       "script/OC2-VERIFY-extra.ts",
+      "script/oc2-issue-new.ts",
+      "script/oc2-automation-new.ts",
       "script/oc2-automation-policy.ts",
       "script/oc2-publish.ts",
       "script/ci-scope.ts",
-      "packages/opencode/src/server/automation-safe-request.ts",
+      "script/check-generated.ts",
+      "script/package-boundaries.ts",
+      "script/package-boundary-baseline.jsonc",
       "packages/opencode/script/docs-check.ts",
-      "packages/core/src/util/wildcard.ts",
-      "packages/app/script/build.ts",
-      "install",
       "docs/issue-automation.md",
       "specs/secure-issue-driven-oc2-automation.md",
     ])
       expect(isProtectedAutomationPath(path)).toBeTrue()
+  })
+
+  test("allows ordinary normalized checkout paths by default", () => {
+    for (const path of [
+      "src/ordinary.ts",
+      "packages/opencode/src/ordinary.ts",
+      "packages/core/src/ordinary.ts",
+      "packages/opencode/test/ordinary.test.ts",
+      "script/ordinary.ts",
+      "packages/clock/src/file.ts",
+      "docs/ordinary.md",
+      "specs/ordinary.md",
+    ]) {
+      expect(isProtectedAutomationPath(path)).toBeFalse()
+    }
+    expect(
+      validateChangedPaths(["src/ordinary.ts", "packages/opencode/src/ordinary.ts", "script/ordinary.ts"]),
+    ).toEqual(["src/ordinary.ts", "packages/opencode/src/ordinary.ts", "script/ordinary.ts"])
   })
 
   test("rejects exact, case-folded, and Unicode case-folded duplicates", () => {

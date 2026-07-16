@@ -872,12 +872,13 @@ describe("opencode run (non-interactive subprocess)", () => {
         })
         const disabled = yield* opencode.run("hello", {
           automation: true,
-          agent: "disabled",
+          agent: "issue-task",
           variant: "high",
+          format: "result-json",
           env: {
             OC2_CONFIG_CONTENT: JSON.stringify({
               ...testProviderConfig(llm.url),
-              agent: { disabled: { disable: true } },
+              agent: { "issue-task": { disable: true } },
             }),
           },
         })
@@ -900,7 +901,12 @@ describe("opencode run (non-interactive subprocess)", () => {
 
         expect(unknown.exitCode).not.toBe(0)
         expect(subagent.exitCode).not.toBe(0)
-        expect(disabled.exitCode).not.toBe(0)
+        opencode.expectExit(disabled, 2)
+        expect(automationResult(disabled.stdout)).toEqual({
+          status: "error",
+          sessionID: expect.any(String),
+          error: "invalid_agent",
+        })
         expect(renamed.exitCode).not.toBe(0)
         expect(untrusted.exitCode).not.toBe(0)
         expect(yield* llm.calls).toBe(0)
@@ -978,7 +984,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "automation spec implementation accepts exactly one path and positive integer slice",
+    "automation spec implementation accepts one path and an optional positive integer slice",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
         const base = [
@@ -997,7 +1003,6 @@ describe("opencode run (non-interactive subprocess)", () => {
         ]
         for (const values of [
           [],
-          ["specs/feature.md"],
           ["specs/feature.md", "all"],
           ["specs/feature.md", "0"],
           ["specs/feature.md", "1.5"],
@@ -1015,10 +1020,15 @@ describe("opencode run (non-interactive subprocess)", () => {
         }
         expect(yield* llm.calls).toBe(0)
 
+        yield* llm.text("whole spec completed")
+        const withoutSlice = yield* opencode.spawn([...base, "specs/feature.md"])
+        opencode.expectExit(withoutSlice, 0)
+        expect(automationResult(withoutSlice.stdout)).toMatchObject({ status: "ok", text: "whole spec completed" })
+
         yield* llm.text("one slice completed")
-        const valid = yield* opencode.spawn([...base, "specs/path with spaces.md", "4"])
-        opencode.expectExit(valid, 0)
-        expect(automationResult(valid.stdout)).toMatchObject({ status: "ok", text: "one slice completed" })
+        const withSlice = yield* opencode.spawn([...base, "specs/path with spaces.md", "4"])
+        opencode.expectExit(withSlice, 0)
+        expect(automationResult(withSlice.stdout)).toMatchObject({ status: "ok", text: "one slice completed" })
         expect(yield* llm.calls).toBeGreaterThan(0)
       }),
     120_000,

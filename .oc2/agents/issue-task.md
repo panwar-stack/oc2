@@ -11,21 +11,7 @@ permission:
   glob: allow
   grep: allow
   edit:
-    "*": deny
-    README.md: allow
-    "packages/onboarding.md": allow
-    docs: allow
-    "docs/**": allow
-    specs: allow
-    "specs/**": allow
-    "packages/app/src": allow
-    "packages/app/src/**": allow
-    "packages/app/e2e": allow
-    "packages/app/e2e/**": allow
-    "packages/ui/src": allow
-    "packages/ui/src/**": allow
-    "packages/ui/test": allow
-    "packages/ui/test/**": allow
+    "*": allow
     ".github": deny
     ".github/**": deny
     "**/.github": deny
@@ -51,12 +37,22 @@ permission:
     "bunfig.toml": deny
     "**/bunfig.toml": deny
     "*lock*": deny
+    "**/*lock*": deny
     "turbo.json": deny
     "**/turbo.json": deny
     "tsconfig*.json": deny
     "**/tsconfig*.json": deny
     "docs/issue-automation.md": deny
     "specs/secure-issue-driven-oc2-automation.md": deny
+    "script/oc2-issue*": deny
+    "script/oc2-verify*": deny
+    "script/oc2-automation-*": deny
+    "script/oc2-publish*": deny
+    "script/ci-scope*": deny
+    "script/check-generated.ts": deny
+    "script/package-boundaries.ts": deny
+    "script/package-boundary-baseline.jsonc": deny
+    "packages/opencode/script/docs-check.ts": deny
   write: deny
   apply_patch: deny
   external_directory: deny

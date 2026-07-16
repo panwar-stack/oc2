@@ -342,7 +342,11 @@ export function validAutomationArguments(name: string, input: string) {
   const args = parseArguments(input)
   if (!args) return false
   if (name !== Default.IMPLEMENT_SPEC_PR) return true
-  return args?.length === 2 && args[0].trim().length > 0 && /^[1-9]\d*$/.test(args[1])
+  return (
+    (args.length === 1 || args.length === 2) &&
+    args[0].trim().length > 0 &&
+    (args.length === 1 || /^[1-9]\d*$/.test(args[1]))
+  )
 }
 
 export function validAutomationRole(name: string, agent: string) {

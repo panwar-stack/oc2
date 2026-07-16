@@ -61,6 +61,7 @@ const GeneratedAgent = Schema.Struct({
 
 export interface Interface {
   readonly get: (agent: string) => Effect.Effect<Info>
+  readonly getAutomation: (agent: string) => Effect.Effect<Info | undefined>
   readonly list: () => Effect.Effect<Info[]>
   readonly defaultInfo: () => Effect.Effect<Info>
   readonly defaultAgent: () => Effect.Effect<string>
@@ -77,7 +78,7 @@ export interface Interface {
   >
 }
 
-type State = Omit<Interface, "generate">
+type State = Omit<Interface, "generate" | "getAutomation">
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Agent") {}
 
@@ -90,21 +91,7 @@ const issueRead = {
   "**/.env*": "deny",
 } as const
 const issueEdit = {
-  "*": "deny",
-  "README.md": "allow",
-  "packages/onboarding.md": "allow",
-  docs: "allow",
-  "docs/**": "allow",
-  specs: "allow",
-  "specs/**": "allow",
-  "packages/app/src": "allow",
-  "packages/app/src/**": "allow",
-  "packages/app/e2e": "allow",
-  "packages/app/e2e/**": "allow",
-  "packages/ui/src": "allow",
-  "packages/ui/src/**": "allow",
-  "packages/ui/test": "allow",
-  "packages/ui/test/**": "allow",
+  "*": "allow",
   ".github": "deny",
   ".github/**": "deny",
   "**/.github": "deny",
@@ -130,12 +117,22 @@ const issueEdit = {
   "bunfig.toml": "deny",
   "**/bunfig.toml": "deny",
   "*lock*": "deny",
+  "**/*lock*": "deny",
   "turbo.json": "deny",
   "**/turbo.json": "deny",
   "tsconfig*.json": "deny",
   "**/tsconfig*.json": "deny",
   "docs/issue-automation.md": "deny",
   "specs/secure-issue-driven-oc2-automation.md": "deny",
+  "script/oc2-issue*": "deny",
+  "script/oc2-verify*": "deny",
+  "script/oc2-automation-*": "deny",
+  "script/oc2-publish*": "deny",
+  "script/ci-scope*": "deny",
+  "script/check-generated.ts": "deny",
+  "script/package-boundaries.ts": "deny",
+  "script/package-boundary-baseline.jsonc": "deny",
+  "packages/opencode/script/docs-check.ts": "deny",
 } as const
 const issueAutomationDefinitions = {
   "issue-task": {
@@ -426,6 +423,7 @@ export const layer = Layer.effect(
         }
 
         for (const name of issueAutomationNames) {
+          if (cfg.agent?.[name]?.disable) continue
           agents[name] = automationAgents[name]
         }
 
@@ -493,6 +491,11 @@ export const layer = Layer.effect(
       get: Effect.fn("Agent.get")(function* (agent: string) {
         if (isIssueAutomationName(agent)) return automationAgents[agent]
         return yield* InstanceState.useEffect(state, (s) => s.get(agent))
+      }),
+      getAutomation: Effect.fn("Agent.getAutomation")(function* (agent: string) {
+        if (!isIssueAutomationName(agent)) return undefined
+        const cfg = yield* config.get()
+        return cfg.agent?.[agent]?.disable ? undefined : automationAgents[agent]
       }),
       list: Effect.fn("Agent.list")(function* () {
         return yield* InstanceState.useEffect(state, (s) => s.list())

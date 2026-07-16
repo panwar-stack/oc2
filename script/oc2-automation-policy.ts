@@ -1,13 +1,17 @@
 const protectedNames = new Set(["agents.md", "bunfig.toml", "codeowners", "package.json", "turbo.json"])
-const allowedAutomationPrefixes = [
-  "docs/",
-  "packages/app/e2e/",
-  "packages/app/src/",
-  "packages/ui/src/",
-  "packages/ui/test/",
-  "specs/",
+const protectedAutomationPrefixes = [
+  "script/oc2-issue",
+  "script/oc2-verify",
+  "script/oc2-automation-",
+  "script/oc2-publish",
+  "script/ci-scope",
 ] as const
-const allowedAutomationFiles = new Set(["packages/onboarding.md", "readme.md"])
+const protectedAutomationFiles = new Set([
+  "script/check-generated.ts",
+  "script/package-boundaries.ts",
+  "script/package-boundary-baseline.jsonc",
+  "packages/opencode/script/docs-check.ts",
+])
 
 export function normalizeRepositoryPath(path: string) {
   if (
@@ -35,10 +39,11 @@ export function isProtectedAutomationPath(path: string) {
   if (segments.some((segment) => protectedNames.has(segment))) return true
   if (segments.some((segment) => segment.startsWith("tsconfig") && segment.endsWith(".json"))) return true
   if (segments.some((segment) => segment === "oc2.json" || segment === "oc2.jsonc")) return true
-  if (folded.includes("lock")) return true
+  if (segments.at(-1)?.includes("lock")) return true
   if (folded === "specs/secure-issue-driven-oc2-automation.md") return true
   if (folded === "docs/issue-automation.md") return true
-  return !allowedAutomationFiles.has(folded) && !allowedAutomationPrefixes.some((prefix) => folded.startsWith(prefix))
+  if (protectedAutomationFiles.has(folded)) return true
+  return protectedAutomationPrefixes.some((prefix) => folded.startsWith(prefix))
 }
 
 export function validateChangedPaths(paths: ReadonlyArray<string>) {

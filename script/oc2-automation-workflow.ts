@@ -35,6 +35,13 @@ const resultErrors = new Set([
   "cancelled",
   "timeout",
 ])
+const invocationResultErrors = new Set([
+  "invalid_input",
+  "invalid_agent",
+  "invalid_model",
+  "invalid_variant",
+  "invalid_command",
+])
 
 class AutomationExecutionError extends Error {
   constructor(readonly phase: "permission_denied" | "tool_failed" | "model_failed") {
@@ -364,7 +371,7 @@ export async function validateIssueBundle(bundleDir: string, admission: Admissio
   return value as unknown as IssueBundle
 }
 
-export function parseAutomationResult(source: string) {
+function decodeAutomationResult(source: string) {
   if (!source.endsWith("\n") || source.slice(0, -1).includes("\n")) throw new Error("invalid automation result")
   const value = parseJson(source)
   if (
@@ -390,14 +397,20 @@ export function parseAutomationResult(source: string) {
     typeof value.error === "string" &&
     resultErrors.has(value.error)
   )
-    throw new AutomationExecutionError(
-      value.error === "permission_denied"
-        ? "permission_denied"
-        : value.error === "tool_error"
-          ? "tool_failed"
-          : "model_failed",
-    )
+    return { status: "error" as const, error: value.error }
   throw new Error("invalid automation result")
+}
+
+export function parseAutomationResult(source: string) {
+  const result = decodeAutomationResult(source)
+  if (result.status === "ok") return result
+  throw new AutomationExecutionError(
+    result.error === "permission_denied"
+      ? "permission_denied"
+      : result.error === "tool_error"
+        ? "tool_failed"
+        : "model_failed",
+  )
 }
 
 async function runOc2(
@@ -441,8 +454,30 @@ async function runOc2(
   const exitCode = await child.exited
   clearTimeout(timer)
   await Promise.all([stdout.close(), stderr.close()])
-  if (timedOut || exitCode !== 0) throw new Error("automation execution failed")
-  return parseAutomationResult(await readRegularUtf8(stdoutPath, maximumResultBytes))
+  if (timedOut) throw new Error("automation execution failed")
+  let result: ReturnType<typeof decodeAutomationResult>
+  try {
+    result = decodeAutomationResult(await readRegularUtf8(stdoutPath, maximumResultBytes))
+  } catch {
+    throw new Error("automation execution failed")
+  }
+  if (result.status === "ok") {
+    if (exitCode !== 0) throw new Error("automation execution failed")
+    return result
+  }
+  if (
+    (exitCode !== 1 && exitCode !== 2) ||
+    (exitCode === 1 && invocationResultErrors.has(result.error)) ||
+    (exitCode === 2 && !invocationResultErrors.has(result.error))
+  )
+    throw new Error("automation execution failed")
+  throw new AutomationExecutionError(
+    result.error === "permission_denied"
+      ? "permission_denied"
+      : result.error === "tool_error"
+        ? "tool_failed"
+        : "model_failed",
+  )
 }
 
 export async function runGeneration(input: {
@@ -545,6 +580,7 @@ export async function runGeneration(input: {
         "issue-implementer",
         "--variant",
         "xhigh",
+        ...fileArgs,
         "--command",
         "spec:implement",
         "--",

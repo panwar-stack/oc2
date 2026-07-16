@@ -131,9 +131,17 @@ it.instance(
 
       for (const name of ["issue-task", "issue-implementer"]) {
         const agent = issueAgents.find((item) => item.name === name)
-        expect(Permission.evaluate("edit", "packages/app/src/index.ts", agent!.permission).action).toBe("allow")
-        expect(Permission.evaluate("edit", "docs/guide.md", agent!.permission).action).toBe("allow")
-        expect(Permission.evaluate("edit", "src/index.ts", agent!.permission).action).toBe("deny")
+        for (const file of [
+          "src/index.ts",
+          "packages/opencode/src/ordinary.ts",
+          "packages/core/src/ordinary.ts",
+          "packages/opencode/test/ordinary.test.ts",
+          "script/ordinary.ts",
+          "docs/guide.md",
+          "specs/feature.md",
+        ]) {
+          expect(Permission.evaluate("edit", file, agent!.permission).action).toBe("allow")
+        }
         expect(Permission.evaluate("write", "src/index.ts", agent!.permission).action).toBe("deny")
         expect(Permission.evaluate("apply_patch", "src/index.ts", agent!.permission).action).toBe("deny")
         expect(Permission.disabled(["edit", "write", "apply_patch", "custom-project-tool"], agent!.permission)).toEqual(
@@ -165,14 +173,15 @@ it.instance(
           "packages/app/tsconfig.build.json",
           "script/oc2-issue-generate.ts",
           "script/oc2-verify-slice.ts",
+          "script/oc2-automation-policy.ts",
           "script/oc2-publish.ts",
           "script/ci-scope.ts",
-          "packages/opencode/src/server/automation-safe-request.ts",
+          "script/check-generated.ts",
+          "script/package-boundaries.ts",
+          "script/package-boundary-baseline.jsonc",
           "packages/opencode/script/docs-check.ts",
-          "packages/core/src/util/wildcard.ts",
-          "packages/app/script/build.ts",
-          "install",
           "docs/issue-automation.md",
+          "specs/secure-issue-driven-oc2-automation.md",
         ]) {
           expect(Permission.evaluate("edit", file, agent!.permission).action).toBe("deny")
           expect(Permission.evaluate("apply_patch", file, agent!.permission).action).toBe("deny")
@@ -239,11 +248,25 @@ it.instance(
           prompt: "PROJECT OVERRIDE",
           permission: { edit: "allow", write: "allow", apply_patch: "allow" },
         },
-        "issue-implementer": { disable: true },
+        "issue-implementer": { prompt: "PROJECT OVERRIDE", permission: { "*": "allow" } },
         spoof: { name: "issue-task", permission: { "*": "allow" } },
       },
     },
   },
+)
+
+it.instance(
+  "explicit config disable removes a reserved automation agent without fallback",
+  () =>
+    Effect.gen(function* () {
+      const agents = yield* load((svc) => svc.list())
+      expect(agents.some((agent) => agent.name === "issue-task")).toBe(false)
+      expect(yield* load((svc) => svc.getAutomation("issue-task"))).toBeUndefined()
+      const implementer = yield* load((svc) => svc.getAutomation("issue-implementer"))
+      if (!implementer) throw new Error("issue-implementer not found")
+      expect(Agent.isIssueAutomation(implementer)).toBe(true)
+    }),
+  { config: { agent: { "issue-task": { disable: true } } } },
 )
 
 it.instance("build agent has correct default properties", () =>

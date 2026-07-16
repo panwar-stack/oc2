@@ -510,7 +510,7 @@ export const RunCommand = effectCmd({
       if (args.automation && args.command && !Command.validAutomationArguments(args.command, message)) {
         await die(
           args.command === Command.Default.IMPLEMENT_SPEC_PR
-            ? 'Automation command "spec:implement" requires exactly one spec path and one positive integer slice.'
+            ? 'Automation command "spec:implement" requires one spec path and accepts one optional positive integer slice.'
             : `Automation command "${args.command}" has malformed quoted arguments.`,
         )
       }
@@ -758,7 +758,7 @@ export const RunCommand = effectCmd({
         }
 
         const [agent, providers, command] = await Promise.all([
-          bridge.promise(agentSvc.get(args.agent!)),
+          bridge.promise(agentSvc.getAutomation(args.agent!)),
           bridge.promise(providerSvc.listAutomation()),
           args.command ? bridge.promise(commandSvc.get(args.command, { automation: true })) : undefined,
         ])
