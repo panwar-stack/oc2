@@ -757,11 +757,12 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    type InternalPromptInput = PromptInput & {
-      resolveReferences?: boolean
-      allowAutomationSubtask?: boolean
-    }
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: InternalPromptInput) {
+    type InternalPromptInput = PromptInput & { resolveReferences?: boolean }
+    const automationSubtask = Symbol("automation-subtask")
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
+      input: InternalPromptInput,
+      capability?: typeof automationSubtask,
+    ) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -778,7 +779,7 @@ export const layer = Layer.effect(
         input.parts.some(
           (part) =>
             part.type === "agent" ||
-            (part.type === "subtask" && !input.allowAutomationSubtask) ||
+            (part.type === "subtask" && capability !== automationSubtask) ||
             (part.type === "file" && part.source?.type === "resource"),
         )
       ) {
@@ -1287,10 +1288,13 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt = Effect.fn("SessionPrompt.prompt")(function* (input: InternalPromptInput) {
+    const promptInternal = Effect.fn("SessionPrompt.promptInternal")(function* (
+      input: InternalPromptInput,
+      capability?: typeof automationSubtask,
+    ) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
-      const message = yield* createUserMessage(input)
+      const message = yield* createUserMessage(input, capability)
       yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []
@@ -1309,6 +1313,10 @@ export const layer = Layer.effect(
 
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
+    })
+
+    const prompt = Effect.fn("SessionPrompt.prompt")(function* (input: InternalPromptInput) {
+      return yield* promptInternal(input)
     })
 
     function hasPathScopedEditPermission(permission: PermissionV1.Ruleset) {
@@ -1846,17 +1854,19 @@ Do not create a team for trivial one step requests or when the user explicitly a
         )
       }
 
-      const result = yield* prompt({
-        sessionID: input.sessionID,
-        messageID: input.messageID,
-        model: userModel,
-        agent: userAgent,
-        parts,
-        variant: input.variant,
-        resolveReferences: !automationSafe,
-        automation: automationSafe,
-        allowAutomationSubtask: automationSafe && isSubtask,
-      })
+      const result = yield* promptInternal(
+        {
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+          model: userModel,
+          agent: userAgent,
+          parts,
+          variant: input.variant,
+          resolveReferences: !automationSafe,
+          automation: automationSafe,
+        },
+        automationSafe && isSubtask ? automationSubtask : undefined,
+      )
       yield* events.publish(Command.Event.Executed, {
         name: input.command,
         sessionID: input.sessionID,
