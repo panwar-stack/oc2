@@ -911,6 +911,47 @@ describe("durable marker state", () => {
     expect(github.state.writes).toHaveLength(1)
   })
 
+  test.each([
+    "input_too_large",
+    "attachment_rejected",
+    "install_failed",
+    "model_failed",
+    "permission_denied",
+    "tool_failed",
+    "patch_rejected",
+    "verification_failed",
+    "stale_base",
+    "push_race",
+    "auto_merge_unavailable",
+  ] as const)("permits a corrected relabel after recoverable phase %s", async (phase) => {
+    const github = fakeGitHub({
+      comments: [
+        {
+          id: 600,
+          userId: botId,
+          body: formatIssueMarker({
+            attempt: 1,
+            key: markerKey,
+            phase,
+            runId: 700,
+            updatedAt: "2026-07-16T10:00:00.000Z",
+          }),
+        },
+      ],
+      labeledEvents: [
+        {
+          actor: { id: 100, login: "maintainer", type: "User" },
+          createdAt: "2026-07-16T11:00:00Z",
+          label: "task",
+          nodeId: "LE_relabel",
+        },
+      ],
+    })
+    expect(
+      await admitIssue(input(event({ updatedAt: "2026-07-16T11:00:00Z" }), { runId: 801 }), github.api),
+    ).toMatchObject({ status: "admitted" })
+  })
+
   test("rejects relabeling while an exact App-owned issue PR is open", async () => {
     const oldMarker = formatIssueMarker({
       attempt: 1,
@@ -1894,8 +1935,9 @@ async function gitFixture() {
     return stdout.trim()
   }
   await git("init", "--initial-branch=main")
-  await Bun.write(join(checkout, "tracked.txt"), "before\n")
-  await git("add", "tracked.txt")
+  await mkdir(join(checkout, "packages/app/src"), { recursive: true })
+  await Bun.write(join(checkout, "packages/app/src/tracked.txt"), "before\n")
+  await git("add", "packages/app/src/tracked.txt")
   await git("-c", "user.name=OC2 Test", "-c", "user.email=oc2@example.com", "commit", "-m", "base")
   return { baseSha: await git("rev-parse", "HEAD"), checkout, root }
 }
@@ -1937,8 +1979,8 @@ describe("trusted issue workflow glue", () => {
     const githubOutput = join(fixture.root, "github-output")
     await mkdir(stateDir)
     await Bun.write(githubOutput, "")
-    await Bun.write(join(fixture.checkout, "tracked.txt"), "after\n")
-    await Bun.write(join(fixture.checkout, "created.txt"), "created\n")
+    await Bun.write(join(fixture.checkout, "packages/app/src/tracked.txt"), "after\n")
+    await Bun.write(join(fixture.checkout, "packages/app/src/created.txt"), "created\n")
     const admission = admissionArtifact({
       repository: { id: 1234, nameWithOwner: "octo/oc2", baseBranch: "main", baseSha: fixture.baseSha },
     })
@@ -1971,7 +2013,9 @@ describe("trusted issue workflow glue", () => {
         baseSha: fixture.baseSha,
         cwd: fixture.checkout,
       }),
-    ).resolves.toMatchObject({ paths: ["created.txt", "tracked.txt"] })
+    ).resolves.toMatchObject({
+      paths: ["packages/app/src/created.txt", "packages/app/src/tracked.txt"],
+    })
     await rm(fixture.root, { recursive: true, force: true })
   })
 
@@ -2033,7 +2077,7 @@ describe("trusted issue workflow glue", () => {
     expect(workflow).not.toContain("dangerously-skip-permissions")
     expect(workflow).not.toContain("--format json")
     expect(workflow).not.toMatch(/\bbun script\//)
-    expect(workflow.match(/bun --config=\/dev\/null --no-env-file --no-install/g)).toHaveLength(14)
+    expect(workflow.match(/bun --config=\/dev\/null --no-env-file --no-install/g)).toHaveLength(15)
     for (const line of workflow.split("\n").filter((line) => line.trim().startsWith("uses:"))) {
       expect(line).toMatch(/uses: [^@]+@[0-9a-f]{40}(?: # v[^ ]+)?$/)
     }

@@ -5,16 +5,24 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
   workflow_dispatch:
+
+permissions: {}
 
 jobs:
   typecheck:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -41,6 +49,9 @@ jobs:
       - name: Check generated artifacts
         if: steps.scope.outputs.check_generated == 'true'
         run: bun run check:generated
+
+      - name: Typecheck automation security scripts
+        run: bun run typecheck:automation
 
       - name: Run typecheck
         if: steps.scope.outputs.run_typecheck == 'true'

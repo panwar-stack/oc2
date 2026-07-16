@@ -1,0 +1,55 @@
+name: oc2 provenance
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate:
+    name: provenance/path-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted workflow source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Validate automation provenance and path policy
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PUBLISHER_BOT_ID: ${{ vars.OC2_PUBLISHER_BOT_ID }}
+          APP_ID: ${{ vars.OC2_APP_ID }}
+        run: |
+          set -euo pipefail
+          bun --config=/dev/null --no-env-file --no-install script/oc2-automation-provenance.ts validate \
+            --event-file "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$REPOSITORY_ID" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --publisher-bot-id "${PUBLISHER_BOT_ID:-0}" \
+            --app-id "${APP_ID:-0}"

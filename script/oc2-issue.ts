@@ -55,6 +55,19 @@ export const issuePhases = [
 
 export type IssuePhase = (typeof issuePhases)[number]
 export type ExecutionLabel = "task" | "feature"
+const recoverableNewKeyPhases = new Set<IssuePhase>([
+  "input_too_large",
+  "attachment_rejected",
+  "install_failed",
+  "model_failed",
+  "permission_denied",
+  "tool_failed",
+  "patch_rejected",
+  "verification_failed",
+  "stale_base",
+  "push_race",
+  "auto_merge_unavailable",
+])
 
 export interface IssueMarker {
   attempt: number
@@ -1070,6 +1083,8 @@ async function canReplaceMarker(previous: IssueMarker, next: IssueMarker, input:
     if (new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "no_changes"]).has(previous.phase)) return false
     if (previous.runId !== next.runId || next.attempt <= previous.attempt) return false
   } else if (new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "no_changes"]).has(previous.phase)) {
+    return true
+  } else if (recoverableNewKeyPhases.has(previous.phase)) {
     return true
   }
   const run = await api.getActionsRunAttempt(previous.runId, previous.attempt)

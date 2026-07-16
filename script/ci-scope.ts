@@ -3,7 +3,7 @@ import { appendFile } from "node:fs/promises"
 
 import { $ } from "bun"
 
-const fullRunEvents = new Set(["push", "schedule", "workflow_dispatch"])
+const fullRunEvents = new Set(["merge_group", "push", "schedule", "workflow_dispatch"])
 const fullRunFiles = new Set([
   ".github/workflows/test.yml",
   ".github/workflows/typecheck.yml",
@@ -39,11 +39,12 @@ const httpApiPackages = new Set(["oc2", "@oc2-ai/core", "@oc2-ai/sdk", "@oc2-ai/
 
 const args = process.argv.slice(2)
 const event = option("event") ?? process.env.GITHUB_EVENT_NAME ?? "pull_request"
+const requestedFiles = option("files")
 const files =
-  option("files")
+  requestedFiles
     ?.split(",")
     .map((item) => item.trim())
-    .filter(Boolean) ?? (await changedFiles())
+    .filter(Boolean) ?? (fullRunEvents.has(event) ? [] : await changedFiles())
 const packages = await workspacePackages()
 
 const fullRun =
@@ -83,20 +84,19 @@ function option(name: string) {
 }
 
 async function changedFiles() {
-  const baseRef = process.env.GITHUB_BASE_REF ?? "master"
-  const ranges = [`origin/${baseRef}...HEAD`, `${baseRef}...HEAD`, "origin/master...HEAD", "master...HEAD"]
+  const baseRef = process.env.GITHUB_BASE_REF
+  if (!baseRef || !/^[A-Za-z0-9._/-]+$/.test(baseRef) || baseRef.startsWith("/") || baseRef.includes(".."))
+    throw new Error("missing or invalid CI base ref")
+  const ranges = [`origin/${baseRef}...HEAD`, `${baseRef}...HEAD`]
   for (const range of ranges) {
     const result = await $`git diff --name-only ${range}`.quiet().nothrow()
     if (result.exitCode === 0) return result.stdout.toString().trim().split("\n").filter(Boolean)
   }
-  return []
+  throw new Error("unable to resolve CI base ref")
 }
 
 async function workspacePackages() {
-  const paths = [
-    ...new Bun.Glob("packages/*/package.json").scanSync(),
-    "packages/sdk/js/package.json",
-  ]
+  const paths = [...new Bun.Glob("packages/*/package.json").scanSync(), "packages/sdk/js/package.json"]
   const packages = await Promise.all(
     unique(paths).map(async (path) => {
       const json = (await Bun.file(path).json()) as { name?: string }
@@ -114,10 +114,7 @@ function packageForFile(file: string, packages: WorkspacePackage[]) {
 }
 
 function isDocsOnly(file: string) {
-  return (
-    file.endsWith(".md") ||
-    file.startsWith("docs/")
-  )
+  return file.endsWith(".md") || file.startsWith("docs/")
 }
 
 function unique<T>(items: T[]) {

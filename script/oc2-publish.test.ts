@@ -63,6 +63,8 @@ function states(overrides: Partial<PublicationStateInput> = {}): PublicationStat
     verifyState: "verified",
     publishResult: "success",
     publishState: "pr_opened",
+    autoMergeResult: "success",
+    autoMergeState: "auto_merge_enabled",
     ...overrides,
   }
 }
@@ -283,7 +285,12 @@ describe("fixed status phase precedence", () => {
     ["verification failure", { verifyResult: "failure", verifyState: "verification_failed" }, "verification_failed"],
     ["stale base", { publishState: "stale_base" }, "stale_base"],
     ["push race", { publishResult: "failure", publishState: "push_race" }, "push_race"],
-    ["opened PR", {}, "pr_opened"],
+    ["auto-merge enabled", {}, "auto_merge_enabled"],
+    [
+      "auto-merge unavailable",
+      { autoMergeResult: "failure", autoMergeState: "auto_merge_unavailable" },
+      "auto_merge_unavailable",
+    ],
   ] as const)("selects %s", (_name, override, expected) => {
     expect(deriveStatusPhase(states(override))).toBe(expected)
   })
@@ -315,7 +322,11 @@ describe("workflow secret boundaries", () => {
     expect(workflow).toContain("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349")
     expect(workflow).toContain("permission-contents: write")
     expect(workflow).toContain("permission-pull-requests: write")
-    expect(workflow).not.toContain("auto-merge")
+    expect(workflow).toContain("permission-administration: write")
+    expect(helper).toContain('"--auto"')
+    expect(helper).toContain('"--rebase"')
+    expect(helper).toContain('"--match-head-commit"')
+    expect(workflow).not.toContain("update-branch")
     expect(helper).not.toContain("https://x-access-token:")
     expect(helper).not.toContain("remote add")
     expect(helper).toContain("GIT_ASKPASS_REQUIRE")

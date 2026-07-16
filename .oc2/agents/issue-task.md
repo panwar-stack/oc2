@@ -11,7 +11,21 @@ permission:
   glob: allow
   grep: allow
   edit:
-    "*": allow
+    "*": deny
+    README.md: allow
+    "packages/onboarding.md": allow
+    docs: allow
+    "docs/**": allow
+    specs: allow
+    "specs/**": allow
+    "packages/app/src": allow
+    "packages/app/src/**": allow
+    "packages/app/e2e": allow
+    "packages/app/e2e/**": allow
+    "packages/ui/src": allow
+    "packages/ui/src/**": allow
+    "packages/ui/test": allow
+    "packages/ui/test/**": allow
     ".github": deny
     ".github/**": deny
     "**/.github": deny
@@ -41,10 +55,7 @@ permission:
     "**/turbo.json": deny
     "tsconfig*.json": deny
     "**/tsconfig*.json": deny
-    "script/oc2-issue*": deny
-    "script/oc2-verify*": deny
-    "script/oc2-automation*": deny
-    "script/oc2-publish*": deny
+    "docs/issue-automation.md": deny
     "specs/secure-issue-driven-oc2-automation.md": deny
   write: deny
   apply_patch: deny

@@ -17,6 +17,7 @@
     "check:product-copy": "bun run script/check-product-copy.ts",
     "report:packages": "bun run script/package-boundaries.ts --graph",
     "typecheck": "tsgo -p script/tsconfig.oc2-issue.json && bun turbo typecheck",
+    "typecheck:automation": "tsgo -p script/tsconfig.oc2-issue.json",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
     "postinstall": "bun run --cwd packages/core fix-node-pty",
     "prepare": "husky",

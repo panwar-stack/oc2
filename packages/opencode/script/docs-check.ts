@@ -40,7 +40,13 @@ if (!helpText.includes("Commands:")) throw new Error("oc2 --help output did not 
 const cliReference = await Bun.file("docs/cli.md").text()
 const cliDocumentation = `${cliReference}\n${await Bun.file("docs/extensions.md").text()}`
 const cliSource = await Bun.file("packages/opencode/src/index.ts").text()
-const documentedCommands = new Set([...cliReference.matchAll(/^\| `oc2 ([a-z][\w-]*)/gm)].map((match) => match[1]))
+const commandSummary = cliReference.match(/^Commands:\n([\s\S]*?)^Global options:/m)?.[1] ?? ""
+const documentedCommands = new Set(
+  [
+    ...cliReference.matchAll(/^\| `oc2 ([a-z][\w-]*)/gm),
+    ...commandSummary.matchAll(/^\s{2}oc2 ([a-z][\w-]*)/gm),
+  ].map((match) => match[1]),
+)
 const helpCommands = new Set([...helpText.matchAll(/^\s+oc2 ([a-z][\w-]*)/gm)].map((match) => match[1]))
 const commandNames = [...cliSource.matchAll(/\{ names: \[([^\]]*)\], load:/g)].map((match) =>
   [...match[1].matchAll(/"([^"]+)"/g)].map((name) => name[1]),
@@ -64,7 +70,12 @@ if (unregisteredHelpCommands.length)
   throw new Error(`oc2 --help contained unregistered commands: ${unregisteredHelpCommands.join(", ")}`)
 
 function topLevelAliasDrift(reference: string) {
-  const documented = new Set([...reference.matchAll(/\bAlias:\s*`oc2 ([a-z][\w-]*)`/gi)].map((match) => match[1]))
+  const documented = new Set(
+    [
+      ...reference.matchAll(/\bAlias:\s*`oc2 ([a-z][\w-]*)`/gi),
+      ...reference.matchAll(/\(alias:\s*([a-z][\w-]*)\)/gi),
+    ].map((match) => match[1]),
+  )
   return {
     undocumented: [...registeredAliases].filter((alias) => !documented.has(alias)),
     unregistered: [...documented].filter((alias) => !registeredAliases.has(alias)),
@@ -151,7 +162,7 @@ if (!/return piped \+ "\\n" \+ value/.test(tuiCliSource) || !cliReference.includ
 const runCliSource = await Bun.file("packages/opencode/src/cli/cmd/run.ts").text()
 if (
   !/return value \+ "\\n" \+ piped/.test(runCliSource) ||
-  !cliReference.includes("argument text is followed by the piped content")
+  !cliReference.includes("their text is followed by the piped content")
 )
   throw new Error("oc2 run stdin ordering drifted from docs/cli.md")
 

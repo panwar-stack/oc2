@@ -7,6 +7,15 @@ import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 import { decodeAdmission, validateAdmissionEvent } from "./oc2-automation-workflow"
+import {
+  decodeProvenancePullRequest,
+  decodeRuleset,
+  requireAutomationPullRequest,
+  validateRepositorySettings,
+  type ProvenancePullRequest,
+  type RepositorySettings,
+  type Ruleset,
+} from "./oc2-automation-provenance"
 import { createGitHubApi, updateIssueMarker, type Admission, type IssuePhase } from "./oc2-issue"
 import { validatePatch, type ValidatedPatch } from "./oc2-verify"
 
@@ -15,6 +24,7 @@ const sha256Pattern = /^[0-9a-f]{64}$/
 const repositoryPattern = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/
 const maximumJsonBytes = 64 * 1024
 const maximumResponseBytes = 2 * 1024 * 1024
+const maximumPages = 100
 const decoder = new TextDecoder("utf-8", { fatal: true })
 
 interface VerificationManifest {
@@ -53,7 +63,7 @@ export interface PullRequest {
 
 export interface PublisherApi {
   getPublisherIdentity(appSlug: string): Promise<{ id: number; login: string; type: string }>
-  getRepository(): Promise<{ id: number; nameWithOwner: string; defaultBranch: string }>
+  getRepository(): Promise<RepositorySettings>
   getRef(branch: string): Promise<string | undefined>
   getCommit(sha: string): Promise<{
     message: string
@@ -64,6 +74,17 @@ export interface PublisherApi {
   createPullRequest(input: { title: string; body: string; branch: string }): Promise<PullRequest>
   updatePullRequest(input: { number: number; title: string; body: string }): Promise<PullRequest>
   closePullRequest(number: number): Promise<PullRequest>
+  getPullRequest(number: number): Promise<ProvenancePullRequest>
+  listRulesets(): Promise<Ruleset[]>
+  getAutoMergeState(number: number): Promise<{
+    number: number
+    state: string
+    headSha: string
+    autoMergeMethod?: string
+    queuePullRequestNumber?: number
+    queuePullRequestHeadSha?: string
+    queueHeadSha?: string
+  }>
 }
 
 export interface PublicationStateInput {
@@ -75,6 +96,8 @@ export interface PublicationStateInput {
   verifyState: string
   publishResult: string
   publishState: string
+  autoMergeResult: string
+  autoMergeState: string
 }
 
 export class PublicationStopped extends Error {
@@ -109,6 +132,16 @@ function boundedBody(value: unknown) {
     /[\u0000-\u0009\u000b-\u001f\u007f]/.test(value)
   )
     throw new Error("invalid publication input")
+  return value
+}
+
+function responseRecord(value: unknown, message: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message)
+  return value as Record<string, unknown>
+}
+
+function responseBoolean(value: unknown, message: string) {
+  if (typeof value !== "boolean") throw new Error(message)
   return value
 }
 
@@ -594,6 +627,8 @@ export function createPublisherApi(input: {
         id: positiveInteger(item.id),
         nameWithOwner: boundedString(item.full_name),
         defaultBranch: boundedString(item.default_branch),
+        allowAutoMerge: responseBoolean(item.allow_auto_merge, "invalid repository response"),
+        rebaseMergeAllowed: responseBoolean(item.allow_rebase_merge, "invalid repository response"),
       }
     },
     async getRef(branch) {
@@ -655,6 +690,74 @@ export function createPublisherApi(input: {
           body: { state: "closed" },
         }),
       )
+    },
+    async getPullRequest(number) {
+      return decodeProvenancePullRequest(await call(`${repositoryPath}/pulls/${positiveInteger(number)}`))
+    },
+    async listRulesets() {
+      const ids: number[] = []
+      for (let page = 1; page <= maximumPages; page++) {
+        const value = await call(
+          `${repositoryPath}/rulesets?includes_parents=true&targets=branch&per_page=100&page=${page}`,
+        )
+        if (!Array.isArray(value)) throw new Error("invalid repository rulesets response")
+        ids.push(
+          ...value.map((entry) => positiveInteger(responseRecord(entry, "invalid repository rulesets response").id)),
+        )
+        if (value.length < 100) break
+      }
+      if (ids.length >= maximumPages * 100 || new Set(ids).size !== ids.length)
+        throw new Error("incomplete repository rulesets response")
+      return Promise.all(
+        ids.map(async (id) => decodeRuleset(await call(`${repositoryPath}/rulesets/${id}?includes_parents=true`))),
+      )
+    },
+    async getAutoMergeState(number) {
+      const [owner, name] = input.repository.split("/") as [string, string]
+      const value = responseRecord(
+        await call("/graphql", {
+          method: "POST",
+          body: {
+            query:
+              "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){databaseId nameWithOwner pullRequest(number:$number){number state headRefOid autoMergeRequest{mergeMethod} mergeQueueEntry{headCommit{oid} pullRequest{number headRefOid}}}}}",
+            variables: { owner, name, number: positiveInteger(number) },
+          },
+        }),
+        "invalid auto-merge response",
+      )
+      if (value.errors !== undefined) throw new Error("invalid auto-merge response")
+      const repository = responseRecord(
+        responseRecord(value.data, "invalid auto-merge response").repository,
+        "invalid auto-merge response",
+      )
+      if (
+        positiveInteger(repository.databaseId) < 1 ||
+        boundedString(repository.nameWithOwner, 201) !== input.repository
+      )
+        throw new Error("invalid auto-merge response")
+      const pullRequest = responseRecord(repository.pullRequest, "invalid auto-merge response")
+      const autoMerge =
+        pullRequest.autoMergeRequest === null
+          ? undefined
+          : responseRecord(pullRequest.autoMergeRequest, "invalid auto-merge response")
+      const queue =
+        pullRequest.mergeQueueEntry === null
+          ? undefined
+          : responseRecord(pullRequest.mergeQueueEntry, "invalid auto-merge response")
+      const queuePullRequest = queue ? responseRecord(queue.pullRequest, "invalid auto-merge response") : undefined
+      return {
+        number: positiveInteger(pullRequest.number),
+        state: boundedString(pullRequest.state, 32),
+        headSha: sha(pullRequest.headRefOid),
+        ...(autoMerge === undefined ? {} : { autoMergeMethod: boundedString(autoMerge.mergeMethod, 32) }),
+        ...(queue === undefined
+          ? {}
+          : {
+              queuePullRequestNumber: positiveInteger(queuePullRequest?.number),
+              queuePullRequestHeadSha: sha(queuePullRequest?.headRefOid),
+              queueHeadSha: sha(responseRecord(queue.headCommit, "invalid auto-merge response").oid),
+            }),
+      }
     },
   }
 }
@@ -898,7 +1001,14 @@ export async function publishPrepared(input: {
     )
       throw new PublicationStopped("push_race")
     if ((await api.getRef("main")) !== manifest.baseSha) throw new PublicationStopped("stale_base")
-    return { phase: "pr_opened" as const, prId: final[0]!.id, prNumber: final[0]!.number, prUrl: final[0]!.url }
+    return {
+      phase: "pr_opened" as const,
+      prId: final[0]!.id,
+      prNumber: final[0]!.number,
+      prUrl: final[0]!.url,
+      branch,
+      headSha: candidate.commitSha,
+    }
   } catch (error) {
     if (changedPullRequest) {
       if (before[0]) {
@@ -946,13 +1056,178 @@ export async function publishPrepared(input: {
   }
 }
 
+export function requireExactAutoMergePullRequest(input: {
+  pullRequest: ProvenancePullRequest
+  repositoryId: number
+  repository: string
+  appId: number
+  publisherBotId: number
+  prId: number
+  prNumber: number
+  branch: string
+  headSha: string
+}) {
+  const provenance = requireAutomationPullRequest({
+    pullRequest: input.pullRequest,
+    repositoryId: input.repositoryId,
+    repository: input.repository,
+    publisherBotId: input.publisherBotId,
+    appId: input.appId,
+    expectedNumber: input.prNumber,
+    expectedHeadSha: input.headSha,
+  })
+  if (
+    input.pullRequest.id !== input.prId ||
+    input.pullRequest.headRef !== input.branch ||
+    provenance.branch !== input.branch
+  )
+    throw new Error("auto-merge pull request changed")
+  return provenance
+}
+
+async function runGhAutoMerge(input: { token: string; repository: string; prNumber: number; headSha: string }) {
+  const home = await mkdtemp(join(tmpdir(), "oc2-gh-"))
+  try {
+    const child = Bun.spawn(
+      [
+        "gh",
+        "pr",
+        "merge",
+        String(positiveInteger(input.prNumber)),
+        "--repo",
+        input.repository,
+        "--auto",
+        "--rebase",
+        "--match-head-commit",
+        sha(input.headSha),
+      ],
+      {
+        cwd: home,
+        env: {
+          GH_CONFIG_DIR: join(home, "config"),
+          GH_PROMPT_DISABLED: "1",
+          GH_TOKEN: input.token,
+          HOME: home,
+          LANG: "C",
+          LC_ALL: "C",
+          NO_COLOR: "1",
+          PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+        },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      },
+    )
+    return (await child.exited) === 0
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+}
+
+export async function enablePreparedAutoMerge(input: {
+  repository: string
+  repositoryId: number
+  appId: number
+  publisherBotId: number
+  prId: number
+  prNumber: number
+  branch: string
+  headSha: string
+  token: string
+  settingsToken: string
+  api?: PublisherApi
+  merge?: (input: { token: string; repository: string; prNumber: number; headSha: string }) => Promise<boolean>
+}) {
+  if (!input.token || !input.settingsToken || !repositoryPattern.test(input.repository))
+    throw new Error("invalid auto-merge configuration")
+  positiveInteger(input.repositoryId)
+  positiveInteger(input.appId)
+  positiveInteger(input.publisherBotId)
+  positiveInteger(input.prId)
+  positiveInteger(input.prNumber)
+  if (!/^oc2\/issue-[1-9]\d*-[0-9a-f]{12}$/.test(input.branch)) throw new Error("invalid auto-merge branch")
+  sha(input.headSha)
+  const api = input.api ?? createPublisherApi({ token: input.settingsToken, repository: input.repository })
+  const [repository, rulesets, pullRequest, branchSha] = await Promise.all([
+    api.getRepository(),
+    api.listRulesets(),
+    api.getPullRequest(input.prNumber),
+    api.getRef(input.branch),
+  ])
+  validateRepositorySettings({
+    repository,
+    repositoryId: input.repositoryId,
+    nameWithOwner: input.repository,
+    appId: input.appId,
+    rulesets,
+  })
+  const provenance = requireExactAutoMergePullRequest({ ...input, pullRequest })
+  const mainSha = await api.getRef("main")
+  if (branchSha !== input.headSha || mainSha !== provenance.baseSha) throw new Error("auto-merge ref changed")
+
+  const [current, currentBranchSha, currentMainSha, currentRepository, currentRulesets] = await Promise.all([
+    api.getPullRequest(input.prNumber),
+    api.getRef(input.branch),
+    api.getRef("main"),
+    api.getRepository(),
+    api.listRulesets(),
+  ])
+  requireExactAutoMergePullRequest({ ...input, pullRequest: current })
+  validateRepositorySettings({
+    repository: currentRepository,
+    repositoryId: input.repositoryId,
+    nameWithOwner: input.repository,
+    appId: input.appId,
+    rulesets: currentRulesets,
+  })
+  if (currentBranchSha !== input.headSha || currentMainSha !== provenance.baseSha)
+    throw new Error("auto-merge ref changed")
+  if (!(await (input.merge ?? runGhAutoMerge)(input))) throw new Error("auto-merge command rejected")
+
+  const [final, finalBranchSha, state, finalRepository, finalRulesets] = await Promise.all([
+    api.getPullRequest(input.prNumber),
+    api.getRef(input.branch),
+    api.getAutoMergeState(input.prNumber),
+    api.getRepository(),
+    api.listRulesets(),
+  ])
+  requireExactAutoMergePullRequest({ ...input, pullRequest: final })
+  validateRepositorySettings({
+    repository: finalRepository,
+    repositoryId: input.repositoryId,
+    nameWithOwner: input.repository,
+    appId: input.appId,
+    rulesets: finalRulesets,
+  })
+  const exactAutoMerge =
+    state.autoMergeMethod === "REBASE" &&
+    state.queuePullRequestNumber === undefined &&
+    state.queuePullRequestHeadSha === undefined &&
+    state.queueHeadSha === undefined
+  const exactQueue =
+    state.autoMergeMethod === undefined &&
+    state.queuePullRequestNumber === input.prNumber &&
+    state.queuePullRequestHeadSha === input.headSha &&
+    state.queueHeadSha !== undefined
+  if (
+    finalBranchSha !== input.headSha ||
+    state.number !== input.prNumber ||
+    state.state !== "OPEN" ||
+    state.headSha !== input.headSha ||
+    (!exactAutoMerge && !exactQueue)
+  )
+    throw new Error("auto-merge state mismatch")
+  return { phase: "auto_merge_enabled" as const }
+}
+
 export function deriveStatusPhase(input: PublicationStateInput): IssuePhase {
   const jobResults = new Set(["success", "failure", "cancelled", "skipped"])
   if (
     !jobResults.has(input.ingestResult) ||
     !jobResults.has(input.generateResult) ||
     !jobResults.has(input.verifyResult) ||
-    !jobResults.has(input.publishResult)
+    !jobResults.has(input.publishResult) ||
+    !jobResults.has(input.autoMergeResult)
   )
     throw new Error("invalid job result")
   if (input.ingestState === "input_too_large" || input.ingestState === "attachment_rejected") return input.ingestState
@@ -969,10 +1244,10 @@ export function deriveStatusPhase(input: PublicationStateInput): IssuePhase {
   if (input.generateResult !== "success" || input.generateState !== "generated") return "model_failed"
   if (input.verifyState === "verification_failed" || input.verifyResult !== "success") return "verification_failed"
   if (input.verifyState !== "verified") return "verification_failed"
-  if (input.publishState === "stale_base" || input.publishState === "push_race" || input.publishState === "pr_opened")
-    return input.publishState
-  if (input.publishResult !== "success") return "push_race"
-  return "push_race"
+  if (input.publishState === "stale_base" || input.publishState === "push_race") return input.publishState
+  if (input.publishResult !== "success" || input.publishState !== "pr_opened") return "push_race"
+  if (input.autoMergeResult === "success" && input.autoMergeState === "auto_merge_enabled") return "auto_merge_enabled"
+  return "auto_merge_unavailable"
 }
 
 async function appendOutputs(path: string, values: Readonly<Record<string, string>>) {
@@ -1058,12 +1333,46 @@ export async function main(argv: ReadonlyArray<string> = process.argv.slice(2)) 
           pr_id: String(result.prId),
           pr_number: String(result.prNumber),
           pr_url: result.prUrl,
+          branch: result.branch,
+          head_sha: result.headSha,
           execute: "true",
         }),
       async (error) => {
         const phase = error instanceof PublicationStopped ? error.phase : "push_race"
         await appendOutputs(output, { state: phase, execute: "false" })
         if (!(error instanceof PublicationStopped)) throw error
+      },
+    )
+    return
+  }
+  if (argv[0] === "auto-merge") {
+    const value = options(argv, [
+      "--repository",
+      "--repository-id",
+      "--app-id",
+      "--publisher-bot-id",
+      "--pr-id",
+      "--pr-number",
+      "--branch",
+      "--head-sha",
+      "--github-output",
+    ])
+    await enablePreparedAutoMerge({
+      repository: value.repository!,
+      repositoryId: positiveInteger(Number(value.repository_id)),
+      appId: positiveInteger(Number(value.app_id)),
+      publisherBotId: positiveInteger(Number(value.publisher_bot_id)),
+      prId: positiveInteger(Number(value.pr_id)),
+      prNumber: positiveInteger(Number(value.pr_number)),
+      branch: value.branch!,
+      headSha: sha(value.head_sha),
+      token: process.env.OC2_PUBLISH_TOKEN ?? "",
+      settingsToken: process.env.OC2_SETTINGS_TOKEN ?? "",
+    }).then(
+      async (result) => appendOutputs(value.github_output!, { state: result.phase, execute: "true" }),
+      async (error) => {
+        await appendOutputs(value.github_output!, { state: "auto_merge_unavailable", execute: "false" })
+        throw error
       },
     )
     return
@@ -1085,6 +1394,8 @@ export async function main(argv: ReadonlyArray<string> = process.argv.slice(2)) 
       "--verify-state",
       "--publish-result",
       "--publish-state",
+      "--auto-merge-result",
+      "--auto-merge-state",
       "--pr-id",
     ])
     const admission = admitted(decoder.decode(await readRegular(value.admission!, maximumJsonBytes)))
@@ -1106,9 +1417,15 @@ export async function main(argv: ReadonlyArray<string> = process.argv.slice(2)) 
       verifyState: value.verify_state!,
       publishResult: value.publish_result!,
       publishState: value.publish_state!,
+      autoMergeResult: value.auto_merge_result!,
+      autoMergeState: value.auto_merge_state!,
     })
     const prId = value.pr_id === "none" ? undefined : positiveInteger(Number(value.pr_id))
-    if ((phase === "pr_opened") !== (prId !== undefined)) throw new Error("invalid status PR identity")
+    if (
+      new Set<IssuePhase>(["pr_opened", "auto_merge_enabled", "auto_merge_unavailable"]).has(phase) !==
+      (prId !== undefined)
+    )
+      throw new Error("invalid status PR identity")
     await updateIssueMarker(
       { admission, botId: positiveInteger(Number(value.bot_id)), phase, ...(prId === undefined ? {} : { prId }) },
       createGitHubApi({

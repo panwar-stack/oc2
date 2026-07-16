@@ -11,6 +11,7 @@ import {
   validateRepositoryPathSet,
 } from "./oc2-automation-policy"
 import {
+  assertSourceReadOnly,
   materializeSandboxWorkspace,
   runSandboxChecks,
   sandboxChecks,
@@ -31,6 +32,7 @@ const roots: string[] = []
 const repository = "panwar-stack/oc2"
 const repositoryId = 123
 const image = `ghcr.io/panwar-stack/oc2-verify@sha256:${"a".repeat(64)}`
+const sourcePath = "packages/app/src/source.txt"
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
@@ -74,7 +76,7 @@ interface RepositoryFixture {
   baseSha: string
 }
 
-async function repositoryFixture(files: Readonly<Record<string, string | Uint8Array>> = { "source.txt": "base\n" }) {
+async function repositoryFixture(files: Readonly<Record<string, string | Uint8Array>> = { [sourcePath]: "base\n" }) {
   const root = await mkdtemp(join(tmpdir(), "oc2-verify-test-"))
   roots.push(root)
   const checkout = join(root, "checkout")
@@ -159,19 +161,19 @@ async function verificationFixture() {
   const fixture = await repositoryFixture({
     ".gitignore": "node_modules/\n",
     "package.json": '{"name":"verify-fixture","private":true,"scripts":{}}\n',
-    "source.txt": "base\n",
+    [sourcePath]: "base\n",
   })
   await command(fixture.checkout, [process.execPath, "install", "--lockfile-only"])
   await rm(join(fixture.checkout, "node_modules"), { recursive: true, force: true })
   await updateBase(fixture, "lock dependencies")
-  await writeFile(join(fixture.checkout, "source.txt"), "candidate\n")
+  await writeFile(join(fixture.checkout, sourcePath), "candidate\n")
   const patch = await stagedPatch(fixture)
   const patchPath = join(fixture.artifacts, "changes.patch")
   const generationPath = join(fixture.artifacts, "generation.json")
   await writeFile(patchPath, patch)
   await writeFile(generationPath, JSON.stringify(generation(fixture, patch, 1)))
-  await writeFile(join(fixture.checkout, "source.txt"), "base\n")
-  await command(fixture.checkout, ["git", "add", "source.txt"])
+  await writeFile(join(fixture.checkout, sourcePath), "base\n")
+  await command(fixture.checkout, ["git", "add", sourcePath])
   return {
     fixture,
     input: {
@@ -210,6 +212,8 @@ async function sandboxFixture() {
   const dependencyDir = join(root, "dependencies")
   await mkdir(gitDir, { recursive: true })
   await mkdir(dependencyDir)
+  await mkdir(join(checkout, "packages/app"), { recursive: true })
+  await writeFile(join(checkout, "packages/app/package.json"), '{"name":"app"}\n')
   return { cwd: checkout, gitDir, dependencyDir }
 }
 
@@ -233,6 +237,13 @@ describe("canonical automation path policy", () => {
       "script/OC2-VERIFY-extra.ts",
       "script/oc2-automation-policy.ts",
       "script/oc2-publish.ts",
+      "script/ci-scope.ts",
+      "packages/opencode/src/server/automation-safe-request.ts",
+      "packages/opencode/script/docs-check.ts",
+      "packages/core/src/util/wildcard.ts",
+      "packages/app/script/build.ts",
+      "install",
+      "docs/issue-automation.md",
       "specs/secure-issue-driven-oc2-automation.md",
     ])
       expect(isProtectedAutomationPath(path)).toBeTrue()
@@ -250,18 +261,18 @@ describe("canonical automation path policy", () => {
 describe("patch validation", () => {
   test("accepts a regular text patch and returns its exact candidate tree", async () => {
     const fixture = await repositoryFixture()
-    await writeFile(join(fixture.checkout, "source.txt"), "changed\n")
+    await writeFile(join(fixture.checkout, sourcePath), "changed\n")
     const patch = await stagedPatch(fixture)
     const objectsBefore = await command(fixture.checkout, ["git", "count-objects", "-v"])
     const result = await validate(fixture, patch, 1)
-    expect(result.paths).toEqual(["source.txt"])
+    expect(result.paths).toEqual([sourcePath])
     expect(result.treeSha).toMatch(/^[0-9a-f]{40}$/)
     expect(await command(fixture.checkout, ["git", "count-objects", "-v"])).toEqual(objectsBefore)
   })
 
   test("standalone validation boots without preinstalled dependencies", async () => {
     const fixture = await repositoryFixture()
-    await writeFile(join(fixture.checkout, "source.txt"), "changed\n")
+    await writeFile(join(fixture.checkout, sourcePath), "changed\n")
     const patch = await stagedPatch(fixture)
     const patchPath = join(fixture.artifacts, "changes.patch")
     const generationPath = join(fixture.artifacts, "generation.json")
@@ -290,18 +301,18 @@ describe("patch validation", () => {
 
   test("accepts regular executable mode changes and deletions", async () => {
     const executable = await repositoryFixture()
-    await writeFile(join(executable.checkout, "source.txt"), "executable\n")
-    await chmod(join(executable.checkout, "source.txt"), 0o755)
-    expect((await validate(executable, await stagedPatch(executable), 1)).paths).toEqual(["source.txt"])
+    await writeFile(join(executable.checkout, sourcePath), "executable\n")
+    await chmod(join(executable.checkout, sourcePath), 0o755)
+    expect((await validate(executable, await stagedPatch(executable), 1)).paths).toEqual([sourcePath])
 
     const deleted = await repositoryFixture()
-    await rm(join(deleted.checkout, "source.txt"))
-    expect((await validate(deleted, await stagedPatch(deleted), 1)).paths).toEqual(["source.txt"])
+    await rm(join(deleted.checkout, sourcePath))
+    expect((await validate(deleted, await stagedPatch(deleted), 1)).paths).toEqual([sourcePath])
   })
 
   test("strictly rejects excess and mismatched manifest fields", async () => {
     const fixture = await repositoryFixture()
-    await writeFile(join(fixture.checkout, "source.txt"), "changed\n")
+    await writeFile(join(fixture.checkout, sourcePath), "changed\n")
     const patch = await stagedPatch(fixture)
     expect(await rejection(validate(fixture, patch, 1, (value) => ({ ...value, unexpected: true })))).not.toBe("")
     expect(await rejection(validate(fixture, patch, 2))).toContain("mismatch")
@@ -317,7 +328,7 @@ describe("patch validation", () => {
 
   test("rejects a base argument or manifest that does not match", async () => {
     const fixture = await repositoryFixture()
-    await writeFile(join(fixture.checkout, "source.txt"), "changed\n")
+    await writeFile(join(fixture.checkout, sourcePath), "changed\n")
     const patch = await stagedPatch(fixture)
     const patchPath = join(fixture.artifacts, "changes.patch")
     const generationPath = join(fixture.artifacts, "generation.json")
@@ -346,7 +357,7 @@ describe("patch validation", () => {
 
   test("rejects symlink and gitlink modes", async () => {
     const symlinkFixture = await repositoryFixture()
-    await symlink("source.txt", join(symlinkFixture.checkout, "link"))
+    await symlink("source.txt", join(symlinkFixture.checkout, "packages/app/src/link"))
     expect(await rejection(validate(symlinkFixture, await stagedPatch(symlinkFixture), 1))).toContain("mode")
 
     const gitlinkFixture = await repositoryFixture()
@@ -355,19 +366,20 @@ describe("patch validation", () => {
       "update-index",
       "--add",
       "--cacheinfo",
-      `160000,${gitlinkFixture.baseSha},module`,
+      `160000,${gitlinkFixture.baseSha},packages/app/src/module`,
     ])
     expect(await rejection(validate(gitlinkFixture, await indexedPatch(gitlinkFixture), 1))).toContain("mode")
   })
 
   test("accepts valid binary data and rejects a corrupted binary patch", async () => {
-    const fixture = await repositoryFixture({ "image.bin": new Uint8Array([0, 1, 2, 3, 4, 5]) })
+    const imagePath = "packages/app/src/image.bin"
+    const fixture = await repositoryFixture({ [imagePath]: new Uint8Array([0, 1, 2, 3, 4, 5]) })
     await writeFile(
-      join(fixture.checkout, "image.bin"),
+      join(fixture.checkout, imagePath),
       Uint8Array.from({ length: 4096 }, (_, index) => index % 251),
     )
     const patch = await stagedPatch(fixture)
-    expect((await validate(fixture, patch, 1)).paths).toEqual(["image.bin"])
+    expect((await validate(fixture, patch, 1)).paths).toEqual([imagePath])
 
     const corrupted = patch.slice()
     const corruptedIndex = Math.floor(corrupted.length / 2)
@@ -377,20 +389,21 @@ describe("patch validation", () => {
 
   test("rejects noncanonical patches and oversized decoded candidate blobs", async () => {
     const text = await repositoryFixture()
-    await writeFile(join(text.checkout, "source.txt"), "candidate\n")
+    await writeFile(join(text.checkout, sourcePath), "candidate\n")
     const patch = await stagedPatch(text)
     expect(await rejection(validate(text, Buffer.concat([patch, new TextEncoder().encode("\n")]), 1))).toContain(
       "canonical",
     )
 
-    const binary = await repositoryFixture({ "large.bin": new Uint8Array([0]) })
-    await writeFile(join(binary.checkout, "large.bin"), new Uint8Array(20 * 1024 * 1024 + 1))
+    const largePath = "packages/app/src/large.bin"
+    const binary = await repositoryFixture({ [largePath]: new Uint8Array([0]) })
+    await writeFile(join(binary.checkout, largePath), new Uint8Array(20 * 1024 * 1024 + 1))
     expect(await rejection(validate(binary, await stagedPatch(binary), 1))).toContain("size limit")
   })
 
   test("rejects a patch artifact symlink and bytes beyond the 2 MiB boundary", async () => {
     const fixture = await repositoryFixture()
-    await writeFile(join(fixture.checkout, "source.txt"), "changed\n")
+    await writeFile(join(fixture.checkout, sourcePath), "changed\n")
     const patch = await stagedPatch(fixture)
     const realPatch = join(fixture.artifacts, "real.patch")
     const patchPath = join(fixture.artifacts, "changes.patch")
@@ -432,24 +445,31 @@ describe("patch validation", () => {
   test("allows exactly 100 files and rejects 101 files", async () => {
     const accepted = await repositoryFixture()
     for (let index = 0; index < maximumChangedFiles; index++)
-      await writeFile(join(accepted.checkout, `file-${index.toString().padStart(3, "0")}.txt`), "new\n")
+      await writeFile(
+        join(accepted.checkout, `packages/app/src/file-${index.toString().padStart(3, "0")}.txt`),
+        "new\n",
+      )
     expect((await validate(accepted, await stagedPatch(accepted), maximumChangedFiles)).paths).toHaveLength(
       maximumChangedFiles,
     )
 
     const rejected = await repositoryFixture()
     for (let index = 0; index <= maximumChangedFiles; index++)
-      await writeFile(join(rejected.checkout, `file-${index.toString().padStart(3, "0")}.txt`), "new\n")
+      await writeFile(
+        join(rejected.checkout, `packages/app/src/file-${index.toString().padStart(3, "0")}.txt`),
+        "new\n",
+      )
     expect(await rejection(validate(rejected, await stagedPatch(rejected), maximumChangedFiles))).not.toBe("")
   })
 
   test("allows exactly 50,000 changed text lines and rejects 50,001", async () => {
-    const accepted = await repositoryFixture({ "lines.txt": "a\n".repeat(maximumChangedLines / 2) })
-    await writeFile(join(accepted.checkout, "lines.txt"), "b\n".repeat(maximumChangedLines / 2))
-    expect((await validate(accepted, await stagedPatch(accepted), 1)).paths).toEqual(["lines.txt"])
+    const linesPath = "packages/app/src/lines.txt"
+    const accepted = await repositoryFixture({ [linesPath]: "a\n".repeat(maximumChangedLines / 2) })
+    await writeFile(join(accepted.checkout, linesPath), "b\n".repeat(maximumChangedLines / 2))
+    expect((await validate(accepted, await stagedPatch(accepted), 1)).paths).toEqual([linesPath])
 
-    const rejected = await repositoryFixture({ "lines.txt": "a\n".repeat(maximumChangedLines / 2) })
-    await writeFile(join(rejected.checkout, "lines.txt"), "b\n".repeat(maximumChangedLines / 2 + 1))
+    const rejected = await repositoryFixture({ [linesPath]: "a\n".repeat(maximumChangedLines / 2) })
+    await writeFile(join(rejected.checkout, linesPath), "b\n".repeat(maximumChangedLines / 2 + 1))
     expect(await rejection(validate(rejected, await stagedPatch(rejected), 1))).toContain("line limit")
   })
 
@@ -463,7 +483,7 @@ describe("patch validation", () => {
 
   test("rejects rename, copy, duplicate, and hostile path records", async () => {
     const renamed = await repositoryFixture()
-    await command(renamed.checkout, ["git", "mv", "source.txt", "renamed.txt"])
+    await command(renamed.checkout, ["git", "mv", sourcePath, "packages/app/src/renamed.txt"])
     const renamePatch = await command(renamed.checkout, [
       "git",
       "diff",
@@ -475,8 +495,8 @@ describe("patch validation", () => {
     expect(await rejection(validate(renamed, renamePatch, 1))).toContain("rename")
 
     const copied = await repositoryFixture()
-    await copyFile(join(copied.checkout, "source.txt"), join(copied.checkout, "copied.txt"))
-    await command(copied.checkout, ["git", "add", "copied.txt"])
+    await copyFile(join(copied.checkout, sourcePath), join(copied.checkout, "packages/app/src/copied.txt"))
+    await command(copied.checkout, ["git", "add", "packages/app/src/copied.txt"])
     const copyPatch = await command(copied.checkout, [
       "git",
       "diff",
@@ -489,7 +509,7 @@ describe("patch validation", () => {
     expect(await rejection(validate(copied, copyPatch, 1))).toContain("rename")
 
     const duplicated = await repositoryFixture()
-    await writeFile(join(duplicated.checkout, "source.txt"), "candidate\n")
+    await writeFile(join(duplicated.checkout, sourcePath), "candidate\n")
     const patch = await stagedPatch(duplicated)
     expect(await rejection(validate(duplicated, Buffer.concat([patch, patch]), 1))).toContain("duplicate")
 
@@ -524,8 +544,8 @@ describe("patch validation", () => {
               .find((item) => item.argv[1] === "create")!
               .argv.find((value) => value.startsWith("type=bind") && value.endsWith("dst=/source,readonly"))!
             const candidate = mount.slice("type=bind,src=".length, -",dst=/source,readonly".length)
-            await writeFile(join(candidate, "source.txt"), "sandbox mutation\n")
-            await command(candidate, ["git", "add", "source.txt"])
+            await writeFile(join(candidate, sourcePath), "sandbox mutation\n")
+            await command(candidate, ["git", "add", sourcePath])
           }
           return run(argv, timeoutMs)
         }),
@@ -581,8 +601,10 @@ describe("verification sandbox", () => {
       `type=bind,src=${fixture.cwd},dst=/source,readonly`,
       `type=bind,src=${fixture.gitDir},dst=/workspace/.git,readonly`,
       `type=bind,src=${fixture.dependencyDir},dst=/workspace/node_modules,readonly`,
+      `type=bind,src=${fixture.dependencyDir},dst=/source/node_modules,readonly`,
       expect.stringMatching(/dst=\/opt\/oc2\/oc2-verify-sandbox\.ts,readonly$/),
     ])
+    expect(create).toContain("/source/packages/app/.artifacts:rw,noexec,nosuid,nodev,size=67108864")
     expect(create).toContain("TURBO_CACHE_DIR=/tmp/turbo-cache")
     expect(commands.find((item) => item.argv[1] === "rm")!.argv).toContain("--volumes")
     expect(commands.find((item) => item.argv[1] === "wait")!.timeoutMs).toBe(65 * 60_000)
@@ -672,14 +694,20 @@ describe("verification sandbox", () => {
   })
 
   test("entrypoint runs only fixed checks with ignored logs and kills timed-out children", async () => {
-    const invocations: Array<{ argv: string[]; stdout: string; stderr: string }> = []
+    const invocations: Array<{ argv: string[]; cwd: string; stdout: string; stderr: string }> = []
     const spawn: SandboxSpawn = (argv, options) => {
-      invocations.push({ argv, stdout: options.stdout, stderr: options.stderr })
+      invocations.push({ argv, cwd: options.cwd, stdout: options.stdout, stderr: options.stderr })
       return { exited: Promise.resolve(0), kill() {} }
     }
-    await runSandboxChecks(spawn)
+    let probed = false
+    await runSandboxChecks(spawn, sandboxChecks, async () => {
+      probed = true
+    })
     expect(invocations.map((item) => item.argv.slice(1))).toEqual(sandboxChecks.map((check) => [...check.argv]))
     expect(invocations.every((item) => item.stdout === "ignore" && item.stderr === "ignore")).toBeTrue()
+    expect(invocations.slice(0, -1).every((item) => item.cwd === "/workspace")).toBeTrue()
+    expect(invocations.at(-1)?.cwd).toBe("/source")
+    expect(probed).toBeTrue()
 
     let killed = false
     let finish = (_code: number) => {}
@@ -713,6 +741,12 @@ describe("verification sandbox", () => {
     expect(await Bun.file(join(target, "source.txt")).text()).toBe("candidate\n")
     expect(await Bun.file(join(target, ".git")).exists()).toBeFalse()
     expect(await Bun.file(join(target, "node_modules")).exists()).toBeFalse()
+  })
+
+  test("entrypoint rejects a writable candidate source mount", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "oc2-readonly-test-")))
+    roots.push(root)
+    expect(assertSourceReadOnly(root)).rejects.toThrow("source is writable")
   })
 })
 

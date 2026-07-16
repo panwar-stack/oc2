@@ -257,6 +257,7 @@ See [Extensions](./docs/extensions.md) and [Providers](./docs/providers.md) for 
 - [Agents and permissions](./docs/agents-permissions.md)
 - [Extensions: MCP, plugins, and skills](./docs/extensions.md)
 - [GitHub Release guide](./docs/github-releases.md)
+- [Secure issue automation](./docs/issue-automation.md)
 - [Environment variables](./docs/reference/environment.md)
 - [Keybindings](./docs/reference/keybindings.md)
 
