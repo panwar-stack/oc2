@@ -753,15 +753,15 @@ async function canReplaceMarker(previous: IssueMarker, next: IssueMarker, input:
     return true
   }
   const run = await api.getActionsRunAttempt(previous.runId, previous.attempt)
-  if (run && (run.id !== previous.runId || run.attempt !== previous.attempt))
-    throw new Error("Actions run attempt identity mismatch")
+  if (!run) return false
+  if (run.id !== previous.runId || run.attempt !== previous.attempt) throw new Error("Actions run attempt identity mismatch")
   const terminated =
     run?.status === "completed" &&
     run.conclusion !== null &&
     new Set(["failure", "cancelled", "timed_out", "startup_failure", "stale"]).has(run.conclusion)
   if (terminated) return true
   if (run?.status === "completed") return false
-  const lastUpdate = Math.max(Date.parse(previous.updatedAt), run === undefined ? 0 : Date.parse(run.updatedAt))
+  const lastUpdate = Math.max(Date.parse(previous.updatedAt), Date.parse(run.updatedAt))
   return previous.phase === "running" && (input.now ?? new Date()).getTime() - lastUpdate > staleAfterMs
 }
 

@@ -539,6 +539,13 @@ describe("durable marker state", () => {
   test("reclaims a stale same-run marker only beyond timeout plus fixed grace", async () => {
     const github = fakeGitHub()
     const first = admitted(await admitIssue(input(event()), github.api))
+    github.state.actionsRuns.set("800/1", {
+      id: 800,
+      attempt: 1,
+      status: "in_progress",
+      conclusion: null,
+      updatedAt: "2026-07-16T05:30:01.000Z",
+    })
     github.state.comments[0] = {
       id: first.marker.commentId,
       userId: botId,
@@ -565,8 +572,34 @@ describe("durable marker state", () => {
         updatedAt: "2026-07-16T05:29:59.000Z",
       }),
     }
+    github.state.actionsRuns.set("800/1", {
+      id: 800,
+      attempt: 1,
+      status: "in_progress",
+      conclusion: null,
+      updatedAt: "2026-07-16T05:29:59.000Z",
+    })
     expect(await admitIssue(input(event(), { runAttempt: 2 }), github.api)).toMatchObject({ status: "admitted" })
     expect(github.state.writes).toHaveLength(1)
+  })
+
+  test("does not reclaim a stale running marker when the exact run attempt is unavailable", async () => {
+    const github = fakeGitHub()
+    const first = admitted(await admitIssue(input(event()), github.api))
+    github.state.comments[0] = {
+      id: first.marker.commentId,
+      userId: botId,
+      body: formatIssueMarker({
+        attempt: 1,
+        key: first.key,
+        phase: "running",
+        runId: 800,
+        updatedAt: "2026-07-16T01:00:00.000Z",
+      }),
+    }
+    github.state.writes.length = 0
+    expect(await admitIssue(input(event(), { runAttempt: 2 }), github.api)).toMatchObject({ status: "duplicate" })
+    expect(github.state.writes).toEqual([])
   })
 
   test("a recently updated active Actions run prevents stale recovery", async () => {
