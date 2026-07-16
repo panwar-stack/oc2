@@ -28,6 +28,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Permission } from "@/permission"
 import { LLMAISDK } from "@/session/llm/ai-sdk"
 import { LLMFugu } from "@/session/llm/fugu"
+import { LLMRequestPrep } from "@/session/llm/request"
 import { ProviderTimingLifecycle } from "@/session/llm/provider-timing"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@oc2-ai/core/provider"
@@ -60,7 +61,13 @@ const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: stri
 
 const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, EventV2Bridge.defaultLayer))
 const agentIt = testEffect(
-  Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, EventV2Bridge.defaultLayer, Agent.defaultLayer),
+  Layer.mergeAll(
+    LLM.defaultLayer,
+    Provider.defaultLayer,
+    EventV2Bridge.defaultLayer,
+    Agent.defaultLayer,
+    RuntimeFlags.defaultLayer,
+  ),
 )
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
@@ -2055,6 +2062,45 @@ describe("session.llm.stream", () => {
         expect(Cause.pretty(exit.cause)).toContain("Fugu is unavailable for automation-safe execution")
       }
       expect(state.queue).toHaveLength(0)
+    }),
+  )
+
+  agentIt.instance("derived issue safety skips all request plugin hooks", () =>
+    Effect.gen(function* () {
+      const agent = yield* (yield* Agent.Service).get("issue-task")
+      const flags = yield* RuntimeFlags.Service
+      const model = fuguRuntimeModel()
+      const input = fuguInput(model, { agent })
+      let pluginCalls = 0
+      const plugin: Plugin.Interface = {
+        trigger: <Name extends string, Input, Output>(_name: Name, _input: Input, output: Output) =>
+          Effect.sync(() => {
+            pluginCalls++
+            return output
+          }),
+        list: () => Effect.succeed([]),
+        init: () => Effect.void,
+      }
+
+      yield* LLMRequestPrep.prepare({
+        ...input,
+        automationSafe: true,
+        provider: {
+          id: model.providerID,
+          name: "Safe Test Provider",
+          source: "config",
+          env: [],
+          options: {},
+          models: { [model.id]: model },
+        },
+        auth: undefined,
+        plugin,
+        flags,
+        isWorkflow: false,
+      })
+
+      expect(input.user.automation).toBeUndefined()
+      expect(pluginCalls).toBe(0)
     }),
   )
 

@@ -32,6 +32,7 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  readonly automationSafe?: boolean
   readonly forbidImplicitTools?: boolean
 }
 
@@ -55,7 +56,7 @@ const mergeOptions = (target: Record<string, any>, source: Record<string, any> |
 
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
-  const automationSafe = input.user.automation === true
+  const automationSafe = input.automationSafe === true || input.user.automation === true
   const system = [
     [
       SystemPrompt.TOKEN_BUDGET_GUIDANCE,

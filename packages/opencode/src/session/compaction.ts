@@ -377,8 +377,9 @@ export const layer = Layer.effect(
         }
       }
 
+      const sourceAgent = yield* agents.get(userMessage.agent)
+      const automationSafe = userMessage.automation === true || Agent.isIssueAutomation(sourceAgent)
       const agent = yield* agents.get("compaction")
-      const automationSafe = userMessage.automation === true
       const model = !automationSafe && agent.model
         ? yield* provider.getModel(agent.model.providerID, agent.model.modelID, { automationSafe }).pipe(Effect.orDie)
         : yield* provider
@@ -456,7 +457,7 @@ export const layer = Layer.effect(
         automationSafe,
       })
       const result = yield* processor.process({
-        user: userMessage,
+        user: { ...userMessage, automation: automationSafe || undefined },
         agent,
         sessionID: input.sessionID,
         tools: {},
@@ -502,7 +503,7 @@ export const layer = Layer.effect(
             format: original.format,
             tools: original.tools,
             system: original.system,
-            automation: original.automation,
+            automation: automationSafe || original.automation || undefined,
           })
           for (const part of replay.parts) {
             if (part.type === "compaction") continue
@@ -549,7 +550,7 @@ export const layer = Layer.effect(
               time: { created: Date.now() },
               agent: userMessage.agent,
               model: userMessage.model,
-              automation: userMessage.automation,
+              automation: automationSafe || undefined,
             })
             const text =
               (input.overflow
@@ -612,7 +613,12 @@ export const layer = Layer.effect(
       const previous = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).findLast(
         (item) => item.info.role === "user" && !item.parts.some((part) => part.type === "compaction"),
       )?.info
-      const automationSafe = previous?.role === "user" ? previous.automation : undefined
+      const previousAgent = previous?.role === "user" ? yield* agents.get(previous.agent) : undefined
+      const automationSafe =
+        previous?.role === "user" &&
+        (previous.automation === true || (previousAgent ? Agent.isIssueAutomation(previousAgent) : false))
+          ? true
+          : undefined
       const msg = yield* session.updateMessage({
         id: MessageID.ascending(),
         role: "user",

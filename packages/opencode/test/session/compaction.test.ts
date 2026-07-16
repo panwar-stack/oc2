@@ -92,14 +92,14 @@ function createModel(opts: {
 
 const wide = () => ProviderTest.fake({ model: createModel({ context: 100_000, output: 32_000 }) })
 
-function createUserMessage(sessionID: SessionID, text: string, options?: { automation?: boolean }) {
+function createUserMessage(sessionID: SessionID, text: string, options?: { automation?: boolean; agent?: string }) {
   return Effect.gen(function* () {
     const ssn = yield* SessionNs.Service
     const msg = yield* ssn.updateMessage({
       id: MessageID.ascending(),
       role: "user",
       sessionID,
-      agent: "build",
+      agent: options?.agent ?? "build",
       model: ref,
       time: { created: Date.now() },
       ...(options?.automation ? { automation: true } : {}),
@@ -176,7 +176,10 @@ function createSummaryAssistantMessage(sessionID: SessionID, parentID: MessageID
   )
 }
 
-function createCompactionMarker(sessionID: SessionID, options?: { automation?: boolean; variant?: string }) {
+function createCompactionMarker(
+  sessionID: SessionID,
+  options?: { automation?: boolean; variant?: string; agent?: string },
+) {
   return SessionNs.Service.use((ssn) =>
     Effect.gen(function* () {
       const msg = yield* ssn.updateMessage({
@@ -184,7 +187,7 @@ function createCompactionMarker(sessionID: SessionID, options?: { automation?: b
         role: "user",
         model: { ...ref, variant: options?.variant },
         sessionID,
-        agent: "build",
+        agent: options?.agent ?? "build",
         time: { created: Date.now() },
         ...(options?.automation ? { automation: true } : {}),
       })
@@ -1026,11 +1029,12 @@ describe("session.compaction.process", () => {
       const ssn = yield* SessionNs.Service
       const compact = yield* SessionCompaction.Service
       const session = yield* ssn.create({})
-      yield* createUserMessage(session.id, "safe request", { automation: true })
-      yield* compact.create({ sessionID: session.id, agent: "build", model: ref, auto: false })
+      yield* createUserMessage(session.id, "safe request", { agent: "issue-task" })
+      yield* compact.create({ sessionID: session.id, agent: "issue-task", model: ref, auto: false })
       const messages = yield* ssn.messages({ sessionID: session.id })
       const marker = messages.at(-1)
       if (!marker || marker.info.role !== "user") throw new Error("missing compaction marker")
+      expect(marker.info.automation).toBe(true)
 
       const result = yield* compact.process({
         parentID: marker.info.id,
@@ -1075,7 +1079,7 @@ describe("session.compaction.process", () => {
       const ssn = yield* SessionNs.Service
       const compact = yield* SessionCompaction.Service
       const session = yield* ssn.create({})
-      yield* createCompactionMarker(session.id, { automation: true, variant: "selected" })
+      yield* createCompactionMarker(session.id, { agent: "issue-task", variant: "selected" })
       const messages = yield* ssn.messages({ sessionID: session.id })
       const marker = messages.at(-1)
       if (!marker || marker.info.role !== "user") throw new Error("missing compaction marker")

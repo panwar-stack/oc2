@@ -166,6 +166,7 @@ const live: Layer.Layer<
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
+        automationSafe,
         provider: item,
         auth: info,
         plugin,
