@@ -1460,7 +1460,11 @@ Do not create a team for trivial one step requests or when the user explicitly a
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
           const primaryLastUserMsg = msgs.findLast((msg) => msg.info.role === "user" && msg.info.id === lastUser.id)
-          if (lastUser.automation !== true && (yield* deliverTeamMessages({ session, lastUser }).pipe(Effect.orDie))) {
+          if (
+            lastUser.automation !== true &&
+            !Agent.isIssueAutomationName(lastUser.agent) &&
+            (yield* deliverTeamMessages({ session, lastUser }).pipe(Effect.orDie))
+          ) {
             continue
           }
           const agent = yield* agents.get(lastUser.agent)
@@ -1758,6 +1762,11 @@ Do not create a team for trivial one step requests or when the user explicitly a
         const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
+      }
+      if (!automationSafe && cmd.agent && Agent.isIssueAutomationName(cmd.agent)) {
+        throw new NamedError.Unknown({
+          message: `Automation agent "${cmd.agent}" must be selected explicitly by the caller`,
+        })
       }
       if (automationSafe && !Command.validAutomationArguments(input.command, input.arguments)) {
         const error = new NamedError.Unknown({

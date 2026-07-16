@@ -887,7 +887,7 @@ it.instance(
   "immutable agent policy ignores cross-session ambient approvals",
   () =>
     Effect.gen(function* () {
-      for (const [index, permission] of ["edit", "read", "external_directory"].entries()) {
+      for (const [index, permission] of ["edit", "read", "external_directory", "doom_loop"].entries()) {
         const pattern = permission === "external_directory" ? `/tmp/immutable-${index}/*` : `immutable-${index}.txt`
         const id = PermissionV1.ID.make(`per_ambient_${index}`)
         const approval = yield* ask({

@@ -655,7 +655,11 @@ export const layer = Layer.effect(
               permission: "doom_loop",
               patterns: [value.name],
               sessionID: ctx.assistantMessage.sessionID,
-              metadata: { tool: value.name, input },
+              metadata: {
+                tool: value.name,
+                input,
+                ...(Agent.isIssueAutomation(agent) ? { immutableAgentPolicy: true } : {}),
+              },
               always: [value.name],
               ruleset: agent.permission,
             })

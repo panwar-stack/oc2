@@ -1324,13 +1324,15 @@ it.live(
           agentType: "build",
           rolePrompt: "Report progress",
         })
-        yield* prompt.prompt({
+        const admitted = yield* prompt.prompt({
           sessionID: lead.id,
           agent: "issue-task",
           model: ref,
           noReply: true,
           parts: [{ type: "text", text: "start safe coordination" }],
         })
+        if (admitted.info.role !== "user") throw new Error("expected admitted user message")
+        yield* sessions.updateMessage({ ...admitted.info, automation: undefined })
         yield* team.sendMessage({
           teamID: info.id,
           sender: worker.id,
@@ -1454,6 +1456,11 @@ it.instance("automation command admission rejects untrusted agents and skips she
           template: `!\`${process.execPath} -e 'await Bun.write(${JSON.stringify(marker)}, "ran")'\``,
           subtask: true,
         },
+        "derived-issue": {
+          template: `!\`${process.execPath} -e 'await Bun.write(${JSON.stringify(marker)}, "ran")'\``,
+          agent: "issue-task",
+          subtask: true,
+        },
       },
     })
     const { prompt, chat } = yield* boot()
@@ -1487,10 +1494,19 @@ it.instance("automation command admission rejects untrusted agents and skips she
         model: "test/test-model",
       })
       .pipe(Effect.exit)
+    const derivedIssue = yield* prompt
+      .command({
+        sessionID: chat.id,
+        command: "derived-issue",
+        arguments: "",
+        model: "test/test-model",
+      })
+      .pipe(Effect.exit)
 
     expect(Exit.isFailure(untrusted)).toBe(true)
     expect(Exit.isFailure(trusted)).toBe(true)
     expect(Exit.isFailure(mismatchedRole)).toBe(true)
+    expect(Exit.isFailure(derivedIssue)).toBe(true)
     expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
   }),
 )
