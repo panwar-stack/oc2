@@ -256,12 +256,13 @@ function pngChunk(type: string, data: Uint8Array) {
   return value
 }
 
-function pngAttachment(idatSuffix = new Uint8Array()) {
+function pngAttachment(idatSuffix = new Uint8Array(), interlace = 0) {
   const header = new Uint8Array(13)
   const view = new DataView(header.buffer)
   view.setUint32(0, 1)
   view.setUint32(4, 1)
   header[8] = 8
+  header[12] = interlace
   return bytes(
     new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     pngChunk("IHDR", header),
@@ -284,12 +285,42 @@ function gifAttachment() {
   )
 }
 
+function invalidGifCodeSize() {
+  const content = gifAttachment()
+  content[23] = 9
+  return content
+}
+
 function webpAttachment() {
-  return bytes(
-    new TextEncoder().encode("RIFF"),
-    new Uint8Array([18, 0, 0, 0]),
-    new TextEncoder().encode("WEBPVP8L"),
-    new Uint8Array([6, 0, 0, 0, 0x2f, 0, 0, 0, 0, 0]),
+  return webpFile(webpChunk("VP8L", new Uint8Array([0x2f, 0, 0, 0, 0, 0])))
+}
+
+function webpChunk(type: string, data: Uint8Array) {
+  const size = new Uint8Array(4)
+  new DataView(size.buffer).setUint32(0, data.byteLength, true)
+  return bytes(new TextEncoder().encode(type), size, data, data.byteLength % 2 ? new Uint8Array(1) : new Uint8Array())
+}
+
+function webpFile(...chunks: Uint8Array[]) {
+  const payload = bytes(new TextEncoder().encode("WEBP"), ...chunks)
+  const size = new Uint8Array(4)
+  new DataView(size.buffer).setUint32(0, payload.byteLength, true)
+  return bytes(new TextEncoder().encode("RIFF"), size, payload)
+}
+
+function extendedWebpAttachment() {
+  return webpFile(
+    webpChunk("VP8X", new Uint8Array([0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0])),
+    webpChunk("VP8L", new Uint8Array([0x2f, 0, 0, 0, 0, 0])),
+    webpChunk("EXIF", new Uint8Array([1])),
+  )
+}
+
+function animatedWebpAttachment() {
+  return webpFile(
+    webpChunk("VP8X", new Uint8Array([0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0])),
+    webpChunk("ANIM", new Uint8Array(6)),
+    webpChunk("ANMF", bytes(new Uint8Array(16), webpChunk("VP8L", new Uint8Array([0x2f, 0, 0, 0, 0, 0])))),
   )
 }
 
@@ -1432,6 +1463,31 @@ describe("bounded attachment ingestion", () => {
     await rm(ignoredMime.root, { recursive: true, force: true })
   })
 
+  test("accepts standard Adam7 and extended or animated WebP containers", async () => {
+    const contents = [pngAttachment(new Uint8Array(), 1), extendedWebpAttachment(), animatedWebpAttachment()]
+    let index = 0
+    const fixture = await ingestFixture({
+      body: contents.map((_, item) => `![${item}](${attachmentUrl(item + 101)})`).join("\n"),
+      fetch: async () => new Response(contents[index++]),
+    })
+    expect(fixture.result).toMatchObject({ status: "ok", attachmentCount: 3 })
+    const snapshot = JSON.parse(await Bun.file(join(fixture.bundleDir, "issue.json")).text())
+    expect(snapshot.attachments.map((attachment: { mediaType: string }) => attachment.mediaType).sort()).toEqual(
+      ["image/png", "image/webp", "image/webp"].sort(),
+    )
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
+  test("accepts CommonMark autolinks as deterministic Markdown text", async () => {
+    const fixture = await ingestFixture({
+      body: `![asset](${attachmentUrl(104)})`,
+      fetch: async () => new Response("<https://example.com>"),
+    })
+    const snapshot = JSON.parse(await Bun.file(join(fixture.bundleDir, "issue.json")).text())
+    expect(snapshot.attachments[0]).toMatchObject({ mediaType: "text/markdown" })
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
   test.each([
     ["SVG", new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>'), null],
     ["HTML", new TextEncoder().encode("<!doctype html><html></html>"), "image/png"],
@@ -1446,6 +1502,7 @@ describe("bounded attachment ingestion", () => {
     ["image polyglot", bytes(pngAttachment(), new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/png"],
     ["embedded PNG archive", pngAttachment(new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/png"],
     ["prolog SVG", new TextEncoder().encode("<?safe?> <!-- comment --> <svg></svg>"), "text/plain"],
+    ["impossible GIF code size", invalidGifCodeSize(), "image/gif"],
   ])("rejects %s bytes regardless of extension or content type", async (_name, content, contentType) => {
     const fixture = await ingestFixture({
       body: `![asset](${attachmentUrl()})`,

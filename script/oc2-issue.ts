@@ -1366,7 +1366,7 @@ function sniffAttachment(content: Uint8Array) {
     }
     break
   }
-  if (start.startsWith("#!") || /^<(?:!doctype|[a-z])/.test(start)) rejectAttachment()
+  if (start.startsWith("#!") || /^<(?:!doctype(?:\s|>)|[a-z][a-z0-9:-]*(?:\s|\/?>))/.test(start)) rejectAttachment()
   if (isJsonText(text)) return { extension: "json", mediaType: "application/json" }
   return looksLikeMarkdown(text)
     ? { extension: "md", mediaType: "text/markdown" }
@@ -1384,6 +1384,7 @@ function isPng(content: Uint8Array) {
   let sawData = false
   let endedData = false
   let indexed = false
+  let rowGroups: Array<{ bytes: number; rows: number }> = []
   while (offset + 12 <= content.byteLength) {
     const length = view.getUint32(offset)
     const dataStart = offset + 8
@@ -1400,6 +1401,7 @@ function isPng(content: Uint8Array) {
       const height = view.getUint32(dataStart + 4)
       const bitDepth = content[dataStart + 8]
       const colorType = content[dataStart + 9]
+      const interlace = content[dataStart + 12]
       const channels = colorType === 0 ? 1 : colorType === 2 ? 3 : colorType === 3 ? 1 : colorType === 4 ? 2 : 4
       const validDepths =
         colorType === 0 ? new Set([1, 2, 4, 8, 16]) : colorType === 3 ? new Set([1, 2, 4, 8]) : new Set([8, 16])
@@ -1410,11 +1412,12 @@ function isPng(content: Uint8Array) {
         !validDepths.has(bitDepth ?? -1) ||
         content[dataStart + 10] !== 0 ||
         content[dataStart + 11] !== 0 ||
-        content[dataStart + 12] !== 0
+        (interlace !== 0 && interlace !== 1)
       )
         return false
       indexed = colorType === 3
-      expectedBytes = (Math.ceil((width * channels * (bitDepth ?? 0)) / 8) + 1) * height
+      rowGroups = pngRowGroups(width, height, channels * (bitDepth ?? 0), interlace)
+      expectedBytes = rowGroups.reduce((total, group) => total + group.bytes * group.rows, 0)
       if (!Number.isSafeInteger(expectedBytes) || expectedBytes > maximumTotalAttachmentBytes) return false
       sawHeader = true
     } else if (type === "PLTE") {
@@ -1443,12 +1446,14 @@ function isPng(content: Uint8Array) {
         return false
       }
       if (decoded.byteLength !== expectedBytes) return false
-      const height = view.getUint32(20)
-      const rowBytes = expectedBytes / height
-      return (
-        Number.isInteger(rowBytes) &&
-        Array.from({ length: height }, (_, row) => decoded[row * rowBytes]).every((filter) => (filter ?? 5) <= 4)
-      )
+      let rowOffset = 0
+      for (const group of rowGroups) {
+        for (let row = 0; row < group.rows; row++) {
+          if ((decoded[rowOffset] ?? 5) > 4) return false
+          rowOffset += group.bytes
+        }
+      }
+      return rowOffset === decoded.byteLength
     } else if ((type[0] ?? "a") === (type[0] ?? "a").toUpperCase()) {
       return false
     } else if (sawData) {
@@ -1457,6 +1462,26 @@ function isPng(content: Uint8Array) {
     offset = next
   }
   return false
+}
+
+function pngRowGroups(width: number, height: number, bitsPerPixel: number, interlace: number) {
+  const passes =
+    interlace === 0
+      ? [[0, 0, 1, 1]]
+      : [
+          [0, 0, 8, 8],
+          [4, 0, 8, 8],
+          [0, 4, 4, 8],
+          [2, 0, 4, 4],
+          [0, 2, 2, 4],
+          [1, 0, 2, 2],
+          [0, 1, 1, 2],
+        ]
+  return passes.flatMap(([x = 0, y = 0, stepX = 1, stepY = 1]) => {
+    const passWidth = width <= x ? 0 : Math.ceil((width - x) / stepX)
+    const rows = height <= y ? 0 : Math.ceil((height - y) / stepY)
+    return passWidth && rows ? [{ bytes: Math.ceil((passWidth * bitsPerPixel) / 8) + 1, rows }] : []
+  })
 }
 
 function isJpeg(content: Uint8Array) {
@@ -1550,7 +1575,7 @@ function isGif(content: Uint8Array) {
     offset += 9
     if (packed & 0x80) offset += 3 * 2 ** ((packed & 0x07) + 1)
     const codeSize = content[offset++]
-    if (codeSize === undefined || codeSize < 2 || codeSize > 12) return false
+    if (codeSize === undefined || codeSize < 2 || codeSize > 8) return false
     if (content[offset] === 0) return false
     offset = skipGifBlocks(content, offset)
     if (offset < 0) return false
@@ -1581,7 +1606,17 @@ function isWebp(content: Uint8Array) {
   const view = new DataView(content.buffer, content.byteOffset, content.byteLength)
   if (view.getUint32(4, true) + 8 !== content.byteLength) return false
   let offset = 12
+  let extended = false
+  let flags = 0
+  let canvasWidth = 0
+  let canvasHeight = 0
   let images = 0
+  let frames = 0
+  let animation = false
+  let profile = false
+  let exif = false
+  let xmp = false
+  let alpha = false
   while (offset + 8 <= content.byteLength) {
     const type = new TextDecoder().decode(content.slice(offset, offset + 4))
     const length = view.getUint32(offset + 4, true)
@@ -1589,28 +1624,103 @@ function isWebp(content: Uint8Array) {
     const dataEnd = dataStart + length
     const next = dataEnd + (length % 2)
     if (!/^[\x20-\x7e]{4}$/.test(type) || dataEnd < dataStart || next > content.byteLength) return false
-    if (!new Set(["VP8 ", "VP8L", "VP8X", "ALPH"]).has(type)) return false
-    if (type === "VP8 ") {
-      if (
-        length < 10 ||
-        ((content[dataStart] ?? 1) & 1) !== 0 ||
-        !startsWithBytes(content.subarray(dataStart + 3), [0x9d, 0x01, 0x2a]) ||
-        (view.getUint16(dataStart + 6, true) & 0x3fff) === 0 ||
-        (view.getUint16(dataStart + 8, true) & 0x3fff) === 0
-      )
+    if (type === "VP8X") {
+      if (offset !== 12 || extended || length !== 10) return false
+      flags = content[dataStart] ?? 0
+      if ((flags & 0xc1) !== 0 || content[dataStart + 1] || content[dataStart + 2] || content[dataStart + 3])
         return false
+      canvasWidth = readUint24(content, dataStart + 4) + 1
+      canvasHeight = readUint24(content, dataStart + 7) + 1
+      extended = true
+    } else if (type === "VP8 " || type === "VP8L") {
+      if (!isWebpImage(content, view, type, dataStart, length)) return false
       images++
-    } else if (type === "VP8L") {
-      if (length < 6 || content[dataStart] !== 0x2f || ((content[dataStart + 4] ?? 0) & 0xe0) !== 0) return false
-      images++
-    } else if (type === "VP8X") {
-      if (length !== 10) return false
-    } else if (type === "ALPH" && length < 2) {
+    } else if (type === "ALPH") {
+      if (!extended || alpha || length < 2) return false
+      alpha = true
+    } else if (type === "ICCP" || type === "EXIF" || type === "XMP ") {
+      if (!extended || !length) return false
+      if (type === "ICCP") {
+        if (profile) return false
+        profile = true
+      }
+      if (type === "EXIF") {
+        if (exif) return false
+        exif = true
+      }
+      if (type === "XMP ") {
+        if (xmp) return false
+        xmp = true
+      }
+    } else if (type === "ANIM") {
+      if (!extended || animation || length !== 6) return false
+      animation = true
+    } else if (type === "ANMF") {
+      if (!extended || !isWebpFrame(content, view, dataStart, dataEnd, canvasWidth, canvasHeight)) return false
+      frames++
+    } else {
       return false
     }
     offset = next
   }
-  return offset === content.byteLength && images === 1
+  if (offset !== content.byteLength) return false
+  if (!extended) return images === 1 && frames === 0
+  if (profile !== Boolean(flags & 0x20) || exif !== Boolean(flags & 0x08) || xmp !== Boolean(flags & 0x04)) return false
+  if (Boolean(flags & 0x02) !== animation || (alpha && !(flags & 0x10))) return false
+  return animation ? images === 0 && frames > 0 : images === 1 && frames === 0
+}
+
+function isWebpImage(content: Uint8Array, view: DataView, type: string, dataStart: number, length: number) {
+  if (type === "VP8L") return length >= 6 && content[dataStart] === 0x2f && ((content[dataStart + 4] ?? 0) & 0xe0) === 0
+  return (
+    length >= 10 &&
+    ((content[dataStart] ?? 1) & 1) === 0 &&
+    startsWithBytes(content.subarray(dataStart + 3), [0x9d, 0x01, 0x2a]) &&
+    (view.getUint16(dataStart + 6, true) & 0x3fff) > 0 &&
+    (view.getUint16(dataStart + 8, true) & 0x3fff) > 0
+  )
+}
+
+function isWebpFrame(
+  content: Uint8Array,
+  view: DataView,
+  dataStart: number,
+  dataEnd: number,
+  canvasWidth: number,
+  canvasHeight: number,
+) {
+  if (dataEnd - dataStart < 30 || ((content[dataStart + 15] ?? 0) & 0xfc) !== 0) return false
+  const x = readUint24(content, dataStart) * 2
+  const y = readUint24(content, dataStart + 3) * 2
+  const width = readUint24(content, dataStart + 6) + 1
+  const height = readUint24(content, dataStart + 9) + 1
+  if (x + width > canvasWidth || y + height > canvasHeight) return false
+  let offset = dataStart + 16
+  let images = 0
+  let alpha = false
+  while (offset + 8 <= dataEnd) {
+    const type = new TextDecoder().decode(content.slice(offset, offset + 4))
+    const length = view.getUint32(offset + 4, true)
+    const nestedStart = offset + 8
+    const nestedEnd = nestedStart + length
+    const next = nestedEnd + (length % 2)
+    if (nestedEnd < nestedStart || next > dataEnd) return false
+    if (type === "ALPH") {
+      if (alpha || length < 2) return false
+      alpha = true
+    } else if (type === "VP8 " || type === "VP8L") {
+      if (!isWebpImage(content, view, type, nestedStart, length)) return false
+      images++
+    } else {
+      return false
+    }
+    offset = next
+  }
+  return offset === dataEnd && images === 1
+}
+
+function readUint24(content: Uint8Array, offset: number) {
+  return (content[offset] ?? 0) | ((content[offset + 1] ?? 0) << 8) | ((content[offset + 2] ?? 0) << 16)
 }
 
 function isJsonText(text: string) {
@@ -1623,7 +1733,7 @@ function isJsonText(text: string) {
 }
 
 function looksLikeMarkdown(text: string) {
-  return /(?:^|\n)(?: {0,3}#{1,6}\s| {0,3}(?:[-+*]|\d+[.)])\s| {0,3}>\s| {0,3}```)|!?\[[^\]\n]+\]\([^\n)]+\)|(?:^|\n) {0,3}(?:[-*_]\s*){3,}(?:\n|$)/m.test(
+  return /(?:^|\n)(?: {0,3}#{1,6}\s| {0,3}(?:[-+*]|\d+[.)])\s| {0,3}>\s| {0,3}```)|!?\[[^\]\n]+\]\([^\n)]+\)|<(?:https?:\/\/[^>]+|[^<>\s@]+@[^<>\s@]+)>|(?:^|\n) {0,3}(?:[-*_]\s*){3,}(?:\n|$)/m.test(
     text,
   )
 }
