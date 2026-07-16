@@ -297,17 +297,19 @@ export const RunCommand = effectCmd({
     const resultJson = args.format === "result-json"
     let automationSessionID: string | null = null
     let automationResultEmitted = false
-    const emitAutomationResult = async (result: AutomationResult) => {
+    let automationResultExitCode: 0 | 1 | 2 | undefined
+    const emitAutomationResult = async (result: AutomationResult, exitCode: 0 | 1 | 2) => {
       if (automationResultEmitted) return
       automationResultEmitted = true
+      automationResultExitCode = exitCode
       Reflect.set(process, automationResultMarker, true)
+      process.exitCode = exitCode
       const safe = JSON.stringify(result).replace(/[\u007f-\u009f\u2028\u2029]/g, (char) => {
         return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`
       })
       await new Promise<void>((resolve, reject) => {
         process.stdout.write(safe + EOL, (error) => {
           if (!error) return resolve()
-          process.exitCode = 1
           reject(error)
         })
       })
@@ -338,7 +340,7 @@ export const RunCommand = effectCmd({
       return "session_error"
     }
     const failAutomation = async (error: AutomationError) => {
-      if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error })
+      if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error }, 1)
       else UI.error("Automation run failed")
       process.exitCode = 1
     }
@@ -347,7 +349,7 @@ export const RunCommand = effectCmd({
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
       const thinking = args.interactive ? (args.thinking ?? true) : (args.thinking ?? false)
       const die = async (message: string, error: AutomationError = "invalid_input"): Promise<never> => {
-        if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error })
+        if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error }, 2)
         else UI.error(message)
         process.exit(args.automation || resultJson ? 2 : 1)
       }
@@ -990,7 +992,7 @@ export const RunCommand = effectCmd({
                 .map((part) => part.text.trim())
                 .filter(Boolean)
                 .join(EOL)
-              if (resultJson) await emitAutomationResult({ status: "ok", sessionID, text })
+              if (resultJson) await emitAutomationResult({ status: "ok", sessionID, text }, 0)
               else if (text) process.stdout.write(text + EOL)
               return
             }
@@ -1113,7 +1115,10 @@ export const RunCommand = effectCmd({
     }).pipe(
       Effect.catchCause((cause) => {
         if (!args.automation) return Effect.failCause(cause)
-        if (automationResultEmitted) return Effect.void
+        if (automationResultEmitted) {
+          process.exitCode = automationResultExitCode === 0 ? 1 : (automationResultExitCode ?? 1)
+          return Effect.void
+        }
         return Effect.promise(() => failAutomation(executionError(Cause.squash(cause))))
       }),
     )

@@ -254,7 +254,7 @@ try {
     if (Reflect.get(process, automationResultMarker) !== true) {
       writeAutomationError("session_error", 1)
     } else {
-      process.exitCode ??= 1
+      if (process.exitCode === undefined || process.exitCode === 0) process.exitCode = 1
     }
   } else if (automationOutput) {
     UI.error("Automation run failed")
