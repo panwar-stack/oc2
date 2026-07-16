@@ -755,7 +755,7 @@ export const layer = Layer.effect(
         throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
       }
       const agentName = input.agent ?? (yield* agents.defaultAgent())
-      const ag = yield* (input.automation ? agents.getAutomation(agentName) : agents.get(agentName))
+      const ag = yield* (Agent.isIssueAutomationName(agentName) ? agents.getAutomation(agentName) : agents.get(agentName))
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
@@ -1745,10 +1745,10 @@ Do not create a team for trivial one step requests or when the user explicitly a
         throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
       }
       const requestedAgent = input.agent
-        ? yield* (input.automation ? agents.getAutomation(input.agent) : agents.get(input.agent))
+        ? yield* (Agent.isIssueAutomationName(input.agent) ? agents.getAutomation(input.agent) : agents.get(input.agent))
         : undefined
       const trustedAutomation = requestedAgent ? Agent.isIssueAutomation(requestedAgent) : false
-      if (input.automation && !trustedAutomation) {
+      if ((input.automation || (input.agent && Agent.isIssueAutomationName(input.agent))) && !trustedAutomation) {
         throw new NamedError.Unknown({ message: `Agent "${input.agent ?? ""}" is not a trusted automation agent` })
       }
       const automationSafe = input.automation === true || trustedAutomation

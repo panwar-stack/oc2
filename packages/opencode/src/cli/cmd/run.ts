@@ -352,10 +352,14 @@ export const RunCommand = effectCmd({
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
       const thinking = args.interactive ? (args.thinking ?? true) : (args.thinking ?? false)
-      const die = async (message: string, error: AutomationError = "invalid_input"): Promise<never> => {
-        if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error }, 2)
+      const die = async (
+        message: string,
+        error: AutomationError = "invalid_input",
+        exitCode: 1 | 2 = args.automation || resultJson ? 2 : 1,
+      ): Promise<never> => {
+        if (resultJson) await emitAutomationResult({ status: "error", sessionID: automationSessionID, error }, exitCode)
         else UI.error(message)
-        process.exit(args.automation || resultJson ? 2 : 1)
+        process.exit(exitCode)
       }
       const abortExecution = async (message: string, error: AutomationError = "session_error"): Promise<never> => {
         if (args.automation) await failAutomation(error)
@@ -671,9 +675,14 @@ export const RunCommand = effectCmd({
         const name = args.agent
 
         const entry = await Effect.runPromise(
-          agentSvc.get(name).pipe(Effect.provideService(InstanceRef, localInstance)),
+          (Agent.isIssueAutomationName(name) ? agentSvc.getAutomation(name) : agentSvc.get(name)).pipe(
+            Effect.provideService(InstanceRef, localInstance),
+          ),
         )
         if (!entry) {
+          if (Agent.isIssueAutomationName(name)) {
+            return die(`agent "${name}" not found or disabled`, "invalid_agent", 2)
+          }
           UI.println(
             UI.Style.TEXT_WARNING_BOLD + "!",
             UI.Style.TEXT_NORMAL,

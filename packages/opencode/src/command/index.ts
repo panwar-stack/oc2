@@ -115,7 +115,7 @@ export const layer = Layer.effect(
         }
         commands[Default.IMPLEMENT_SPEC_PR] = {
           name: Default.IMPLEMENT_SPEC_PR,
-          description: "Understand a specification thoroughly and implement only the requested PR slice.",
+          description: "Understand a specification thoroughly and implement only the requested scope.",
           source: "command",
           template: PROMPT_IMPLEMENT_SPEC_PR,
           hints: hints(PROMPT_IMPLEMENT_SPEC_PR),
@@ -197,7 +197,7 @@ export const layer = Layer.effect(
       }
       commands[Default.IMPLEMENT_SPEC_PR] = {
         name: Default.IMPLEMENT_SPEC_PR,
-        description: "Understand a specification thoroughly and implement only the requested PR slice.",
+        description: "Understand a specification thoroughly and implement only the requested scope.",
         source: "command",
         get template() {
           return PROMPT_IMPLEMENT_SPEC_PR

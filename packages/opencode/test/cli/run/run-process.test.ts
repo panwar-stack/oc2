@@ -882,6 +882,16 @@ describe("opencode run (non-interactive subprocess)", () => {
             }),
           },
         })
+        const implicitlyDisabled = yield* opencode.run("hello", {
+          agent: "issue-task",
+          variant: "high",
+          env: {
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              agent: { "issue-task": { disable: true } },
+            }),
+          },
+        })
         const renamed = yield* opencode.run("hello", {
           automation: true,
           agent: "renamed-key",
@@ -902,6 +912,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(unknown.exitCode).not.toBe(0)
         expect(subagent.exitCode).not.toBe(0)
         opencode.expectExit(disabled, 2)
+        opencode.expectExit(implicitlyDisabled, 2)
         expect(automationResult(disabled.stdout)).toEqual({
           status: "error",
           sessionID: expect.any(String),

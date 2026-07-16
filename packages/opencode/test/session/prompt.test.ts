@@ -1450,6 +1450,7 @@ it.instance("automation prompt and command admission honor a disabled reserved a
     const { llm } = yield* useServerConfig((url) => ({
       ...providerCfg(url),
       agent: { "issue-task": { disable: true } },
+      command: { custom: { template: "must not execute" } },
     }))
     const { prompt, chat } = yield* boot()
 
@@ -1463,18 +1464,27 @@ it.instance("automation prompt and command admission honor a disabled reserved a
         parts: [{ type: "text", text: "must not execute" }],
       })
       .pipe(Effect.exit)
+    const implicit = yield* prompt
+      .prompt({
+        sessionID: chat.id,
+        agent: "issue-task",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "must not execute implicitly" }],
+      })
+      .pipe(Effect.exit)
     const command = yield* prompt
       .command({
         sessionID: chat.id,
         command: "custom",
         arguments: "must not execute",
-        automation: true,
         agent: "issue-task",
         model: "test/test-model",
       })
       .pipe(Effect.exit)
 
     expect(Exit.isFailure(direct)).toBe(true)
+    expect(Exit.isFailure(implicit)).toBe(true)
     expect(Exit.isFailure(command)).toBe(true)
     expect(yield* llm.calls).toBe(0)
   }),

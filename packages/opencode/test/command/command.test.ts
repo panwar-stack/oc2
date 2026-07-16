@@ -55,7 +55,7 @@ describe("command", () => {
 
           expect(implementSpecPr.source).toBe("command")
           expect(implementSpecPr.description).toBe(
-            "Understand a specification thoroughly and implement only the requested PR slice.",
+            "Understand a specification thoroughly and implement only the requested scope.",
           )
           const template = yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))
 
