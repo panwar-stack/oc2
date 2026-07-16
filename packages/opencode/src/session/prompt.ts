@@ -1742,8 +1742,8 @@ Do not create a team for trivial one step requests or when the user explicitly a
       return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
     })
 
-    const command = Effect.fn("SessionPrompt.command")(function* (raw: CommandInput) {
-      const input = Schema.decodeUnknownSync(CommandInput)(raw)
+    const command = Effect.fn("SessionPrompt.command")(function* (untrusted: CommandInput) {
+      const input = Schema.decodeUnknownSync(CommandInput)(untrusted)
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
       const automationSafe = input.automation === true
       const cmd = yield* commands.get(input.command)
