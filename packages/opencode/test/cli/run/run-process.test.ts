@@ -580,6 +580,53 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
+    "ordinary automation keeps checkout, home, and configured references literal",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const checkoutSecret = path.join(home, "checkout-secret.txt")
+        const homeSecret = path.join(home, "home-secret.txt")
+        const referenceSecret = path.join(home, "reference-secret", "README.md")
+        const shellMarker = path.join(home, "ordinary-shell-marker")
+        yield* Effect.promise(() =>
+          Promise.all([
+            Bun.write(checkoutSecret, "CHECKOUT_REFERENCE_SECRET"),
+            Bun.write(homeSecret, "HOME_REFERENCE_SECRET"),
+            Bun.write(referenceSecret, "CONFIGURED_REFERENCE_SECRET"),
+          ]),
+        )
+        yield* llm.text("ordinary references stayed literal")
+
+        const text = `Inspect @checkout-secret.txt @~/home-secret.txt @docs and !\`touch ${shellMarker}\``
+        const result = yield* opencode.run(text, {
+          automation: true,
+          agent: "issue-task",
+          variant: "high",
+          format: "result-json",
+          env: {
+            OC2_EXPERIMENTAL_REFERENCES: "true",
+            OC2_CONFIG_CONTENT: JSON.stringify({
+              ...testProviderConfig(llm.url),
+              reference: { docs: "./reference-secret" },
+            }),
+          },
+        })
+
+        opencode.expectExit(result, 0)
+        expect(automationResult(result.stdout)).toMatchObject({
+          status: "ok",
+          text: "ordinary references stayed literal",
+        })
+        expect(yield* Effect.promise(() => Bun.file(shellMarker).exists())).toBe(false)
+        const input = JSON.stringify(yield* llm.inputs)
+        expect(input).toContain(text)
+        expect(input).not.toContain("CHECKOUT_REFERENCE_SECRET")
+        expect(input).not.toContain("HOME_REFERENCE_SECRET")
+        expect(input).not.toContain("CONFIGURED_REFERENCE_SECRET")
+      }),
+    60_000,
+  )
+
+  cliIt.live(
     "automation treats hostile command arguments literally without ambient file inclusion",
     ({ llm, opencode, home }) =>
       Effect.gen(function* () {

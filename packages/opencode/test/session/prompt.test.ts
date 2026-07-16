@@ -1672,48 +1672,81 @@ raceNoLLMServer.instance(
 )
 
 it.instance(
-  "configured subtask command forwards explicit attachments to the child provider",
+  "configured automation subtask keeps ambient references literal and forwards explicit files",
   () =>
     Effect.gen(function* () {
-      const marker = "EXPLICIT_SUBTASK_ATTACHMENT"
-      const { llm } = yield* useServerConfig((url) => ({
+      const { dir, llm } = yield* useServerConfig((url) => ({
         ...providerCfg(url),
         command: {
-          "attachment-subtask": {
-            template: "Inspect the explicit attachment",
+          "literal-subtask": {
+            template: "Inspect @checkout-secret.txt @~/home-secret.txt @docs and !`printf unsafe`",
             subtask: true,
           },
         },
+        reference: { docs: "./reference-secret" },
       }))
-      const { prompt, chat } = yield* boot()
-      yield* llm.textMatch(({ body }) => JSON.stringify(body.messages).includes(marker), "child inspected attachment")
+      const config = yield* Config.Service
+      const previousConfig = yield* config.getGlobal()
+      yield* config.updateGlobal(providerCfg(llm.url))
+      yield* Effect.addFinalizer(() => config.updateGlobal(previousConfig).pipe(Effect.orDie))
+      const home = path.join(dir, "home")
+      const checkoutSecret = path.join(dir, "checkout-secret.txt")
+      const homeSecret = path.join(home, "home-secret.txt")
+      const referenceSecret = path.join(dir, "reference-secret", "README.md")
+      const attachment = "EXPLICIT_SUBTASK_ATTACHMENT"
+      yield* writeText(checkoutSecret, "CHECKOUT_SUBTASK_SECRET")
+      yield* writeText(homeSecret, "HOME_SUBTASK_SECRET")
+      yield* writeText(referenceSecret, "CONFIGURED_SUBTASK_SECRET")
+      const previousHome = process.env.HOME
+      process.env.HOME = home
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousHome === undefined) delete process.env.HOME
+          else process.env.HOME = previousHome
+        }),
+      )
+
+      const literal = "Inspect @checkout-secret.txt @~/home-secret.txt @docs and !`printf unsafe`"
+      yield* llm.textMatch(
+        ({ body }) => {
+          const messages = JSON.stringify(body.messages)
+          return messages.includes(literal) && messages.includes(attachment)
+        },
+        "child inspected explicit attachment",
+      )
       yield* llm.textMatch(
         ({ body }) => JSON.stringify(body.messages).includes("Summarize the task tool output"),
         "parent completed command",
       )
+      const { prompt, chat } = yield* boot()
 
       const result = yield* prompt.command({
         sessionID: chat.id,
-        command: "attachment-subtask",
+        command: "literal-subtask",
         arguments: "",
         automation: true,
-        agent: "build",
+        agent: "issue-task",
         model: "test/test-model",
         parts: [
           {
             type: "file",
             mime: "text/plain",
             filename: "context.txt",
-            url: `data:text/plain;base64,${Buffer.from(marker).toString("base64")}`,
+            url: `data:text/plain;base64,${Buffer.from(attachment).toString("base64")}`,
           },
         ],
       })
 
       expect(result.info.role).toBe("assistant")
-      const childInput = (yield* llm.inputs).find((input) => JSON.stringify(input.messages).includes(marker))
-      expect(childInput).toBeDefined()
-      expect(JSON.stringify(childInput?.messages)).toContain(marker)
+      const inputs = JSON.stringify(yield* llm.inputs)
+      expect(inputs).toContain(literal)
+      expect(inputs).toContain(attachment)
+      expect(inputs).toContain("Summarize the task tool output")
+      expect(inputs).not.toContain("CHECKOUT_SUBTASK_SECRET")
+      expect(inputs).not.toContain("HOME_SUBTASK_SECRET")
+      expect(inputs).not.toContain("CONFIGURED_SUBTASK_SECRET")
     }),
+  { git: true },
   30_000,
 )
 

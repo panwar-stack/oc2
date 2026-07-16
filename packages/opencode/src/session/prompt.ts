@@ -353,7 +353,9 @@ export const layer = Layer.effect(
       const promptOps = {
         ...basePromptOps,
         resolvePromptParts: (template: string) =>
-          basePromptOps.resolvePromptParts(template).pipe(Effect.map((parts) => [...parts, ...forwardedParts])),
+          lastUser.automation
+            ? Effect.succeed([{ type: "text" as const, text: template }, ...forwardedParts])
+            : basePromptOps.resolvePromptParts(template).pipe(Effect.map((parts) => [...parts, ...forwardedParts])),
       } satisfies TaskPromptOps
       const { task: taskTool } = yield* registry.named()
       const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
