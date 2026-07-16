@@ -1682,7 +1682,12 @@ it.instance(
       const pluginPath = path.join(dir, "automation-subtask-plugin.ts")
       yield* writeText(
         pluginPath,
-        `export default async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "initialized"); return {} }`,
+        [
+          "export default async () => ({",
+          `  "tool.execute.before": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "before") },`,
+          `  "tool.execute.after": async () => { await Bun.write(${JSON.stringify(pluginMarker)}, "after") },`,
+          "})",
+        ].join("\n"),
       )
       const { llm } = yield* useServerConfig((url) => ({
         ...providerCfg(url),
