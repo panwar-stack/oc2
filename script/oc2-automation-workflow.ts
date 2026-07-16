@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 
 import { validateChangedPaths } from "./oc2-automation-policy"
 import { maximumChangedFiles, maximumPatchBytes } from "./oc2-verify"
-import type { Admission, IssueBundle } from "./oc2-issue"
+import { maximumIssueJsonBytes, type Admission, type IssueBundle } from "./oc2-issue"
 
 const maximumAdmissionBytes = 64 * 1024
 const maximumBundleTextBytes = 512 * 1024
@@ -297,7 +297,7 @@ export async function validateIssueBundle(bundleDir: string, admission: Admissio
   const location = relative(workspace, root)
   if ((location !== ".." && !location.startsWith(`..${sep}`)) || isAbsolute(location))
     throw new Error("issue bundle must be outside checkout")
-  const value = parseJson(await readRegularUtf8(join(root, "issue.json"), 1024 * 1024))
+  const value = parseJson(await readRegularUtf8(join(root, "issue.json"), maximumIssueJsonBytes))
   if (
     !exactKeys(value, ["repository", "issue", "comments", "attachments"]) ||
     !exactKeys(value.repository, ["id", "nameWithOwner", "baseBranch", "baseSha"]) ||

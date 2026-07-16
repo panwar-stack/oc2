@@ -10,6 +10,7 @@ import {
   formatIssueMarker,
   ingestIssue,
   main,
+  maximumIssueJsonBytes,
   parseIssueMarker,
   updateIssueMarker,
   updateRunIssueMarker,
@@ -244,6 +245,35 @@ function attachmentUrl(index = 1, host = "github.com") {
   return `https://${host}/user-attachments/assets/00000000-0000-4000-8000-${suffix}`
 }
 
+const realPngAttachment = new Uint8Array(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP8ywACLGCSAQANEQED1LYyQAAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+)
+const realJpegAttachment = new Uint8Array(
+  Buffer.from(
+    "/9j/4AAQSkZJRgABAgAAAQABAAD//gAQTGF2YzYyLjI4LjEwMAD/2wBDAAgEBAQEBAUFBQUFBQYGBgYGBgYGBgYGBgYHBwcICAgHBwcGBgcHCAgICAkJCQgICAgJCQoKCgwMCwsODg4RERT/xABMAAEBAAAAAAAAAAAAAAAAAAAABgEBAQAAAAAAAAAAAAAAAAAABgcQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAACAAIDASIAAhEAAxEA/9oADAMBAAIRAxEAPwCLAE1/f//Z",
+    "base64",
+  ),
+)
+const realGifAttachment = new Uint8Array(Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"))
+const realWebpAttachment = new Uint8Array(
+  Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAUAmJaQAA3AA/vuU", "base64"),
+)
+const realCompressedAlphaWebpAttachment = new Uint8Array(
+  Buffer.from(
+    "UklGRmoAAABXRUJQVlA4WAoAAAAQAAAADwAADwAAQUxQSCMAAAAFFyAgSUPg8IqIWCCTttEwT2H+Ne2dgYj+E0zSVNsxRabbAQBWUDggIAAAAHABAJ0BKhAAEAAPwP4loAJ0AUAAAP7aJpV6vLkWwAAA",
+    "base64",
+  ),
+)
+const realRawAlphaWebpAttachment = new Uint8Array(
+  Buffer.from(
+    "UklGRkgBAABXRUJQVlA4WAoAAAAQAAAADwAADwAAQUxQSAEBAAAA/4D/gP+A/4D/gP+A/4D/gID/gP+A/4D/gP+A/4D/gP//gP+A/4D/gP+A/4D/gP+AgP+A/4D/gP+A/4D/gP+A//+A/4D/gP+A/4D/gP+A/4CA/4D/gP+A/4D/gP+A/4D//4D/gP+A/4D/gP+A/4D/gID/gP+A/4D/gP+A/4D/gP//gP+A/4D/gP+A/4D/gP+AgP+A/4D/gP+A/4D/gP+A//+A/4D/gP+A/4D/gP+A/4CA/4D/gP+A/4D/gP+A/4D//4D/gP+A/4D/gP+A/4D/gID/gP+A/4D/gP+A/4D/gP//gP+A/4D/gP+A/4D/gP+AgP+A/4D/gP+A/4D/gP+A/wBWUDggIAAAAHABAJ0BKhAAEAAPwP4loAJ0AUAAAP7aJpV6vLkWwAAA",
+    "base64",
+  ),
+)
+
 function bytes(...parts: Uint8Array[]) {
   const value = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0))
   let offset = 0
@@ -265,11 +295,11 @@ function pngChunk(type: string, data: Uint8Array) {
   return value
 }
 
-function pngAttachment(idatSuffix = new Uint8Array(), interlace = 0) {
+function pngAttachment(idatSuffix = new Uint8Array(), interlace = 0, width = 1, height = 1) {
   const header = new Uint8Array(13)
   const view = new DataView(header.buffer)
-  view.setUint32(0, 1)
-  view.setUint32(4, 1)
+  view.setUint32(0, width)
+  view.setUint32(4, height)
   header[8] = 8
   header[12] = interlace
   return bytes(
@@ -280,28 +310,71 @@ function pngAttachment(idatSuffix = new Uint8Array(), interlace = 0) {
   )
 }
 
-function jpegAttachment() {
-  return new Uint8Array([
+function jpegAttachment(width = 1, height = 1) {
+  const content = new Uint8Array([
     0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0x3f, 0, 0, 0xff, 0xd9,
   ])
+  const view = new DataView(content.buffer)
+  view.setUint16(7, height)
+  view.setUint16(9, width)
+  return content
 }
 
 function gifAttachment() {
-  return bytes(
-    new TextEncoder().encode("GIF89a"),
-    new Uint8Array([1, 0, 1, 0, 0, 0, 0]),
-    new Uint8Array([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3b]),
-  )
+  return realGifAttachment.slice()
 }
 
 function invalidGifCodeSize() {
   const content = gifAttachment()
-  content[23] = 9
+  content[29] = 9
   return content
 }
 
-function webpAttachment() {
-  return webpFile(webpChunk("VP8L", new Uint8Array([0x2f, 0, 0, 0, 0, 0])))
+function gifWithPlainTextExtensions(count: number) {
+  const logicalScreen = new Uint8Array(7)
+  const screenView = new DataView(logicalScreen.buffer)
+  screenView.setUint16(0, 16_384, true)
+  screenView.setUint16(2, 2_441, true)
+  logicalScreen[4] = 0x80
+  const textGrid = new Uint8Array(12)
+  const textView = new DataView(textGrid.buffer)
+  textView.setUint16(4, 16_384, true)
+  textView.setUint16(6, 2_441, true)
+  textGrid[8] = 1
+  textGrid[9] = 1
+  textGrid[10] = 1
+  return bytes(
+    new TextEncoder().encode("GIF89a"),
+    logicalScreen,
+    new Uint8Array([0, 0, 0, 0xff, 0xff, 0xff]),
+    ...Array.from({ length: count }, () => bytes(new Uint8Array([0x21, 0x01, 0x0c]), textGrid, new Uint8Array([0]))),
+    new Uint8Array([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 1, 0x4c, 0, 0x3b]),
+  )
+}
+
+function webpAttachment(width = 1, height = 1) {
+  const header = new Uint8Array(6)
+  header[0] = 0x2f
+  new DataView(header.buffer).setUint32(1, (width - 1) | ((height - 1) << 14), true)
+  return webpFile(webpChunk("VP8L", header))
+}
+
+function withByte(content: Uint8Array, offset: number, value: number) {
+  const mutated = content.slice()
+  mutated[offset] = value
+  return mutated
+}
+
+function rawAlphaWebpWithLength(length: 256 | 258) {
+  const content = length === 258 ? realRawAlphaWebpAttachment.slice() : new Uint8Array(334)
+  if (length === 256) {
+    content.set(realRawAlphaWebpAttachment.slice(0, 294))
+    content.set(realRawAlphaWebpAttachment.slice(296), 294)
+  }
+  const view = new DataView(content.buffer)
+  view.setUint32(4, content.byteLength - 8, true)
+  view.setUint32(34, length, true)
+  return content
 }
 
 function webpChunk(type: string, data: Uint8Array) {
@@ -330,6 +403,15 @@ function animatedWebpAttachment() {
     webpChunk("VP8X", new Uint8Array([0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0])),
     webpChunk("ANIM", new Uint8Array(6)),
     webpChunk("ANMF", bytes(new Uint8Array(16), webpChunk("VP8L", new Uint8Array([0x2f, 0, 0, 0, 0, 0])))),
+  )
+}
+
+function unorderedMetadataWebpAttachment() {
+  return webpFile(
+    webpChunk("VP8X", new Uint8Array([0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0])),
+    webpChunk("XMP ", new Uint8Array([1])),
+    webpChunk("EXIF", new Uint8Array([1])),
+    webpChunk("VP8L", new Uint8Array([0x2f, 0, 0, 0, 0, 0])),
   )
 }
 
@@ -1265,6 +1347,25 @@ describe("deterministic issue ingestion", () => {
     await rm(oversized.root, { recursive: true, force: true })
   })
 
+  test("bounds the exact pretty-printed issue JSON at the worst-case escaping boundary", async () => {
+    const baseline = await ingestFixture({ title: "", body: "" })
+    const baselineBytes = Bun.file(join(baseline.bundleDir, "issue.json")).size
+    await rm(baseline.root, { recursive: true, force: true })
+    const escapedCharacters = Math.floor((maximumIssueJsonBytes - baselineBytes) / 6)
+
+    const accepted = await ingestFixture({ title: "\u0000".repeat(escapedCharacters), body: "" })
+    const acceptedBytes = Bun.file(join(accepted.bundleDir, "issue.json")).size
+    expect(accepted.result.status).toBe("ok")
+    expect(acceptedBytes).toBeLessThanOrEqual(maximumIssueJsonBytes)
+    expect(maximumIssueJsonBytes - acceptedBytes).toBeLessThan(6)
+    await rm(accepted.root, { recursive: true, force: true })
+
+    const rejected = await ingestFixture({ title: "\u0000".repeat(escapedCharacters + 1), body: "" })
+    expect(rejected.result).toEqual({ version: 1, status: "stopped", phase: "input_too_large" })
+    expect(await Bun.file(rejected.bundleDir).exists()).toBe(false)
+    await rm(rejected.root, { recursive: true, force: true })
+  })
+
   test("rejects mutable identities, event bindings, and malformed Unicode", async () => {
     const invalidAdmissions = [
       { ...admissionArtifact(), key: "a".repeat(64) },
@@ -1360,6 +1461,7 @@ describe("bounded attachment ingestion", () => {
   test("accepts only exact current and legacy GitHub attachment URL forms", async () => {
     const urls = [
       attachmentUrl(1),
+      "https://github.com/user-attachments/files/123456/safe-file_1.png",
       "https://github.com/octo/oc2/assets/1234/safe-file.png",
       "https://user-images.githubusercontent.com/1234/5678-safe-file.png",
       "https://private-user-images.githubusercontent.com/1234/5679-safe-file.png",
@@ -1393,6 +1495,10 @@ describe("bounded attachment ingestion", () => {
     ["lookalike host", attachmentUrl().replace("github.com", "github.com.attacker.test")],
     ["encoded slash", attachmentUrl().replace("/assets/", "/assets%2f")],
     ["dot segment", attachmentUrl().replace("/user-attachments/", "/repo/../user-attachments/")],
+    ["missing current upload ID", "https://github.com/user-attachments/files/safe-file.png"],
+    ["nonnumeric current upload ID", "https://github.com/user-attachments/files/12a/safe-file.png"],
+    ["unsafe current upload name", "https://github.com/user-attachments/files/1234/unsafe%20file.png"],
+    ["nested current upload name", "https://github.com/user-attachments/files/1234/nested/safe-file.png"],
     ["unknown GitHub path", "https://github.com/octo/oc2/issues/1"],
     ["private signed source", "https://private-user-images.githubusercontent.com/1234/5678-file.png?jwt=secret"],
     ["relative image", "/uploads/private.png"],
@@ -1632,17 +1738,49 @@ describe("bounded attachment ingestion", () => {
     await rm(ignoredMime.root, { recursive: true, force: true })
   })
 
-  test("accepts standard Adam7 and extended or animated WebP containers", async () => {
-    const contents = [pngAttachment(new Uint8Array(), 1), extendedWebpAttachment(), animatedWebpAttachment()]
+  test.each([
+    ["PNG", realPngAttachment, "image/png"],
+    ["JPEG", realJpegAttachment, "image/jpeg"],
+    ["GIF", realGifAttachment, "image/gif"],
+    ["WebP", realWebpAttachment, "image/webp"],
+    ["compressed-alpha WebP", realCompressedAlphaWebpAttachment, "image/webp"],
+    ["raw-alpha WebP", realRawAlphaWebpAttachment, "image/webp"],
+  ])("accepts a representative minimal %s file verified by a real decoder", async (_name, content, mediaType) => {
+    const fixture = await ingestFixture({
+      body: `![asset](${attachmentUrl(201)})`,
+      fetch: async () => new Response(content),
+    })
+    expect(fixture.result).toMatchObject({ status: "ok", attachmentCount: 1 })
+    const snapshot = JSON.parse(await Bun.file(join(fixture.bundleDir, "issue.json")).text())
+    expect(snapshot.attachments[0]?.mediaType).toBe(mediaType)
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
+  test("bounds GIF Plain Text rendering against the cumulative pixel ceiling", async () => {
+    const fixture = await ingestFixture({
+      body: `![asset](${attachmentUrl(202)})`,
+      fetch: async () => new Response(gifWithPlainTextExtensions(1)),
+    })
+    expect(fixture.result).toMatchObject({ status: "ok", attachmentCount: 1 })
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
+  test("accepts standard Adam7 and extended, animated, or unordered-metadata WebP containers", async () => {
+    const contents = [
+      pngAttachment(new Uint8Array(), 1),
+      extendedWebpAttachment(),
+      animatedWebpAttachment(),
+      unorderedMetadataWebpAttachment(),
+    ]
     let index = 0
     const fixture = await ingestFixture({
       body: contents.map((_, item) => `![${item}](${attachmentUrl(item + 101)})`).join("\n"),
       fetch: async () => new Response(contents[index++]),
     })
-    expect(fixture.result).toMatchObject({ status: "ok", attachmentCount: 3 })
+    expect(fixture.result).toMatchObject({ status: "ok", attachmentCount: 4 })
     const snapshot = JSON.parse(await Bun.file(join(fixture.bundleDir, "issue.json")).text())
     expect(snapshot.attachments.map((attachment: { mediaType: string }) => attachment.mediaType).sort()).toEqual(
-      ["image/png", "image/webp", "image/webp"].sort(),
+      ["image/png", "image/webp", "image/webp", "image/webp"].sort(),
     )
     await rm(fixture.root, { recursive: true, force: true })
   })
@@ -1672,6 +1810,38 @@ describe("bounded attachment ingestion", () => {
     ["embedded PNG archive", pngAttachment(new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/png"],
     ["prolog SVG", new TextEncoder().encode("<?safe?> <!-- comment --> <svg></svg>"), "text/plain"],
     ["impossible GIF code size", invalidGifCodeSize(), "image/gif"],
+    ["truncated real PNG", realPngAttachment.slice(0, -1), "image/png"],
+    [
+      "malformed real PNG CRC",
+      withByte(realPngAttachment, realPngAttachment.byteLength - 1, (realPngAttachment.at(-1) ?? 0) ^ 1),
+      "image/png",
+    ],
+    ["real PNG polyglot", bytes(realPngAttachment, new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/png"],
+    [
+      "APNG animation controls",
+      bytes(
+        pngAttachment().slice(0, 33),
+        pngChunk("acTL", new Uint8Array([0, 0, 0, 2, 0, 0, 0, 0])),
+        pngAttachment().slice(33),
+      ),
+      "image/png",
+    ],
+    ["truncated real JPEG", realJpegAttachment.slice(0, -1), "image/jpeg"],
+    ["malformed real JPEG segment", withByte(realJpegAttachment, 5, 1), "image/jpeg"],
+    ["real JPEG polyglot", bytes(realJpegAttachment, new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/jpeg"],
+    ["truncated real GIF", realGifAttachment.slice(0, -1), "image/gif"],
+    ["malformed real GIF subblock", withByte(realGifAttachment, 30, 4), "image/gif"],
+    ["real GIF polyglot", bytes(realGifAttachment, new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/gif"],
+    ["GIF Plain Text pixel bomb", gifWithPlainTextExtensions(2), "image/gif"],
+    ["truncated real WebP", realWebpAttachment.slice(0, -1), "image/webp"],
+    ["malformed real WebP length", withByte(realWebpAttachment, 4, 0), "image/webp"],
+    ["real WebP polyglot", bytes(realWebpAttachment, new Uint8Array([0x50, 0x4b, 0x03, 0x04])), "image/webp"],
+    ["short raw WebP alpha plane", rawAlphaWebpWithLength(256), "image/webp"],
+    ["long raw WebP alpha plane", rawAlphaWebpWithLength(258), "image/webp"],
+    ["PNG dimension bomb", pngAttachment(new Uint8Array(), 0, 16_385, 1), "image/png"],
+    ["JPEG dimension bomb", jpegAttachment(16_385, 1), "image/jpeg"],
+    ["GIF dimension bomb", withByte(withByte(realGifAttachment, 6, 1), 7, 0x40), "image/gif"],
+    ["WebP pixel bomb", webpAttachment(16_384, 16_384), "image/webp"],
   ])("rejects %s bytes regardless of extension or content type", async (_name, content, contentType) => {
     const fixture = await ingestFixture({
       body: `![asset](${attachmentUrl()})`,
