@@ -143,6 +143,7 @@ export const RunCommand = effectCmd({
   // --attach connects to a remote server (no local instance needed); the
   // default path runs an in-process server and needs the project instance.
   instance: (args) => !args.attach,
+  automationSafe: (args) => args.automation,
   // For --dir without --attach, load instance for the resolved target dir.
   // The handler also chdirs (preserving the legacy order: chdir → file resolution).
   directory: (args) => (args.dir && !args.attach ? path.resolve(process.cwd(), args.dir) : process.cwd()),
@@ -259,10 +260,14 @@ export const RunCommand = effectCmd({
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
+    const { EffectBridge } = yield* Effect.promise(() => import("@/effect/bridge"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
     const { InstanceRef } = yield* Effect.promise(() => import("@/effect/instance-ref"))
+    const { Provider } = yield* Effect.promise(() => import("@/provider/provider"))
     const { ServerAuth } = yield* Effect.promise(() => import("@/server/auth"))
     const agentSvc = yield* Agent.Service
+    const providerSvc = yield* Provider.Service
+    const bridge = yield* EffectBridge.make()
     const flags = yield* RuntimeFlags.Service
     const localInstance = yield* InstanceRef
     const resultJson = args.format === "result-json"
@@ -354,6 +359,14 @@ export const RunCommand = effectCmd({
         await die("--automation cannot be used with --format json")
       }
 
+      if (args.automation && args.attach) {
+        await die("--automation cannot be used with --attach")
+      }
+
+      if (args.automation && (args.session || args.continue || args.fork)) {
+        await die("--automation cannot be used with --session, --continue, or --fork")
+      }
+
       if (args.automation && !args.agent) {
         await die("--automation requires --agent", "invalid_agent")
       }
@@ -399,7 +412,9 @@ export const RunCommand = effectCmd({
 
       const replay = args.replay || args["replay-limit"] !== undefined
 
-      const root = Filesystem.resolve(process.env.PWD ?? process.cwd())
+      const root = args.automation
+        ? (localInstance?.directory ?? (await die("Automation instance unavailable", "session_error")))
+        : Filesystem.resolve(process.env.PWD ?? process.cwd())
       const directory = await (async () => {
         if (!args.dir) return args.attach ? undefined : root
         if (args.attach) return args.dir
@@ -692,20 +707,19 @@ export const RunCommand = effectCmd({
           return die("--automation requires --variant", "invalid_variant")
         }
 
-        const [agentResult, providerResult, commandResult] = await Promise.all([
-          sdk.app.agents(undefined, { throwOnError: true }),
-          sdk.provider.list(undefined, { throwOnError: true }),
+        const [agent, providers, commandResult] = await Promise.all([
+          bridge.promise(agentSvc.get(args.agent!)),
+          bridge.promise(providerSvc.listAutomation()),
           args.command ? sdk.command.list(undefined, { throwOnError: true }) : undefined,
         ])
-        const agent = agentResult.data?.find((item) => item.name === args.agent)
-        if (!agent) {
+        if (!agent || agent.name !== args.agent) {
           return die(`agent "${args.agent}" not found or disabled`, "invalid_agent")
         }
         if (agent.mode === "subagent") {
           return die(`agent "${args.agent}" is a subagent, not a primary agent`, "invalid_agent")
         }
 
-        const provider = providerResult.data?.all.find((item) => item.id === model.providerID)
+        const provider = Object.values(providers).find((item) => item.id === model.providerID)
         const selected = provider?.models[model.modelID]
         if (!provider || !selected || selected.id !== model.modelID || selected.providerID !== model.providerID) {
           return die(`model "${args.model}" not found`, "invalid_model")
@@ -719,7 +733,7 @@ export const RunCommand = effectCmd({
         }
 
         return {
-          agent: agent.name,
+          agent: args.agent!,
           model,
         }
       }
@@ -980,6 +994,7 @@ export const RunCommand = effectCmd({
             agent,
             model,
             variant: args.variant,
+            automation: args.automation || undefined,
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {

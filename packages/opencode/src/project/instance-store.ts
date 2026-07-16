@@ -16,6 +16,7 @@ export interface LoadInput {
   directory: string
   worktree?: string
   project?: Project.Info
+  automationSafe?: boolean
 }
 
 export interface Interface {
@@ -33,6 +34,7 @@ export const use = serviceUse(Service)
 
 interface Entry {
   readonly deferred: Deferred.Deferred<InstanceContext>
+  readonly automationSafe: boolean
 }
 
 export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Service> = Layer.effect(
@@ -68,7 +70,9 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
           status: "completed",
           duration: Date.now() - started,
         })
-        yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
+        yield* (input.automationSafe ? bootstrap.runAutomationSafe : bootstrap.run).pipe(
+          Effect.provideService(InstanceRef, ctx),
+        )
         yield* log.info("startup stage", {
           directory: input.directory,
           projectID: ctx.project.id,
@@ -135,9 +139,17 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const existing = cache.get(directory)
-          if (existing) return yield* restore(Deferred.await(existing.deferred))
+          if (existing) {
+            if (input.automationSafe && !existing.automationSafe) {
+              throw new Error("Automation-safe instance cannot reuse an ordinary bootstrap")
+            }
+            return yield* restore(Deferred.await(existing.deferred))
+          }
 
-          const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>() }
+          const entry: Entry = {
+            deferred: Deferred.makeUnsafe<InstanceContext>(),
+            automationSafe: input.automationSafe === true,
+          }
           cache.set(directory, entry)
           yield* Effect.gen(function* () {
             yield* Effect.logInfo("creating instance").pipe(Effect.annotateLogs("directory", directory))
@@ -153,7 +165,10 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const previous = cache.get(directory)
-          const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>() }
+          const entry: Entry = {
+            deferred: Deferred.makeUnsafe<InstanceContext>(),
+            automationSafe: input.automationSafe === true,
+          }
           cache.set(directory, entry)
           yield* Effect.gen(function* () {
             yield* Effect.logInfo("reloading instance").pipe(Effect.annotateLogs("directory", directory))

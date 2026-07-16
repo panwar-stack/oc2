@@ -5,7 +5,9 @@
 // `OC2_CONFIG_CONTENT` providing the test provider config inline.
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import fs from "node:fs/promises"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { cliIt, testModelID } from "../../lib/cli-process"
 import { reply } from "../../lib/llm-server"
 import { testProviderConfig } from "../../lib/test-provider"
@@ -34,6 +36,18 @@ function automationResult(stdout: string) {
   expect(lines).toHaveLength(1)
   return JSON.parse(lines[0]) as AutomationResult
 }
+
+const git = Effect.fn("RunProcessTest.git")(function* (cwd: string, args: string[]) {
+  return yield* Effect.promise(async () => {
+    const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    if (code !== 0) throw new Error(stderr.trim() || stdout.trim() || `git ${args.join(" ")} failed`)
+  })
+})
 
 describe("opencode run (non-interactive subprocess)", () => {
   // Happy path: prompt completes, output reaches stdout, process exits 0.
@@ -64,6 +78,127 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(result.stdout).toContain("automation completed")
       }),
     60_000,
+  )
+
+  cliIt.live(
+    "automation avoids project bootstrap and instruction side effects",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const marker = path.join(home, "plugin-initialized")
+        const mcpMarker = path.join(home, "mcp-initialized")
+        const lspMarker = path.join(home, "lsp-initialized")
+        const formatterMarker = path.join(home, "formatter-initialized")
+        const plugin = path.join(home, "plugin.ts")
+        const localInstruction = path.join(home, "hostile-instruction.md")
+        const instructionHits = { value: 0 }
+        const instructionServer = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.serve({
+              hostname: "127.0.0.1",
+              port: 0,
+              fetch() {
+                instructionHits.value++
+                return new Response("REMOTE_INSTRUCTION_SECRET")
+              },
+            }),
+          ),
+          (server) => Effect.sync(() => server.stop(true)),
+        )
+        yield* Effect.promise(() =>
+          Promise.all([
+            Bun.write(path.join(home, "AGENTS.md"), "PROJECT_INSTRUCTION_SECRET"),
+            Bun.write(localInstruction, "LOCAL_INSTRUCTION_SECRET"),
+            Bun.write(
+              plugin,
+              [
+                "export default async () => {",
+                `  await Bun.write(${JSON.stringify(marker)}, "initialized")`,
+                "  return {}",
+                "}",
+                "",
+              ].join("\n"),
+            ),
+          ]),
+        )
+        const source = path.join(home, "reference-source")
+        const remoteRoot = path.join(home, "reference-remotes")
+        const remoteDir = path.join(remoteRoot, "issue-safe-reference")
+        yield* Effect.promise(() => fs.mkdir(source, { recursive: true }))
+        yield* Effect.promise(() => Bun.write(path.join(source, "README.md"), "reference"))
+        yield* git(source, ["init"])
+        yield* git(source, ["add", "."])
+        yield* git(source, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"])
+        yield* Effect.promise(() => fs.mkdir(remoteDir, { recursive: true }))
+        yield* git(remoteRoot, ["clone", "--bare", source, path.join(remoteDir, "repo.git")])
+
+        const target = path.join(home, "safe.repro")
+        yield* Effect.promise(() => Bun.write(target, "before"))
+        const env = {
+          OC2_PURE: "false",
+          OC2_EXPERIMENTAL_REFERENCES: "true",
+          OC2_REPO_CLONE_GITHUB_BASE_URL: `file://${remoteRoot}/`,
+          OC2_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            plugin: [pathToFileURL(plugin).href],
+            instructions: [localInstruction, instructionServer.url.toString()],
+            reference: { docs: "issue-safe-reference/repo" },
+            mcp: {
+              unsafe: {
+                type: "local",
+                command: [process.execPath, "-e", `await Bun.write(${JSON.stringify(mcpMarker)}, "initialized")`],
+              },
+            },
+            lsp: {
+              unsafe: {
+                command: [process.execPath, "-e", `await Bun.write(${JSON.stringify(lspMarker)}, "initialized")`],
+                extensions: [".repro"],
+              },
+            },
+            formatter: {
+              unsafe: {
+                command: [
+                  process.execPath,
+                  "-e",
+                  `await Bun.write(${JSON.stringify(formatterMarker)}, "initialized")`,
+                  "$FILE",
+                ],
+                extensions: [".repro"],
+              },
+            },
+          }),
+        }
+
+        yield* llm.tool("read", { filePath: target })
+        yield* llm.tool("edit", { filePath: target, oldString: "before", newString: "after" })
+        yield* llm.text("safe automation completed")
+        const result = yield* opencode.run("do safe work", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          env,
+        })
+
+        opencode.expectExit(result, 0)
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        expect(yield* Effect.promise(() => Bun.file(mcpMarker).exists())).toBe(false)
+        expect(yield* Effect.promise(() => Bun.file(lspMarker).exists())).toBe(false)
+        expect(yield* Effect.promise(() => Bun.file(formatterMarker).exists())).toBe(false)
+        expect(yield* Effect.promise(() => Bun.file(target).text())).toBe("after")
+        expect(instructionHits.value).toBe(0)
+        const inputs = JSON.stringify(yield* llm.inputs)
+        expect(inputs).not.toContain("PROJECT_INSTRUCTION_SECRET")
+        expect(inputs).not.toContain("LOCAL_INSTRUCTION_SECRET")
+        expect(inputs).not.toContain("REMOTE_INSTRUCTION_SECRET")
+        expect(
+          yield* Effect.promise(() =>
+            Bun.file(
+              path.join(home, ".local", "share", "oc2", "repos", "github.com", "issue-safe-reference", "repo"),
+            ).exists(),
+          ),
+        ).toBe(false)
+      }),
+    90_000,
   )
 
   cliIt.live(
@@ -189,7 +324,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "result-json reports a missing requested session as an execution failure",
+    "result-json rejects requested sessions as invalid automation input",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
         const result = yield* opencode.run("continue missing session", {
@@ -200,13 +335,50 @@ describe("opencode run (non-interactive subprocess)", () => {
           extraArgs: ["--session", "ses_missing"],
         })
 
-        opencode.expectExit(result, 1)
+        opencode.expectExit(result, 2)
         expect(result.stderr).toBe("")
         expect(automationResult(result.stdout)).toEqual({
           status: "error",
           sessionID: null,
-          error: "session_error",
+          error: "invalid_input",
         })
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "automation rejects session continuation, forking, and unsafe attach before execution",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        const base = [
+          "run",
+          "--automation",
+          "--agent",
+          "build",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "--format",
+          "result-json",
+          "do work",
+        ]
+        for (const flags of [
+          ["--session", "ses_existing"],
+          ["--continue"],
+          ["--fork"],
+          ["--attach", "http://127.0.0.1:1"],
+        ]) {
+          const result = yield* opencode.spawn([...base, ...flags])
+          opencode.expectExit(result, 2)
+          expect(result.stderr).toBe("")
+          expect(automationResult(result.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_input",
+          })
+        }
         expect(yield* llm.calls).toBe(0)
       }),
     60_000,
@@ -338,24 +510,22 @@ describe("opencode run (non-interactive subprocess)", () => {
           ),
         )
         const config = testProviderConfig(llm.url)
-        const env = {
-          OC2_CONFIG_CONTENT: JSON.stringify({
-            ...config,
-            provider: {
-              ...config.provider,
-              test: {
-                ...config.provider.test,
-                models: {
-                  ...config.provider.test.models,
-                  "test-model": {
-                    ...config.provider.test.models["test-model"],
-                    attachment: true,
-                    modalities: { input: ["text", "image"], output: ["text"] },
-                  },
+        const trustedConfig = {
+          ...config,
+          provider: {
+            ...config.provider,
+            test: {
+              ...config.provider.test,
+              models: {
+                ...config.provider.test.models,
+                "test-model": {
+                  ...config.provider.test.models["test-model"],
+                  attachment: true,
+                  modalities: { input: ["text", "image"], output: ["text"] },
                 },
               },
             },
-          }),
+          },
         }
 
         for (const file of [fakePng, fakePdf, realPng]) {
@@ -366,7 +536,7 @@ describe("opencode run (non-interactive subprocess)", () => {
             variant: "high",
             format: "result-json",
             file: [file],
-            env,
+            trustedConfig,
           })
           opencode.expectExit(result, 0)
         }
@@ -678,16 +848,14 @@ describe("opencode run (non-interactive subprocess)", () => {
           automation: true,
           agent: "build",
           variant: "high",
-          env: {
-            OC2_CONFIG_CONTENT: JSON.stringify({
-              ...config,
-              provider: {
-                test: {
-                  ...config.provider.test,
-                  options: { ...config.provider.test.options, chunkTimeout: 50 },
-                },
+          trustedConfig: {
+            ...config,
+            provider: {
+              test: {
+                ...config.provider.test,
+                options: { ...config.provider.test.options, chunkTimeout: 50 },
               },
-            }),
+            },
           },
         })
         opencode.expectExit(result, 1)
@@ -774,7 +942,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
-    "automation exits nonzero without leaking MCP isError details",
+    "automation does not initialize configured MCP tools or leak details",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
         yield* llm.push(
@@ -803,7 +971,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         })
 
         opencode.expectExit(result, 1)
-        expect(JSON.stringify(yield* llm.inputs)).toContain("MCP_RAW_DETAIL_SECRET")
+        expect(JSON.stringify(yield* llm.inputs)).not.toContain("MCP_RAW_DETAIL_SECRET")
         expect(result.stdout).toBe("")
         expect(result.stderr).not.toContain("PRE_MCP_SECRET")
         expect(result.stderr).not.toContain("POST_MCP_SECRET")

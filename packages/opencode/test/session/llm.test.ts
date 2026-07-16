@@ -2026,6 +2026,22 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
 describe("session.llm.stream", () => {
   const vivgridFixture = { providerID: "vivgrid", modelID: "gemini-3.1-pro-preview" }
 
+  it.instance("rejects Fugu automation before resolving configured target providers", () =>
+    Effect.gen(function* () {
+      const input = fuguInput(fuguRuntimeModel())
+      const exit = yield* collect({
+        ...input,
+        user: { ...input.user, automation: true },
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(Cause.pretty(exit.cause)).toContain("Fugu is unavailable for automation-safe execution")
+      }
+      expect(state.queue).toHaveLength(0)
+    }),
+  )
+
   it.instance(
     "runs fugu branches with original context and returns only synthesizer output",
     () =>

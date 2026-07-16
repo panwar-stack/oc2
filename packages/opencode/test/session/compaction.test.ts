@@ -92,7 +92,7 @@ function createModel(opts: {
 
 const wide = () => ProviderTest.fake({ model: createModel({ context: 100_000, output: 32_000 }) })
 
-function createUserMessage(sessionID: SessionID, text: string) {
+function createUserMessage(sessionID: SessionID, text: string, options?: { automation?: boolean }) {
   return Effect.gen(function* () {
     const ssn = yield* SessionNs.Service
     const msg = yield* ssn.updateMessage({
@@ -102,6 +102,7 @@ function createUserMessage(sessionID: SessionID, text: string) {
       agent: "build",
       model: ref,
       time: { created: Date.now() },
+      ...(options?.automation ? { automation: true } : {}),
     })
     yield* ssn.updatePart({
       id: PartID.ascending(),
@@ -212,11 +213,19 @@ function fake(
   } satisfies SessionProcessorModule.SessionProcessor.Handle
 }
 
-function layer(result: "continue" | "compact") {
+function layer(
+  result: "continue" | "compact",
+  capture?: (input: Parameters<SessionProcessorModule.SessionProcessor.Interface["create"]>[0]) => void,
+) {
   return Layer.succeed(
     SessionProcessorModule.SessionProcessor.Service,
     SessionProcessorModule.SessionProcessor.Service.of({
-      create: Effect.fn("TestSessionProcessor.create")((input) => Effect.succeed(fake(input, result))),
+      create: Effect.fn("TestSessionProcessor.create")((input) =>
+        Effect.sync(() => {
+          capture?.(input)
+          return fake(input, result)
+        }),
+      ),
     }),
   )
 }
@@ -264,6 +273,7 @@ type CompactionProcessOptions = {
   plugin?: Layer.Layer<Plugin.Service>
   provider?: ReturnType<typeof ProviderTest.fake>
   config?: Layer.Layer<Config.Service>
+  captureProcessor?: (input: Parameters<SessionProcessorModule.SessionProcessor.Interface["create"]>[0]) => void
 }
 
 function withCompaction(options?: CompactionProcessOptions) {
@@ -280,7 +290,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
         Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
         Layer.provide(status),
       )
-    : layer(options?.result ?? "continue")
+    : layer(options?.result ?? "continue", options?.captureProcessor)
   return Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, events, status).pipe(
     Layer.provide(SessionNs.defaultLayer),
     Layer.provide((options?.provider ?? wide()).layer),
@@ -692,6 +702,30 @@ describe("session.compaction.create", () => {
     ),
   )
 
+  it.live(
+    "preserves automation identity on the compaction marker",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const ssn = yield* SessionNs.Service
+        const info = yield* ssn.create({})
+        yield* createUserMessage(info.id, "safe request", { automation: true })
+
+        yield* compact.create({
+          sessionID: info.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+        })
+
+        const marker = (yield* ssn.messages({ sessionID: info.id })).at(-1)
+        expect(marker?.info.role).toBe("user")
+        expect(marker?.info.role === "user" ? marker.info.automation : undefined).toBe(true)
+        expect(marker?.parts).toContainEqual(expect.objectContaining({ type: "compaction", auto: true }))
+      }),
+    ),
+  )
+
   it.live.skip(
     "projects a compaction message to v2 (v2 projector disabled)",
     provideTmpdirInstance(() =>
@@ -974,6 +1008,49 @@ describe("session.compaction.process", () => {
     }),
   )
 
+  itCompaction.instance("keeps automated compaction out of plugin hooks and marks its processor safe", () => {
+    let pluginCalls = 0
+    let processorSafe: boolean | undefined
+    const pluginLayer = Layer.mock(Plugin.Service)({
+      trigger: <Name extends string, Input, Output>(_name: Name, _input: Input, output: Output) =>
+        Effect.sync(() => {
+          pluginCalls++
+          return output
+        }),
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    })
+
+    return Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const compact = yield* SessionCompaction.Service
+      const session = yield* ssn.create({})
+      yield* createUserMessage(session.id, "safe request", { automation: true })
+      yield* compact.create({ sessionID: session.id, agent: "build", model: ref, auto: false })
+      const messages = yield* ssn.messages({ sessionID: session.id })
+      const marker = messages.at(-1)
+      if (!marker || marker.info.role !== "user") throw new Error("missing compaction marker")
+
+      const result = yield* compact.process({
+        parentID: marker.info.id,
+        messages,
+        sessionID: session.id,
+        auto: false,
+      })
+
+      expect(result).toBe("continue")
+      expect(pluginCalls).toBe(0)
+      expect(processorSafe).toBe(true)
+    }).pipe(
+      withCompaction({
+        plugin: pluginLayer,
+        captureProcessor(input) {
+          processorSafe = input.automationSafe
+        },
+      }),
+    )
+  })
+
   itCompaction.instance(
     "marks summary message as errored on compact result",
     Effect.gen(function* () {
@@ -1238,7 +1315,7 @@ describe("session.compaction.process", () => {
       const ssn = yield* SessionNs.Service
       const session = yield* ssn.create({})
       yield* createUserMessage(session.id, "root")
-      const replay = yield* createUserMessage(session.id, "image")
+      const replay = yield* createUserMessage(session.id, "image", { automation: true })
       yield* ssn.updatePart({
         id: PartID.ascending(),
         messageID: replay.id,
@@ -1248,7 +1325,7 @@ describe("session.compaction.process", () => {
         filename: "cat.png",
         url: "https://example.com/cat.png",
       })
-      const msg = yield* createUserMessage(session.id, "current")
+      const msg = yield* createUserMessage(session.id, "current", { automation: true })
       const msgs = yield* ssn.messages({ sessionID: session.id })
 
       const result = yield* SessionCompaction.use.process({
@@ -1263,6 +1340,7 @@ describe("session.compaction.process", () => {
 
       expect(result).toBe("continue")
       expect(last?.info.role).toBe("user")
+      expect(last?.info.role === "user" ? last.info.automation : undefined).toBe(true)
       expect(last?.parts.some((part) => part.type === "file")).toBe(false)
       expect(
         last?.parts.some((part) => part.type === "text" && part.text.includes("Attached image/png: cat.png")),

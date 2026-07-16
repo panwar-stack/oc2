@@ -325,6 +325,61 @@ describe("tool.registry", () => {
     }),
   )
 
+  withOpengrepDownload.instance(
+    "filters automation tools before opengrep and custom tool initialization",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const bin = path.join(test.directory, "bin")
+        const search = path.join(test.directory, "search")
+        const custom = path.join(test.directory, ".oc2", "tool")
+        const marker = path.join(test.directory, "custom-loaded")
+        yield* Effect.promise(() => fs.mkdir(search, { recursive: true }))
+        yield* Effect.promise(() => fs.mkdir(custom, { recursive: true }))
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(custom, "side-effect.ts"),
+            [
+              `await Bun.write(${JSON.stringify(marker)}, "loaded")`,
+              "export default { description: 'side effect', args: {}, execute: async () => 'ok' }",
+              "",
+            ].join("\n"),
+          ),
+        )
+        const agent = yield* (yield* Agent.Service).defaultInfo()
+
+        yield* withOpengrepPaths(
+          { bin, path: search },
+          Effect.gen(function* () {
+            const registry = yield* ToolRegistry.Service
+            const safeIDs = (yield* registry.tools({
+              providerID: ProviderV2.ID.openai,
+              modelID: ModelV2.ID.make("gpt-5"),
+              agent,
+              automationSafe: true,
+            })).map((tool) => tool.id)
+
+            expect(safeIDs).toEqual(["read", "glob", "grep", "edit"])
+            expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+            expect(
+              yield* Effect.promise(() =>
+                Bun.file(path.join(bin, process.platform === "win32" ? "opengrep.exe" : "opengrep")).exists(),
+              ),
+            ).toBe(false)
+
+            const ordinary = (yield* registry.tools({
+              providerID: ProviderV2.ID.openai,
+              modelID: ModelV2.ID.make("gpt-5"),
+              agent,
+            })).map((tool) => tool.id)
+            expect(ordinary).toContain("apply_patch")
+            expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(true)
+          }),
+        )
+      }),
+    15_000,
+  )
+
   it.instance("hides task background parameter unless experimental background subagents are enabled", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

@@ -103,10 +103,12 @@ export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
+  readonly read: () => Effect.Effect<ReadDef>
   readonly tools: (model: {
     providerID: ProviderV2.ID
     modelID: ModelV2.ID
     agent: Agent.Info
+    automationSafe?: boolean
   }) => Effect.Effect<Tool.Def[]>
 }
 
@@ -393,6 +395,26 @@ export const layer: Layer.Layer<
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
+      if (input.automationSafe) {
+        const safe = yield* Effect.all({
+          read: Tool.init(read),
+          glob: Tool.init(globtool),
+          grep: Tool.init(greptool),
+          edit: Tool.init(edit),
+        })
+        const disabled = Permission.disabled(Object.keys(safe), input.agent.permission)
+        return Object.values(safe)
+          .filter((tool) => !disabled.has(tool.id))
+          .map((tool) => ({
+            id: tool.id,
+            description: tool.description,
+            parameters: tool.parameters,
+            jsonSchema: tool.jsonSchema,
+            execute: tool.execute,
+            formatValidationError: tool.formatValidationError,
+          }))
+      }
+
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
@@ -440,7 +462,11 @@ export const layer: Layer.Layer<
       return { task: s.task, read: s.read }
     })
 
-    return Service.of({ ids, all, named, tools })
+    const readTool: Interface["read"] = Effect.fn("ToolRegistry.read")(function* () {
+      return yield* Tool.init(read)
+    })
+
+    return Service.of({ ids, all, named, read: readTool, tools })
   }),
 )
 

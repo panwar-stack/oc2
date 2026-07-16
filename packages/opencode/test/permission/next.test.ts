@@ -13,7 +13,10 @@ import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 
 const events = EventV2Bridge.defaultLayer
-const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
+const noopBootstrap = Layer.succeed(
+  InstanceBootstrap.Service,
+  InstanceBootstrap.Service.of({ run: Effect.void, runAutomationSafe: Effect.void }),
+)
 const env = Layer.mergeAll(
   Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events)),
   events,

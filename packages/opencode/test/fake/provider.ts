@@ -54,6 +54,7 @@ export namespace ProviderTest {
         Provider.Service,
         Provider.Service.of({
           list: Effect.fn("TestProvider.list")(() => Effect.succeed({ [row.id]: row })),
+          listAutomation: Effect.fn("TestProvider.listAutomation")(() => Effect.succeed({ [row.id]: row })),
           listPublic: Effect.fn("TestProvider.listPublic")(() =>
             Effect.succeed({ providers: { [row.id]: row }, catalog: { [row.id]: row } }),
           ),

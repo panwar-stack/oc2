@@ -29,7 +29,10 @@ import { ModelV2 } from "@oc2-ai/core/model"
 import { Database } from "@oc2-ai/core/database/database"
 import { httpApiLayer } from "./httpapi-layer"
 
-const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
+const noopBootstrap = Layer.succeed(
+  InstanceBootstrap.Service,
+  InstanceBootstrap.Service.of({ run: Effect.void, runAutomationSafe: Effect.void }),
+)
 const it = testEffect(
   Layer.mergeAll(
     FSUtil.defaultLayer,

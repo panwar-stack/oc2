@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdir } from "fs/promises"
+import { mkdir, stat } from "fs/promises"
 import path from "path"
+import { pathToFileURL } from "url"
 import { Effect, Layer } from "effect"
 import { ModelsDev } from "@oc2-ai/core/models-dev"
 import { FSUtil } from "@oc2-ai/core/fs-util"
@@ -254,6 +255,178 @@ it.instance(
       },
     },
   },
+)
+
+it.instance(
+  "automation ignores project model modules and keeps the built-in OpenAI variant",
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const provider = yield* Provider.Service
+    const marker = path.join(test.directory, "file-provider-loaded")
+    const pluginMarker = path.join(test.directory, "provider-plugin-loaded")
+    yield* setProcessEnv("OC2_PURE", "false")
+    yield* set("OPENAI_API_KEY", "test-api-key")
+
+    const safe = yield* provider.listAutomation()
+    const safeModel = safe[ProviderV2.ID.openai].models["gpt-5"]
+    expect(safeModel.api.npm).toBe("@ai-sdk/openai")
+    expect(safeModel.variants?.["high"]).toBeDefined()
+
+    yield* provider.getLanguage(
+      {
+        ...safeModel,
+        api: { ...safeModel.api, npm: pathToFileURL(path.join(test.directory, "unsafe-provider.mjs")).href },
+      },
+      { automationSafe: true },
+    )
+    expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+    expect(yield* Effect.promise(() => Bun.file(pluginMarker).exists())).toBe(false)
+
+    const ordinaryModel = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5"))
+    expect(ordinaryModel.api.npm).toStartWith("file://")
+    expect(ordinaryModel.variants?.["high"]).toBeUndefined()
+    yield* provider.getLanguage(ordinaryModel)
+    expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(true)
+    expect(yield* Effect.promise(() => Bun.file(pluginMarker).exists())).toBe(true)
+  }),
+  {
+    init: (directory) =>
+      Effect.promise(async () => {
+        const marker = path.join(directory, "file-provider-loaded")
+        const module = path.join(directory, "unsafe-provider.mjs")
+        const pluginMarker = path.join(directory, "provider-plugin-loaded")
+        const plugin = path.join(directory, "provider-plugin.mjs")
+        await Bun.write(
+          module,
+          [
+            `await Bun.write(${JSON.stringify(marker)}, "loaded")`,
+            "export function createUnsafeProvider() {",
+            "  return {",
+            "    languageModel(modelId) {",
+            "      return { specificationVersion: 'v3', provider: 'unsafe', modelId, supportedUrls: {} }",
+            "    },",
+            "    responses(modelId) { return this.languageModel(modelId) },",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+        )
+        await Bun.write(
+          plugin,
+          [
+            `await Bun.write(${JSON.stringify(pluginMarker)}, "loaded")`,
+            "export default async function () { return {} }",
+            "",
+          ].join("\n"),
+        )
+        await Bun.write(
+          path.join(directory, "oc2.json"),
+          JSON.stringify({
+            plugin: [pathToFileURL(plugin).href],
+            provider: {
+              openai: {
+                models: {
+                  "gpt-5": {
+                    provider: { npm: pathToFileURL(module).href },
+                    variants: { high: { disabled: true } },
+                  },
+                },
+              },
+            },
+          }),
+        )
+      }),
+  },
+  15_000,
+)
+
+it.instance(
+  "automation does not install or import project npm providers",
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const provider = yield* Provider.Service
+    const loaded = path.join(test.directory, "npm-provider-loaded")
+    const cache = path.join(Global.Path.cache, "packages", path.join(test.directory, "oc2-unsafe-provider-1.0.0.tgz"))
+    yield* setProcessEnv("OC2_PURE", "false")
+
+    const safe = yield* provider.listAutomation()
+    expect(safe[ProviderV2.ID.make("project-provider")]).toBeUndefined()
+    expect(
+      yield* Effect.promise(() =>
+        stat(cache).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    ).toBe(false)
+    expect(yield* Effect.promise(() => Bun.file(loaded).exists())).toBe(false)
+
+    const ordinaryModel = yield* provider.getModel(
+      ProviderV2.ID.make("project-provider"),
+      ModelV2.ID.make("project-model"),
+    )
+    yield* provider.getLanguage(ordinaryModel).pipe(Effect.exit)
+    expect(
+      yield* Effect.promise(() =>
+        stat(cache).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    ).toBe(true)
+  }),
+  {
+    init: (directory) =>
+      Effect.promise(async () => {
+        const loaded = path.join(directory, "npm-provider-loaded")
+        const packageDirectory = path.join(directory, "unsafe-provider-package")
+        const packageTarball = path.join(directory, "oc2-unsafe-provider-1.0.0.tgz")
+        await mkdir(packageDirectory, { recursive: true })
+        await Bun.write(
+          path.join(packageDirectory, "package.json"),
+          JSON.stringify({
+            name: "oc2-unsafe-provider",
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+          }),
+        )
+        await Bun.write(
+          path.join(packageDirectory, "index.js"),
+          [
+            `await Bun.write(${JSON.stringify(loaded)}, "loaded")`,
+            "export function createUnsafeProvider() {",
+            "  return {",
+            "    languageModel(modelId) {",
+            "      return { specificationVersion: 'v3', provider: 'unsafe', modelId, supportedUrls: {} }",
+            "    },",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+        )
+        const pack = Bun.spawn(["npm", "pack", "--pack-destination", directory], {
+          cwd: packageDirectory,
+          stdout: "ignore",
+          stderr: "pipe",
+        })
+        const code = await pack.exited
+        if (code !== 0) throw new Error(await new Response(pack.stderr).text())
+        await Bun.write(
+          path.join(directory, "oc2.json"),
+          JSON.stringify({
+            provider: {
+              "project-provider": {
+                npm: packageTarball,
+                options: { apiKey: "unsafe-key" },
+                models: { "project-model": { name: "Project Model" } },
+              },
+            },
+          }),
+        )
+      }),
+  },
+  30_000,
 )
 
 it.instance(

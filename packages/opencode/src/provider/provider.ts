@@ -1086,13 +1086,21 @@ export type Error = ModelNotFoundError | InitError | NoProvidersError | NoModels
 
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderV2.ID, Info>>
+  readonly listAutomation: () => Effect.Effect<Record<ProviderV2.ID, Info>>
   readonly listPublic: () => Effect.Effect<{
     providers: Record<ProviderV2.ID, Info>
     catalog: Record<ProviderV2.ID, Info>
   }>
-  readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
-  readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
-  readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
+  readonly getProvider: (providerID: ProviderV2.ID, options?: { automationSafe?: boolean }) => Effect.Effect<Info>
+  readonly getModel: (
+    providerID: ProviderV2.ID,
+    modelID: ModelV2.ID,
+    options?: { automationSafe?: boolean },
+  ) => Effect.Effect<Model, ModelNotFoundError>
+  readonly getLanguage: (
+    model: Model,
+    options?: { automationSafe?: boolean },
+  ) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
   readonly closest: (
     providerID: ProviderV2.ID,
     query: string[],
@@ -1340,14 +1348,19 @@ export const layer = Layer.effect(
     const modelsDevSvc = yield* ModelsDev.Service
     const runtimeFlags = yield* RuntimeFlags.Service
 
-    const state = yield* InstanceState.make<State>(() =>
+    const initState = (automationSafe: boolean) =>
       Effect.gen(function* () {
         using _ = log.time("state")
         const bridge = yield* EffectBridge.make()
-        const cfg = yield* config.get()
+        const cfg = yield* automationSafe ? config.getGlobal() : config.get()
         const modelsDev = yield* modelsDevSvc.get()
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         delete catalog[ProviderV2.ID.oc2]
+        if (automationSafe) {
+          for (const provider of Object.values(catalog)) {
+            provider.models = pickBy(provider.models, (model) => Boolean(BUNDLED_PROVIDERS[model.api.npm]))
+          }
+        }
         const database = mapValues(catalog, toPublicInfo)
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
@@ -1385,10 +1398,17 @@ export const layer = Layer.effect(
         }
 
         // load plugins first so config() hook runs before reading cfg.provider
-        const plugins = yield* plugin.list()
+        const plugins = automationSafe ? [] : yield* plugin.list()
 
         // now read config providers - includes any modifications from plugin config() hook
-        const configProviders = Object.entries(cfg.provider ?? {})
+        const configProviders = Object.entries(cfg.provider ?? {}).filter(([providerID, provider]) => {
+          if (!automationSafe || database[providerID]) return true
+          const npm = provider.npm ?? "@ai-sdk/openai-compatible"
+          if (!BUNDLED_PROVIDERS[npm]) return false
+          return Object.values(provider.models ?? {}).every((model) =>
+            Boolean(BUNDLED_PROVIDERS[model.provider?.npm ?? npm]),
+          )
+        })
         const disabled = new Set(cfg.disabled_providers ?? [])
         const enabled = cfg.enabled_providers ? new Set(cfg.enabled_providers) : null
 
@@ -1438,7 +1458,9 @@ export const layer = Layer.effect(
             models: existing?.models ?? {},
           }
 
-          for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+          for (const [modelID, model] of automationSafe && database[providerID]
+            ? []
+            : Object.entries(provider.models ?? {})) {
             const existingModel = parsed.models[model.id ?? modelID]
             const apiID = model.id ?? existingModel?.api.id ?? modelID
             const apiNpm =
@@ -1568,7 +1590,7 @@ export const layer = Layer.effect(
           mergeProvider(providerID, patch)
         }
 
-        for (const [id, fn] of Object.entries(custom(dep))) {
+        for (const [id, fn] of automationSafe ? [] : Object.entries(custom(dep))) {
           const providerID = ProviderV2.ID.make(id)
           if (disabled.has(providerID)) continue
           const data = database[providerID]
@@ -1622,7 +1644,7 @@ export const layer = Layer.effect(
             continue
           }
 
-          const configProvider = cfg.provider?.[providerID]
+          const configProvider = automationSafe ? undefined : cfg.provider?.[providerID]
 
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
@@ -1682,15 +1704,26 @@ export const layer = Layer.effect(
           modelLoaders,
           varsLoaders,
         }
-      }),
-    )
+      })
+    const state = yield* InstanceState.make<State>(() => initState(false))
+    const automationState = yield* InstanceState.make<State>(() => initState(true))
+    const selectedState = (options?: { automationSafe?: boolean }) =>
+      options?.automationSafe ? automationState : state
 
     const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
+    const listAutomation = Effect.fn("Provider.listAutomation")(() =>
+      InstanceState.use(automationState, (s) => s.providers),
+    )
     const listPublic = Effect.fn("Provider.listPublic")(() =>
       InstanceState.use(state, (s) => ({ providers: s.publicProviders, catalog: s.publicCatalog })),
     )
 
-    async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>) {
+    async function resolveSDK(
+      model: Model,
+      s: State,
+      envs: Record<string, string | undefined>,
+      automationSafe: boolean,
+    ) {
       try {
         using _ = log.time("getSDK", {
           providerID: model.providerID,
@@ -1825,6 +1858,8 @@ export const layer = Layer.effect(
           return loaded as SDK
         }
 
+        if (automationSafe) throw new Error(`Provider package ${model.api.npm} is unavailable for automation`)
+
         const installedPath = await (async () => {
           if (model.api.npm.startsWith("file://")) {
             log.info("loading local provider", { pkg: model.api.npm })
@@ -1852,12 +1887,17 @@ export const layer = Layer.effect(
       }
     }
 
-    const getProvider = Effect.fn("Provider.getProvider")((providerID: ProviderV2.ID) =>
-      InstanceState.use(state, (s) => s.providers[providerID]),
+    const getProvider = Effect.fn("Provider.getProvider")(
+      (providerID: ProviderV2.ID, options?: { automationSafe?: boolean }) =>
+        InstanceState.use(selectedState(options), (s) => s.providers[providerID]),
     )
 
-    const getModel = Effect.fn("Provider.getModel")(function* (providerID: ProviderV2.ID, modelID: ModelV2.ID) {
-      const s = yield* InstanceState.get(state)
+    const getModel = Effect.fn("Provider.getModel")(function* (
+      providerID: ProviderV2.ID,
+      modelID: ModelV2.ID,
+      options?: { automationSafe?: boolean },
+    ) {
+      const s = yield* InstanceState.get(selectedState(options))
       const provider = s.providers[providerID]
       if (!provider) {
         const catalogProvider = s.catalog[providerID]
@@ -1880,35 +1920,41 @@ export const layer = Layer.effect(
       return info
     })
 
-    const getLanguage = Effect.fn("Provider.getLanguage")(function* (model: Model) {
-      const s = yield* InstanceState.get(state)
+    const getLanguage = Effect.fn("Provider.getLanguage")(function* (
+      model: Model,
+      options?: { automationSafe?: boolean },
+    ) {
+      const s = yield* InstanceState.get(selectedState(options))
       const envs = yield* env.all()
-      const key = `${model.providerID}/${model.id}`
-      const cacheable = model.providerID !== "gitlab" || !model.id.startsWith("duo-workflow-")
+      const automationSafe = options?.automationSafe === true
+      const resolved = automationSafe ? s.providers[model.providerID]?.models[model.id] : model
+      if (!resolved) return yield* new ModelNotFoundError({ providerID: model.providerID, modelID: model.id })
+      const key = `${resolved.providerID}/${resolved.id}`
+      const cacheable = resolved.providerID !== "gitlab" || !resolved.id.startsWith("duo-workflow-")
       const cached = cacheable ? s.models.get(key) : undefined
       if (cached) return cached
 
-      const provider = s.providers[model.providerID]
+      const provider = s.providers[resolved.providerID]
       return yield* EffectPromise.refineRejection(
         async () => {
-          const sdk = await resolveSDK(model, s, envs)
-          const language = s.modelLoaders[model.providerID]
-            ? await s.modelLoaders[model.providerID](
+          const sdk = await resolveSDK(resolved, s, envs, automationSafe)
+          const language = s.modelLoaders[resolved.providerID]
+            ? await s.modelLoaders[resolved.providerID](
                 sdk,
-                model.api.id,
+                resolved.api.id,
                 {
                   ...provider.options,
-                  ...model.options,
+                  ...resolved.options,
                 },
-                model,
+                resolved,
               )
-            : sdk.languageModel(model.api.id)
+            : sdk.languageModel(resolved.api.id)
           if (cacheable) s.models.set(key, language)
           return language
         },
         (cause) =>
           cause instanceof NoSuchModelError
-            ? new ModelNotFoundError({ modelID: model.id, providerID: model.providerID, cause })
+            ? new ModelNotFoundError({ modelID: resolved.id, providerID: resolved.providerID, cause })
             : undefined,
       )
     })
@@ -2029,7 +2075,17 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, listPublic, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({
+      list,
+      listAutomation,
+      listPublic,
+      getProvider,
+      getModel,
+      getLanguage,
+      closest,
+      getSmallModel,
+      defaultModel,
+    })
   }),
 )
 

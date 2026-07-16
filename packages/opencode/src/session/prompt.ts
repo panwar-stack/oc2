@@ -277,6 +277,7 @@ export const layer = Layer.effect(
       const firstUser = context[idx]
       if (!firstUser || firstUser.info.role !== "user") return
       const firstInfo = firstUser.info
+      if (firstInfo.automation) return
 
       const subtasks = firstUser.parts.filter((p): p is SessionV1.SubtaskPart => p.type === "subtask")
       const onlySubtasks = subtasks.length > 0 && firstUser.parts.every((p) => p.type === "subtask")
@@ -708,8 +709,9 @@ export const layer = Layer.effect(
       providerID: ProviderV2.ID,
       modelID: ModelV2.ID,
       sessionID: SessionID,
+      automationSafe = false,
     ) {
-      const exit = yield* provider.getModel(providerID, modelID).pipe(Effect.exit)
+      const exit = yield* provider.getModel(providerID, modelID, { automationSafe }).pipe(Effect.exit)
       if (Exit.isSuccess(exit)) return exit.value
       const err = Cause.squash(exit.cause)
       if (Provider.ModelNotFoundError.isInstance(err)) {
@@ -757,6 +759,21 @@ export const layer = Layer.effect(
         throw error
       }
 
+      const automationSafe = input.automation === true
+      if (
+        automationSafe &&
+        input.parts.some(
+          (part) =>
+            part.type === "agent" ||
+            part.type === "subtask" ||
+            (part.type === "file" && part.source?.type === "resource"),
+        )
+      ) {
+        throw new NamedError.Unknown({
+          message: "Automation prompts cannot contain agent, subtask, or MCP resource parts",
+        })
+      }
+
       const current = yield* db
         .select({ agent: SessionTable.agent, model: SessionTable.model })
         .from(SessionTable)
@@ -768,7 +785,7 @@ export const layer = Layer.effect(
       const full =
         !input.variant && ag.variant && same
           ? yield* provider
-              .getModel(model.providerID, model.modelID)
+              .getModel(model.providerID, model.modelID, { automationSafe })
               .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
           : undefined
       const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
@@ -787,6 +804,7 @@ export const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        automation: automationSafe || undefined,
       }
 
       if (current?.agent !== info.agent) {
@@ -906,16 +924,16 @@ export const layer = Layer.effect(
               const filepath = fileURLToPath(part.url)
               const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
 
-              const { read } = yield* registry.named()
+              const read = yield* registry.read()
               const execRead = (args: Parameters<typeof read.execute>[0], extra?: Tool.Context["extra"]) => {
                 const controller = new AbortController()
                 return read
                   .execute(args, {
                     sessionID: input.sessionID,
                     abort: controller.signal,
-                    agent: input.agent!,
+                    agent: ag.name,
                     messageID: info.id,
-                    extra: { bypassCwdCheck: true, ...extra },
+                    extra: { bypassCwdCheck: true, automationSafe, ...extra },
                     messages: [],
                     metadata: () => Effect.void,
                     ask: () => Effect.void,
@@ -931,7 +949,7 @@ export const layer = Layer.effect(
                   const filePathURI = part.url.split("?")[0]
                   let start = parseInt(range.start)
                   let end = range.end ? parseInt(range.end) : undefined
-                  if (start === end) {
+                  if (start === end && !automationSafe) {
                     const symbols = yield* lsp.documentSymbol(filePathURI).pipe(Effect.catch(() => Effect.succeed([])))
                     for (const symbol of symbols) {
                       let r: LSP.Range | undefined
@@ -957,10 +975,12 @@ export const layer = Layer.effect(
                     text: `Called the Read tool with the following input: ${JSON.stringify(args)}`,
                   },
                 ]
-                const exit = yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(
-                  Effect.flatMap((mdl) => execRead(args, { model: mdl, attachmentMime: mime })),
-                  Effect.exit,
-                )
+                const exit = yield* provider
+                  .getModel(info.model.providerID, info.model.modelID, { automationSafe })
+                  .pipe(
+                    Effect.flatMap((mdl) => execRead(args, { model: mdl, attachmentMime: mime })),
+                    Effect.exit,
+                  )
                 if (Exit.isSuccess(exit)) {
                   const result = exit.value
                   pieces.push({
@@ -1095,7 +1115,7 @@ export const layer = Layer.effect(
         ),
       )
       for (const part of input.parts) {
-        if (part.type !== "text" || part.synthetic || input.resolveReferences === false) continue
+        if (part.type !== "text" || part.synthetic || info.automation || input.resolveReferences === false) continue
         for (const reference of yield* resolveReferenceParts(part.text)) {
           if (reference.type === "file" && attachedReferences.has(reference.url)) continue
           if (reference.type === "file") attachedReferences.add(reference.url)
@@ -1107,17 +1127,19 @@ export const layer = Layer.effect(
         concurrency: PROMPT_REFERENCE_CONCURRENCY,
       }).pipe(Effect.map((x) => x.flat().map(assign)))
 
-      yield* plugin.trigger(
-        "chat.message",
-        {
-          sessionID: input.sessionID,
-          agent: input.agent,
-          model: input.model,
-          messageID: input.messageID,
-          variant: input.variant,
-        },
-        { message: info, parts: resolvedParts },
-      )
+      if (!info.automation) {
+        yield* plugin.trigger(
+          "chat.message",
+          {
+            sessionID: input.sessionID,
+            agent: input.agent,
+            model: input.model,
+            messageID: input.messageID,
+            variant: input.variant,
+          },
+          { message: info, parts: resolvedParts },
+        )
+      }
 
       const parts = yield* Effect.forEach(resolvedParts, (part) =>
         part.type === "file" && part.mime.startsWith("image/")
@@ -1313,6 +1335,7 @@ export const layer = Layer.effect(
         agent: input.lastUser.agent,
         model: input.lastUser.model,
         tools: input.lastUser.tools,
+        automation: input.lastUser.automation,
       }
       yield* sessions.updateMessage(userMsg)
       yield* sessions.updatePart({
@@ -1457,8 +1480,18 @@ Do not create a team for trivial one step requests or when the user explicitly a
             break
           }
 
+          const agent = yield* agents.get(lastUser.agent)
+          if (!agent) {
+            const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+            throw error
+          }
+          const automationSafe = lastUser.automation === true
+
           step++
-          if (step === 1)
+          if (step === 1 && !automationSafe)
             yield* title({
               session,
               modelID: lastUser.model.modelID,
@@ -1466,10 +1499,13 @@ Do not create a team for trivial one step requests or when the user explicitly a
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID, automationSafe)
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
+            if (automationSafe) {
+              throw new NamedError.Unknown({ message: "Automation prompts cannot execute subtasks" })
+            }
             yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
             continue
           }
@@ -1495,14 +1531,6 @@ Do not create a team for trivial one step requests or when the user explicitly a
             continue
           }
 
-          const agent = yield* agents.get(lastUser.agent)
-          if (!agent) {
-            const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-            throw error
-          }
           const maxSteps = agent.steps ?? Infinity
           const isLastStep = step >= maxSteps
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
@@ -1543,6 +1571,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
               assistantMessage: msg,
               sessionID,
               model,
+              automationSafe,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
@@ -1558,6 +1587,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
               bypassAgentCheck,
               messages: msgs,
               promptOps,
+              automationSafe,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),
@@ -1596,14 +1626,16 @@ Do not create a team for trivial one step requests or when the user explicitly a
               }
             }
 
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            if (!automationSafe) {
+              yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            }
 
             const roots = yield* sessions.listRoots(sessionID).pipe(Effect.catch(() => Effect.succeed([])))
             const [skills, env, teamLead, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model, roots),
-              teamLeadSystemPrompt({ session, agent }),
-              instruction.system().pipe(Effect.orDie),
+              automationSafe ? Effect.succeed(undefined) : teamLeadSystemPrompt({ session, agent }),
+              automationSafe ? Effect.succeed([]) : instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const memoryRule = tools.memory_search_commit ? MEMORY_WORKFLOW_SYSTEM_PROMPT : undefined
@@ -1689,6 +1721,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
+      const automationSafe = input.automation === true
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)
@@ -1697,7 +1730,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
-      const agentName = input.automation ? (input.agent ?? cmd.agent) : (cmd.agent ?? input.agent)
+      const agentName = automationSafe ? input.agent : (cmd.agent ?? input.agent)
 
       const raw = input.arguments.match(argsRegex) ?? []
       const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
@@ -1724,7 +1757,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
         template = template + "\n\n" + input.arguments
       }
 
-      const shellMatches = input.automation ? [] : ConfigMarkdown.shell(template)
+      const shellMatches = automationSafe ? [] : ConfigMarkdown.shell(template)
       if (shellMatches.length > 0) {
         const cfg = yield* config.get()
         const sh = Shell.preferred(cfg.shell)
@@ -1739,7 +1772,9 @@ Do not create a team for trivial one step requests or when the user explicitly a
       template = template.trim()
 
       const taskModel = yield* Effect.gen(function* () {
-        if (input.automation && input.model) return Provider.parseModel(input.model)
+        if (automationSafe) {
+          return input.model ? Provider.parseModel(input.model) : yield* currentModel(input.sessionID)
+        }
         if (cmd.model === Command.Model.SMALL) {
           const current = input.model ? Provider.parseModel(input.model) : yield* currentModel(input.sessionID)
           const small = yield* provider.getSmallModel(current.providerID)
@@ -1754,8 +1789,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
         if (input.model) return Provider.parseModel(input.model)
         return yield* currentModel(input.sessionID)
       })
-
-      yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
+      yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID, automationSafe)
 
       const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!agent) {
@@ -1766,7 +1800,7 @@ Do not create a team for trivial one step requests or when the user explicitly a
         throw error
       }
 
-      const templateParts = input.automation
+      const templateParts = automationSafe
         ? [{ type: "text" as const, text: template }]
         : yield* resolvePromptParts(template)
       const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
@@ -1791,11 +1825,13 @@ Do not create a team for trivial one step requests or when the user explicitly a
           : yield* currentModel(input.sessionID)
         : taskModel
 
-      yield* plugin.trigger(
-        "command.execute.before",
-        { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
-        { parts },
-      )
+      if (!automationSafe) {
+        yield* plugin.trigger(
+          "command.execute.before",
+          { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
+          { parts },
+        )
+      }
 
       const result = yield* prompt({
         sessionID: input.sessionID,
@@ -1804,7 +1840,8 @@ Do not create a team for trivial one step requests or when the user explicitly a
         agent: userAgent,
         parts,
         variant: input.variant,
-        resolveReferences: !input.automation,
+        resolveReferences: !automationSafe,
+        automation: automationSafe,
       })
       yield* events.publish(Command.Event.Executed, {
         name: input.command,
@@ -1878,6 +1915,7 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(SessionV1.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  automation: Schema.optional(Schema.Boolean),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,

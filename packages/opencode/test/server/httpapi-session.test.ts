@@ -51,7 +51,10 @@ const workspaceLayer = Workspace.defaultLayer.pipe(
 )
 const instanceStoreLayer = InstanceStore.defaultLayer.pipe(
   Layer.provide(
-    Layer.succeed(InstanceBootstrapService.Service, InstanceBootstrapService.Service.of({ run: Effect.void })),
+    Layer.succeed(
+      InstanceBootstrapService.Service,
+      InstanceBootstrapService.Service.of({ run: Effect.void, runAutomationSafe: Effect.void }),
+    ),
   ),
 )
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(

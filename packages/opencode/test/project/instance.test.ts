@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
-import { Deferred, Effect, Fiber, Layer } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { registerDisposer } from "../../src/effect/instance-registry"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
@@ -9,9 +9,13 @@ import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 let bootstrapRun: Effect.Effect<void> = Effect.void
+let bootstrapAutomationSafe: Effect.Effect<void> = Effect.void
 const noopBootstrap = Layer.succeed(
   InstanceBootstrap.Service,
-  InstanceBootstrap.Service.of({ run: Effect.suspend(() => bootstrapRun) }),
+  InstanceBootstrap.Service.of({
+    run: Effect.suspend(() => bootstrapRun),
+    runAutomationSafe: Effect.suspend(() => bootstrapAutomationSafe),
+  }),
 )
 
 const it = testEffect(
@@ -26,6 +30,17 @@ const setBootstrap = (run: Effect.Effect<void>) =>
     () =>
       Effect.sync(() => {
         bootstrapRun = Effect.void
+      }),
+  )
+
+const setAutomationSafeBootstrap = (run: Effect.Effect<void>) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      bootstrapAutomationSafe = run
+    }),
+    () =>
+      Effect.sync(() => {
+        bootstrapAutomationSafe = Effect.void
       }),
   )
 
@@ -61,6 +76,52 @@ describe("InstanceStore", () => {
       yield* store.load({ directory: dir })
 
       expect(initializedDirectory).toBe(dir)
+    }),
+  )
+
+  it.live("uses automation-safe bootstrap without ordinary side effects", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const calls = { ordinary: 0, safe: 0 }
+      yield* setBootstrap(
+        Effect.sync(() => {
+          calls.ordinary++
+        }),
+      )
+      yield* setAutomationSafeBootstrap(
+        Effect.sync(() => {
+          calls.safe++
+        }),
+      )
+
+      yield* store.load({ directory: dir, automationSafe: true })
+
+      expect(calls).toEqual({ ordinary: 0, safe: 1 })
+    }),
+  )
+
+  it.live("fails closed when a safe load follows an ordinary bootstrap", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const calls = { ordinary: 0, safe: 0 }
+      yield* setBootstrap(
+        Effect.sync(() => {
+          calls.ordinary++
+        }),
+      )
+      yield* setAutomationSafeBootstrap(
+        Effect.sync(() => {
+          calls.safe++
+        }),
+      )
+
+      yield* store.load({ directory: dir })
+      const exit = yield* store.load({ directory: dir, automationSafe: true }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls).toEqual({ ordinary: 1, safe: 0 })
     }),
   )
 

@@ -6,7 +6,8 @@
 // the original /event race or #27371's invalid-model hang).
 //
 // Configuration flows through opencode's built-in test affordances:
-//   - OC2_CONFIG_CONTENT      : provider config inline, no files to find
+//   - isolated global config  : trusted test provider for automation runs
+//   - OC2_CONFIG_CONTENT      : per-process local/project overrides
 //   - OC2_TEST_HOME           : pins os.homedir() → tmpdir
 //   - OC2_DISABLE_PROJECT_CONFIG : skip walking up for oc2.json
 //   - OC2_PURE                : skip external plugin discovery + install
@@ -83,7 +84,11 @@ export type RunResult = {
   readonly durationMs: number
 }
 
-export type SpawnOpts = { readonly timeoutMs?: number; readonly env?: Record<string, string> }
+export type SpawnOpts = {
+  readonly timeoutMs?: number
+  readonly env?: Record<string, string>
+  readonly trustedConfig?: Record<string, unknown>
+}
 
 // Typed equivalent of constructing argv for `opencode run`. New flags should
 // land here so tests stay grep-able and refactor-safe.
@@ -194,11 +199,17 @@ export function withCliFixture<A, E>(
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "oc-cli-" })
 
     const configJson = JSON.stringify(testProviderConfig(llm.url))
+    yield* fs.writeWithDirs(path.join(home, ".config", "oc2", "oc2.json"), configJson)
     const env = isolatedEnv(home, configJson)
 
     const spawn = Effect.fn("opencode.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
       const timeoutMs = opts?.timeoutMs ?? 30_000
+      if (opts?.trustedConfig) {
+        yield* fs
+          .writeWithDirs(path.join(home, ".config", "oc2", "oc2.json"), JSON.stringify(opts.trustedConfig))
+          .pipe(Effect.orDie)
+      }
       // stdin: "ignore" so the child doesn't see a piped stdin and block
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to

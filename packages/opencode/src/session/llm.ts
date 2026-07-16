@@ -129,7 +129,9 @@ const live: Layer.Layer<
         providerID: input.model.providerID,
       })
 
+      const automationSafe = input.user.automation === true
       if (LLMFugu.isSelected(input.model)) {
+        if (automationSafe) return yield* Effect.fail(new Error("Fugu is unavailable for automation-safe execution"))
         // log.info("INPUT", {
         //   model: input.model,
         //   messages: input.messages,
@@ -153,9 +155,9 @@ const live: Layer.Layer<
 
       const [language, cfg, item, info] = yield* Effect.all(
         [
-          provider.getLanguage(input.model),
+          provider.getLanguage(input.model, { automationSafe }),
           config.get(),
-          provider.getProvider(input.model.providerID),
+          provider.getProvider(input.model.providerID, { automationSafe }),
           auth.get(input.model.providerID),
         ],
         { concurrency: "unbounded" },

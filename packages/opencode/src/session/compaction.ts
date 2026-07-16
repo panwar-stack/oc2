@@ -378,9 +378,12 @@ export const layer = Layer.effect(
       }
 
       const agent = yield* agents.get("compaction")
+      const automationSafe = userMessage.automation === true
       const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
+        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID, { automationSafe }).pipe(Effect.orDie)
+        : yield* provider
+            .getModel(userMessage.model.providerID, userMessage.model.modelID, { automationSafe })
+            .pipe(Effect.orDie)
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
@@ -392,14 +395,16 @@ export const layer = Layer.effect(
         model,
       })
       // Allow plugins to inject context or replace compaction prompt.
-      const compacting = yield* plugin.trigger(
-        "experimental.session.compacting",
-        { sessionID: input.sessionID },
-        { context: [], prompt: undefined },
-      )
+      const compacting = automationSafe
+        ? { context: [], prompt: undefined }
+        : yield* plugin.trigger(
+            "experimental.session.compacting",
+            { sessionID: input.sessionID },
+            { context: [], prompt: undefined },
+          )
       const nextPrompt = compacting.prompt ?? buildPrompt({ previousSummary, context: compacting.context })
       const msgs = structuredClone(selected.head)
-      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+      if (!automationSafe) yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
@@ -448,6 +453,7 @@ export const layer = Layer.effect(
         assistantMessage: msg,
         sessionID: input.sessionID,
         model,
+        automationSafe,
       })
       const result = yield* processor.process({
         user: userMessage,
@@ -496,6 +502,7 @@ export const layer = Layer.effect(
             format: original.format,
             tools: original.tools,
             system: original.system,
+            automation: original.automation,
           })
           for (const part of replay.parts) {
             if (part.type === "compaction") continue
@@ -513,27 +520,28 @@ export const layer = Layer.effect(
         }
 
         if (!replay) {
-          const info = yield* provider.getProvider(userMessage.model.providerID)
-          if (
-            (yield* plugin.trigger(
-              "experimental.compaction.autocontinue",
-              {
-                sessionID: input.sessionID,
-                agent: userMessage.agent,
-                model: yield* provider
-                  .getModel(userMessage.model.providerID, userMessage.model.modelID)
-                  .pipe(Effect.orDie),
-                provider: {
-                  source: info.source,
-                  info,
-                  options: info.options,
+          const info = yield* provider.getProvider(userMessage.model.providerID, { automationSafe })
+          const autocontinue = automationSafe
+            ? { enabled: true }
+            : yield* plugin.trigger(
+                "experimental.compaction.autocontinue",
+                {
+                  sessionID: input.sessionID,
+                  agent: userMessage.agent,
+                  model: yield* provider
+                    .getModel(userMessage.model.providerID, userMessage.model.modelID)
+                    .pipe(Effect.orDie),
+                  provider: {
+                    source: info.source,
+                    info,
+                    options: info.options,
+                  },
+                  message: userMessage,
+                  overflow: input.overflow === true,
                 },
-                message: userMessage,
-                overflow: input.overflow === true,
-              },
-              { enabled: true },
-            )).enabled
-          ) {
+                { enabled: true },
+              )
+          if (autocontinue.enabled) {
             const continueMsg = yield* session.updateMessage({
               id: MessageID.ascending(),
               role: "user",
@@ -541,6 +549,7 @@ export const layer = Layer.effect(
               time: { created: Date.now() },
               agent: userMessage.agent,
               model: userMessage.model,
+              automation: userMessage.automation,
             })
             const text =
               (input.overflow
@@ -600,6 +609,10 @@ export const layer = Layer.effect(
       auto: boolean
       overflow?: boolean
     }) {
+      const previous = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).findLast(
+        (item) => item.info.role === "user" && !item.parts.some((part) => part.type === "compaction"),
+      )?.info
+      const automationSafe = previous?.role === "user" ? previous.automation : undefined
       const msg = yield* session.updateMessage({
         id: MessageID.ascending(),
         role: "user",
@@ -607,6 +620,7 @@ export const layer = Layer.effect(
         sessionID: input.sessionID,
         agent: input.agent,
         time: { created: Date.now() },
+        automation: automationSafe,
       })
       yield* session.updatePart({
         id: PartID.ascending(),
