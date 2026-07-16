@@ -5,5 +5,5 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["oc2-issue.ts", "oc2-issue.test.ts"]
+  "include": ["oc2-automation-policy.ts", "oc2-issue.ts", "oc2-issue.test.ts", "oc2-verify*.ts"]
 }
