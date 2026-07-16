@@ -153,86 +153,85 @@ function show(out: string) {
   process.stderr.write(out)
 }
 
-const commands = await loadCommands()
-
-const cli = yargs(args)
-  .parserConfiguration({ "populate--": true })
-  .scriptName("oc2")
-  .wrap(100)
-  .help("help", "show help")
-  .alias("help", "h")
-  .version("version", "show version number", InstallationVersion)
-  .alias("version", "v")
-  .option("print-logs", {
-    describe: "print logs to stderr",
-    type: "boolean",
-  })
-  .option("log-level", {
-    describe: "log level",
-    type: "string",
-    choices: ["DEBUG", "INFO", "WARN", "ERROR"],
-  })
-  .option("pure", {
-    describe: "run without external plugins",
-    type: "boolean",
-  })
-  .middleware(async (opts) => {
-    if (opts.pure) {
-      process.env.OC2_PURE = "1"
-    }
-
-    await Log.init({
-      print: process.argv.includes("--print-logs") && !safeAutomationOutput,
-      dev: Installation.isLocal(),
-      level: (() => {
-        if (opts.logLevel) return opts.logLevel as Log.Level
-        if (Installation.isLocal()) return "DEBUG"
-        return "INFO"
-      })(),
+async function main() {
+  const commands = await loadCommands()
+  const cli = yargs(args)
+    .parserConfiguration({ "populate--": true })
+    .scriptName("oc2")
+    .wrap(100)
+    .help("help", "show help")
+    .alias("help", "h")
+    .version("version", "show version number", InstallationVersion)
+    .alias("version", "v")
+    .option("print-logs", {
+      describe: "print logs to stderr",
+      type: "boolean",
     })
-
-    Heap.start()
-
-    process.env.AGENT = "1"
-    process.env.OPENCODE = "1"
-    process.env.OC2_PID = String(process.pid)
-
-    Log.Default.info("opencode", {
-      version: InstallationVersion,
-      args: safeAutomationOutput ? ["<automation arguments redacted>"] : process.argv.slice(2),
-      process_role: processMetadata.processRole,
-      run_id: processMetadata.runID,
+    .option("log-level", {
+      describe: "log level",
+      type: "string",
+      choices: ["DEBUG", "INFO", "WARN", "ERROR"],
     })
-  })
-  .usage("")
-  .completion("completion", "generate shell completion script")
-const registerCommand = cli.command as (command: unknown) => unknown
-for (const command of commands) registerCommand.call(cli, command)
+    .option("pure", {
+      describe: "run without external plugins",
+      type: "boolean",
+    })
+    .middleware(async (opts) => {
+      if (opts.pure) {
+        process.env.OC2_PURE = "1"
+      }
 
-cli
-  .fail((msg, err) => {
-    if (resultJsonOutput) {
-      writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"invalid_input"}' + EOL)
-      process.exit(2)
-    }
-    if (
-      msg?.startsWith("Unknown argument") ||
-      msg?.startsWith("Not enough non-option arguments") ||
-      msg?.startsWith("Invalid values:")
-    ) {
+      await Log.init({
+        print: process.argv.includes("--print-logs") && !safeAutomationOutput,
+        dev: Installation.isLocal(),
+        level: (() => {
+          if (opts.logLevel) return opts.logLevel as Log.Level
+          if (Installation.isLocal()) return "DEBUG"
+          return "INFO"
+        })(),
+      })
+
+      Heap.start()
+
+      process.env.AGENT = "1"
+      process.env.OPENCODE = "1"
+      process.env.OC2_PID = String(process.pid)
+
+      Log.Default.info("opencode", {
+        version: InstallationVersion,
+        args: safeAutomationOutput ? ["<automation arguments redacted>"] : process.argv.slice(2),
+        process_role: processMetadata.processRole,
+        run_id: processMetadata.runID,
+      })
+    })
+    .usage("")
+    .completion("completion", "generate shell completion script")
+  const registerCommand = cli.command as (command: unknown) => unknown
+  for (const command of commands) registerCommand.call(cli, command)
+
+  cli
+    .fail((msg, err) => {
+      if (resultJsonOutput) {
+        writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"invalid_input"}' + EOL)
+        process.exit(2)
+      }
+      if (
+        msg?.startsWith("Unknown argument") ||
+        msg?.startsWith("Not enough non-option arguments") ||
+        msg?.startsWith("Invalid values:")
+      ) {
+        if (err) throw err
+        cli.showHelp(show)
+      }
+      if (err && automationOutput) {
+        UI.error("Invalid automation invocation")
+        process.exit(2)
+      }
       if (err) throw err
-      cli.showHelp(show)
-    }
-    if (err && automationOutput) {
-      UI.error("Invalid automation invocation")
-      process.exit(2)
-    }
-    if (err) throw err
-    process.exit(automationOutput ? 2 : 1)
-  })
-  .strict()
+      process.exit(automationOutput ? 2 : 1)
+    })
+    .strict()
 
-try {
   if (args.includes("-h") || args.includes("--help")) {
     await cli.parse(args, (err: Error | undefined, _argv: unknown, out: string) => {
       if (err) throw err
@@ -242,6 +241,10 @@ try {
   } else {
     await cli.parse()
   }
+}
+
+try {
+  await main()
 } catch (e) {
   if (resultJsonOutput) {
     writeFileSync(process.stdout.fd, '{"status":"error","sessionID":null,"error":"session_error"}' + EOL)

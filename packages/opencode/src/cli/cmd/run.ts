@@ -15,7 +15,7 @@ import type { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import type { Argv } from "yargs"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect } from "effect"
+import { Cause, Effect } from "effect"
 import { UI } from "../ui"
 import { effectCmd } from "../effect-cmd"
 import { EOL } from "os"
@@ -142,7 +142,9 @@ export const RunCommand = effectCmd({
   describe: "run oc2 with a message",
   // --attach connects to a remote server (no local instance needed); the
   // default path runs an in-process server and needs the project instance.
-  instance: (args) => !args.attach && !(args.automation && (args.session || args.continue || args.fork)),
+  instance: (args) =>
+    args.attach === undefined &&
+    !(args.automation && (args.session !== undefined || args.continue || args.fork)),
   automationSafe: (args) => args.automation,
   // For --dir without --attach, load instance for the resolved target dir.
   // The handler also chdirs (preserving the legacy order: chdir → file resolution).
@@ -259,7 +261,10 @@ export const RunCommand = effectCmd({
         describe: "enable direct interactive demo slash commands; pass one as the message to run it immediately",
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
-    if (args.automation && (args.session || args.continue || args.fork)) {
+    if (
+      args.automation &&
+      (args.session !== undefined || args.continue || args.fork || args.attach !== undefined)
+    ) {
       if (args.format === "result-json") {
         yield* Effect.promise(
           () =>
@@ -270,7 +275,7 @@ export const RunCommand = effectCmd({
               )
             }),
         )
-      } else UI.error("--automation cannot be used with --session, --continue, or --fork")
+      } else UI.error("--automation cannot be used with --session, --continue, --fork, or --attach")
       process.exit(2)
     }
 
@@ -374,11 +379,11 @@ export const RunCommand = effectCmd({
         await die("--automation cannot be used with --format json")
       }
 
-      if (args.automation && args.attach) {
+      if (args.automation && args.attach !== undefined) {
         await die("--automation cannot be used with --attach")
       }
 
-      if (args.automation && (args.session || args.continue || args.fork)) {
+      if (args.automation && (args.session !== undefined || args.continue || args.fork)) {
         await die("--automation cannot be used with --session, --continue, or --fork")
       }
 
@@ -1097,9 +1102,10 @@ export const RunCommand = effectCmd({
       })
       await execute(sdk)
     }).pipe(
-      Effect.catch((error) => {
-        if (!args.automation || automationResultEmitted) return Effect.fail(error)
-        return Effect.promise(() => failAutomation(executionError(error)))
+      Effect.catchCause((cause) => {
+        if (!args.automation) return Effect.failCause(cause)
+        if (automationResultEmitted) return Effect.void
+        return Effect.promise(() => failAutomation(executionError(Cause.squash(cause))))
       }),
     )
   }),

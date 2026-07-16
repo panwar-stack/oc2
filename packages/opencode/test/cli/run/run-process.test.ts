@@ -348,6 +348,97 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.live(
+    "automation rejects empty session and attach values before bootstrap",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const marker = path.join(home, "empty-option-bootstrap")
+        const plugin = path.join(home, "empty-option-plugin.ts")
+        yield* Effect.promise(() =>
+          Bun.write(
+            plugin,
+            `export default async () => { await Bun.write(${JSON.stringify(marker)}, "initialized"); return {} }`,
+          ),
+        )
+        const base = [
+          "run",
+          "--automation",
+          "--agent",
+          "build",
+          "--model",
+          testModelID,
+          "--variant",
+          "high",
+          "--format",
+          "result-json",
+          "do work",
+        ]
+        const env = {
+          OC2_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            plugin: [pathToFileURL(plugin).href],
+          }),
+        }
+
+        for (const option of ["--session=", "--attach="]) {
+          const result = yield* opencode.spawn([...base, option], { env })
+          opencode.expectExit(result, 2)
+          expect(result.stderr).toBe("")
+          expect(automationResult(result.stdout)).toEqual({
+            status: "error",
+            sessionID: null,
+            error: "invalid_input",
+          })
+        }
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "automation sanitizes promise defects in plain and result-json formats",
+    ({ llm, opencode, home }) =>
+      Effect.gen(function* () {
+        const secret = "PROMISE_DEFECT_SECRET"
+        const socketPath = path.join(home, `${secret}.sock`)
+        yield* Effect.acquireRelease(
+          Effect.sync(() => Bun.listen({ unix: socketPath, socket: { data() {} } })),
+          (server) => Effect.sync(() => server.stop(true)),
+        )
+
+        const plain = yield* opencode.run("read the socket", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          file: [socketPath],
+        })
+        opencode.expectExit(plain, 1)
+        expect(plain.stdout).toBe("")
+        expect(plain.stderr).toContain("Automation run failed")
+        expect(plain.stderr).not.toContain(secret)
+        expect(plain.stderr).not.toContain("EOPNOTSUPP")
+
+        const resultJson = yield* opencode.run("read the socket", {
+          automation: true,
+          agent: "build",
+          variant: "high",
+          format: "result-json",
+          file: [socketPath],
+        })
+        opencode.expectExit(resultJson, 1)
+        expect(resultJson.stderr).toBe("")
+        expect(resultJson.stdout).not.toContain(secret)
+        expect(automationResult(resultJson.stdout)).toEqual({
+          status: "error",
+          sessionID: null,
+          error: "session_error",
+        })
+        expect(yield* llm.calls).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
     "automation rejects session continuation, forking, and unsafe attach before execution",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
