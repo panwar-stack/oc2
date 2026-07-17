@@ -17,6 +17,7 @@ import { DialogSelectProvider } from "./dialog-select-provider"
 type Props = {
   back?: "providers" | "close"
   onConnected?: (providerID: string) => void
+  isCancelled?: () => boolean
 }
 
 export function DialogCustomProvider(props: Props) {
@@ -142,7 +143,7 @@ export function DialogCustomProvider(props: Props) {
       return result
     },
     onSuccess: (result) => {
-      if (!alive) return
+      if (!alive || props.isCancelled?.()) return
       dialog.close()
       props.onConnected?.(result.providerID)
       showToast({

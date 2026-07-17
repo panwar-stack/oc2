@@ -54,11 +54,33 @@ export const DialogSelectProvider: Component<{ onConnected?: (providerID: string
         }}
         onSelect={(x) => {
           if (!x) return
+          const cancelled = { value: false }
+          const onClose = () => {
+            cancelled.value = true
+          }
           if (x.id === CUSTOM_ID) {
-            dialog.show(() => <DialogCustomProvider back="providers" onConnected={props.onConnected} />)
+            dialog.show(
+              () => (
+                <DialogCustomProvider
+                  back="providers"
+                  onConnected={props.onConnected}
+                  isCancelled={() => cancelled.value}
+                />
+              ),
+              onClose,
+            )
             return
           }
-          dialog.show(() => <DialogConnectProvider provider={x.id} onConnected={props.onConnected} />)
+          dialog.show(
+            () => (
+              <DialogConnectProvider
+                provider={x.id}
+                onConnected={props.onConnected}
+                isCancelled={() => cancelled.value}
+              />
+            ),
+            onClose,
+          )
         }}
       >
         {(i) => (
