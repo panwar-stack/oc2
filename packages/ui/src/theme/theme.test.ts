@@ -80,10 +80,12 @@ describe("v2 theme CSS", () => {
   test("declares every referenced v2 variable", async () => {
     const theme = await Bun.file(`${import.meta.dir}/../v2/styles/theme.css`).text()
     const primitives = await Bun.file(`${import.meta.dir}/../v2/styles/colors.css`).text()
+    const paths = await Array.fromAsync(new Bun.Glob("v2/**/*.css").scan({ cwd: `${import.meta.dir}/..` }))
+    const styles = await Promise.all(paths.map((path) => Bun.file(`${import.meta.dir}/../${path}`).text()))
     const declarations = new Set(
       [...`${theme}\n${primitives}`.matchAll(/--(v2-[\w-]+)\s*:/g)].map((match) => match[1]!),
     )
-    const references = [...theme.matchAll(/var\(--(v2-[\w-]+)/g)].map((match) => match[1]!)
+    const references = [...styles.join("\n").matchAll(/var\(--(v2-[\w-]+)/g)].map((match) => match[1]!)
 
     expect([...new Set(references)].filter((key) => !declarations.has(key))).toEqual([])
   })
@@ -122,6 +124,7 @@ describe("v2 theme CSS", () => {
       "text-weak",
       "text-weaker",
       "text-interactive-base",
+      "text-invert-base",
       "text-on-brand-base",
       "border-base",
       "border-weaker-base",

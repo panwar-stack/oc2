@@ -165,7 +165,7 @@
   --text-weak: #525e70;
   --text-weaker: #67717f;
   --text-strong: #161b24;
-  --text-invert-base: #f8f8f8;
+  --text-invert-base: #ffffff;
   --text-invert-weak: #f3f3f3;
   --text-invert-weaker: #ededed;
   --text-invert-strong: #fcfcfc;
@@ -427,7 +427,7 @@
     --text-weak: #9aa4b2;
     --text-weaker: #5c6675;
     --text-strong: #e8ebf0;
-    --text-invert-base: #a0a0a0;
+    --text-invert-base: #0a0d12;
     --text-invert-weak: #707070;
     --text-invert-weaker: #505050;
     --text-invert-strong: #ededed;
