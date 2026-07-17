@@ -25,3 +25,65 @@
 [data-component="tag"][data-high-contrast] {
   border-color: var(--v2-border-border-strong);
 }
+
+@layer components {
+  [data-component="badge-v2"] {
+    box-sizing: border-box;
+    display: inline-flex;
+    min-width: 18px;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--v2-radius-pill);
+    font-family: var(--v2-font-family-mono);
+    font-size: var(--v2-font-size-micro);
+    font-weight: 700;
+    line-height: var(--v2-line-height-label);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  [data-component="badge-v2"][data-size="normal"] {
+    min-height: 18px;
+    padding: 2px 6px;
+  }
+
+  [data-component="badge-v2"][data-size="small"] {
+    min-height: 16px;
+    padding: 1px 5px;
+  }
+
+  [data-component="badge-v2"][data-variant="neutral"] {
+    background: var(--v2-background-bg-layer-02);
+    color: var(--v2-text-text-faint);
+  }
+
+  [data-component="badge-v2"][data-variant="blue"] {
+    background: var(--v2-pill-bg-blue);
+    color: var(--v2-state-fg-info);
+  }
+
+  [data-component="badge-v2"][data-variant="amber"] {
+    background: var(--v2-pill-bg-amber);
+    color: var(--v2-state-fg-thinking);
+  }
+
+  [data-component="badge-v2"][data-variant="teal"] {
+    background: var(--v2-pill-bg-teal);
+    color: var(--v2-state-fg-tool);
+  }
+
+  [data-component="badge-v2"][data-variant="purple"] {
+    background: var(--v2-pill-bg-purple);
+    color: var(--v2-state-fg-decision);
+  }
+
+  [data-component="badge-v2"][data-variant="green"] {
+    background: var(--v2-pill-bg-green);
+    color: var(--v2-state-fg-success);
+  }
+
+  [data-component="badge-v2"][data-variant="red"] {
+    background: var(--v2-pill-bg-red);
+    color: var(--v2-state-fg-danger);
+  }
+}

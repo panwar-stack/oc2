@@ -686,7 +686,7 @@ function ChannelIndicator() {
   return (
     <>
       {(channel === "beta" || channel === "dev") && (
-        <div class="bg-icon-interactive-base text-[#FFF] font-medium px-2 rounded-sm uppercase font-mono">
+        <div class="bg-v2-background-bg-accent text-v2-text-text-contrast font-medium px-2 rounded-sm uppercase font-mono">
           {channel.toUpperCase()}
         </div>
       )}

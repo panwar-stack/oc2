@@ -1,0 +1,108 @@
+@layer components {
+  [data-component="status-glyph"] {
+    display: inline-grid;
+    flex: none;
+    width: 1.2ch;
+    place-items: center;
+    font-family: var(--v2-font-family-mono);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  [data-component="status-glyph"][data-size="small"] {
+    font-size: var(--v2-font-size-micro);
+  }
+
+  [data-component="status-glyph"][data-size="normal"] {
+    font-size: var(--v2-font-size-small);
+  }
+
+  [data-component="status-glyph"][data-size="large"] {
+    font-size: var(--v2-font-size-body);
+  }
+
+  [data-component="status-glyph"]:is(
+    [data-variant="pending"],
+    [data-variant="gauge-empty"],
+    [data-variant="continuation"],
+    [data-variant="separator"],
+    [data-variant="enter"]
+  ) {
+    color: var(--v2-text-text-faint);
+  }
+
+  [data-component="status-glyph"]:is(
+    [data-variant="collapsed"],
+    [data-variant="expanded"],
+    [data-variant="attachment"]
+  ) {
+    color: var(--v2-text-text-muted);
+  }
+
+  [data-component="status-glyph"][data-variant="running"] {
+    color: var(--v2-state-fg-thinking);
+  }
+
+  [data-component="status-glyph"]:is([data-variant="done"], [data-variant="live"]) {
+    color: var(--v2-state-fg-success);
+  }
+
+  [data-component="status-glyph"][data-variant="failed"] {
+    color: var(--v2-state-fg-danger);
+  }
+
+  [data-component="status-glyph"][data-variant="needs-you"] {
+    color: var(--v2-state-fg-decision);
+  }
+
+  [data-component="status-glyph"]:is([data-variant="mailbox"], [data-variant="tool-group"]) {
+    color: var(--v2-state-fg-tool);
+  }
+
+  [data-component="status-glyph"][data-variant="brand"] {
+    width: auto;
+    color: var(--v2-text-text-base);
+  }
+
+  [data-component="status-glyph"][data-variant="gauge-full"] {
+    color: inherit;
+  }
+
+  [data-component="status-glyph"] [data-slot="status-glyph-frame"] {
+    grid-area: 1 / 1;
+    opacity: 0;
+    animation: status-glyph-running
+      calc(var(--v2-duration-spinner-frame) + var(--v2-duration-spinner-frame) + var(--v2-duration-spinner-frame))
+      steps(1) infinite;
+  }
+
+  [data-component="status-glyph"] [data-slot="status-glyph-frame"][data-frame="1"] {
+    animation-delay: var(--v2-duration-spinner-frame);
+  }
+
+  [data-component="status-glyph"] [data-slot="status-glyph-frame"][data-frame="2"] {
+    animation-delay: calc(var(--v2-duration-spinner-frame) + var(--v2-duration-spinner-frame));
+  }
+
+  @keyframes status-glyph-running {
+    0%,
+    33.32% {
+      opacity: 1;
+    }
+    33.33%,
+    100% {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-component="status-glyph"] [data-slot="status-glyph-frame"] {
+      animation: none;
+      opacity: 0;
+    }
+
+    [data-component="status-glyph"] [data-slot="status-glyph-frame"][data-frame="0"] {
+      opacity: 1;
+    }
+  }
+}

@@ -1,0 +1,77 @@
+@layer components {
+  [data-component="gauge-v2"] {
+    box-sizing: border-box;
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--v2-space-3);
+    color: var(--v2-state-fg-success);
+    font-family: var(--v2-font-family-mono);
+    font-size: var(--v2-font-size-meta);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--v2-line-height-label);
+    white-space: nowrap;
+  }
+
+  [data-component="gauge-v2"][data-variant="warning"] {
+    color: var(--v2-state-fg-thinking);
+  }
+
+  [data-component="gauge-v2"][data-variant="danger"] {
+    color: var(--v2-state-fg-danger);
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-progress"] {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--v2-space-3);
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-label"],
+  [data-component="gauge-v2"] [data-slot="gauge-v2-value"] {
+    color: var(--v2-text-text-muted);
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-track"] {
+    display: inline-flex;
+    width: 64px;
+    height: 4px;
+    overflow: hidden;
+    border-radius: var(--v2-radius-pill);
+    background: var(--v2-background-bg-layer-03);
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-fill"] {
+    height: 100%;
+    border-radius: inherit;
+    background: currentColor;
+    transition: width var(--v2-duration-base) var(--v2-ease-standard);
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-text"] {
+    display: inline-flex;
+    letter-spacing: 0;
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-text-empty"] {
+    color: var(--v2-text-text-faint);
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-loading"] {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--v2-space-2);
+    color: var(--v2-text-text-muted);
+  }
+
+  [data-component="gauge-v2"] [data-slot="gauge-v2-supplemental"] {
+    color: var(--v2-text-text-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-component="gauge-v2"] [data-slot="gauge-v2-fill"] {
+      transition-duration: var(--v2-duration-instant);
+    }
+  }
+}
