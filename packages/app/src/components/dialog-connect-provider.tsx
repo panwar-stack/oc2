@@ -17,7 +17,7 @@ import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 
-export function DialogConnectProvider(props: { provider: string }) {
+export function DialogConnectProvider(props: { provider: string; onConnected?: (providerID: string) => void }) {
   const dialog = useDialog()
   const serverSync = useServerSync()
   const serverSDK = useServerSDK()
@@ -26,7 +26,7 @@ export function DialogConnectProvider(props: { provider: string }) {
 
   const all = () => {
     void import("./dialog-select-provider").then((x) => {
-      dialog.show(() => <x.DialogSelectProvider />)
+      dialog.show(() => <x.DialogSelectProvider onConnected={props.onConnected} />)
     })
   }
 
@@ -332,7 +332,9 @@ export function DialogConnectProvider(props: { provider: string }) {
 
   async function complete() {
     await serverSDK.client.global.dispose()
+    if (!alive.value) return
     dialog.close()
+    props.onConnected?.(props.provider)
     showToast({
       variant: "success",
       icon: "circle-check",

@@ -11,7 +11,7 @@ import { DialogCustomProvider } from "./dialog-custom-provider"
 
 const CUSTOM_ID = "_custom"
 
-export const DialogSelectProvider: Component = () => {
+export const DialogSelectProvider: Component<{ onConnected?: (providerID: string) => void }> = (props) => {
   const dialog = useDialog()
   const providers = useProviders()
   const language = useLanguage()
@@ -55,10 +55,10 @@ export const DialogSelectProvider: Component = () => {
         onSelect={(x) => {
           if (!x) return
           if (x.id === CUSTOM_ID) {
-            dialog.show(() => <DialogCustomProvider back="providers" />)
+            dialog.show(() => <DialogCustomProvider back="providers" onConnected={props.onConnected} />)
             return
           }
-          dialog.show(() => <DialogConnectProvider provider={x.id} />)
+          dialog.show(() => <DialogConnectProvider provider={x.id} onConnected={props.onConnected} />)
         }}
       >
         {(i) => (

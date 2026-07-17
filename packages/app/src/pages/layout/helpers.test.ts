@@ -19,6 +19,7 @@ import {
   homeProjectDirectories,
   homeSessionServerStatus,
   latestRootSession,
+  shouldConnectProvider,
   toggleHomeProjectSelection,
 } from "./helpers"
 import { pathKey } from "@/utils/path-key"
@@ -110,6 +111,20 @@ describe("layout deep links", () => {
 
     expect(drainPendingDeepLinks(target)).toEqual(["opencode://open-project?directory=/a"])
     expect(drainPendingDeepLinks(target)).toEqual([])
+  })
+})
+
+describe("provider onboarding", () => {
+  test("prompts when no provider is connected", () => {
+    expect(shouldConnectProvider([])).toBe(true)
+  })
+
+  test("prompts when Fugu is the only connected provider", () => {
+    expect(shouldConnectProvider([{ id: "fugu" }])).toBe(true)
+  })
+
+  test("does not prompt when a real provider is connected", () => {
+    expect(shouldConnectProvider([{ id: "fugu" }, { id: "anthropic" }])).toBe(false)
   })
 })
 

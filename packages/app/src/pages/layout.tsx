@@ -73,6 +73,7 @@ import {
   effectiveWorkspaceOrder,
   errorMessage,
   latestRootSession,
+  shouldConnectProvider,
   sortedRootSessions,
 } from "./layout/helpers"
 import {
@@ -1125,12 +1126,20 @@ export default function Layout(props: ParentProps) {
 
   let providerConnectChecked = false
 
+  function selectProviderModel(providerID: string) {
+    const run = ++dialogRun
+    void import("@/components/dialog-select-model").then((x) => {
+      if (dialogDead || dialogRun !== run) return
+      dialog.show(() => <x.DialogSelectModel provider={providerID} />)
+    })
+  }
+
   function connectProvider(automatic = false) {
     if (!automatic) providerConnectChecked = true
     const run = ++dialogRun
     void import("@/components/dialog-select-provider").then((x) => {
       if (dialogDead || dialogRun !== run || (automatic && dialog.active)) return
-      dialog.show(() => <x.DialogSelectProvider />)
+      dialog.show(() => <x.DialogSelectProvider onConnected={automatic ? selectProviderModel : undefined} />)
     })
   }
 
@@ -1138,7 +1147,7 @@ export default function Layout(props: ParentProps) {
     if (providerConnectChecked || !serverSync.ready) return
     if (initialDirectory && !serverSync.child(initialDirectory)[0].provider_ready) return
     providerConnectChecked = true
-    if (providers.connected().length > 0 || dialog.active) return
+    if (!shouldConnectProvider(providers.connected()) || dialog.active) return
     connectProvider(true)
   })
 

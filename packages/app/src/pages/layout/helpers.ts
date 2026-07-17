@@ -8,6 +8,9 @@ type SessionStore = {
   path: { directory: string }
 }
 
+export const shouldConnectProvider = (providers: readonly { id: string }[]) =>
+  !providers.some((provider) => provider.id !== "fugu")
+
 function sortSessions(now: number) {
   const oneMinuteAgo = now - 60 * 1000
   return (a: Session, b: Session) => {

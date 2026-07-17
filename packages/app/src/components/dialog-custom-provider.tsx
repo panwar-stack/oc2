@@ -6,7 +6,7 @@ import { ProviderIcon } from "@oc2-ai/ui/provider-icon"
 import { useMutation } from "@tanstack/solid-query"
 import { TextField } from "@oc2-ai/ui/text-field"
 import { showToast } from "@/utils/toast"
-import { batch, For } from "solid-js"
+import { batch, For, onCleanup } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
@@ -16,6 +16,7 @@ import { DialogSelectProvider } from "./dialog-select-provider"
 
 type Props = {
   back?: "providers" | "close"
+  onConnected?: (providerID: string) => void
 }
 
 export function DialogCustomProvider(props: Props) {
@@ -23,6 +24,10 @@ export function DialogCustomProvider(props: Props) {
   const serverSync = useServerSync()
   const serverSDK = useServerSDK()
   const language = useLanguage()
+  let alive = true
+  onCleanup(() => {
+    alive = false
+  })
 
   const [form, setForm] = createStore<FormState>({
     providerID: "",
@@ -39,7 +44,7 @@ export function DialogCustomProvider(props: Props) {
       dialog.close()
       return
     }
-    dialog.show(() => <DialogSelectProvider />)
+    dialog.show(() => <DialogSelectProvider onConnected={props.onConnected} />)
   }
 
   const addModel = () => {
@@ -137,7 +142,9 @@ export function DialogCustomProvider(props: Props) {
       return result
     },
     onSuccess: (result) => {
+      if (!alive) return
       dialog.close()
+      props.onConnected?.(result.providerID)
       showToast({
         variant: "success",
         icon: "circle-check",
