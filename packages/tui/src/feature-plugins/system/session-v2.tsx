@@ -867,7 +867,7 @@ function Edit(props: ToolProps) {
             <box paddingLeft={1}>
               <diff
                 diff={diff()}
-                view={dimensions().width > 120 ? "split" : "unified"}
+                view={dimensions().width > theme.diffSplitCols ? "split" : "unified"}
                 filetype={filetype(filePath())}
                 syntaxStyle={syntax()}
                 showLineNumbers={true}
@@ -929,7 +929,7 @@ function ApplyPatch(props: ToolProps) {
                   <box paddingLeft={1}>
                     <diff
                       diff={patch()}
-                      view={dimensions().width > 120 ? "split" : "unified"}
+                      view={dimensions().width > theme.diffSplitCols ? "split" : "unified"}
                       filetype={filetype(stringValue(file.filePath) ?? stringValue(file.relativePath))}
                       syntaxStyle={syntax()}
                       showLineNumbers={true}

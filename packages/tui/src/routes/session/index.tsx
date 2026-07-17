@@ -1534,7 +1534,7 @@ export function Session() {
                   right={0}
                   bottom={0}
                   alignItems="flex-end"
-                  backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
+                  backgroundColor={theme.scrimLight}
                 >
                   <Sidebar sessionID={route.sessionID} />
                 </box>
@@ -2534,7 +2534,7 @@ function Edit(props: ToolProps) {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
     // Default to "auto" behavior
-    return ctx.width > 120 ? "split" : "unified"
+    return ctx.width > theme.diffSplitCols ? "split" : "unified"
   })
 
   const ft = createMemo(() => filetype(stringValue(props.input.filePath)))
@@ -2588,7 +2588,7 @@ function ApplyPatch(props: ToolProps) {
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
-    return ctx.width > 120 ? "split" : "unified"
+    return ctx.width > theme.diffSplitCols ? "split" : "unified"
   })
 
   function Diff(p: { diff: string; filePath: string }) {

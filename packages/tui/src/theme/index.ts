@@ -43,6 +43,7 @@ export type Theme = {
   readonly info: RGBA
   readonly text: RGBA
   readonly textMuted: RGBA
+  readonly textFaint: RGBA
   readonly selectedListItemText: RGBA
   readonly background: RGBA
   readonly backgroundPanel: RGBA
@@ -51,6 +52,8 @@ export type Theme = {
   readonly border: RGBA
   readonly borderActive: RGBA
   readonly borderSubtle: RGBA
+  readonly scrim: RGBA
+  readonly scrimLight: RGBA
   readonly diffAdded: RGBA
   readonly diffRemoved: RGBA
   readonly diffContext: RGBA
@@ -86,10 +89,17 @@ export type Theme = {
   readonly syntaxType: RGBA
   readonly syntaxOperator: RGBA
   readonly syntaxPunctuation: RGBA
+  readonly agentColorRamp: readonly [RGBA, RGBA, RGBA, RGBA, RGBA, RGBA, RGBA, RGBA]
+  readonly diffSplitCols: number
   readonly thinkingOpacity: number
   _hasSelectedListItemText: boolean
 }
-type ThemeColor = Exclude<keyof Theme, "thinkingOpacity" | "_hasSelectedListItemText">
+type ThemeColor = Exclude<
+  keyof Theme,
+  "agentColorRamp" | "diffSplitCols" | "thinkingOpacity" | "_hasSelectedListItemText"
+>
+type OptionalThemeColor = "selectedListItemText" | "backgroundMenu" | "scrim" | "scrimLight" | "textFaint"
+type RequiredThemeColor = Exclude<ThemeColor, OptionalThemeColor>
 export type SyntaxStyleOverrides = Record<string, { italic?: boolean }>
 
 export function selectedForeground(theme: Theme, bg?: RGBA): RGBA {
@@ -117,14 +127,25 @@ type Variant = {
   light: HexColor | RefName
 }
 type ColorValue = HexColor | RefName | Variant | RGBA
+type AgentColorRampJson = readonly [
+  ColorValue,
+  ColorValue,
+  ColorValue,
+  ColorValue,
+  ColorValue,
+  ColorValue,
+  ColorValue,
+  ColorValue,
+]
 export type ThemeJson = {
   $schema?: string
   defs?: Record<string, HexColor | RefName>
-  theme: Omit<Record<ThemeColor, ColorValue>, "selectedListItemText" | "backgroundMenu"> & {
-    selectedListItemText?: ColorValue
-    backgroundMenu?: ColorValue
-    thinkingOpacity?: number
-  }
+  theme: Record<RequiredThemeColor, ColorValue> &
+    Partial<Record<OptionalThemeColor, ColorValue>> & {
+      agentColorRamp?: AgentColorRampJson
+      diffSplitCols?: number
+      thinkingOpacity?: number
+    }
 }
 
 export const DEFAULT_THEMES: Record<string, ThemeJson> = {
@@ -149,7 +170,7 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
   nord,
   ["one-dark"]: onedark,
   ["osaka-jade"]: osakaJade,
-  oc2,
+  oc2: bundledTheme(oc2),
   orng,
   ["lucent-orng"]: lucentOrng,
   palenight,
@@ -195,6 +216,11 @@ export function isTheme(theme: unknown): theme is ThemeJson {
   if (typeof theme !== "object" || theme === null || Array.isArray(theme)) return false
   const value = Reflect.get(theme, "theme")
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function bundledTheme(theme: unknown) {
+  if (!isTheme(theme)) throw new Error("Invalid bundled theme")
+  return theme
 }
 
 export function subscribeThemes(listener: (themes: Record<string, ThemeJson>) => void) {
@@ -265,11 +291,11 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
 
   const resolved = Object.fromEntries(
     Object.entries(theme.theme)
-      .filter(([key]) => key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity")
+      .filter(([key]) => key !== "agentColorRamp" && key !== "diffSplitCols" && key !== "thinkingOpacity")
       .map(([key, value]) => {
         return [key, resolveColor(value as ColorValue)]
       }),
-  ) as Partial<Record<ThemeColor, RGBA>>
+  ) as Record<RequiredThemeColor, RGBA> & Partial<Record<OptionalThemeColor, RGBA>>
 
   // Handle selectedListItemText separately since it's optional
   const hasSelectedListItemText = theme.theme.selectedListItemText !== undefined
@@ -288,12 +314,48 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
     resolved.backgroundMenu = resolved.backgroundElement
   }
 
+  resolved.scrim = theme.theme.scrim === undefined ? RGBA.fromInts(0, 0, 0, 150) : resolveColor(theme.theme.scrim)
+  resolved.scrimLight =
+    theme.theme.scrimLight === undefined ? RGBA.fromInts(0, 0, 0, 70) : resolveColor(theme.theme.scrimLight)
+  resolved.textFaint = theme.theme.textFaint === undefined ? resolved.textMuted : resolveColor(theme.theme.textFaint)
+
+  const fallbackRamp = [
+    resolved.secondary,
+    resolved.accent,
+    resolved.success,
+    resolved.warning,
+    resolved.primary,
+    resolved.error,
+    resolved.info,
+    resolved.secondary,
+  ] as const
+  const ramp = theme.theme.agentColorRamp
+  if (
+    ramp !== undefined &&
+    (ramp.length !== 8 || Array.from({ length: 8 }, (_, index) => Reflect.has(ramp, index)).includes(false))
+  )
+    throw new Error("agentColorRamp must contain exactly 8 colors")
+  const agentColorRamp = ramp
+    ? [
+        resolveColor(ramp[0]),
+        resolveColor(ramp[1]),
+        resolveColor(ramp[2]),
+        resolveColor(ramp[3]),
+        resolveColor(ramp[4]),
+        resolveColor(ramp[5]),
+        resolveColor(ramp[6]),
+        resolveColor(ramp[7]),
+      ]
+    : fallbackRamp
+
   // Handle thinkingOpacity - optional with default of 0.6
   const thinkingOpacity = theme.theme.thinkingOpacity ?? 0.6
 
   return {
     ...resolved,
     _hasSelectedListItemText: hasSelectedListItemText,
+    agentColorRamp,
+    diffSplitCols: theme.theme.diffSplitCols ?? 120,
     thinkingOpacity,
   } as Theme
 }
@@ -398,15 +460,15 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
   return {
     theme: {
       // Primary colors using ANSI
-      primary: ansiColors.cyan,
-      secondary: ansiColors.magenta,
-      accent: ansiColors.cyan,
+      primary: ansiColors.blue,
+      secondary: ansiColors.cyan,
+      accent: ansiColors.magenta,
 
       // Status colors using ANSI
       error: ansiColors.red,
       warning: ansiColors.yellow,
       success: ansiColors.green,
-      info: ansiColors.cyan,
+      info: ansiColors.blue,
 
       // Text colors
       text: fg,
@@ -422,7 +484,7 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
       // Border colors
       borderSubtle: grays[6],
       border: grays[7],
-      borderActive: grays[8],
+      borderActive: ansiColors.blue,
 
       // Diff colors
       diffAdded: ansiColors.green,

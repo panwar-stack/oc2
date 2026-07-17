@@ -21,6 +21,28 @@ export type LocalTheme = {
   primary: RGBA
   error: RGBA
   info: RGBA
+  agentColorRamp: readonly [RGBA, RGBA, RGBA, RGBA, RGBA, RGBA, RGBA, RGBA]
+}
+
+export function resolveAgentColor(theme: LocalTheme, name: string, color?: string) {
+  if (color?.startsWith("#")) return RGBA.fromHex(color)
+  if (
+    color === "primary" ||
+    color === "secondary" ||
+    color === "accent" ||
+    color === "success" ||
+    color === "warning" ||
+    color === "error" ||
+    color === "info"
+  )
+    return theme[color]
+
+  let hash = 2166136261
+  for (let i = 0; i < name.length; i++) {
+    hash ^= name.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return theme.agentColorRamp[(hash >>> 0) % theme.agentColorRamp.length]
 }
 
 export function parseModel(model: string) {
@@ -76,15 +98,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       const [agentStore, setAgentStore] = createStore({
         current: undefined as string | undefined,
       })
-      const colors = createMemo(() => [
-        theme.secondary,
-        theme.accent,
-        theme.success,
-        theme.warning,
-        theme.primary,
-        theme.error,
-        theme.info,
-      ])
       return {
         list() {
           return agents()
@@ -113,17 +126,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           })
         },
         color(name: string) {
-          const index = visibleAgents().findIndex((x) => x.name === name)
-          if (index === -1) return colors()[0]
-          const agent = visibleAgents()[index]
-
-          if (agent?.color) {
-            const color = agent.color
-            if (color.startsWith("#")) return RGBA.fromHex(color)
-            // already validated by config, just satisfying TS here
-            return theme[color as keyof typeof theme] as RGBA
-          }
-          return colors()[index % colors().length]
+          return resolveAgentColor(theme, name, visibleAgents().find((agent) => agent.name === name)?.color)
         },
       }
     }
