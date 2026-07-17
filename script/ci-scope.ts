@@ -21,6 +21,7 @@ const generatedPrefixes = [
   "packages/ui/script/",
   "packages/ui/src/styles/tailwind/",
   "packages/ui/src/theme/",
+  "packages/ui/src/v2/styles/",
   "script/check-generated.ts",
 ]
 const sharedPackages = new Set([

@@ -51,6 +51,23 @@ describe("theme preload", () => {
     expect(localStorage.getItem("opencode-theme-css-light")).toBeNull()
   })
 
+  test("uses versioned dark css for a system-dark non-default theme", () => {
+    localStorage.setItem("opencode-theme-id", "nightowl")
+    localStorage.setItem("opencode-theme-css-dark", "--background-base:#stale;")
+    localStorage.setItem("opencode-theme-css-dark.v2", "--background-base:#000;")
+    Object.defineProperty(window, "matchMedia", {
+      value: () => ({ matches: true }) as MediaQueryList,
+      configurable: true,
+    })
+
+    run()
+
+    expect(document.documentElement.dataset.colorScheme).toBe("dark")
+    expect(document.getElementById("oc-theme-preload")?.textContent).toContain("--background-base:#000;")
+    expect(document.getElementById("oc-theme-preload")?.textContent).not.toContain("#stale")
+    expect(localStorage.getItem("opencode-theme-css-dark")).toBeNull()
+  })
+
   test("sets the light theme color before mount", () => {
     document.head.innerHTML = '<meta name="theme-color" content="#000000">'
 

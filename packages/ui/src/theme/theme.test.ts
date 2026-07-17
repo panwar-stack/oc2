@@ -63,6 +63,8 @@ describe("theme resolution", () => {
       ["v2-state-fg-success", "v2-background-bg-base"],
       ["v2-state-fg-danger", "v2-background-bg-base"],
       ["v2-text-text-inverse", "v2-state-fill-decision"],
+      ["v2-text-text-contrast", "v2-background-bg-accent"],
+      ["v2-state-fg-danger", "v2-pill-bg-red"],
     ] as const
 
     for (const [mode, tokens] of Object.entries(resolved)) {
@@ -72,6 +74,10 @@ describe("theme resolution", () => {
           `${mode}: ${foreground} on ${background}`,
         ).toBeGreaterThanOrEqual(4.5)
       }
+      expect(
+        contrast(tokens["v2-text-text-faint"]!, tokens["v2-background-bg-base"]!),
+        `${mode}: decorative tertiary text`,
+      ).toBeGreaterThanOrEqual(3)
     }
   })
 })
@@ -104,6 +110,16 @@ describe("v2 theme CSS", () => {
     ]) {
       expect(tailwind, key).toContain(`--color-${key}: var(--${key});`)
     }
+  })
+
+  test("reduces every v2 motion duration", async () => {
+    const theme = await Bun.file(`${import.meta.dir}/../v2/styles/theme.css`).text()
+
+    expect(theme).toContain("@media (prefers-reduced-motion: reduce)")
+    for (const key of ["instant", "fast", "base", "slow", "caret", "spinner-frame"])
+      expect(theme, key).toContain(`--v2-duration-${key}: 0.01ms;`)
+    expect(theme).toContain("animation-iteration-count: 1 !important;")
+    expect(theme).toContain("scroll-behavior: auto !important;")
   })
 
   test("switches the legacy bridge with the shared color-scheme attribute", async () => {
