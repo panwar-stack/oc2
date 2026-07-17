@@ -1,12 +1,15 @@
 ;(function () {
+  localStorage.removeItem("opencode-theme-css-light")
+  localStorage.removeItem("opencode-theme-css-dark")
+
   var key = "opencode-theme-id"
   var themeId = localStorage.getItem(key) || "oc-2"
 
   if (themeId === "oc-1") {
     themeId = "oc-2"
     localStorage.setItem(key, themeId)
-    localStorage.removeItem("opencode-theme-css-light")
-    localStorage.removeItem("opencode-theme-css-dark")
+    localStorage.removeItem("opencode-theme-css-light.v2")
+    localStorage.removeItem("opencode-theme-css-dark.v2")
   }
 
   var scheme = localStorage.getItem("opencode-color-scheme") || "system"
@@ -18,11 +21,11 @@
 
   // Update theme-color meta tag to match app color scheme
   var metas = document.querySelectorAll("meta[name='theme-color']")
-  if (metas.length > 0) metas[0].setAttribute("content", isDark ? "#131010" : "#F8F7F7")
+  if (metas.length > 0) metas[0].setAttribute("content", isDark ? "#0A0D12" : "#FFFFFF")
 
   if (themeId === "oc-2") return
 
-  var css = localStorage.getItem("opencode-theme-css-" + mode)
+  var css = localStorage.getItem("opencode-theme-css-" + mode + ".v2")
   if (css) {
     var style = document.createElement("style")
     style.id = "oc-theme-preload"

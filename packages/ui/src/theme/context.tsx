@@ -14,9 +14,10 @@ export type ColorScheme = "light" | "dark" | "system"
 const STORAGE_KEYS = {
   THEME_ID: "opencode-theme-id",
   COLOR_SCHEME: "opencode-color-scheme",
-  THEME_CSS_LIGHT: "opencode-theme-css-light",
-  THEME_CSS_DARK: "opencode-theme-css-dark",
+  THEME_CSS_LIGHT: "opencode-theme-css-light.v2",
+  THEME_CSS_DARK: "opencode-theme-css-dark.v2",
 } as const
+const STALE_CSS_KEYS = ["opencode-theme-css-light", "opencode-theme-css-dark"] as const
 
 const THEME_STYLE_ID = "oc-theme"
 let files: Record<string, () => Promise<{ default: DesktopTheme }>> | undefined
@@ -154,7 +155,7 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
 
   // Update theme-color meta tag to match light/dark mode
   const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.setAttribute("content", isDark ? "#131010" : "#F8F7F7")
+  if (meta) meta.setAttribute("content", isDark ? "#0A0D12" : "#FFFFFF")
 }
 
 function cacheThemeVariants(theme: DesktopTheme, themeId: string) {
@@ -172,6 +173,7 @@ function cacheThemeVariants(theme: DesktopTheme, themeId: string) {
 export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
   name: "Theme",
   init: (props: { defaultTheme?: string; onThemeApplied?: (theme: DesktopTheme, mode: "light" | "dark") => void }) => {
+    for (const key of STALE_CSS_KEYS) drop(key)
     const themeId = normalize(read(STORAGE_KEYS.THEME_ID) ?? props.defaultTheme) ?? "oc-2"
     const colorScheme = (read(STORAGE_KEYS.COLOR_SCHEME) as ColorScheme | null) ?? "system"
     const mode = colorScheme === "system" ? getSystemMode() : colorScheme

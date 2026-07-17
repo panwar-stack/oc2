@@ -23,6 +23,8 @@ describe("theme preload", () => {
     localStorage.setItem("opencode-theme-id", "oc-1")
     localStorage.setItem("opencode-theme-css-light", "--background-base:#fff;")
     localStorage.setItem("opencode-theme-css-dark", "--background-base:#000;")
+    localStorage.setItem("opencode-theme-css-light.v2", "--background-base:#eee;")
+    localStorage.setItem("opencode-theme-css-dark.v2", "--background-base:#111;")
 
     run()
 
@@ -31,16 +33,39 @@ describe("theme preload", () => {
     expect(localStorage.getItem("opencode-theme-id")).toBe("oc-2")
     expect(localStorage.getItem("opencode-theme-css-light")).toBeNull()
     expect(localStorage.getItem("opencode-theme-css-dark")).toBeNull()
+    expect(localStorage.getItem("opencode-theme-css-light.v2")).toBeNull()
+    expect(localStorage.getItem("opencode-theme-css-dark.v2")).toBeNull()
     expect(document.getElementById("oc-theme-preload")).toBeNull()
   })
 
-  test("keeps cached css for non-default themes", () => {
+  test("uses only versioned cached css for non-default themes", () => {
     localStorage.setItem("opencode-theme-id", "nightowl")
-    localStorage.setItem("opencode-theme-css-light", "--background-base:#fff;")
+    localStorage.setItem("opencode-theme-css-light", "--background-base:#stale;")
+    localStorage.setItem("opencode-theme-css-light.v2", "--background-base:#fff;")
 
     run()
 
     expect(document.documentElement.dataset.theme).toBe("nightowl")
     expect(document.getElementById("oc-theme-preload")?.textContent).toContain("--background-base:#fff;")
+    expect(document.getElementById("oc-theme-preload")?.textContent).not.toContain("#stale")
+    expect(localStorage.getItem("opencode-theme-css-light")).toBeNull()
+  })
+
+  test("sets the light theme color before mount", () => {
+    document.head.innerHTML = '<meta name="theme-color" content="#000000">'
+
+    run()
+
+    expect(document.querySelector('meta[name="theme-color"]')?.getAttribute("content")).toBe("#FFFFFF")
+  })
+
+  test("sets the dark theme color before mount", () => {
+    document.head.innerHTML = '<meta name="theme-color" content="#FFFFFF">'
+    localStorage.setItem("opencode-color-scheme", "dark")
+
+    run()
+
+    expect(document.documentElement.dataset.colorScheme).toBe("dark")
+    expect(document.querySelector('meta[name="theme-color"]')?.getAttribute("content")).toBe("#0A0D12")
   })
 })
