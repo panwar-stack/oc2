@@ -4,14 +4,15 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { createStore } from "solid-js/store"
 import { useQuery } from "@tanstack/solid-query"
 import { Button } from "@oc2-ai/ui/button"
-import { Logo } from "@oc2-ai/ui/logo"
-import { Spinner } from "@oc2-ai/ui/spinner"
+import { Logo, Mark } from "@oc2-ai/ui/logo"
 import { ScrollView } from "@oc2-ai/ui/scroll-view"
 import { ProjectAvatar } from "@oc2-ai/ui/v2/project-avatar-v2"
 import { ButtonV2 } from "@oc2-ai/ui/v2/button-v2"
 import { Icon as IconV2 } from "@oc2-ai/ui/v2/icon"
 import { IconButtonV2 } from "@oc2-ai/ui/v2/icon-button-v2"
+import { KeyHintV2 } from "@oc2-ai/ui/v2/key-hint-v2"
 import { MenuV2 } from "@oc2-ai/ui/v2/menu-v2"
+import { StateBlockV2 } from "@oc2-ai/ui/v2/state-block-v2"
 import { getProjectAvatarVariant, useLayout, type LocalProject } from "@/context/layout"
 import { useNavigate } from "@solidjs/router"
 import { base64Encode } from "@oc2-ai/core/util/encode"
@@ -47,6 +48,12 @@ import { useSettings } from "@/context/settings"
 import { ServerRowMenu } from "@/components/server/server-row-menu"
 import { ServerHealthIndicator } from "@/components/server/server-row"
 import { type ServerHealth } from "@/utils/server-health"
+import {
+  HOME_ALL_SESSIONS_KEYBIND,
+  homeSessionTokenCount,
+  nextHomeSessionCursor,
+  recentHomeSessions,
+} from "./home-model"
 
 const HOME_SESSION_LIMIT = 64
 const HOME_ROW_LAYOUT =
@@ -61,6 +68,7 @@ type HomeSessionRecord = {
   session: Session
   project: LocalProject
   projectName: string
+  status?: "idle" | "busy" | "retry"
 }
 
 type HomeSessionGroup = {
@@ -89,18 +97,27 @@ function buildHomeSessionRecords(input: {
     ...new Map(
       input
         .projectDirectories()
-        .flatMap((directory) => sortedRootSessions(input.sync.child(directory, { bootstrap: false })[0], Date.now()))
-        .map((session) => [`${pathKey(session.directory)}:${session.id}`, session] as const),
+        .flatMap((directory) => {
+          const store = input.sync.child(directory, { bootstrap: false })[0]
+          return sortedRootSessions(store, Date.now()).map((session) => ({
+            session,
+            status: store.session_status[session.id]?.type,
+          }))
+        })
+        .map((record) => [`${pathKey(record.session.directory)}:${record.session.id}`, record] as const),
     ).values(),
   ]
-    .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
-    .flatMap((session) => {
-      const project = projectForSession(session, input.projects(), input.projectByID())
+    .sort(
+      (a, b) => (b.session.time.updated ?? b.session.time.created) - (a.session.time.updated ?? a.session.time.created),
+    )
+    .flatMap((record) => {
+      const project = projectForSession(record.session, input.projects(), input.projectByID())
       if (!project) return []
       return {
-        session,
+        session: record.session,
         project,
         projectName: displayName(project),
+        status: record.status,
       }
     })
 }
@@ -110,7 +127,7 @@ function matchesHomeSessionSearch(record: HomeSessionRecord, query: string) {
 }
 
 function homeSessionSearchKey(record: HomeSessionRecord) {
-  return `${pathKey(record.session.directory)}:${record.session.id}`
+  return `${encodeURIComponent(pathKey(record.session.directory))}:${record.session.id}`
 }
 
 export default function Home() {
@@ -139,6 +156,10 @@ function HomeDesign() {
     search: "",
     selection: { server: server.key } as HomeProjectSelection,
     searchFocused: false,
+    allSessions: false,
+    allSessionsLoading: false,
+    recentCursor: 0,
+    prompt: "",
   })
 
   const focusedServer = createMemo(
@@ -169,9 +190,10 @@ function HomeDesign() {
     queryKey: ["home", "sessions", state.selection.server, ...projectDirectories()] as const,
     queryFn: async () => {
       await Promise.all(
-        projectDirectories().map((directory) =>
-          focusedSync().project.loadSessions(directory, { limit: HOME_SESSION_LIMIT }),
-        ),
+        projectDirectories().map(async (directory) => {
+          const loaded = await focusedSync().project.loadSessions(directory, { limit: HOME_SESSION_LIMIT })
+          if (!loaded) throw new Error(`Failed to load sessions for ${directory}`)
+        }),
       )
       return null
     },
@@ -189,13 +211,43 @@ function HomeDesign() {
     }),
   )
   const records = createMemo(() => allRecords().slice(0, HOME_SESSION_LIMIT))
+  const recent = createMemo(() => recentHomeSessions(records()))
   const searchResults = createMemo(() => {
     const query = search().toLowerCase()
     if (!query) return []
     return allRecords().filter((record) => matchesHomeSessionSearch(record, query))
   })
   const searchOpen = createMemo(() => state.searchFocused && search().length > 0)
-  const groups = createMemo(() => groupSessions(records(), language))
+  const groups = createMemo(() => groupSessions(allRecords(), language))
+  const composerProject = createMemo(() => newSessionProject())
+  const composerStore = createMemo(() => {
+    const project = composerProject()
+    if (!project) return
+    return focusedSync().child(project.worktree)[0]
+  })
+  const composerBranch = createMemo(() => composerStore()?.vcs?.branch)
+  const composerAgent = createMemo(() => composerStore()?.config.default_agent ?? "build")
+  const composerModel = createMemo(() => composerStore()?.config.model)
+  const serverHealth = createMemo(() => global.servers.health[state.selection.server]?.healthy)
+  const sessionLoadError = createMemo(() => sessionLoad.isError)
+  const sessionTotal = createMemo(() =>
+    projectDirectories().reduce((total, directory) => {
+      const store = focusedSync().child(directory, { bootstrap: false })[0]
+      return total + Math.max(store.sessionTotal, sortedRootSessions(store, Date.now()).length)
+    }, 0),
+  )
+  const sessionTotalExact = createMemo(() =>
+    projectDirectories().every((directory) => {
+      const store = focusedSync().child(directory, { bootstrap: false })[0]
+      return store.sessionTotal <= sortedRootSessions(store, Date.now()).length
+    }),
+  )
+
+  createEffect(() => {
+    for (const directory of new Set(recent().map((record) => record.session.directory))) {
+      focusedSync().child(directory)
+    }
+  })
 
   function setSelection(next: HomeProjectSelection) {
     batch(() => {
@@ -209,6 +261,32 @@ function HomeDesign() {
     setState("searchFocused", false)
   }
 
+  function showAllSessions() {
+    setState("allSessions", true)
+    queueMicrotask(() => focusSessionSearch?.())
+    void loadAllSessions()
+  }
+
+  async function loadAllSessions() {
+    setState("allSessionsLoading", true)
+    await sessionLoad.refetch()
+    await Promise.all(
+      projectDirectories().map(async (directory) => {
+        for (;;) {
+          const store = focusedSync().child(directory, { bootstrap: false })[0]
+          const count = sortedRootSessions(store, Date.now()).length
+          if (store.sessionTotal <= count) return
+          const loaded = await focusedSync().project.loadSessions(directory, {
+            limit: Math.max(store.sessionTotal, count + HOME_SESSION_LIMIT),
+          })
+          if (!loaded) return
+          if (sortedRootSessions(store, Date.now()).length <= count) return
+        }
+      }),
+    )
+    setState("allSessionsLoading", false)
+  }
+
   function selectSearchSession(session: Session) {
     openSession(session)
     closeSearch()
@@ -220,9 +298,22 @@ function HomeDesign() {
       title: language.t("home.sessions.search.placeholder"),
       keybind: "mod+f",
       hidden: true,
-      onSelect: () => focusSessionSearch?.(),
+      onSelect: showAllSessions,
+    },
+    {
+      id: "home.sessions.all",
+      title: "Show all sessions",
+      keybind: HOME_ALL_SESSIONS_KEYBIND,
+      hidden: true,
+      onSelect: showAllSessions,
     },
   ])
+
+  createEffect(() => {
+    const count = recent().length
+    if (count === 0 || state.recentCursor < count) return
+    setState("recentCursor", count - 1)
+  })
 
   createEffect(() => {
     const list = global.servers.list()
@@ -270,6 +361,20 @@ function HomeDesign() {
     openProjectNewSession(conn, project.worktree)
   }
 
+  function submitHomePrompt() {
+    const conn = focusedServer()
+    const project = composerProject()
+    const prompt = state.prompt.trim()
+    if (!conn || !project || !prompt) return
+    openProjectNewSession(conn, project.worktree, prompt)
+  }
+
+  function resumeRecent() {
+    const record = recent()[state.recentCursor]
+    if (!record) return
+    openSession(record.session)
+  }
+
   function navigateOnServer(conn: ServerConnection.Any, href: string) {
     const next = homeProjectNavigation(server.key, ServerConnection.key(conn), href)
     if (!next.server) {
@@ -280,11 +385,12 @@ function HomeDesign() {
     server.setActive(next.server)
   }
 
-  function openProjectNewSession(conn: ServerConnection.Any, directory: string) {
+  function openProjectNewSession(conn: ServerConnection.Any, directory: string, prompt?: string) {
     const ctx = global.createServerCtx(conn)
     ctx.projects.open(directory)
     ctx.projects.touch(directory)
-    navigateOnServer(conn, `/${base64Encode(directory)}/session`)
+    const href = `/${base64Encode(directory)}/session`
+    navigateOnServer(conn, prompt ? `${href}?prompt=${encodeURIComponent(prompt)}` : href)
   }
 
   function editProject(conn: ServerConnection.Any, project: LocalProject) {
@@ -338,8 +444,8 @@ function HomeDesign() {
   }
 
   return (
-    <div class="rounded-[10px] shadow-[var(--v2-elevation-raised)] m-2 min-h-0 lg:overflow-hidden bg-v2-background-bg-base self-stretch flex-1">
-      <div class="mx-auto grid w-full h-full max-w-[1080px] gap-8 px-6 pb-16 lg:grid-cols-[280px_minmax(0,720px)]">
+    <div class="m-2 flex min-h-0 flex-1 self-stretch flex-col overflow-hidden rounded-[10px] bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]">
+      <div class="mx-auto grid min-h-0 w-full max-w-[1080px] flex-1 gap-8 overflow-y-auto px-4 pb-8 sm:px-6 lg:grid-cols-[280px_minmax(0,720px)] lg:overflow-hidden">
         <HomeProjectColumn
           projects={projects()}
           selected={state.selection}
@@ -365,71 +471,449 @@ function HomeDesign() {
         />
 
         <section
-          class="min-h-0 min-w-0 flex-1 flex flex-col pt-12"
+          class="order-first flex min-h-0 min-w-0 flex-1 flex-col pt-8 lg:order-none lg:pt-12"
           aria-label={language.t("sidebar.project.recentSessions")}
         >
-          <HomeSessionSearch
-            value={state.search}
-            placeholder={language.t("home.sessions.search.placeholder")}
-            open={searchOpen()}
-            loading={sessionLoad.isLoading}
-            results={searchResults()}
-            server={state.selection.server}
-            activeServer={state.selection.server === server.key}
-            noResultsLabel={language.t("home.sessions.search.noResults", { query: search() })}
-            bindFocus={(focus) => {
-              focusSessionSearch = focus
-            }}
-            onInput={(value) => setState("search", value)}
-            onFocus={() => setState("searchFocused", true)}
-            onClose={closeSearch}
-            onSelect={selectSearchSession}
+          <HomeIdentity
+            version={platform.version}
+            updatePolicy={composerStore()?.config.autoupdate}
+            ready={composerProject() ? composerStore()?.status === "complete" : focusedSync().data.ready}
           />
-          <ScrollView class="mt-3 min-h-0 flex-1">
-            <div class="pt-3 flex flex-col gap-6">
-              <Show
-                when={!sessionLoad.isLoading}
-                fallback={<HomeSessionSkeleton label={language.t("common.loading")} />}
-              >
-                <Show
-                  when={groups().length > 0}
-                  fallback={
-                    <div class="flex min-w-0 flex-col gap-4">
-                      <HomeSessionGroupHeader
-                        title={language.t("home.sessions.empty")}
-                        onNewSession={newSessionProject() ? openNewSession : undefined}
-                      />
-                    </div>
-                  }
+          <HomeComposer
+            value={state.prompt}
+            agent={composerAgent()}
+            model={composerModel()}
+            project={composerProject() ? displayName(composerProject()!) : undefined}
+            enabled={!!composerProject()}
+            recent={recent().length > 0}
+            onInput={(value) => setState("prompt", value)}
+            onMove={(delta) =>
+              setState("recentCursor", nextHomeSessionCursor(state.recentCursor, delta, recent().length))
+            }
+            onSubmit={submitHomePrompt}
+            onResume={resumeRecent}
+          />
+          <Show
+            when={state.allSessions}
+            fallback={
+              <HomeRecentSessions
+                loading={sessionLoad.isLoading}
+                error={sessionLoadError()}
+                records={recent()}
+                total={sessionTotalExact() ? sessionTotal() : undefined}
+                cursor={state.recentCursor}
+                onCursor={(cursor) => setState("recentCursor", cursor)}
+                onMove={(delta) =>
+                  setState("recentCursor", nextHomeSessionCursor(state.recentCursor, delta, recent().length))
+                }
+                onResume={openSession}
+                onShowAll={showAllSessions}
+                onRetry={() => void sessionLoad.refetch()}
+                onOpenProject={
+                  !composerProject() && focusedServer() ? () => void chooseProject(focusedServer()!) : undefined
+                }
+              />
+            }
+          >
+            <div class="mt-6 flex min-h-0 flex-1 flex-col">
+              <div class="mb-3 flex min-w-0 items-center justify-between px-1">
+                <span class="text-[var(--v2-font-size-label)] font-bold tracking-[0.12em] text-v2-text-text-faint">
+                  ALL SESSIONS
+                </span>
+                <button
+                  type="button"
+                  class="text-[var(--v2-font-size-meta)] text-v2-text-text-muted hover:text-v2-text-text-base focus-visible:outline-none focus-visible:shadow-[var(--v2-shadow-focus)]"
+                  onClick={() => setState("allSessions", false)}
                 >
-                  <For each={groups()}>
-                    {(group, index) => (
-                      <div class="flex min-w-0 flex-col gap-4">
-                        <HomeSessionGroupHeader
-                          title={group.title}
-                          onNewSession={index() === 0 && newSessionProject() ? openNewSession : undefined}
+                  Recent sessions
+                </button>
+              </div>
+              <HomeSessionSearch
+                value={state.search}
+                placeholder={language.t("home.sessions.search.placeholder")}
+                open={searchOpen()}
+                loading={sessionLoad.isLoading || state.allSessionsLoading}
+                results={searchResults()}
+                server={state.selection.server}
+                activeServer={state.selection.server === server.key}
+                noResultsLabel={language.t("home.sessions.search.noResults", { query: search() })}
+                bindFocus={(focus) => {
+                  focusSessionSearch = focus
+                }}
+                onInput={(value) => setState("search", value)}
+                onFocus={() => setState("searchFocused", true)}
+                onClose={closeSearch}
+                onEscape={() => setState("allSessions", false)}
+                onSelect={selectSearchSession}
+              />
+              <ScrollView class="mt-3 min-h-0 flex-1">
+                <div class="flex flex-col gap-6 pt-3">
+                  <Show
+                    when={!sessionLoad.isLoading && !state.allSessionsLoading}
+                    fallback={<StateBlockV2 variant="loading" title="Loading sessions…" />}
+                  >
+                    <Show
+                      when={!sessionLoadError()}
+                      fallback={
+                        <StateBlockV2
+                          variant="error"
+                          title="Couldn't load sessions"
+                          description="Check the server connection and retry."
+                          action={
+                            <ButtonV2 variant="contrast" size="normal" onClick={() => void sessionLoad.refetch()}>
+                              Retry
+                            </ButtonV2>
+                          }
                         />
-                        <div class="flex min-w-0 flex-col gap-px">
-                          <For each={group.sessions}>
-                            {(record) => (
-                              <HomeSessionRow
-                                record={record}
-                                server={state.selection.server}
-                                activeServer={state.selection.server === server.key}
-                                openSession={openSession}
+                      }
+                    >
+                      <Show
+                        when={groups().length > 0}
+                        fallback={
+                          <StateBlockV2
+                            variant="empty"
+                            title="No sessions yet"
+                            description={
+                              composerProject()
+                                ? "Start typing above to create one — your sessions will appear here."
+                                : "Open a project to create your first session."
+                            }
+                            action={
+                              !composerProject() && focusedServer() ? (
+                                <ButtonV2
+                                  variant="contrast"
+                                  size="normal"
+                                  onClick={() => void chooseProject(focusedServer()!)}
+                                >
+                                  Open project
+                                </ButtonV2>
+                              ) : undefined
+                            }
+                          />
+                        }
+                      >
+                        <For each={groups()}>
+                          {(group, index) => (
+                            <div class="flex min-w-0 flex-col gap-4">
+                              <HomeSessionGroupHeader
+                                title={group.title}
+                                onNewSession={index() === 0 && newSessionProject() ? openNewSession : undefined}
                               />
-                            )}
-                          </For>
-                        </div>
-                      </div>
-                    )}
-                  </For>
-                </Show>
-              </Show>
+                              <div class="flex min-w-0 flex-col gap-px">
+                                <For each={group.sessions}>
+                                  {(record) => (
+                                    <HomeSessionRow
+                                      record={record}
+                                      server={state.selection.server}
+                                      activeServer={state.selection.server === server.key}
+                                      openSession={openSession}
+                                    />
+                                  )}
+                                </For>
+                              </div>
+                            </div>
+                          )}
+                        </For>
+                      </Show>
+                    </Show>
+                  </Show>
+                </div>
+              </ScrollView>
             </div>
-          </ScrollView>
+          </Show>
         </section>
       </div>
+      <HomeStatusLine
+        project={composerProject() ? displayName(composerProject()!) : undefined}
+        directory={composerProject()?.worktree}
+        branch={composerBranch()}
+        health={serverHealth()}
+      />
+    </div>
+  )
+}
+
+function HomeIdentity(props: { version?: string; updatePolicy?: boolean | "notify"; ready: boolean }) {
+  const update = () => {
+    if (!props.ready) return { glyph: "◐", label: "syncing", class: "text-v2-state-fg-thinking" }
+    if (props.updatePolicy === false) return { glyph: "○", label: "updates off", class: "text-v2-text-text-faint" }
+    if (props.updatePolicy === true) return { glyph: "●", label: "auto-update on", class: "text-v2-state-fg-success" }
+    return { glyph: "●", label: "update checks on", class: "text-v2-state-fg-success" }
+  }
+  return (
+    <div data-component="home-identity" class="mb-5 flex min-w-0 items-center gap-2.5">
+      <span class="flex size-7 shrink-0 items-center justify-center rounded-[var(--v2-radius-chip)] bg-v2-background-bg-accent p-1.5 text-v2-text-text-contrast">
+        <Mark class="w-full" />
+      </span>
+      <strong class="text-[var(--v2-font-size-title)] text-v2-text-text-base">OC2</strong>
+      <span class="min-w-0 truncate text-[var(--v2-font-size-meta)] text-v2-text-text-faint">
+        {props.version ? `v${props.version}` : "version unavailable"} · {update().glyph}{" "}
+        <span class={update().class}>{update().label}</span>
+      </span>
+    </div>
+  )
+}
+
+function HomeComposer(props: {
+  value: string
+  agent: string
+  model?: string
+  project?: string
+  enabled: boolean
+  recent: boolean
+  onInput: (value: string) => void
+  onMove: (delta: number) => void
+  onSubmit: () => void
+  onResume: () => void
+}) {
+  const send = () => {
+    if (props.value.trim()) {
+      props.onSubmit()
+      return
+    }
+    if (props.recent) props.onResume()
+  }
+  return (
+    <div
+      data-component="home-composer"
+      class="overflow-hidden rounded-[var(--v2-radius-composer)] border border-v2-border-border-strong bg-v2-background-bg-layer-02 focus-within:border-v2-border-border-focus focus-within:shadow-[var(--v2-shadow-focus)]"
+    >
+      <textarea
+        autofocus
+        rows={3}
+        value={props.value}
+        disabled={!props.enabled}
+        aria-label="Message"
+        placeholder={props.enabled ? 'Ask anything… e.g. "Fix a TODO in the codebase"' : "Open a project to start"}
+        class="block min-h-20 w-full resize-none border-0 bg-transparent px-4 py-3 text-[var(--v2-font-size-title)] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint disabled:cursor-not-allowed"
+        onInput={(event) => props.onInput(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.isComposing || event.altKey || event.metaKey || event.ctrlKey) return
+          if (!props.value.trim() && props.recent && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault()
+            props.onMove(event.key === "ArrowDown" ? 1 : -1)
+            return
+          }
+          if (event.key !== "Enter" || event.shiftKey) return
+          event.preventDefault()
+          send()
+        }}
+      />
+      <div class="flex min-w-0 flex-wrap items-center gap-1.5 border-t border-v2-border-border-muted bg-v2-background-bg-layer-01 px-2 py-1.5">
+        <span class="max-w-32 truncate rounded-[var(--v2-radius-chip)] bg-v2-background-bg-layer-03 px-2 py-1 text-[var(--v2-font-size-meta)] font-semibold text-v2-text-text-base">
+          ▸ {props.agent}
+        </span>
+        <Show when={props.model}>
+          {(model) => (
+            <span class="max-w-48 truncate rounded-[var(--v2-radius-chip)] bg-v2-background-bg-layer-03 px-2 py-1 text-[var(--v2-font-size-meta)] text-v2-text-text-muted">
+              {model()}
+            </span>
+          )}
+        </Show>
+        <Show when={props.project}>
+          {(project) => (
+            <span class="max-w-40 truncate rounded-[var(--v2-radius-chip)] bg-v2-background-bg-layer-03 px-2 py-1 text-[var(--v2-font-size-meta)] text-v2-text-text-muted sm:max-w-56">
+              {project()}
+            </span>
+          )}
+        </Show>
+        <span class="ml-auto hidden text-[var(--v2-font-size-meta)] text-v2-text-text-faint sm:inline">
+          Enter continue · Shift+Enter newline
+        </span>
+        <ButtonV2 variant="contrast" size="normal" disabled={!props.enabled || !props.value.trim()} onClick={send}>
+          Continue ⏎
+        </ButtonV2>
+      </div>
+    </div>
+  )
+}
+
+function HomeRecentSessions(props: {
+  loading: boolean
+  error: boolean
+  records: HomeSessionRecord[]
+  total?: number
+  cursor: number
+  onCursor: (cursor: number) => void
+  onMove: (delta: number) => void
+  onResume: (session: Session) => void
+  onShowAll: () => void
+  onRetry: () => void
+  onOpenProject?: () => void
+}) {
+  const language = useLanguage()
+  const active = () => props.records[props.cursor]
+  return (
+    <div data-component="home-recent-sessions" class="mt-7 min-w-0">
+      <div class="mb-2 flex min-w-0 items-center justify-between gap-3">
+        <span class="text-[var(--v2-font-size-label)] font-bold tracking-[0.12em] text-v2-text-text-faint">
+          RECENT SESSIONS <span class="font-normal tracking-normal">{props.records.length}</span>
+        </span>
+        <div class="flex shrink-0 items-center gap-2">
+          <KeyHintV2 shortcut="↑↓" label="select" decorative />
+          <KeyHintV2 shortcut="Enter" label="resume" decorative />
+        </div>
+      </div>
+      <Show when={!props.loading} fallback={<StateBlockV2 variant="loading" title="Loading sessions…" />}>
+        <Show
+          when={!props.error}
+          fallback={
+            <StateBlockV2
+              variant="error"
+              title="Couldn't load sessions"
+              description="Check the server connection and retry."
+              action={
+                <ButtonV2 variant="contrast" size="normal" onClick={props.onRetry}>
+                  Retry
+                </ButtonV2>
+              }
+            />
+          }
+        >
+          <Show
+            when={props.records.length > 0}
+            fallback={
+              <StateBlockV2
+                variant="empty"
+                title="No sessions yet"
+                description={
+                  props.onOpenProject
+                    ? "Open a project to create your first session."
+                    : "Start typing above to create one — your sessions will appear here."
+                }
+                action={
+                  props.onOpenProject ? (
+                    <ButtonV2 variant="contrast" size="normal" onClick={props.onOpenProject}>
+                      Open project
+                    </ButtonV2>
+                  ) : undefined
+                }
+              />
+            }
+          >
+            <div class="overflow-hidden rounded-[var(--v2-radius-group)] border border-v2-border-border-base">
+              <div
+                role="listbox"
+                tabIndex={0}
+                aria-label="Recent sessions"
+                aria-activedescendant={active() ? `home-recent-session-${homeSessionSearchKey(active()!)}` : undefined}
+                class="focus-visible:outline-none focus-visible:shadow-[var(--v2-shadow-focus)]"
+                onKeyDown={(event) => {
+                  if (event.altKey || event.ctrlKey || event.metaKey) return
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault()
+                    props.onMove(event.key === "ArrowDown" ? 1 : -1)
+                    return
+                  }
+                  if (/^[1-3]$/.test(event.key)) {
+                    const record = props.records[Number(event.key) - 1]
+                    if (!record) return
+                    event.preventDefault()
+                    props.onCursor(Number(event.key) - 1)
+                    return
+                  }
+                  if (event.key !== "Enter" || event.isComposing) return
+                  event.preventDefault()
+                  const record = active()
+                  if (record) props.onResume(record.session)
+                }}
+              >
+                <For each={props.records}>
+                  {(record, index) => {
+                    const selected = () => index() === props.cursor
+                    const tokens = () => homeSessionTokenCount(record.session)
+                    const live = () => record.status === "busy" || record.status === "retry"
+                    const meta = () =>
+                      [
+                        record.session.agent,
+                        tokens() === undefined
+                          ? undefined
+                          : `${Intl.NumberFormat(language.intl(), { notation: "compact", maximumFractionDigits: 1 }).format(tokens()!)} tok`,
+                        DateTime.fromMillis(record.session.time.updated ?? record.session.time.created)
+                          .setLocale(language.intl())
+                          .toRelative(),
+                      ]
+                        .filter((value): value is string => !!value)
+                        .join(" · ")
+                    return (
+                      <button
+                        type="button"
+                        role="option"
+                        tabIndex={-1}
+                        id={`home-recent-session-${homeSessionSearchKey(record)}`}
+                        aria-selected={selected()}
+                        class="flex h-8 w-full min-w-0 items-center gap-2 border-0 border-b border-v2-border-border-muted px-3 text-left last:border-b-0 hover:bg-v2-background-bg-layer-02 data-[selected]:bg-v2-background-bg-layer-02 focus-visible:outline-none"
+                        data-selected={selected() ? "" : undefined}
+                        onMouseEnter={() => props.onCursor(index())}
+                        onFocus={() => props.onCursor(index())}
+                        onClick={() => props.onResume(record.session)}
+                      >
+                        <span
+                          aria-hidden="true"
+                          class={
+                            selected()
+                              ? "w-2 shrink-0 text-v2-text-text-accent"
+                              : live()
+                                ? "w-2 shrink-0 text-v2-state-fg-success"
+                                : "w-2 shrink-0 text-v2-text-text-faint"
+                          }
+                        >
+                          {selected() ? "▸" : live() ? "●" : "·"}
+                        </span>
+                        <span
+                          class={`min-w-0 flex-1 truncate text-[var(--v2-font-size-small)] ${selected() ? "font-semibold text-v2-text-text-base" : "text-v2-text-text-muted"}`}
+                        >
+                          {sessionTitle(record.session.title) || record.session.id}
+                        </span>
+                        <Show when={live()}>
+                          <span class="shrink-0 text-[var(--v2-font-size-meta)] text-v2-state-fg-success">live</span>
+                        </Show>
+                        <span class="max-w-[52%] shrink-0 truncate whitespace-nowrap text-right text-[var(--v2-font-size-meta)] text-v2-text-text-faint sm:max-w-none">
+                          {meta()}
+                        </span>
+                      </button>
+                    )
+                  }}
+                </For>
+              </div>
+              <button
+                type="button"
+                class="flex h-8 w-full min-w-0 items-center gap-2 border-t border-v2-border-border-muted px-3 text-left text-[var(--v2-font-size-small)] text-v2-text-text-faint hover:bg-v2-background-bg-layer-02 focus-visible:outline-none focus-visible:shadow-[var(--v2-shadow-focus)]"
+                onClick={props.onShowAll}
+              >
+                <span aria-hidden="true" class="w-2 shrink-0">
+                  ·
+                </span>
+                <span class="min-w-0 flex-1 truncate">
+                  {props.total === undefined ? "Show all sessions…" : `Show all ${props.total} sessions…`}
+                </span>
+                <KeyHintV2 shortcut="Ctrl+O" decorative />
+              </button>
+            </div>
+          </Show>
+        </Show>
+      </Show>
+    </div>
+  )
+}
+
+function HomeStatusLine(props: { project?: string; directory?: string; branch?: string; health?: boolean }) {
+  return (
+    <div
+      data-component="home-status-line"
+      role="status"
+      aria-label={`${props.project ?? "No project"}${props.branch ? `, branch ${props.branch}` : ""}, ${props.health === undefined ? "checking server" : props.health ? "server connected" : "server unavailable"}`}
+      class="flex h-8 min-w-0 shrink-0 items-center gap-2 border-t border-v2-border-border-muted bg-v2-background-bg-layer-01 px-3 text-[var(--v2-font-size-meta)] text-v2-text-text-muted"
+    >
+      <span class={props.health === false ? "text-v2-state-fg-danger" : "text-v2-state-fg-success"} aria-hidden="true">
+        {props.health === undefined ? "○" : props.health ? "●" : "✕"}
+      </span>
+      <span class="max-w-[25%] shrink-0 truncate">{props.project ?? "No project"}</span>
+      <Show when={props.directory}>{(directory) => <span class="min-w-0 flex-1 truncate">{directory()}</span>}</Show>
+      <Show when={props.branch}>{(branch) => <span class="max-w-[25%] shrink truncate">: {branch()}</span>}</Show>
+      <span class="ml-auto hidden shrink-0 text-v2-text-text-faint sm:inline">
+        {props.health === undefined ? "checking server" : props.health ? "server connected" : "server unavailable"}
+      </span>
     </div>
   )
 }
@@ -757,6 +1241,7 @@ function HomeSessionSearch(props: {
   onInput: (value: string) => void
   onFocus: () => void
   onClose: () => void
+  onEscape?: () => void
   onSelect: (session: Session) => void
 }) {
   const language = useLanguage()
@@ -844,17 +1329,17 @@ function HomeSessionSearch(props: {
                 <Show
                   when={!props.loading}
                   fallback={
-                    <div class="flex items-center justify-center px-4 py-3 text-v2-text-text-muted [font-weight:440]">
-                      <Spinner class="size-4" />
+                    <div class="px-4 py-3">
+                      <StateBlockV2 variant="loading" title="Loading sessions…" />
                     </div>
                   }
                 >
                   <Show
                     when={props.results.length > 0}
                     fallback={
-                      <p class="my-1.5 px-4 text-[13px] leading-4 tracking-[-0.04px] text-v2-text-text-muted [font-weight:440]">
-                        {props.noResultsLabel}
-                      </p>
+                      <div class="px-4 py-3">
+                        <StateBlockV2 variant="empty" title={props.noResultsLabel} />
+                      </div>
                     }
                   >
                     <div class="flex flex-col">
@@ -909,6 +1394,7 @@ function HomeSessionSearch(props: {
               if (event.key === "Escape") {
                 event.preventDefault()
                 props.onClose()
+                props.onEscape?.()
                 input?.blur()
                 return
               }
@@ -1052,19 +1538,6 @@ function HomeSessionRow(props: {
         </span>
       </Show>
     </button>
-  )
-}
-
-function HomeSessionSkeleton(props: { label: string }) {
-  return (
-    <div class="flex min-w-0 flex-col gap-4">
-      <div class="flex h-7 min-w-0 items-center justify-between px-4">
-        <div class={HOME_SECTION_LABEL}>{props.label}</div>
-      </div>
-      <div class="flex min-w-0 flex-col gap-px" aria-hidden="true">
-        <For each={[0, 1, 2, 3]}>{() => <div class="h-10 rounded-[6px] bg-v2-background-bg-deep opacity-70" />}</For>
-      </div>
-    </div>
   )
 }
 

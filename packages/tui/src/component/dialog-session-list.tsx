@@ -3,7 +3,6 @@ import { DialogSelect } from "../ui/dialog-select"
 import { useRoute } from "../context/route"
 import { useSync } from "../context/sync"
 import { createMemo, createResource, createSignal, onMount, type JSX } from "solid-js"
-import { Locale } from "../util/locale"
 import { useProject } from "../context/project"
 import { useTheme } from "../context/theme"
 import { useSDK } from "../context/sdk"
@@ -18,6 +17,10 @@ import { errorMessage } from "../util/error"
 import { DialogSessionDeleteFailed } from "./dialog-session-delete-failed"
 import { WorkspaceLabel } from "./workspace-label"
 import { useCommandShortcut } from "../keymap"
+import { homeSessionMeta } from "../routes/home/session-destination"
+import { StateBlock } from "./state-block"
+import { Locale } from "../util/locale"
+import { useKeyboard } from "@opentui/solid"
 
 export function DialogSessionList() {
   const dialog = useDialog()
@@ -39,12 +42,22 @@ export function DialogSessionList() {
     async (input) => {
       if (!input.query) return undefined
       const result = await sdk.client.session.list({ search: input.query, limit: 30, ...input.filter })
+      if (result.error) throw new Error(errorMessage(result.error))
       return result.data ?? []
     },
   )
 
+  useKeyboard((event) => {
+    if (!searchResults.error || event.name !== "return") return
+    event.preventDefault()
+    event.stopPropagation()
+    void refetch()
+  })
+
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
-  const sessions = createMemo(() => searchResults() ?? sync.data.session)
+  const sessions = createMemo(() =>
+    search() && (searchResults.loading || searchResults.error) ? [] : (searchResults() ?? sync.data.session),
+  )
 
   function recover(session: NonNullable<ReturnType<typeof sessions>[number]>) {
     const workspace = project.workspace.get(session.workspaceID!)
@@ -139,7 +152,7 @@ export function DialogSessionList() {
       .map((x) => x.id)
   }
 
-  const [browseOrder] = createSignal<string[]>(orderByRecency(sync.data.session))
+  const browseOrder = createMemo(() => orderByRecency(sync.data.session))
 
   const quickSwitchHint = createMemo(() => {
     const first = quickSwitch1()
@@ -172,21 +185,26 @@ export function DialogSessionList() {
       if (!x) return undefined
       const workspace = x.workspaceID ? project.workspace.get(x.workspaceID) : undefined
 
-      let footer: JSX.Element | string = ""
+      const meta = Locale.truncate(homeSessionMeta(x), Flag.OC2_EXPERIMENTAL_WORKSPACES ? 18 : 30)
+      let footer: JSX.Element | string = meta
       if (Flag.OC2_EXPERIMENTAL_WORKSPACES) {
         if (x.workspaceID) {
           footer = workspace ? (
-            <WorkspaceLabel
-              type={workspace.type}
-              name={workspace.name}
-              status={project.workspace.status(x.workspaceID) ?? "error"}
-            />
+            <>
+              <WorkspaceLabel
+                type={workspace.type}
+                name={Locale.truncate(workspace.name, 14)}
+                status={project.workspace.status(x.workspaceID) ?? "error"}
+              />
+              <span style={{ fg: theme.textMuted }}> · {meta}</span>
+            </>
           ) : (
-            <WorkspaceLabel type="unknown" name={x.workspaceID} status="error" />
+            <>
+              <WorkspaceLabel type="unknown" name={Locale.truncate(x.workspaceID, 14)} status="error" />
+              <span style={{ fg: theme.textMuted }}> · {meta}</span>
+            </>
           )
         }
-      } else {
-        footer = Locale.time(x.time.updated)
       }
 
       const isDeleting = toDelete() === x.id
@@ -197,7 +215,7 @@ export function DialogSessionList() {
         ? () => <Spinner />
         : slot !== undefined
           ? () => <text fg={theme.accent}>{slot}</text>
-          : undefined
+          : () => <text fg={theme.textFaint}>·</text>
       return {
         title: isDeleting ? `Press ${deleteHint()} again to confirm` : x.title,
         bg: isDeleting ? theme.error : undefined,
@@ -230,6 +248,25 @@ export function DialogSessionList() {
       title="Sessions"
       options={options()}
       skipFilter={true}
+      empty={
+        searchResults.error ? (
+          <StateBlock
+            theme={theme}
+            variant="error"
+            title="Couldn't load sessions"
+            description={errorMessage(searchResults.error)}
+            action={
+              <text fg={theme.primary} onMouseUp={() => void refetch()}>
+                retry
+              </text>
+            }
+            hint={<text fg={theme.textMuted}>enter</text>}
+            scale="inline"
+          />
+        ) : searchResults.loading && search() ? (
+          <StateBlock theme={theme} variant="loading" title="Loading sessions…" scale="inline" />
+        ) : undefined
+      }
       current={currentSessionID()}
       onFilter={setSearch}
       onMove={() => {

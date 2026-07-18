@@ -98,7 +98,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
 
   const sdkCache = new Map<string, OpencodeClient>()
   const booting = new Map<string, Promise<void>>()
-  const sessionLoads = new Map<string, Promise<void>>()
+  const sessionLoads = new Map<string, Promise<boolean>>()
   const sessionMeta = new Map<string, { limit: number }>()
   const sessionAuthority = createSessionAuthority()
 
@@ -288,7 +288,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     const key = directoryKey(directory)
     const pending = sessionLoads.get(key)
     if (pending) {
-      await pending
+      if (!(await pending)) return false
       return loadSessions(directory, options)
     }
 
@@ -306,11 +306,12 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         cleanupDroppedSessionCaches(store, setStore, next, setSessionTodo)
       }
       children.unpin(key)
-      return
+      return true
     }
 
     const limit = Math.max(retainedLimit + SESSION_RECENT_LIMIT, SESSION_RECENT_LIMIT)
     const generation = sessionAuthority.beginList(key)
+    let succeeded = true
     const promise = queryClient
       .fetchQuery({
         ...queryOptionsApi.sessions(key),
@@ -358,16 +359,18 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
                 title: language.t("toast.session.listFailed.title", { project }),
                 description: formatServerError(err, language.t),
               })
+              succeeded = false
             })
             .then(() => null),
       })
-      .then(() => {})
+      .then(() => succeeded)
 
     sessionLoads.set(key, promise)
-    void promise.finally(() => {
+    const release = () => {
       sessionLoads.delete(key)
       children.unpin(key)
-    })
+    }
+    void promise.then(release, release)
     return promise
   }
 
@@ -397,7 +400,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         store: child[0],
         setStore: child[1],
         vcsCache: cache,
-        loadSessions,
+        loadSessions: (directory) => loadSessions(directory).then(() => {}),
         loadSession: (sessionID) => refreshSession(key, sessionID),
         translate: language.t,
         queryClient,

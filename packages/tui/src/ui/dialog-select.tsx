@@ -26,6 +26,7 @@ export interface DialogSelectProps<T> {
   titleView?: JSX.Element
   placeholder?: string
   footer?: JSX.Element
+  empty?: JSX.Element
   options: DialogSelectOption<T>[]
   flat?: boolean
   ref?: (ref: DialogSelectRef<T>) => void
@@ -605,7 +606,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           when={grouped().length > 0}
           fallback={
             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-              <StateBlock theme={theme} variant="empty" title="No results found" scale="inline" />
+              {props.empty ?? <StateBlock theme={theme} variant="empty" title="No results found" scale="inline" />}
             </box>
           }
         >
