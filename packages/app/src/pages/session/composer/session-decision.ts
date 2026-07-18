@@ -28,6 +28,11 @@ export function questionDecisionPresentation(input: {
   }
 }
 
+export function questionConfirmAction(input: { multiple: boolean; selected: number; last: boolean }) {
+  if (!input.multiple && input.selected === 0) return "select" as const
+  return input.last ? ("submit" as const) : ("next" as const)
+}
+
 export function decisionKey(key: string, total: number) {
   if (key === "Escape") return { type: "cancel" as const }
   if (key === "Enter") return { type: "confirm" as const }

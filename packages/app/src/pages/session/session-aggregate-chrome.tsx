@@ -9,7 +9,7 @@ import { useCommand } from "@/context/command"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
 import { useProviders } from "@/hooks/use-providers"
-import { contextGaugeState, visibleTodos } from "./session-chrome-model"
+import { contextGaugeState, rootSessionID, visibleTodos } from "./session-chrome-model"
 
 function useSessionContext(sessionID: () => string | undefined) {
   const sync = useSync()
@@ -82,14 +82,18 @@ export function SessionDetailsPanel(props: {
   const sync = useSync()
   const sdk = useSDK()
   const session = createMemo(() => (props.sessionID ? sync.session.get(props.sessionID) : undefined))
+  const teamSessionID = createMemo(() =>
+    props.sessionID ? rootSessionID(sync.data.session, props.sessionID) : undefined,
+  )
   const [teamMembers, { refetch }] = createResource(
-    () => props.sessionID,
+    teamSessionID,
     async (sessionID) => {
       const team = await sdk.client.team.get({ sessionID }, { throwOnError: false }).then((result) => result.data)
-      if (!team) return []
-      const tasks = await sdk.client.team
-        .tasks({ teamID: team.id, sessionID }, { throwOnError: true })
+      if (!team || typeof team !== "object" || Array.isArray(team) || typeof team.id !== "string") return []
+      const result = await sdk.client.team
+        .tasks({ teamID: team.id, sessionID }, { throwOnError: false })
         .then((result) => result.data)
+      const tasks = Array.isArray(result) ? result : []
       return [...new Set(tasks.flatMap((task) => task.assignee ?? []))].map((name) => {
         const assigned = tasks.filter((task) => task.assignee === name)
         return {

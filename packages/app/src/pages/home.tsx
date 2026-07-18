@@ -48,6 +48,8 @@ import { useSettings } from "@/context/settings"
 import { ServerRowMenu } from "@/components/server/server-row-menu"
 import { ServerHealthIndicator } from "@/components/server/server-row"
 import { type ServerHealth } from "@/utils/server-health"
+import { setSessionPromptHandoff } from "@/pages/session/handoff"
+import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import {
   HOME_ALL_SESSIONS_KEYBIND,
   homeSessionTokenCount,
@@ -389,8 +391,11 @@ function HomeDesign() {
     const ctx = global.createServerCtx(conn)
     ctx.projects.open(directory)
     ctx.projects.touch(directory)
-    const href = `/${base64Encode(directory)}/session`
-    navigateOnServer(conn, prompt ? `${href}?prompt=${encodeURIComponent(prompt)}` : href)
+    const slug = base64Encode(directory)
+    if (prompt) {
+      setSessionPromptHandoff(SessionStateKey.from(ctx.sdk.scope, SessionRouteKey.fromLegacy(slug)), prompt)
+    }
+    navigateOnServer(conn, `/${slug}/session`)
   }
 
   function editProject(conn: ServerConnection.Any, project: LocalProject) {

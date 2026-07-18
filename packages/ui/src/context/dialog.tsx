@@ -54,6 +54,19 @@ function returnFocusTarget() {
   return target
 }
 
+export function escapeTargetsPopup(target: EventTarget | null) {
+  if (typeof document === "undefined" || typeof Element === "undefined") return false
+  const element = target instanceof Element ? target : document.activeElement
+  if (!(element instanceof Element)) return false
+  if (element.closest('[role="menu"], [role="listbox"]')) return true
+
+  const control = element.closest<HTMLElement>('[aria-expanded="true"][aria-controls]')
+  const popupID = control?.getAttribute("aria-controls")
+  if (!popupID) return false
+  const popup = document.getElementById(popupID)
+  return !!popup?.matches('[role="menu"], [role="listbox"]')
+}
+
 function init() {
   const [stack, setStack] = createSignal<Active[]>([])
   const timer = { current: undefined as ReturnType<typeof setTimeout> | undefined }
@@ -93,6 +106,7 @@ function init() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
+      if (escapeTargetsPopup(event.target)) return
       close()
       event.preventDefault()
       event.stopPropagation()

@@ -7,7 +7,7 @@ import { useTheme } from "../../context/theme"
 import { useLocal } from "../../context/local"
 import { reasoningSummary, useThinkingMode } from "../../context/thinking"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import { RGBA, TextAttributes, type BoxRenderable, type SyntaxStyle } from "@opentui/core"
+import { RGBA, TextAttributes, type BoxRenderable, type KeyEvent, type SyntaxStyle } from "@opentui/core"
 import { useBindings } from "../../keymap"
 import { Locale } from "../../util/locale"
 import { useTuiPaths } from "../../context/runtime"
@@ -602,8 +602,20 @@ function BlockTool(props: {
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const [hover, setHover] = createSignal(false)
+  const [focused, setFocused] = createSignal(false)
+  let root: BoxRenderable | undefined
   const input = createMemo(() => (props.part ? toolInputRecord(props.part.state.input) : {}))
   const metadata = createMemo(() => (props.part ? toolDisplayMetadata(props.part.state) : {}))
+  const activate = () => {
+    if (renderer.getSelection()?.getSelectedText()) return
+    props.onClick?.()
+  }
+  const key = (event: KeyEvent) => {
+    if (event.name !== "return" || !props.onClick) return
+    event.preventDefault()
+    event.stopPropagation()
+    activate()
+  }
   return (
     <Show
       when={props.part}
@@ -615,14 +627,19 @@ function BlockTool(props: {
           paddingLeft={2}
           marginTop={1}
           gap={1}
-          backgroundColor={hover() ? theme.backgroundMenu : theme.backgroundPanel}
+          backgroundColor={hover() || focused() ? theme.backgroundMenu : theme.backgroundPanel}
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.background}
+          focusable={Boolean(props.onClick)}
+          ref={(value: BoxRenderable) => (root = value)}
+          on:focused={() => setFocused(true)}
+          on:blurred={() => setFocused(false)}
+          onKeyDown={key}
           onMouseOver={() => props.onClick && setHover(true)}
           onMouseOut={() => setHover(false)}
           onMouseUp={() => {
-            if (renderer.getSelection()?.getSelectedText()) return
-            props.onClick?.()
+            root?.focus()
+            activate()
           }}
           flexShrink={0}
         >
@@ -651,6 +668,7 @@ function BlockTool(props: {
           metadata={metadata()}
           duration={v2ToolRowDuration(part().time)}
           error={v2ToolError(part())}
+          onActivate={props.onClick}
           ref={(el) => setPreLayoutSiblingMargin(el, (previous) => (previous?.id.startsWith("text-") ? 1 : 0))}
         >
           <box paddingTop={1} paddingBottom={1} gap={1}>

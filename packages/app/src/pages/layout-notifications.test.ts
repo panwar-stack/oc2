@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-test("keeps agent state out of in-app toasts", async () => {
+test("keeps redesigned decisions in-page and restores actionable legacy alerts", async () => {
   const source = await Bun.file(new URL("./layout.tsx", import.meta.url)).text()
   const start = source.indexOf("const useSDKNotifications")
   const end = source.indexOf("useSDKNotifications()", start)
@@ -8,5 +8,8 @@ test("keeps agent state out of in-app toasts", async () => {
 
   expect(notifications).toContain('e.details?.type !== "permission.asked"')
   expect(notifications).toContain("platform.notify")
-  expect(notifications).not.toContain("showToast(")
+  expect(notifications).toContain("if (settings.general.newLayoutDesigns()) return")
+  expect(notifications).toContain("const toastID = showToast({")
+  expect(notifications).toContain('language.t("notification.action.goToSession")')
+  expect(notifications).toContain("persistent: true")
 })

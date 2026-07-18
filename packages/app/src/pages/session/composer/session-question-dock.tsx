@@ -15,7 +15,11 @@ import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSync } from "@/context/sync"
 import { ScopedKey } from "@/utils/server-scope"
-import { decisionKey, questionDecisionPresentation } from "@/pages/session/composer/session-decision"
+import {
+  decisionKey,
+  questionConfirmAction,
+  questionDecisionPresentation,
+} from "@/pages/session/composer/session-decision"
 
 const cache = new Map<string, { tab: number; answers: QuestionAnswer[]; custom: string[]; customOn: boolean[] }>()
 
@@ -443,12 +447,13 @@ export const SessionQuestionDock: Component<{
     if (sending()) return
     if (store.editing) commitCustom()
 
-    if (!multi() && selected() === 0) {
+    const action = questionConfirmAction({ multiple: multi(), selected: selected(), last: store.tab >= total() - 1 })
+    if (action === "select") {
       selectOption(store.focus)
-      if (store.editing || selected() === 0) return
+      return
     }
 
-    if (store.tab >= total() - 1) {
+    if (action === "submit") {
       submit()
       return
     }

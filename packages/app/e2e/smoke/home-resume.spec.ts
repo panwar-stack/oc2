@@ -71,7 +71,9 @@ test("keeps the resume surface usable at narrow and 200%-equivalent widths", asy
   const prompt = page.getByRole("textbox", { name: "Message" })
   await prompt.fill("2 failing home tests")
   await page.keyboard.press("Enter")
-  await expect(page).toHaveURL(/\/session\?prompt=2%20failing%20home%20tests$/)
+  await expect(page).toHaveURL(/\/session$/)
+  await expect(page.getByRole("textbox", { name: "Message" })).toContainText("2 failing home tests")
+  expect(await page.evaluate(() => JSON.stringify(history.state))).not.toContain("2 failing home tests")
 })
 
 test("loads beyond the recent cache when all sessions opens", async ({ page }) => {
@@ -87,6 +89,21 @@ test("loads beyond the recent cache when all sessions opens", async ({ page }) =
 
   await page.keyboard.press("Control+o")
   await expect(page.locator('[data-component="home-session-row"]')).toHaveCount(70)
+})
+
+test("delivers a prompt when a deep link targets the open new-session route", async ({ page }) => {
+  await openHome(page)
+  const href = `/${base64Encode(fixture.directory)}/session`
+  await page.goto(href)
+  await expectAppVisible(page.getByRole("textbox", { name: "Message" }))
+
+  await page.evaluate((directory) => {
+    const url = `opencode://new-session?directory=${encodeURIComponent(directory)}&prompt=same-route%20prompt`
+    window.dispatchEvent(new CustomEvent("opencode:deep-link", { detail: { urls: [url] } }))
+  }, fixture.directory)
+
+  await expect(page).toHaveURL(new RegExp(`${href}$`))
+  await expect(page.getByRole("textbox", { name: "Message" })).toContainText("same-route prompt")
 })
 
 test("renders the canonical session error and retry action", async ({ page }) => {

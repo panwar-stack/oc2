@@ -115,12 +115,6 @@ export function QuestionPrompt(props: {
       values[store.tab] = answer
       setStore("custom", values)
     }
-    if (questions().length === 1) {
-      if (planApproval()) return
-      reply([[answer]])
-      return
-    }
-    if (!last()) moveQuestion(store.tab + 1)
   }
 
   const selectOption = (index = store.focused) => {
@@ -147,7 +141,6 @@ export function QuestionPrompt(props: {
     if (store.phase !== "waiting") return
     if (!multi() && selected() === 0) {
       selectOption()
-      if (planApproval() && selected() > 0) submit()
       return
     }
     if (!last()) {

@@ -1,4 +1,4 @@
-import type { TeamInfo, TeamMessage, TeamTask } from "@oc2-ai/sdk/v2"
+import type { TeamInfo, TeamTask } from "@oc2-ai/sdk/v2"
 import { StatusGlyph } from "@oc2-ai/ui/v2/status-glyph"
 import { StateBlockV2 } from "@oc2-ai/ui/v2/state-block-v2"
 import { ButtonV2 } from "@oc2-ai/ui/v2/button-v2"
@@ -6,7 +6,13 @@ import { KeyHintV2 } from "@oc2-ai/ui/v2/key-hint-v2"
 import { For, Match, Show, Switch, createMemo, createResource, onCleanup, onMount } from "solid-js"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
-import { groupTeamTasks, stableAgentColor, teamTaskGroup, type TeamTaskGroup } from "./session-chrome-model"
+import {
+  groupTeamTasks,
+  rootSessionID,
+  stableAgentColor,
+  teamTaskGroup,
+  type TeamTaskGroup,
+} from "./session-chrome-model"
 import "./team-board.css"
 
 const groups: { id: TeamTaskGroup; label: string; glyph: "running" | "needs-you" | "pending" | "done" | "failed" }[] = [
@@ -20,18 +26,17 @@ const groups: { id: TeamTaskGroup; label: string; glyph: "running" | "needs-you"
 export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; onExit: () => void }) {
   const sdk = useSDK()
   const sync = useSync()
+  const teamSessionID = createMemo(() => rootSessionID(sync.data.session, props.sessionID))
   const [data, { refetch }] = createResource(
-    () => [props.sessionID, sdk.directory] as const,
+    () => [teamSessionID(), sdk.directory] as const,
     async ([sessionID]) => {
       const response = await sdk.client.team.get({ sessionID }, { throwOnError: false })
       const team = response.data
-      if (!team) return
+      if (!team || typeof team !== "object" || Array.isArray(team) || typeof team.id !== "string") return
       const access = { teamID: team.id, sessionID }
-      const [tasks, messages] = await Promise.all([
-        sdk.client.team.tasks(access, { throwOnError: true }).then((result) => result.data),
-        sdk.client.team.messages(access, { throwOnError: true }).then((result) => result.data),
-      ])
-      return { team, tasks, messages } satisfies { team: TeamInfo; tasks: TeamTask[]; messages: TeamMessage[] }
+      const result = await sdk.client.team.tasks(access, { throwOnError: false })
+      const tasks = Array.isArray(result.data) ? result.data : []
+      return { team, tasks } satisfies { team: TeamInfo; tasks: TeamTask[] }
     },
   )
 
@@ -42,7 +47,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
 
   const taskGroups = createMemo(() => groupTeamTasks(data()?.tasks ?? []))
   const completed = createMemo(() => taskGroups().completed.length)
-  const children = createMemo(() => sync.data.session.filter((item) => item.parentID === props.sessionID))
+  const children = createMemo(() => sync.data.session.filter((item) => item.parentID === teamSessionID()))
   const memberFor = (assignee?: string) =>
     assignee ? children().find((item) => item.id === assignee || item.title === assignee) : undefined
   const pendingFor = (assignee?: string) => {

@@ -154,6 +154,20 @@ describe("TUI transcript blocks", () => {
     frame = renderer!.captureCharFrame()
     expect(frame).toContain("Expanded detail")
     expect(activations).toBe(0)
+
+    renderer!.mockInput.pressEnter()
+    await renderer!.renderOnce()
+    expect(activations).toBe(1)
+    expect(renderer!.captureCharFrame()).toContain("Expanded detail")
+  })
+
+  test("wires shell overflow activation through legacy and v2 block rows", async () => {
+    const legacy = await Bun.file(new URL("../../../src/routes/session/index.tsx", import.meta.url)).text()
+    const v2 = await Bun.file(new URL("../../../src/feature-plugins/system/session-v2.tsx", import.meta.url)).text()
+    expect(legacy).toContain("onActivate={props.onClick}")
+    expect(v2).toContain("onActivate={props.onClick}")
+    expect(v2).toContain("focusable={Boolean(props.onClick)}")
+    expect(v2).toContain("onKeyDown={key}")
   })
 
   test("exposes thinking summary, duration, and expandable trace", async () => {

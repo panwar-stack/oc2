@@ -2289,6 +2289,7 @@ function BlockTool(props: {
           metadata={metadata()}
           duration={toolRowDuration(part().state)}
           error={error()}
+          onActivate={props.onClick}
           ref={(el) => setPreLayoutSiblingMargin(el, (previous) => (previous?.id.startsWith("text-") ? 1 : 0))}
         >
           <box paddingTop={1} paddingBottom={1} gap={1}>

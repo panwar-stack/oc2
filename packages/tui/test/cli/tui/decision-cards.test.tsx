@@ -56,6 +56,22 @@ const planRequest = {
   ],
 } satisfies QuestionRequest
 
+const singleRequest = {
+  id: "single-1",
+  sessionID: "session-1",
+  questions: [
+    {
+      header: "Mode",
+      question: "Which mode should be used?",
+      custom: false,
+      options: [
+        { label: "Safe", description: "Use safe mode" },
+        { label: "Fast", description: "Use fast mode" },
+      ],
+    },
+  ],
+} satisfies QuestionRequest
+
 async function waitFor(check: () => boolean, timeout = 2000) {
   const start = Date.now()
   while (!check()) {
@@ -149,6 +165,26 @@ describe("TUI decision cards", () => {
 
     app!.mockInput.pressEnter()
     await waitFor(() => calls.includes("/question/plan-1/reply"))
+  })
+
+  test("does not reply when Enter only selects the focused plan action", async () => {
+    const calls = await mount({ request: planRequest, tool: "plan_exit" })
+    app!.mockInput.pressEnter()
+    await waitFor(() => app!.captureCharFrame().includes("Approve plan ⏎"))
+    expect(calls).not.toContain("/question/plan-1/reply")
+
+    app!.mockInput.pressEnter()
+    await waitFor(() => calls.includes("/question/plan-1/reply"))
+  })
+
+  test("ordinary single-select waits for the displayed confirmation", async () => {
+    const calls = await mount({ request: singleRequest })
+    app!.mockInput.pressKey("2")
+    await waitFor(() => app!.captureCharFrame().includes("1 of 2 selected"))
+    expect(calls).not.toContain("/question/single-1/reply")
+
+    app!.mockInput.pressEnter()
+    await waitFor(() => calls.includes("/question/single-1/reply"))
   })
 
   test("permission prompt keeps purple waiting, consequence, and cancellation channels", async () => {

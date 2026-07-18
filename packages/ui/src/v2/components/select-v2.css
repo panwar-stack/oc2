@@ -208,6 +208,11 @@
   box-shadow: none;
 }
 
+[data-component="select-v2"][data-appearance="inline"]:where(:focus-within):not([data-disabled], [data-invalid]) {
+  outline: 1px solid var(--v2-border-border-focus);
+  box-shadow: var(--v2-shadow-focus);
+}
+
 [data-component="select-v2"][data-appearance="inline"]:where(:active):not([data-disabled], [data-invalid]):not(
     [data-expanded]
   ) {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { contextGaugeState, groupTeamTasks, stableAgentColor, visibleTodos } from "./session-chrome-model"
+import { contextGaugeState, groupTeamTasks, rootSessionID, stableAgentColor, visibleTodos } from "./session-chrome-model"
 
 describe("session aggregate chrome", () => {
   test("uses the 70 and 90 percent context thresholds", () => {
@@ -51,6 +51,30 @@ describe("session aggregate chrome", () => {
     expect(groups.working[0]?.dependency_ids).toEqual(["done"])
     expect(groups["needs-you"].map((task) => task.id)).toEqual(["blocked"])
     expect(groups.completed.map((task) => task.id)).toEqual(["done"])
+  })
+
+  test("resolves child team views to the root session without looping on malformed ancestry", () => {
+    const sessions = [
+      { id: "lead" },
+      { id: "child", parentID: "lead" },
+      { id: "nested", parentID: "child" },
+      { id: "cycle-a", parentID: "cycle-b" },
+      { id: "cycle-b", parentID: "cycle-a" },
+    ]
+    expect(rootSessionID(sessions, "nested")).toBe("lead")
+    expect(rootSessionID(sessions, "cycle-a")).toBe("cycle-a")
+  })
+
+  test("guards team task payloads and does not fetch unused message bodies", async () => {
+    const [board, details] = await Promise.all([
+      Bun.file(import.meta.dir + "/team-board.tsx").text(),
+      Bun.file(import.meta.dir + "/session-aggregate-chrome.tsx").text(),
+    ])
+    expect(board).toContain("Array.isArray(result.data) ? result.data : []")
+    expect(board).toContain("rootSessionID(sync.data.session, props.sessionID)")
+    expect(board).not.toContain("sdk.client.team.messages(")
+    expect(details).toContain("const tasks = Array.isArray(result) ? result : []")
+    expect(details).toContain("rootSessionID(sync.data.session, props.sessionID)")
   })
 
   test("keeps agent color stable and uses container responsive columns", async () => {

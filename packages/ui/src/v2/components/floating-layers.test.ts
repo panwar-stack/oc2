@@ -30,6 +30,7 @@ describe("floating layer contracts", () => {
     const component = await source("dialog-v2.tsx")
     const context = await Bun.file(`${import.meta.dir}/../../context/dialog.tsx`).text()
     const css = await source("dialog-v2.css")
+    const selectCss = await source("select-v2.css")
 
     for (const width of ["480px", "700px", "920px"]) expect(css).toContain(`min(92vw, ${width})`)
     expect(component).toContain("<Kobalte.Title")
@@ -38,12 +39,15 @@ describe("floating layer contracts", () => {
     expect(component).toContain('stroke="currentColor"')
     expect(context).toContain("modal")
     expect(context).toContain('event.key !== "Escape"')
+    expect(context).toContain("escapeTargetsPopup(event.target)")
     expect(context).toContain("current.returnFocus?.isConnected")
     expect(context).toContain("returnFocusTarget()")
     expect(context).toContain("[aria-controls]")
     expect(context).toContain('element.getAttribute("aria-controls")')
     expect(component).toContain('aria-modal="true"')
     expect(component).toContain("onPointerDownOutside")
+    expect(selectCss).toContain('[data-appearance="inline"]:where(:focus-within)')
+    expect(selectCss).toContain("box-shadow: var(--v2-shadow-focus)")
   })
 
   test("maps toast variants through non-color glyphs and sticky error defaults", () => {

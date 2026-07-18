@@ -46,8 +46,12 @@ export function ToolRow(props: {
   }
   const activate = () => {
     if (renderer.getSelection()?.getSelectedText()) return
-    toggleDetails()
-    props.onActivate?.()
+    if (!props.onActivate) {
+      toggleDetails()
+      return
+    }
+    if (expandable()) setExpanded(true)
+    props.onActivate()
   }
   const key = (event: KeyEvent) => {
     if (event.ctrl && event.name === "e") {

@@ -55,7 +55,7 @@ import { playSoundById } from "@/utils/sound"
 import { createAim } from "@/utils/aim"
 import { setNavigate } from "@/utils/notification-click"
 import { Worktree as WorktreeState } from "@/utils/worktree"
-import { setSessionHandoff } from "@/pages/session/handoff"
+import { setSessionPromptHandoff } from "@/pages/session/handoff"
 import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 
 import { useDialog } from "@oc2-ai/ui/context/dialog"
@@ -356,8 +356,17 @@ export default function Layout(props: ParentProps) {
 
   const useSDKNotifications = () =>
     onMount(() => {
+      const toastBySession = new Map<string, number>()
       const alertedAtBySession = new Map<string, number>()
       const cooldownMs = 5000
+
+      const dismissSessionAlert = (sessionKey: string) => {
+        const toastID = toastBySession.get(sessionKey)
+        if (toastID === undefined) return
+        toaster.dismiss(toastID)
+        toastBySession.delete(sessionKey)
+        alertedAtBySession.delete(sessionKey)
+      }
 
       const unsub = serverSDK.event.listen((e) => {
         if (e.details?.type === "worktree.ready") {
@@ -373,6 +382,16 @@ export default function Layout(props: ParentProps) {
             e.name,
             e.details.properties?.message ?? language.t("common.requestFailed"),
           )
+          return
+        }
+
+        if (
+          e.details?.type === "question.replied" ||
+          e.details?.type === "question.rejected" ||
+          e.details?.type === "permission.replied"
+        ) {
+          const props = e.details.properties as { sessionID: string }
+          dismissSessionAlert(`${e.name}:${props.sessionID}`)
           return
         }
 
@@ -416,8 +435,47 @@ export default function Layout(props: ParentProps) {
             void platform.notify(title, description, href)
           }
         }
+
+        if (settings.general.newLayoutDesigns()) return
+        const currentSession = params.id
+        if (pathKey(directory) === pathKey(currentDir()) && props.sessionID === currentSession) return
+        if (pathKey(directory) === pathKey(currentDir()) && session?.parentID === currentSession) return
+
+        dismissSessionAlert(sessionKey)
+        const toastID = showToast({
+          persistent: true,
+          icon: e.details.type === "permission.asked" ? "checklist" : "bubble-5",
+          title,
+          description,
+          actions: [
+            {
+              label: language.t("notification.action.goToSession"),
+              onClick: () => navigate(href),
+            },
+            {
+              label: language.t("common.dismiss"),
+              onClick: "dismiss",
+            },
+          ],
+        })
+        toastBySession.set(sessionKey, toastID)
       })
       onCleanup(unsub)
+
+      createEffect(() => {
+        if (settings.general.newLayoutDesigns()) {
+          for (const sessionKey of toastBySession.keys()) dismissSessionAlert(sessionKey)
+          return
+        }
+
+        const currentSession = params.id
+        if (!currentDir() || !currentSession) return
+        dismissSessionAlert(`${currentDir()}:${currentSession}`)
+        const [store] = serverSync.child(currentDir(), { bootstrap: false })
+        for (const child of store.session.filter((session) => session.parentID === currentSession)) {
+          dismissSessionAlert(`${currentDir()}:${child.id}`)
+        }
+      })
     })
 
   useSDKNotifications()
@@ -1255,17 +1313,17 @@ export default function Layout(props: ParentProps) {
       void openProject(directory)
     }
 
-    for (const link of collectNewSessionDeepLinks(urls)) {
+    const links = collectNewSessionDeepLinks(urls)
+    for (const link of links) {
       void openProject(link.directory, false)
-      const slug = base64Encode(link.directory)
-      if (link.prompt) {
-        setSessionHandoff(SessionStateKey.from(server.scope(), SessionRouteKey.fromLegacy(slug)), {
-          prompt: link.prompt,
-        })
-      }
-      const href = link.prompt ? `/${slug}/session?prompt=${encodeURIComponent(link.prompt)}` : `/${slug}/session`
-      navigateWithSidebarReset(href)
     }
+    const link = links.at(-1)
+    if (!link) return
+    const slug = base64Encode(link.directory)
+    if (link.prompt) {
+      setSessionPromptHandoff(SessionStateKey.from(server.scope(), SessionRouteKey.fromLegacy(slug)), link.prompt)
+    }
+    navigateWithSidebarReset(`/${slug}/session`)
   }
 
   onMount(() => {

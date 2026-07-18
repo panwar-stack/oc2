@@ -31,7 +31,7 @@ import { previewSelectedLines } from "@oc2-ai/ui/pierre/selection-bridge"
 import { Button } from "@oc2-ai/ui/button"
 import { showToast } from "@/utils/toast"
 import { checksum } from "@oc2-ai/core/util/encode"
-import { useLocation, useSearchParams } from "@solidjs/router"
+import { useLocation } from "@solidjs/router"
 import { NewSessionDesignView, NewSessionView, SessionHeader } from "@/components/session"
 import { useComments } from "@/context/comments"
 import { getSessionPrefetch, SESSION_PREFETCH_TTL } from "@/context/global-sync/session-prefetch"
@@ -71,6 +71,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
+import { sessionPromptHandoffVersion, takeSessionPromptHandoff } from "@/pages/session/handoff"
 
 const emptyUserMessages: UserMessage[] = []
 type FollowupItem = FollowupDraft & { id: string }
@@ -201,19 +202,18 @@ export default function Page() {
   const comments = useComments()
   const terminal = useTerminal()
   const server = useServer()
-  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
   const location = useLocation()
   const { params, sessionKey, workspaceKey, tabs, view } = useSessionLayout()
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
 
   createEffect(() => {
+    sessionPromptHandoffVersion()
     if (!prompt.ready()) return
     untrack(() => {
       if (params.id) return
-      const text = searchParams.prompt
+      const text = takeSessionPromptHandoff(sessionKey())
       if (!text) return
       prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
-      setSearchParams({ ...searchParams, prompt: undefined })
     })
   })
 

@@ -3,6 +3,7 @@ import {
   decisionDocumentTitle,
   decisionKey,
   pendingDecisionTitleController,
+  questionConfirmAction,
   questionDecisionPresentation,
 } from "./session-decision"
 
@@ -53,6 +54,12 @@ describe("decision card presentation", () => {
     expect(decisionKey("Escape", 5)).toEqual({ type: "cancel" })
     expect(decisionKey("3", 5)).toEqual({ type: "pick", index: 2 })
     expect(decisionKey("6", 5)).toBeUndefined()
+  })
+
+  test("requires a separate confirmation after implicit single selection", () => {
+    expect(questionConfirmAction({ multiple: false, selected: 0, last: true })).toBe("select")
+    expect(questionConfirmAction({ multiple: false, selected: 1, last: true })).toBe("submit")
+    expect(questionConfirmAction({ multiple: false, selected: 1, last: false })).toBe("next")
   })
 
   test("keeps required group and live-region attributes in both docks", async () => {

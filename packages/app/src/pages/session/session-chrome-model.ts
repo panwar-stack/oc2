@@ -39,6 +39,22 @@ export function groupTeamTasks(tasks: readonly TeamTask[]) {
   )
 }
 
+export function rootSessionID(
+  sessions: readonly { id: string; parentID?: string }[],
+  sessionID: string,
+) {
+  const byID = new Map(sessions.map((session) => [session.id, session]))
+  const seen = new Set<string>()
+  let current = sessionID
+  while (!seen.has(current)) {
+    seen.add(current)
+    const parentID = byID.get(current)?.parentID
+    if (!parentID) return current
+    current = parentID
+  }
+  return sessionID
+}
+
 export function stableAgentColor(name: string) {
   let hash = 2166136261
   for (const char of name) {
