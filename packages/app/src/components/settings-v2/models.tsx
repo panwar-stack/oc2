@@ -4,6 +4,7 @@ import { Switch } from "@oc2-ai/ui/v2/switch-v2"
 import { Icon as IconV2 } from "@oc2-ai/ui/v2/icon"
 import { IconButtonV2 } from "@oc2-ai/ui/v2/icon-button-v2"
 import { TextInputV2 } from "@oc2-ai/ui/v2/text-input-v2"
+import { StateBlockV2 } from "@oc2-ai/ui/v2/state-block-v2"
 import { type Component, For, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useModels } from "@/context/models"
@@ -76,21 +77,22 @@ export const SettingsModelsV2: Component = () => {
         <Show
           when={!list.grouped.loading}
           fallback={
-            <div class="settings-v2-models-status">
-              {language.t("common.loading")}
-              {language.t("common.loading.ellipsis")}
-            </div>
+            <StateBlockV2
+              variant="loading"
+              title={`${language.t("common.loading")}${language.t("common.loading.ellipsis")}`}
+              scale="full"
+            />
           }
         >
           <Show
             when={list.flat().length > 0}
             fallback={
-              <div class="settings-v2-models-status">
-                <span>{language.t("dialog.model.empty")}</span>
-                <Show when={list.filter()}>
-                  <span class="settings-v2-models-status-filter">&quot;{list.filter()}&quot;</span>
-                </Show>
-              </div>
+              <StateBlockV2
+                variant="empty"
+                title={language.t("dialog.model.empty")}
+                description={<Show when={list.filter()}>&quot;{list.filter()}&quot;</Show>}
+                scale="full"
+              />
             }
           >
             <For each={list.grouped.latest}>

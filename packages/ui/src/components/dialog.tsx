@@ -2,6 +2,7 @@ import { Dialog as Kobalte } from "@kobalte/core/dialog"
 import { ComponentProps, JSXElement, Match, ParentProps, Show, Switch } from "solid-js"
 import { useI18n } from "../context/i18n"
 import { IconButton } from "./icon-button"
+import { useDialogLayerOptions } from "../context/dialog"
 
 export interface DialogProps extends ParentProps {
   title?: JSXElement
@@ -12,21 +13,28 @@ export interface DialogProps extends ParentProps {
   classList?: ComponentProps<"div">["classList"]
   fit?: boolean
   transition?: boolean
+  variant?: "default" | "confirm"
 }
 
 export function Dialog(props: DialogProps) {
   const i18n = useI18n()
+  const layer = useDialogLayerOptions()
   return (
     <div
       data-component="dialog"
       data-fit={props.fit ? true : undefined}
       data-size={props.size || "normal"}
       data-transition={props.transition ? true : undefined}
+      data-variant={props.variant ?? "default"}
     >
       <div data-slot="dialog-container">
         <Kobalte.Content
           data-slot="dialog-content"
           data-no-header={!props.title && !props.action ? "" : undefined}
+          aria-modal="true"
+          onPointerDownOutside={(event) => {
+            if (layer.dismissible === false) event.preventDefault()
+          }}
           classList={{
             ...props.classList,
             [props.class ?? ""]: !!props.class,

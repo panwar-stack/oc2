@@ -354,19 +354,10 @@ export default function Layout(props: ParentProps) {
     })
   }
 
-  const useSDKNotificationToasts = () =>
+  const useSDKNotifications = () =>
     onMount(() => {
-      const toastBySession = new Map<string, number>()
       const alertedAtBySession = new Map<string, number>()
       const cooldownMs = 5000
-
-      const dismissSessionAlert = (sessionKey: string) => {
-        const toastId = toastBySession.get(sessionKey)
-        if (toastId === undefined) return
-        toaster.dismiss(toastId)
-        toastBySession.delete(sessionKey)
-        alertedAtBySession.delete(sessionKey)
-      }
 
       const unsub = serverSDK.event.listen((e) => {
         if (e.details?.type === "worktree.ready") {
@@ -385,23 +376,11 @@ export default function Layout(props: ParentProps) {
           return
         }
 
-        if (
-          e.details?.type === "question.replied" ||
-          e.details?.type === "question.rejected" ||
-          e.details?.type === "permission.replied"
-        ) {
-          const props = e.details.properties as { sessionID: string }
-          const sessionKey = `${e.name}:${props.sessionID}`
-          dismissSessionAlert(sessionKey)
-          return
-        }
-
         if (e.details?.type !== "permission.asked" && e.details?.type !== "question.asked") return
         const title =
           e.details.type === "permission.asked"
             ? language.t("notification.permission.title")
             : language.t("notification.question.title")
-        const icon = e.details.type === "permission.asked" ? ("checklist" as const) : ("bubble-5" as const)
         const directory = e.name
         const props = e.details.properties
         if (e.details.type === "permission.asked" && permission.autoResponds(e.details.properties, directory)) return
@@ -437,47 +416,11 @@ export default function Layout(props: ParentProps) {
             void platform.notify(title, description, href)
           }
         }
-
-        const currentSession = params.id
-        if (pathKey(directory) === pathKey(currentDir()) && props.sessionID === currentSession) return
-        if (pathKey(directory) === pathKey(currentDir()) && session?.parentID === currentSession) return
-
-        dismissSessionAlert(sessionKey)
-
-        const toastId = showToast({
-          persistent: true,
-          icon,
-          title,
-          description,
-          actions: [
-            {
-              label: language.t("notification.action.goToSession"),
-              onClick: () => navigate(href),
-            },
-            {
-              label: language.t("common.dismiss"),
-              onClick: "dismiss",
-            },
-          ],
-        })
-        toastBySession.set(sessionKey, toastId)
       })
       onCleanup(unsub)
-
-      createEffect(() => {
-        const currentSession = params.id
-        if (!currentDir() || !currentSession) return
-        const sessionKey = `${currentDir()}:${currentSession}`
-        dismissSessionAlert(sessionKey)
-        const [store] = serverSync.child(currentDir(), { bootstrap: false })
-        const childSessions = store.session.filter((s) => s.parentID === currentSession)
-        for (const child of childSessions) {
-          dismissSessionAlert(`${currentDir()}:${child.id}`)
-        }
-      })
     })
 
-  useSDKNotificationToasts()
+  useSDKNotifications()
 
   function scrollToSession(sessionId: string, sessionKey: string) {
     if (!scrollContainerRef) return
@@ -1441,6 +1384,7 @@ export default function Layout(props: ParentProps) {
       .then((x) => x.data)
       .catch((err) => {
         showToast({
+          variant: "error",
           title: language.t("workspace.delete.failed.title"),
           description: errorMessage(err, language.t("common.requestFailed")),
         })
@@ -1511,6 +1455,7 @@ export default function Layout(props: ParentProps) {
       .then((x) => x.data)
       .catch((err) => {
         showToast({
+          variant: "error",
           title: language.t("workspace.reset.failed.title"),
           description: errorMessage(err, language.t("common.requestFailed")),
         })
@@ -1598,7 +1543,7 @@ export default function Layout(props: ParentProps) {
     }
 
     return (
-      <Dialog title={language.t("workspace.delete.title")} fit>
+      <Dialog title={language.t("workspace.delete.title")} variant="confirm" fit>
         <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
           <div class="flex flex-col gap-1">
             <span class="text-14-regular text-text-strong">
@@ -1672,7 +1617,7 @@ export default function Layout(props: ParentProps) {
     }
 
     return (
-      <Dialog title={language.t("workspace.reset.title")} fit>
+      <Dialog title={language.t("workspace.reset.title")} variant="confirm" fit>
         <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
           <div class="flex flex-col gap-1">
             <span class="text-14-regular text-text-strong">
@@ -1873,6 +1818,7 @@ export default function Layout(props: ParentProps) {
       .then((x) => x.data)
       .catch((err) => {
         showToast({
+          variant: "error",
           title: language.t("workspace.create.failed.title"),
           description: errorMessage(err, language.t("common.requestFailed")),
         })
@@ -1925,9 +1871,9 @@ export default function Layout(props: ParentProps) {
     workspaceExpanded: (directory, local) => store.workspaceExpanded[directory] ?? local,
     setWorkspaceExpanded: (directory, value) => setStore("workspaceExpanded", directory, value),
     showResetWorkspaceDialog: (root, directory) =>
-      dialog.show(() => <DialogResetWorkspace root={root} directory={directory} />),
+      dialog.show(() => <DialogResetWorkspace root={root} directory={directory} />, undefined, { dismissible: false }),
     showDeleteWorkspaceDialog: (root, directory) =>
-      dialog.show(() => <DialogDeleteWorkspace root={root} directory={directory} />),
+      dialog.show(() => <DialogDeleteWorkspace root={root} directory={directory} />, undefined, { dismissible: false }),
     setScrollContainerRef: (el, mobile) => {
       if (!mobile) scrollContainerRef = el
     },

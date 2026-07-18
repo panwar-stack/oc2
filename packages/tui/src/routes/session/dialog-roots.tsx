@@ -141,6 +141,8 @@ function DialogRootsContent(props: { sessionID: string }) {
       dialog,
       "Remove Root",
       `Remove ${displayName(root)} from this session? Files are not deleted.`,
+      undefined,
+      { destructive: true },
     )
     if (ok !== true) return
     try {

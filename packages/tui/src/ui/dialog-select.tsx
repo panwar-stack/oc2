@@ -19,6 +19,7 @@ import { Locale } from "../util/locale"
 import { getScrollAcceleration } from "../util/scroll"
 import { useTuiConfig } from "../config"
 import { formatKeyBindings, useBindings, useKeymapSelector } from "../keymap"
+import { StateBlock } from "../component/state-block"
 
 export interface DialogSelectProps<T> {
   title: string
@@ -98,7 +99,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     on(
       () => props.current,
       (current) => {
-        if (current) {
+        if (current !== undefined) {
           const currentIndex = flat().findIndex((opt) => isDeepEqual(opt.value, current))
           if (currentIndex >= 0) {
             setStore("selected", currentIndex)
@@ -281,7 +282,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       setTimeout(() => {
         if (filter.length > 0) {
           moveTo(0, true)
-        } else if (current) {
+        } else if (current !== undefined) {
           const currentIndex = flat().findIndex((opt) => isDeepEqual(opt.value, current))
           if (currentIndex >= 0) {
             moveTo(currentIndex, true)
@@ -604,7 +605,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           when={grouped().length > 0}
           fallback={
             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
-              <text fg={theme.textMuted}>No results found</text>
+              <StateBlock theme={theme} variant="empty" title="No results found" scale="inline" />
             </box>
           }
         >

@@ -1,12 +1,12 @@
 [data-component="toast-v2-region"] {
   position: fixed;
   bottom: 48px;
-  right: 32px;
-  z-index: 1000;
+  right: 16px;
+  z-index: var(--v2-z-toast);
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: min(320px, calc(100vw - 64px));
+  max-width: min(320px, calc(100vw - 32px));
   max-height: none;
   width: 100%;
   overflow: visible;
@@ -35,17 +35,31 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: 320px;
+  width: min(320px, calc(100vw - 32px));
   padding: 12px;
   max-height: min(420px, calc(100dvh - 96px));
   overflow: hidden;
   pointer-events: auto;
   transition: transform 140ms ease-out;
 
-  border-radius: 8px;
+  border-radius: var(--v2-radius-chip);
+  border: 1px solid var(--v2-border-border-base);
+  border-left: 2px solid var(--v2-state-fg-decision);
   color: var(--v2-text-text-base);
-  background: var(--v2-background-bg-layer-01);
-  box-shadow: var(--v2-elevation-floating);
+  background: var(--v2-background-bg-layer-02);
+  box-shadow: var(--v2-shadow-popover);
+
+  &[data-variant="success"] {
+    border-left-color: var(--v2-state-fg-success);
+  }
+
+  &[data-variant="warning"] {
+    border-left-color: var(--v2-state-fg-thinking);
+  }
+
+  &[data-variant="error"] {
+    border-left-color: var(--v2-state-fg-danger);
+  }
 
   &[data-opened] {
     animation: toastV2PopIn 140ms ease-out;
@@ -60,6 +74,37 @@
     align-items: flex-start;
     gap: 12px;
     width: 100%;
+  }
+
+  [data-slot="toast-v2-state-glyph"] {
+    flex-shrink: 0;
+    color: var(--v2-state-fg-decision);
+    font-weight: 600;
+    line-height: 20px;
+  }
+
+  &[data-variant="success"] [data-slot="toast-v2-state-glyph"] {
+    color: var(--v2-state-fg-success);
+  }
+
+  &[data-variant="warning"] [data-slot="toast-v2-state-glyph"] {
+    color: var(--v2-state-fg-thinking);
+  }
+
+  &[data-variant="error"] [data-slot="toast-v2-state-glyph"] {
+    color: var(--v2-state-fg-danger);
+  }
+
+  [data-slot="toast-v2-variant-label"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   [data-slot="toast-v2-icon"] {

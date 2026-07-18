@@ -1,5 +1,8 @@
 import type { TeamInfo, TeamMessage, TeamTask } from "@oc2-ai/sdk/v2"
 import { StatusGlyph } from "@oc2-ai/ui/v2/status-glyph"
+import { StateBlockV2 } from "@oc2-ai/ui/v2/state-block-v2"
+import { ButtonV2 } from "@oc2-ai/ui/v2/button-v2"
+import { KeyHintV2 } from "@oc2-ai/ui/v2/key-hint-v2"
 import { For, Match, Show, Switch, createMemo, createResource, onCleanup, onMount } from "solid-js"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
@@ -94,7 +97,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
 
   return (
     <div
-      class="size-full overflow-y-auto bg-[var(--v2-background-bg-base)] px-4 py-4 sm:px-6"
+      class="size-full overflow-y-auto bg-[var(--v2-background-bg-base)] px-4 py-4 sm:px-6 flex flex-col"
       onKeyDown={(event) => {
         if (event.key !== "Escape") return
         event.preventDefault()
@@ -104,19 +107,29 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
     >
       <Switch>
         <Match when={data.loading && !data()}>
-          <div role="status" class="text-[var(--v2-text-text-muted)]">
-            <StatusGlyph name="running" /> loading team board…
-          </div>
+          <StateBlockV2 variant="loading" title="Loading team board…" scale="full" />
         </Match>
         <Match when={data.error}>
-          <div role="alert" class="text-[var(--v2-state-fg-danger)]">
-            <StatusGlyph name="failed" /> team board unavailable
-          </div>
+          <StateBlockV2
+            variant="error"
+            title="Team board unavailable"
+            description="The latest team data could not be loaded."
+            scale="full"
+            action={
+              <ButtonV2 size="small" onClick={() => void refetch()}>
+                Retry
+              </ButtonV2>
+            }
+            hint={<KeyHintV2 shortcut="enter" label="retry" />}
+          />
         </Match>
         <Match when={!data()}>
-          <div class="text-[var(--v2-text-text-muted)]">
-            <StatusGlyph name="pending" /> no team · this session runs a single agent
-          </div>
+          <StateBlockV2
+            variant="empty"
+            title="No team for this session"
+            description="This session runs a single agent."
+            scale="full"
+          />
         </Match>
         <Match when={data()}>
           {(result) => (
@@ -141,9 +154,11 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
               <Show
                 when={result().tasks.length > 0}
                 fallback={
-                  <div class="text-[var(--v2-text-text-muted)]">
-                    <StatusGlyph name="pending" /> no team tasks yet
-                  </div>
+                  <StateBlockV2
+                    variant="empty"
+                    title="No team tasks yet"
+                    description="Create a task to start tracking team work."
+                  />
                 }
               >
                 <Show

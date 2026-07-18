@@ -1,8 +1,7 @@
 @import "./menu-v2.css";
 
-/* Above modal dialogs (z-index 50); matches legacy select-content. */
 [data-popper-positioner]:has([data-slot="select-v2-content"]) {
-  z-index: 60;
+  z-index: var(--v2-z-select);
 }
 
 /* Dropdown surface (Type=menu) — overrides shared menu-v2 defaults for selects only. */
@@ -11,11 +10,12 @@
   min-width: 160px;
   max-width: 23rem;
   overflow: hidden;
-  z-index: 60;
+  z-index: var(--v2-z-select);
   pointer-events: auto;
-  background: var(--v2-background-bg-layer-01);
-  border-radius: 6px;
-  box-shadow: var(--v2-elevation-floating);
+  background: var(--v2-background-bg-layer-02);
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: var(--v2-radius-group);
+  box-shadow: var(--v2-shadow-popover);
   transform-origin: top center;
   animation: select-v2-content-in 120ms ease-out;
 }
@@ -236,7 +236,7 @@
   list-style: none;
   min-width: 0;
   width: 100%;
-  max-height: 12rem;
+  max-height: 40vh;
   overflow-x: hidden;
   overflow-y: auto;
   outline: none;
@@ -265,6 +265,25 @@
   --menu-v2-badge-bg: var(--v2-background-bg-layer-02);
   --menu-v2-badge-border: var(--v2-border-border-base);
   --menu-v2-hover: var(--v2-overlay-simple-overlay-hover);
+  min-height: 30px;
+}
+
+[data-slot="select-v2-listbox"] [data-component="menu-v2-item"] [data-slot="menu-v2-item-content"]::before {
+  width: 12px;
+  flex-shrink: 0;
+  content: "▸";
+  color: var(--menu-v2-accent);
+  visibility: hidden;
+}
+
+[data-slot="select-v2-listbox"] [data-component="menu-v2-item"][data-highlighted] [data-slot="menu-v2-item-content"] {
+  font-weight: 530;
+}
+
+[data-slot="select-v2-listbox"]
+  [data-component="menu-v2-item"][data-highlighted]
+  [data-slot="menu-v2-item-content"]::before {
+  visibility: visible;
 }
 
 /* Listbox uses data-selected; menu item CSS uses data-checked — mirror accent */

@@ -100,7 +100,7 @@ export function createSessionComposerState(options?: {
       .then(() => true)
       .catch((err: unknown) => {
         const description = err instanceof Error ? err.message : String(err)
-        showToast({ title: language.t("common.requestFailed"), description })
+        showToast({ variant: "error", title: language.t("common.requestFailed"), description })
         return false
       })
       .finally(() => {

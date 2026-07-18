@@ -776,6 +776,7 @@ export function MessageTimeline(props: {
     },
     onError: (err) => {
       showToast({
+        variant: "error",
         title: language.t("common.requestFailed"),
         description: errorMessage(err),
       })
@@ -872,6 +873,7 @@ export function MessageTimeline(props: {
       })
       .catch((err) => {
         showToast({
+          variant: "error",
           title: language.t("common.requestFailed"),
           description: errorMessage(err),
         })
@@ -891,6 +893,7 @@ export function MessageTimeline(props: {
       .then((x) => x.data)
       .catch((err) => {
         showToast({
+          variant: "error",
           title: language.t("session.delete.failed.title"),
           description: errorMessage(err),
         })
@@ -958,7 +961,7 @@ export function MessageTimeline(props: {
     }
 
     return (
-      <Dialog title={language.t("session.delete.title")} fit>
+      <Dialog title={language.t("session.delete.title")} variant="confirm" fit>
         <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
           <div class="flex flex-col gap-1">
             <span class="text-14-regular text-text-strong">
@@ -1482,7 +1485,11 @@ export function MessageTimeline(props: {
                             </DropdownMenu.Item>
                             <DropdownMenu.Separator />
                             <DropdownMenu.Item
-                              onSelect={() => dialog.show(() => <DialogDeleteSession sessionID={id} />)}
+                              onSelect={() =>
+                                dialog.show(() => <DialogDeleteSession sessionID={id} />, undefined, {
+                                  dismissible: false,
+                                })
+                              }
                             >
                               <DropdownMenu.ItemLabel>{language.t("common.delete")}</DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>

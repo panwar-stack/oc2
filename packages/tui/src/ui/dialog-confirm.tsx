@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core"
-import { useTheme } from "../context/theme"
+import { selectedForeground, useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "./dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
@@ -12,6 +12,7 @@ export type DialogConfirmProps = {
   onConfirm?: () => void
   onCancel?: () => void
   label?: string
+  destructive?: boolean
 }
 
 export type DialogConfirmResult = boolean | undefined
@@ -53,10 +54,13 @@ export function DialogConfirm(props: DialogConfirmProps) {
       },
     ],
   }))
+  const background = (key: "confirm" | "cancel") =>
+    key === "confirm" && props.destructive ? theme.error : theme.primary
   return (
     <box paddingLeft={2} paddingRight={2} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
+          {props.destructive ? "✕ " : ""}
           {props.title}
         </text>
         <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
@@ -72,14 +76,14 @@ export function DialogConfirm(props: DialogConfirmProps) {
             <box
               paddingLeft={1}
               paddingRight={1}
-              backgroundColor={key === store.active ? theme.primary : undefined}
+              backgroundColor={key === store.active ? background(key) : undefined}
               onMouseUp={() => {
                 if (key === "confirm") props.onConfirm?.()
                 if (key === "cancel") props.onCancel?.()
                 dialog.clear()
               }}
             >
-              <text fg={key === store.active ? theme.selectedListItemText : theme.textMuted}>
+              <text fg={key === store.active ? selectedForeground(theme, background(key)) : theme.textMuted}>
                 {Locale.titlecase(key === "cancel" ? (props.label ?? key) : key)}
               </text>
             </box>
@@ -90,7 +94,13 @@ export function DialogConfirm(props: DialogConfirmProps) {
   )
 }
 
-DialogConfirm.show = (dialog: DialogContext, title: string, message: string, label?: string) => {
+DialogConfirm.show = (
+  dialog: DialogContext,
+  title: string,
+  message: string,
+  label?: string,
+  options?: { destructive?: boolean },
+) => {
   return new Promise<DialogConfirmResult>((resolve) => {
     dialog.replace(
       () => (
@@ -100,9 +110,11 @@ DialogConfirm.show = (dialog: DialogContext, title: string, message: string, lab
           onConfirm={() => resolve(true)}
           onCancel={() => resolve(false)}
           label={label}
+          destructive={options?.destructive}
         />
       ),
       () => resolve(undefined),
+      { dismissible: options?.destructive !== true },
     )
   })
 }

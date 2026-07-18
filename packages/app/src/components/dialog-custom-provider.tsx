@@ -155,7 +155,7 @@ export function DialogCustomProvider(props: Props) {
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err)
-      showToast({ title: language.t("common.requestFailed"), description: message })
+      showToast({ variant: "error", title: language.t("common.requestFailed"), description: message })
     },
   }))
 
@@ -188,9 +188,7 @@ export function DialogCustomProvider(props: Props) {
         </div>
 
         <form onSubmit={save} class="px-2.5 pb-6 flex flex-col gap-6">
-          <p class="text-14-regular text-text-base">
-            {language.t("provider.custom.description")}
-          </p>
+          <p class="text-14-regular text-text-base">{language.t("provider.custom.description")}</p>
 
           <div class="flex flex-col gap-4">
             <TextField

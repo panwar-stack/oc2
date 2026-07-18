@@ -1,0 +1,73 @@
+[data-component="state-block-v2"] {
+  display: flex;
+  width: 100%;
+  max-width: 44ch;
+  min-width: 0;
+  align-items: center;
+  gap: var(--v2-space-2);
+  color: var(--v2-text-text-faint);
+
+  [data-component="status-glyph"] {
+    flex-shrink: 0;
+    font-size: 20px;
+  }
+
+  [data-slot="state-block-v2-copy"] {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--v2-space-1);
+  }
+
+  [data-slot="state-block-v2-title"] {
+    overflow: hidden;
+    color: var(--v2-text-text-base);
+    font-size: var(--v2-font-size-title);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  [data-slot="state-block-v2-description"] {
+    overflow: hidden;
+    color: var(--v2-text-text-muted);
+    font-size: var(--v2-font-size-small);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  [data-slot="state-block-v2-actions"] {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--v2-space-2);
+  }
+
+  &[data-variant="error"] {
+    padding: var(--v2-space-3);
+    border: 1px solid var(--v2-state-border-danger);
+    border-radius: var(--v2-radius-card);
+    background: color-mix(in srgb, var(--v2-state-bg-danger) 18%, var(--v2-background-bg-layer-02));
+
+    [data-component="status-glyph"] {
+      color: var(--v2-state-fg-danger);
+    }
+  }
+
+  &[data-variant="loading"] [data-component="status-glyph"] {
+    color: var(--v2-state-fg-thinking);
+  }
+
+  &[data-scale="full"] {
+    margin: auto;
+    flex-direction: column;
+    justify-content: center;
+    padding: var(--v2-space-6);
+    text-align: center;
+
+    [data-slot="state-block-v2-copy"],
+    [data-slot="state-block-v2-actions"] {
+      align-items: center;
+    }
+  }
+}

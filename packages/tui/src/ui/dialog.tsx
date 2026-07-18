@@ -12,6 +12,7 @@ export function Dialog(
   props: ParentProps<{
     size?: "medium" | "large" | "xlarge"
     onClose: () => void
+    dismissible?: boolean
   }>,
 ) {
   const dimensions = useTerminalDimensions()
@@ -35,7 +36,7 @@ export function Dialog(
           dismiss = false
           return
         }
-        props.onClose?.()
+        if (props.dismissible !== false) props.onClose?.()
       }}
       width={dimensions().width}
       height={dimensions().height}
@@ -66,8 +67,9 @@ export function Dialog(
 function init() {
   const [store, setStore] = createStore({
     stack: [] as {
-      element: JSX.Element
+      element: JSX.Element | (() => JSX.Element)
       onClose?: () => void
+      dismissible?: boolean
     }[],
     size: "medium" as "medium" | "large" | "xlarge",
   })
@@ -144,7 +146,7 @@ function init() {
       })
       refocus()
     },
-    replace(input: any, onClose?: () => void) {
+    replace(input: JSX.Element | (() => JSX.Element), onClose?: () => void, options?: { dismissible?: boolean }) {
       if (store.stack.length === 0) {
         focus = renderer.currentFocusedRenderable
         focus?.blur()
@@ -157,6 +159,7 @@ function init() {
         {
           element: input,
           onClose,
+          dismissible: options?.dismissible,
         },
       ])
     },
@@ -210,8 +213,11 @@ export function DialogProvider(props: ParentProps) {
         onMouseUp={!Flag.OC2_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? copySelection : undefined}
       >
         <Show when={value.stack.length}>
-          <Dialog onClose={() => value.clear()} size={value.size}>
-            {value.stack.at(-1)!.element}
+          <Dialog onClose={() => value.clear()} size={value.size} dismissible={value.stack.at(-1)?.dismissible}>
+            {(() => {
+              const element = value.stack.at(-1)!.element
+              return typeof element === "function" ? element() : element
+            })()}
           </Dialog>
         </Show>
       </box>

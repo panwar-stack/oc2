@@ -1,13 +1,14 @@
 import { Dialog as Kobalte } from "@kobalte/core/dialog"
 import { type ComponentProps, type JSXElement, type ParentProps, Show, children, splitProps } from "solid-js"
 import "./dialog-v2.css"
+import { useDialogLayerOptions } from "../../context/dialog"
 
 export interface DialogProps extends ParentProps {
   title?: JSXElement
   description?: JSXElement
   action?: JSXElement
   size?: "normal" | "large" | "x-large"
-  variant?: "default" | "settings"
+  variant?: "default" | "settings" | "confirm"
   class?: ComponentProps<"div">["class"]
   classList?: ComponentProps<"div">["classList"]
   fit?: boolean
@@ -18,6 +19,7 @@ export function DialogFooter(props: ParentProps) {
 }
 
 export function Dialog(props: DialogProps) {
+  const layer = useDialogLayerOptions()
   const [local] = splitProps(props, [
     "title",
     "description",
@@ -37,7 +39,7 @@ export function Dialog(props: DialogProps) {
   return (
     <div
       data-component="dialog-v2"
-      data-variant={local.variant === "settings" ? "settings" : undefined}
+      data-variant={local.variant ?? "default"}
       data-fit={local.fit ? true : undefined}
       data-size={local.size || "normal"}
     >
@@ -45,6 +47,10 @@ export function Dialog(props: DialogProps) {
         <Kobalte.Content
           data-slot="dialog-content"
           data-no-header={!hasHeader() ? "" : undefined}
+          aria-modal="true"
+          onPointerDownOutside={(event) => {
+            if (layer.dismissible === false) event.preventDefault()
+          }}
           classList={{
             ...local.classList,
             [local.class ?? ""]: !!local.class,
@@ -78,7 +84,7 @@ export function Dialog(props: DialogProps) {
                 >
                   <path
                     d="M12.4446 3.55469L3.55566 12.4436M3.55566 3.55469L12.4446 12.4436"
-                    stroke="#808080"
+                    stroke="currentColor"
                     stroke-linejoin="round"
                   />
                 </svg>

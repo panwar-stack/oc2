@@ -6,14 +6,15 @@ import { Portal } from "solid-js/web"
 import { useI18n } from "../context/i18n"
 import { Icon, type IconProps } from "./icon"
 import { IconButton } from "./icon-button"
+import { focusNewestToast, toastPresentation, type ToastVariant } from "./toast-grammar"
 
 export interface ToastRegionProps extends ComponentProps<typeof Kobalte.Region> {}
 
 function ToastRegion(props: ToastRegionProps) {
   return (
     <Portal>
-      <Kobalte.Region data-component="toast-region" {...props}>
-        <Kobalte.List data-slot="toast-list" />
+      <Kobalte.Region data-component="toast-region" duration={4000} limit={3} hotkey={["altKey", "KeyN"]} {...props}>
+        <Kobalte.List data-slot="toast-list" onFocusIn={focusNewestToast} />
       </Kobalte.Region>
     </Portal>
   )
@@ -23,6 +24,7 @@ export interface ToastRootComponentProps extends ToastRootProps {
   class?: string
   classList?: ComponentProps<"li">["classList"]
   children?: JSX.Element
+  role?: "status" | "alert"
 }
 
 function ToastRoot(props: ToastRootComponentProps) {
@@ -98,7 +100,7 @@ export const Toast = Object.assign(ToastRoot, {
 
 export { toaster }
 
-export type ToastVariant = "default" | "success" | "error" | "loading"
+export type { ToastVariant } from "./toast-grammar"
 
 export interface ToastAction {
   label: string
@@ -117,13 +119,20 @@ export interface ToastOptions {
 
 export function showToast(options: ToastOptions | string) {
   const opts = typeof options === "string" ? { description: options } : options
+  const variant = toastPresentation(opts.variant, opts.persistent)
   return toaster.show((props) => (
     <Toast
       toastId={props.toastId}
       duration={opts.duration}
-      persistent={opts.persistent}
-      data-variant={opts.variant ?? "default"}
+      persistent={variant.persistent}
+      data-variant={variant.tone}
+      role={variant.tone === "error" ? "alert" : "status"}
+      priority={variant.tone === "error" ? "high" : "low"}
     >
+      <span data-slot="toast-state-glyph" aria-hidden="true">
+        {variant.glyph}
+      </span>
+      <span data-slot="toast-variant-label">{variant.label}: </span>
       <Show when={opts.icon}>
         <Toast.Icon name={opts.icon!} />
       </Show>
@@ -167,19 +176,31 @@ export function showPromiseToast<T, U = unknown>(
   promise: Promise<T> | (() => Promise<T>),
   options: ToastPromiseOptions<T, U>,
 ) {
-  return toaster.promise(promise, (props) => (
-    <Toast
-      toastId={props.toastId}
-      data-variant={props.state === "pending" ? "loading" : props.state === "fulfilled" ? "success" : "error"}
-    >
-      <Toast.Content>
-        <Toast.Description>
-          {props.state === "pending" && options.loading}
-          {props.state === "fulfilled" && options.success?.(props.data!)}
-          {props.state === "rejected" && options.error?.(props.error)}
-        </Toast.Description>
-      </Toast.Content>
-      <Toast.CloseButton />
-    </Toast>
-  ))
+  return toaster.promise(promise, (props) => {
+    const variant = toastPresentation(
+      props.state === "pending" ? "loading" : props.state === "fulfilled" ? "success" : "error",
+    )
+    return (
+      <Toast
+        toastId={props.toastId}
+        data-variant={variant.tone}
+        persistent={variant.persistent}
+        role={variant.tone === "error" ? "alert" : "status"}
+        priority={variant.tone === "error" ? "high" : "low"}
+      >
+        <span data-slot="toast-state-glyph" aria-hidden="true">
+          {variant.glyph}
+        </span>
+        <span data-slot="toast-variant-label">{variant.label}: </span>
+        <Toast.Content>
+          <Toast.Description>
+            {props.state === "pending" && options.loading}
+            {props.state === "fulfilled" && options.success?.(props.data!)}
+            {props.state === "rejected" && options.error?.(props.error)}
+          </Toast.Description>
+        </Toast.Content>
+        <Toast.CloseButton />
+      </Toast>
+    )
+  })
 }

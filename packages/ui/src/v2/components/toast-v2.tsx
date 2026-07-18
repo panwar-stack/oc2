@@ -4,6 +4,7 @@ import type { ComponentProps, JSX } from "solid-js"
 import { Show, children } from "solid-js"
 import { Portal } from "solid-js/web"
 import { ButtonV2 } from "./button-v2"
+import { focusNewestToast, toastPresentation, type ToastVariant } from "../../components/toast-grammar"
 import "./toast-v2.css"
 
 export interface ToastV2RegionProps extends ComponentProps<typeof Kobalte.Region> {}
@@ -11,8 +12,8 @@ export interface ToastV2RegionProps extends ComponentProps<typeof Kobalte.Region
 function ToastV2Region(props: ToastV2RegionProps) {
   return (
     <Portal>
-      <Kobalte.Region data-component="toast-v2-region" {...props}>
-        <Kobalte.List data-slot="toast-v2-list" />
+      <Kobalte.Region data-component="toast-v2-region" duration={4000} limit={3} hotkey={["altKey", "KeyN"]} {...props}>
+        <Kobalte.List data-slot="toast-v2-list" onFocusIn={focusNewestToast} />
       </Kobalte.Region>
     </Portal>
   )
@@ -22,6 +23,7 @@ export interface ToastV2RootComponentProps extends ToastRootProps {
   class?: string
   classList?: ComponentProps<"li">["classList"]
   children?: JSX.Element
+  role?: "status" | "alert"
 }
 
 function ToastV2Root(props: ToastV2RootComponentProps) {
@@ -90,6 +92,7 @@ export interface ToastV2Options {
   title?: string
   description?: string
   icon?: JSX.Element
+  variant?: ToastVariant
   duration?: number
   persistent?: boolean
   actions?: ToastV2Action[]
@@ -98,9 +101,21 @@ export interface ToastV2Options {
 export function showToastV2(options: ToastV2Options | string) {
   const opts = typeof options === "string" ? { description: options } : options
   const resolvedIcon = children(() => opts.icon)
+  const variant = toastPresentation(opts.variant, opts.persistent)
   return toaster.show((props) => (
-    <ToastV2 toastId={props.toastId} duration={opts.duration} persistent={opts.persistent}>
+    <ToastV2
+      toastId={props.toastId}
+      duration={opts.duration}
+      persistent={variant.persistent}
+      data-variant={variant.tone}
+      role={variant.tone === "error" ? "alert" : "status"}
+      priority={variant.tone === "error" ? "high" : "low"}
+    >
       <div data-slot="toast-v2-header">
+        <span data-slot="toast-v2-state-glyph" aria-hidden="true">
+          {variant.glyph}
+        </span>
+        <span data-slot="toast-v2-variant-label">{variant.label}: </span>
         <Show when={resolvedIcon()}>
           <ToastV2.Icon>{resolvedIcon()}</ToastV2.Icon>
         </Show>

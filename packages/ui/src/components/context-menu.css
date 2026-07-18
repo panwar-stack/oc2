@@ -2,13 +2,13 @@
 [data-component="context-menu-sub-content"] {
   min-width: 8rem;
   overflow: hidden;
-  border: none;
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs-border);
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: var(--v2-radius-group);
+  box-shadow: var(--v2-shadow-popover);
   background-clip: padding-box;
-  background-color: var(--surface-raised-stronger-non-alpha);
+  background-color: var(--v2-background-bg-layer-02);
   padding: 4px;
-  z-index: 100;
+  z-index: var(--v2-z-popover);
   transform-origin: var(--kb-menu-content-transform-origin);
 
   &:focus-within,

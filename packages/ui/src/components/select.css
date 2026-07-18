@@ -94,11 +94,12 @@
   min-width: 104px;
   max-width: 23rem;
   overflow: hidden;
-  border-radius: var(--radius-md);
-  background-color: var(--surface-raised-stronger-non-alpha);
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: var(--v2-radius-group);
+  background-color: var(--v2-background-bg-layer-02);
   padding: 4px;
-  box-shadow: var(--shadow-xs-border);
-  z-index: 60;
+  box-shadow: var(--v2-shadow-popover);
+  z-index: var(--v2-z-select);
 
   &[data-expanded] {
     animation: select-open 0.15s ease-out;
@@ -106,7 +107,7 @@
 
   [data-slot="select-select-content-list"] {
     overflow-y: auto;
-    max-height: 12rem;
+    max-height: 40vh;
     white-space: nowrap;
     overflow-x: hidden;
     display: flex;
@@ -127,6 +128,7 @@
     align-items: center;
     padding: 2px 8px;
     gap: 12px;
+    min-height: 30px;
     border-radius: 4px;
     cursor: default;
 
@@ -146,8 +148,21 @@
     outline: none;
     user-select: none;
 
+    &::before {
+      width: 12px;
+      flex-shrink: 0;
+      content: "▸";
+      color: var(--v2-text-text-accent);
+      visibility: hidden;
+    }
+
     &[data-highlighted] {
-      background: var(--surface-raised-base-hover);
+      background: var(--v2-background-bg-layer-03);
+      font-weight: 600;
+
+      &::before {
+        visibility: visible;
+      }
     }
     &[data-disabled] {
       background-color: var(--surface-raised-base);
