@@ -9,6 +9,7 @@ const generatedPaths = [
   "packages/ui/src/theme/themes/oc-2.json",
 ]
 
+await $`bun run check:tokens`
 console.log("Regenerating SDK/OpenAPI and UI generated artifacts...")
 await $`./packages/sdk/js/script/build.ts`
 await $`bun dev generate > ../sdk/openapi.json`.cwd("packages/opencode")

@@ -15,9 +15,11 @@ const fullRunFiles = new Set([
 ])
 const fullRunPrefixes = [".github/actions/", "containers/", "patches/", "script/"]
 const generatedPrefixes = [
+  "design-system/",
   "packages/opencode/src/",
   "packages/sdk/",
   "packages/server/",
+  "packages/tui/src/theme/assets/oc2.json",
   "packages/ui/script/",
   "packages/ui/src/styles/tailwind/",
   "packages/ui/src/theme/",

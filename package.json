@@ -11,6 +11,7 @@
     "dev:build": "./packages/opencode/script/build.ts --single",
     "dev:web": "bun --cwd packages/app dev",
     "lint": "oxlint",
+    "check:tokens": "bun test --cwd script check-token-parity.test.ts",
     "check:generated": "bun run script/check-generated.ts",
     "docs:check": "bun run --cwd packages/opencode script/docs-check.ts",
     "check:packages": "bun run script/package-boundaries.ts",
