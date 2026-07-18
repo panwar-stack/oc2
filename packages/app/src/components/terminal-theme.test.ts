@@ -226,7 +226,7 @@ describe("terminal theme", () => {
     else delete root.dataset.colorScheme
   })
 
-  test("keeps terminal colors tokenized and fonts offline-safe", async () => {
+  test("keeps terminal colors tokenized and defaults to standard JetBrains Mono", async () => {
     const terminal = await Bun.file(import.meta.dir + "/terminal.tsx").text()
     const appCss = await Bun.file(import.meta.dir + "/../index.css").text()
     const settings = await Bun.file(import.meta.dir + "/../context/settings.tsx").text()
@@ -240,9 +240,6 @@ describe("terminal theme", () => {
     expect(appCss.match(/font-display: swap/g)).toHaveLength(3)
     expect(appCss).not.toMatch(/url\(["']?https?:/)
     expect(settings).toContain('terminalDefault = "JetBrains Mono"')
-    expect(
-      await Bun.file(import.meta.dir + "/../../public/assets/JetBrainsMonoNerdFontMono-Regular.woff2").exists(),
-    ).toBe(true)
-    expect(await Bun.file(import.meta.dir + "/../../public/assets/Inter.ttf").exists()).toBe(true)
+    expect(appCss).toContain("/assets/fonts/JetBrainsMonoVariable-Latin.woff2")
   })
 })
