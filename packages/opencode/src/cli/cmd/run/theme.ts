@@ -68,7 +68,7 @@ export type RunTheme = {
   block: RunBlockTheme
 }
 
-type ThemeColor = Exclude<keyof TuiThemeCurrent, "thinkingOpacity">
+type ThemeColor = Exclude<keyof TuiThemeCurrent, "agentColorRamp" | "diffSplitCols" | "thinkingOpacity">
 type HexColor = `#${string}`
 type RefName = string
 type Variant = {
@@ -76,13 +76,17 @@ type Variant = {
   light: HexColor | RefName
 }
 type ColorValue = HexColor | RefName | Variant | RGBA | number
+type AgentColorRampJson = readonly [ColorValue, ColorValue, ColorValue, ColorValue, ColorValue, ColorValue, ColorValue, ColorValue]
+type OptionalThemeColor = "selectedListItemText" | "backgroundMenu" | "scrim" | "scrimLight" | "textFaint"
+type RequiredThemeColor = Exclude<ThemeColor, OptionalThemeColor>
 type ThemeJson = {
   defs?: Record<string, HexColor | RefName>
-  theme: Omit<Record<ThemeColor, ColorValue>, "selectedListItemText" | "backgroundMenu"> & {
-    selectedListItemText?: ColorValue
-    backgroundMenu?: ColorValue
-    thinkingOpacity?: number
-  }
+  theme: Record<RequiredThemeColor, ColorValue> &
+    Partial<Record<OptionalThemeColor, ColorValue>> & {
+      agentColorRamp?: AgentColorRampJson
+      diffSplitCols?: number
+      thinkingOpacity?: number
+    }
 }
 
 type SharedSyntaxTheme = TuiThemeCurrent & {
@@ -309,19 +313,63 @@ export function resolveTheme(theme: ThemeJson, pick: "dark" | "light"): TuiTheme
 
   const resolved = Object.fromEntries(
     Object.entries(theme.theme)
-      .filter(([key]) => key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity")
+      .filter(
+        ([key]) =>
+          key !== "selectedListItemText" &&
+          key !== "backgroundMenu" &&
+          key !== "thinkingOpacity" &&
+          key !== "agentColorRamp" &&
+          key !== "diffSplitCols",
+      )
       .map(([key, value]) => [key, resolveColor(value as ColorValue)]),
   ) as Partial<Record<ThemeColor, RGBA>>
 
+  const hasSelectedListItemText = theme.theme.selectedListItemText !== undefined
+  const selectedListItemText = hasSelectedListItemText
+    ? resolveColor(theme.theme.selectedListItemText!)
+    : resolved.background
+
+  const scrim = theme.theme.scrim === undefined ? RGBA.fromInts(0, 0, 0, 150) : resolveColor(theme.theme.scrim)
+  const scrimLight =
+    theme.theme.scrimLight === undefined ? RGBA.fromInts(0, 0, 0, 70) : resolveColor(theme.theme.scrimLight)
+  const textFaint = theme.theme.textFaint === undefined ? resolved.textMuted : resolveColor(theme.theme.textFaint)
+
+  const fallbackRamp = [
+    resolved.secondary!,
+    resolved.accent!,
+    resolved.success!,
+    resolved.warning!,
+    resolved.primary!,
+    resolved.error!,
+    resolved.info!,
+    resolved.secondary!,
+  ] as const
+  const ramp = theme.theme.agentColorRamp
+  const agentColorRamp =
+    ramp && ramp.length === 8
+      ? ([
+          resolveColor(ramp[0]),
+          resolveColor(ramp[1]),
+          resolveColor(ramp[2]),
+          resolveColor(ramp[3]),
+          resolveColor(ramp[4]),
+          resolveColor(ramp[5]),
+          resolveColor(ramp[6]),
+          resolveColor(ramp[7]),
+        ] as const)
+      : fallbackRamp
+
   return {
     ...(resolved as Record<ThemeColor, RGBA>),
-    selectedListItemText:
-      theme.theme.selectedListItemText === undefined
-        ? resolved.background!
-        : resolveColor(theme.theme.selectedListItemText),
+    selectedListItemText: selectedListItemText!,
     backgroundMenu:
       theme.theme.backgroundMenu === undefined ? resolved.backgroundElement! : resolveColor(theme.theme.backgroundMenu),
     thinkingOpacity: theme.theme.thinkingOpacity ?? 0.6,
+    scrim,
+    scrimLight,
+    textFaint: textFaint!,
+    agentColorRamp,
+    diffSplitCols: theme.theme.diffSplitCols ?? 120,
   }
 }
 
@@ -474,16 +522,17 @@ function quantizeColor(indexed: RGBA[], rgba: RGBA): RGBA {
 }
 
 function quantizeTheme(theme: TuiThemeCurrent, indexed: RGBA[]): TuiThemeCurrent {
-  const resolved = Object.fromEntries(
-    Object.entries(theme)
-      .filter(([key]) => key !== "thinkingOpacity")
-      .map(([key, value]) => [key, quantizeColor(indexed, value as RGBA)]),
-  ) as Partial<Record<ThemeColor, RGBA>>
+  const { thinkingOpacity, diffSplitCols, agentColorRamp, ...colorFields } = theme
+  const quantized = Object.fromEntries(
+    Object.entries(colorFields).map(([key, value]) => [key, quantizeColor(indexed, value as RGBA)]),
+  ) as Record<string, RGBA>
 
   return {
-    ...(resolved as Record<ThemeColor, RGBA>),
-    thinkingOpacity: theme.thinkingOpacity,
-  }
+    ...quantized,
+    thinkingOpacity,
+    diffSplitCols,
+    agentColorRamp,
+  } as TuiThemeCurrent
 }
 
 function splashTheme(theme: TuiThemeCurrent, indexed: RGBA[]): RunSplashTheme {

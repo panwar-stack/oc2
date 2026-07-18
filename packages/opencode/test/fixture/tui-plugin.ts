@@ -81,6 +81,11 @@ function themeCurrent(): HostPluginApi["theme"]["current"] {
     syntaxOperator: a,
     syntaxPunctuation: c,
     thinkingOpacity: 0.6,
+    textFaint: b,
+    scrim: RGBA.fromInts(0, 0, 0, 150),
+    scrimLight: RGBA.fromInts(0, 0, 0, 70),
+    agentColorRamp: [b, a, f, e, a, d, g, b] as const,
+    diffSplitCols: 120,
   }
 }
 
