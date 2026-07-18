@@ -100,11 +100,13 @@ describe("session aggregate chrome", () => {
     expect(board).toContain("if (response.error) throw response.error")
     expect(board).toContain("if (result.error) throw result.error")
     expect(board).toContain("rootSessionID(sync.data.session, props.sessionID)")
+    expect(board).toContain("data.error ? undefined : data()")
     expect(board).not.toContain("sdk.client.team.messages(")
     expect(details).toContain("const tasks = Array.isArray(responseTasks.data) ? responseTasks.data : []")
     expect(details).toContain("response.error && response.response.status === 400")
     expect(details).toContain("if (responseTasks.error) throw responseTasks.error")
     expect(details).toContain("rootSessionID(sync.data.session, props.sessionID)")
+    expect(details).toContain("teamData.error ? [] : (teamData()?.assignees ?? [])")
   })
 
   test("keeps agent color stable and uses container responsive columns", async () => {

@@ -56,10 +56,11 @@ describe("redesign accessibility contracts", () => {
   })
 
   test("keeps decision and attachment removal actions at least 24px", async () => {
-    const [message, images, context] = await Promise.all([
+    const [message, images, context, prompt] = await Promise.all([
       ui("components/message-part.css"),
       app("prompt-input/image-attachments.tsx"),
       app("prompt-input/context-items.tsx"),
+      app("prompt-input.tsx"),
     ])
     const progress = message.slice(message.indexOf('[data-slot="question-progress-segment"]'))
 
@@ -69,5 +70,6 @@ describe("redesign accessibility contracts", () => {
     expect(images.match(/size-6/g)?.length).toBeGreaterThanOrEqual(2)
     expect(images).toContain("group-focus-within:opacity-100 focus:opacity-100")
     expect(context).toContain('class="ml-auto size-6')
+    expect(prompt).toContain("focus-visible:shadow-[var(--v2-shadow-focus)]")
   })
 })

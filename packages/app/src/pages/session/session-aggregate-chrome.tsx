@@ -112,7 +112,7 @@ export function SessionDetailsPanel(props: {
     const timer = window.setInterval(() => void refetch(), 5000)
     onCleanup(() => window.clearInterval(timer))
   })
-  const assignees = createMemo(() => teamData()?.assignees ?? [])
+  const assignees = createMemo(() => (teamData.error ? [] : (teamData()?.assignees ?? [])))
   const pendingFor = (item: ReturnType<typeof assignees>[number]) =>
     item.session
       ? (sync.data.permission[item.session.id]?.length ?? 0) + (sync.data.question[item.session.id]?.length ?? 0)

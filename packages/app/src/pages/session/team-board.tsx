@@ -49,7 +49,9 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
     onCleanup(() => window.clearInterval(timer))
   })
 
-  const taskGroups = createMemo(() => groupTeamTasks(data()?.tasks ?? []))
+  const boardData = createMemo(() => (data.error ? undefined : data()))
+  const tasks = createMemo(() => boardData()?.tasks ?? [])
+  const taskGroups = createMemo(() => groupTeamTasks(tasks()))
   const completed = createMemo(() => taskGroups().completed.length)
   const children = createMemo(() => sync.data.session.filter((item) => item.parentID === teamSessionID()))
   const memberFor = (assignee?: string) =>
@@ -61,7 +63,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
   }
   const assignees = createMemo(() => {
     const assigned = new Map<string, TeamTask[]>()
-    for (const task of data()?.tasks ?? []) {
+    for (const task of tasks()) {
       if (!task.assignee) continue
       const tasks = assigned.get(task.assignee)
       if (tasks) tasks.push(task)
@@ -71,19 +73,19 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
       const pending = pendingFor(name)
       const state = pending
         ? ("needs-you" as const)
-        : tasks.some((task) => teamTaskGroup(task, data()?.tasks ?? []) === "working")
+        : tasks.some((task) => teamTaskGroup(task, boardData()?.tasks ?? []) === "working")
           ? ("working" as const)
-          : tasks.some((task) => teamTaskGroup(task, data()?.tasks ?? []) === "blocked")
+          : tasks.some((task) => teamTaskGroup(task, boardData()?.tasks ?? []) === "blocked")
             ? ("blocked" as const)
-            : tasks.some((task) => teamTaskGroup(task, data()?.tasks ?? []) === "errored")
+            : tasks.some((task) => teamTaskGroup(task, boardData()?.tasks ?? []) === "errored")
               ? ("errored" as const)
-              : tasks.every((task) => teamTaskGroup(task, data()?.tasks ?? []) === "completed")
+              : tasks.every((task) => teamTaskGroup(task, boardData()?.tasks ?? []) === "completed")
                 ? ("completed" as const)
                 : ("idle" as const)
       const current =
-        tasks.find((task) => teamTaskGroup(task, data()?.tasks ?? []) === "working") ??
-        tasks.find((task) => teamTaskGroup(task, data()?.tasks ?? []) === "blocked") ??
-        tasks.find((task) => teamTaskGroup(task, data()?.tasks ?? []) === "idle") ??
+        tasks.find((task) => teamTaskGroup(task, boardData()?.tasks ?? []) === "working") ??
+        tasks.find((task) => teamTaskGroup(task, boardData()?.tasks ?? []) === "blocked") ??
+        tasks.find((task) => teamTaskGroup(task, boardData()?.tasks ?? []) === "idle") ??
         tasks[0]!
       return {
         name,
@@ -105,7 +107,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
       { working: [], blocked: [], "needs-you": [], idle: [], completed: [], errored: [] },
     ),
   )
-  const dependency = (id: string) => data()?.tasks.find((task) => task.id === id)?.description ?? id
+  const dependency = (id: string) => tasks().find((task) => task.id === id)?.description ?? id
 
   return (
     <div
@@ -118,7 +120,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
       }}
     >
       <Switch>
-        <Match when={data.loading && !data()}>
+        <Match when={data.loading && !boardData()}>
           <StateBlockV2 variant="loading" title="Loading team board…" scale="full" />
         </Match>
         <Match when={data.error}>
@@ -135,7 +137,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
             hint={<KeyHintV2 shortcut="enter" label="retry" />}
           />
         </Match>
-        <Match when={!data()}>
+        <Match when={!boardData()}>
           <StateBlockV2
             variant="empty"
             title="No team for this session"
@@ -143,7 +145,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
             scale="full"
           />
         </Match>
-        <Match when={data()}>
+        <Match when={boardData()}>
           {(result) => (
             <div class="mx-auto flex w-full max-w-[1100px] flex-col gap-5">
               <header class="min-w-0">

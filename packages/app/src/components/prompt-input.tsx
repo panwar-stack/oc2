@@ -1623,7 +1623,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       type="button"
                       icon="plus"
                       variant="ghost"
-                      class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted"
+                      class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted focus-visible:shadow-[var(--v2-shadow-focus)]"
                       style={buttons()}
                       onClick={pick}
                       disabled={store.mode !== "normal"}

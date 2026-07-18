@@ -19,6 +19,16 @@ export interface MockServerConfig {
   sessions: ({ id: string } & Record<string, unknown>)[]
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
   events?: () => unknown[]
+  questions?: unknown[]
+  permissions?: unknown[]
+  sessionStatus?: Record<string, unknown>
+  team?: MockResponse
+  teamTasks?: MockResponse
+}
+
+interface MockResponse {
+  status?: number
+  body?: unknown
 }
 
 export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
@@ -46,6 +56,11 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     const path = url.pathname
     if (path === "/global/event" || path === "/event") return sse(route, config.events?.())
     if (path === "/global/health") return json(route, { healthy: true })
+    if (path === "/question") return json(route, config.questions ?? [])
+    if (path === "/permission") return json(route, config.permissions ?? [])
+    if (path === "/session/status") return json(route, config.sessionStatus ?? {})
+    if (path === "/team") return response(route, config.team ?? { body: {} })
+    if (/^\/team\/[^/]+\/tasks$/.test(path)) return response(route, config.teamTasks ?? { body: [] })
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
     if (path in staticRoutes) return json(route, staticRoutes[path])
@@ -70,9 +85,13 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
   })
 }
 
-function json(route: Route, body: unknown, headers?: Record<string, string>) {
+function response(route: Route, value: MockResponse) {
+  return json(route, value.body, undefined, value.status)
+}
+
+function json(route: Route, body: unknown, headers?: Record<string, string>, status = 200) {
   return route.fulfill({
-    status: 200,
+    status,
     contentType: "application/json",
     headers: {
       "access-control-allow-origin": "*",
