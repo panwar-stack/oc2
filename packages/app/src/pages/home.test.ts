@@ -57,5 +57,7 @@ describe("redesigned home resume surface", () => {
     expect(source).toContain("/^[1-3]$/.test(event.key)")
     expect(source).not.toContain("onDigit={")
     expect(source).not.toContain("up to date")
+    expect(source).toContain('retry() ? "▲" : busy() ? "●"')
+    expect(source).toContain("text-v2-state-fg-warning")
   })
 })

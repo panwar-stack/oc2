@@ -425,6 +425,11 @@ export const SessionQuestionDock: Component<{
     focus(options().length)
   }
 
+  const closeCustom = () => {
+    setStore("editing", false)
+    focus(options().length)
+  }
+
   const resizeInput = (el: HTMLTextAreaElement) => {
     el.style.height = "0px"
     el.style.height = `${el.scrollHeight}px`
@@ -546,9 +551,9 @@ export const SessionQuestionDock: Component<{
                 />
                 <KeyHintV2
                   shortcut="esc"
-                  label={language.t("session.decision.cancel")}
+                  label={store.editing ? language.t("common.close") : language.t("session.decision.cancel")}
                   disabled={sending()}
-                  onClick={reject}
+                  onClick={() => (store.editing ? closeCustom() : reject())}
                   aria-keyshortcuts="Escape"
                 />
               </div>
@@ -662,8 +667,7 @@ export const SessionQuestionDock: Component<{
                         if (e.key === "Escape") {
                           e.preventDefault()
                           e.stopPropagation()
-                          setStore("editing", false)
-                          focus(options().length)
+                          closeCustom()
                           return
                         }
                         if ((e.metaKey || e.ctrlKey) && !e.altKey) return

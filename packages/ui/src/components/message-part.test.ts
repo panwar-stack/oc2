@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { readPartText } from "./message-part-text"
+import { assistantTurnTokenCount } from "./turn-footer"
 
 describe("readPartText", () => {
   test("returns empty string when accum is undefined and part text is undefined", () => {
@@ -24,5 +25,25 @@ describe("readPartText", () => {
 
   test("trims leading and trailing whitespace", () => {
     expect(readPartText(undefined, { id: "part_1", text: "\n  body  \n" })).toBe("body")
+  })
+})
+
+describe("assistantTurnTokenCount", () => {
+  test("aggregates every provider step and respects authoritative totals", () => {
+    expect(
+      assistantTurnTokenCount([
+        { tokens: { total: 100, input: 1, output: 2, reasoning: 3, cache: { read: 4, write: 5 } } },
+        { tokens: { input: 10, output: 20, reasoning: 30, cache: { read: 40, write: 50 } } },
+      ]),
+    ).toBe(250)
+  })
+
+  test("uses actual permission requests and one shared duration interval", async () => {
+    const source = await Bun.file(new URL("./message-part.tsx", import.meta.url)).text()
+    expect(source).toContain("data.store.permission?.")
+    expect(source).toContain("approval: approvals().has(`${part.messageID}:${part.callID}`)")
+    expect(source).not.toContain("props.busy")
+    expect(source).toContain("const elapsedSubscribers = new Set")
+    expect(source.match(/window\.setInterval/g)?.length).toBe(1)
   })
 })

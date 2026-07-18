@@ -9,7 +9,7 @@ import { useCommand } from "@/context/command"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
 import { useProviders } from "@/hooks/use-providers"
-import { contextGaugeState, rootSessionID, visibleTodos } from "./session-chrome-model"
+import { contextGaugeState, rootSessionID, teamTaskGroup, visibleTodos } from "./session-chrome-model"
 
 function useSessionContext(sessionID: () => string | undefined) {
   const sync = useSync()
@@ -85,50 +85,69 @@ export function SessionDetailsPanel(props: {
   const teamSessionID = createMemo(() =>
     props.sessionID ? rootSessionID(sync.data.session, props.sessionID) : undefined,
   )
-  const [teamMembers, { refetch }] = createResource(
-    teamSessionID,
-    async (sessionID) => {
-      const team = await sdk.client.team.get({ sessionID }, { throwOnError: false }).then((result) => result.data)
-      if (!team || typeof team !== "object" || Array.isArray(team) || typeof team.id !== "string") return []
-      const result = await sdk.client.team
-        .tasks({ teamID: team.id, sessionID }, { throwOnError: false })
-        .then((result) => result.data)
-      const tasks = Array.isArray(result) ? result : []
-      return [...new Set(tasks.flatMap((task) => task.assignee ?? []))].map((name) => {
-        const assigned = tasks.filter((task) => task.assignee === name)
-        return {
-          name,
-          tasks: assigned,
-          session: sync.data.session.find(
-            (item) => item.parentID === sessionID && (item.id === name || item.title === name),
-          ),
-        }
-      })
-    },
-  )
+  const [teamData, { refetch }] = createResource(teamSessionID, async (sessionID) => {
+    const response = await sdk.client.team.get({ sessionID }, { throwOnError: false })
+    if (response.error && response.response.status === 400) return { team: undefined, tasks: [], assignees: [] }
+    if (response.error) throw response.error
+    const team = response.data
+    if (!team || typeof team !== "object" || Array.isArray(team) || typeof team.id !== "string") {
+      return { team: undefined, tasks: [], assignees: [] }
+    }
+    const responseTasks = await sdk.client.team.tasks({ teamID: team.id, sessionID }, { throwOnError: false })
+    if (responseTasks.error) throw responseTasks.error
+    const tasks = Array.isArray(responseTasks.data) ? responseTasks.data : []
+    const assignees = [...new Set(tasks.flatMap((task) => task.assignee ?? []))].map((name) => {
+      const assigned = tasks.filter((task) => task.assignee === name)
+      return {
+        name,
+        tasks: assigned,
+        session: sync.data.session.find(
+          (item) => item.parentID === sessionID && (item.id === name || item.title === name),
+        ),
+      }
+    })
+    return { team, tasks, assignees }
+  })
   onMount(() => {
     const timer = window.setInterval(() => void refetch(), 5000)
     onCleanup(() => window.clearInterval(timer))
   })
-  const members = createMemo(() => teamMembers() ?? [])
-  const pendingFor = (item: ReturnType<typeof members>[number]) =>
+  const assignees = createMemo(() => teamData()?.assignees ?? [])
+  const pendingFor = (item: ReturnType<typeof assignees>[number]) =>
     item.session
       ? (sync.data.permission[item.session.id]?.length ?? 0) + (sync.data.question[item.session.id]?.length ?? 0)
       : 0
-  const needsYou = createMemo(() => members().filter((item) => pendingFor(item) > 0))
+  const needsYou = createMemo(() => assignees().filter((item) => pendingFor(item) > 0))
   const working = createMemo(() =>
-    members().filter(
+    assignees().filter(
       (item) =>
         pendingFor(item) === 0 &&
         ((item.session && sync.data.session_working(item.session.id)) ||
-          item.tasks.some((task) => task.status === "in_progress")),
+          item.tasks.some((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "working")),
+    ),
+  )
+  const blocked = createMemo(() =>
+    assignees().filter(
+      (item) =>
+        pendingFor(item) === 0 &&
+        !item.tasks.some((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "working") &&
+        item.tasks.some((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "blocked"),
     ),
   )
   const completed = createMemo(() =>
-    members().filter((item) => item.tasks.length > 0 && item.tasks.every((task) => task.status === "completed")),
+    assignees().filter(
+      (item) =>
+        pendingFor(item) === 0 &&
+        !item.tasks.some((task) => {
+          const group = teamTaskGroup(task, teamData()?.tasks ?? [])
+          return group === "working" || group === "blocked"
+        }) &&
+        item.tasks.length > 0 &&
+        item.tasks.every((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "completed"),
+    ),
   )
   const idle = createMemo(() =>
-    Math.max(0, members().length - needsYou().length - working().length - completed().length),
+    Math.max(0, assignees().length - needsYou().length - working().length - blocked().length - completed().length),
   )
   const pending = createMemo(() => needsYou().reduce((count, item) => count + pendingFor(item), 0))
   const done = createMemo(() => props.todos.filter((todo) => todo.status === "completed").length)
@@ -192,9 +211,9 @@ export function SessionDetailsPanel(props: {
               aria-label="Team"
               class="border-t border-[var(--v2-border-border-base)] px-[var(--v2-space-7)] py-[var(--v2-space-6)]"
             >
-              <SectionHeadV2 label="Team" aggregate={members().length} size="compact" />
+              <SectionHeadV2 label="Team" aggregate={assignees().length} size="compact" />
               <Show
-                when={!teamMembers.loading}
+                when={!teamData.loading}
                 fallback={
                   <div class="mt-2 truncate text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]">
                     ◐ loading team…
@@ -202,44 +221,57 @@ export function SessionDetailsPanel(props: {
                 }
               >
                 <Show
-                  when={!teamMembers.error}
+                  when={!teamData.error}
                   fallback={<div class="mt-2 truncate text-[var(--v2-state-fg-danger)]">✕ team unavailable</div>}
                 >
                   <Show
-                    when={members().length > 0}
+                    when={teamData()?.team}
                     fallback={
                       <div class="mt-2 truncate text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]">
                         ○ single agent
                       </div>
                     }
                   >
-                    <div class="mt-2 flex flex-col gap-1 text-[var(--v2-font-size-meta)]">
-                      <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-thinking)]">
-                        <StatusGlyph name="running" /> <span class="min-w-0 flex-1 truncate">Working</span>
-                        <span>{working().length}</span>
-                      </div>
-                      <For each={working().slice(0, 3)}>
-                        {(member) => (
-                          <div class="ml-3 truncate border-l border-[var(--v2-border-border-base)] pl-2">
-                            {member.name}
-                          </div>
-                        )}
-                      </For>
-                      <div class="flex items-center gap-1.5 text-[var(--v2-text-text-faint)]">
-                        <StatusGlyph name="pending" /> <span class="min-w-0 flex-1 truncate">Idle</span>
-                        <span>{idle()}</span>
-                      </div>
-                      <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-success)]">
-                        <StatusGlyph name="done" /> <span class="min-w-0 flex-1 truncate">Completed</span>
-                        <span>{completed().length}</span>
-                      </div>
-                      <Show when={pending() > 0}>
-                        <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-decision)]">
-                          <StatusGlyph name="needs-you" /> <span class="min-w-0 flex-1 truncate">Waiting on you</span>
-                          <span>{pending()}</span>
+                    <Show
+                      when={assignees().length > 0}
+                      fallback={
+                        <div class="mt-2 truncate text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]">
+                          ○ no assigned tasks
                         </div>
-                      </Show>
-                    </div>
+                      }
+                    >
+                      <div class="mt-2 flex flex-col gap-1 text-[var(--v2-font-size-meta)]">
+                        <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-thinking)]">
+                          <StatusGlyph name="running" /> <span class="min-w-0 flex-1 truncate">Working assignees</span>
+                          <span>{working().length}</span>
+                        </div>
+                        <For each={working().slice(0, 3)}>
+                          {(assignee) => (
+                            <div class="ml-3 truncate border-l border-[var(--v2-border-border-base)] pl-2">
+                              {assignee.name}
+                            </div>
+                          )}
+                        </For>
+                        <div class="flex items-center gap-1.5 text-[var(--v2-text-text-faint)]">
+                          <StatusGlyph name="pending" /> <span class="min-w-0 flex-1 truncate">Dependency blocked</span>
+                          <span>{blocked().length}</span>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-[var(--v2-text-text-faint)]">
+                          <StatusGlyph name="pending" /> <span class="min-w-0 flex-1 truncate">Idle</span>
+                          <span>{idle()}</span>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-success)]">
+                          <StatusGlyph name="done" /> <span class="min-w-0 flex-1 truncate">Completed</span>
+                          <span>{completed().length}</span>
+                        </div>
+                        <Show when={pending() > 0}>
+                          <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-decision)]">
+                            <StatusGlyph name="needs-you" /> <span class="min-w-0 flex-1 truncate">Waiting on you</span>
+                            <span>{pending()}</span>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
                   </Show>
                 </Show>
               </Show>

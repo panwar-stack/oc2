@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import type { PermissionRequest, QuestionRequest, Session } from "@oc2-ai/sdk/v2/client"
 import {
   composerPresentation,
+  composerWorkingStartedAt,
   formatComposerElapsed,
-  latchComposerWorkingSince,
   todoState,
 } from "./session-composer-model"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
@@ -164,12 +164,16 @@ describe("composerPresentation", () => {
 })
 
 describe("composer working clock", () => {
-  test("latches the start while work remains active and resets on idle", () => {
-    expect(latchComposerWorkingSince(undefined, true, 1_000)).toBe(1_000)
-    expect(latchComposerWorkingSince(1_000, true, 5_000)).toBe(1_000)
-    expect(latchComposerWorkingSince(1_000, true, 5_000, true)).toBe(5_000)
-    expect(latchComposerWorkingSince(1_000, false, 5_000)).toBeUndefined()
-    expect(latchComposerWorkingSince(undefined, true, 8_000)).toBe(8_000)
+  test("uses the latest persisted user timestamp and does not invent a start", () => {
+    expect(
+      composerWorkingStartedAt([
+        { role: "user", time: { created: 1_000 } },
+        { role: "assistant", time: { created: 2_000 } },
+        { role: "user", time: { created: 5_000 } },
+      ]),
+    ).toBe(5_000)
+    expect(composerWorkingStartedAt([{ role: "assistant", time: { created: 2_000 } }])).toBeUndefined()
+    expect(composerWorkingStartedAt([{ role: "user", time: { created: Number.NaN } }])).toBeUndefined()
   })
 
   test("formats stable elapsed labels", () => {

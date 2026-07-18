@@ -8,6 +8,9 @@ import { useDialog } from "../ui/dialog"
 import { SplitBorder } from "../ui/border"
 import { TextAttributes } from "@opentui/core"
 import { Locale } from "../util/locale"
+import { DialogConfirm } from "../ui/dialog-confirm"
+import { useBindings } from "../keymap"
+import { errorMessage } from "../util/error"
 
 type Tab = "overview" | "tasks" | "messages"
 
@@ -59,23 +62,25 @@ export function groupDialogTeamTasks(tasks: readonly TeamTask[]) {
   const group = (status: string) =>
     status === "in_progress" || status === "working"
       ? "working"
-      : status === "blocked" || status === "needs-you" || status === "needs_you"
-        ? "needs-you"
-        : status === "completed" || status === "done"
-          ? "completed"
-          : status === "cancelled" || status === "failed" || status === "error"
-            ? "errored"
-            : "idle"
-  return tasks.reduce<Record<"working" | "needs-you" | "idle" | "completed" | "errored", TeamTask[]>>(
+      : status === "blocked"
+        ? "blocked"
+        : status === "needs-you" || status === "needs_you"
+          ? "needs-you"
+          : status === "completed" || status === "done"
+            ? "completed"
+            : status === "cancelled" || status === "failed" || status === "error"
+              ? "errored"
+              : "idle"
+  return tasks.reduce<Record<"working" | "blocked" | "needs-you" | "idle" | "completed" | "errored", TeamTask[]>>(
     (result, task) => {
       result[group(task.status)].push(task)
       return result
     },
-    { working: [], "needs-you": [], idle: [], completed: [], errored: [] },
+    { working: [], blocked: [], "needs-you": [], idle: [], completed: [], errored: [] },
   )
 }
 
-export function DialogTeam(props: { focusTab?: Tab }) {
+export function DialogTeam(props: { focusTab?: Tab; actionError?: string }) {
   const route = useRouteData("session")
   const sync = useSync()
   const sdk = useSDK()
@@ -88,9 +93,14 @@ export function DialogTeam(props: { focusTab?: Tab }) {
     return s ? (s.parentID ?? s.id) : route.sessionID
   })
 
-  const [team] = createResource(
+  const [team, { refetch: refetchTeam }] = createResource(
     () => sessionID(),
-    (sid) => sdk.client.team.get({ sessionID: sid }).then((res) => res.data ?? undefined),
+    (sid) =>
+      sdk.client.team.get({ sessionID: sid }, { throwOnError: false }).then((response) => {
+        if (response.error && response.response.status === 400) return
+        if (response.error) throw response.error
+        return response.data
+      }),
   )
 
   const teamID = createMemo(() => team()?.id)
@@ -101,12 +111,12 @@ export function DialogTeam(props: { focusTab?: Tab }) {
     return { teamID: id, sessionID: sessionID() }
   })
 
-  const [tasks] = createResource(
+  const [tasks, { refetch: refetchTasks }] = createResource(
     () => teamAccess(),
     (access) => sdk.client.team.tasks(access, { throwOnError: true }).then((res) => res.data),
   )
 
-  const [messages] = createResource(
+  const [messages, { refetch: refetchMessages }] = createResource(
     () => teamAccess(),
     (access) => sdk.client.team.messages(access, { throwOnError: true }).then((res) => res.data),
   )
@@ -133,13 +143,57 @@ export function DialogTeam(props: { focusTab?: Tab }) {
     if (!member) return 0
     return (sync.data.permission[member.id]?.length ?? 0) + (sync.data.question[member.id]?.length ?? 0)
   }
-  const taskGroups = createMemo(() =>
-    groupDialogTeamTasks(
-      (tasks() ?? []).map((task) => (taskPending(task.assignee) ? { ...task, status: "needs-you" } : task)),
-    ),
-  )
+  const taskGroups = createMemo(() => groupDialogTeamTasks(tasks() ?? []))
 
   const [tab, setTab] = createSignal<Tab>(props.focusTab ?? "overview")
+  const tabs = ["overview", "tasks", "messages"] as const
+
+  const moveTab = (step: number) => {
+    const index = tabs.indexOf(tab())
+    setTab(tabs[(index + step + tabs.length) % tabs.length])
+  }
+
+  const retry = () => {
+    if (team.error) {
+      void refetchTeam()
+      return
+    }
+    if (tab() === "tasks") void refetchTasks()
+    if (tab() === "messages") void refetchMessages()
+  }
+
+  const shutdown = async () => {
+    const info = team()
+    if (!info) return
+    const selected = tab()
+    const confirmed = await DialogConfirm.show(
+      dialog,
+      "Shutdown Team",
+      "Stop all active team members and close this team?",
+      undefined,
+      { destructive: true, defaultOption: "cancel" },
+    )
+    if (confirmed === false) {
+      dialog.replace(() => <DialogTeam focusTab={selected} />)
+      return
+    }
+    if (!confirmed) return
+    const result = await sdk.client.team.shutdown({ teamID: info.id, sessionID: sessionID() }, { throwOnError: false })
+    if (!result.error) {
+      dialog.clear()
+      return
+    }
+    dialog.replace(() => <DialogTeam focusTab={selected} actionError={errorMessage(result.error)} />)
+  }
+
+  useBindings(() => ({
+    bindings: [
+      { key: "tab", desc: "Next team tab", group: "Team", cmd: () => moveTab(1) },
+      { key: "shift+tab", desc: "Previous team tab", group: "Team", cmd: () => moveTab(-1) },
+      { key: "r", desc: "Retry team data", group: "Team", cmd: retry },
+      { key: "s", desc: "Shutdown team", group: "Team", cmd: () => void shutdown() },
+    ],
+  }))
 
   const tabStyle = (t: Tab) => ({
     fg: tab() === t ? theme.text : theme.textMuted,
@@ -153,7 +207,7 @@ export function DialogTeam(props: { focusTab?: Tab }) {
           <Show when={team()}>{(t) => <span style={{ fg: theme.textMuted }}> · {t().name}</span>}</Show>
         </text>
         <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-          esc
+          tab switch · r retry · s shutdown · esc close
         </text>
       </box>
 
@@ -165,6 +219,13 @@ export function DialogTeam(props: { focusTab?: Tab }) {
           </text>
         }
       >
+        <Show when={props.actionError}>
+          {(message) => (
+            <text fg={theme.error} onMouseUp={() => void shutdown()}>
+              ✕ {message()} · s retry shutdown
+            </text>
+          )}
+        </Show>
         <Show
           when={team()}
           fallback={
@@ -173,7 +234,9 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                 <text fg={theme.textMuted}>Loading team data...</text>
               </Show>
               <Show when={team.error}>
-                <text fg={theme.error}>✕ Team data unavailable</text>
+                <text fg={theme.error} onMouseUp={() => void refetchTeam()}>
+                  ✕ Team data unavailable · r retry
+                </text>
               </Show>
               <Show when={!team.loading && !team.error}>
                 <text fg={theme.textMuted}>○ No team for this session.</text>
@@ -299,13 +362,7 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                     </Show>
 
                     <box {...SplitBorder} border={["top"]} borderColor={theme.border} paddingTop={1}>
-                      <box
-                        onMouseUp={() => {
-                          void sdk.client.team
-                            .shutdown({ teamID: info.id, sessionID: sessionID() })
-                            .then(() => dialog.clear())
-                        }}
-                      >
+                      <box onMouseUp={() => void shutdown()}>
                         <text fg={theme.error}>Shutdown Team</text>
                       </box>
                     </box>
@@ -314,7 +371,14 @@ export function DialogTeam(props: { focusTab?: Tab }) {
 
                 <Show when={tab() === "tasks"}>
                   <Show when={!tasks.loading} fallback={<text fg={theme.textMuted}>◐ Loading team tasks...</text>}>
-                    <Show when={!tasks.error} fallback={<text fg={theme.error}>✕ Team tasks unavailable</text>}>
+                    <Show
+                      when={!tasks.error}
+                      fallback={
+                        <text fg={theme.error} onMouseUp={() => void refetchTasks()}>
+                          ✕ Team tasks unavailable · r retry
+                        </text>
+                      }
+                    >
                       <Show
                         when={(tasks()?.length ?? 0) > 0}
                         fallback={<text fg={theme.textMuted}>○ No tasks created yet.</text>}
@@ -323,6 +387,7 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                           each={
                             [
                               ["working", "◐ WORKING", theme.warning],
+                              ["blocked", "○ DEPENDENCY BLOCKED", theme.info],
                               ["needs-you", "▲ WAITING ON YOU", theme.accent],
                               ["idle", "○ IDLE", theme.textMuted],
                               ["errored", "✕ ERRORED", theme.error],
@@ -360,7 +425,12 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                                           <b>{Locale.truncate(task.assignee ?? "unassigned", 28)}</b>
                                         </text>
                                         <text flexGrow={1} />
-                                        <Show when={taskPending(task.assignee) > 0}>
+                                        <Show
+                                          when={
+                                            taskPending(task.assignee) > 0 &&
+                                            (task.status === "in_progress" || task.status === "working")
+                                          }
+                                        >
                                           <text fg={theme.accent}>▲ {taskPending(task.assignee)} pending</text>
                                         </Show>
                                       </box>
@@ -392,7 +462,14 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                     when={!messages.loading}
                     fallback={<text fg={theme.textMuted}>◐ Loading team messages...</text>}
                   >
-                    <Show when={!messages.error} fallback={<text fg={theme.error}>✕ Team messages unavailable</text>}>
+                    <Show
+                      when={!messages.error}
+                      fallback={
+                        <text fg={theme.error} onMouseUp={() => void refetchMessages()}>
+                          ✕ Team messages unavailable · r retry
+                        </text>
+                      }
+                    >
                       <Show
                         when={(messages()?.length ?? 0) > 0}
                         fallback={<text fg={theme.textMuted}>○ No messages exchanged yet.</text>}

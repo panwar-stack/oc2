@@ -412,7 +412,6 @@ export function SessionTurn(
                     messages={assistantMessages()}
                     showAssistantCopyPartID={assistantCopyPartID()}
                     turnDurationMs={turnDurationMs()}
-                    working={working()}
                     showReasoningSummaries={showReasoningSummaries()}
                     shellToolDefaultOpen={props.shellToolDefaultOpen}
                     editToolDefaultOpen={props.editToolDefaultOpen}
@@ -533,7 +532,9 @@ export function SessionTurn(
                 </Card>
               </Show>
               <Show when={props.redesigned && assistantMessages().at(-1)}>
-                {(message) => <TurnFooter message={message()} durationMs={turnDurationMs()} />}
+                {(message) => (
+                  <TurnFooter message={message()} messages={assistantMessages()} durationMs={turnDurationMs()} />
+                )}
               </Show>
             </div>
           </Show>

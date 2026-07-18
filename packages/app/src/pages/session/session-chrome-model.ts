@@ -19,30 +19,43 @@ export function visibleTodos(todos: readonly Todo[], limit = 5) {
   return { items, overflow: Math.max(0, todos.length - items.length) }
 }
 
-export type TeamTaskGroup = "working" | "needs-you" | "idle" | "completed" | "errored"
+export type TeamTaskGroup = "working" | "blocked" | "needs-you" | "idle" | "completed" | "errored"
 
-export function teamTaskGroup(status: string): TeamTaskGroup {
+export function teamTaskGroup(
+  task: Pick<TeamTask, "id" | "status" | "dependency_ids">,
+  tasks: readonly TeamTask[] = [],
+): TeamTaskGroup {
+  const status = task.status
   if (status === "in_progress" || status === "working") return "working"
-  if (status === "blocked" || status === "needs_you" || status === "needs-you") return "needs-you"
+  if (status === "blocked") return "blocked"
+  if (status === "needs_you" || status === "needs-you") return "needs-you"
   if (status === "completed" || status === "done") return "completed"
   if (status === "cancelled" || status === "error" || status === "failed") return "errored"
+  if (
+    task.dependency_ids?.some((id) => {
+      const dependency = tasks.find((item) => item.id === id)
+      return !dependency || (dependency.status !== "completed" && dependency.status !== "done")
+    })
+  )
+    return "blocked"
   return "idle"
 }
 
 export function groupTeamTasks(tasks: readonly TeamTask[]) {
   return tasks.reduce<Record<TeamTaskGroup, TeamTask[]>>(
     (groups, task) => {
-      groups[teamTaskGroup(task.status)].push(task)
+      groups[teamTaskGroup(task, tasks)].push(task)
       return groups
     },
-    { working: [], "needs-you": [], idle: [], completed: [], errored: [] },
+    { working: [], blocked: [], "needs-you": [], idle: [], completed: [], errored: [] },
   )
 }
 
-export function rootSessionID(
-  sessions: readonly { id: string; parentID?: string }[],
-  sessionID: string,
-) {
+export function teamBoardFeatureEnabled(input: { redesign: boolean; flag?: string; sessionID?: string }) {
+  return input.redesign && input.flag === "true" && !!input.sessionID
+}
+
+export function rootSessionID(sessions: readonly { id: string; parentID?: string }[], sessionID: string) {
   const byID = new Map(sessions.map((session) => [session.id, session]))
   const seen = new Set<string>()
   let current = sessionID

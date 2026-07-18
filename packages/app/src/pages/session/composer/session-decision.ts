@@ -54,9 +54,19 @@ export function decisionDocumentTitle(title: string, pending: boolean) {
 
 export function pendingDecisionTitleController(target: Document) {
   let active = false
+  let ownedTitle: string | undefined
   const update = () => {
-    const next = decisionDocumentTitle(target.title, active)
-    if (target.title !== next) target.title = next
+    if (ownedTitle !== undefined && target.title !== ownedTitle) ownedTitle = undefined
+    if (!active) {
+      if (ownedTitle === undefined) return
+      const next = ownedTitle.slice(titlePrefix.length)
+      ownedTitle = undefined
+      target.title = next
+      return
+    }
+    if (ownedTitle !== undefined || target.title.startsWith(titlePrefix)) return
+    ownedTitle = `${titlePrefix}${target.title}`
+    target.title = ownedTitle
   }
   const observer = new MutationObserver(update)
   observer.observe(target.head, { childList: true, subtree: true, characterData: true })

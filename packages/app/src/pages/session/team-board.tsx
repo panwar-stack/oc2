@@ -17,6 +17,7 @@ import "./team-board.css"
 
 const groups: { id: TeamTaskGroup; label: string; glyph: "running" | "needs-you" | "pending" | "done" | "failed" }[] = [
   { id: "working", label: "Working", glyph: "running" },
+  { id: "blocked", label: "Dependency blocked", glyph: "pending" },
   { id: "needs-you", label: "Waiting on you", glyph: "needs-you" },
   { id: "idle", label: "Idle", glyph: "pending" },
   { id: "errored", label: "Errored", glyph: "failed" },
@@ -31,10 +32,13 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
     () => [teamSessionID(), sdk.directory] as const,
     async ([sessionID]) => {
       const response = await sdk.client.team.get({ sessionID }, { throwOnError: false })
+      if (response.error && response.response.status === 400) return
+      if (response.error) throw response.error
       const team = response.data
       if (!team || typeof team !== "object" || Array.isArray(team) || typeof team.id !== "string") return
       const access = { teamID: team.id, sessionID }
       const result = await sdk.client.team.tasks(access, { throwOnError: false })
+      if (result.error) throw result.error
       const tasks = Array.isArray(result.data) ? result.data : []
       return { team, tasks } satisfies { team: TeamInfo; tasks: TeamTask[] }
     },
@@ -55,7 +59,7 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
     if (!member) return 0
     return (sync.data.permission[member.id]?.length ?? 0) + (sync.data.question[member.id]?.length ?? 0)
   }
-  const workers = createMemo(() => {
+  const assignees = createMemo(() => {
     const assigned = new Map<string, TeamTask[]>()
     for (const task of data()?.tasks ?? []) {
       if (!task.assignee) continue
@@ -67,16 +71,19 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
       const pending = pendingFor(name)
       const state = pending
         ? ("needs-you" as const)
-        : tasks.some((task) => teamTaskGroup(task.status) === "working")
+        : tasks.some((task) => teamTaskGroup(task, data()?.tasks ?? []) === "working")
           ? ("working" as const)
-          : tasks.some((task) => teamTaskGroup(task.status) === "errored")
-            ? ("errored" as const)
-            : tasks.every((task) => teamTaskGroup(task.status) === "completed")
-              ? ("completed" as const)
-              : ("idle" as const)
+          : tasks.some((task) => teamTaskGroup(task, data()?.tasks ?? []) === "blocked")
+            ? ("blocked" as const)
+            : tasks.some((task) => teamTaskGroup(task, data()?.tasks ?? []) === "errored")
+              ? ("errored" as const)
+              : tasks.every((task) => teamTaskGroup(task, data()?.tasks ?? []) === "completed")
+                ? ("completed" as const)
+                : ("idle" as const)
       const current =
-        tasks.find((task) => teamTaskGroup(task.status) === "working") ??
-        tasks.find((task) => teamTaskGroup(task.status) === "idle") ??
+        tasks.find((task) => teamTaskGroup(task, data()?.tasks ?? []) === "working") ??
+        tasks.find((task) => teamTaskGroup(task, data()?.tasks ?? []) === "blocked") ??
+        tasks.find((task) => teamTaskGroup(task, data()?.tasks ?? []) === "idle") ??
         tasks[0]!
       return {
         name,
@@ -88,14 +95,14 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
       }
     })
   })
-  type Worker = ReturnType<typeof workers>[number]
-  const workerGroups = createMemo(() =>
-    workers().reduce<Record<TeamTaskGroup, Worker[]>>(
-      (result, worker) => {
-        result[worker.state].push(worker)
+  type Assignee = ReturnType<typeof assignees>[number]
+  const assigneeGroups = createMemo(() =>
+    assignees().reduce<Record<TeamTaskGroup, Assignee[]>>(
+      (result, assignee) => {
+        result[assignee.state].push(assignee)
         return result
       },
-      { working: [], "needs-you": [], idle: [], completed: [], errored: [] },
+      { working: [], blocked: [], "needs-you": [], idle: [], completed: [], errored: [] },
     ),
   )
   const dependency = (id: string) => data()?.tasks.find((task) => task.id === id)?.description ?? id
@@ -151,8 +158,9 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
                   aria-live="polite"
                   class="mt-1 truncate font-mono text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]"
                 >
-                  {workers().length} workers · {workerGroups().working.length} working · {workerGroups().idle.length}{" "}
-                  idle · {workerGroups().completed.length} done · tasks {completed()}/{result().tasks.length}
+                  {assignees().length} assignees · {assigneeGroups().working.length} working ·{" "}
+                  {assigneeGroups().blocked.length} blocked · {assigneeGroups().idle.length} idle ·{" "}
+                  {assigneeGroups().completed.length} done · tasks {completed()}/{result().tasks.length}
                 </div>
               </header>
 
@@ -179,7 +187,8 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
                             <div class="flex min-w-0 items-center gap-2">
                               <StatusGlyph
                                 name={
-                                  groups.find((group) => group.id === teamTaskGroup(task.status))?.glyph ?? "pending"
+                                  groups.find((group) => group.id === teamTaskGroup(task, result().tasks))?.glyph ??
+                                  "pending"
                                 }
                               />
                               <strong class="min-w-0 flex-1 truncate">{task.description}</strong>
@@ -202,68 +211,68 @@ export function TeamBoard(props: { sessionID: string; mode: "board" | "tasks"; o
                   }
                 >
                   <Show
-                    when={workers().length > 0}
+                    when={assignees().length > 0}
                     fallback={
                       <div class="text-[var(--v2-text-text-muted)]">
-                        <StatusGlyph name="pending" /> no assigned workers · open Tasks for unassigned work
+                        <StatusGlyph name="pending" /> no task assignees · open Tasks for unassigned work
                       </div>
                     }
                   >
                     <For each={groups}>
                       {(group) => (
-                        <Show when={workerGroups()[group.id].length > 0}>
+                        <Show when={assigneeGroups()[group.id].length > 0}>
                           <section aria-labelledby={`team-${group.id}`} class="flex flex-col gap-2">
                             <h3
                               id={`team-${group.id}`}
                               class="font-mono text-[var(--v2-font-size-label)] font-bold uppercase tracking-[0.08em] text-[var(--v2-text-text-muted)]"
                             >
-                              <StatusGlyph name={group.glyph} /> {group.label} · {workerGroups()[group.id].length}
+                              <StatusGlyph name={group.glyph} /> {group.label} · {assigneeGroups()[group.id].length}
                             </h3>
                             <div data-component="team-board-grid">
-                              <For each={workerGroups()[group.id]}>
-                                {(worker) => (
+                              <For each={assigneeGroups()[group.id]}>
+                                {(assignee) => (
                                   <article
                                     tabIndex={0}
-                                    aria-label={`${worker.name}, ${group.label}, ${worker.current.description}`}
+                                    aria-label={`${assignee.name}, ${group.label}, ${assignee.current.description}`}
                                     class="min-w-0 rounded-[var(--v2-radius-card)] border bg-[var(--v2-background-bg-layer-02)] px-3 py-3 outline-none focus-visible:shadow-[var(--v2-shadow-focus)]"
                                     style={{
                                       "border-color":
                                         group.id === "working"
                                           ? "var(--v2-state-border-thinking)"
-                                          : `var(--v2-agent-${stableAgentColor(worker.name) + 1})`,
+                                          : `var(--v2-agent-${stableAgentColor(assignee.name) + 1})`,
                                     }}
                                   >
                                     <div class="flex min-w-0 items-center gap-2">
                                       <StatusGlyph name={group.glyph} />
                                       <strong
                                         class="min-w-0 flex-1 truncate text-[var(--v2-text-text-base)]"
-                                        title={worker.name}
+                                        title={assignee.name}
                                       >
-                                        {worker.name}
+                                        {assignee.name}
                                       </strong>
                                     </div>
                                     <div
                                       class="mt-2 line-clamp-2 min-h-10 text-[var(--v2-font-size-small)] text-[var(--v2-text-text-muted)]"
-                                      title={worker.current.description}
+                                      title={assignee.current.description}
                                     >
-                                      {worker.current.description}
+                                      {assignee.current.description}
                                     </div>
-                                    <Show when={worker.dependencies.length}>
+                                    <Show when={assignee.dependencies.length}>
                                       <div
                                         class="mt-2 truncate text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]"
-                                        title={worker.dependencies.map(dependency).join(", ")}
+                                        title={assignee.dependencies.map(dependency).join(", ")}
                                       >
-                                        waits on {worker.dependencies.map(dependency).join(" · ")}
+                                        waits on {assignee.dependencies.map(dependency).join(" · ")}
                                       </div>
                                     </Show>
                                     <div class="mt-2 flex min-w-0 items-center gap-2 font-mono text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]">
                                       <span>
-                                        {worker.tasks.length} task{worker.tasks.length === 1 ? "" : "s"}
+                                        {assignee.tasks.length} task{assignee.tasks.length === 1 ? "" : "s"}
                                       </span>
                                       <span class="flex-1" />
-                                      <Show when={worker.pending > 0}>
+                                      <Show when={assignee.pending > 0}>
                                         <span class="text-[var(--v2-state-fg-decision)]">
-                                          <StatusGlyph name="needs-you" /> {worker.pending} pending
+                                          <StatusGlyph name="needs-you" /> {assignee.pending} pending
                                         </span>
                                       </Show>
                                     </div>

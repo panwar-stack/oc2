@@ -132,6 +132,7 @@ export namespace Timeline {
     showReasoning: boolean,
     status: SessionStatus["type"],
     isActive: boolean,
+    showTurnFooter: boolean,
     fuguStatus?: LiveFuguStatus,
   ) {
     const rows: TimelineRow.TimelineRow[] = []
@@ -275,7 +276,7 @@ export namespace Timeline {
     }
 
     const lastAssistant = assistantMessages.at(-1)
-    if (lastAssistant) {
+    if (lastAssistant && showTurnFooter) {
       rows.push(
         new TimelineRow.TurnFooter({
           userMessageID: userMessage.id,

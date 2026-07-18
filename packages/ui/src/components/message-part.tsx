@@ -63,6 +63,7 @@ import { KeyHintV2 } from "../v2/components/key-hint-v2"
 import { PillV2 } from "../v2/components/pill-v2"
 import { StatusGlyph } from "../v2/components/status-glyph"
 import { toolAggregate, toolDuration, toolSummary } from "./tool-summary"
+import { assistantTurnTokenCount } from "./turn-footer"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -624,7 +625,6 @@ export function AssistantParts(props: {
   messages: AssistantMessage[]
   showAssistantCopyPartID?: string | null
   turnDurationMs?: number
-  working?: boolean
   showReasoningSummaries?: boolean
   shellToolDefaultOpen?: boolean
   editToolDefaultOpen?: boolean
@@ -657,8 +657,6 @@ export function AssistantParts(props: {
     { equals: sameGroups },
   )
 
-  const last = createMemo(() => grouped().at(-1)?.key)
-
   return (
     <Index each={grouped()}>
       {(entryAccessor) => {
@@ -679,11 +677,9 @@ export function AssistantParts(props: {
                   emptyTools,
                   { equals: same },
                 )
-                const busy = createMemo(() => props.working && last() === entryAccessor().key)
-
                 return (
                   <Show when={parts().length > 0}>
-                    <ContextToolGroup parts={parts()} busy={busy()} redesigned={props.redesigned} />
+                    <ContextToolGroup parts={parts()} redesigned={props.redesigned} />
                   </Show>
                 )
               })()}
@@ -814,13 +810,31 @@ function contextToolSummary(parts: ToolPart[]) {
   return { read, search, list }
 }
 
+const elapsedSubscribers = new Set<(now: number) => void>()
+let elapsedTimer: number | undefined
+
+function subscribeElapsed(listener: (now: number) => void) {
+  elapsedSubscribers.add(listener)
+  listener(Date.now())
+  if (elapsedTimer === undefined) {
+    elapsedTimer = window.setInterval(() => {
+      const now = Date.now()
+      for (const subscriber of elapsedSubscribers) subscriber(now)
+    }, 1_000)
+  }
+  return () => {
+    elapsedSubscribers.delete(listener)
+    if (elapsedSubscribers.size > 0 || elapsedTimer === undefined) return
+    window.clearInterval(elapsedTimer)
+    elapsedTimer = undefined
+  }
+}
+
 function useElapsedNow(active: () => boolean) {
   const [now, setNow] = createSignal(Date.now())
   createEffect(() => {
     if (!active()) return
-    setNow(Date.now())
-    const interval = window.setInterval(() => setNow(Date.now()), 1_000)
-    onCleanup(() => window.clearInterval(interval))
+    onCleanup(subscribeElapsed(setNow))
   })
   return now
 }
@@ -935,27 +949,29 @@ export function AssistantMessageDisplay(props: {
   )
 }
 
-export function ContextToolGroup(props: {
-  parts: ToolPart[]
-  busy?: boolean
-  redesigned?: boolean
-  onSizeChange?: () => void
-}) {
+export function ContextToolGroup(props: { parts: ToolPart[]; redesigned?: boolean; onSizeChange?: () => void }) {
+  const data = useData()
   const i18n = useI18n()
   const [open, setOpen] = createSignal(false)
-  const pending = createMemo(
+  const pending = createMemo(() =>
+    props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),
+  )
+  const approvals = createMemo(
     () =>
-      !!props.busy || props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),
+      new Set(
+        (data.store.permission?.[props.parts[0]?.sessionID ?? ""] ?? []).flatMap((request) =>
+          request.tool?.callID && request.tool.messageID ? [`${request.tool.messageID}:${request.tool.callID}`] : [],
+        ),
+      ),
   )
   const summary = createMemo(() => contextToolSummary(props.parts))
   const aggregate = createMemo(() =>
     toolAggregate(
-      props.parts
-        .map((part) => ({
-          status: part.state.status,
-          error: toolPartError(part),
-        }))
-        .concat(props.busy ? [{ status: "running", error: undefined }] : []),
+      props.parts.map((part) => ({
+        status: part.state.status,
+        error: toolPartError(part),
+        approval: approvals().has(`${part.messageID}:${part.callID}`),
+      })),
     ),
   )
   const handleOpenChange = (value: boolean) => {
@@ -1616,7 +1632,11 @@ function formatDuration(ms: number, i18n: ReturnType<typeof useI18n>, numfmt: In
   })
 }
 
-export function TurnFooter(props: { message: AssistantMessage; durationMs?: number }) {
+export function TurnFooter(props: {
+  message: AssistantMessage
+  messages?: readonly AssistantMessage[]
+  durationMs?: number
+}) {
   const data = useData()
   const i18n = useI18n()
   const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
@@ -1636,8 +1656,7 @@ export function TurnFooter(props: { message: AssistantMessage; durationMs?: numb
     return formatDuration(ms, i18n, numfmt())
   })
   const tokens = createMemo(() => {
-    const usage = props.message.tokens
-    const total = usage.total ?? usage.input + usage.output + usage.reasoning + usage.cache.read + usage.cache.write
+    const total = assistantTurnTokenCount(props.messages ?? [props.message])
     return total > 0 ? `${numfmt().format(total)} tokens` : ""
   })
   const meta = createMemo(() => {

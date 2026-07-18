@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { composerFooterPresentation, latchComposerWorkingSince } from "../../src/component/composer-footer"
+import { composerFooterPresentation } from "../../src/component/composer-footer"
 
 describe("composerFooterPresentation", () => {
   test("keeps idle sends and working steer delivery truthful", () => {
@@ -45,23 +45,5 @@ describe("composerFooterPresentation", () => {
       state: "working",
       action: "queue",
     })
-  })
-})
-
-describe("latchComposerWorkingSince", () => {
-  test("latches within a turn and resets across sessions and idle", () => {
-    expect(latchComposerWorkingSince({}, { sessionID: "a", working: true, now: 1_000 })).toEqual({
-      sessionID: "a",
-      startedAt: 1_000,
-    })
-    expect(
-      latchComposerWorkingSince({ sessionID: "a", startedAt: 1_000 }, { sessionID: "a", working: true, now: 5_000 }),
-    ).toEqual({ sessionID: "a", startedAt: 1_000 })
-    expect(
-      latchComposerWorkingSince({ sessionID: "a", startedAt: 1_000 }, { sessionID: "b", working: true, now: 8_000 }),
-    ).toEqual({ sessionID: "b", startedAt: 8_000 })
-    expect(
-      latchComposerWorkingSince({ sessionID: "b", startedAt: 8_000 }, { sessionID: "b", working: false, now: 9_000 }),
-    ).toEqual({ sessionID: undefined, startedAt: undefined })
   })
 })

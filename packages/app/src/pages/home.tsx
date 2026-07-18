@@ -827,7 +827,8 @@ function HomeRecentSessions(props: {
                   {(record, index) => {
                     const selected = () => index() === props.cursor
                     const tokens = () => homeSessionTokenCount(record.session)
-                    const live = () => record.status === "busy" || record.status === "retry"
+                    const busy = () => record.status === "busy"
+                    const retry = () => record.status === "retry"
                     const meta = () =>
                       [
                         record.session.agent,
@@ -847,6 +848,7 @@ function HomeRecentSessions(props: {
                         tabIndex={-1}
                         id={`home-recent-session-${homeSessionSearchKey(record)}`}
                         aria-selected={selected()}
+                        data-status={record.status}
                         class="flex h-8 w-full min-w-0 items-center gap-2 border-0 border-b border-v2-border-border-muted px-3 text-left last:border-b-0 hover:bg-v2-background-bg-layer-02 data-[selected]:bg-v2-background-bg-layer-02 focus-visible:outline-none"
                         data-selected={selected() ? "" : undefined}
                         onMouseEnter={() => props.onCursor(index())}
@@ -858,20 +860,26 @@ function HomeRecentSessions(props: {
                           class={
                             selected()
                               ? "w-2 shrink-0 text-v2-text-text-accent"
-                              : live()
-                                ? "w-2 shrink-0 text-v2-state-fg-success"
-                                : "w-2 shrink-0 text-v2-text-text-faint"
+                              : retry()
+                                ? "w-2 shrink-0 text-v2-state-fg-warning"
+                                : busy()
+                                  ? "w-2 shrink-0 text-v2-state-fg-success"
+                                  : "w-2 shrink-0 text-v2-text-text-faint"
                           }
                         >
-                          {selected() ? "▸" : live() ? "●" : "·"}
+                          {selected() ? "▸" : retry() ? "▲" : busy() ? "●" : "·"}
                         </span>
                         <span
                           class={`min-w-0 flex-1 truncate text-[var(--v2-font-size-small)] ${selected() ? "font-semibold text-v2-text-text-base" : "text-v2-text-text-muted"}`}
                         >
                           {sessionTitle(record.session.title) || record.session.id}
                         </span>
-                        <Show when={live()}>
-                          <span class="shrink-0 text-[var(--v2-font-size-meta)] text-v2-state-fg-success">live</span>
+                        <Show when={busy() || retry()}>
+                          <span
+                            class={`shrink-0 text-[var(--v2-font-size-meta)] ${retry() ? "text-v2-state-fg-warning" : "text-v2-state-fg-success"}`}
+                          >
+                            {retry() ? "retrying" : "live"}
+                          </span>
                         </Show>
                         <span class="max-w-[52%] shrink-0 truncate whitespace-nowrap text-right text-[var(--v2-font-size-meta)] text-v2-text-text-faint sm:max-w-none">
                           {meta()}

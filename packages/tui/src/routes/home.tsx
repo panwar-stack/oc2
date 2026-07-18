@@ -240,7 +240,8 @@ function HomeRecentSessions(props: {
             <For each={props.sessions}>
               {(session, index) => {
                 const selected = () => index() === props.cursor
-                const live = () => props.status(session.id) === "busy" || props.status(session.id) === "retry"
+                const busy = () => props.status(session.id) === "busy"
+                const retry = () => props.status(session.id) === "retry"
                 return (
                   <box
                     height={1}
@@ -254,10 +255,18 @@ function HomeRecentSessions(props: {
                     <text
                       width={2}
                       flexShrink={0}
-                      fg={selected() ? props.theme.primary : live() ? props.theme.success : props.theme.textFaint}
+                      fg={
+                        selected()
+                          ? props.theme.primary
+                          : retry()
+                            ? props.theme.warning
+                            : busy()
+                              ? props.theme.success
+                              : props.theme.textFaint
+                      }
                       attributes={selected() ? TextAttributes.BOLD : undefined}
                     >
-                      {selected() ? "▸" : live() ? "●" : "·"}
+                      {selected() ? "▸" : retry() ? "▲" : busy() ? "●" : "·"}
                     </text>
                     <text
                       flexGrow={1}
@@ -268,9 +277,14 @@ function HomeRecentSessions(props: {
                     >
                       {session.title || session.id}
                     </text>
-                    <Show when={live()}>
-                      <text flexShrink={0} marginRight={1} wrapMode="none" fg={props.theme.success}>
-                        live
+                    <Show when={busy() || retry()}>
+                      <text
+                        flexShrink={0}
+                        marginRight={1}
+                        wrapMode="none"
+                        fg={retry() ? props.theme.warning : props.theme.success}
+                      >
+                        {retry() ? "retrying" : "live"}
                       </text>
                     </Show>
                     <text

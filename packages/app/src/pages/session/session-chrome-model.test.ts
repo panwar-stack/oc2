@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { contextGaugeState, groupTeamTasks, rootSessionID, stableAgentColor, visibleTodos } from "./session-chrome-model"
+import {
+  contextGaugeState,
+  groupTeamTasks,
+  rootSessionID,
+  stableAgentColor,
+  teamBoardFeatureEnabled,
+  visibleTodos,
+} from "./session-chrome-model"
 
 describe("session aggregate chrome", () => {
   test("uses the 70 and 90 percent context thresholds", () => {
@@ -39,6 +46,15 @@ describe("session aggregate chrome", () => {
         time_updated: 2,
       },
       {
+        id: "waiting",
+        team_id: "team",
+        description: "waiting",
+        status: "pending",
+        dependency_ids: ["work"],
+        time_created: 1,
+        time_updated: 2,
+      },
+      {
         id: "done",
         team_id: "team",
         description: "done",
@@ -49,8 +65,17 @@ describe("session aggregate chrome", () => {
     ]
     const groups = groupTeamTasks(tasks)
     expect(groups.working[0]?.dependency_ids).toEqual(["done"])
-    expect(groups["needs-you"].map((task) => task.id)).toEqual(["blocked"])
+    expect(groups.blocked.map((task) => task.id)).toEqual(["blocked", "waiting"])
+    expect(groups["needs-you"]).toEqual([])
     expect(groups.completed.map((task) => task.id)).toEqual(["done"])
+  })
+
+  test("keeps the team board P2 gate off unless redesign, flag, and session are present", () => {
+    expect(teamBoardFeatureEnabled({ redesign: true, flag: "true", sessionID: "ses" })).toBe(true)
+    expect(teamBoardFeatureEnabled({ redesign: false, flag: "true", sessionID: "ses" })).toBe(false)
+    expect(teamBoardFeatureEnabled({ redesign: true, flag: "false", sessionID: "ses" })).toBe(false)
+    expect(teamBoardFeatureEnabled({ redesign: true, sessionID: "ses" })).toBe(false)
+    expect(teamBoardFeatureEnabled({ redesign: true, flag: "true" })).toBe(false)
   })
 
   test("resolves child team views to the root session without looping on malformed ancestry", () => {
@@ -71,9 +96,14 @@ describe("session aggregate chrome", () => {
       Bun.file(import.meta.dir + "/session-aggregate-chrome.tsx").text(),
     ])
     expect(board).toContain("Array.isArray(result.data) ? result.data : []")
+    expect(board).toContain("response.error && response.response.status === 400")
+    expect(board).toContain("if (response.error) throw response.error")
+    expect(board).toContain("if (result.error) throw result.error")
     expect(board).toContain("rootSessionID(sync.data.session, props.sessionID)")
     expect(board).not.toContain("sdk.client.team.messages(")
-    expect(details).toContain("const tasks = Array.isArray(result) ? result : []")
+    expect(details).toContain("const tasks = Array.isArray(responseTasks.data) ? responseTasks.data : []")
+    expect(details).toContain("response.error && response.response.status === 400")
+    expect(details).toContain("if (responseTasks.error) throw responseTasks.error")
     expect(details).toContain("rootSessionID(sync.data.session, props.sessionID)")
   })
 

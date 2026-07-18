@@ -82,6 +82,7 @@ export function SessionTodoDock(props: {
   const off = createMemo(() => hide() > 0.98)
   const turn = createMemo(() => Math.max(0, Math.min(1, value())))
   const full = createMemo(() => Math.max(78, store.height))
+  const listID = () => `session-todo-list-${props.sessionID ?? "new"}`
   let contentRef: HTMLDivElement | undefined
 
   createEffect(() => {
@@ -109,6 +110,8 @@ export function SessionTodoDock(props: {
           class="pl-3 pr-2 py-2 flex items-center gap-2 overflow-visible"
           role="button"
           tabIndex={0}
+          aria-expanded={!props.collapsed}
+          aria-controls={listID()}
           onClick={props.onToggle}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return
@@ -191,11 +194,14 @@ export function SessionTodoDock(props: {
                 props.onToggle()
               }}
               aria-label={props.collapsed ? props.expandLabel : props.collapseLabel}
+              aria-expanded={!props.collapsed}
+              aria-controls={listID()}
             />
           </div>
         </div>
 
         <div
+          id={listID()}
           data-slot="session-todo-list"
           aria-hidden={props.collapsed || off()}
           classList={{

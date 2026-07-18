@@ -8,9 +8,9 @@ export type SessionContextUsage = { tokens: number; limit?: number }
 
 export type SessionActivityState =
   | { type: "waiting"; interruptible: false; who?: string }
-  | { type: "compacting"; interruptible: true; started?: number }
-  | { type: "retry"; interruptible: true; retry: Extract<SessionStatus, { type: "retry" }> }
-  | { type: "session"; interruptible: true; who?: string; task?: string; started?: number }
+  | { type: "compacting"; interruptible: boolean; started?: number }
+  | { type: "retry"; interruptible: boolean; retry: Extract<SessionStatus, { type: "retry" }> }
+  | { type: "session"; interruptible: boolean; who?: string; task?: string; started?: number }
   | { type: "team"; interruptible: false; who: string; task?: string; started?: number }
 
 export function sessionContextHealth(input: SessionContextUsage) {
@@ -34,12 +34,13 @@ export function sessionActivity(input: {
   teammate?: { name: string; task?: string; started?: number }
   task?: string
   started?: number
+  interruptible?: boolean
 }): SessionActivityState | undefined {
   if (input.waiting) return { type: "waiting", interruptible: false }
-  if (input.compacting) return { type: "compacting", interruptible: true, started: input.started }
-  if (input.status?.type === "retry") return { type: "retry", interruptible: true, retry: input.status }
-  if (input.status?.type === "busy")
-    return { type: "session", interruptible: true, task: input.task, started: input.started }
+  const interruptible = input.interruptible ?? true
+  if (input.compacting) return { type: "compacting", interruptible, started: input.started }
+  if (input.status?.type === "retry") return { type: "retry", interruptible, retry: input.status }
+  if (input.status?.type === "busy") return { type: "session", interruptible, task: input.task, started: input.started }
   if (input.teammate)
     return {
       type: "team",
@@ -69,6 +70,8 @@ export function SessionWorkingLine(props: {
   const { theme } = useTheme()
   const [now, setNow] = createSignal(Date.now())
   createEffect(() => {
+    const started = "started" in props.activity ? props.activity.started : undefined
+    if (props.activity.type !== "retry" && started === undefined) return
     setNow(Date.now())
     const timer = setInterval(() => setNow(Date.now()), 1000)
     onCleanup(() => clearInterval(timer))

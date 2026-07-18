@@ -104,7 +104,7 @@ test.describe("regression: session timeline local row state", () => {
   test("keeps a manually collapsed tool collapsed when later assistant content streams", async ({ page }) => {
     const events: EventPayload[] = []
     await mockServer(page, events)
-    await configurePage(page)
+    await configurePage(page, false)
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
     await expectSessionTitle(page, title)
@@ -136,11 +136,43 @@ test.describe("regression: session timeline local row state", () => {
     })
   })
 
+  test("keeps a redesigned tool collapsed when later assistant content streams", async ({ page }) => {
+    const events: EventPayload[] = []
+    await mockServer(page, events)
+    await configurePage(page, true)
+
+    await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+    await expectSessionTitle(page, title)
+
+    const wrapper = page.locator(`[data-timeline-part-id="${editPartID}"]`).first()
+    await expectAppVisible(wrapper)
+    await expectExpanded(wrapper, false)
+    await wrapper.locator('[data-slot="collapsible-trigger"]').first().click()
+    await expectExpanded(wrapper, true)
+    await wrapper.locator('[data-slot="collapsible-trigger"]').first().click()
+    await expectExpanded(wrapper, false)
+
+    events.push({
+      directory,
+      payload: {
+        type: "message.part.updated",
+        properties: { part: streamedTextPart },
+      },
+    })
+
+    await expect(page.locator(`[data-timeline-part-id="${textPartID}"]`).first()).toBeVisible({ timeout: 10_000 })
+    expect(await readToolState(page)).toEqual({
+      expanded: false,
+      row: "AssistantPart",
+      streamedTextVisible: true,
+    })
+  })
+
   test("does not remount an edit diff when sibling parts or diff counts update", async ({ page }) => {
     const events: EventPayload[] = []
     await installDiffProbe(page)
     await mockServer(page, events)
-    await configurePage(page)
+    await configurePage(page, false)
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
     await expectSessionTitle(page, title)
@@ -177,8 +209,8 @@ test.describe("regression: session timeline local row state", () => {
   })
 })
 
-async function configurePage(page: Page) {
-  await page.addInitScript(() => {
+async function configurePage(page: Page, redesign: boolean) {
+  await page.addInitScript((newLayoutDesigns) => {
     localStorage.setItem(
       "settings.v3",
       JSON.stringify({
@@ -187,10 +219,11 @@ async function configurePage(page: Page) {
           shellToolPartsExpanded: true,
           showReasoningSummaries: true,
           showSessionProgressBar: true,
+          newLayoutDesigns,
         },
       }),
     )
-  })
+  }, redesign)
 }
 
 async function expectExpanded(locator: Locator, expected: boolean) {

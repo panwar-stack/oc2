@@ -1,4 +1,12 @@
-import type { Message, Session, Part, SnapshotFileDiff, SessionStatus, Provider } from "@oc2-ai/sdk/v2"
+import type {
+  Message,
+  Session,
+  Part,
+  SnapshotFileDiff,
+  SessionStatus,
+  Provider,
+  PermissionRequest,
+} from "@oc2-ai/sdk/v2"
 import { createSimpleContext } from "./helper"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 
@@ -34,6 +42,9 @@ type Data = {
   }
   part_text_accum_delta?: {
     [partID: string]: string
+  }
+  permission?: {
+    [sessionID: string]: PermissionRequest[]
   }
 }
 

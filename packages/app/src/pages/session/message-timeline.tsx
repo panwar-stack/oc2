@@ -459,6 +459,7 @@ export function MessageTimeline(props: {
             settings.general.showReasoningSummaries(),
             sessionStatus().type,
             active,
+            settings.general.newLayoutDesigns(),
             active ? fuguStatus() : undefined,
           )
 
@@ -481,14 +482,6 @@ export function MessageTimeline(props: {
       if (!("userMessageID" in row)) return
       if (result.has(row.userMessageID)) return
       result.set(row.userMessageID, index)
-    })
-    return result
-  })
-  const lastAssistantGroupKey = createMemo(() => {
-    const result = new Map<string, string>()
-    timelineRows().forEach((row) => {
-      if (row._tag !== "AssistantPart") return
-      result.set(row.userMessageID, row.group.key)
     })
     return result
   })
@@ -1032,9 +1025,6 @@ export function MessageTimeline(props: {
       return (
         <ContextToolGroup
           parts={parts()}
-          busy={
-            workingTurn(row().userMessageID) && lastAssistantGroupKey().get(row().userMessageID) === row().group.key
-          }
           onSizeChange={measureTimeline}
           redesigned={settings.general.newLayoutDesigns()}
         />
@@ -1273,12 +1263,19 @@ export function MessageTimeline(props: {
           const value = messageByID().get(turnFooterRow().assistantMessageID)
           if (value?.role === "assistant") return value
         })
+        const messages = createMemo(
+          () => assistantMessagesByParent().get(turnFooterRow().userMessageID) ?? emptyAssistantMessages,
+        )
         return (
           <Show when={settings.general.newLayoutDesigns() && message()}>
             {(message) => (
               <TimelineRowFrame row={turnFooterRow}>
                 <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
-                  <TurnFooter message={message()} durationMs={turnDurationMs(turnFooterRow().userMessageID)} />
+                  <TurnFooter
+                    message={message()}
+                    messages={messages()}
+                    durationMs={turnDurationMs(turnFooterRow().userMessageID)}
+                  />
                 </div>
               </TimelineRowFrame>
             )}

@@ -205,15 +205,20 @@ export function SessionComposerRegion(props: {
       >
         <Show when={settings.general.newLayoutDesigns() && route.params.id}>
           <SessionWorkingBar
+            sessionID={route.params.id}
             working={props.state.working()}
             blocked={props.state.blocked()}
             team={workingMembers() > 0}
             task={activeTask()}
             elapsed={props.state.elapsed()}
             queued={props.followup?.items.length}
-            onInterrupt={() => {
-              void abortActive?.()
-            }}
+            onInterrupt={
+              child()
+                ? undefined
+                : () => {
+                    void abortActive?.()
+                  }
+            }
           />
         </Show>
 

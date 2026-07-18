@@ -9,7 +9,7 @@ import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
-import { formatComposerElapsed, latchComposerWorkingSince, todoState } from "./session-composer-model"
+import { composerWorkingStartedAt, formatComposerElapsed, todoState } from "./session-composer-model"
 
 const idle = { type: "idle" as const }
 
@@ -59,7 +59,6 @@ export function createSessionComposerState(options?: {
     closing: false,
     opening: false,
     workingSince: undefined as number | undefined,
-    workingSession: undefined as string | undefined,
     now: Date.now(),
   })
 
@@ -69,12 +68,11 @@ export function createSessionComposerState(options?: {
     const sessionID = params.id
     const active = working() && (options?.trackElapsed?.() ?? true)
     const now = Date.now()
-    const since = latchComposerWorkingSince(store.workingSince, active, now, store.workingSession !== sessionID)
+    const since = active && sessionID ? composerWorkingStartedAt(sync.data.message[sessionID] ?? []) : undefined
     if (since !== store.workingSince) setStore("workingSince", since)
-    setStore("workingSession", active ? sessionID : undefined)
     setStore("now", now)
 
-    if (!active) {
+    if (!active || since === undefined) {
       if (elapsedTimer !== undefined) window.clearInterval(elapsedTimer)
       elapsedTimer = undefined
       return
@@ -208,6 +206,7 @@ export function createSessionComposerState(options?: {
     working,
     elapsed: () => {
       if (store.workingSince === undefined) return
+      if (store.now < store.workingSince) return
       return formatComposerElapsed((store.now - store.workingSince) / 1000)
     },
     todos,

@@ -64,13 +64,23 @@ describe("decision card presentation", () => {
 
   test("keeps required group and live-region attributes in both docks", async () => {
     const question = await Bun.file(new URL("./session-question-dock.tsx", import.meta.url)).text()
-    const permission = await Bun.file(new URL("./session-permission-dock.tsx", import.meta.url)).text()
+    const [permission, todo, working] = await Promise.all([
+      Bun.file(new URL("./session-permission-dock.tsx", import.meta.url)).text(),
+      Bun.file(new URL("./session-todo-dock.tsx", import.meta.url)).text(),
+      Bun.file(new URL("../session-working-bar.tsx", import.meta.url)).text(),
+    ])
     expect(question).toContain("role={presentation().groupRole}")
     expect(question).toContain("role={presentation().optionRole}")
     expect(question).toContain('aria-live="polite"')
     expect(permission).toContain('role="radiogroup"')
     expect(permission).toContain('role="radio"')
     expect(permission).toContain('aria-live="polite"')
+    expect(question).toContain('store.editing ? language.t("common.close")')
+    expect(question).toContain("onClick={() => (store.editing ? closeCustom() : reject())}")
+    expect(todo).toContain("aria-expanded={!props.collapsed}")
+    expect(todo).toContain("aria-controls={listID()}")
+    expect(working).toContain("Turn completed")
+    expect(working).toContain('aria-live="polite"')
   })
 })
 
@@ -95,5 +105,16 @@ describe("pending decision document title", () => {
     expect(document.title).toBe("▲ Renamed session")
     controller.dispose()
     expect(document.title).toBe("Renamed session")
+  })
+
+  test("does not claim or remove a marker owned by the page title", () => {
+    document.title = "▲ Authored title"
+    const controller = pendingDecisionTitleController(document)
+    controller.set(true)
+    expect(document.title).toBe("▲ Authored title")
+    controller.set(false)
+    expect(document.title).toBe("▲ Authored title")
+    controller.dispose()
+    expect(document.title).toBe("▲ Authored title")
   })
 })

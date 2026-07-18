@@ -5,6 +5,7 @@ declare global {
     readonly VITE_OC2_SERVER_HOST: string
     readonly VITE_OC2_SERVER_PORT: string
     readonly VITE_OC2_CHANNEL?: "dev" | "beta" | "prod"
+    readonly VITE_OC2_TEAM_BOARD?: "true" | "false"
 
     readonly VITE_SENTRY_DSN?: string
     readonly VITE_SENTRY_ENVIRONMENT?: string

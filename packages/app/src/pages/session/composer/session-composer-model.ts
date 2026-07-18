@@ -26,15 +26,9 @@ export function composerPresentation(input: {
   return { state: "working", action: "send" }
 }
 
-export function latchComposerWorkingSince(
-  previous: number | undefined,
-  working: boolean,
-  now: number,
-  sessionChanged = false,
-) {
-  if (!working) return undefined
-  if (sessionChanged) return now
-  return previous ?? now
+export function composerWorkingStartedAt(messages: readonly { role: string; time: { created: number } }[]) {
+  const created = messages.findLast((message) => message.role === "user")?.time.created
+  return typeof created === "number" && Number.isFinite(created) ? created : undefined
 }
 
 export function formatComposerElapsed(seconds: number) {

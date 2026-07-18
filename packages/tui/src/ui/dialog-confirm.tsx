@@ -13,6 +13,7 @@ export type DialogConfirmProps = {
   onCancel?: () => void
   label?: string
   destructive?: boolean
+  defaultOption?: "confirm" | "cancel"
 }
 
 export type DialogConfirmResult = boolean | undefined
@@ -21,7 +22,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()
   const { theme } = useTheme()
   const [store, setStore] = createStore({
-    active: "confirm" as "confirm" | "cancel",
+    active: props.defaultOption ?? ("confirm" as "confirm" | "cancel"),
   })
 
   useBindings(() => ({
@@ -99,7 +100,7 @@ DialogConfirm.show = (
   title: string,
   message: string,
   label?: string,
-  options?: { destructive?: boolean },
+  options?: { destructive?: boolean; defaultOption?: "confirm" | "cancel" },
 ) => {
   return new Promise<DialogConfirmResult>((resolve) => {
     dialog.replace(
@@ -111,6 +112,7 @@ DialogConfirm.show = (
           onCancel={() => resolve(false)}
           label={label}
           destructive={options?.destructive}
+          defaultOption={options?.defaultOption}
         />
       ),
       () => resolve(undefined),

@@ -1,3 +1,6 @@
+export const SESSION_ALL_SESSIONS_KEY = "ctrl+o"
+export const SESSION_TEAM_PANEL_KEY = "ctrl+y"
+
 export const sessionBindingCommands = [
   "session.rename",
   "session.timeline",

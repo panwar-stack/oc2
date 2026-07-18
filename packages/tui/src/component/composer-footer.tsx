@@ -25,15 +25,6 @@ export function composerFooterPresentation(input: {
   return { state: "working", action: input.delivery }
 }
 
-export function latchComposerWorkingSince(
-  previous: { sessionID?: string; startedAt?: number },
-  input: { sessionID?: string; working: boolean; now: number },
-) {
-  if (!input.working || !input.sessionID) return { sessionID: undefined, startedAt: undefined }
-  if (previous.sessionID !== input.sessionID) return { sessionID: input.sessionID, startedAt: input.now }
-  return { sessionID: input.sessionID, startedAt: previous.startedAt ?? input.now }
-}
-
 function fadeColor(color: RGBA, alpha: number) {
   return RGBA.fromValues(color.r, color.g, color.b, color.a * alpha)
 }
@@ -49,6 +40,7 @@ type ComposerFooterProps = {
   queued: number
   hasDraft: boolean
   interrupt: number
+  interruptible: boolean
   elapsed?: string
   agent?: { label: string; color: RGBA; alpha: number }
   model?: { label: string; provider: string; alpha: number }
@@ -166,7 +158,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
                 </Show>
                 <RetryStatus status={props.status} />
               </box>
-              <Show when={props.status.type !== "idle"}>
+              <Show when={props.interruptible && props.status.type !== "idle"}>
                 <text fg={props.interrupt > 0 ? theme.primary : theme.text} wrapMode="none">
                   esc{" "}
                   <span style={{ fg: props.interrupt > 0 ? theme.primary : theme.textMuted }}>

@@ -18,6 +18,7 @@ import { OC2_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { Glyph } from "../../component/glyph"
 import { KeyHint } from "../../component/key-hint"
+import { errorMessage } from "../../util/error"
 
 type PermissionStage = "permission" | "always" | "reject"
 type PermissionReplyResult = { error?: unknown }
@@ -505,16 +506,16 @@ function RejectPrompt(props: { onConfirm: (message: string) => Promise<Permissio
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
-  const [store, setStore] = createStore({ submitting: false })
+  const [store, setStore] = createStore({ submitting: false, error: undefined as string | undefined })
   const confirm = () => {
     if (store.submitting) return
-    setStore("submitting", true)
+    setStore({ submitting: true, error: undefined })
     void props
       .onConfirm(input.plainText)
       .then((result) => {
-        if (result.error) setStore("submitting", false)
+        if (result.error) setStore({ submitting: false, error: errorMessage(result.error) })
       })
-      .catch(() => setStore("submitting", false))
+      .catch((error: unknown) => setStore({ submitting: false, error: errorMessage(error) }))
   }
   useBindings(() => ({
     mode: OC2_BASE_MODE,
@@ -565,6 +566,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => Promise<Permissio
         <box paddingLeft={1}>
           <text fg={theme.textMuted}>Tell OC2 what to do differently</text>
         </box>
+        <Show when={store.error}>{(message) => <text fg={theme.error}>✕ {message()} · enter retry</text>}</Show>
       </box>
       <box
         flexDirection={narrow() ? "column" : "row"}
@@ -619,6 +621,8 @@ function Prompt<const T extends Record<string, string>>(props: {
     selected: keys[0],
     expanded: false,
     submitting: false,
+    error: undefined as string | undefined,
+    failedOption: undefined as keyof T | undefined,
   })
   const narrow = createMemo(() => dimensions().width < 80)
   const fullscreenHint = useCommandShortcut("permission.prompt.fullscreen")
@@ -628,16 +632,16 @@ function Prompt<const T extends Record<string, string>>(props: {
     setStore("focused", keys[(index + step + keys.length) % keys.length])
   }
 
-  const confirm = (option: keyof T = store.selected) => {
+  const confirm = (option: keyof T = store.failedOption ?? store.selected) => {
     if (store.submitting) return
     const result = props.onSelect(option)
     if (!result) return
-    setStore("submitting", true)
+    setStore({ submitting: true, error: undefined, failedOption: undefined })
     void result
       .then((outcome) => {
-        if (outcome.error) setStore("submitting", false)
+        if (outcome.error) setStore({ submitting: false, error: errorMessage(outcome.error), failedOption: option })
       })
-      .catch(() => setStore("submitting", false))
+      .catch((error: unknown) => setStore({ submitting: false, error: errorMessage(error), failedOption: option }))
   }
 
   useBindings(() => ({
@@ -712,7 +716,7 @@ function Prompt<const T extends Record<string, string>>(props: {
         key: "space",
         desc: "Select permission option",
         group: "Permission",
-        cmd: () => setStore("selected", store.focused),
+        cmd: () => setStore({ selected: store.focused, error: undefined, failedOption: undefined }),
       },
       ...keys.slice(0, 9).map((option, index) => ({
         key: String(index + 1),
@@ -720,7 +724,7 @@ function Prompt<const T extends Record<string, string>>(props: {
         group: "Permission",
         cmd: () => {
           setStore("focused", option)
-          setStore("selected", option)
+          setStore({ selected: option, error: undefined, failedOption: undefined })
         },
       })),
       {
@@ -780,6 +784,7 @@ function Prompt<const T extends Record<string, string>>(props: {
           </box>
         </Show>
         {props.body}
+        <Show when={store.error}>{(message) => <text fg={theme.error}>✕ {message()} · enter retry</text>}</Show>
       </box>
       <box
         flexDirection={narrow() ? "column" : "row"}
@@ -805,7 +810,7 @@ function Prompt<const T extends Record<string, string>>(props: {
                 onMouseOver={() => setStore("focused", option)}
                 onMouseUp={() => {
                   setStore("focused", option)
-                  setStore("selected", option)
+                  setStore({ selected: option, error: undefined, failedOption: undefined })
                 }}
               >
                 <text

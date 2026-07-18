@@ -81,12 +81,15 @@ import { TurnFooter } from "../../component/turn-footer"
 import { ThinkingRow } from "../../component/thinking-row"
 import { ToolGroupHeader, ToolRow, toolRowDuration } from "../../component/tool-row"
 import {
+  SESSION_ALL_SESSIONS_KEY,
+  SESSION_TEAM_PANEL_KEY,
   sessionBindingCommands,
   sessionGlobalBindingCommands,
   sessionGlobalUnfocusedBindingCommands,
 } from "./session-keybinds"
 import { SessionStatusLine, SessionWorkingLine, sessionActivity } from "./chrome"
 import { consumedTokens, currentContextMessage } from "../../util/context-usage"
+import { activeTurnStartedAt } from "../../util/session-time"
 
 addDefaultParsers(parsers.parsers)
 
@@ -431,18 +434,24 @@ export function Session() {
     (sync.data.todo[route.sessionID] ?? []).find((item) => item.status === "in_progress"),
   )
   const workingMember = createMemo(() => workingMembers()[0])
+  const memberStartedAt = (sessionID: string) => {
+    const items = sync.data.message[sessionID] ?? []
+    const active = items.findLast((message) => message.role === "assistant" && message.time.completed === undefined)
+    return activeTurnStartedAt(items, active?.role === "assistant" ? active.parentID : undefined)
+  }
   const activity = createMemo(() =>
     sessionActivity({
       waiting: permissions().length > 0 || questions().length > 0,
       compacting: !!session()?.time.compacting,
       status: sync.data.session_status[route.sessionID],
       task: activeTodo()?.content,
-      started: session()?.time.compacting ?? session()?.time.processing,
+      started: session()?.time.compacting ?? activeTurnStartedAt(messages(), activeUserMessageID()),
+      interruptible: !session()?.parentID,
       teammate: workingMember()
         ? {
             name: workingMember()!.title,
             task: (sync.data.todo[workingMember()!.id] ?? []).find((item) => item.status === "in_progress")?.content,
-            started: workingMember()!.time.processing,
+            started: memberStartedAt(workingMember()!.id),
           }
         : undefined,
     }),
@@ -1328,6 +1337,28 @@ export function Session() {
 
   useBindings(() => ({
     mode: OC2_BASE_MODE,
+    priority: 2,
+    bindings: [
+      {
+        key: SESSION_ALL_SESSIONS_KEY,
+        desc: "List all sessions",
+        group: "Session",
+        cmd: () => keymap.dispatchCommand("session.list"),
+      },
+      {
+        key: SESSION_TEAM_PANEL_KEY,
+        desc: "Open team panel",
+        group: "Team",
+        cmd: () => {
+          if (!teamsEnabled()) return
+          keymap.dispatchCommand("team.panel.toggle")
+        },
+      },
+    ],
+  }))
+
+  useBindings(() => ({
+    mode: OC2_BASE_MODE,
     enabled: foregroundTasks().length > 0,
     priority: 1,
     bindings: tuiConfig.keybinds.get("session.background"),
@@ -1617,6 +1648,7 @@ export function Session() {
                         toBottom()
                       }}
                       sessionID={route.sessionID}
+                      interruptible={!session()?.parentID}
                       right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
                     />
                   </pluginRuntime.Slot>

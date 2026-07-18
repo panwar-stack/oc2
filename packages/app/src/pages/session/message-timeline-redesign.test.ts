@@ -10,7 +10,9 @@ describe("web timeline transcript contract", () => {
     expect(source).toContain("redesigned={settings.general.newLayoutDesigns()}")
     expect(source).toContain("<TurnFooter")
     expect(data).toContain("new TimelineRow.TurnFooter")
+    expect(data).toContain("lastAssistant && showTurnFooter")
     expect(data).toContain("`turn-footer:${row.userMessageID}:${row.assistantMessageID}`")
+    expect(source).not.toContain("lastAssistantGroupKey")
     expect(data).toContain("`assistant-part:${row.userMessageID}:${row.group.key}`")
   })
 

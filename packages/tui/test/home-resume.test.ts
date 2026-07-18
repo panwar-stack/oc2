@@ -79,6 +79,8 @@ describe("TUI home resume surface", () => {
     expect(home).toContain('variant="loading"')
     expect(home).toContain('variant="empty"')
     expect(home).toContain('wrapMode="none"')
+    expect(home).toContain('retry() ? "▲" : busy() ? "●"')
+    expect(home).toContain('{retry() ? "retrying" : "live"}')
     expect(dialog).toContain("homeSessionMeta(x)")
     expect(dialog).toContain('variant="error"')
     expect(dialog).toContain('variant="loading"')

@@ -63,11 +63,13 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
-import { ComposerFooter, latchComposerWorkingSince } from "../composer-footer"
+import { ComposerFooter } from "../composer-footer"
 import { reduceTuiMotion } from "../glyph"
+import { activeTurnStartedAt } from "../../util/session-time"
 
 export type PromptProps = {
   sessionID?: string
+  interruptible?: boolean
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
@@ -165,6 +167,15 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const sessionMessages = createMemo(() => sync.data.message[props.sessionID ?? ""] ?? [])
+  const activeUserMessageID = createMemo(() => {
+    const pending = sessionMessages().findLast(
+      (message) => message.role === "assistant" && message.time.completed === undefined,
+    )
+    if (pending?.role === "assistant") return pending.parentID
+    if (status().type === "idle") return
+    return sessionMessages().findLast((message) => message.role === "user")?.id
+  })
   const teammateWorking = createMemo(() => {
     const sessionID = props.sessionID
     if (!sessionID || sync.session.get(sessionID)?.parentID) return false
@@ -309,8 +320,7 @@ export function Prompt(props: PromptProps) {
   const usage = createMemo(() => {
     if (!props.sessionID) return
     const session = sync.session.get(props.sessionID)
-    const msg = sync.data.message[props.sessionID] ?? []
-    const last = currentContextMessage(msg)
+    const last = currentContextMessage(sessionMessages())
     if (!last) return
 
     const tokens = consumedTokens(last.tokens)
@@ -323,13 +333,6 @@ export function Prompt(props: PromptProps) {
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
-  const processingElapsed = createMemo(() => {
-    if (!props.sessionID) return
-    const processing = sync.session.get(props.sessionID)?.time.processing
-    if (processing === undefined) return
-    return formatDuration(Math.floor(processing / 1000)) || "0s"
-  })
-
   const [store, setStore] = createStore<{
     prompt: PromptInfo
     mode: "normal" | "shell"
@@ -337,7 +340,6 @@ export function Prompt(props: PromptProps) {
     interrupt: number
     placeholder: number
     clipboardPending: number
-    workingSession: string | undefined
     workingSince: number | undefined
     now: number
   }>({
@@ -350,26 +352,19 @@ export function Prompt(props: PromptProps) {
     extmarkToPartIndex: new Map(),
     interrupt: 0,
     clipboardPending: 0,
-    workingSession: undefined,
     workingSince: undefined,
     now: Date.now(),
   })
 
   let elapsedTimer: ReturnType<typeof setInterval> | undefined
   createEffect(() => {
-    const next = latchComposerWorkingSince(
-      { sessionID: store.workingSession, startedAt: store.workingSince },
-      {
-        sessionID: props.sessionID,
-        working: status().type !== "idle",
-        now: Date.now(),
-      },
-    )
-    setStore("workingSession", next.sessionID)
-    setStore("workingSince", next.startedAt)
-    setStore("now", Date.now())
+    const now = Date.now()
+    const startedAt =
+      status().type === "idle" ? undefined : activeTurnStartedAt(sessionMessages(), activeUserMessageID())
+    setStore("workingSince", startedAt)
+    setStore("now", now)
 
-    if (next.startedAt === undefined) {
+    if (startedAt === undefined) {
       if (elapsedTimer) clearInterval(elapsedTimer)
       elapsedTimer = undefined
       return
@@ -382,6 +377,7 @@ export function Prompt(props: PromptProps) {
   })
   const workingElapsed = createMemo(() => {
     if (store.workingSince === undefined) return
+    if (store.now < store.workingSince) return
     return formatDuration(Math.floor((store.now - store.workingSince) / 1000)) || "0s"
   })
 
@@ -486,8 +482,9 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: status().type !== "idle" && props.interruptible !== false,
         run: () => {
+          if (props.interruptible === false) return
           if (auto()?.visible) return
           if (!input.focused) return
           // TODO: this should be its own command
@@ -1588,6 +1585,7 @@ export function Prompt(props: PromptProps) {
           queued={0}
           hasDraft={status().type !== "idle" && !!store.prompt.input}
           interrupt={store.interrupt}
+          interruptible={props.interruptible !== false}
           elapsed={workingElapsed()}
           agent={
             local.agent.current()
@@ -1682,13 +1680,6 @@ export function Prompt(props: PromptProps) {
               </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
-                  <Show when={processingElapsed()}>
-                    {(value) => (
-                      <text fg={theme.textMuted} wrapMode="none">
-                        AI {value()}
-                      </text>
-                    )}
-                  </Show>
                   <Switch>
                     <Match when={usage()}>
                       {(item) => (

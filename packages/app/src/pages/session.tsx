@@ -66,6 +66,7 @@ import { shouldUseV2NewSessionPage } from "@/pages/session/new-session-layout"
 import { Identifier } from "@/utils/id"
 import { SessionDetailsPanel, SessionStatusBar } from "@/pages/session/session-aggregate-chrome"
 import { TeamBoard } from "@/pages/session/team-board"
+import { teamBoardFeatureEnabled } from "@/pages/session/session-chrome-model"
 import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
@@ -276,7 +277,11 @@ export default function Page() {
   const isV2NewSessionPage = () =>
     shouldUseV2NewSessionPage({ newLayoutDesigns: newSessionDesign(), sessionID: params.id })
   const teamBoardEnabled = () =>
-    newSessionDesign() && import.meta.env.VITE_OC2_TEAM_BOARD === "true" && Boolean(params.id)
+    teamBoardFeatureEnabled({
+      redesign: newSessionDesign(),
+      flag: import.meta.env.VITE_OC2_TEAM_BOARD,
+      sessionID: params.id,
+    })
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened() && !isV2NewSessionPage())
   const desktopFileTreeOpen = createMemo(() => isDesktop() && layout.fileTree.opened() && !isV2NewSessionPage())
   const desktopSidePanelOpen = createMemo(() => desktopReviewOpen() || desktopFileTreeOpen())

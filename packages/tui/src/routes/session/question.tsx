@@ -10,6 +10,7 @@ import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
 import { Glyph } from "../../component/glyph"
 import { KeyHint } from "../../component/key-hint"
+import { errorMessage } from "../../util/error"
 
 const QUESTION_MODE = "question"
 
@@ -33,6 +34,8 @@ export function QuestionPrompt(props: {
     focused: 0,
     editing: false,
     phase: "waiting" as "waiting" | "submitting" | "resolved" | "cancelled",
+    error: undefined as string | undefined,
+    failedAction: undefined as "reply" | "reject" | undefined,
   })
   let textarea: TextareaRenderable | undefined
 
@@ -54,35 +57,37 @@ export function QuestionPrompt(props: {
   })
 
   const reply = (answers: QuestionAnswer[]) => {
+    setStore({ error: undefined, failedAction: undefined })
     setStore("phase", "submitting")
     void sdk.client.question
       .reply({ requestID: props.request.id, directory: props.directory, answers })
       .then((result) => {
         if (result.error) {
-          setStore("phase", "waiting")
+          setStore({ phase: "waiting", error: errorMessage(result.error), failedAction: "reply" })
           return
         }
         setStore("phase", "resolved")
         props.onResolved?.({ variant: "resolved", text: `Question resolved — ${selectedTotal()} selected` })
       })
-      .catch(() => setStore("phase", "waiting"))
+      .catch((error: unknown) => setStore({ phase: "waiting", error: errorMessage(error), failedAction: "reply" }))
   }
 
   const submit = () => reply(questions().map((_, index) => store.answers[index] ?? []))
 
   const reject = () => {
+    setStore({ error: undefined, failedAction: undefined })
     setStore("phase", "submitting")
     void sdk.client.question
       .reject({ requestID: props.request.id, directory: props.directory })
       .then((result) => {
         if (result.error) {
-          setStore("phase", "waiting")
+          setStore({ phase: "waiting", error: errorMessage(result.error), failedAction: "reject" })
           return
         }
         setStore("phase", "cancelled")
         props.onResolved?.({ variant: "cancelled", text: "Question cancelled" })
       })
-      .catch(() => setStore("phase", "waiting"))
+      .catch((error: unknown) => setStore({ phase: "waiting", error: errorMessage(error), failedAction: "reject" }))
   }
 
   const moveQuestion = (index: number) => {
@@ -100,6 +105,7 @@ export function QuestionPrompt(props: {
   }
 
   const toggle = (answer: string) => {
+    setStore({ error: undefined, failedAction: undefined })
     const answers = [...store.answers]
     const current = answers[store.tab] ?? []
     answers[store.tab] = current.includes(answer) ? current.filter((item) => item !== answer) : [...current, answer]
@@ -107,6 +113,7 @@ export function QuestionPrompt(props: {
   }
 
   const pick = (answer: string, own = false) => {
+    setStore({ error: undefined, failedAction: undefined })
     const answers = [...store.answers]
     answers[store.tab] = [answer]
     setStore("answers", answers)
@@ -139,6 +146,10 @@ export function QuestionPrompt(props: {
 
   const confirm = () => {
     if (store.phase !== "waiting") return
+    if (store.failedAction === "reject") {
+      reject()
+      return
+    }
     if (!multi() && selected() === 0) {
       selectOption()
       return
@@ -403,6 +414,7 @@ export function QuestionPrompt(props: {
                 </box>
               </Show>
             </box>
+            <Show when={store.error}>{(message) => <text fg={theme.error}>✕ {message()} · enter retry</text>}</Show>
           </box>
 
           <box
