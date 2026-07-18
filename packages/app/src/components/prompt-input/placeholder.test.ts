@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { promptPlaceholder } from "./placeholder"
+import { promptPlaceholder, showDesignPlaceholder } from "./placeholder"
 
 describe("promptPlaceholder", () => {
   const t = (key: string, params?: Record<string, string>) => `${key}${params?.example ? `:${params.example}` : ""}`
@@ -44,5 +44,13 @@ describe("promptPlaceholder", () => {
       t,
     })
     expect(value).toBe("prompt.placeholder.simple")
+  })
+})
+
+describe("showDesignPlaceholder", () => {
+  test("hides before composed or committed input can be occluded", () => {
+    expect(showDesignPlaceholder({ dirty: false, composing: false })).toBe(true)
+    expect(showDesignPlaceholder({ dirty: true, composing: false })).toBe(false)
+    expect(showDesignPlaceholder({ dirty: false, composing: true })).toBe(false)
   })
 })

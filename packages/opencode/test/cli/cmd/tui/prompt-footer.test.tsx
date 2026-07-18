@@ -407,6 +407,7 @@ describe("prompt footer", () => {
       expect(frame).toContain("1m")
       expect(frame).toContain("1.6K (16%) · $0.05")
       expect(frame).toContain("ctrl+p commands")
+      expect(frame).toContain("Send ⏎")
       expect(frame.indexOf("1m")).toBeLessThan(frame.indexOf("1.6K (16%) · $0.05"))
       expect(frame.indexOf("1.6K (16%) · $0.05")).toBeLessThan(frame.indexOf("ctrl+p commands"))
     } finally {
@@ -473,6 +474,8 @@ describe("prompt footer", () => {
       const frame = app.captureCharFrame()
       expect(frame).toContain("Reading clipboard...")
       expect(frame).toContain("team working")
+      expect(frame).toContain("Send ⏎")
+      expect(frame).not.toContain("Steer ⏎")
       read.resolve(undefined)
       await operation
     } finally {

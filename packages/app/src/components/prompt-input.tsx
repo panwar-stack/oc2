@@ -42,6 +42,8 @@ import { Icon, type IconProps } from "@oc2-ai/ui/icon"
 import { ProviderIcon } from "@oc2-ai/ui/provider-icon"
 import { Tooltip, TooltipKeybind } from "@oc2-ai/ui/tooltip"
 import { IconButton } from "@oc2-ai/ui/icon-button"
+import { KeyHintV2 } from "@oc2-ai/ui/v2/key-hint-v2"
+import { StatusGlyph } from "@oc2-ai/ui/v2/status-glyph"
 import { Select } from "@oc2-ai/ui/select"
 import { useDialog } from "@oc2-ai/ui/context/dialog"
 import { ModelSelectorPopover } from "@/components/dialog-select-model"
@@ -72,7 +74,7 @@ import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
-import { promptPlaceholder } from "./prompt-input/placeholder"
+import { promptPlaceholder, showDesignPlaceholder } from "./prompt-input/placeholder"
 import { useDirectoryPicker } from "./directory-picker"
 import { showToast } from "@/utils/toast"
 import { ImagePreview } from "@oc2-ai/ui/image-preview"
@@ -81,6 +83,7 @@ import { useQueryOptions } from "@/context/server-sync"
 import { pathKey } from "@/utils/path-key"
 import { base64Encode } from "@oc2-ai/core/util/encode"
 import { displayName } from "@/pages/layout/helpers"
+import { composerPresentation } from "@/pages/session/composer/session-composer-model"
 
 interface PromptInputProps {
   class?: string
@@ -91,6 +94,9 @@ interface PromptInputProps {
   edit?: { id: string; prompt: Prompt; context: FollowupDraft["context"] }
   onEditLoaded?: () => void
   shouldQueue?: () => boolean
+  queuedCount?: () => number
+  queuedSendsNext?: () => boolean
+  workingElapsed?: () => string | undefined
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
@@ -319,6 +325,20 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .join("")
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
+  const composer = createMemo(() =>
+    composerPresentation({
+      working: working(),
+      delivery: store.mode === "normal" && props.shouldQueue?.() ? "queue" : "steer",
+      queued: props.queuedCount?.() ?? 0,
+      hasDraft: !blank(),
+    }),
+  )
+  const composerActionLabel = () => {
+    if (store.mode === "shell") return language.t("prompt.action.run")
+    if (composer().action === "queued") return language.t("prompt.action.queued")
+    if (composer().action === "queue") return language.t("prompt.action.queue")
+    return language.t("prompt.action.send")
+  }
   const stopping = createMemo(() => working() && blank())
   const tip = () => {
     if (stopping()) {
@@ -1108,7 +1128,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return true
   }
 
-  const { addAttachment, addAttachments, removeAttachment, handlePaste } = createPromptAttachments({
+  const { addAttachment, addAttachments, removeAttachment, handlePaste, pending } = createPromptAttachments({
     editor: () => editorRef,
     isDialogActive: () => !!dialog.active,
     setDraggingType: (type) => setStore("draggingType", type),
@@ -1150,6 +1170,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     autoAccept: () => accepting(),
     mode: () => store.mode,
     working,
+    uploading: () => pending().length > 0,
     editor: () => editorRef,
     queueScroll,
     promptLength,
@@ -1491,9 +1512,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <div class="flex flex-col gap-3">
             <DockShellForm
               data-component={newSession() ? "session-new-composer" : "session-composer"}
+              data-state={composer().state}
               onSubmit={handleSubmit}
               classList={{
-                "group/prompt-input min-h-[96px] w-full rounded-xl bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]": true,
+                "group/prompt-input min-h-[96px] w-full rounded-[var(--v2-radius-composer)] border bg-v2-background-bg-layer-02 shadow-[var(--v2-elevation-raised)]": true,
+                "border-v2-border-border-strong focus-within:border-v2-border-border-focus focus-within:shadow-[var(--v2-shadow-focus)]":
+                  composer().state !== "working",
+                "border-v2-state-border-thinking": composer().state === "working",
                 "border-icon-info-active border-dashed": store.draggingType !== null,
                 [props.class ?? ""]: !!props.class,
               }}
@@ -1516,6 +1541,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   prompt.context.remove(item.key)
                 }}
                 t={(key) => language.t(key as Parameters<typeof language.t>[0])}
+                redesigned
               />
               <PromptImageAttachments
                 attachments={imageAttachments()}
@@ -1524,6 +1550,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 }
                 onRemove={removeAttachment}
                 removeLabel={language.t("prompt.attachment.remove")}
+                pending={pending()}
+                uploadingLabel={(filename) => language.t("prompt.attachment.uploading", { name: filename })}
+                redesigned
               />
               <div
                 class="relative min-h-[52px]"
@@ -1543,7 +1572,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     }}
                     role="textbox"
                     aria-multiline="true"
-                    aria-label={designPlaceholder()}
+                    aria-label={language.t("prompt.input.label")}
                     contenteditable="true"
                     autocapitalize={store.mode === "normal" ? "sentences" : "off"}
                     autocorrect={store.mode === "normal" ? "on" : "off"}
@@ -1567,15 +1596,19 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   />
                   <div
                     data-component={newSession() ? "session-new-design-text" : "session-composer-text"}
-                    class="absolute top-0 inset-x-0 px-4 pt-4 pointer-events-none whitespace-nowrap truncate leading-5 text-[13px] font-[440] text-v2-text-text-faint [font-family:Inter,var(--font-family-sans)]"
-                    classList={{ "font-mono!": store.mode === "shell", hidden: prompt.dirty() }}
+                    aria-hidden="true"
+                    class="absolute top-0 inset-x-0 pl-7 pr-4 pt-4 pointer-events-none whitespace-nowrap truncate leading-5 text-[13px] font-[440] text-v2-text-text-faint [font-family:Inter,var(--font-family-sans)]"
+                    classList={{
+                      "font-mono!": store.mode === "shell",
+                      hidden: !showDesignPlaceholder({ dirty: prompt.dirty(), composing: composing() }),
+                    }}
                   >
-                    {designPlaceholder()}
+                    <span data-slot="session-composer-placeholder">{designPlaceholder()}</span>
                   </div>
                 </div>
               </div>
-              <div class="flex h-11 items-center px-2">
-                <div class="flex min-w-0 flex-1 items-center gap-0">
+              <div class="flex min-h-11 flex-wrap items-center gap-2 border-t border-v2-border-border-strong bg-v2-background-bg-layer-01 px-2 py-1">
+                <div class="flex min-w-0 flex-1 items-center gap-0 overflow-x-auto no-scrollbar">
                   {fileAttachmentInput()}
                   <TooltipKeybind
                     placement="top"
@@ -1626,7 +1659,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             local.model.variant.set(value === "default" ? undefined : value)
                             restoreFocus()
                           }}
-                          class="capitalize max-w-[160px] justify-start text-v2-text-text-faint"
+                          class="capitalize max-w-[160px] justify-start rounded bg-v2-background-bg-layer-02 text-v2-text-text-faint hover:bg-v2-background-bg-layer-03 focus-visible:bg-v2-background-bg-layer-03"
                           valueClass="truncate text-[13px] font-[440] leading-5 text-v2-text-text-faint"
                           triggerStyle={control()}
                           triggerProps={{ "data-action": "prompt-model-variant" }}
@@ -1636,22 +1669,72 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     </div>
                   </Show>
                 </div>
-                <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
-                  <IconButton
-                    data-action="prompt-submit"
-                    type="submit"
-                    disabled={!working() && blank()}
-                    tabIndex={store.mode === "normal" ? undefined : -1}
-                    icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
-                    variant="primary"
-                    class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted shadow-[var(--v2-elevation-button-contrast)] disabled:opacity-50"
-                    style={{
-                      "background-image":
-                        "linear-gradient(180deg,var(--v2-alpha-light-20) 0%,var(--v2-alpha-light-0) 100%),linear-gradient(90deg,var(--v2-background-bg-contrast) 0%,var(--v2-background-bg-contrast) 100%)",
+                <Show when={composer().state !== "idle"}>
+                  <div
+                    data-component="session-composer-state"
+                    role="status"
+                    aria-live="polite"
+                    aria-label={
+                      composer().state === "queued"
+                        ? language.t(
+                            props.queuedSendsNext?.() === false ? "prompt.state.queuedPaused" : "prompt.state.queued",
+                          )
+                        : composer().action === "queue"
+                          ? language.t("prompt.state.queueAnnouncement")
+                          : store.mode === "shell"
+                            ? language.t("prompt.state.shellAnnouncement")
+                            : language.t("prompt.state.steerAnnouncement")
+                    }
+                    classList={{
+                      "flex min-w-0 items-center gap-1 whitespace-nowrap text-[var(--v2-font-size-meta)]": true,
+                      "text-v2-state-fg-thinking": composer().state === "working",
+                      "text-v2-text-text-muted": composer().state === "queued",
                     }}
-                    aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                  >
+                    <StatusGlyph name={composer().state === "queued" ? "done" : "running"} size="small" />
+                    <span>
+                      {composer().state === "queued"
+                        ? language.t(
+                            props.queuedSendsNext?.() === false ? "prompt.state.queuedPaused" : "prompt.state.queued",
+                          )
+                        : language.t("prompt.state.working")}
+                    </span>
+                    <Show when={composer().state === "working" && props.workingElapsed?.()} keyed>
+                      {(elapsed) => <span aria-hidden="true">· {elapsed}</span>}
+                    </Show>
+                    <Show
+                      when={composer().state === "working" && composer().action === "send" && store.mode === "normal"}
+                    >
+                      <span class="text-v2-text-text-faint">· {language.t("prompt.state.steer")}</span>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={composer().state === "working" && store.mode === "normal"}>
+                  <KeyHintV2
+                    shortcut="esc"
+                    label={language.t("prompt.state.interrupt")}
+                    aria-label={`${language.t("common.key.esc")} ${language.t("prompt.state.interrupt")}`}
+                    aria-keyshortcuts="Escape"
+                    onClick={() => void abort()}
                   />
-                </Tooltip>
+                </Show>
+                <button
+                  data-action="prompt-submit"
+                  data-state={composer().action}
+                  type="submit"
+                  disabled={composer().action === "queued" || blank() || pending().length > 0}
+                  tabIndex={store.mode === "normal" ? undefined : -1}
+                  classList={{
+                    "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[var(--v2-font-size-meta)] font-medium shadow-[var(--v2-elevation-button-contrast)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-v2-border-border-focus disabled:cursor-default": true,
+                    "bg-v2-background-bg-accent text-v2-text-text-contrast": composer().action === "send",
+                    "bg-v2-background-bg-layer-03 text-v2-text-text-muted": composer().action !== "send",
+                    "opacity-60": composer().action === "queued" || blank() || pending().length > 0,
+                  }}
+                  aria-label={composerActionLabel()}
+                >
+                  <span>{composerActionLabel()}</span>
+                  <StatusGlyph name={composer().action === "queued" ? "done" : "enter"} size="small" />
+                </button>
               </div>
             </DockShellForm>
             <Show when={newSession() && selectedProject()}>
@@ -1697,6 +1780,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               }
               onRemove={removeAttachment}
               removeLabel={language.t("prompt.attachment.remove")}
+              pending={pending()}
+              uploadingLabel={(filename) => language.t("prompt.attachment.uploading", { name: filename })}
             />
             <div
               class="relative"
@@ -1783,7 +1868,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <IconButton
                       data-action="prompt-submit"
                       type="submit"
-                      disabled={!working() && blank()}
+                      disabled={(!working() && blank()) || pending().length > 0}
                       tabIndex={store.mode === "normal" ? undefined : -1}
                       icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                       variant="primary"
@@ -2145,8 +2230,8 @@ function ComposerAgentControl(props: { state: ComposerAgentControlState }) {
           options={props.state.options}
           current={props.state.current}
           onSelect={props.state.onSelect}
-          class="max-w-[175px] justify-start text-v2-text-text-faint [&_[data-component=icon]]:text-v2-icon-icon-muted"
-          valueClass="truncate pl-5 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
+          class="max-w-[175px] justify-start rounded bg-v2-background-bg-layer-03 text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover [&_[data-component=icon]]:text-v2-icon-icon-muted"
+          valueClass="truncate pl-5 text-[13px] font-[440] leading-5 text-v2-text-text-base"
           triggerStyle={props.state.style}
           triggerProps={{ "data-action": "prompt-agent" }}
           variant="ghost"
@@ -2165,10 +2250,10 @@ function ComposerModelControl(props: { state: ComposerModelControlState }) {
           <TooltipKeybind placement="top" gutter={4} title={props.state.title} keybind={props.state.keybind}>
             <Button
               data-action="prompt-model"
-              as="div"
+              type="button"
               variant="ghost"
               size="normal"
-              class="min-w-0 max-w-[220px] justify-start text-[13px] font-[440] leading-5 text-v2-text-text-faint group"
+              class="min-w-0 max-w-[220px] justify-start rounded bg-v2-background-bg-layer-02 text-[13px] font-[440] leading-5 text-v2-text-text-faint hover:bg-v2-background-bg-layer-03 focus-visible:bg-v2-background-bg-layer-03 group"
               style={props.state.style}
               onClick={props.state.onUnpaidClick}
             >
@@ -2194,9 +2279,10 @@ function ComposerModelControl(props: { state: ComposerModelControlState }) {
             triggerProps={{
               variant: "ghost",
               size: "normal",
+              type: "button",
               style: props.state.style,
               class:
-                "min-w-0 max-w-[220px] justify-start text-[13px] font-[440] leading-5 text-v2-text-text-faint group",
+                "min-w-0 max-w-[220px] justify-start rounded bg-v2-background-bg-layer-02 text-[13px] font-[440] leading-5 text-v2-text-text-faint hover:bg-v2-background-bg-layer-03 focus-visible:bg-v2-background-bg-layer-03 group",
               "data-action": "prompt-model",
             }}
             onClose={props.state.onClose}

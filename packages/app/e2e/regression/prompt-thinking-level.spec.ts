@@ -56,8 +56,16 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   const composer = page.locator('[data-component="session-composer"]')
   const input = composer.locator('[data-component="prompt-input"]')
+  const placeholder = composer.locator('[data-component="session-composer-text"]')
+  const placeholderText = placeholder.locator('[data-slot="session-composer-placeholder"]')
   const control = composer.locator('[data-component="prompt-variant-control"]')
   await expectAppVisible(composer)
+
+  const inputBox = await input.boundingBox()
+  const placeholderBox = await placeholderText.boundingBox()
+  expect(inputBox).not.toBeNull()
+  expect(placeholderBox).not.toBeNull()
+  expect(placeholderBox!.x).toBeGreaterThan(inputBox!.x + 16)
 
   await idleComposer(page)
   await expect(control).toBeHidden()
@@ -79,6 +87,15 @@ test("shows the V2 thinking level control while relevant", async ({ page }) => {
 
   await idleComposer(page)
   await expect(control).toBeVisible()
+
+  await input.focus()
+  await page.keyboard.type("caret stays clear")
+  await expect(placeholder).toBeHidden()
+  await page.keyboard.press("ControlOrMeta+A")
+  await page.keyboard.press("Backspace")
+  await expect(placeholder).toBeVisible()
+  await page.keyboard.press("Tab")
+  await expect(composer.locator('[data-action="prompt-attach"]')).toBeFocused()
 })
 
 async function idleComposer(page: Page) {

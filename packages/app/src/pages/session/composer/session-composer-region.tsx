@@ -7,6 +7,7 @@ import { PromptInput } from "@/components/prompt-input"
 import { useLanguage } from "@/context/language"
 import { usePrompt } from "@/context/prompt"
 import { useSync } from "@/context/sync"
+import { useSettings } from "@/context/settings"
 import { getSessionHandoff, setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionKey } from "@/pages/session/session-layout"
 import { SessionPermissionDock } from "@/pages/session/composer/session-permission-dock"
@@ -31,6 +32,7 @@ export function SessionComposerRegion(props: {
   onResponseSubmit: () => void
   followup?: {
     queue: () => boolean
+    sendsNext: () => boolean
     items: { id: string; text: string }[]
     sending?: string
     edit?: { id: string; prompt: FollowupDraft["prompt"]; context: FollowupDraft["context"] }
@@ -54,6 +56,7 @@ export function SessionComposerRegion(props: {
   const language = useLanguage()
   const route = useSessionKey()
   const sync = useSync()
+  const settings = useSettings()
   const view = layout.view(route.sessionKey)
 
   const handoffPrompt = createMemo(() => getSessionHandoff(route.sessionKey())?.prompt)
@@ -254,6 +257,7 @@ export function SessionComposerRegion(props: {
                 <SessionFollowupDock
                   items={props.followup!.items}
                   sending={props.followup!.sending}
+                  redesigned={settings.general.newLayoutDesigns()}
                   onSend={props.followup!.onSend}
                   onEdit={props.followup!.onEdit}
                 />
@@ -270,6 +274,9 @@ export function SessionComposerRegion(props: {
                       edit={props.followup?.edit}
                       onEditLoaded={props.followup?.onEditLoaded}
                       shouldQueue={props.followup?.queue}
+                      queuedCount={() => props.followup?.items.length ?? 0}
+                      queuedSendsNext={props.followup?.sendsNext}
+                      workingElapsed={props.state.elapsed}
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}
                       onSubmit={props.onSubmit}

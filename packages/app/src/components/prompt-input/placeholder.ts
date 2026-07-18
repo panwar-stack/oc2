@@ -13,3 +13,7 @@ export function promptPlaceholder(input: PromptPlaceholderInput) {
   if (!input.suggest) return input.t("prompt.placeholder.simple")
   return input.t("prompt.placeholder.normal", { example: input.example })
 }
+
+export function showDesignPlaceholder(input: { dirty: boolean; composing: boolean }) {
+  return !input.dirty && !input.composing
+}

@@ -224,7 +224,7 @@ export default function Page() {
     },
   })
 
-  const composer = createSessionComposerState()
+  const composer = createSessionComposerState({ trackElapsed: newSessionDesign })
 
   const workspaceTabs = createMemo(() => layout.tabs(workspaceKey))
 
@@ -1672,6 +1672,11 @@ export default function Page() {
         params.id && !isChildSession()
           ? {
               queue: queueEnabled,
+              sendsNext: () => {
+                const id = params.id
+                if (!id) return false
+                return !followup.failed[id] && !followup.paused[id]
+              },
               items: followupDock(),
               sending: sendingFollowup(),
               edit: editingFollowup(),

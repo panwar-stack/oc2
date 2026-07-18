@@ -1,4 +1,5 @@
 import { onMount } from "solid-js"
+import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { showToast } from "@/utils/toast"
 import { usePrompt, type ContentPart, type ImageAttachmentPart } from "@/context/prompt"
@@ -36,6 +37,9 @@ type PromptAttachmentsInput = {
 export function createPromptAttachments(input: PromptAttachmentsInput) {
   const prompt = usePrompt()
   const language = useLanguage()
+  const [store, setStore] = createStore({
+    pending: [] as { id: string; filename: string }[],
+  })
 
   const warn = () => {
     showToast({
@@ -44,29 +48,34 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
     })
   }
 
-  const add = async (file: File, toast = true) => {
-    const mime = await attachmentMime(file)
-    if (!mime) {
-      if (toast) warn()
-      return false
-    }
+  const add = (file: File, toast = true) => {
+    const pending = { id: uuid(), filename: file.name }
+    setStore("pending", (items) => [...items, pending])
+    return attachmentMime(file)
+      .then(async (mime) => {
+        if (!mime) {
+          if (toast) warn()
+          return false
+        }
 
-    const editor = input.editor()
-    if (!editor) return false
+        const editor = input.editor()
+        if (!editor) return false
 
-    const url = await dataUrl(file, mime)
-    if (!url) return false
+        const url = await dataUrl(file, mime)
+        if (!url) return false
 
-    const attachment: ImageAttachmentPart = {
-      type: "image",
-      id: uuid(),
-      filename: file.name,
-      mime,
-      dataUrl: url,
-    }
-    const cursor = prompt.cursor() ?? getCursorPosition(editor)
-    prompt.set([...prompt.current(), attachment], cursor)
-    return true
+        const attachment: ImageAttachmentPart = {
+          type: "image",
+          id: uuid(),
+          filename: file.name,
+          mime,
+          dataUrl: url,
+        }
+        const cursor = prompt.cursor() ?? getCursorPosition(editor)
+        prompt.set([...prompt.current(), attachment], cursor)
+        return true
+      })
+      .finally(() => setStore("pending", (items) => items.filter((item) => item.id !== pending.id)))
   }
 
   const addAttachment = (file: File) => add(file)
@@ -182,5 +191,6 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
     addAttachments,
     removeAttachment,
     handlePaste,
+    pending: () => store.pending,
   }
 }

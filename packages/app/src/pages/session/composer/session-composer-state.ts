@@ -9,21 +9,14 @@ import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
-
-export const todoState = (input: {
-  count: number
-  done: boolean
-  live: boolean
-}): "hide" | "clear" | "open" | "close" => {
-  if (input.count === 0) return "hide"
-  if (!input.live) return "clear"
-  if (!input.done) return "open"
-  return "close"
-}
+import { formatComposerElapsed, latchComposerWorkingSince, todoState } from "./session-composer-model"
 
 const idle = { type: "idle" as const }
 
-export function createSessionComposerState(options?: { closeMs?: number | (() => number) }) {
+export function createSessionComposerState(options?: {
+  closeMs?: number | (() => number)
+  trackElapsed?: () => boolean
+}) {
   const params = useParams()
   const sdk = useSDK()
   const sync = useSync()
@@ -57,13 +50,37 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     () => todos().length > 0 && todos().every((todo) => todo.status === "completed" || todo.status === "cancelled"),
   )
 
-  const live = createMemo(() => sync.data.session_working(params.id ?? "") || blocked())
+  const working = createMemo(() => sync.data.session_working(params.id ?? ""))
+  const live = createMemo(() => working() || blocked())
 
   const [store, setStore] = createStore({
     responding: undefined as string | undefined,
     dock: todos().length > 0 && live(),
     closing: false,
     opening: false,
+    workingSince: undefined as number | undefined,
+    workingSession: undefined as string | undefined,
+    now: Date.now(),
+  })
+
+  let elapsedTimer: number | undefined
+
+  createEffect(() => {
+    const sessionID = params.id
+    const active = working() && (options?.trackElapsed?.() ?? true)
+    const now = Date.now()
+    const since = latchComposerWorkingSince(store.workingSince, active, now, store.workingSession !== sessionID)
+    if (since !== store.workingSince) setStore("workingSince", since)
+    setStore("workingSession", active ? sessionID : undefined)
+    setStore("now", now)
+
+    if (!active) {
+      if (elapsedTimer !== undefined) window.clearInterval(elapsedTimer)
+      elapsedTimer = undefined
+      return
+    }
+    if (elapsedTimer !== undefined) return
+    elapsedTimer = window.setInterval(() => setStore("now", Date.now()), 1000)
   })
 
   const permissionResponding = createMemo(() => {
@@ -175,12 +192,22 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     cancelAnimationFrame(raf)
   })
 
+  onCleanup(() => {
+    if (elapsedTimer === undefined) return
+    window.clearInterval(elapsedTimer)
+  })
+
   return {
     blocked,
     questionRequest,
     permissionRequest,
     permissionResponding,
     decide,
+    working,
+    elapsed: () => {
+      if (store.workingSince === undefined) return
+      return formatComposerElapsed((store.now - store.workingSince) / 1000)
+    },
     todos,
     dock: () => store.dock,
     closing: () => store.closing,

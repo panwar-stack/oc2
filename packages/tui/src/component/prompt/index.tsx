@@ -1,6 +1,6 @@
 import {
   BoxRenderable,
-  RGBA,
+  RenderableEvents,
   TextareaRenderable,
   MouseEvent,
   PasteEvent,
@@ -45,7 +45,6 @@ import { formatDuration } from "../../util/format"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
-import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
@@ -64,6 +63,7 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { ComposerFooter, latchComposerWorkingSince } from "../composer-footer"
 
 export type PromptProps = {
   sessionID?: string
@@ -113,10 +113,6 @@ function randomIndex(count: number) {
   return Math.floor(Math.random() * count)
 }
 
-function fadeColor(color: RGBA, alpha: number) {
-  return RGBA.fromValues(color.r, color.g, color.b, color.a * alpha)
-}
-
 function hasEditorRangeSelection(selection: EditorSelection["ranges"][number]) {
   return (
     selection.selection.start.line !== selection.selection.end.line ||
@@ -149,6 +145,9 @@ export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
+  const [inputFocused, setInputFocused] = createSignal(false)
+  const handleInputFocused = () => setInputFocused(true)
+  const handleInputBlurred = () => setInputFocused(false)
 
   const leader = useLeaderActive()
   const local = useLocal()
@@ -224,7 +223,6 @@ export function Prompt(props: PromptProps) {
   const workspace = usePromptWorkspace(props.sessionID)
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
   const [cursorVersion, setCursorVersion] = createSignal(0)
-  const hasRightContent = createMemo(() => Boolean(props.right))
 
   function promptModelWarning() {
     toast.show({
@@ -324,7 +322,7 @@ export function Prompt(props: PromptProps) {
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
-  const elapsed = createMemo(() => {
+  const processingElapsed = createMemo(() => {
     if (!props.sessionID) return
     const processing = sync.session.get(props.sessionID)?.time.processing
     if (processing === undefined) return
@@ -338,6 +336,9 @@ export function Prompt(props: PromptProps) {
     interrupt: number
     placeholder: number
     clipboardPending: number
+    workingSession: string | undefined
+    workingSince: number | undefined
+    now: number
   }>({
     placeholder: randomIndex(list().length),
     prompt: {
@@ -348,6 +349,39 @@ export function Prompt(props: PromptProps) {
     extmarkToPartIndex: new Map(),
     interrupt: 0,
     clipboardPending: 0,
+    workingSession: undefined,
+    workingSince: undefined,
+    now: Date.now(),
+  })
+
+  let elapsedTimer: ReturnType<typeof setInterval> | undefined
+  createEffect(() => {
+    const next = latchComposerWorkingSince(
+      { sessionID: store.workingSession, startedAt: store.workingSince },
+      {
+        sessionID: props.sessionID,
+        working: status().type !== "idle",
+        now: Date.now(),
+      },
+    )
+    setStore("workingSession", next.sessionID)
+    setStore("workingSince", next.startedAt)
+    setStore("now", Date.now())
+
+    if (next.startedAt === undefined) {
+      if (elapsedTimer) clearInterval(elapsedTimer)
+      elapsedTimer = undefined
+      return
+    }
+    if (elapsedTimer) return
+    elapsedTimer = setInterval(() => setStore("now", Date.now()), 1000)
+  })
+  onCleanup(() => {
+    if (elapsedTimer) clearInterval(elapsedTimer)
+  })
+  const workingElapsed = createMemo(() => {
+    if (store.workingSince === undefined) return
+    return formatDuration(Math.floor((store.now - store.workingSince) / 1000)) || "0s"
   })
 
   createEffect(
@@ -685,6 +719,9 @@ export function Prompt(props: PromptProps) {
       stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
     }
     setInputTarget(undefined)
+    setInputFocused(false)
+    input?.off(RenderableEvents.FOCUSED, handleInputFocused)
+    input?.off(RenderableEvents.BLURRED, handleInputBlurred)
     props.ref?.(undefined)
   })
 
@@ -1365,7 +1402,11 @@ export function Prompt(props: PromptProps) {
     () => !!local.agent.current() && store.mode === "normal" && showVariant(),
     animationsEnabled,
   )
-  const borderHighlight = createMemo(() => tint(theme.border, highlight(), agentMetaAlpha()))
+  const borderHighlight = createMemo(() => {
+    if (inputFocused()) return theme.borderActive
+    if (working()) return theme.warning
+    return tint(theme.border, highlight(), agentMetaAlpha())
+  })
 
   const placeholderText = createMemo(() => {
     if (props.showPlaceholder === false) return undefined
@@ -1479,6 +1520,9 @@ export function Prompt(props: PromptProps) {
               }}
               ref={(r: TextareaRenderable) => {
                 input = r
+                r.on(RenderableEvents.FOCUSED, handleInputFocused)
+                r.on(RenderableEvents.BLURRED, handleInputBlurred)
+                setInputFocused(r.focused)
                 Object.assign(r, {
                   getClipboardText: (text: string) => expandPastedTextPlaceholders(text, store.prompt.parts),
                 })
@@ -1498,44 +1542,6 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={syntax()}
             />
-            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
-              <box flexDirection="row" gap={1}>
-                <Show when={local.agent.current()} fallback={<box height={1} />}>
-                  {(agent) => (
-                    <>
-                      <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
-                      </text>
-                      <Show when={store.mode === "normal"}>
-                        <box flexDirection="row" gap={1}>
-                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
-                          <text
-                            flexShrink={0}
-                            fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
-                          >
-                            {displayModelMeta().model}
-                          </text>
-                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{displayModelMeta().provider}</text>
-                          <Show when={showVariant()}>
-                            <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
-                            <text>
-                              <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
-                                {displayModelMeta().variant}
-                              </span>
-                            </text>
-                          </Show>
-                        </box>
-                      </Show>
-                    </>
-                  )}
-                </Show>
-              </box>
-              <Show when={hasRightContent()}>
-                <box flexDirection="row" gap={1} alignItems="center">
-                  {props.right}
-                </box>
-              </Show>
-            </box>
           </box>
         </box>
         <box
@@ -1564,152 +1570,106 @@ export function Prompt(props: PromptProps) {
             }
           />
         </box>
-        <box width="100%" flexDirection="row" justifyContent="space-between">
-          <Show when={store.clipboardPending > 0}>
-            <box paddingLeft={3} paddingRight={1} flexShrink={0}>
-              <Spinner color={theme.accent}>Reading clipboard...</Spinner>
+        <Show when={store.clipboardPending > 0}>
+          <box paddingLeft={3} paddingRight={1} flexShrink={0}>
+            <Spinner color={theme.accent}>Reading clipboard...</Spinner>
+          </box>
+        </Show>
+        <ComposerFooter
+          mode={store.mode}
+          leader={leader()}
+          status={status()}
+          working={working()}
+          activeTurn={status().type !== "idle"}
+          teammateWorking={teammateWorking()}
+          delivery="steer"
+          queued={0}
+          hasDraft={status().type !== "idle" && !!store.prompt.input}
+          interrupt={store.interrupt}
+          elapsed={workingElapsed()}
+          agent={
+            local.agent.current()
+              ? {
+                  label: Locale.titlecase(local.agent.current()!.name),
+                  color: highlight(),
+                  alpha: agentMetaAlpha(),
+                }
+              : undefined
+          }
+          model={{
+            label: displayModelMeta().model,
+            provider: displayModelMeta().provider,
+            alpha: modelMetaAlpha(),
+          }}
+          variant={
+            showVariant() && displayModelMeta().variant
+              ? { label: displayModelMeta().variant!, alpha: variantMetaAlpha() }
+              : undefined
+          }
+          spinner={
+            <box marginLeft={1}>
+              <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
+                <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+              </Show>
             </box>
-          </Show>
-          <Switch>
-            <Match when={working()}>
-              <box
-                flexDirection="row"
-                gap={1}
-                flexGrow={1}
-                justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
-              >
-                <box flexShrink={0} flexDirection="row" gap={1}>
-                  <box marginLeft={1}>
-                    <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
-                      <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+          }
+          left={
+            <Switch>
+              <Match when={workspace.notice()}>
+                {(notice) => (
+                  <box paddingLeft={3}>
+                    <text fg={theme.accent}>{notice()}</text>
+                  </box>
+                )}
+              </Match>
+              <Match when={workspace.label()}>
+                {(label) => (
+                  <box paddingLeft={3} flexDirection="row" gap={1}>
+                    <Show when={workspace.creating()}>
+                      <Spinner color={theme.accent} />
                     </Show>
-                  </box>
-                  <box flexDirection="row" gap={1} flexShrink={0}>
-                    {(() => {
-                      const retry = createMemo(() => {
-                        const s = status()
-                        if (s.type !== "retry") return
-                        return s
-                      })
-                      const message = createMemo(() => {
-                        const r = retry()
-                        if (!r) return
-                        if (r.message.includes("exceeded your current quota") && r.message.includes("gemini"))
-                          return "gemini is way too hot right now"
-                        if (r.message.length > 80) return r.message.slice(0, 80) + "..."
-                        return r.message
-                      })
-                      const isTruncated = createMemo(() => {
-                        const r = retry()
-                        if (!r) return false
-                        return r.message.length > 120
-                      })
-                      const [seconds, setSeconds] = createSignal(0)
-                      onMount(() => {
-                        const timer = setInterval(() => {
-                          const next = retry()?.next
-                          if (next) setSeconds(Math.round((next - Date.now()) / 1000))
-                        }, 1000)
-
-                        onCleanup(() => {
-                          clearInterval(timer)
-                        })
-                      })
-                      const handleMessageClick = () => {
-                        const r = retry()
-                        if (!r) return
-                        if (isTruncated()) {
-                          void DialogAlert.show(dialog, "Retry Error", r.message)
+                    <text fg={workspace.creating() ? theme.accent : theme.text}>
+                      {(() => {
+                        const item = label()
+                        if (item.type === "new") {
+                          if (workspace.creating())
+                            return `Creating ${item.workspaceType}${".".repeat(workspace.creatingDots())}`
+                          return (
+                            <>
+                              Workspace <span style={{ fg: theme.textMuted }}>(new {item.workspaceType})</span>
+                            </>
+                          )
                         }
-                      }
-
-                      const retryText = () => {
-                        const r = retry()
-                        if (!r) return ""
-                        const baseMessage = message()
-                        const truncatedHint = isTruncated() ? " (click to expand)" : ""
-                        const duration = formatDuration(seconds())
-                        const retryInfo = ` [retrying ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`
-                        return baseMessage + truncatedHint + retryInfo
-                      }
-
-                      return (
-                        <Show when={retry()}>
-                          <box onMouseUp={handleMessageClick}>
-                            <text fg={theme.error}>{retryText()}</text>
-                          </box>
-                        </Show>
-                      )
-                    })()}
-                  </box>
-                </box>
-                <Show
-                  when={status().type !== "idle"}
-                  fallback={<text fg={theme.textMuted}>team working</text>}
-                >
-                  <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
-                    esc{" "}
-                    <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
-                      {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
-                    </span>
-                  </text>
-                </Show>
-              </box>
-            </Match>
-            <Match when={workspace.notice()}>
-              {(notice) => (
-                <box paddingLeft={3}>
-                  <text fg={theme.accent}>{notice()}</text>
-                </box>
-              )}
-            </Match>
-            <Match when={workspace.label()}>
-              {(label) => (
-                <box paddingLeft={3} flexDirection="row" gap={1}>
-                  <Show when={workspace.creating()}>
-                    <Spinner color={theme.accent} />
-                  </Show>
-                  <text fg={workspace.creating() ? theme.accent : theme.text}>
-                    {(() => {
-                      const item = label()
-                      if (item.type === "new") {
-                        if (workspace.creating())
-                          return `Creating ${item.workspaceType}${".".repeat(workspace.creatingDots())}`
                         return (
                           <>
-                            Workspace <span style={{ fg: theme.textMuted }}>(new {item.workspaceType})</span>
+                            Workspace <span style={{ fg: theme.textMuted }}>{item.workspaceName}</span>
                           </>
                         )
-                      }
-                      return (
-                        <>
-                          Workspace <span style={{ fg: theme.textMuted }}>{item.workspaceName}</span>
-                        </>
-                      )
-                    })()}
-                  </text>
-                </box>
-              )}
-            </Match>
-            <Match when={move.progress()}>
-              {(progress) => (
+                      })()}
+                    </text>
+                  </box>
+                )}
+              </Match>
+              <Match when={move.progress()}>
+                {(progress) => (
+                  <box paddingLeft={3}>
+                    <Spinner color={theme.accent}>
+                      {progress()}
+                      <span style={{ fg: theme.textMuted }}>{".".repeat(move.creatingDots())}</span>
+                    </Spinner>
+                  </box>
+                )}
+              </Match>
+              <Match when={move.pendingNew()}>
                 <box paddingLeft={3}>
-                  <Spinner color={theme.accent}>
-                    {progress()}
-                    <span style={{ fg: theme.textMuted }}>{".".repeat(move.creatingDots())}</span>
-                  </Spinner>
+                  <text fg={theme.accent}>(new working copy)</text>
                 </box>
-              )}
-            </Match>
-            <Match when={move.pendingNew()}>
-              <box paddingLeft={3}>
-                <text fg={theme.accent}>(new working copy)</text>
-              </box>
-            </Match>
-            <Match when={true}>{props.hint ?? <text />}</Match>
-          </Switch>
-          <Show when={status().type !== "retry"}>
-            <box gap={2} flexDirection="row">
+              </Match>
+              <Match when={true}>{props.hint ?? <text />}</Match>
+            </Switch>
+          }
+          meta={
+            <>
               <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                 {(file) => (
                   <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
@@ -1717,7 +1677,7 @@ export function Prompt(props: PromptProps) {
               </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
-                  <Show when={elapsed()}>
+                  <Show when={processingElapsed()}>
                     {(value) => (
                       <text fg={theme.textMuted} wrapMode="none">
                         AI {value()}
@@ -1748,9 +1708,13 @@ export function Prompt(props: PromptProps) {
                   </text>
                 </Match>
               </Switch>
-            </box>
-          </Show>
-        </box>
+            </>
+          }
+          right={props.right}
+          onAgentClick={() => keymap.dispatchCommand("agent.cycle")}
+          onModelClick={() => keymap.dispatchCommand("model.list")}
+          onVariantClick={() => keymap.dispatchCommand("variant.cycle")}
+        />
       </box>
       <Autocomplete
         sessionID={props.sessionID}

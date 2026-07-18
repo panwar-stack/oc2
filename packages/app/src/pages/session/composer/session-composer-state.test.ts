@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { PermissionRequest, QuestionRequest, Session } from "@oc2-ai/sdk/v2/client"
-import { todoState } from "./session-composer-state"
+import {
+  composerPresentation,
+  formatComposerElapsed,
+  latchComposerWorkingSince,
+  todoState,
+} from "./session-composer-model"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
 
 const session = (input: { id: string; parentID?: string }) =>
@@ -124,5 +129,52 @@ describe("todoState", () => {
 
   test("clears completed todos when the session is no longer live", () => {
     expect(todoState({ count: 2, done: true, live: false })).toBe("clear")
+  })
+})
+
+describe("composerPresentation", () => {
+  test("derives truthful idle and steer actions", () => {
+    expect(composerPresentation({ working: false, delivery: "steer", queued: 0, hasDraft: false })).toEqual({
+      state: "idle",
+      action: "send",
+    })
+    expect(composerPresentation({ working: true, delivery: "steer", queued: 0, hasDraft: true })).toEqual({
+      state: "working",
+      action: "send",
+    })
+  })
+
+  test("uses queue semantics only when queue delivery is active", () => {
+    expect(composerPresentation({ working: true, delivery: "queue", queued: 0, hasDraft: true })).toEqual({
+      state: "working",
+      action: "queue",
+    })
+  })
+
+  test("confirms a queued draft until the user starts another draft", () => {
+    expect(composerPresentation({ working: true, delivery: "queue", queued: 1, hasDraft: false })).toEqual({
+      state: "queued",
+      action: "queued",
+    })
+    expect(composerPresentation({ working: true, delivery: "queue", queued: 1, hasDraft: true })).toEqual({
+      state: "working",
+      action: "queue",
+    })
+  })
+})
+
+describe("composer working clock", () => {
+  test("latches the start while work remains active and resets on idle", () => {
+    expect(latchComposerWorkingSince(undefined, true, 1_000)).toBe(1_000)
+    expect(latchComposerWorkingSince(1_000, true, 5_000)).toBe(1_000)
+    expect(latchComposerWorkingSince(1_000, true, 5_000, true)).toBe(5_000)
+    expect(latchComposerWorkingSince(1_000, false, 5_000)).toBeUndefined()
+    expect(latchComposerWorkingSince(undefined, true, 8_000)).toBe(8_000)
+  })
+
+  test("formats stable elapsed labels", () => {
+    expect(formatComposerElapsed(0)).toBe("0s")
+    expect(formatComposerElapsed(885)).toBe("14m 45s")
+    expect(formatComposerElapsed(3_725)).toBe("1h 2m")
   })
 })

@@ -2,6 +2,7 @@ import { Component, For, Show } from "solid-js"
 import { FileIcon } from "@oc2-ai/ui/file-icon"
 import { IconButton } from "@oc2-ai/ui/icon-button"
 import { Tooltip } from "@oc2-ai/ui/tooltip"
+import { StatusGlyph } from "@oc2-ai/ui/v2/status-glyph"
 import { getDirectory, getFilename, getFilenameTruncated } from "@oc2-ai/core/util/path"
 import type { ContextItem } from "@/context/prompt"
 
@@ -13,6 +14,7 @@ type ContextItemsProps = {
   openComment: (item: PromptContextItem) => void
   remove: (item: PromptContextItem) => void
   t: (key: string) => string
+  redesigned?: boolean
 }
 
 export const PromptContextItems: Component<ContextItemsProps> = (props) => {
@@ -24,9 +26,47 @@ export const PromptContextItems: Component<ContextItemsProps> = (props) => {
             const directory = getDirectory(item.path)
             const filename = getFilename(item.path)
             const label = getFilenameTruncated(item.path, 14)
-            const selected = props.active(item)
+            const selected = () => props.active(item)
 
-            return (
+            return props.redesigned ? (
+              <div
+                data-active={selected() ? "true" : undefined}
+                classList={{
+                  "group flex h-7 max-w-[220px] shrink-0 items-center gap-1 rounded-[var(--v2-radius-chip)] border pl-2 pr-1 text-[var(--v2-font-size-meta)] text-v2-text-text-muted hover:bg-v2-background-bg-layer-03 focus-within:border-v2-border-border-focus": true,
+                  "border-v2-border-border-focus bg-v2-background-bg-layer-03": selected(),
+                  "border-v2-border-border-strong bg-v2-background-bg-layer-01": !selected(),
+                }}
+              >
+                <button
+                  type="button"
+                  class="flex min-w-0 items-center gap-1.5 outline-none"
+                  onClick={() => props.openComment(item)}
+                  disabled={!item.commentID}
+                  tabIndex={item.commentID ? undefined : -1}
+                  aria-current={selected() ? "true" : undefined}
+                >
+                  <StatusGlyph name="attachment" size="small" />
+                  <span class="truncate text-v2-text-text-base">{label}</span>
+                  <Show when={item.selection}>
+                    {(sel) => (
+                      <span class="shrink-0 text-v2-text-text-faint">
+                        {sel().startLine === sel().endLine
+                          ? `:${sel().startLine}`
+                          : `:${sel().startLine}-${sel().endLine}`}
+                      </span>
+                    )}
+                  </Show>
+                </button>
+                <IconButton
+                  type="button"
+                  icon="close-small"
+                  variant="ghost"
+                  class="ml-auto size-5 shrink-0 text-v2-text-text-faint hover:text-v2-text-text-base"
+                  onClick={() => props.remove(item)}
+                  aria-label={props.t("prompt.context.removeFile")}
+                />
+              </div>
+            ) : (
               <Tooltip
                 value={
                   <span class="flex max-w-[300px]">
@@ -42,9 +82,10 @@ export const PromptContextItems: Component<ContextItemsProps> = (props) => {
                 <div
                   classList={{
                     "group shrink-0 flex flex-col rounded-[6px] pl-2 pr-1 py-1 max-w-[200px] h-12 cursor-default transition-all transition-transform shadow-xs-border hover:shadow-xs-border-hover": true,
-                    "hover:bg-surface-interactive-weak": !!item.commentID && !selected,
-                    "bg-surface-interactive-hover hover:bg-surface-interactive-hover shadow-xs-border-hover": selected,
-                    "bg-background-stronger": !selected,
+                    "hover:bg-surface-interactive-weak": !!item.commentID && !selected(),
+                    "bg-surface-interactive-hover hover:bg-surface-interactive-hover shadow-xs-border-hover":
+                      selected(),
+                    "bg-background-stronger": !selected(),
                   }}
                   onClick={() => props.openComment(item)}
                 >

@@ -8,12 +8,13 @@ import { useLanguage } from "@/context/language"
 export function SessionFollowupDock(props: {
   items: { id: string; text: string }[]
   sending?: string
+  redesigned?: boolean
   onSend: (id: string) => void
   onEdit: (id: string) => void
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({
-    collapsed: false,
+    collapsed: !!props.redesigned,
   })
 
   const toggle = () => setStore("collapsed", (value) => !value)
@@ -28,6 +29,12 @@ export function SessionFollowupDock(props: {
   return (
     <DockTray
       data-component="session-followup-dock"
+      data-redesigned={props.redesigned ? "true" : undefined}
+      class={
+        props.redesigned
+          ? "border-v2-border-border-strong bg-v2-background-bg-layer-01 text-v2-text-text-base"
+          : undefined
+      }
       style={{
         "margin-bottom": "-0.875rem",
         "border-bottom-left-radius": 0,
@@ -45,7 +52,15 @@ export function SessionFollowupDock(props: {
           toggle()
         }}
       >
-        <span class="shrink-0 text-13-medium text-text-strong cursor-default">{label()}</span>
+        <span
+          classList={{
+            "shrink-0 text-13-medium cursor-default": true,
+            "text-v2-text-text-base": !!props.redesigned,
+            "text-text-strong": !props.redesigned,
+          }}
+        >
+          {label()}
+        </span>
         <Show when={store.collapsed && preview()}>
           <span class="min-w-0 flex-1 truncate text-13-regular text-text-base cursor-default">{preview()}</span>
         </Show>
