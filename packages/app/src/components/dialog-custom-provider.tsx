@@ -179,6 +179,7 @@ export function DialogCustomProvider(props: Props) {
           aria-label={language.t("common.goBack")}
         />
       }
+      accessibleTitle={language.t("provider.custom.title")}
       transition
     >
       <div class="flex flex-col gap-6 px-2.5 pb-3 overflow-y-auto max-h-[60vh]">

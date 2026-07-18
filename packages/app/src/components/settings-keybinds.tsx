@@ -545,7 +545,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
               <IconButtonV2
                 type="button"
                 variant="ghost-muted"
-                size="small"
+                aria-label={`${language.t("common.clear")}: ${language.t("settings.shortcuts.search.placeholder")}`}
                 class="settings-v2-tab-search-clear"
                 icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
                 onClick={() => setStore("filter", "")}

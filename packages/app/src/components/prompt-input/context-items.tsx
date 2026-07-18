@@ -61,7 +61,7 @@ export const PromptContextItems: Component<ContextItemsProps> = (props) => {
                   type="button"
                   icon="close-small"
                   variant="ghost"
-                  class="ml-auto size-5 shrink-0 text-v2-text-text-faint hover:text-v2-text-text-base"
+                  class="ml-auto size-6 shrink-0 text-v2-text-text-faint hover:text-v2-text-text-base"
                   onClick={() => props.remove(item)}
                   aria-label={props.t("prompt.context.removeFile")}
                 />

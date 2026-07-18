@@ -12,6 +12,7 @@ export interface DialogProps extends ParentProps {
   class?: ComponentProps<"div">["class"]
   classList?: ComponentProps<"div">["classList"]
   fit?: boolean
+  accessibleTitle?: string
 }
 
 export function DialogFooter(props: ParentProps) {
@@ -29,6 +30,7 @@ export function Dialog(props: DialogProps) {
     "class",
     "classList",
     "fit",
+    "accessibleTitle",
     "children",
   ])
   const title = children(() => local.title)
@@ -48,6 +50,7 @@ export function Dialog(props: DialogProps) {
           data-slot="dialog-content"
           data-no-header={!hasHeader() ? "" : undefined}
           aria-modal="true"
+          aria-label={local.accessibleTitle}
           onPointerDownOutside={(event) => {
             if (layer.dismissible === false) event.preventDefault()
           }}

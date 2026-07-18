@@ -64,7 +64,7 @@ export const SettingsModelsV2: Component = () => {
             <IconButtonV2
               type="button"
               variant="ghost-muted"
-              size="small"
+              aria-label={`${language.t("common.clear")}: ${language.t("dialog.model.search.placeholder")}`}
               class="settings-v2-tab-search-clear"
               icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
               onClick={() => list.clear()}

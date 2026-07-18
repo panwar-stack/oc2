@@ -33,6 +33,8 @@
       "@effect/sql-sqlite-bun": "4.0.0-beta.74",
       "@npmcli/arborist": "9.4.0",
       "@types/bun": "1.3.13",
+      "ajv": "8.20.0",
+      "color-name": "1.1.4",
       "@types/cross-spawn": "6.0.6",
       "@hono/zod-validator": "0.4.2",
       "@opentui/core": "0.3.4",

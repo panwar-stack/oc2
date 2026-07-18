@@ -25,7 +25,7 @@ describe("web timeline transcript contract", () => {
     expect(styles).toContain('[data-component="session-timeline"][data-layout="v2"]')
     expect(marked).toContain("var(--v2-syntax-keyword)")
     expect(marked).toContain("var(--v2-diff-added)")
-    expect(markdown).toContain("var(--v2-markdown-text)")
+    expect(markdown).toContain("var(--v2-markdown-text, var(--markdown-text))")
     expect(pierre).toContain("var(--v2-diff-added-bg)")
     expect(`${marked}\n${markdown}\n${pierre}`).not.toMatch(/#[\da-f]{3,8}/i)
   })

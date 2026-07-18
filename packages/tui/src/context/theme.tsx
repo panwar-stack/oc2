@@ -149,7 +149,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     let hasResolvedSystemTheme = false
     function resolveSystemTheme(mode: "dark" | "light" = store.mode) {
       return renderer
-        .getPalette({ size: 16 })
+        .getPalette({ size: 256 })
         .then((colors: TerminalColors) => {
           if (!colors.palette[0]) {
             if (hasResolvedSystemTheme) return

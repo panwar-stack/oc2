@@ -60,12 +60,18 @@ describe("floating layer contracts", () => {
     })
     expect(toastPresentation("success").glyph).toBe("✓")
     expect(toastPresentation("error")).toEqual({ tone: "error", label: "Error", glyph: "✕", persistent: true })
-    expect(toastPresentation("error", false).persistent).toBe(false)
+    expect(toastPresentation("error", false).persistent).toBe(true)
+    expect(toastPresentation("success", true).persistent).toBe(true)
   })
 
   test("caps both toast regions and exposes accessible state labels", async () => {
     for (const component of [await source("toast-v2.tsx"), await legacy("toast.tsx")]) {
       expect(component).toContain("limit={3}")
+      const region = component.slice(
+        component.indexOf("function Toast"),
+        component.indexOf("export interface ToastRoot"),
+      )
+      expect(region.indexOf("{...props}"), region).toBeLessThan(region.indexOf("limit={3}"))
       expect(component).toContain('["altKey", "KeyN"]')
       expect(component).toContain('role={variant.tone === "error" ? "alert" : "status"}')
       expect(component).toContain('priority={variant.tone === "error" ? "high" : "low"}')
@@ -73,6 +79,12 @@ describe("floating layer contracts", () => {
       expect(component).toContain("variant.glyph")
       expect(component).toContain("focusNewestToast")
     }
+
+    const css = await source("toast-v2.css")
+    const close = css.slice(css.indexOf('[data-slot="toast-v2-close-button"]'))
+    expect(close).toContain("min-width: 24px")
+    expect(close).toContain("min-height: 24px")
+    expect(close).toContain("color: var(--v2-icon-icon-base)")
   })
 })
 

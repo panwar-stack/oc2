@@ -9,7 +9,7 @@ const presentation = {
 
 export function toastPresentation(variant: ToastVariant = "default", persistent?: boolean) {
   const tone = variant === "default" ? "info" : variant === "loading" ? "warning" : variant
-  return { tone, ...presentation[tone], persistent: persistent ?? tone === "error" }
+  return { tone, ...presentation[tone], persistent: tone === "error" || persistent === true }
 }
 
 export function focusNewestToast(event: FocusEvent & { currentTarget: HTMLOListElement }) {

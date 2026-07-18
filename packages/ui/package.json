@@ -33,6 +33,8 @@
     "typecheck": "tsgo --noEmit",
     "test": "bun test src",
     "test:ci": "mkdir -p .artifacts/unit && bun test src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
+    "check:themes": "bun run script/check-themes.ts",
+    "check:redesign": "bun run script/check-redesign.ts",
     "dev": "vite",
     "generate:tailwind": "bun run script/tailwind.ts",
     "generate:v2-oc2": "bun run script/build-oc2-v2-overrides.ts"
@@ -42,6 +44,8 @@
     "@tsconfig/node22": "catalog:",
     "@types/bun": "catalog:",
     "@types/katex": "0.16.7",
+    "ajv": "catalog:",
+    "color-name": "catalog:",
     "@types/luxon": "catalog:",
     "@typescript/native-preview": "catalog:",
     "tailwindcss": "catalog:",

@@ -392,7 +392,13 @@ export function DialogSelectFile(props: {
   })
 
   return (
-    <Dialog class="pt-3 pb-0 !max-h-[480px]" transition>
+    <Dialog
+      class="pt-3 pb-0 !max-h-[480px]"
+      transition
+      accessibleTitle={
+        filesOnly() ? language.t("session.header.searchFiles") : language.t("palette.search.placeholder")
+      }
+    >
       <List
         class="px-3"
         search={{

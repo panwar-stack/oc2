@@ -64,6 +64,7 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { ComposerFooter, latchComposerWorkingSince } from "../composer-footer"
+import { reduceTuiMotion } from "../glyph"
 
 export type PromptProps = {
   sessionID?: string
@@ -1442,6 +1443,7 @@ export function Prompt(props: PromptProps) {
       }),
     }
   })
+  const activityDots = (dots: number) => (reduceTuiMotion(kv.get("animations_enabled", true)) ? "…" : ".".repeat(dots))
   const maxHeight = createMemo(() => tuiConfig.prompt?.max_height ?? Math.max(6, Math.floor(dimensions().height / 3)))
   const moveLabelWidth = createMemo(() => Math.max(12, Math.min(44, dimensions().width - 48)))
 
@@ -1608,7 +1610,10 @@ export function Prompt(props: PromptProps) {
           }
           spinner={
             <box marginLeft={1}>
-              <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
+              <Show
+                when={!reduceTuiMotion(kv.get("animations_enabled", true))}
+                fallback={<text fg={theme.textMuted}>[⋯]</text>}
+              >
                 <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
               </Show>
             </box>
@@ -1633,7 +1638,7 @@ export function Prompt(props: PromptProps) {
                         const item = label()
                         if (item.type === "new") {
                           if (workspace.creating())
-                            return `Creating ${item.workspaceType}${".".repeat(workspace.creatingDots())}`
+                            return `Creating ${item.workspaceType}${activityDots(workspace.creatingDots())}`
                           return (
                             <>
                               Workspace <span style={{ fg: theme.textMuted }}>(new {item.workspaceType})</span>
@@ -1655,7 +1660,7 @@ export function Prompt(props: PromptProps) {
                   <box paddingLeft={3}>
                     <Spinner color={theme.accent}>
                       {progress()}
-                      <span style={{ fg: theme.textMuted }}>{".".repeat(move.creatingDots())}</span>
+                      <span style={{ fg: theme.textMuted }}>{activityDots(move.creatingDots())}</span>
                     </Spinner>
                   </box>
                 )}

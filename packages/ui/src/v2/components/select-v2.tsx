@@ -86,6 +86,8 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
     "flip",
     "slide",
     "fitViewport",
+    "aria-label",
+    "aria-describedby",
   ])
 
   const inline = () => (local.appearance ?? "base") === "inline"
@@ -129,6 +131,8 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
       flip={local.flip ?? true}
       slide={local.slide ?? true}
       fitViewport={local.fitViewport ?? false}
+      aria-label={local["aria-label"]}
+      aria-describedby={local["aria-describedby"]}
       value={local.current}
       options={grouped()}
       optionValue={(x) => (local.value ? local.value(x) : String(x as string))}
@@ -180,6 +184,8 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
         data-numeric={local.numeric ? "" : undefined}
         disabled={local.disabled}
         data-disabled={local.disabled ? "" : undefined}
+        aria-label={local["aria-label"]}
+        aria-describedby={local["aria-describedby"]}
         classList={{
           ...local.classList,
           [local.class ?? ""]: !!local.class,

@@ -3,6 +3,7 @@ import { Ghostty, Terminal } from "ghostty-web"
 import {
   observeTerminalTheme,
   resolveTerminalTheme,
+  terminalCursorBlink,
   terminalThemeFromElement,
   terminalThemeSequence,
 } from "./terminal-theme"
@@ -74,6 +75,11 @@ const modes = {
 } as const
 
 describe("terminal theme", () => {
+  test("disables cursor blink when reduced motion is requested", () => {
+    expect(terminalCursorBlink(false)).toBe(true)
+    expect(terminalCursorBlink(true)).toBe(false)
+  })
+
   for (const [mode, expected] of Object.entries(modes)) {
     test(`maps canonical ${mode} colors and all ANSI fields`, () => {
       const tokens = new Map<string, string>([
@@ -227,6 +233,8 @@ describe("terminal theme", () => {
     const themeCss = await Bun.file(import.meta.dir + "/../../../ui/src/v2/styles/theme.css").text()
 
     expect(terminal).not.toMatch(/#[\da-f]{3,8}\b/i)
+    expect(terminal).toContain('window.matchMedia("(prefers-reduced-motion: reduce)")')
+    expect(terminal).toContain('reducedMotion.addEventListener("change", handleReducedMotion)')
     expect(themeCss).toContain("--v2-terminal-background: var(--v2-background-bg-base)")
     expect(themeCss.match(/--v2-terminal-ansi-\d+:/g)).toHaveLength(32)
     expect(appCss.match(/font-display: swap/g)).toHaveLength(3)

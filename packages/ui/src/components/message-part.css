@@ -1011,8 +1011,8 @@
   }
 
   [data-slot="question-progress-segment"] {
-    width: 16px;
-    height: 16px;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border: 0;
     background: transparent;

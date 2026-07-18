@@ -14,7 +14,12 @@ import type { LocalPTY } from "@/context/terminal"
 import { disposeIfDisposable, getHoveredLinkText, setOptionIfSupported } from "@/utils/runtime-adapters"
 import { terminalWriter } from "@/utils/terminal-writer"
 import { terminalWebSocketURL } from "@/utils/terminal-websocket-url"
-import { observeTerminalTheme, terminalThemeFromElement, terminalThemeSequence } from "./terminal-theme"
+import {
+  observeTerminalTheme,
+  terminalCursorBlink,
+  terminalThemeFromElement,
+  terminalThemeSequence,
+} from "./terminal-theme"
 
 const TOGGLE_TERMINAL_ID = "terminal.toggle"
 const DEFAULT_TOGGLE_TERMINAL_KEYBIND = "ctrl+`"
@@ -51,6 +56,7 @@ const useTerminalUiBindings = (input: {
   cleanups: VoidFunction[]
   handlePointerDown: () => void
   handleLinkClick: (event: MouseEvent) => void
+  reducedMotion: MediaQueryList
 }) => {
   const handleCopy = (event: ClipboardEvent) => {
     const selection = input.term.getSelection()
@@ -74,10 +80,14 @@ const useTerminalUiBindings = (input: {
   }
 
   const handleTextareaFocus = () => {
-    input.term.options.cursorBlink = true
+    input.term.options.cursorBlink = terminalCursorBlink(input.reducedMotion.matches)
   }
   const handleTextareaBlur = () => {
     input.term.options.cursorBlink = false
+  }
+  const handleReducedMotion = () => {
+    input.term.options.cursorBlink =
+      terminalCursorBlink(input.reducedMotion.matches) && input.term.textarea === document.activeElement
   }
 
   input.container.addEventListener("copy", handleCopy, true)
@@ -100,8 +110,10 @@ const useTerminalUiBindings = (input: {
 
   input.term.textarea?.addEventListener("focus", handleTextareaFocus)
   input.term.textarea?.addEventListener("blur", handleTextareaBlur)
+  input.reducedMotion.addEventListener("change", handleReducedMotion)
   input.cleanups.push(() => input.term.textarea?.removeEventListener("focus", handleTextareaFocus))
   input.cleanups.push(() => input.term.textarea?.removeEventListener("blur", handleTextareaBlur))
+  input.cleanups.push(() => input.reducedMotion.removeEventListener("change", handleReducedMotion))
 }
 
 const persistTerminal = (input: {
@@ -305,9 +317,10 @@ export const Terminal = (props: TerminalProps) => {
 
       const mod = loaded.mod
       const g = loaded.ghostty
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)")
 
       const t = new mod.Terminal({
-        cursorBlink: true,
+        cursorBlink: terminalCursorBlink(reducedMotion.matches),
         cursorStyle: "bar",
         cols: restoreSize?.cols,
         rows: restoreSize?.rows,
@@ -362,6 +375,7 @@ export const Terminal = (props: TerminalProps) => {
         cleanups,
         handlePointerDown,
         handleLinkClick,
+        reducedMotion,
       })
 
       if (local.autoFocus !== false) focusTerminal()

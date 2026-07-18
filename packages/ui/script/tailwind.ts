@@ -20,4 +20,4 @@ const output = `
 }
 `
 
-await Bun.file(import.meta.dir + "/../src/styles/tailwind/colors.css").write(output.trim())
+await Bun.file(import.meta.dir + "/../src/styles/tailwind/colors.css").write(`${output.trim()}\n`)

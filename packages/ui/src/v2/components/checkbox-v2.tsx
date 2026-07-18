@@ -34,7 +34,7 @@ export function CheckboxV2(props: CheckboxV2Props) {
                 xmlns="http://www.w3.org/2000/svg"
                 aria-hidden="true"
               >
-                <path d="M3.53564 8.17857L6.39279 11.75L12.4642 4.25" stroke="#FAFAFA" stroke-width="1" />
+                <path d="M3.53564 8.17857L6.39279 11.75L12.4642 4.25" stroke="var(--v2-grey-200)" stroke-width="1" />
               </svg>
               <svg
                 class="checkbox-v2-icon checkbox-v2-icon--minus"
@@ -45,7 +45,7 @@ export function CheckboxV2(props: CheckboxV2Props) {
                 xmlns="http://www.w3.org/2000/svg"
                 aria-hidden="true"
               >
-                <path d="M12.75 8H3.25" stroke="#FAFAFA" stroke-linejoin="round" stroke-width="1" />
+                <path d="M12.75 8H3.25" stroke="var(--v2-grey-200)" stroke-linejoin="round" stroke-width="1" />
               </svg>
             </Kobalte.Indicator>
           </Kobalte.Control>

@@ -211,7 +211,12 @@ export const SettingsGeneralV2: Component = () => {
           description={language.t("toast.permissions.autoaccept.on.description")}
         >
           <div data-action="settings-auto-accept-permissions">
-            <Switch checked={accepting()} disabled={!dir()} onChange={toggleAccept} />
+            <Switch
+              aria-label={language.t("command.permissions.autoaccept.enable")}
+              checked={accepting()}
+              disabled={!dir()}
+              onChange={toggleAccept}
+            />
           </div>
         </SettingsRowV2>
 
@@ -220,6 +225,7 @@ export const SettingsGeneralV2: Component = () => {
           description={language.t("settings.general.row.shell.description")}
         >
           <SelectV2
+            aria-label={language.t("settings.general.row.shell.title")}
             appearance="inline"
             data-action="settings-shell"
             options={shellOptions()}
@@ -242,6 +248,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-feed-reasoning-summaries">
             <Switch
+              aria-label={language.t("settings.general.row.reasoningSummaries.title")}
               checked={settings.general.showReasoningSummaries()}
               onChange={(checked) => settings.general.setShowReasoningSummaries(checked)}
             />
@@ -254,6 +261,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-feed-shell-tool-parts-expanded">
             <Switch
+              aria-label={language.t("settings.general.row.shellToolPartsExpanded.title")}
               checked={settings.general.shellToolPartsExpanded()}
               onChange={(checked) => settings.general.setShellToolPartsExpanded(checked)}
             />
@@ -266,6 +274,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-feed-edit-tool-parts-expanded">
             <Switch
+              aria-label={language.t("settings.general.row.editToolPartsExpanded.title")}
               checked={settings.general.editToolPartsExpanded()}
               onChange={(checked) => settings.general.setEditToolPartsExpanded(checked)}
             />
@@ -278,6 +287,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-show-session-progress-bar">
             <Switch
+              aria-label={language.t("settings.general.row.showSessionProgressBar.title")}
               checked={settings.general.showSessionProgressBar()}
               onChange={(checked) => settings.general.setShowSessionProgressBar(checked)}
             />
@@ -290,6 +300,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-new-layout-designs">
             <Switch
+              aria-label={language.t("settings.general.row.newLayoutDesigns.title")}
               checked={settings.general.newLayoutDesigns()}
               onChange={(checked) => {
                 settings.general.setNewLayoutDesigns(checked)
@@ -315,6 +326,7 @@ export const SettingsGeneralV2: Component = () => {
           description={language.t("settings.general.row.colorScheme.description")}
         >
           <SelectV2
+            aria-label={language.t("settings.general.row.colorScheme.title")}
             appearance="inline"
             data-action="settings-color-scheme"
             options={colorSchemeOptions()}
@@ -337,6 +349,7 @@ export const SettingsGeneralV2: Component = () => {
           description={language.t("settings.general.row.theme.description")}
         >
           <SelectV2
+            aria-label={language.t("settings.general.row.theme.title")}
             appearance="inline"
             data-action="settings-theme"
             options={themeOptions()}
@@ -437,6 +450,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-notifications-agent">
             <Switch
+              aria-label={language.t("settings.general.notifications.agent.title")}
               checked={settings.notifications.agent()}
               onChange={(checked) => settings.notifications.setAgent(checked)}
             />
@@ -449,6 +463,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-notifications-permissions">
             <Switch
+              aria-label={language.t("settings.general.notifications.permissions.title")}
               checked={settings.notifications.permissions()}
               onChange={(checked) => settings.notifications.setPermissions(checked)}
             />
@@ -461,6 +476,7 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-notifications-errors">
             <Switch
+              aria-label={language.t("settings.general.notifications.errors.title")}
               checked={settings.notifications.errors()}
               onChange={(checked) => settings.notifications.setErrors(checked)}
             />
@@ -480,6 +496,7 @@ export const SettingsGeneralV2: Component = () => {
           description={language.t("settings.general.sounds.agent.description")}
         >
           <SelectV2
+            aria-label={language.t("settings.general.sounds.agent.title")}
             appearance="inline"
             data-action="settings-sounds-agent"
             {...soundSelectProps(
@@ -498,6 +515,7 @@ export const SettingsGeneralV2: Component = () => {
           description={language.t("settings.general.sounds.permissions.description")}
         >
           <SelectV2
+            aria-label={language.t("settings.general.sounds.permissions.title")}
             appearance="inline"
             data-action="settings-sounds-permissions"
             {...soundSelectProps(
@@ -516,6 +534,7 @@ export const SettingsGeneralV2: Component = () => {
           description={language.t("settings.general.sounds.errors.description")}
         >
           <SelectV2
+            aria-label={language.t("settings.general.sounds.errors.title")}
             appearance="inline"
             data-action="settings-sounds-errors"
             {...soundSelectProps(
@@ -543,12 +562,12 @@ export const SettingsGeneralV2: Component = () => {
         >
           <div data-action="settings-release-notes">
             <Switch
+              aria-label={language.t("settings.general.row.releaseNotes.title")}
               checked={settings.general.releaseNotes()}
               onChange={(checked) => settings.general.setReleaseNotes(checked)}
             />
           </div>
         </SettingsRowV2>
-
       </SettingsListV2>
     </div>
   )

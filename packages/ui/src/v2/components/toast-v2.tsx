@@ -12,7 +12,7 @@ export interface ToastV2RegionProps extends ComponentProps<typeof Kobalte.Region
 function ToastV2Region(props: ToastV2RegionProps) {
   return (
     <Portal>
-      <Kobalte.Region data-component="toast-v2-region" duration={4000} limit={3} hotkey={["altKey", "KeyN"]} {...props}>
+      <Kobalte.Region {...props} data-component="toast-v2-region" duration={4000} hotkey={["altKey", "KeyN"]} limit={3}>
         <Kobalte.List data-slot="toast-v2-list" onFocusIn={focusNewestToast} />
       </Kobalte.Region>
     </Portal>

@@ -14,6 +14,7 @@ export interface DialogProps extends ParentProps {
   fit?: boolean
   transition?: boolean
   variant?: "default" | "confirm"
+  accessibleTitle?: string
 }
 
 export function Dialog(props: DialogProps) {
@@ -32,6 +33,7 @@ export function Dialog(props: DialogProps) {
           data-slot="dialog-content"
           data-no-header={!props.title && !props.action ? "" : undefined}
           aria-modal="true"
+          aria-label={props.accessibleTitle}
           onPointerDownOutside={(event) => {
             if (layer.dismissible === false) event.preventDefault()
           }}

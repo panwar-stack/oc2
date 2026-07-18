@@ -12,9 +12,11 @@ const oc2Theme = oc2ThemeJson as DesktopTheme
 
 describe("theme resolution", () => {
   test("resolves every bundled theme in both modes", () => {
-    expect(themes.length).toBeGreaterThan(1)
+    expect(themes).toHaveLength(36)
+    expect(new Set(themes.map((entry) => entry.theme.id)).size).toBe(themes.length)
 
     for (const entry of themes) {
+      expect(entry.path).toBe(`themes/${entry.theme.id}.json`)
       const legacy = resolveTheme(entry.theme)
       const v2 = resolveThemeV2(entry.theme)
 
@@ -65,6 +67,10 @@ describe("theme resolution", () => {
       ["v2-text-text-inverse", "v2-state-fill-decision"],
       ["v2-text-text-contrast", "v2-background-bg-accent"],
       ["v2-state-fg-danger", "v2-pill-bg-red"],
+      ["v2-diff-context", "v2-diff-added-bg"],
+      ["v2-diff-context", "v2-diff-removed-bg"],
+      ["v2-text-text-inverse", "v2-state-fg-danger"],
+      ["v2-icon-icon-base", "v2-background-bg-layer-02"],
     ] as const
 
     for (const [mode, tokens] of Object.entries(resolved)) {
@@ -78,6 +84,16 @@ describe("theme resolution", () => {
         contrast(tokens["v2-text-text-faint"]!, tokens["v2-background-bg-base"]!),
         `${mode}: decorative tertiary text`,
       ).toBeGreaterThanOrEqual(3)
+      const emphasisAlpha = mode === "light" ? 0.15 : 0.2
+      for (const [foreground, lineBackground] of [
+        ["v2-diff-added", "v2-diff-added-bg"],
+        ["v2-diff-removed", "v2-diff-removed-bg"],
+      ] as const) {
+        expect(
+          contrast(tokens["v2-diff-context"]!, composite(tokens[foreground]!, tokens[lineBackground]!, emphasisAlpha)),
+          `${mode}: diff context on ${foreground} intraline emphasis`,
+        ).toBeGreaterThanOrEqual(4.5)
+      }
     }
   })
 })
@@ -109,6 +125,38 @@ describe("v2 theme CSS", () => {
       "v2-agent-8",
     ]) {
       expect(tailwind, key).toContain(`--color-${key}: var(--${key});`)
+    }
+  })
+
+  test("keeps the Tailwind generator byte-idempotent", async () => {
+    const root = `${import.meta.dir}/../..`
+    const path = `${root}/src/styles/tailwind/colors.css`
+    const before = await Bun.file(path).text()
+    const generate = () =>
+      Bun.spawn(["bun", "run", "script/tailwind.ts"], { cwd: root, stdout: "pipe", stderr: "pipe" })
+
+    expect(await generate().exited).toBe(0)
+    const once = await Bun.file(path).text()
+    expect(once).toBe(before)
+    expect(once.endsWith("\n")).toBe(true)
+
+    expect(await generate().exited).toBe(0)
+    expect(await Bun.file(path).text()).toBe(once)
+  })
+
+  test("uses low-alpha diff emphasis backgrounds and keeps markdown legacy fallbacks", async () => {
+    const pierre = await Bun.file(`${import.meta.dir}/../pierre/index.ts`).text()
+    const markdown = await Bun.file(`${import.meta.dir}/../components/markdown.css`).text()
+
+    expect(pierre).toContain("rgb(from var(--v2-diff-removed) r g b / 0.15)")
+    expect(pierre).toContain("rgb(from var(--v2-diff-removed) r g b / 0.2)")
+    expect(pierre).toContain("rgb(from var(--v2-diff-added) r g b / 0.15)")
+    expect(pierre).toContain("rgb(from var(--v2-diff-added) r g b / 0.2)")
+    expect(pierre).not.toContain("--diffs-bg-deletion-emphasis-override, var(--v2-diff-highlight-removed)")
+    expect(pierre).not.toContain("--diffs-bg-addition-emphasis-override, var(--v2-diff-highlight-added)")
+    for (const reference of markdown.matchAll(/var\(--v2-[^,)]+/g)) {
+      const expression = markdown.slice(reference.index, markdown.indexOf(";", reference.index))
+      expect(expression, reference[0]).toContain(", var(--")
     }
   })
 
@@ -186,6 +234,23 @@ function contrast(foreground: string, background: string) {
   const first = luminance(foreground)
   const second = luminance(background)
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}
+
+function composite(foreground: string, background: string, alpha: number) {
+  const channels = (value: string) =>
+    value
+      .slice(1, 7)
+      .match(/.{2}/g)!
+      .map((channel) => parseInt(channel, 16))
+  const front = channels(foreground)
+  const back = channels(background)
+  return `#${front
+    .map((channel, index) =>
+      Math.round(channel * alpha + back[index]! * (1 - alpha))
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`
 }
 
 function cssBlock(css: string, selector: string) {

@@ -30,11 +30,23 @@ const unsafeCSS = `
   --diffs-bg-deletion: var(--diffs-bg-deletion-override, var(--v2-diff-removed-bg));
   --diffs-bg-deletion-number: var(--diffs-bg-deletion-number-override, var(--v2-diff-removed-line-number-bg));
   --diffs-bg-deletion-hover: var(--diffs-bg-deletion-hover-override, var(--v2-diff-removed-line-number-bg));
-  --diffs-bg-deletion-emphasis: var(--diffs-bg-deletion-emphasis-override, var(--v2-diff-highlight-removed));
+  --diffs-bg-deletion-emphasis: var(
+    --diffs-bg-deletion-emphasis-override,
+    light-dark(
+      rgb(from var(--v2-diff-removed) r g b / 0.15),
+      rgb(from var(--v2-diff-removed) r g b / 0.2)
+    )
+  );
   --diffs-bg-addition: var(--diffs-bg-addition-override, var(--v2-diff-added-bg));
   --diffs-bg-addition-number: var(--diffs-bg-addition-number-override, var(--v2-diff-added-line-number-bg));
   --diffs-bg-addition-hover: var(--diffs-bg-addition-hover-override, var(--v2-diff-added-line-number-bg));
-  --diffs-bg-addition-emphasis: var(--diffs-bg-addition-emphasis-override, var(--v2-diff-highlight-added));
+  --diffs-bg-addition-emphasis: var(
+    --diffs-bg-addition-emphasis-override,
+    light-dark(
+      rgb(from var(--v2-diff-added) r g b / 0.15),
+      rgb(from var(--v2-diff-added) r g b / 0.2)
+    )
+  );
   --diffs-selection-base: var(--v2-state-bg-decision);
   --diffs-selection-border: var(--v2-state-border-decision);
   --diffs-selection-number-fg: var(--v2-text-text-base);
@@ -107,11 +119,6 @@ const unsafeCSS = `
 [data-diff] [data-column-number][data-line-type='change-addition'][data-selected-line],
 [data-diff] [data-column-number][data-line-type='change-deletion'][data-selected-line] {
   color: var(--diffs-selection-number-fg);
-}
-
-/* The deletion word-diff emphasis is stronger than additions; soften it while selected so the selection highlight reads consistently. */
-[data-diff] [data-line][data-line-type='change-deletion'][data-selected-line] {
-  --diffs-bg-deletion-emphasis: var(--v2-diff-highlight-removed);
 }
 
 [data-diff-header],

@@ -70,6 +70,20 @@ describe("TUI transcript blocks", () => {
     expect(v2ToolRowDuration({ created: 1_000, ran: 1_250 }, 2_500)).toBe("1.3s")
   })
 
+  test("routes shared and direct session spinners through reduced-motion policy", async () => {
+    const [spinner, chrome, prompt] = await Promise.all([
+      Bun.file(`${import.meta.dir}/../../../src/component/spinner.tsx`).text(),
+      Bun.file(`${import.meta.dir}/../../../src/routes/session/chrome.tsx`).text(),
+      Bun.file(`${import.meta.dir}/../../../src/component/prompt/index.tsx`).text(),
+    ])
+
+    expect(spinner).toContain('!reduceTuiMotion(kv.get("animations_enabled", true))')
+    expect(chrome).toContain('<Glyph name={props.activity.type === "waiting" ? "needs-you" : "running"}')
+    expect(chrome).not.toContain("<spinner")
+    expect(prompt).toContain('!reduceTuiMotion(kv.get("animations_enabled", true))')
+    expect(prompt).toContain('reduceTuiMotion(kv.get("animations_enabled", true)) ? "…"')
+  })
+
   test("renders aggregate-first safe rows without secret-prone payloads", async () => {
     const frame = await render(() => (
       <box>

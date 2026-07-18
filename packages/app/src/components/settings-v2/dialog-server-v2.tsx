@@ -56,8 +56,11 @@ export const DialogServerV2: Component<{
       <div class="flex w-full min-w-0 flex-1 flex-col px-4">
         <div class="flex w-full min-w-0 flex-col gap-6">
           <div class="flex w-full min-w-0 flex-col gap-2">
-            <label class="settings-v2-server-dialog-label">{language.t("dialog.server.add.url")}</label>
+            <label for="settings-server-url" class="settings-v2-server-dialog-label">
+              {language.t("dialog.server.add.url")}
+            </label>
             <TextInputV2
+              id="settings-server-url"
               type="text"
               appearance="large"
               class="!w-full self-stretch"
@@ -74,8 +77,11 @@ export const DialogServerV2: Component<{
             </Show>
           </div>
           <div class="flex w-full min-w-0 flex-col gap-2">
-            <label class="settings-v2-server-dialog-label">{language.t("dialog.server.add.name")}</label>
+            <label for="settings-server-name" class="settings-v2-server-dialog-label">
+              {language.t("dialog.server.add.name")}
+            </label>
             <TextInputV2
+              id="settings-server-name"
               type="text"
               appearance="large"
               class="!w-full self-stretch"
@@ -88,8 +94,11 @@ export const DialogServerV2: Component<{
           </div>
           <div class="grid w-full min-w-0 grid-cols-2 gap-4">
             <div class="flex min-w-0 flex-col gap-2">
-              <label class="settings-v2-server-dialog-label">{language.t("dialog.server.add.username")}</label>
+              <label for="settings-server-username" class="settings-v2-server-dialog-label">
+                {language.t("dialog.server.add.username")}
+              </label>
               <TextInputV2
+                id="settings-server-username"
                 type="text"
                 appearance="large"
                 class="!w-full self-stretch"
@@ -101,8 +110,11 @@ export const DialogServerV2: Component<{
               />
             </div>
             <div class="flex min-w-0 flex-col gap-2">
-              <label class="settings-v2-server-dialog-label">{language.t("dialog.server.add.password")}</label>
+              <label for="settings-server-password" class="settings-v2-server-dialog-label">
+                {language.t("dialog.server.add.password")}
+              </label>
               <TextInputV2
+                id="settings-server-password"
                 type="password"
                 appearance="large"
                 class="!w-full self-stretch"

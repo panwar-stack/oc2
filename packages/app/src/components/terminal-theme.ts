@@ -73,6 +73,10 @@ export function observeTerminalTheme(element: Element, onChange: VoidFunction) {
   return () => observer.disconnect()
 }
 
+export function terminalCursorBlink(prefersReducedMotion: boolean) {
+  return !prefersReducedMotion
+}
+
 export function terminalThemeSequence(theme: Required<ITheme>) {
   const color = (value: string) => {
     const hex = value.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i)

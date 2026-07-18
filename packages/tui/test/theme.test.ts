@@ -272,6 +272,61 @@ test("generateSystem maps semantic hues to ANSI slots", () => {
   expect(theme.warning.toInts()).toEqual([51, 51, 51, 255])
 })
 
+test("generateSystem uses canonical ANSI-256 neutral spreads", () => {
+  const darkPalette = Array<string | null>(256).fill(null)
+  darkPalette[0] = "#000000"
+  darkPalette[7] = "#ffffff"
+  darkPalette[234] = "#111111"
+  darkPalette[235] = "#222222"
+  darkPalette[236] = "#333333"
+  darkPalette[237] = "#444444"
+  const dark = resolveTheme(generateSystem(terminalColors("#010101", darkPalette), "dark"), "dark")
+  expect(dark.backgroundPanel.toInts()).toEqual([17, 17, 17, 255])
+  expect(dark.backgroundElement.toInts()).toEqual([34, 34, 34, 255])
+  expect(dark.backgroundMenu.toInts()).toEqual([51, 51, 51, 255])
+  expect(dark.borderSubtle.toInts()).toEqual([68, 68, 68, 255])
+  expect(dark.border.toInts()).toEqual([68, 68, 68, 255])
+
+  const lightPalette = Array<string | null>(256).fill(null)
+  lightPalette[0] = "#000000"
+  lightPalette[7] = "#ffffff"
+  lightPalette[250] = "#aaaaaa"
+  lightPalette[251] = "#bbbbbb"
+  lightPalette[253] = "#cccccc"
+  lightPalette[254] = "#dddddd"
+  lightPalette[255] = "#eeeeee"
+  const light = resolveTheme(generateSystem(terminalColors("#fefefe", lightPalette), "light"), "light")
+  expect(light.backgroundPanel.toInts()).toEqual([238, 238, 238, 255])
+  expect(light.backgroundElement.toInts()).toEqual([221, 221, 221, 255])
+  expect(light.backgroundMenu.toInts()).toEqual([204, 204, 204, 255])
+  expect(light.borderSubtle.toInts()).toEqual([187, 187, 187, 255])
+  expect(light.border.toInts()).toEqual([170, 170, 170, 255])
+})
+
+test("generateSystem falls back to canonical xterm neutrals when the 256 palette is partial", () => {
+  const palette = Array<string | null>(16).fill(null)
+  palette[0] = "#000000"
+  palette[7] = "#ffffff"
+
+  const dark = resolveTheme(generateSystem(terminalColors("#010101", palette), "dark"), "dark")
+  expect(dark.backgroundPanel.toInts()).toEqual([28, 28, 28, 255])
+  expect(dark.backgroundElement.toInts()).toEqual([38, 38, 38, 255])
+  expect(dark.backgroundMenu.toInts()).toEqual([48, 48, 48, 255])
+  expect(dark.border.toInts()).toEqual([58, 58, 58, 255])
+
+  const light = resolveTheme(generateSystem(terminalColors("#fefefe", palette), "light"), "light")
+  expect(light.backgroundPanel.toInts()).toEqual([238, 238, 238, 255])
+  expect(light.backgroundElement.toInts()).toEqual([228, 228, 228, 255])
+  expect(light.backgroundMenu.toInts()).toEqual([218, 218, 218, 255])
+  expect(light.borderSubtle.toInts()).toEqual([198, 198, 198, 255])
+  expect(light.border.toInts()).toEqual([188, 188, 188, 255])
+})
+
+test("system theme requests the full ANSI-256 palette", async () => {
+  const context = await Bun.file(`${import.meta.dir}/../src/context/theme.tsx`).text()
+  expect(context).toContain("getPalette({ size: 256 })")
+})
+
 test("agent colors are deterministic by name and configured colors take precedence", () => {
   const theme = resolveTheme(DEFAULT_THEMES.oc2, "dark")
   const names = Array.from({ length: 64 }, (_, index) => `agent-${index}`)

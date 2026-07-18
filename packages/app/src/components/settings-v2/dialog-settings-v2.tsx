@@ -16,7 +16,12 @@ export const DialogSettings: Component = () => {
   const platform = usePlatform()
 
   return (
-    <Dialog size="x-large" variant="settings" class="settings-v2-dialog">
+    <Dialog
+      size="x-large"
+      variant="settings"
+      class="settings-v2-dialog"
+      accessibleTitle={language.t("command.category.settings")}
+    >
       <TabsV2 orientation="vertical" variant="settings" defaultValue="general" class="settings-v2">
         <TabsV2.List>
           <div class="flex flex-col justify-between h-full w-full">

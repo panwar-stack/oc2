@@ -431,8 +431,6 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
     return ansiToRgba(i)
   }
 
-  // Generate gray scale based on terminal background
-  const grays = generateGrayScale(bg, isDark)
   const textMuted = generateMutedTextColor(bg, isDark)
 
   // ANSI color references
@@ -448,11 +446,27 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
     redBright: col(9),
     greenBright: col(10),
   }
+  const neutral = isDark
+    ? {
+        panel: col(234),
+        element: col(235),
+        menu: col(236),
+        borderSubtle: col(237),
+        // The canonical dark spread publishes no separate strong-border slot.
+        border: col(237),
+      }
+    : {
+        panel: col(255),
+        element: col(254),
+        menu: col(253),
+        borderSubtle: col(251),
+        border: col(250),
+      }
 
   const diffAlpha = isDark ? 0.22 : 0.14
   const diffAddedBg = tint(bg, ansiColors.green, diffAlpha)
   const diffRemovedBg = tint(bg, ansiColors.red, diffAlpha)
-  const diffContextBg = grays[2]
+  const diffContextBg = neutral.panel
   const diffAddedLineNumberBg = tint(diffContextBg, ansiColors.green, diffAlpha)
   const diffRemovedLineNumberBg = tint(diffContextBg, ansiColors.red, diffAlpha)
   const diffLineNumber = textMuted
@@ -477,20 +491,20 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
 
       // Background colors - use transparent to respect terminal transparency
       background: transparent,
-      backgroundPanel: grays[2],
-      backgroundElement: grays[3],
-      backgroundMenu: grays[3],
+      backgroundPanel: neutral.panel,
+      backgroundElement: neutral.element,
+      backgroundMenu: neutral.menu,
 
       // Border colors
-      borderSubtle: grays[6],
-      border: grays[7],
+      borderSubtle: neutral.borderSubtle,
+      border: neutral.border,
       borderActive: ansiColors.blue,
 
       // Diff colors
       diffAdded: ansiColors.green,
       diffRemoved: ansiColors.red,
-      diffContext: grays[7],
-      diffHunkHeader: grays[7],
+      diffContext: neutral.border,
+      diffHunkHeader: neutral.border,
       diffHighlightAdded: ansiColors.greenBright,
       diffHighlightRemoved: ansiColors.redBright,
       diffAddedBg,
@@ -509,7 +523,7 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
       markdownBlockQuote: ansiColors.yellow,
       markdownEmph: ansiColors.yellow,
       markdownStrong: fg,
-      markdownHorizontalRule: grays[7],
+      markdownHorizontalRule: neutral.border,
       markdownListItem: ansiColors.blue,
       markdownListEnumeration: ansiColors.cyan,
       markdownImage: ansiColors.blue,
@@ -528,60 +542,6 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
       syntaxPunctuation: fg,
     },
   }
-}
-
-function generateGrayScale(bg: RGBA, isDark: boolean): Record<number, RGBA> {
-  const grays: Record<number, RGBA> = {}
-
-  // RGBA stores floats in range 0-1, convert to 0-255
-  const bgR = bg.r * 255
-  const bgG = bg.g * 255
-  const bgB = bg.b * 255
-
-  const luminance = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB
-
-  for (let i = 1; i <= 12; i++) {
-    const factor = i / 12.0
-
-    let grayValue: number
-    let newR: number
-    let newG: number
-    let newB: number
-
-    if (isDark) {
-      if (luminance < 10) {
-        grayValue = Math.floor(factor * 0.4 * 255)
-        newR = grayValue
-        newG = grayValue
-        newB = grayValue
-      } else {
-        const newLum = luminance + (255 - luminance) * factor * 0.4
-
-        const ratio = newLum / luminance
-        newR = Math.min(bgR * ratio, 255)
-        newG = Math.min(bgG * ratio, 255)
-        newB = Math.min(bgB * ratio, 255)
-      }
-    } else {
-      if (luminance > 245) {
-        grayValue = Math.floor(255 - factor * 0.4 * 255)
-        newR = grayValue
-        newG = grayValue
-        newB = grayValue
-      } else {
-        const newLum = luminance * (1 - factor * 0.4)
-
-        const ratio = newLum / luminance
-        newR = Math.max(bgR * ratio, 0)
-        newG = Math.max(bgG * ratio, 0)
-        newB = Math.max(bgB * ratio, 0)
-      }
-    }
-
-    grays[i] = RGBA.fromInts(Math.floor(newR), Math.floor(newG), Math.floor(newB))
-  }
-
-  return grays
 }
 
 function generateMutedTextColor(bg: RGBA, isDark: boolean): RGBA {

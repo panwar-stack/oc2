@@ -2,8 +2,7 @@ import type { SessionStatus } from "@oc2-ai/sdk/v2"
 import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { Locale } from "../../util/locale"
-import { useKV } from "../../context/kv"
-import "opentui-spinner/solid"
+import { Glyph } from "../../component/glyph"
 
 export type SessionContextUsage = { tokens: number; limit?: number }
 
@@ -68,7 +67,6 @@ export function SessionWorkingLine(props: {
   interruptShortcut?: string
 }) {
   const { theme } = useTheme()
-  const kv = useKV()
   const [now, setNow] = createSignal(Date.now())
   createEffect(() => {
     setNow(Date.now())
@@ -98,12 +96,7 @@ export function SessionWorkingLine(props: {
       backgroundColor={theme.backgroundElement}
     >
       <box width={2} flexShrink={0}>
-        <Show
-          when={props.activity.type !== "waiting" && kv.get("animations_enabled", true)}
-          fallback={<text fg={color()}>{props.activity.type === "waiting" ? "▲" : "◐"}</text>}
-        >
-          <spinner frames={["◐", "◑", "◓"]} interval={200} color={color()} />
-        </Show>
+        <Glyph name={props.activity.type === "waiting" ? "needs-you" : "running"} color={color()} />
       </box>
       <text width={labelWidth()} wrapMode="none" fg={color()}>
         <b>{Locale.truncate(label(), labelWidth())}</b>

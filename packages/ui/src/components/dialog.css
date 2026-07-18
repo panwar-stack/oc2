@@ -137,7 +137,7 @@
 
   &[data-variant="confirm"] [data-variant="primary"] {
     background: var(--v2-state-fg-danger);
-    color: var(--v2-text-text-contrast);
+    color: var(--v2-text-text-inverse);
   }
 }
 

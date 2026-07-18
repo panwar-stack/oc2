@@ -18,7 +18,7 @@ const fallbackClass = "size-16 rounded-md bg-surface-base flex items-center just
 const imageClass =
   "size-16 rounded-md object-cover border border-border-base hover:border-border-strong-base transition-colors"
 const removeClass =
-  "absolute -top-1.5 -right-1.5 size-5 rounded-full bg-surface-raised-stronger-non-alpha border border-border-base flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-surface-raised-base-hover"
+  "absolute -top-1.5 -right-1.5 size-6 rounded-full bg-surface-raised-stronger-non-alpha border border-border-base flex items-center justify-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity hover:bg-surface-raised-base-hover"
 const nameClass = "absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/50 rounded-b-md"
 
 export const PromptImageAttachments: Component<PromptImageAttachmentsProps> = (props) => {
@@ -96,7 +96,7 @@ export const PromptImageAttachments: Component<PromptImageAttachmentsProps> = (p
                 </button>
                 <button
                   type="button"
-                  class="flex size-5 shrink-0 items-center justify-center rounded text-v2-text-text-faint hover:bg-v2-background-bg-layer-03 hover:text-v2-text-text-base focus-visible:outline focus-visible:outline-1 focus-visible:outline-v2-border-border-focus"
+                  class="flex size-6 shrink-0 items-center justify-center rounded text-v2-text-text-faint hover:bg-v2-background-bg-layer-03 hover:text-v2-text-text-base focus-visible:outline focus-visible:outline-1 focus-visible:outline-v2-border-border-focus"
                   onClick={() => props.onRemove(attachment.id)}
                   aria-label={`${props.removeLabel}: ${attachment.filename}`}
                 >

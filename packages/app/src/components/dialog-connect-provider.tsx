@@ -575,6 +575,11 @@ export function DialogConnectProvider(props: {
           aria-label={language.t("common.goBack")}
         />
       }
+      accessibleTitle={
+        props.provider === "anthropic" && method()?.label?.toLowerCase().includes("max")
+          ? language.t("provider.connect.title.anthropicProMax")
+          : language.t("provider.connect.title", { provider: provider().name })
+      }
     >
       <div class="flex flex-col gap-6 px-2.5 pb-3">
         <div class="px-2.5 flex gap-4 items-center">
