@@ -13,7 +13,7 @@ import { getDirectory, getFilename } from "@oc2-ai/core/util/path"
 import { createEffect, createMemo, createSignal, For, on, ParentProps, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
-import { AssistantParts, Message, MessageDivider, PART_MAPPING, type UserActions } from "./message-part"
+import { AssistantParts, Message, MessageDivider, PART_MAPPING, TurnFooter, type UserActions } from "./message-part"
 import { Card } from "./card"
 import { Accordion } from "./accordion"
 import { StickyAccordionHeader } from "./sticky-accordion-header"
@@ -158,6 +158,7 @@ export function SessionTurn(
     showReasoningSummaries?: boolean
     shellToolDefaultOpen?: boolean
     editToolDefaultOpen?: boolean
+    redesigned?: boolean
     active?: boolean
     status?: SessionStatus
     onUserInteracted?: () => void
@@ -398,7 +399,7 @@ export function SessionTurn(
               class={props.classes?.container}
             >
               <div data-slot="session-turn-message-content" aria-live="off">
-                <Message message={message()!} parts={parts()} actions={props.actions} />
+                <Message message={message()!} parts={parts()} actions={props.actions} redesigned={props.redesigned} />
               </div>
               <Show when={divider()}>
                 <div data-slot="session-turn-compaction">
@@ -415,6 +416,7 @@ export function SessionTurn(
                     showReasoningSummaries={showReasoningSummaries()}
                     shellToolDefaultOpen={props.shellToolDefaultOpen}
                     editToolDefaultOpen={props.editToolDefaultOpen}
+                    redesigned={props.redesigned}
                   />
                 </div>
               </Show>
@@ -529,6 +531,9 @@ export function SessionTurn(
                 <Card variant="error" class="error-card">
                   {errorText()}
                 </Card>
+              </Show>
+              <Show when={props.redesigned && assistantMessages().at(-1)}>
+                {(message) => <TurnFooter message={message()} durationMs={turnDurationMs()} />}
               </Show>
             </div>
           </Show>

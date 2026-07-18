@@ -59,6 +59,10 @@ import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
 import { ExaOutput } from "./exa-output"
+import { KeyHintV2 } from "../v2/components/key-hint-v2"
+import { PillV2 } from "../v2/components/pill-v2"
+import { StatusGlyph } from "../v2/components/status-glyph"
+import { toolAggregate, toolDuration, toolSummary } from "./tool-summary"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -162,6 +166,7 @@ export interface MessageProps {
   actions?: UserActions
   showAssistantCopyPartID?: string | null
   showReasoningSummaries?: boolean
+  redesigned?: boolean
 }
 
 export type SessionAction = (input: { sessionID: string; messageID: string }) => Promise<void> | void
@@ -182,6 +187,7 @@ export interface MessagePartProps {
   virtualizeDiff?: boolean
   showAssistantCopyPartID?: string | null
   turnDurationMs?: number
+  redesigned?: boolean
 }
 
 export type PartComponent = Component<MessagePartProps>
@@ -622,6 +628,7 @@ export function AssistantParts(props: {
   showReasoningSummaries?: boolean
   shellToolDefaultOpen?: boolean
   editToolDefaultOpen?: boolean
+  redesigned?: boolean
 }) {
   const data = useData()
   const emptyParts: PartType[] = []
@@ -676,7 +683,7 @@ export function AssistantParts(props: {
 
                 return (
                   <Show when={parts().length > 0}>
-                    <ContextToolGroup parts={parts()} busy={busy()} />
+                    <ContextToolGroup parts={parts()} busy={busy()} redesigned={props.redesigned} />
                   </Show>
                 )
               })()}
@@ -702,7 +709,12 @@ export function AssistantParts(props: {
                         message={message()!}
                         showAssistantCopyPartID={props.showAssistantCopyPartID}
                         turnDurationMs={props.turnDurationMs}
-                        defaultOpen={partDefaultOpen(item()!, props.shellToolDefaultOpen, props.editToolDefaultOpen)}
+                        defaultOpen={
+                          props.redesigned
+                            ? false
+                            : partDefaultOpen(item()!, props.shellToolDefaultOpen, props.editToolDefaultOpen)
+                        }
+                        redesigned={props.redesigned}
                       />
                     </Show>
                   </Show>
@@ -733,6 +745,14 @@ function contextToolDetail(part: ToolPart): string | undefined {
   const description = part.state.input?.description
   if (typeof description === "string") return description
   return undefined
+}
+
+function toolPartError(part: ToolPart) {
+  return part.state.status === "error" ? part.state.error : undefined
+}
+
+function toolPartMetadata(part: ToolPart) {
+  return "metadata" in part.state ? part.state.metadata : undefined
 }
 
 function contextToolTrigger(part: ToolPart, i18n: ReturnType<typeof useI18n>) {
@@ -794,6 +814,17 @@ function contextToolSummary(parts: ToolPart[]) {
   return { read, search, list }
 }
 
+function useElapsedNow(active: () => boolean) {
+  const [now, setNow] = createSignal(Date.now())
+  createEffect(() => {
+    if (!active()) return
+    setNow(Date.now())
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000)
+    onCleanup(() => window.clearInterval(interval))
+  })
+  return now
+}
+
 export function registerPartComponent(type: string, component: PartComponent) {
   PART_MAPPING[type] = component
 }
@@ -803,7 +834,12 @@ export function Message(props: MessageProps) {
     <Switch>
       <Match when={props.message.role === "user" && props.message}>
         {(userMessage) => (
-          <UserMessageDisplay message={userMessage() as UserMessage} parts={props.parts} actions={props.actions} />
+          <UserMessageDisplay
+            message={userMessage() as UserMessage}
+            parts={props.parts}
+            actions={props.actions}
+            redesigned={props.redesigned}
+          />
         )}
       </Match>
       <Match when={props.message.role === "assistant" && props.message}>
@@ -813,6 +849,7 @@ export function Message(props: MessageProps) {
             parts={props.parts}
             showAssistantCopyPartID={props.showAssistantCopyPartID}
             showReasoningSummaries={props.showReasoningSummaries}
+            redesigned={props.redesigned}
           />
         )}
       </Match>
@@ -825,6 +862,7 @@ export function AssistantMessageDisplay(props: {
   parts: PartType[]
   showAssistantCopyPartID?: string | null
   showReasoningSummaries?: boolean
+  redesigned?: boolean
 }) {
   const emptyTools: ToolPart[] = []
   const part = createMemo(() => index(props.parts))
@@ -865,7 +903,7 @@ export function AssistantMessageDisplay(props: {
 
                 return (
                   <Show when={parts().length > 0}>
-                    <ContextToolGroup parts={parts()} />
+                    <ContextToolGroup parts={parts()} redesigned={props.redesigned} />
                   </Show>
                 )
               })()}
@@ -884,6 +922,7 @@ export function AssistantMessageDisplay(props: {
                       part={item()!}
                       message={props.message}
                       showAssistantCopyPartID={props.showAssistantCopyPartID}
+                      redesigned={props.redesigned}
                     />
                   </Show>
                 )
@@ -896,7 +935,12 @@ export function AssistantMessageDisplay(props: {
   )
 }
 
-export function ContextToolGroup(props: { parts: ToolPart[]; busy?: boolean; onSizeChange?: () => void }) {
+export function ContextToolGroup(props: {
+  parts: ToolPart[]
+  busy?: boolean
+  redesigned?: boolean
+  onSizeChange?: () => void
+}) {
   const i18n = useI18n()
   const [open, setOpen] = createSignal(false)
   const pending = createMemo(
@@ -904,107 +948,170 @@ export function ContextToolGroup(props: { parts: ToolPart[]; busy?: boolean; onS
       !!props.busy || props.parts.some((part) => part.state.status === "pending" || part.state.status === "running"),
   )
   const summary = createMemo(() => contextToolSummary(props.parts))
+  const aggregate = createMemo(() =>
+    toolAggregate(
+      props.parts
+        .map((part) => ({
+          status: part.state.status,
+          error: toolPartError(part),
+        }))
+        .concat(props.busy ? [{ status: "running", error: undefined }] : []),
+    ),
+  )
   const handleOpenChange = (value: boolean) => {
     setOpen(value)
     props.onSizeChange?.()
   }
 
   return (
-    <Collapsible
-      open={open()}
-      onOpenChange={handleOpenChange}
-      variant="ghost"
-      class="tool-collapsible"
-      data-timeline-part-ids={props.parts.map((part) => part.id).join(",")}
+    <div
+      role={props.redesigned ? "region" : undefined}
+      aria-label={props.redesigned ? `Context, ${props.parts.length} tool calls, ${aggregate().label}` : undefined}
     >
-      <Collapsible.Trigger>
-        <div data-component="context-tool-group-trigger">
-          <span
-            data-slot="context-tool-group-title"
-            class="min-w-0 flex items-center gap-2 text-14-medium text-text-strong"
-          >
-            <span data-slot="context-tool-group-label" class="shrink-0">
-              <ToolStatusTitle
-                active={pending()}
-                activeText={i18n.t("ui.sessionTurn.status.gatheringContext")}
-                doneText={i18n.t("ui.sessionTurn.status.gatheredContext")}
-                split={false}
-              />
-            </span>
-            <span
-              data-slot="context-tool-group-summary"
-              class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-normal text-text-base"
+      <Collapsible
+        open={open()}
+        onOpenChange={handleOpenChange}
+        variant="ghost"
+        class="tool-collapsible"
+        data-timeline-part-ids={props.parts.map((part) => part.id).join(",")}
+      >
+        <Collapsible.Trigger
+          aria-keyshortcuts={props.redesigned ? "Control+E" : undefined}
+          onKeyDown={(event: KeyboardEvent) => {
+            if (!props.redesigned || !event.ctrlKey || event.key.toLowerCase() !== "e") return
+            event.preventDefault()
+            event.stopPropagation()
+            handleOpenChange(!open())
+          }}
+        >
+          <div data-component="context-tool-group-trigger" data-redesigned={props.redesigned ? "true" : undefined}>
+            <Show
+              when={props.redesigned}
+              fallback={
+                <span
+                  data-slot="context-tool-group-title"
+                  class="min-w-0 flex items-center gap-2 text-14-medium text-text-strong"
+                >
+                  <span data-slot="context-tool-group-label" class="shrink-0">
+                    <ToolStatusTitle
+                      active={pending()}
+                      activeText={i18n.t("ui.sessionTurn.status.gatheringContext")}
+                      doneText={i18n.t("ui.sessionTurn.status.gatheredContext")}
+                      split={false}
+                    />
+                  </span>
+                  <span
+                    data-slot="context-tool-group-summary"
+                    class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-normal text-text-base"
+                  >
+                    <AnimatedCountList
+                      items={[
+                        {
+                          key: "read",
+                          count: summary().read,
+                          one: i18n.t("ui.messagePart.context.read.one"),
+                          other: i18n.t("ui.messagePart.context.read.other"),
+                        },
+                        {
+                          key: "search",
+                          count: summary().search,
+                          one: i18n.t("ui.messagePart.context.search.one"),
+                          other: i18n.t("ui.messagePart.context.search.other"),
+                        },
+                        {
+                          key: "list",
+                          count: summary().list,
+                          one: i18n.t("ui.messagePart.context.list.one"),
+                          other: i18n.t("ui.messagePart.context.list.other"),
+                        },
+                      ]}
+                      fallback=""
+                    />
+                  </span>
+                </span>
+              }
             >
-              <AnimatedCountList
-                items={[
-                  {
-                    key: "read",
-                    count: summary().read,
-                    one: i18n.t("ui.messagePart.context.read.one"),
-                    other: i18n.t("ui.messagePart.context.read.other"),
-                  },
-                  {
-                    key: "search",
-                    count: summary().search,
-                    one: i18n.t("ui.messagePart.context.search.one"),
-                    other: i18n.t("ui.messagePart.context.search.other"),
-                  },
-                  {
-                    key: "list",
-                    count: summary().list,
-                    one: i18n.t("ui.messagePart.context.list.one"),
-                    other: i18n.t("ui.messagePart.context.list.other"),
-                  },
-                ]}
-                fallback=""
-              />
-            </span>
-          </span>
-          <Collapsible.Arrow />
-        </div>
-      </Collapsible.Trigger>
-      <Collapsible.Content>
-        <div data-component="context-tool-group-list">
-          <Index each={props.parts}>
-            {(partAccessor) => {
-              const trigger = createMemo(() => contextToolTrigger(partAccessor(), i18n))
-              const running = createMemo(
-                () => partAccessor().state.status === "pending" || partAccessor().state.status === "running",
-              )
-              return (
-                <div data-slot="context-tool-group-item">
-                  <div data-component="tool-trigger">
-                    <div data-slot="basic-tool-tool-trigger-content">
-                      <div data-slot="basic-tool-tool-info">
-                        <div data-slot="basic-tool-tool-info-structured">
-                          <div data-slot="basic-tool-tool-info-main">
-                            <span data-slot="basic-tool-tool-title">
-                              <TextShimmer text={trigger().title} active={running()} />
-                            </span>
-                            <Show when={!running() && trigger().subtitle}>
-                              <span data-slot="basic-tool-tool-subtitle">{trigger().subtitle}</span>
-                            </Show>
-                            <Show when={!running() && trigger().args?.length}>
-                              <For each={trigger().args}>
-                                {(arg) => <span data-slot="basic-tool-tool-arg">{arg}</span>}
-                              </For>
-                            </Show>
+              <span data-slot="context-tool-group-heading">
+                <StatusGlyph name="tool-group" label="Tool group" />
+                <strong>Context</strong>
+                <span>{props.parts.length} tool calls</span>
+                <PillV2 variant={aggregate().tone} glyph={aggregate().glyph}>
+                  {aggregate().label}
+                </PillV2>
+              </span>
+            </Show>
+            <Collapsible.Arrow />
+          </div>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          <div data-component="context-tool-group-list">
+            <Index each={props.parts}>
+              {(partAccessor) => {
+                const trigger = createMemo(() => contextToolTrigger(partAccessor(), i18n))
+                const running = createMemo(
+                  () => partAccessor().state.status === "pending" || partAccessor().state.status === "running",
+                )
+                const durationActive = createMemo(() => Boolean(props.redesigned && running()))
+                const now = useElapsedNow(durationActive)
+                const error = createMemo(() => toolPartError(partAccessor()))
+                return (
+                  <div data-slot="context-tool-group-item">
+                    <Show
+                      when={props.redesigned}
+                      fallback={
+                        <div data-component="tool-trigger">
+                          <div data-slot="basic-tool-tool-trigger-content">
+                            <div data-slot="basic-tool-tool-info">
+                              <div data-slot="basic-tool-tool-info-structured">
+                                <div data-slot="basic-tool-tool-info-main">
+                                  <span data-slot="basic-tool-tool-title">
+                                    <TextShimmer text={trigger().title} active={running()} />
+                                  </span>
+                                  <Show when={!running() && trigger().subtitle}>
+                                    <span data-slot="basic-tool-tool-subtitle">{trigger().subtitle}</span>
+                                  </Show>
+                                  <Show when={!running() && trigger().args?.length}>
+                                    <For each={trigger().args}>
+                                      {(arg) => <span data-slot="basic-tool-tool-arg">{arg}</span>}
+                                    </For>
+                                  </Show>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
+                      }
+                    >
+                      <BasicTool
+                        icon="mcp"
+                        redesigned
+                        tool={partAccessor().tool}
+                        name={trigger().title}
+                        input={partAccessor().state.input}
+                        metadata={toolPartMetadata(partAccessor())}
+                        status={partAccessor().state.status}
+                        duration={toolDuration(partAccessor().state, now())}
+                        error={error()}
+                        trigger={{ title: trigger().title }}
+                      />
+                    </Show>
                   </div>
-                </div>
-              )
-            }}
-          </Index>
-        </div>
-      </Collapsible.Content>
-    </Collapsible>
+                )
+              }}
+            </Index>
+          </div>
+        </Collapsible.Content>
+      </Collapsible>
+    </div>
   )
 }
 
-export function UserMessageDisplay(props: { message: UserMessage; parts: PartType[]; actions?: UserActions }) {
+export function UserMessageDisplay(props: {
+  message: UserMessage
+  parts: PartType[]
+  actions?: UserActions
+  redesigned?: boolean
+}) {
   const data = useData()
   const dialog = useDialog()
   const i18n = useI18n()
@@ -1045,12 +1152,17 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
   })
 
   const metaHead = createMemo(() => {
+    if (props.redesigned) return "you"
     const agent = props.message.agent
     const items = [agent ? agent[0]?.toUpperCase() + agent.slice(1) : "", model()]
     return items.filter((x) => !!x).join("\u00A0\u00B7\u00A0")
   })
 
   const metaTail = stamp
+  const attachmentMeta = createMemo(() => {
+    if (!props.redesigned || files().length === 0) return ""
+    return `▤ ${files().length} ${files().length === 1 ? "file" : "files"} attached`
+  })
 
   const openImagePreview = (url: string, alt?: string) => {
     dialog.show(() => <ImagePreview src={url} alt={alt} />)
@@ -1080,7 +1192,13 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
   }
 
   return (
-    <div data-component="user-message" data-timeline-part-id={textPart()?.id}>
+    <Dynamic
+      component={props.redesigned ? "article" : "div"}
+      data-component="user-message"
+      data-redesigned={props.redesigned ? "true" : undefined}
+      data-timeline-part-id={textPart()?.id}
+      aria-label={props.redesigned ? "Your message" : undefined}
+    >
       <Show when={attachments().length > 0}>
         <div data-slot="user-message-attachments">
           <For each={attachments()}>
@@ -1140,6 +1258,12 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
                     {metaTail()}
                   </span>
                 </Show>
+                <Show when={attachmentMeta()}>
+                  <span data-slot="user-message-meta-tail" class="text-12-regular text-text-weak cursor-default">
+                    {"\u00A0\u00B7\u00A0"}
+                    {attachmentMeta()}
+                  </span>
+                </Show>
               </span>
             </Show>
             <Show when={props.actions?.revert}>
@@ -1178,7 +1302,7 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
           </div>
         </>
       </Show>
-    </div>
+    </Dynamic>
   )
 }
 
@@ -1237,6 +1361,7 @@ export function Part(props: MessagePartProps) {
         virtualizeDiff={props.virtualizeDiff}
         showAssistantCopyPartID={props.showAssistantCopyPartID}
         turnDurationMs={props.turnDurationMs}
+        redesigned={props.redesigned}
       />
     </Show>
   )
@@ -1257,6 +1382,10 @@ export interface ToolProps {
   virtualizeDiff?: boolean
   forceOpen?: boolean
   locked?: boolean
+  name?: string
+  redesigned?: boolean
+  duration?: string
+  error?: string
 }
 
 export type ToolComponent = Component<ToolProps>
@@ -1352,12 +1481,36 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   })
 
   const render = createMemo(() => ToolRegistry.render(part().tool) ?? GenericTool)
+  const info = createMemo(() => getToolInfo(part().tool, input(), partMetadata()))
+  const active = createMemo(() =>
+    Boolean(props.redesigned && (part().state.status === "pending" || part().state.status === "running")),
+  )
+  const now = useElapsedNow(active)
+  const duration = createMemo(() => toolDuration(part().state, now()))
+  const error = createMemo(() => toolPartError(part()))
+  const aggregate = createMemo(() => toolAggregate([{ status: part().state.status, error: error() }]))
   const controlledOpen = () => (props.onToolOpenChange ? (props.toolOpen ?? props.defaultOpen) : undefined)
   const handleToolOpenChange = (open: boolean) => props.onToolOpenChange?.(open)
 
   return (
     <Show when={!hideQuestion()}>
-      <div data-component="tool-part-wrapper" data-timeline-part-id={part().id}>
+      <div
+        data-component="tool-part-wrapper"
+        data-redesigned={props.redesigned ? "true" : undefined}
+        data-timeline-part-id={part().id}
+        role={props.redesigned ? "region" : undefined}
+        aria-label={props.redesigned ? `${info().title}, 1 tool call, ${aggregate().label}` : undefined}
+      >
+        <Show when={props.redesigned}>
+          <div data-component="tool-call-group-header">
+            <StatusGlyph name="tool-group" label="Tool group" />
+            <strong>{info().title}</strong>
+            <span>1 tool call</span>
+            <PillV2 variant={aggregate().tone} glyph={aggregate().glyph}>
+              {aggregate().label}
+            </PillV2>
+          </div>
+        </Show>
         <Switch>
           <Match when={part().state.status === "error" && (part().state as any).error}>
             {(error) => {
@@ -1372,16 +1525,37 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
                 )
               }
               return (
-                <ToolErrorCard
-                  tool={part().tool}
-                  error={error()}
-                  title={part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider) : undefined}
-                  defaultOpen={props.defaultOpen}
-                  open={controlledOpen()}
-                  onOpenChange={props.onToolOpenChange ? handleToolOpenChange : undefined}
-                  subtitle={taskSubtitle()}
-                  href={taskHref()}
-                />
+                <Show
+                  when={props.redesigned}
+                  fallback={
+                    <ToolErrorCard
+                      tool={part().tool}
+                      error={error()}
+                      title={part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider) : undefined}
+                      defaultOpen={props.defaultOpen}
+                      open={controlledOpen()}
+                      onOpenChange={props.onToolOpenChange ? handleToolOpenChange : undefined}
+                      subtitle={taskSubtitle()}
+                      href={taskHref()}
+                    />
+                  }
+                >
+                  <BasicTool
+                    icon="mcp"
+                    redesigned
+                    tool={part().tool}
+                    name={info().title}
+                    input={input()}
+                    metadata={partMetadata()}
+                    status={part().state.status}
+                    duration={duration()}
+                    error={error()}
+                    defaultOpen={props.defaultOpen}
+                    open={controlledOpen()}
+                    onOpenChange={props.onToolOpenChange ? handleToolOpenChange : undefined}
+                    trigger={{ title: info().title }}
+                  />
+                </Show>
               )
             }}
           </Match>
@@ -1395,6 +1569,9 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
               // @ts-expect-error
               output={part().state.output}
               status={part().state.status}
+              name={info().title}
+              redesigned={props.redesigned}
+              duration={duration()}
               hideDetails={props.hideDetails}
               defaultOpen={props.defaultOpen}
               open={controlledOpen()}
@@ -1428,6 +1605,55 @@ PART_MAPPING["compaction"] = function CompactionPartDisplay() {
   return <MessageDivider label={i18n.t("ui.messagePart.compaction")} />
 }
 
+function formatDuration(ms: number, i18n: ReturnType<typeof useI18n>, numfmt: Intl.NumberFormat) {
+  const total = Math.round(ms / 1000)
+  if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt.format(total) })
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return i18n.t("ui.message.duration.minutesSeconds", {
+    minutes: numfmt.format(minutes),
+    seconds: numfmt.format(seconds),
+  })
+}
+
+export function TurnFooter(props: { message: AssistantMessage; durationMs?: number }) {
+  const data = useData()
+  const i18n = useI18n()
+  const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
+  const model = createMemo(() => {
+    const match = data.store.provider?.all?.get(props.message.providerID)
+    return match?.models?.[props.message.modelID]?.name ?? props.message.modelID
+  })
+  const duration = createMemo(() => {
+    const completed = props.message.time.completed
+    const ms =
+      typeof props.durationMs === "number"
+        ? props.durationMs
+        : typeof completed === "number"
+          ? completed - props.message.time.created
+          : undefined
+    if (ms === undefined || ms < 0) return ""
+    return formatDuration(ms, i18n, numfmt())
+  })
+  const tokens = createMemo(() => {
+    const usage = props.message.tokens
+    const total = usage.total ?? usage.input + usage.output + usage.reasoning + usage.cache.read + usage.cache.write
+    return total > 0 ? `${numfmt().format(total)} tokens` : ""
+  })
+  const meta = createMemo(() => {
+    const agent = props.message.agent || props.message.mode
+    return [agent ? agent[0]?.toUpperCase() + agent.slice(1) : "", model(), duration(), tokens()]
+      .filter(Boolean)
+      .join(" · ")
+  })
+
+  return (
+    <footer data-component="turn-footer" aria-label="Turn details">
+      {meta()}
+    </footer>
+  )
+}
+
 PART_MAPPING["text"] = function TextPartDisplay(props) {
   const data = useData()
   const i18n = useI18n()
@@ -1456,14 +1682,7 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
           ? completed - message.time.created
           : -1
     if (!(ms >= 0)) return ""
-    const total = Math.round(ms / 1000)
-    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt().format(total) })
-    const minutes = Math.floor(total / 60)
-    const seconds = total % 60
-    return i18n.t("ui.message.duration.minutesSeconds", {
-      minutes: numfmt().format(minutes),
-      seconds: numfmt().format(seconds),
-    })
+    return formatDuration(ms, i18n, numfmt())
   })
 
   const meta = createMemo(() => {
@@ -1529,7 +1748,7 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
                 aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
               />
             </Tooltip>
-            <Show when={meta()}>
+            <Show when={!props.redesigned && meta()}>
               <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
                 {meta()}
               </span>
@@ -1544,18 +1763,84 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
 PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
   const data = useData()
   const part = () => props.part as ReasoningPart
+  const [view, setView] = createStore({ open: false })
   const streaming = createMemo(
     () => props.message.role === "assistant" && typeof (props.message as AssistantMessage).time.completed !== "number",
   )
   const text = () => readPartText(data.store.part_text_accum_delta, part())
+  const summary = createMemo(() => {
+    const cleaned = text()
+      .replace(/<!--\s*-->/g, "")
+      .trim()
+    const wrapper = cleaned.match(/^<!--((?:(?!<!--|-->)[\s\S])*)-->$/)
+    const content = (wrapper?.[1] ?? cleaned).trim()
+    const match = content.match(/^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/)
+    if (match) return { title: match[1]!.trim(), body: content.slice(match[0].length).trimEnd() }
+    const title = content
+      .split(/\r?\n/, 1)[0]
+      ?.replace(/^#{1,6}\s+/, "")
+      .replace(/[*_`~]/g, "")
+      .trim()
+    return { title: title || "Reasoning trace", body: content }
+  })
+  const durationActive = createMemo(() => Boolean(props.redesigned && streaming()))
+  const now = useElapsedNow(durationActive)
+  const duration = createMemo(() => {
+    return toolDuration({ time: { start: part().time.start, end: part().time.end } }, now()) ?? ""
+  })
 
   return (
     <Show when={text()}>
-      <div data-component="reasoning-part" data-timeline-part-id={part().id}>
-        <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
-          <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
-        </Show>
-      </div>
+      <Show
+        when={props.redesigned}
+        fallback={
+          <div data-component="reasoning-part" data-timeline-part-id={part().id}>
+            <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
+              <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+            </Show>
+          </div>
+        }
+      >
+        <div
+          data-component="thinking-row"
+          data-open={view.open ? "true" : undefined}
+          data-running={streaming() ? "true" : undefined}
+          data-timeline-part-id={part().id}
+        >
+          <button
+            type="button"
+            data-slot="thinking-row-trigger"
+            aria-expanded={view.open}
+            aria-keyshortcuts="Control+E"
+            aria-label={`Thought: ${summary().title}`}
+            onClick={() => setView("open", !view.open)}
+            onKeyDown={(event) => {
+              if (!event.ctrlKey || event.key.toLowerCase() !== "e") return
+              event.preventDefault()
+              event.stopPropagation()
+              setView("open", !view.open)
+            }}
+          >
+            <Show when={streaming()} fallback={<span data-slot="thinking-row-glyph">◐</span>}>
+              <StatusGlyph name="running" label="Thinking" />
+            </Show>
+            <strong>Thought</strong>
+            <span data-slot="thinking-row-summary">— {summary().title}</span>
+            <Show when={duration()}>{(value) => <span data-slot="thinking-row-duration">{value()}</span>}</Show>
+            <KeyHintV2 shortcut="ctrl+e" label={view.open ? "collapse" : "expand"} decorative />
+          </button>
+          <Show when={view.open && summary().body}>
+            <div data-slot="thinking-row-trace">
+              <Show
+                when={streaming()}
+                fallback={<Markdown text={summary().body} cacheKey={part().id} streaming={false} />}
+              >
+                <PacedMarkdown text={summary().body} cacheKey={part().id} streaming />
+              </Show>
+            </div>
+          </Show>
+        </div>
+      </Show>
     </Show>
   )
 }
@@ -1816,8 +2101,8 @@ ToolRegistry.register({
 
     return (
       <BasicTool
+        {...props}
         icon="task"
-        status={props.status}
         trigger={trigger()}
         hideDetails
         triggerHref={href()}
@@ -2371,6 +2656,6 @@ ToolRegistry.register({
       </div>
     )
 
-    return <BasicTool icon="brain" status={props.status} trigger={trigger()} hideDetails />
+    return <BasicTool {...props} icon="brain" trigger={trigger()} hideDetails />
   },
 })

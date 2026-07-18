@@ -3,9 +3,9 @@
   min-width: 0;
   max-width: 100%;
   overflow-wrap: break-word;
-  color: var(--text-strong);
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-base); /* 14px */
+  color: var(--v2-markdown-text);
+  font-family: var(--v2-font-family-sans);
+  font-size: var(--v2-font-size-body);
   line-height: 160%;
 
   /* Spacing for flow */
@@ -24,7 +24,7 @@
   h5,
   h6 {
     font-size: 14px;
-    color: var(--text-strong);
+    color: var(--v2-markdown-heading);
     font-weight: var(--font-weight-medium);
     margin-top: 0px;
     margin-bottom: 24px;
@@ -34,7 +34,7 @@
   /* Emphasis & Strong: Neutral strong color */
   strong,
   b {
-    color: var(--text-strong);
+    color: var(--v2-markdown-strong);
     font-weight: var(--font-weight-medium);
   }
 
@@ -45,7 +45,7 @@
 
   /* Links */
   a {
-    color: var(--text-interactive-base);
+    color: var(--v2-markdown-link);
     text-decoration: none;
     font-weight: inherit;
   }
@@ -88,8 +88,12 @@
     margin-top: 0.5rem;
   }
 
-  li::marker {
-    color: var(--text-weak);
+  ul li::marker {
+    color: var(--v2-markdown-list-item);
+  }
+
+  ol li::marker {
+    color: var(--v2-markdown-list-enumeration);
   }
 
   /* Nested lists spacing */
@@ -106,10 +110,10 @@
 
   /* Blockquotes */
   blockquote {
-    border-left: 2px solid var(--border-weak-base);
+    border-left: 2px solid var(--v2-markdown-block-quote);
     margin: 1.5rem 0;
     padding-left: 0.5rem;
-    color: var(--text-weak);
+    color: var(--v2-markdown-block-quote);
     font-style: normal;
   }
 
@@ -124,7 +128,8 @@
     font-size: 13px;
     padding: 12px;
     border-radius: 6px;
-    border: 0.5px solid var(--border-weak-base);
+    border: 0.5px solid var(--v2-border-border-base);
+    background: var(--v2-background-bg-layer-01);
   }
 
   [data-component="markdown-code"] {
@@ -149,11 +154,11 @@
 
       max-width: 320px;
       border-radius: var(--radius-sm);
-      background: var(--surface-float-base);
-      color: var(--text-invert-strong);
+      background: var(--v2-background-bg-layer-03);
+      color: var(--v2-text-text-inverse);
       padding: 2px 8px;
-      border: 1px solid var(--border-weak-base, rgba(0, 0, 0, 0.07));
-      box-shadow: var(--shadow-md);
+      border: 1px solid var(--v2-border-border-base);
+      box-shadow: var(--v2-shadow-popover);
 
       pointer-events: none;
       white-space: nowrap;
@@ -177,7 +182,7 @@
 
   [data-slot="markdown-copy-button"][data-variant="secondary"] {
     box-shadow: none;
-    border: 1px solid var(--border-weak-base);
+    border: 1px solid var(--v2-border-border-base);
   }
 
   [data-slot="markdown-copy-button"][data-variant="secondary"] [data-slot="icon-svg"] {
@@ -214,7 +219,7 @@
   :not(pre) > code {
     font-family: var(--font-family-mono);
     font-feature-settings: var(--font-family-mono--font-feature-settings);
-    color: var(--syntax-string);
+    color: var(--v2-markdown-code);
     font-weight: var(--font-weight-medium);
     /* font-size: 13px; */
 
@@ -238,16 +243,16 @@
   th,
   td {
     /* Minimal borders for structure, matching TUI "lines" roughly but keeping it web-clean */
-    border-bottom: 1px solid var(--border-weaker-base);
+    border-bottom: 1px solid var(--v2-border-border-muted);
     padding: 12px;
     text-align: left;
     vertical-align: top;
   }
 
   th {
-    color: var(--text-strong);
+    color: var(--v2-markdown-heading);
     font-weight: var(--font-weight-medium);
-    border-bottom: 1px solid var(--border-weak-base);
+    border-bottom: 1px solid var(--v2-border-border-base);
   }
 
   /* Images */

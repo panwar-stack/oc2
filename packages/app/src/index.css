@@ -54,6 +54,59 @@
     will-change: clip-path;
   }
 
+  [data-component="session-timeline"][data-layout="v2"] {
+    font-family: var(--v2-font-family-mono);
+
+    [data-timeline-row="UserMessage"] {
+      padding-top: var(--v2-space-5);
+    }
+
+    [data-timeline-row="AssistantPart"],
+    [data-timeline-row="Thinking"],
+    [data-timeline-row="DiffSummary"],
+    [data-timeline-row="Error"] {
+      padding-top: var(--v2-space-3);
+    }
+
+    [data-timeline-row="TurnFooter"] {
+      padding-top: var(--v2-space-4);
+      padding-bottom: var(--v2-space-5);
+    }
+
+    [data-slot="session-turn-assistant-content"] {
+      gap: var(--v2-space-3);
+    }
+
+    [data-slot="session-turn-thinking"][data-redesigned="true"] {
+      display: grid;
+      grid-template-columns: auto auto minmax(0, 1fr);
+      align-items: center;
+      gap: var(--v2-space-3);
+      min-height: 28px;
+      margin-top: 0;
+      padding: 0 var(--v2-space-4);
+      overflow: hidden;
+      border: 1px solid var(--v2-state-border-thinking);
+      border-radius: var(--v2-radius-chip);
+      background: var(--v2-state-bg-thinking);
+      color: var(--v2-state-fg-thinking);
+      font-family: var(--v2-font-family-mono);
+      font-size: var(--v2-font-size-small);
+    }
+
+    [data-slot="session-turn-thinking-glyph"] {
+      width: 1.2ch;
+      text-align: center;
+    }
+
+    [data-component="text-reveal"].session-turn-thinking-heading {
+      overflow: hidden;
+      color: var(--v2-text-text-muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   [data-component="getting-started"] {
     container-type: inline-size;
     container-name: getting-started;

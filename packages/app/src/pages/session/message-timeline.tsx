@@ -24,6 +24,7 @@ import {
   Message,
   MessageDivider,
   Part as MessagePart,
+  TurnFooter,
   partDefaultOpen,
   type UserActions,
 } from "@oc2-ai/ui/message-part"
@@ -148,12 +149,21 @@ const markBoundaryGesture = (input: {
   }
 }
 
-function TimelineThinkingRow(props: { reasoningHeading?: string; showReasoningSummaries: boolean }) {
+function TimelineThinkingRow(props: {
+  reasoningHeading?: string
+  showReasoningSummaries: boolean
+  redesigned: boolean
+}) {
   const language = useLanguage()
 
   return (
-    <div data-slot="session-turn-thinking">
-      <TextShimmer text={language.t("ui.sessionTurn.status.thinking")} />
+    <div data-slot="session-turn-thinking" data-redesigned={props.redesigned ? "true" : undefined}>
+      <Show when={props.redesigned} fallback={<TextShimmer text={language.t("ui.sessionTurn.status.thinking")} />}>
+        <span data-slot="session-turn-thinking-glyph" aria-hidden="true">
+          ◐
+        </span>
+        <strong>Thought</strong>
+      </Show>
       <Show when={!props.showReasoningSummaries}>
         <TextReveal text={props.reasoningHeading} class="session-turn-thinking-heading" travel={25} duration={700} />
       </Show>
@@ -1023,6 +1033,7 @@ export function MessageTimeline(props: {
             workingTurn(row().userMessageID) && lastAssistantGroupKey().get(row().userMessageID) === row().group.key
           }
           onSizeChange={measureTimeline}
+          redesigned={settings.general.newLayoutDesigns()}
         />
       )
     }
@@ -1053,11 +1064,12 @@ export function MessageTimeline(props: {
                 message={message()}
                 showAssistantCopyPartID={assistantCopyPartID(row().userMessageID)}
                 turnDurationMs={turnDurationMs(row().userMessageID)}
-                defaultOpen={defaultOpen()}
-                toolOpen={toolOpen[part().id] ?? defaultOpen()}
+                defaultOpen={settings.general.newLayoutDesigns() ? false : defaultOpen()}
+                toolOpen={toolOpen[part().id] ?? (settings.general.newLayoutDesigns() ? false : defaultOpen())}
                 onToolOpenChange={(open) => setToolOpen(part().id, open)}
                 deferToolContent={false}
                 virtualizeDiff={false}
+                redesigned={settings.general.newLayoutDesigns()}
               />
             )}
           </Show>
@@ -1156,6 +1168,7 @@ export function MessageTimeline(props: {
                       message={message()}
                       parts={getMsgParts(userMessageRow().userMessageID)}
                       actions={props.actions}
+                      redesigned={settings.general.newLayoutDesigns()}
                     />
                   </div>
                 </div>
@@ -1203,6 +1216,7 @@ export function MessageTimeline(props: {
               <TimelineThinkingRow
                 reasoningHeading={thinkingRow().reasoningHeading}
                 showReasoningSummaries={settings.general.showReasoningSummaries()}
+                redesigned={settings.general.newLayoutDesigns()}
               />
             </div>
           </TimelineRowFrame>
@@ -1250,6 +1264,24 @@ export function MessageTimeline(props: {
           </TimelineRowFrame>
         )
       }
+      case "TurnFooter": {
+        const turnFooterRow = row as Accessor<TimelineRowByTag<"TurnFooter">>
+        const message = createMemo(() => {
+          const value = messageByID().get(turnFooterRow().assistantMessageID)
+          if (value?.role === "assistant") return value
+        })
+        return (
+          <Show when={settings.general.newLayoutDesigns() && message()}>
+            {(message) => (
+              <TimelineRowFrame row={turnFooterRow}>
+                <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+                  <TurnFooter message={message()} durationMs={turnDurationMs(turnFooterRow().userMessageID)} />
+                </div>
+              </TimelineRowFrame>
+            )}
+          </Show>
+        )
+      }
       case "BottomSpacer":
         return <div data-timeline-row="bottom-spacer" aria-hidden="true" class="h-16" />
     }
@@ -1260,7 +1292,11 @@ export function MessageTimeline(props: {
   }
 
   return (
-    <div class="relative w-full h-full min-w-0">
+    <div
+      data-component="session-timeline"
+      data-layout={settings.general.newLayoutDesigns() ? "v2" : "legacy"}
+      class="relative w-full h-full min-w-0"
+    >
       <div
         class="absolute left-1/2 -translate-x-1/2 bottom-6 z-[60] pointer-events-none transition-all duration-200 ease-out"
         classList={{

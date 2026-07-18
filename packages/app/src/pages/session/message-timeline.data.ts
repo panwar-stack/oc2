@@ -30,6 +30,7 @@ export type TimelineRowMap = {
   Retry: { userMessageID: string }
   DiffSummary: { userMessageID: string; diffs: SummaryDiff[] }
   Error: { userMessageID: string; text: string }
+  TurnFooter: { userMessageID: string; assistantMessageID: string }
   BottomSpacer: {}
 }
 
@@ -71,6 +72,10 @@ export namespace TimelineRow {
   export class Retry extends Data.TaggedClass("Retry")<{
     userMessageID: string
   }> {}
+  export class TurnFooter extends Data.TaggedClass("TurnFooter")<{
+    userMessageID: string
+    assistantMessageID: string
+  }> {}
   export class BottomSpacer extends Data.TaggedClass("BottomSpacer")<{}> {}
 
   export type TimelineRow =
@@ -83,6 +88,7 @@ export namespace TimelineRow {
     | DiffSummary
     | Error
     | Retry
+    | TurnFooter
     | BottomSpacer
 
   export const key = (row: TimelineRow) => {
@@ -105,6 +111,8 @@ export namespace TimelineRow {
         return `error:${row.userMessageID}`
       case "Retry":
         return `retry:${row.userMessageID}`
+      case "TurnFooter":
+        return `turn-footer:${row.userMessageID}:${row.assistantMessageID}`
       case "BottomSpacer":
         return "bottom-spacer"
     }
@@ -262,6 +270,16 @@ export namespace Timeline {
           text: unwrapErrorMessage(
             typeof data === "string" ? data : data === undefined || data === null ? "" : String(data),
           ),
+        }),
+      )
+    }
+
+    const lastAssistant = assistantMessages.at(-1)
+    if (lastAssistant) {
+      rows.push(
+        new TimelineRow.TurnFooter({
+          userMessageID: userMessage.id,
+          assistantMessageID: lastAssistant.id,
         }),
       )
     }

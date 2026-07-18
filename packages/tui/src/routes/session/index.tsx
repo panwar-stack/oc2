@@ -76,6 +76,10 @@ import { PathFormatterProvider, usePathFormatter } from "../../context/path-form
 import { DialogRoots } from "./dialog-roots"
 import { collectExportSessionFromClient } from "../../util/session-export"
 import { FuguStatusBlock } from "./fugu-status"
+import { TranscriptUserMessage } from "../../component/user-message"
+import { TurnFooter } from "../../component/turn-footer"
+import { ThinkingRow } from "../../component/thinking-row"
+import { ToolGroupHeader, ToolRow, toolRowDuration } from "../../component/tool-row"
 import {
   sessionBindingCommands,
   sessionGlobalBindingCommands,
@@ -1565,7 +1569,6 @@ function UserMessage(props: {
   pending?: string
 }) {
   const ctx = use()
-  const local = useLocal()
   const text = createMemo(() => {
     const texts = props.parts
       .map((x) => {
@@ -1579,76 +1582,28 @@ function UserMessage(props: {
   })
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
-  const [hover, setHover] = createSignal(false)
   const queued = createMemo(() => props.pending && props.message.id > props.pending)
-  const color = createMemo(() => local.agent.color(props.message.agent))
-  const queuedFg = createMemo(() => selectedForeground(theme, color()))
-  const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
+  const meta = createMemo(() =>
+    ctx.showTimestamps() ? Locale.todayTimeOrDateTime(props.message.time.created) : undefined,
+  )
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
   return (
     <>
       <Show when={text()}>
-        <box
+        <TranscriptUserMessage
           id={props.message.id}
-          border={["left"]}
-          borderColor={color()}
-          customBorderChars={SplitBorder.customBorderChars}
           marginTop={props.index === 0 ? 0 : 1}
-        >
-          <box
-            onMouseOver={() => {
-              setHover(true)
-            }}
-            onMouseOut={() => {
-              setHover(false)
-            }}
-            onMouseUp={props.onMouseUp}
-            paddingTop={1}
-            paddingBottom={1}
-            paddingLeft={2}
-            backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
-            flexShrink={0}
-          >
-            <text fg={theme.text}>{text()}</text>
-            <Show when={files().length}>
-              <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">
-                <For each={files()}>
-                  {(file) => {
-                    const bg = createMemo(() => {
-                      if (file.mime.startsWith("image/")) return theme.accent
-                      if (file.mime === "application/pdf") return theme.primary
-                      return theme.secondary
-                    })
-                    return (
-                      <text fg={theme.text}>
-                        <span style={{ bg: bg(), fg: theme.background }}> {MIME_BADGE[file.mime] ?? file.mime} </span>
-                        <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {file.filename} </span>
-                      </text>
-                    )
-                  }}
-                </For>
-              </box>
-            </Show>
-            <Show
-              when={queued()}
-              fallback={
-                <Show when={ctx.showTimestamps()}>
-                  <text fg={theme.textMuted}>
-                    <span style={{ fg: theme.textMuted }}>
-                      {Locale.todayTimeOrDateTime(props.message.time.created)}
-                    </span>
-                  </text>
-                </Show>
-              }
-            >
-              <text fg={theme.textMuted}>
-                <span style={{ bg: color(), fg: queuedFg(), bold: true }}> QUEUED </span>
-              </text>
-            </Show>
-          </box>
-        </box>
+          text={text()}
+          attachments={files().map((file) => ({
+            kind: MIME_BADGE[file.mime] ?? file.mime,
+            name: file.filename ?? file.url,
+          }))}
+          meta={meta()}
+          queued={Boolean(queued())}
+          onMouseUp={props.onMouseUp}
+        />
       </Show>
       <Show when={compaction()}>
         <box
@@ -1663,6 +1618,21 @@ function UserMessage(props: {
   )
 }
 
+function consecutiveToolParts(parts: Part[], start: number) {
+  if (parts[start]?.type !== "tool" || parts[start - 1]?.type === "tool") return []
+  const result: ToolPart[] = []
+  for (let index = start; index < parts.length; index++) {
+    const part = parts[index]
+    if (part?.type !== "tool") break
+    result.push(part)
+  }
+  return result
+}
+
+function toolPartError(part: ToolPart) {
+  return part.state.status === "error" ? part.state.error : undefined
+}
+
 function AssistantMessage(props: {
   message: AssistantMessage
   parts: Part[]
@@ -1672,6 +1642,7 @@ function AssistantMessage(props: {
   const ctx = use()
   const local = useLocal()
   const { theme } = useTheme()
+  const [collapsedGroups, setCollapsedGroups] = createSignal<ReadonlySet<string>>(new Set())
   const model = createMemo(() => Model.name(ctx.providers(), props.message.providerID, props.message.modelID))
 
   const final = createMemo(() => {
@@ -1693,15 +1664,51 @@ function AssistantMessage(props: {
       <For each={props.parts}>
         {(part, index) => {
           const component = createMemo(() => PART_MAPPING[part.type as keyof typeof PART_MAPPING])
+          const tools = createMemo(() => consecutiveToolParts(props.parts, index()))
+          const groupKey = createMemo(() => {
+            if (part.type !== "tool") return
+            let cursor = index()
+            while (cursor > 0 && props.parts[cursor - 1]?.type === "tool") cursor--
+            return props.parts[cursor]?.id
+          })
+          const collapsed = createMemo(() => {
+            const key = groupKey()
+            return key ? collapsedGroups().has(key) : false
+          })
           return (
-            <Show when={component()}>
-              <Dynamic
-                last={index() === props.parts.length - 1}
-                component={component()}
-                part={part as any}
-                message={props.message}
-              />
-            </Show>
+            <>
+              <Show when={tools().length > 0}>
+                <ToolGroupHeader
+                  name="Tools"
+                  items={tools().map((item) => ({
+                    status: item.state.status,
+                    error: toolPartError(item),
+                    approval: Boolean(
+                      ctx.sync.data.permission[ctx.sessionID]?.some((request) => request.tool?.callID === item.callID),
+                    ),
+                  }))}
+                  collapsed={collapsed()}
+                  onCollapsedChange={(value) => {
+                    const key = groupKey()
+                    if (!key) return
+                    setCollapsedGroups((current) => {
+                      const next = new Set(current)
+                      if (value) next.add(key)
+                      else next.delete(key)
+                      return next
+                    })
+                  }}
+                />
+              </Show>
+              <Show when={component() && !collapsed()}>
+                <Dynamic
+                  last={index() === props.parts.length - 1}
+                  component={component()}
+                  part={part as any}
+                  message={props.message}
+                />
+              </Show>
+            </>
           )
         }}
       </For>
@@ -1742,28 +1749,21 @@ function AssistantMessage(props: {
       </Show>
       <Switch>
         <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
-          <box paddingLeft={3}>
-            <text marginTop={1}>
-              <span
-                style={{
-                  fg:
-                    props.message.error?.name === "MessageAbortedError"
-                      ? theme.textMuted
-                      : local.agent.color(props.message.agent),
-                }}
-              >
-                ▣{" "}
-              </span>{" "}
-              <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
-              <span style={{ fg: theme.textMuted }}> · {model()}</span>
-              <Show when={duration()}>
-                <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
-              </Show>
-              <Show when={props.message.error?.name === "MessageAbortedError"}>
-                <span style={{ fg: theme.textMuted }}> · interrupted</span>
-              </Show>
-            </text>
-          </box>
+          <TurnFooter
+            agent={props.message.agent || props.message.mode}
+            model={model()}
+            color={local.agent.color(props.message.agent)}
+            duration={duration() ? Locale.duration(duration()) : undefined}
+            tokens={
+              props.message.tokens.total ??
+              props.message.tokens.input +
+                props.message.tokens.output +
+                props.message.tokens.reasoning +
+                props.message.tokens.cache.read +
+                props.message.tokens.cache.write
+            }
+            interrupted={props.message.error?.name === "MessageAbortedError"}
+          />
         </Match>
       </Switch>
     </>
@@ -1781,9 +1781,6 @@ const INLINE_TOOL_ICON_WIDTH = 2
 function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: AssistantMessage }) {
   const { theme } = useTheme()
   const ctx = use()
-  // Collapsed by default in hide mode: a single line throughout, so the
-  // layout never shifts. Click to open the full markdown block, click to close.
-  const [expanded, setExpanded] = createSignal(false)
 
   const content = createMemo(() => {
     // OpenRouter encrypts some reasoning blocks; drop the placeholder.
@@ -1800,82 +1797,19 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   const summary = createMemo(() => reasoningSummary(content()))
   const syntax = createSyntaxStyleMemo(() => generateSubtleSyntax(theme))
 
-  const toggle = () => {
-    if (!inMinimal()) return
-    setExpanded((prev) => !prev)
-  }
-
   return (
     <Show when={content()}>
-      <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
-        <box onMouseUp={toggle}>
-          <ReasoningHeader
-            toggleable={inMinimal()}
-            open={!inMinimal() || expanded()}
-            done={isDone()}
-            title={summary().title}
-            duration={isDone() ? Locale.duration(duration()) : undefined}
-          />
-        </box>
-        <Show when={(!inMinimal() || expanded()) && summary().body}>
-          <box paddingLeft={inMinimal() ? 2 : 0} marginTop={1}>
-            <code
-              filetype="markdown"
-              drawUnstyledText={false}
-              streaming={true}
-              syntaxStyle={syntax()}
-              content={summary().body}
-              conceal={ctx.conceal()}
-              fg={theme.textMuted}
-            />
-          </box>
-        </Show>
-      </box>
+      <ThinkingRow
+        id={"text-" + props.part.id}
+        title={summary().title}
+        trace={summary().body}
+        running={!isDone()}
+        duration={isDone() ? Locale.duration(duration()) : undefined}
+        syntaxStyle={syntax()}
+        conceal={ctx.conceal()}
+        expanded={inMinimal() ? undefined : true}
+      />
     </Show>
-  )
-}
-
-function ReasoningHeader(props: {
-  toggleable: boolean
-  open: boolean
-  done: boolean
-  title: string | null
-  duration?: string
-}) {
-  const { theme } = useTheme()
-  const fg = () =>
-    props.open
-      ? RGBA.fromValues(theme.warning.r, theme.warning.g, theme.warning.b, theme.thinkingOpacity)
-      : theme.warning
-
-  return (
-    <Switch>
-      <Match when={!props.done}>
-        <box flexDirection="row">
-          <Spinner color={fg()}>{props.title ? "Thinking: " + props.title : "Thinking"}</Spinner>
-        </box>
-      </Match>
-      <Match when={true}>
-        <text fg={fg()} wrapMode="none">
-          <Show when={props.toggleable}>
-            <span>{props.open ? "- " : "+ "}</span>
-          </Show>
-          <span>Thought</span>
-          <Show when={props.title || props.duration}>
-            <span>: </span>
-          </Show>
-          <Show when={props.title}>
-            <span>{props.title}</span>
-          </Show>
-          <Show when={props.duration}>
-            <span>
-              {props.title ? " · " : ""}
-              {props.duration}
-            </span>
-          </Show>
-        </text>
-      </Match>
-    </Switch>
   )
 }
 
@@ -2006,12 +1940,12 @@ function GenericTool(props: ToolProps) {
       when={props.output && ctx.showGenericToolOutput()}
       fallback={
         <InlineTool icon="⚙" pending="Writing command..." complete={true} part={props.part}>
-          {props.tool} {input(props.input)}
+          {props.tool}
         </InlineTool>
       }
     >
       <BlockTool
-        title={`# ${props.tool} ${input(props.input)}`}
+        title={`# ${props.tool}`}
         part={props.part}
         onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
       >
@@ -2038,70 +1972,52 @@ function InlineTool(props: {
   part: ToolPart
   onClick?: () => void
 }) {
-  const { theme } = useTheme()
   const ctx = use()
   const sync = useSync()
-  const renderer = useRenderer()
-  const [hover, setHover] = createSignal(false)
-  const [errorExpanded, setErrorExpanded] = createSignal(false)
 
   const permission = createMemo(() => {
-    const callID = sync.data.permission[ctx.sessionID]?.at(0)?.tool?.callID
-    if (!callID) return false
-    return callID === props.part.callID
+    return sync.data.permission[ctx.sessionID]?.some((request) => request.tool?.callID === props.part.callID)
   })
 
-  const error = createMemo(() => (props.part.state.status === "error" ? props.part.state.error : undefined))
-
-  const denied = createMemo(
-    () =>
-      error()?.includes("QuestionRejectedError") ||
-      error()?.includes("rejected permission") ||
-      error()?.includes("specified a rule") ||
-      error()?.includes("user dismissed"),
-  )
-
-  const failed = createMemo(() => Boolean(error() && !denied()))
-  const clickable = createMemo(() => Boolean(props.onClick || failed()))
-  const fg = createMemo(() => {
-    if (props.color) return props.color
-    if (permission()) return theme.warning
-    if (failed()) return theme.error
-    if (hover() && props.onClick) return theme.text
-    if (props.complete) return theme.textMuted
-    return theme.text
-  })
+  const error = createMemo(() => toolPartError(props.part))
+  const metadata = createMemo(() => ("metadata" in props.part.state ? props.part.state.metadata : undefined))
 
   return (
-    <InlineToolRow
+    <ToolRow
       id={`tool-inline-${props.subagent ? "subagent-" : ""}${props.part.id}`}
-      icon={props.icon}
-      iconColor={props.iconColor}
-      color={fg()}
-      errorColor={theme.error}
-      failed={failed()}
-      denied={Boolean(denied())}
+      width={ctx.width}
+      status={props.part.state.status}
+      tool={props.part.tool}
+      name={toolRowName(props.part.tool)}
+      input={props.part.state.input}
+      metadata={metadata()}
+      duration={toolRowDuration(props.part.state)}
       error={error()}
-      errorExpanded={errorExpanded()}
-      complete={props.complete}
-      pending={props.pending}
-      spinner={props.spinner}
-      subagent={props.subagent}
-      separateAfter={(id) => id !== undefined && ctx.userMessageIDs().has(id)}
-      onMouseOver={() => clickable() && setHover(true)}
-      onMouseOut={() => setHover(false)}
-      onMouseUp={() => {
-        if (renderer.getSelection()?.getSelectedText()) return
-        if (failed()) {
-          setErrorExpanded((value) => !value)
-          return
-        }
-        props.onClick?.()
+      approval={permission()}
+      onActivate={props.onClick}
+      ref={(el) => {
+        setPreLayoutSiblingMargin(el, (previous) => {
+          const previousInline = previous?.id.startsWith("tool-inline-") ?? false
+          const previousSubagent = previous?.id.startsWith("tool-inline-subagent-") ?? false
+          return previous?.id.startsWith("text-") ||
+            previous?.id.startsWith("tool-block-") ||
+            (previousInline && previousSubagent !== Boolean(props.subagent)) ||
+            (previous?.id !== undefined && ctx.userMessageIDs().has(previous.id))
+            ? 1
+            : 0
+        })
       }}
-    >
-      {props.children}
-    </InlineToolRow>
+    />
   )
+}
+
+function toolRowName(tool: string) {
+  if (tool === "bash") return "Shell"
+  if (tool === "webfetch") return "Web Fetch"
+  if (tool === "websearch") return "Web Search"
+  if (tool === "apply_patch") return "Apply Patch"
+  if (tool === "todowrite") return "Todo"
+  return Locale.titlecase(tool)
 }
 
 export function InlineToolRow(props: {
@@ -2199,41 +2115,68 @@ function BlockTool(props: {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const [hover, setHover] = createSignal(false)
-  const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
+  const error = createMemo(() => (props.part ? toolPartError(props.part) : undefined))
+  const ctx = use()
+  const metadata = createMemo(() =>
+    props.part && "metadata" in props.part.state ? props.part.state.metadata : undefined,
+  )
   return (
-    <box
-      id={props.part ? "tool-block-" + props.part.id : undefined}
-      border={["left"]}
-      paddingTop={1}
-      paddingBottom={1}
-      paddingLeft={2}
-      marginTop={1}
-      gap={1}
-      backgroundColor={hover() ? theme.backgroundMenu : theme.backgroundPanel}
-      customBorderChars={SplitBorder.customBorderChars}
-      borderColor={theme.background}
-      onMouseOver={() => props.onClick && setHover(true)}
-      onMouseOut={() => setHover(false)}
-      onMouseUp={() => {
-        if (renderer.getSelection()?.getSelectedText()) return
-        props.onClick?.()
-      }}
+    <Show
+      when={props.part}
+      fallback={
+        <box
+          border={["left"]}
+          paddingTop={1}
+          paddingBottom={1}
+          paddingLeft={2}
+          marginTop={1}
+          gap={1}
+          backgroundColor={hover() ? theme.backgroundMenu : theme.backgroundPanel}
+          customBorderChars={SplitBorder.customBorderChars}
+          borderColor={theme.background}
+          onMouseOver={() => props.onClick && setHover(true)}
+          onMouseOut={() => setHover(false)}
+          onMouseUp={() => {
+            if (renderer.getSelection()?.getSelectedText()) return
+            props.onClick?.()
+          }}
+        >
+          <Show
+            when={props.spinner}
+            fallback={
+              <text paddingLeft={3} fg={theme.textMuted}>
+                {props.title}
+              </text>
+            }
+          >
+            <Spinner color={theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+          </Show>
+          {props.children}
+          <Show when={error()}>
+            <text fg={theme.error}>{error()}</text>
+          </Show>
+        </box>
+      }
     >
-      <Show
-        when={props.spinner}
-        fallback={
-          <text paddingLeft={3} fg={theme.textMuted}>
-            {props.title}
-          </text>
-        }
-      >
-        <Spinner color={theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
-      </Show>
-      {props.children}
-      <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
-      </Show>
-    </box>
+      {(part) => (
+        <ToolRow
+          id={"tool-block-" + part().id}
+          width={ctx.width}
+          status={part().state.status}
+          tool={part().tool}
+          name={toolRowName(part().tool)}
+          input={part().state.input}
+          metadata={metadata()}
+          duration={toolRowDuration(part().state)}
+          error={error()}
+          ref={(el) => setPreLayoutSiblingMargin(el, (previous) => (previous?.id.startsWith("text-") ? 1 : 0))}
+        >
+          <box paddingTop={1} paddingBottom={1} gap={1}>
+            {props.children}
+          </box>
+        </ToolRow>
+      )}
+    </Show>
   )
 }
 
@@ -2365,7 +2308,7 @@ function Read(props: ToolProps) {
         spinner={isRunning()}
         part={props.part}
       >
-        Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+        Read {pathFormatter.format(stringValue(props.input.filePath))}
       </InlineTool>
       <For each={loaded()}>
         {(filepath, index) => (
@@ -2571,7 +2514,7 @@ function Edit(props: ToolProps) {
       </Match>
       <Match when={true}>
         <InlineTool icon="←" pending="Preparing edit..." complete={stringValue(props.input.filePath)} part={props.part}>
-          Edit {pathFormatter.format(stringValue(props.input.filePath))} {input({ replaceAll: props.input.replaceAll })}
+          Edit {pathFormatter.format(stringValue(props.input.filePath))}
         </InlineTool>
       </Match>
     </Switch>
@@ -2742,15 +2685,6 @@ function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
       </box>
     </Show>
   )
-}
-
-function input(input: Record<string, unknown>, omit?: string[]): string {
-  const primitives = Object.entries(input).filter(([key, value]) => {
-    if (omit?.includes(key)) return false
-    return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-  })
-  if (primitives.length === 0) return ""
-  return `[${primitives.map(([key, value]) => `${key}=${value}`).join(", ")}]`
 }
 
 function stringValue(value: unknown) {

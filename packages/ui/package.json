@@ -7,6 +7,7 @@
     "./package.json": "./package.json",
     "./*": "./src/components/*.tsx",
     "./session-diff": "./src/components/session-diff.ts",
+    "./tool-summary": "./src/components/tool-summary.ts",
     "./i18n/en": "./src/i18n/en.ts",
     "./pierre": "./src/pierre/index.ts",
     "./pierre/*": "./src/pierre/*.ts",
