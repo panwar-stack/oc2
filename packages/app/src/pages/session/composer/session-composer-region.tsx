@@ -21,6 +21,7 @@ import type { FollowupDraft } from "@/components/prompt-input/submit"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { NEW_SESSION_CONTENT_WIDTH } from "@/pages/session/new-session-layout"
 import { usePendingDecisionTitle } from "@/pages/session/composer/session-decision"
+import { SessionWorkingBar } from "@/pages/session/session-working-bar"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -65,6 +66,13 @@ export function SessionComposerRegion(props: {
   const info = createMemo(() => (route.params.id ? sync.session.get(route.params.id) : undefined))
   const parentID = createMemo(() => info()?.parentID)
   const child = createMemo(() => !!parentID())
+  const workingMembers = createMemo(() =>
+    route.params.id
+      ? sync.data.session.filter((item) => item.parentID === route.params.id && sync.data.session_working(item.id))
+          .length
+      : 0,
+  )
+  const activeTask = createMemo(() => props.state.todos().find((item) => item.status === "in_progress")?.content)
   const showComposer = createMemo(() => !props.state.blocked() || child())
   usePendingDecisionTitle(() => !!props.state.questionRequest() || !!props.state.permissionRequest())
 
@@ -95,6 +103,7 @@ export function SessionComposerRegion(props: {
   let frame: number | undefined
   let decisionTimer: number | undefined
   let currentSessionKey = route.sessionKey()
+  let abortActive: (() => Promise<unknown>) | undefined
 
   const clear = () => {
     if (timer !== undefined) {
@@ -194,6 +203,20 @@ export function SessionComposerRegion(props: {
           "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": props.centered,
         }}
       >
+        <Show when={settings.general.newLayoutDesigns() && route.params.id}>
+          <SessionWorkingBar
+            working={props.state.working()}
+            blocked={props.state.blocked()}
+            team={workingMembers() > 0}
+            task={activeTask()}
+            elapsed={props.state.elapsed()}
+            queued={props.followup?.items.length}
+            onInterrupt={() => {
+              void abortActive?.()
+            }}
+          />
+        </Show>
+
         <Show when={props.state.questionRequest()} keyed>
           {(request) => (
             <div>
@@ -273,6 +296,7 @@ export function SessionComposerRegion(props: {
                     collapseLabel={language.t("session.todo.collapse")}
                     expandLabel={language.t("session.todo.expand")}
                     dockProgress={value()}
+                    redesigned={settings.general.newLayoutDesigns()}
                   />
                 </div>
               </div>
@@ -327,6 +351,9 @@ export function SessionComposerRegion(props: {
                       workingElapsed={props.state.elapsed}
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}
+                      setAbort={(abort) => {
+                        abortActive = abort
+                      }}
                       onSubmit={props.onSubmit}
                     />
                   </Show>

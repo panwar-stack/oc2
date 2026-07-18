@@ -55,7 +55,7 @@ function View(props: { api: TuiPluginApi }) {
                 >
                   •
                 </text>
-                <text fg={theme().text} wrapMode="word">
+                <text fg={theme().text} wrapMode="none">
                   {item.name}{" "}
                   <span style={{ fg: theme().textMuted }}>
                     <Switch fallback={item.status}>

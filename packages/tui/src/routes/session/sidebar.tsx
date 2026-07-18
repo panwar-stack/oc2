@@ -8,6 +8,31 @@ import { usePluginRuntime } from "../../plugin/runtime"
 
 import { getScrollAcceleration } from "../../util/scroll"
 import { WorkspaceLabel } from "../../component/workspace-label"
+import { SidebarSessionSection } from "./sidebar-sections"
+import { useClipboard } from "../../context/clipboard"
+import { useDialog } from "../../ui/dialog"
+import { DialogSessionRename } from "../../component/dialog-session-rename"
+
+export const SESSION_SIDEBAR_WIDTH = 34
+export const SESSION_SIDEBAR_MIN_COLUMNS = 100
+
+export type SessionSidebarPresentation = "wide" | "overlay" | "hidden"
+
+export function sessionSidebarPresentation(input: {
+  width: number
+  parent: boolean
+  open: boolean
+  preference: "auto" | "hide"
+}): SessionSidebarPresentation {
+  if (input.parent) return "hidden"
+  if (input.open) return input.width >= SESSION_SIDEBAR_MIN_COLUMNS ? "wide" : "overlay"
+  if (input.preference === "auto" && input.width >= SESSION_SIDEBAR_MIN_COLUMNS) return "wide"
+  return "hidden"
+}
+
+export function sessionSidebarContentWidth(width: number, presentation: SessionSidebarPresentation) {
+  return width - (presentation === "wide" ? SESSION_SIDEBAR_WIDTH : 0) - 4
+}
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const pluginRuntime = usePluginRuntime()
@@ -15,6 +40,8 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const sync = useSync()
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
+  const clipboard = useClipboard()
+  const dialog = useDialog()
   const session = createMemo(() => sync.session.get(props.sessionID))
   const workspace = () => {
     const workspaceID = session()?.workspaceID
@@ -27,7 +54,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
     <Show when={session()}>
       <box
         backgroundColor={theme.backgroundPanel}
-        width={42}
+        width={SESSION_SIDEBAR_WIDTH}
         height="100%"
         paddingTop={1}
         paddingBottom={1}
@@ -53,12 +80,13 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
               title={session()!.title}
             >
               <box paddingRight={1}>
-                <text fg={theme.text}>
-                  <b>{session()!.title}</b>
-                </text>
-                <Show when={InstallationChannel !== "latest"}>
-                  <text fg={theme.textMuted}>{props.sessionID}</text>
-                </Show>
+                <SidebarSessionSection
+                  title={session()!.title}
+                  sessionID={props.sessionID}
+                  channel={InstallationChannel !== "latest" ? InstallationChannel : undefined}
+                  onCopy={() => void clipboard.write?.(props.sessionID)}
+                  onRename={() => dialog.replace(() => <DialogSessionRename session={props.sessionID} />)}
+                />
                 <Show when={session()!.workspaceID}>
                   <text fg={theme.textMuted}>
                     <Show

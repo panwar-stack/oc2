@@ -7,9 +7,11 @@ import { useSpring } from "@oc2-ai/ui/motion-spring"
 import { TextReveal } from "@oc2-ai/ui/text-reveal"
 import { TextStrikethrough } from "@oc2-ai/ui/text-strikethrough"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
-import { Index, createEffect, createMemo } from "solid-js"
+import { Index, Show, createEffect, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
+import { GaugeV2 } from "@oc2-ai/ui/v2/gauge-v2"
+import { StatusGlyph } from "@oc2-ai/ui/v2/status-glyph"
 
 const doneToken = "\u0000done\u0000"
 const totalToken = "\u0000total\u0000"
@@ -47,6 +49,7 @@ export function SessionTodoDock(props: {
   collapseLabel: string
   expandLabel: string
   dockProgress: number
+  redesigned?: boolean
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({
@@ -113,6 +116,11 @@ export function SessionTodoDock(props: {
             props.onToggle()
           }}
         >
+          <Show when={props.redesigned}>
+            <strong class="shrink-0 font-mono text-[length:var(--v2-font-size-small)] text-[var(--v2-text-text-base)]">
+              Todo
+            </strong>
+          </Show>
           <span
             class="text-14-regular text-text-strong cursor-default inline-flex items-baseline shrink-0 overflow-visible"
             aria-label={label()}
@@ -125,17 +133,26 @@ export function SessionTodoDock(props: {
               opacity: `${Math.max(0, Math.min(1, 1 - shut()))}`,
             }}
           >
-            <Index each={progress()}>
-              {(item) =>
-                item() === doneToken ? (
-                  <AnimatedNumber value={done()} />
-                ) : item() === totalToken ? (
-                  <AnimatedNumber value={total()} />
-                ) : (
-                  <span>{item()}</span>
-                )
+            <Show
+              when={!props.redesigned}
+              fallback={
+                <span class="rounded-[var(--v2-radius-pill)] bg-[var(--v2-background-bg-layer-03)] px-2 text-[var(--v2-font-size-micro)]">
+                  {done()} / {total()}
+                </span>
               }
-            </Index>
+            >
+              <Index each={progress()}>
+                {(item) =>
+                  item() === doneToken ? (
+                    <AnimatedNumber value={done()} />
+                  ) : item() === totalToken ? (
+                    <AnimatedNumber value={total()} />
+                  ) : (
+                    <span>{item()}</span>
+                  )
+                }
+              </Index>
+            </Show>
           </span>
           <div
             data-slot="session-todo-preview"
@@ -189,17 +206,25 @@ export function SessionTodoDock(props: {
             opacity: `${Math.max(0, Math.min(1, 1 - hide()))}`,
           }}
         >
-          <TodoList todos={props.todos} />
+          <Show when={props.redesigned}>
+            <div class="px-3 pb-2">
+              <GaugeV2 value={done()} max={total()} label={`${done()} of ${total()} tasks done`} variant="progress" />
+            </div>
+          </Show>
+          <TodoList todos={props.todos} redesigned={props.redesigned} />
         </div>
       </div>
     </DockTray>
   )
 }
 
-function TodoList(props: { todos: Todo[] }) {
+function TodoList(props: { todos: Todo[]; redesigned?: boolean }) {
   const [store, setStore] = createStore({
     stuck: false,
+    expanded: false,
   })
+  const visible = createMemo(() => (props.redesigned && !store.expanded ? props.todos.slice(0, 6) : props.todos))
+  const overflow = createMemo(() => Math.max(0, props.todos.length - visible().length))
 
   return (
     <div class="relative">
@@ -210,40 +235,78 @@ function TodoList(props: { todos: Todo[] }) {
           setStore("stuck", e.currentTarget.scrollTop > 0)
         }}
       >
-        <Index each={props.todos}>
+        <Index each={visible()}>
           {(todo) => (
-            <Checkbox
-              readOnly
-              checked={todo().status === "completed"}
-              indeterminate={todo().status === "in_progress"}
-              data-in-progress={todo().status === "in_progress" ? "" : undefined}
-              data-state={todo().status}
-              icon={dot(todo().status)}
-              style={{
-                "--checkbox-align": "flex-start",
-                "--checkbox-offset": "1px",
-                transition: "opacity 220ms var(--tool-motion-ease, cubic-bezier(0.22, 1, 0.36, 1))",
-                opacity: todo().status === "pending" ? "0.94" : "1",
-              }}
+            <Show
+              when={props.redesigned}
+              fallback={
+                <Checkbox
+                  readOnly
+                  checked={todo().status === "completed"}
+                  indeterminate={todo().status === "in_progress"}
+                  data-in-progress={todo().status === "in_progress" ? "" : undefined}
+                  data-state={todo().status}
+                  icon={dot(todo().status)}
+                  style={{
+                    "--checkbox-align": "flex-start",
+                    "--checkbox-offset": "1px",
+                    transition: "opacity 220ms var(--tool-motion-ease, cubic-bezier(0.22, 1, 0.36, 1))",
+                    opacity: todo().status === "pending" ? "0.94" : "1",
+                  }}
+                >
+                  <TextStrikethrough
+                    active={todo().status === "completed" || todo().status === "cancelled"}
+                    text={todo().content}
+                    class="text-14-regular min-w-0 break-words"
+                    style={{
+                      "line-height": "var(--line-height-normal)",
+                      transition:
+                        "color 220ms var(--tool-motion-ease, cubic-bezier(0.22, 1, 0.36, 1)), opacity 220ms var(--tool-motion-ease, cubic-bezier(0.22, 1, 0.36, 1))",
+                      color:
+                        todo().status === "completed" || todo().status === "cancelled"
+                          ? "var(--text-weak)"
+                          : "var(--text-strong)",
+                      opacity: todo().status === "pending" ? "0.92" : "1",
+                    }}
+                  />
+                </Checkbox>
+              }
             >
-              <TextStrikethrough
-                active={todo().status === "completed" || todo().status === "cancelled"}
-                text={todo().content}
-                class="text-14-regular min-w-0 break-words"
-                style={{
-                  "line-height": "var(--line-height-normal)",
-                  transition:
-                    "color 220ms var(--tool-motion-ease, cubic-bezier(0.22, 1, 0.36, 1)), opacity 220ms var(--tool-motion-ease, cubic-bezier(0.22, 1, 0.36, 1))",
-                  color:
-                    todo().status === "completed" || todo().status === "cancelled"
-                      ? "var(--text-weak)"
-                      : "var(--text-strong)",
-                  opacity: todo().status === "pending" ? "0.92" : "1",
-                }}
-              />
-            </Checkbox>
+              <div
+                data-state={todo().status}
+                class="flex h-6 min-w-0 items-center gap-2 rounded-[var(--v2-radius-base)] px-1 font-mono text-[length:var(--v2-font-size-meta)] data-[state=in_progress]:bg-[var(--v2-state-bg-thinking)] data-[state=in_progress]:font-bold data-[state=in_progress]:text-[var(--v2-state-fg-thinking)]"
+              >
+                <StatusGlyph
+                  name={
+                    todo().status === "completed"
+                      ? "done"
+                      : todo().status === "in_progress"
+                        ? "running"
+                        : todo().status === "cancelled"
+                          ? "failed"
+                          : "pending"
+                  }
+                />
+                <span
+                  class="min-w-0 flex-1 truncate data-[terminal=true]:line-through data-[terminal=true]:text-[var(--v2-text-text-faint)]"
+                  data-terminal={todo().status === "completed" || todo().status === "cancelled" ? "true" : undefined}
+                  title={todo().content}
+                >
+                  {todo().content}
+                </span>
+              </div>
+            </Show>
           )}
         </Index>
+        <Show when={props.redesigned && overflow() > 0}>
+          <button
+            type="button"
+            class="h-6 truncate text-left font-mono text-[length:var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)] focus-visible:shadow-[var(--v2-shadow-focus)]"
+            onClick={() => setStore("expanded", true)}
+          >
+            + {overflow()} more · expand ▾
+          </button>
+        </Show>
       </div>
       <div
         class="pointer-events-none absolute top-0 left-0 right-0 h-4 transition-opacity duration-150"

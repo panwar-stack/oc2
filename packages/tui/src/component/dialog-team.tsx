@@ -1,4 +1,4 @@
-import type { Session } from "@oc2-ai/sdk/v2"
+import type { Session, TeamTask } from "@oc2-ai/sdk/v2"
 import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { useRouteData } from "../context/route"
 import { useSync } from "../context/sync"
@@ -7,27 +7,9 @@ import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { SplitBorder } from "../ui/border"
 import { TextAttributes } from "@opentui/core"
+import { Locale } from "../util/locale"
 
 type Tab = "overview" | "tasks" | "messages"
-
-type TeamInfo = {
-  id: string
-  name: string
-  goal?: string
-  status: string
-}
-
-type TeamTask = {
-  description: string
-  status: string
-}
-
-type TeamMessage = {
-  sender: string
-  recipients: string[]
-  delivery_status: string
-  body: string
-}
 
 function memberStatusColor(
   status: { type: string } | undefined,
@@ -73,6 +55,26 @@ function deliveryStatusColor(status: string, theme: ReturnType<typeof useTheme>[
   return theme.warning
 }
 
+export function groupDialogTeamTasks(tasks: readonly TeamTask[]) {
+  const group = (status: string) =>
+    status === "in_progress" || status === "working"
+      ? "working"
+      : status === "blocked" || status === "needs-you" || status === "needs_you"
+        ? "needs-you"
+        : status === "completed" || status === "done"
+          ? "completed"
+          : status === "cancelled" || status === "failed" || status === "error"
+            ? "errored"
+            : "idle"
+  return tasks.reduce<Record<"working" | "needs-you" | "idle" | "completed" | "errored", TeamTask[]>>(
+    (result, task) => {
+      result[group(task.status)].push(task)
+      return result
+    },
+    { working: [], "needs-you": [], idle: [], completed: [], errored: [] },
+  )
+}
+
 export function DialogTeam(props: { focusTab?: Tab }) {
   const route = useRouteData("session")
   const sync = useSync()
@@ -88,11 +90,7 @@ export function DialogTeam(props: { focusTab?: Tab }) {
 
   const [team] = createResource(
     () => sessionID(),
-    (sid) =>
-      sdk.client.team
-        .get({ sessionID: sid })
-        .then((res) => (res.data ?? undefined) as TeamInfo | undefined)
-        .catch(() => undefined),
+    (sid) => sdk.client.team.get({ sessionID: sid }).then((res) => res.data ?? undefined),
   )
 
   const teamID = createMemo(() => team()?.id)
@@ -105,36 +103,41 @@ export function DialogTeam(props: { focusTab?: Tab }) {
 
   const [tasks] = createResource(
     () => teamAccess(),
-    (access) =>
-      sdk.client.team
-        .tasks(access)
-        .then((res) => (res.data ?? []) as TeamTask[])
-        .catch(() => [] as TeamTask[]),
+    (access) => sdk.client.team.tasks(access, { throwOnError: true }).then((res) => res.data),
   )
 
   const [messages] = createResource(
     () => teamAccess(),
-    (access) =>
-      sdk.client.team
-        .messages(access)
-        .then((res) => (res.data ?? []) as TeamMessage[])
-        .catch(() => [] as TeamMessage[]),
+    (access) => sdk.client.team.messages(access, { throwOnError: true }).then((res) => res.data),
   )
 
   const childSessions = createMemo(() => {
     const sid = sessionID()
-    return sync.data.session.filter((x) => x.parentID === sid).toSorted((a, b) => a.id.localeCompare(b.id))
+    return sync.data.session
+      .filter((item) => item.parentID === sid && sync.data.team_member_status[item.id] !== undefined)
+      .toSorted((a, b) => a.id.localeCompare(b.id))
   })
 
   const children = createMemo(() => {
     const sid = sessionID()
-    return sync.data.session
-      .filter((x) => x.parentID === sid || x.id === sid)
-      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    const root = sync.data.session.find((item) => item.id === sid)
+    return [root, ...childSessions()].filter((item) => item !== undefined)
   })
 
   const permissions = createMemo(() => children().flatMap((x) => sync.data.permission[x.id] ?? []))
   const questions = createMemo(() => children().flatMap((x) => sync.data.question[x.id] ?? []))
+  const memberFor = (assignee?: string) =>
+    assignee ? childSessions().find((member) => member.id === assignee || member.title === assignee) : undefined
+  const taskPending = (assignee?: string) => {
+    const member = memberFor(assignee)
+    if (!member) return 0
+    return (sync.data.permission[member.id]?.length ?? 0) + (sync.data.question[member.id]?.length ?? 0)
+  }
+  const taskGroups = createMemo(() =>
+    groupDialogTeamTasks(
+      (tasks() ?? []).map((task) => (taskPending(task.assignee) ? { ...task, status: "needs-you" } : task)),
+    ),
+  )
 
   const [tab, setTab] = createSignal<Tab>(props.focusTab ?? "overview")
 
@@ -165,9 +168,17 @@ export function DialogTeam(props: { focusTab?: Tab }) {
         <Show
           when={team()}
           fallback={
-            <Show when={team.loading}>
-              <text fg={theme.textMuted}>Loading team data...</text>
-            </Show>
+            <>
+              <Show when={team.loading}>
+                <text fg={theme.textMuted}>Loading team data...</text>
+              </Show>
+              <Show when={team.error}>
+                <text fg={theme.error}>✕ Team data unavailable</text>
+              </Show>
+              <Show when={!team.loading && !team.error}>
+                <text fg={theme.textMuted}>○ No team for this session.</text>
+              </Show>
+            </>
           }
         >
           {(t) => {
@@ -227,13 +238,23 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                       {(member) => {
                         const status = createMemo(() => sync.data.session_status[member.id])
                         const teamStatus = createMemo(() => sync.data.team_member_status[member.id])
+                        const pending = createMemo(
+                          () =>
+                            (sync.data.permission[member.id]?.length ?? 0) +
+                            (sync.data.question[member.id]?.length ?? 0),
+                        )
                         return (
                           <box flexDirection="row" gap={1}>
                             <text flexShrink={0} style={{ fg: memberStatusColor(status(), teamStatus(), theme) }}>
                               •
                             </text>
-                            <text fg={theme.text}>{member.title}</text>
+                            <text fg={theme.text} wrapMode="none">
+                              {Locale.truncate(member.title, 34)}
+                            </text>
                             <text fg={theme.textMuted}>({memberStatusLabel(status(), teamStatus())})</text>
+                            <Show when={pending() > 0}>
+                              <text fg={theme.accent}>▲ {pending()} pending</text>
+                            </Show>
                           </box>
                         )
                       }}
@@ -251,8 +272,11 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                             <text flexShrink={0} style={{ fg: theme.warning }}>
                               !
                             </text>
-                            <text fg={theme.text} wrapMode="word">
-                              Permission: {item.permission} - {item.patterns?.join(", ") ?? ""}
+                            <text fg={theme.text} wrapMode="none">
+                              {Locale.truncate(
+                                `Permission: ${item.permission} - ${item.patterns?.join(", ") ?? ""}`,
+                                72,
+                              )}
                             </text>
                           </box>
                         )}
@@ -263,8 +287,11 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                             <text flexShrink={0} style={{ fg: theme.warning }}>
                               ?
                             </text>
-                            <text fg={theme.text} wrapMode="word">
-                              Questions: {item.questions?.map((q) => q.question).join(", ") ?? ""}
+                            <text fg={theme.text} wrapMode="none">
+                              {Locale.truncate(
+                                `Questions: ${item.questions?.map((q) => q.question).join(", ") ?? ""}`,
+                                72,
+                              )}
                             </text>
                           </box>
                         )}
@@ -286,55 +313,110 @@ export function DialogTeam(props: { focusTab?: Tab }) {
                 </Show>
 
                 <Show when={tab() === "tasks"}>
-                  <Show
-                    when={(tasks()?.length ?? 0) > 0}
-                    fallback={<text fg={theme.textMuted}>No tasks created yet.</text>}
-                  >
-                    <For each={tasks()!}>
-                      {(task) => (
-                        <box flexDirection="row" gap={1}>
-                          <text flexShrink={0} style={{ fg: taskStatusColor(task.status, theme) }}>
-                            {task.status === "completed"
-                              ? "✓"
-                              : task.status === "in_progress"
-                                ? "▶"
-                                : task.status === "cancelled"
-                                  ? "✗"
-                                  : "○"}
-                          </text>
-                          <text fg={theme.text} wrapMode="word">
-                            {task.description}
-                          </text>
-                          <text fg={theme.textMuted}>{task.status}</text>
-                        </box>
-                      )}
-                    </For>
+                  <Show when={!tasks.loading} fallback={<text fg={theme.textMuted}>◐ Loading team tasks...</text>}>
+                    <Show when={!tasks.error} fallback={<text fg={theme.error}>✕ Team tasks unavailable</text>}>
+                      <Show
+                        when={(tasks()?.length ?? 0) > 0}
+                        fallback={<text fg={theme.textMuted}>○ No tasks created yet.</text>}
+                      >
+                        <For
+                          each={
+                            [
+                              ["working", "◐ WORKING", theme.warning],
+                              ["needs-you", "▲ WAITING ON YOU", theme.accent],
+                              ["idle", "○ IDLE", theme.textMuted],
+                              ["errored", "✕ ERRORED", theme.error],
+                              ["completed", "✓ COMPLETED", theme.success],
+                            ] as const
+                          }
+                        >
+                          {([group, label, color]) => (
+                            <Show when={taskGroups()[group].length > 0}>
+                              <box gap={1} paddingBottom={1}>
+                                <text fg={color} attributes={TextAttributes.BOLD}>
+                                  {label} · {taskGroups()[group].length}
+                                </text>
+                                <For each={taskGroups()[group]}>
+                                  {(task) => (
+                                    <box
+                                      border
+                                      borderColor={group === "working" ? theme.warning : theme.borderSubtle}
+                                      paddingLeft={1}
+                                      paddingRight={1}
+                                    >
+                                      <box flexDirection="row" gap={1} minWidth={0}>
+                                        <text flexShrink={0} fg={taskStatusColor(task.status, theme)}>
+                                          {group === "working"
+                                            ? "◐"
+                                            : group === "needs-you"
+                                              ? "▲"
+                                              : group === "completed"
+                                                ? "✓"
+                                                : group === "errored"
+                                                  ? "✕"
+                                                  : "○"}
+                                        </text>
+                                        <text fg={theme.text} wrapMode="none">
+                                          <b>{Locale.truncate(task.assignee ?? "unassigned", 28)}</b>
+                                        </text>
+                                        <text flexGrow={1} />
+                                        <Show when={taskPending(task.assignee) > 0}>
+                                          <text fg={theme.accent}>▲ {taskPending(task.assignee)} pending</text>
+                                        </Show>
+                                      </box>
+                                      <text fg={theme.textMuted} wrapMode="none">
+                                        {Locale.truncate(task.description, 72)}
+                                      </text>
+                                      <Show when={task.dependency_ids?.length}>
+                                        <text fg={theme.textFaint} wrapMode="none">
+                                          waits on {Locale.truncate(task.dependency_ids!.join(" · "), 62)}
+                                        </text>
+                                      </Show>
+                                      <box flexDirection="row" gap={2}>
+                                        <text fg={theme.textFaint}>{task.status}</text>
+                                      </box>
+                                    </box>
+                                  )}
+                                </For>
+                              </box>
+                            </Show>
+                          )}
+                        </For>
+                      </Show>
+                    </Show>
                   </Show>
                 </Show>
 
                 <Show when={tab() === "messages"}>
                   <Show
-                    when={(messages()?.length ?? 0) > 0}
-                    fallback={<text fg={theme.textMuted}>No messages exchanged yet.</text>}
+                    when={!messages.loading}
+                    fallback={<text fg={theme.textMuted}>◐ Loading team messages...</text>}
                   >
-                    <For each={messages()!}>
-                      {(msg) => (
-                        <box gap={0} paddingBottom={1}>
-                          <box flexDirection="row" gap={1}>
-                            <text fg={theme.text} attributes={TextAttributes.BOLD}>
-                              {msg.sender}
-                            </text>
-                            <text fg={theme.textMuted}>→ [{msg.recipients.join(", ")}]</text>
-                            <text flexShrink={0} style={{ fg: deliveryStatusColor(msg.delivery_status, theme) }}>
-                              {msg.delivery_status}
-                            </text>
-                          </box>
-                          <text fg={theme.text} wrapMode="word">
-                            {msg.body}
-                          </text>
-                        </box>
-                      )}
-                    </For>
+                    <Show when={!messages.error} fallback={<text fg={theme.error}>✕ Team messages unavailable</text>}>
+                      <Show
+                        when={(messages()?.length ?? 0) > 0}
+                        fallback={<text fg={theme.textMuted}>○ No messages exchanged yet.</text>}
+                      >
+                        <For each={messages()!}>
+                          {(msg) => (
+                            <box gap={0} paddingBottom={1}>
+                              <box flexDirection="row" gap={1}>
+                                <text fg={theme.text} attributes={TextAttributes.BOLD}>
+                                  {msg.sender}
+                                </text>
+                                <text fg={theme.textMuted}>→ [{msg.recipients.join(", ")}]</text>
+                                <text flexShrink={0} style={{ fg: deliveryStatusColor(msg.delivery_status, theme) }}>
+                                  {msg.delivery_status}
+                                </text>
+                              </box>
+                              <text fg={theme.text} wrapMode="none">
+                                {Locale.truncate(msg.body, 72)}
+                              </text>
+                            </box>
+                          )}
+                        </For>
+                      </Show>
+                    </Show>
                   </Show>
                 </Show>
               </>

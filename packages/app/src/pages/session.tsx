@@ -14,6 +14,7 @@ import {
   onMount,
   untrack,
   createResource,
+  For,
 } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
@@ -63,6 +64,8 @@ import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { shouldUseV2NewSessionPage } from "@/pages/session/new-session-layout"
 import { Identifier } from "@/utils/id"
+import { SessionDetailsPanel, SessionStatusBar } from "@/pages/session/session-aggregate-chrome"
+import { TeamBoard } from "@/pages/session/team-board"
 import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
@@ -73,6 +76,7 @@ const emptyUserMessages: UserMessage[] = []
 type FollowupItem = FollowupDraft & { id: string }
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
 const emptyFollowups: FollowupItem[] = []
+const aggregateViews = ["session", "board", "tasks"] as const
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -222,6 +226,8 @@ export default function Page() {
       bottom: true,
       jump: false,
     },
+    aggregateView: "session" as "session" | "board" | "tasks",
+    detailsOpen: false,
   })
 
   const composer = createSessionComposerState({ trackElapsed: newSessionDesign })
@@ -269,6 +275,8 @@ export default function Page() {
   const size = createSizing()
   const isV2NewSessionPage = () =>
     shouldUseV2NewSessionPage({ newLayoutDesigns: newSessionDesign(), sessionID: params.id })
+  const teamBoardEnabled = () =>
+    newSessionDesign() && import.meta.env.VITE_OC2_TEAM_BOARD === "true" && Boolean(params.id)
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened() && !isV2NewSessionPage())
   const desktopFileTreeOpen = createMemo(() => isDesktop() && layout.fileTree.opened() && !isV2NewSessionPage())
   const desktopSidePanelOpen = createMemo(() => desktopReviewOpen() || desktopFileTreeOpen())
@@ -1757,70 +1765,145 @@ export default function Page() {
             width: sessionPanelWidth(),
           }}
         >
+          <Show when={teamBoardEnabled() && !mobileChanges()}>
+            <div
+              role="tablist"
+              aria-label="Session view"
+              class="mx-3 mt-2 flex h-7 shrink-0 self-start overflow-hidden rounded-[var(--v2-radius-option)] border border-[var(--v2-border-border-base)] bg-[var(--v2-background-bg-layer-01)] font-mono text-[length:var(--v2-font-size-meta)]"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setUi("aggregateView", "session")
+                  return
+                }
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+                event.preventDefault()
+                const offset = event.key === "ArrowRight" ? 1 : -1
+                const index = aggregateViews.indexOf(ui.aggregateView)
+                const next = aggregateViews[(index + offset + aggregateViews.length) % aggregateViews.length]!
+                setUi("aggregateView", next)
+                event.currentTarget.querySelector<HTMLButtonElement>(`[data-view='${next}']`)?.focus()
+              }}
+            >
+              <For each={aggregateViews}>
+                {(view) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    id={`session-view-tab-${view}`}
+                    data-view={view}
+                    aria-controls="session-view-panel"
+                    aria-selected={ui.aggregateView === view}
+                    tabIndex={ui.aggregateView === view ? 0 : -1}
+                    class="px-3 capitalize text-[var(--v2-text-text-muted)] focus-visible:shadow-[inset_0_0_0_1px_var(--v2-border-border-focus)]"
+                    classList={{
+                      "bg-[var(--v2-background-bg-layer-03)] font-bold text-[var(--v2-text-text-base)]":
+                        ui.aggregateView === view,
+                    }}
+                    onClick={() => setUi("aggregateView", view)}
+                  >
+                    {view}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
           <div
-            class="flex-1 min-h-0 overflow-hidden"
+            class="relative flex-1 min-h-0 overflow-hidden flex"
             classList={{
               "rounded-[10px]": settings.general.newLayoutDesigns(),
             }}
           >
-            <Switch>
-              <Match when={params.id && mobileChanges()}>
-                <div class="relative h-full overflow-hidden">
-                  {reviewContent({
-                    diffStyle: "unified",
-                    classes: {
-                      root: "pb-8",
-                      header: "px-4",
-                      container: "px-4",
-                    },
-                    loadingClass: "px-4 py-4 text-text-weak",
-                    emptyClass: "h-full pb-64 -mt-4 flex flex-col items-center justify-center text-center gap-6",
-                  })}
-                </div>
-              </Match>
-              <Match when={params.id}>
-                <Show when={messagesReady()}>
-                  <MessageTimeline
-                    actions={actions}
-                    scroll={ui.scroll}
-                    onResumeScroll={resumeScroll}
-                    setScrollRef={setScrollRef}
-                    onScheduleScrollState={scheduleScrollState}
-                    onAutoScrollHandleScroll={autoScroll.handleScroll}
-                    onMarkScrollGesture={markScrollGesture}
-                    hasScrollGesture={hasScrollGesture}
-                    onUserScroll={markUserScroll}
-                    onHistoryScroll={historyLoader.onScrollerScroll}
-                    onAutoScrollInteraction={autoScroll.handleInteraction}
-                    shouldAnchorBottom={() =>
-                      !location.hash && !store.messageId && !ui.pendingMessage && !autoScroll.userScrolled()
-                    }
-                    centered={centered()}
-                    setContentRef={(el) => {
-                      content = el
-                      autoScroll.contentRef(el)
+            <div
+              id="session-view-panel"
+              role={teamBoardEnabled() && !mobileChanges() ? "tabpanel" : undefined}
+              aria-labelledby={
+                teamBoardEnabled() && !mobileChanges() ? `session-view-tab-${ui.aggregateView}` : undefined
+              }
+              class="min-w-0 flex-1 overflow-hidden"
+            >
+              <Switch>
+                <Match when={params.id && mobileChanges()}>
+                  <div class="relative h-full overflow-hidden">
+                    {reviewContent({
+                      diffStyle: "unified",
+                      classes: {
+                        root: "pb-8",
+                        header: "px-4",
+                        container: "px-4",
+                      },
+                      loadingClass: "px-4 py-4 text-text-weak",
+                      emptyClass: "h-full pb-64 -mt-4 flex flex-col items-center justify-center text-center gap-6",
+                    })}
+                  </div>
+                </Match>
+                <Match when={params.id && teamBoardEnabled() && ui.aggregateView === "board"}>
+                  <TeamBoard sessionID={params.id!} mode="board" onExit={() => setUi("aggregateView", "session")} />
+                </Match>
+                <Match when={params.id && teamBoardEnabled() && ui.aggregateView === "tasks"}>
+                  <TeamBoard sessionID={params.id!} mode="tasks" onExit={() => setUi("aggregateView", "session")} />
+                </Match>
+                <Match when={params.id}>
+                  <Show when={messagesReady()}>
+                    <MessageTimeline
+                      actions={actions}
+                      scroll={ui.scroll}
+                      onResumeScroll={resumeScroll}
+                      setScrollRef={setScrollRef}
+                      onScheduleScrollState={scheduleScrollState}
+                      onAutoScrollHandleScroll={autoScroll.handleScroll}
+                      onMarkScrollGesture={markScrollGesture}
+                      hasScrollGesture={hasScrollGesture}
+                      onUserScroll={markUserScroll}
+                      onHistoryScroll={historyLoader.onScrollerScroll}
+                      onAutoScrollInteraction={autoScroll.handleInteraction}
+                      shouldAnchorBottom={() =>
+                        !location.hash && !store.messageId && !ui.pendingMessage && !autoScroll.userScrolled()
+                      }
+                      centered={centered()}
+                      setContentRef={(el) => {
+                        content = el
+                        autoScroll.contentRef(el)
 
-                      const root = scroller
-                      if (root) scheduleScrollState(root)
-                    }}
-                    historyShift={historyLoader.shift()}
-                    userMessages={historyLoader.userMessages()}
-                    anchor={anchor}
-                    setRevealMessage={(fn) => {
-                      revealMessage = fn
-                    }}
-                  />
-                </Show>
-              </Match>
-              <Match when={true}>
-                <Show when={newSessionDesign()} fallback={<NewSessionView worktree={newSessionWorktree()} />}>
-                  <NewSessionDesignView>{composerRegion("inline")}</NewSessionDesignView>
-                </Show>
-              </Match>
-            </Switch>
+                        const root = scroller
+                        if (root) scheduleScrollState(root)
+                      }}
+                      historyShift={historyLoader.shift()}
+                      userMessages={historyLoader.userMessages()}
+                      anchor={anchor}
+                      setRevealMessage={(fn) => {
+                        revealMessage = fn
+                      }}
+                    />
+                  </Show>
+                </Match>
+                <Match when={true}>
+                  <Show when={newSessionDesign()} fallback={<NewSessionView worktree={newSessionWorktree()} />}>
+                    <NewSessionDesignView>{composerRegion("inline")}</NewSessionDesignView>
+                  </Show>
+                </Match>
+              </Switch>
+            </div>
+            <Show when={newSessionDesign() && params.id}>
+              <SessionDetailsPanel
+                sessionID={params.id}
+                todos={composer.todos()}
+                hidden={desktopSidePanelOpen() && !ui.detailsOpen}
+                overlay={ui.detailsOpen}
+                onClose={() => setUi("detailsOpen", false)}
+              />
+            </Show>
           </div>
 
           <Show when={params.id || !newSessionDesign()}>{composerRegion("dock")}</Show>
+          <Show when={newSessionDesign() && params.id}>
+            <SessionStatusBar
+              sessionID={params.id}
+              waiting={composer.blocked()}
+              onDetailsToggle={() => setUi("detailsOpen", !ui.detailsOpen)}
+            />
+          </Show>
 
           <Show when={desktopReviewOpen()}>
             <div onPointerDown={() => size.start()}>

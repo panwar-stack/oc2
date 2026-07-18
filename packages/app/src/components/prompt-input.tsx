@@ -99,6 +99,7 @@ interface PromptInputProps {
   workingElapsed?: () => string | undefined
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
+  setAbort?: (abort: (() => Promise<unknown>) | undefined) => void
   onSubmit?: () => void
 }
 
@@ -1187,6 +1188,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
   })
+  props.setAbort?.(abort)
+  onCleanup(() => props.setAbort?.(undefined))
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "u") {

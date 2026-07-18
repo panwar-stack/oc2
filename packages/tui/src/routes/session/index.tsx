@@ -45,7 +45,7 @@ import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
-import { Sidebar } from "./sidebar"
+import { Sidebar, sessionSidebarContentWidth, sessionSidebarPresentation } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
@@ -85,6 +85,8 @@ import {
   sessionGlobalBindingCommands,
   sessionGlobalUnfocusedBindingCommands,
 } from "./session-keybinds"
+import { SessionStatusLine, SessionWorkingLine, sessionActivity } from "./chrome"
+import { consumedTokens, currentContextMessage } from "../../util/context-usage"
 
 addDefaultParsers(parsers.parsers)
 
@@ -396,16 +398,67 @@ export function Session() {
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
 
-  const wide = createMemo(() => dimensions().width > 120)
-  const sidebarVisible = createMemo(() => {
-    if (session()?.parentID) return false
-    if (sidebarOpen()) return true
-    if (sidebar() === "auto" && wide()) return true
-    return false
-  })
+  const sidebarPresentation = createMemo(() =>
+    sessionSidebarPresentation({
+      width: dimensions().width,
+      parent: !!session()?.parentID,
+      open: sidebarOpen(),
+      preference: sidebar(),
+    }),
+  )
+  const sidebarVisible = createMemo(() => sidebarPresentation() !== "hidden")
   const showTimestamps = createMemo(() => timestamps() === "show")
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  const contentWidth = createMemo(() => sessionSidebarContentWidth(dimensions().width, sidebarPresentation()))
   const providers = createMemo(() => Model.index(sync.data.provider))
+  const contextUsage = createMemo(() => {
+    const message = currentContextMessage(messages())
+    if (!message) return
+    return {
+      tokens: consumedTokens(message.tokens),
+      limit: Model.get(providers(), message.providerID, message.modelID)?.limit.context,
+    }
+  })
+  const workingMembers = createMemo(() =>
+    children().filter((item) => {
+      if (item.id === route.sessionID) return false
+      const teamStatus = sync.data.team_member_status[item.id]
+      if (!teamStatus) return false
+      const status = sync.data.session_status[item.id]
+      return status?.type === "busy" || status?.type === "retry" || teamStatus.status === "starting"
+    }),
+  )
+  const activeTodo = createMemo(() =>
+    (sync.data.todo[route.sessionID] ?? []).find((item) => item.status === "in_progress"),
+  )
+  const workingMember = createMemo(() => workingMembers()[0])
+  const activity = createMemo(() =>
+    sessionActivity({
+      waiting: permissions().length > 0 || questions().length > 0,
+      compacting: !!session()?.time.compacting,
+      status: sync.data.session_status[route.sessionID],
+      task: activeTodo()?.content,
+      started: session()?.time.compacting ?? session()?.time.processing,
+      teammate: workingMember()
+        ? {
+            name: workingMember()!.title,
+            task: (sync.data.todo[workingMember()!.id] ?? []).find((item) => item.status === "in_progress")?.content,
+            started: workingMember()!.time.processing,
+          }
+        : undefined,
+    }),
+  )
+  const interruptShortcut = useCommandShortcut("session.interrupt")
+  const paletteShortcut = useCommandShortcut("command.palette.show")
+  const lspCount = createMemo(() => Object.keys(sync.data.lsp).length)
+  const mcpItems = createMemo(() => Object.values(sync.data.mcp))
+  const mcpCount = createMemo(() => mcpItems().filter((item) => item.status === "connected").length)
+  const mcpIssueCount = createMemo(
+    () =>
+      mcpItems().filter(
+        (item) =>
+          item.status === "failed" || item.status === "needs_auth" || item.status === "needs_client_registration",
+      ).length,
+  )
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
@@ -1228,7 +1281,6 @@ export function Session() {
       title: "Toggle team panel",
       value: "team.panel.toggle",
       category: "Team",
-      hidden: true,
       enabled: sync.data.config.experimental?.agent_teams === true,
       run: () => {
         dialog.replace(() => <DialogTeam />)
@@ -1238,7 +1290,6 @@ export function Session() {
       title: "Toggle team task list",
       value: "team.task.list",
       category: "Team",
-      hidden: true,
       enabled: sync.data.config.experimental?.agent_teams === true,
       run: () => {
         dialog.replace(() => <DialogTeam focusTab="tasks" />)
@@ -1570,16 +1621,37 @@ export function Session() {
                     />
                   </pluginRuntime.Slot>
                 </Show>
+                <Show when={activity()}>
+                  {(state) => (
+                    <SessionWorkingLine
+                      width={contentWidth()}
+                      activity={state()}
+                      interruptShortcut={interruptShortcut()}
+                    />
+                  )}
+                </Show>
+                <SessionStatusLine
+                  width={contentWidth()}
+                  agent={session()?.agent ?? "agent"}
+                  title={session()?.title ?? route.sessionID}
+                  workingAgents={workingMembers().length}
+                  context={contextUsage()}
+                  paletteShortcut={paletteShortcut()}
+                  waiting={permissions().length > 0 || questions().length > 0}
+                  lspCount={lspCount()}
+                  mcpCount={mcpCount()}
+                  mcpIssueCount={mcpIssueCount()}
+                />
               </box>
             </Show>
             <Toast />
           </box>
           <Show when={sidebarVisible()}>
             <Switch>
-              <Match when={wide()}>
+              <Match when={sidebarPresentation() === "wide"}>
                 <Sidebar sessionID={route.sessionID} />
               </Match>
-              <Match when={!wide()}>
+              <Match when={sidebarPresentation() === "overlay"}>
                 <box
                   position="absolute"
                   top={0}
@@ -1589,7 +1661,7 @@ export function Session() {
                   alignItems="flex-end"
                   backgroundColor={theme.scrimLight}
                 >
-                  <Sidebar sessionID={route.sessionID} />
+                  <Sidebar sessionID={route.sessionID} overlay />
                 </box>
               </Match>
             </Switch>

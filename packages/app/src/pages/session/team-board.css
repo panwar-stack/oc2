@@ -1,0 +1,19 @@
+@layer components {
+  [data-component="team-board-grid"] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--v2-space-4);
+  }
+
+  @container (min-width: 760px) {
+    [data-component="team-board-grid"] {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @container (min-width: 1100px) {
+    [data-component="team-board-grid"] {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+}

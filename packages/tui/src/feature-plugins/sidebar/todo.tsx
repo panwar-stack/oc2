@@ -1,31 +1,17 @@
 import type { TuiPlugin, TuiPluginApi } from "@oc2-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo, For, Show, createSignal } from "solid-js"
-import { TodoItem } from "../../component/todo-item"
+import { createMemo, Show } from "solid-js"
+import { SidebarTodoSection } from "../../routes/session/sidebar-sections"
 
 const id = "internal:sidebar-todo"
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
-  const [open, setOpen] = createSignal(true)
-  const theme = () => props.api.theme.current
   const list = createMemo(() => props.api.state.session.todo(props.session_id))
-  const show = createMemo(() => list().length > 0 && list().some((item) => item.status !== "completed"))
+  const show = createMemo(() => list().length > 0)
 
   return (
     <Show when={show()}>
-      <box>
-        <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
-          <Show when={list().length > 2}>
-            <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
-          </Show>
-          <text fg={theme().text}>
-            <b>Todo</b>
-          </text>
-        </box>
-        <Show when={list().length <= 2 || open()}>
-          <For each={list()}>{(item) => <TodoItem status={item.status} content={item.content} />}</For>
-        </Show>
-      </box>
+      <SidebarTodoSection items={list()} />
     </Show>
   )
 }

@@ -2,6 +2,8 @@ import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@oc2-ai/plugin/tu
 import { useSync } from "../../context/sync"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { Spinner } from "../../component/spinner"
+import { SidebarSectionHeader } from "../../routes/session/sidebar-sections"
+import { Locale } from "../../util/locale"
 
 const id = "internal:sidebar-team"
 
@@ -49,7 +51,38 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const sync = useSync()
   const theme = () => props.api.theme.current
   const teamsEnabled = createMemo(() => props.api.state.config.experimental?.agent_teams === true)
-  const members = createMemo(() => (teamsEnabled() ? props.api.state.session.children(props.session_id) : []))
+  const members = createMemo(() =>
+    teamsEnabled()
+      ? props.api.state.session
+          .children(props.session_id)
+          .filter((member) => sync.data.team_member_status[member.id] !== undefined)
+      : [],
+  )
+  type Member = ReturnType<typeof members>[number]
+  const memberPending = (member: Member) =>
+    props.api.state.session.permission(member.id).length + props.api.state.session.question(member.id).length
+  const grouped = createMemo(() =>
+    members().reduce(
+      (result, member) => {
+        const status = props.api.state.session.status(member.id)
+        const teamStatus = sync.data.team_member_status[member.id]
+        const label = statusLabel(status, teamStatus)
+        if (memberPending(member) > 0) result.attention.push(member)
+        else if (isMemberWorking(status, teamStatus)) result.working.push(member)
+        else if (label === "completed") result.completed.push(member)
+        else if (label === "cancelled") result.failed.push(member)
+        else result.idle.push(member)
+        return result
+      },
+      {
+        working: [] as Member[],
+        idle: [] as Member[],
+        completed: [] as Member[],
+        attention: [] as Member[],
+        failed: [] as Member[],
+      },
+    ),
+  )
 
   const pendingPermissions = createMemo(() => {
     if (!teamsEnabled()) return 0
@@ -65,22 +98,12 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   return (
     <Show when={teamsEnabled()}>
       <box>
-        <box flexDirection="row" gap={1} onMouseDown={() => members().length > 2 && setOpen((x) => !x)}>
-          <Show when={members().length > 2}>
-            <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
-          </Show>
-          <text fg={theme().text}>
-            <b>Team</b>
-            <Show when={members().length > 0}>
-              <span style={{ fg: theme().textMuted }}>
-                {" "}
-                ({members().length} member{members().length !== 1 ? "s" : ""})
-              </span>
-            </Show>
-            <Show when={pendingPermissions() > 0}>
-              <span style={{ fg: theme().warning }}> [{pendingPermissions()} pending]</span>
-            </Show>
-          </text>
+        <box onMouseDown={() => members().length > 2 && setOpen((x) => !x)}>
+          <SidebarSectionHeader
+            title="Team"
+            detail={`${members().length}${pendingPermissions() ? ` · ▲ ${pendingPermissions()}` : ""}`}
+            detailColor={pendingPermissions() ? theme().accent : undefined}
+          />
         </box>
         <Show when={!props.api.state.ready}>
           <Spinner color={theme().textMuted}>Loading team members...</Spinner>
@@ -89,7 +112,11 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
           <text fg={theme().textMuted}>No team members. Use team_create then team_spawn to add members.</text>
         </Show>
         <Show when={members().length > 0 && (members().length <= 2 || open())}>
-          <For each={members()}>
+          <box flexDirection="row" gap={1}>
+            <text fg={theme().warning}>◐</text>
+            <text fg={theme().warning}>Working · {grouped().working.length}</text>
+          </box>
+          <For each={grouped().working}>
             {(member) => {
               const [hover, setHover] = createSignal(false)
               const status = createMemo(() => props.api.state.session.status(member.id))
@@ -106,6 +133,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                 <box
                   flexDirection="row"
                   gap={1}
+                  paddingLeft={2}
                   onMouseOver={() => setHover(true)}
                   onMouseOut={() => setHover(false)}
                   onMouseDown={() => {
@@ -132,8 +160,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                       <Spinner color={statusColor()} />
                     </box>
                   </Show>
-                  <text fg={theme().textMuted}>{member.title}</text>
-                  <text fg={theme().textMuted}>({statusLabel(status(), teamStatus())})</text>
+                  <text fg={theme().textMuted} wrapMode="none">
+                    {Locale.truncate(member.title, memberPerms() ? 14 : 22)}
+                  </text>
                   <Show when={memberPerms() > 0}>
                     <text style={{ fg: theme().warning }}>[{memberPerms()} pending]</text>
                   </Show>
@@ -141,6 +170,26 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
               )
             }}
           </For>
+          <box flexDirection="row" gap={1}>
+            <text fg={theme().textMuted}>○</text>
+            <text fg={theme().textMuted}>Idle · {grouped().idle.length}</text>
+          </box>
+          <Show when={grouped().attention.length > 0}>
+            <box flexDirection="row" gap={1}>
+              <text fg={theme().accent}>▲</text>
+              <text fg={theme().accent}>Needs you · {grouped().attention.length}</text>
+            </box>
+          </Show>
+          <Show when={grouped().failed.length > 0}>
+            <box flexDirection="row" gap={1}>
+              <text fg={theme().error}>✕</text>
+              <text fg={theme().error}>Failed · {grouped().failed.length}</text>
+            </box>
+          </Show>
+          <box flexDirection="row" gap={1}>
+            <text fg={theme().success}>✓</text>
+            <text fg={theme().success}>Completed · {grouped().completed.length}</text>
+          </box>
         </Show>
       </box>
     </Show>

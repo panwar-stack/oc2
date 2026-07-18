@@ -1,6 +1,7 @@
 import type { TuiPlugin, TuiPluginApi } from "@oc2-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show, createSignal } from "solid-js"
+import { Locale } from "../../util/locale"
 
 const id = "internal:sidebar-lsp"
 
@@ -35,8 +36,8 @@ function View(props: { api: TuiPluginApi }) {
               >
                 •
               </text>
-              <text fg={theme().textMuted}>
-                {item.id} {item.root}
+              <text fg={theme().textMuted} wrapMode="none">
+                {Locale.truncate(`${item.id} ${item.root}`, 26)}
               </text>
             </box>
           )}

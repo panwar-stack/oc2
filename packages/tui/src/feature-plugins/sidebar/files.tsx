@@ -32,7 +32,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
             {(item) => (
               <box flexDirection="row" gap={1} justifyContent="space-between">
                 <text fg={theme().textMuted} wrapMode="none">
-                  {Locale.truncateLeft(item.file, Math.max(2, 36 - changeCountWidth(item)))}
+                  {Locale.truncateLeft(item.file, Math.max(2, 26 - changeCountWidth(item)))}
                 </text>
                 <box flexDirection="row" gap={1} flexShrink={0}>
                   <Show when={item.additions}>
