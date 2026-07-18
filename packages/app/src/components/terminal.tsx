@@ -1,10 +1,8 @@
-import { withAlpha } from "@oc2-ai/ui/theme/color"
 import { useTheme } from "@oc2-ai/ui/theme/context"
-import { resolveThemeVariant } from "@oc2-ai/ui/theme/resolve"
-import type { HexColor } from "@oc2-ai/ui/theme/types"
 import { showToast } from "@/utils/toast"
 import type { FitAddon, Ghostty, Terminal as Term } from "ghostty-web"
 import { type ComponentProps, createEffect, createMemo, onCleanup, onMount, splitProps } from "solid-js"
+import { createStore } from "solid-js/store"
 import { SerializeAddon } from "@/addons/serialize"
 import { matchKeybind, parseKeybind } from "@/context/command"
 import { useLanguage } from "@/context/language"
@@ -16,6 +14,7 @@ import type { LocalPTY } from "@/context/terminal"
 import { disposeIfDisposable, getHoveredLinkText, setOptionIfSupported } from "@/utils/runtime-adapters"
 import { terminalWriter } from "@/utils/terminal-writer"
 import { terminalWebSocketURL } from "@/utils/terminal-websocket-url"
+import { observeTerminalTheme, terminalThemeFromElement, terminalThemeSequence } from "./terminal-theme"
 
 const TOGGLE_TERMINAL_ID = "terminal.toggle"
 const DEFAULT_TOGGLE_TERMINAL_KEYBIND = "ctrl+`"
@@ -39,28 +38,6 @@ const loadGhostty = () => {
       throw err
     })
   return shared
-}
-
-type TerminalColors = {
-  background: string
-  foreground: string
-  cursor: string
-  selectionBackground: string
-}
-
-const DEFAULT_TERMINAL_COLORS: Record<"light" | "dark", TerminalColors> = {
-  light: {
-    background: "#fcfcfc",
-    foreground: "#211e1e",
-    cursor: "#211e1e",
-    selectionBackground: withAlpha("#211e1e", 0.2),
-  },
-  dark: {
-    background: "#191515",
-    foreground: "#d4d4d4",
-    cursor: "#d4d4d4",
-    selectionBackground: withAlpha("#d4d4d4", 0.25),
-  },
 }
 
 const debugTerminal = (...values: unknown[]) => {
@@ -203,6 +180,7 @@ export const Terminal = (props: TerminalProps) => {
   let drop: VoidFunction | undefined
   let reconn: ReturnType<typeof setTimeout> | undefined
   let tries = 0
+  const [themeState, setThemeState] = createStore({ revision: 0 })
 
   const cleanup = () => {
     if (!cleanups.length) return
@@ -227,28 +205,12 @@ export const Terminal = (props: TerminalProps) => {
       })
   }
 
-  const getTerminalColors = (): TerminalColors => {
-    const mode = theme.mode() === "dark" ? "dark" : "light"
-    const fallback = DEFAULT_TERMINAL_COLORS[mode]
-    const currentTheme = theme.themes()[theme.themeId()]
-    if (!currentTheme) return fallback
-    const variant = mode === "dark" ? currentTheme.dark : currentTheme.light
-    if (!variant?.seeds && !variant?.palette) return fallback
-    const resolved = resolveThemeVariant(variant, mode === "dark")
-    const text = resolved["text-stronger"] ?? fallback.foreground
-    const background = resolved["background-stronger"] ?? fallback.background
-    const alpha = mode === "dark" ? 0.25 : 0.2
-    const base = text.startsWith("#") ? (text as HexColor) : (fallback.foreground as HexColor)
-    const selectionBackground = withAlpha(base, alpha)
-    return {
-      background,
-      foreground: text,
-      cursor: text,
-      selectionBackground,
-    }
-  }
-
-  const terminalColors = createMemo(getTerminalColors)
+  const terminalColors = createMemo(() => {
+    theme.mode()
+    theme.themes()[theme.themeId()]
+    themeState.revision
+    return terminalThemeFromElement(document.documentElement)
+  })
 
   const scheduleFit = () => {
     if (disposed) return
@@ -290,7 +252,8 @@ export const Terminal = (props: TerminalProps) => {
   createEffect(() => {
     const colors = terminalColors()
     if (!term) return
-    setOptionIfSupported(term, "theme", colors)
+    term.renderer?.setTheme(colors)
+    term.write(terminalThemeSequence(colors))
   })
 
   createEffect(() => {
@@ -332,6 +295,10 @@ export const Terminal = (props: TerminalProps) => {
   }
 
   onMount(() => {
+    cleanups.push(
+      observeTerminalTheme(document.documentElement, () => setThemeState("revision", (revision) => revision + 1)),
+    )
+
     const run = async () => {
       const loaded = await loadGhostty()
       if (disposed) return

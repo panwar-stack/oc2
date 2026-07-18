@@ -27,6 +27,20 @@ test("status glyphs expose the canonical map and decorative default", async () =
   expect(await source("status-glyph.tsx")).toContain('aria-hidden={local.label ? undefined : "true"}')
 })
 
+test("status glyphs use standard Unicode rather than private font codepoints", () => {
+  const privateUse = (codepoint: number) =>
+    (codepoint >= 0xe000 && codepoint <= 0xf8ff) ||
+    (codepoint >= 0xf0000 && codepoint <= 0xffffd) ||
+    (codepoint >= 0x100000 && codepoint <= 0x10fffd)
+
+  expect(
+    [...Object.values(STATUS_GLYPHS).join("")].some((glyph) => {
+      const codepoint = glyph.codePointAt(0)
+      return codepoint !== undefined && privateUse(codepoint)
+    }),
+  ).toBe(false)
+})
+
 test("key hints use real buttons only for clickable affordances", async () => {
   const component = await source("key-hint-v2.tsx")
   expect(component).toContain('component={local.onClick ? "button" : "span"}')
