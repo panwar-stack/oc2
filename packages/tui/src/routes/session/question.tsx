@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { useRenderer } from "@opentui/solid"
+import { createMemo, For, onCleanup, onMount, Show } from "solid-js"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
 import type { QuestionAnswer, QuestionRequest } from "@oc2-ai/sdk/v2"
@@ -8,121 +8,153 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
+import { Glyph } from "../../component/glyph"
+import { KeyHint } from "../../component/key-hint"
 
 const QUESTION_MODE = "question"
 
-export function QuestionPrompt(props: { request: QuestionRequest; directory?: string }) {
+export function QuestionPrompt(props: {
+  request: QuestionRequest
+  directory?: string
+  tool?: string
+  onResolved?: (summary: { variant: "resolved" | "cancelled"; text: string }) => void
+}) {
   const sdk = useSDK()
   const { theme } = useTheme()
   const renderer = useRenderer()
   const tuiConfig = useTuiConfig()
   const modeStack = useOpencodeModeStack()
-
+  const dimensions = useTerminalDimensions()
   const questions = createMemo(() => props.request.questions)
-  const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
-  const tabs = createMemo(() => (single() ? 1 : questions().length + 1)) // questions + confirm tab (no confirm for single select)
-  const [tabHover, setTabHover] = createSignal<number | "confirm" | null>(null)
   const [store, setStore] = createStore({
     tab: 0,
     answers: [] as QuestionAnswer[],
     custom: [] as string[],
-    selected: 0,
+    focused: 0,
     editing: false,
+    phase: "waiting" as "waiting" | "submitting" | "resolved" | "cancelled",
   })
-
   let textarea: TextareaRenderable | undefined
 
   const question = createMemo(() => questions()[store.tab])
-  const confirm = createMemo(() => !single() && store.tab === questions().length)
   const options = createMemo(() => question()?.options ?? [])
   const custom = createMemo(() => question()?.custom !== false)
-  const other = createMemo(() => custom() && store.selected === options().length)
+  const total = createMemo(() => options().length + (custom() ? 1 : 0))
   const input = createMemo(() => store.custom[store.tab] ?? "")
   const multi = createMemo(() => question()?.multiple === true)
+  const planApproval = createMemo(() => props.tool === "plan_exit")
+  const planDecision = createMemo(() => store.answers[store.tab]?.[0])
+  const narrow = createMemo(() => dimensions().width < 80)
+  const last = createMemo(() => store.tab >= questions().length - 1)
+  const selected = createMemo(() => store.answers[store.tab]?.length ?? 0)
+  const selectedTotal = createMemo(() => store.answers.reduce((sum, answer) => sum + (answer?.length ?? 0), 0))
   const customPicked = createMemo(() => {
     const value = input()
-    if (!value) return false
-    return store.answers[store.tab]?.includes(value) ?? false
+    return value ? (store.answers[store.tab]?.includes(value) ?? false) : false
   })
 
-  function submit() {
-    const answers = questions().map((_, i) => store.answers[i] ?? [])
-    void sdk.client.question.reply({
-      requestID: props.request.id,
-      directory: props.directory,
-      answers,
-    })
+  const reply = (answers: QuestionAnswer[]) => {
+    setStore("phase", "submitting")
+    void sdk.client.question
+      .reply({ requestID: props.request.id, directory: props.directory, answers })
+      .then((result) => {
+        if (result.error) {
+          setStore("phase", "waiting")
+          return
+        }
+        setStore("phase", "resolved")
+        props.onResolved?.({ variant: "resolved", text: `Question resolved — ${selectedTotal()} selected` })
+      })
+      .catch(() => setStore("phase", "waiting"))
   }
 
-  function reject() {
-    void sdk.client.question.reject({
-      requestID: props.request.id,
-      directory: props.directory,
-    })
+  const submit = () => reply(questions().map((_, index) => store.answers[index] ?? []))
+
+  const reject = () => {
+    setStore("phase", "submitting")
+    void sdk.client.question
+      .reject({ requestID: props.request.id, directory: props.directory })
+      .then((result) => {
+        if (result.error) {
+          setStore("phase", "waiting")
+          return
+        }
+        setStore("phase", "cancelled")
+        props.onResolved?.({ variant: "cancelled", text: "Question cancelled" })
+      })
+      .catch(() => setStore("phase", "waiting"))
   }
 
-  function pick(answer: string, custom: boolean = false) {
+  const moveQuestion = (index: number) => {
+    const count = questions().length
+    if (!count) return
+    setStore("tab", (index + count) % count)
+    setStore("focused", 0)
+    setStore("editing", false)
+  }
+
+  const moveOption = (index: number) => {
+    const count = total()
+    if (!count) return
+    setStore("focused", (index + count) % count)
+  }
+
+  const toggle = (answer: string) => {
+    const answers = [...store.answers]
+    const current = answers[store.tab] ?? []
+    answers[store.tab] = current.includes(answer) ? current.filter((item) => item !== answer) : [...current, answer]
+    setStore("answers", answers)
+  }
+
+  const pick = (answer: string, own = false) => {
     const answers = [...store.answers]
     answers[store.tab] = [answer]
     setStore("answers", answers)
-    if (custom) {
-      const inputs = [...store.custom]
-      inputs[store.tab] = answer
-      setStore("custom", inputs)
+    if (own) {
+      const values = [...store.custom]
+      values[store.tab] = answer
+      setStore("custom", values)
     }
-    if (single()) {
-      void sdk.client.question.reply({
-        requestID: props.request.id,
-        directory: props.directory,
-        answers: [[answer]],
-      })
+    if (questions().length === 1) {
+      if (planApproval()) return
+      reply([[answer]])
       return
     }
-    setStore("tab", store.tab + 1)
-    setStore("selected", 0)
+    if (!last()) moveQuestion(store.tab + 1)
   }
 
-  function toggle(answer: string) {
-    const existing = store.answers[store.tab] ?? []
-    const next = [...existing]
-    const index = next.indexOf(answer)
-    if (index === -1) next.push(answer)
-    if (index !== -1) next.splice(index, 1)
-    const answers = [...store.answers]
-    answers[store.tab] = next
-    setStore("answers", answers)
-  }
-
-  function moveTo(index: number) {
-    setStore("selected", index)
-  }
-
-  function selectTab(index: number) {
-    setStore("tab", index)
-    setStore("selected", 0)
-  }
-
-  function selectOption() {
-    if (other()) {
-      if (!multi()) {
-        setStore("editing", true)
-        return
-      }
+  const selectOption = (index = store.focused) => {
+    if (store.phase !== "waiting") return
+    if (custom() && index === options().length) {
       const value = input()
-      if (value && customPicked()) {
+      if (multi() && value) {
         toggle(value)
         return
       }
       setStore("editing", true)
       return
     }
-    const opt = options()[store.selected]
-    if (!opt) return
+    const option = options()[index]
+    if (!option) return
     if (multi()) {
-      toggle(opt.label)
+      toggle(option.label)
       return
     }
-    pick(opt.label)
+    pick(option.label)
+  }
+
+  const confirm = () => {
+    if (store.phase !== "waiting") return
+    if (!multi() && selected() === 0) {
+      selectOption()
+      if (planApproval() && selected() > 0) submit()
+      return
+    }
+    if (!last()) {
+      moveQuestion(store.tab + 1)
+      return
+    }
+    submit()
   }
 
   onMount(() => {
@@ -132,7 +164,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
 
   useBindings(() => ({
     mode: QUESTION_MODE,
-    enabled: store.editing && !confirm(),
+    enabled: store.editing && store.phase === "waiting",
     commands: [
       {
         name: "prompt.clear",
@@ -153,9 +185,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
         key: "escape",
         desc: "Cancel answer edit",
         group: "Question",
-        cmd: () => {
-          setStore("editing", false)
-        },
+        cmd: () => setStore("editing", false),
       },
       ...tuiConfig.keybinds.get("prompt.clear"),
       {
@@ -164,273 +194,201 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
         group: "Question",
         cmd: () => {
           const text = textarea?.plainText?.trim() ?? ""
-          const prev = store.custom[store.tab]
-
+          const previous = store.custom[store.tab]
           if (!text) {
-            if (prev) {
-              const inputs = [...store.custom]
-              inputs[store.tab] = ""
-              setStore("custom", inputs)
-
+            const values = [...store.custom]
+            values[store.tab] = ""
+            setStore("custom", values)
+            if (previous) {
               const answers = [...store.answers]
-              answers[store.tab] = (answers[store.tab] ?? []).filter((x) => x !== prev)
+              answers[store.tab] = (answers[store.tab] ?? []).filter((item) => item !== previous)
               setStore("answers", answers)
             }
             setStore("editing", false)
             return
           }
 
-          if (multi()) {
-            const inputs = [...store.custom]
-            inputs[store.tab] = text
-            setStore("custom", inputs)
-
-            const existing = store.answers[store.tab] ?? []
-            const next = [...existing]
-            if (prev) {
-              const index = next.indexOf(prev)
-              if (index !== -1) next.splice(index, 1)
-            }
-            if (!next.includes(text)) next.push(text)
-            const answers = [...store.answers]
-            answers[store.tab] = next
-            setStore("answers", answers)
+          if (!multi()) {
             setStore("editing", false)
+            pick(text, true)
             return
           }
 
-          pick(text, true)
+          const values = [...store.custom]
+          values[store.tab] = text
+          setStore("custom", values)
+          const answers = [...store.answers]
+          const current = (answers[store.tab] ?? []).filter((item) => item !== previous)
+          answers[store.tab] = current.includes(text) ? current : [...current, text]
+          setStore("answers", answers)
           setStore("editing", false)
         },
       },
     ],
   }))
 
-  useBindings(() => {
-    const opts = options()
-    const total = opts.length + (custom() ? 1 : 0)
-    const max = Math.min(total, 9)
-
-    return {
-      mode: QUESTION_MODE,
-      enabled: !store.editing,
-      commands: [
-        {
-          name: "app.exit",
-          title: "Reject question",
-          category: "Question",
-          run() {
-            reject()
-          },
+  useBindings(() => ({
+    mode: QUESTION_MODE,
+    enabled: !store.editing && store.phase === "waiting",
+    commands: [
+      {
+        name: "app.exit",
+        title: "Reject question",
+        category: "Question",
+        run: reject,
+      },
+    ],
+    bindings: [
+      { key: "left", desc: "Previous question", group: "Question", cmd: () => moveQuestion(store.tab - 1) },
+      { key: "h", desc: "Previous question", group: "Question", cmd: () => moveQuestion(store.tab - 1) },
+      { key: "right", desc: "Next question", group: "Question", cmd: () => moveQuestion(store.tab + 1) },
+      { key: "l", desc: "Next question", group: "Question", cmd: () => moveQuestion(store.tab + 1) },
+      {
+        key: "tab",
+        desc: "Next question",
+        group: "Question",
+        cmd: ({ event }: { event: { shift: boolean } }) => moveQuestion(store.tab + (event.shift ? -1 : 1)),
+      },
+      ...Array.from({ length: Math.min(total(), 9) }, (_, index) => ({
+        key: String(index + 1),
+        desc: `Select answer ${index + 1}`,
+        group: "Question",
+        cmd: () => {
+          moveOption(index)
+          selectOption(index)
         },
-      ],
-      bindings: [
-        {
-          key: "left",
-          desc: "Previous question",
-          group: "Question",
-          cmd: () => selectTab((store.tab - 1 + tabs()) % tabs()),
-        },
-        {
-          key: "h",
-          desc: "Previous question",
-          group: "Question",
-          cmd: () => selectTab((store.tab - 1 + tabs()) % tabs()),
-        },
-        { key: "right", desc: "Next question", group: "Question", cmd: () => selectTab((store.tab + 1) % tabs()) },
-        { key: "l", desc: "Next question", group: "Question", cmd: () => selectTab((store.tab + 1) % tabs()) },
-        {
-          key: "tab",
-          desc: "Next question",
-          group: "Question",
-          cmd: ({ event }: { event: { shift: boolean } }) => {
-            selectTab((store.tab + (event.shift ? -1 : 1) + tabs()) % tabs())
-          },
-        },
-        ...(confirm()
-          ? [
-              { key: "return", desc: "Submit answer", group: "Question", cmd: () => submit() },
-              { key: "escape", desc: "Reject question", group: "Question", cmd: () => reject() },
-              ...tuiConfig.keybinds.get("app.exit"),
-            ]
-          : [
-              ...Array.from({ length: max }, (_, index) => ({
-                key: String(index + 1),
-                desc: `Select answer ${index + 1}`,
-                group: "Question",
-                cmd: () => {
-                  moveTo(index)
-                  selectOption()
-                },
-              })),
-              {
-                key: "up",
-                desc: "Previous answer",
-                group: "Question",
-                cmd: () => moveTo((store.selected - 1 + total) % total),
-              },
-              {
-                key: "k",
-                desc: "Previous answer",
-                group: "Question",
-                cmd: () => moveTo((store.selected - 1 + total) % total),
-              },
-              { key: "down", desc: "Next answer", group: "Question", cmd: () => moveTo((store.selected + 1) % total) },
-              { key: "j", desc: "Next answer", group: "Question", cmd: () => moveTo((store.selected + 1) % total) },
-              { key: "return", desc: "Select answer", group: "Question", cmd: () => selectOption() },
-              { key: "escape", desc: "Reject question", group: "Question", cmd: () => reject() },
-              ...tuiConfig.keybinds.get("app.exit"),
-            ]),
-      ],
-    }
-  })
+      })),
+      { key: "up", desc: "Previous answer", group: "Question", cmd: () => moveOption(store.focused - 1) },
+      { key: "k", desc: "Previous answer", group: "Question", cmd: () => moveOption(store.focused - 1) },
+      { key: "down", desc: "Next answer", group: "Question", cmd: () => moveOption(store.focused + 1) },
+      { key: "j", desc: "Next answer", group: "Question", cmd: () => moveOption(store.focused + 1) },
+      { key: "space", desc: "Toggle answer", group: "Question", cmd: () => selectOption() },
+      { key: "return", desc: "Confirm answer", group: "Question", cmd: confirm },
+      { key: "escape", desc: "Reject question", group: "Question", cmd: reject },
+      ...tuiConfig.keybinds.get("app.exit"),
+    ],
+  }))
 
   return (
-    <box
-      backgroundColor={theme.backgroundPanel}
-      border={["left"]}
-      borderColor={theme.accent}
-      customBorderChars={SplitBorder.customBorderChars}
-    >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
-        <Show when={!single()}>
-          <box flexDirection="row" gap={1} paddingLeft={1}>
-            <For each={questions()}>
-              {(q, index) => {
-                const isActive = () => index() === store.tab
-                const isAnswered = () => {
-                  return (store.answers[index()]?.length ?? 0) > 0
-                }
-                return (
-                  <box
-                    paddingLeft={1}
-                    paddingRight={1}
-                    backgroundColor={
-                      isActive()
-                        ? theme.accent
-                        : tabHover() === index()
-                          ? theme.backgroundElement
-                          : theme.backgroundPanel
-                    }
-                    onMouseOver={() => setTabHover(index())}
-                    onMouseOut={() => setTabHover(null)}
-                    onMouseUp={() => {
-                      if (renderer.getSelection()?.getSelectedText()) return
-                      selectTab(index())
-                    }}
-                  >
-                    <text
-                      fg={
-                        isActive()
-                          ? selectedForeground(theme, theme.accent)
-                          : isAnswered()
-                            ? theme.text
-                            : theme.textMuted
-                      }
-                    >
-                      {q.header}
-                    </text>
-                  </box>
-                )
-              }}
-            </For>
-            <box
-              paddingLeft={1}
-              paddingRight={1}
-              backgroundColor={
-                confirm() ? theme.accent : tabHover() === "confirm" ? theme.backgroundElement : theme.backgroundPanel
-              }
-              onMouseOver={() => setTabHover("confirm")}
-              onMouseOut={() => setTabHover(null)}
-              onMouseUp={() => {
-                if (renderer.getSelection()?.getSelectedText()) return
-                selectTab(questions().length)
-              }}
-            >
-              <text fg={confirm() ? selectedForeground(theme, theme.accent) : theme.textMuted}>Confirm</text>
-            </box>
-          </box>
-        </Show>
-
-        <Show when={!confirm()}>
-          <box paddingLeft={1} gap={1}>
-            <box>
-              <text fg={theme.text}>
-                {question()?.question}
-                {multi() ? " (select all that apply)" : ""}
+    <Show
+      when={store.phase === "resolved" || store.phase === "cancelled"}
+      fallback={
+        <box
+          backgroundColor={theme.backgroundPanel}
+          border={["left"]}
+          borderColor={theme.accent}
+          customBorderChars={SplitBorder.customBorderChars}
+        >
+          <box gap={1} paddingLeft={2} paddingRight={3} paddingTop={1} paddingBottom={1}>
+            <box flexDirection={narrow() ? "column" : "row"} gap={1}>
+              <box flexDirection="row" gap={1}>
+                <Glyph name="needs-you" />
+                <text fg={theme.text}>
+                  <b>{question()?.header ?? "Question"}</b>
+                </text>
+                <text fg={theme.accent}>
+                  {multi() ? "[multi-select]" : planApproval() ? "[plan approval]" : "[single-select]"}
+                </text>
+              </box>
+              <box flexGrow={1} />
+              <text fg={theme.accent}>
+                <b>
+                  {selected()} of {total()} selected
+                </b>
               </text>
             </box>
-            <box>
+
+            <Show when={questions().length > 1}>
+              <box flexDirection="row" gap={1} paddingLeft={2}>
+                <For each={questions()}>
+                  {(item, index) => (
+                    <box
+                      paddingLeft={1}
+                      paddingRight={1}
+                      backgroundColor={index() === store.tab ? theme.accent : theme.backgroundPanel}
+                      onMouseUp={() => moveQuestion(index())}
+                    >
+                      <text fg={index() === store.tab ? selectedForeground(theme, theme.accent) : theme.textMuted}>
+                        {item.header}
+                      </text>
+                    </box>
+                  )}
+                </For>
+              </box>
+            </Show>
+
+            <box paddingLeft={2}>
+              <text fg={theme.text}>{question()?.question}</text>
+            </box>
+
+            <box paddingLeft={1}>
               <For each={options()}>
-                {(opt, i) => {
-                  const active = () => i() === store.selected
-                  const picked = () => store.answers[store.tab]?.includes(opt.label) ?? false
+                {(option, index) => {
+                  const focused = () => index() === store.focused
+                  const picked = () => store.answers[store.tab]?.includes(option.label) ?? false
                   return (
                     <box
-                      onMouseOver={() => moveTo(i())}
-                      onMouseDown={() => moveTo(i())}
+                      backgroundColor={focused() ? tint(theme.backgroundPanel, theme.accent, 0.12) : undefined}
+                      paddingLeft={1}
+                      paddingRight={1}
+                      onMouseOver={() => moveOption(index())}
+                      onMouseDown={() => moveOption(index())}
                       onMouseUp={() => {
                         if (renderer.getSelection()?.getSelectedText()) return
-                        selectOption()
+                        selectOption(index())
                       }}
                     >
-                      <box flexDirection="row">
-                        <box backgroundColor={active() ? theme.backgroundElement : undefined} paddingRight={1}>
-                          <text fg={active() ? tint(theme.textMuted, theme.secondary, 0.6) : theme.textMuted}>
-                            {`${i() + 1}.`}
-                          </text>
-                        </box>
-                        <box backgroundColor={active() ? theme.backgroundElement : undefined}>
-                          <text fg={active() ? theme.secondary : picked() ? theme.success : theme.text}>
-                            {multi() ? `[${picked() ? "✓" : " "}] ${opt.label}` : opt.label}
-                          </text>
-                        </box>
-                        <Show when={!multi()}>
-                          <text fg={theme.success}>{picked() ? " ✓" : ""}</text>
-                        </Show>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={picked() ? theme.accent : theme.textMuted}>
+                          {multi() ? `[${picked() ? "✓" : " "}]` : picked() ? "(●)" : "( )"}
+                        </text>
+                        <text fg={theme.textMuted}>{index() + 1}</text>
+                        <text fg={focused() ? theme.accent : picked() ? theme.text : theme.textMuted}>
+                          <span style={{ bold: focused() || picked() }}>{option.label}</span>
+                        </text>
                       </box>
-
-                      <box paddingLeft={3}>
-                        <text fg={theme.textMuted}>{opt.description}</text>
-                      </box>
+                      <Show when={option.description}>
+                        <box paddingLeft={6}>
+                          <text fg={theme.textMuted}>{option.description}</text>
+                        </box>
+                      </Show>
                     </box>
                   )
                 }}
               </For>
+
               <Show when={custom()}>
                 <box
-                  onMouseOver={() => moveTo(options().length)}
-                  onMouseDown={() => moveTo(options().length)}
+                  backgroundColor={
+                    store.focused === options().length ? tint(theme.backgroundPanel, theme.accent, 0.12) : undefined
+                  }
+                  paddingLeft={1}
+                  paddingRight={1}
+                  onMouseOver={() => moveOption(options().length)}
+                  onMouseDown={() => moveOption(options().length)}
                   onMouseUp={() => {
                     if (renderer.getSelection()?.getSelectedText()) return
-                    selectOption()
+                    selectOption(options().length)
                   }}
                 >
-                  <box flexDirection="row">
-                    <box backgroundColor={other() ? theme.backgroundElement : undefined} paddingRight={1}>
-                      <text fg={other() ? tint(theme.textMuted, theme.secondary, 0.6) : theme.textMuted}>
-                        {`${options().length + 1}.`}
-                      </text>
-                    </box>
-                    <box backgroundColor={other() ? theme.backgroundElement : undefined}>
-                      <text fg={other() ? theme.secondary : customPicked() ? theme.success : theme.text}>
-                        {multi() ? `[${customPicked() ? "✓" : " "}] Type your own answer` : "Type your own answer"}
-                      </text>
-                    </box>
-
-                    <Show when={!multi()}>
-                      <text fg={theme.success}>{customPicked() ? " ✓" : ""}</text>
-                    </Show>
+                  <box flexDirection="row" gap={1}>
+                    <text fg={customPicked() ? theme.accent : theme.textMuted}>
+                      {multi() ? `[${customPicked() ? "✓" : "┄"}]` : customPicked() ? "(●)" : "(┄)"}
+                    </text>
+                    <text fg={theme.textMuted}>{options().length + 1}</text>
+                    <text fg={store.focused === options().length ? theme.accent : theme.textMuted}>
+                      <span style={{ bold: store.focused === options().length }}>Type your own answer</span>
+                    </text>
                   </box>
                   <Show when={store.editing}>
-                    <box paddingLeft={3}>
+                    <box paddingLeft={6}>
                       <textarea
-                        ref={(val: TextareaRenderable) => {
-                          textarea = val
-                          val.traits = { status: "ANSWER" }
+                        ref={(value: TextareaRenderable) => {
+                          textarea = value
+                          value.traits = { status: "ANSWER" }
                           queueMicrotask(() => {
-                            val.focus()
-                            val.gotoLineEnd()
+                            value.focus()
+                            value.gotoLineEnd()
                           })
                         }}
                         initialValue={input()}
@@ -445,7 +403,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                     </box>
                   </Show>
                   <Show when={!store.editing && input()}>
-                    <box paddingLeft={3}>
+                    <box paddingLeft={6}>
                       <text fg={theme.textMuted}>{input()}</text>
                     </box>
                   </Show>
@@ -453,62 +411,45 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
               </Show>
             </box>
           </box>
-        </Show>
 
-        <Show when={confirm() && !single()}>
-          <box paddingLeft={1}>
-            <text fg={theme.text}>Review</text>
+          <box
+            flexDirection={narrow() ? "column" : "row"}
+            flexShrink={0}
+            gap={1}
+            paddingLeft={2}
+            paddingRight={3}
+            paddingBottom={1}
+            justifyContent="space-between"
+          >
+            <box flexDirection="row" gap={2}>
+              <KeyHint shortcut="↑↓" label="move" />
+              <KeyHint shortcut="space" label={multi() ? "toggle" : "select"} />
+              <KeyHint shortcut="esc" label="cancel" />
+            </box>
+            <box
+              width={narrow() ? "100%" : undefined}
+              paddingLeft={1}
+              paddingRight={1}
+              backgroundColor={theme.accent}
+              onMouseUp={confirm}
+            >
+              <text fg={selectedForeground(theme, theme.accent)}>
+                <b>
+                  {store.phase === "submitting"
+                    ? "◐ Submitting"
+                    : `${last() ? (planApproval() ? (planDecision() === "No" ? "Keep planning" : planDecision() === "Yes" ? "Approve plan" : "Choose plan action") : multi() ? `Confirm ${selected()}` : "Confirm answer") : "Next question"} ⏎`}
+                </b>
+              </text>
+            </box>
           </box>
-          <For each={questions()}>
-            {(q, index) => {
-              const value = () => store.answers[index()]?.join(", ") ?? ""
-              const answered = () => Boolean(value())
-              return (
-                <box paddingLeft={1}>
-                  <text>
-                    <span style={{ fg: theme.textMuted }}>{q.header}:</span>{" "}
-                    <span style={{ fg: answered() ? theme.text : theme.error }}>
-                      {answered() ? value() : "(not answered)"}
-                    </span>
-                  </text>
-                </box>
-              )
-            }}
-          </For>
-        </Show>
-      </box>
-      <box
-        flexDirection="row"
-        flexShrink={0}
-        gap={1}
-        paddingLeft={2}
-        paddingRight={3}
-        paddingBottom={1}
-        justifyContent="space-between"
-      >
-        <box flexDirection="row" gap={2}>
-          <Show when={!single()}>
-            <text fg={theme.text}>
-              {"⇆"} <span style={{ fg: theme.textMuted }}>tab</span>
-            </text>
-          </Show>
-          <Show when={!confirm()}>
-            <text fg={theme.text}>
-              {"↑↓"} <span style={{ fg: theme.textMuted }}>select</span>
-            </text>
-          </Show>
-          <text fg={theme.text}>
-            enter{" "}
-            <span style={{ fg: theme.textMuted }}>
-              {confirm() ? "submit" : multi() ? "toggle" : single() ? "submit" : "confirm"}
-            </span>
-          </text>
-
-          <text fg={theme.text}>
-            esc <span style={{ fg: theme.textMuted }}>dismiss</span>
-          </text>
         </box>
+      }
+    >
+      <box backgroundColor={store.phase === "cancelled" ? theme.error : theme.success} paddingLeft={2} paddingRight={2}>
+        <text fg={selectedForeground(theme, store.phase === "cancelled" ? theme.error : theme.success)}>
+          {store.phase === "cancelled" ? "✕ Question cancelled" : `✓ Question resolved — ${selectedTotal()} selected`}
+        </text>
       </box>
-    </box>
+    </Show>
   )
 }

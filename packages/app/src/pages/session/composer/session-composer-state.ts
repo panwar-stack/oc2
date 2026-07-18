@@ -95,11 +95,13 @@ export function createSessionComposerState(options?: {
     if (store.responding === perm.id) return
 
     setStore("responding", perm.id)
-    sdk.client.permission
+    return sdk.client.permission
       .respond({ sessionID: perm.sessionID, permissionID: perm.id, response })
+      .then(() => true)
       .catch((err: unknown) => {
         const description = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description })
+        return false
       })
       .finally(() => {
         setStore("responding", (id) => (id === perm.id ? undefined : id))

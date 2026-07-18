@@ -16,9 +16,11 @@ import { SessionFollowupDock } from "@/pages/session/composer/session-followup-d
 import { SessionRevertDock } from "@/pages/session/composer/session-revert-dock"
 import type { SessionComposerState } from "@/pages/session/composer/session-composer-state"
 import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
+import { StatusGlyph } from "@oc2-ai/ui/v2/status-glyph"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { NEW_SESSION_CONTENT_WIDTH } from "@/pages/session/new-session-layout"
+import { usePendingDecisionTitle } from "@/pages/session/composer/session-decision"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -64,6 +66,7 @@ export function SessionComposerRegion(props: {
   const parentID = createMemo(() => info()?.parentID)
   const child = createMemo(() => !!parentID())
   const showComposer = createMemo(() => !props.state.blocked() || child())
+  usePendingDecisionTitle(() => !!props.state.questionRequest() || !!props.state.permissionRequest())
 
   const previewPrompt = () =>
     prompt
@@ -86,9 +89,12 @@ export function SessionComposerRegion(props: {
     ready: false,
     height: 320,
     body: undefined as HTMLDivElement | undefined,
+    decision: undefined as { variant: "resolved" | "cancelled"; text: string } | undefined,
   })
   let timer: number | undefined
   let frame: number | undefined
+  let decisionTimer: number | undefined
+  let currentSessionKey = route.sessionKey()
 
   const clear = () => {
     if (timer !== undefined) {
@@ -101,13 +107,38 @@ export function SessionComposerRegion(props: {
     }
   }
 
+  const showDecisionSummary = (summary: { variant: "resolved" | "cancelled"; text: string }) => {
+    if (decisionTimer !== undefined) window.clearTimeout(decisionTimer)
+    decisionTimer = undefined
+    setStore("decision", summary)
+  }
+
   createEffect(() => {
-    route.sessionKey()
+    const summary = store.decision
+    const pending = !!props.state.questionRequest() || !!props.state.permissionRequest()
+    if (!summary || pending) {
+      if (decisionTimer !== undefined) window.clearTimeout(decisionTimer)
+      decisionTimer = undefined
+      return
+    }
+    if (decisionTimer !== undefined) return
+    decisionTimer = window.setTimeout(() => {
+      setStore("decision", undefined)
+      decisionTimer = undefined
+    }, 2400)
+  })
+
+  createEffect(() => {
+    const nextSessionKey = route.sessionKey()
     const ready = props.ready
     const delay = 140
 
     clear()
     setStore("ready", false)
+    if (nextSessionKey !== currentSessionKey) {
+      currentSessionKey = nextSessionKey
+      setStore("decision", undefined)
+    }
     if (!ready) return
 
     frame = requestAnimationFrame(() => {
@@ -119,7 +150,10 @@ export function SessionComposerRegion(props: {
     })
   })
 
-  onCleanup(clear)
+  onCleanup(() => {
+    clear()
+    if (decisionTimer !== undefined) window.clearTimeout(decisionTimer)
+  })
 
   const open = createMemo(() => store.ready && props.state.dock() && !props.state.closing())
   const progress = useSpring(() => (open() ? 1 : 0), { visualDuration: 0.3, bounce: 0 })
@@ -163,7 +197,11 @@ export function SessionComposerRegion(props: {
         <Show when={props.state.questionRequest()} keyed>
           {(request) => (
             <div>
-              <SessionQuestionDock request={request} onSubmit={props.onResponseSubmit} />
+              <SessionQuestionDock
+                request={request}
+                onSubmit={props.onResponseSubmit}
+                onResolved={showDecisionSummary}
+              />
             </div>
           )}
         </Show>
@@ -176,9 +214,19 @@ export function SessionComposerRegion(props: {
                 responding={props.state.permissionResponding()}
                 onDecide={(response) => {
                   props.onResponseSubmit()
-                  props.state.decide(response)
+                  return props.state.decide(response)
                 }}
+                onResolved={showDecisionSummary}
               />
+            </div>
+          )}
+        </Show>
+
+        <Show when={!props.state.questionRequest() && !props.state.permissionRequest() && store.decision} keyed>
+          {(summary) => (
+            <div data-component="decision-resolved" data-variant={summary.variant} role="status">
+              <StatusGlyph name={summary.variant === "cancelled" ? "failed" : "done"} size="normal" />
+              <span>{summary.text}</span>
             </div>
           )}
         </Show>

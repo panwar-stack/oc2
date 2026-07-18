@@ -215,6 +215,18 @@ export function Session() {
   const { theme } = useTheme()
   const promptRef = usePromptRef()
   const sdk = useSDK()
+  const [decisionSummary, setDecisionSummary] = createSignal<
+    { variant: "resolved" | "cancelled"; text: string } | undefined
+  >()
+  let decisionTimer: Timer | undefined
+  const showDecisionSummary = (summary: { variant: "resolved" | "cancelled"; text: string }) => {
+    if (decisionTimer) clearTimeout(decisionTimer)
+    decisionTimer = undefined
+    setDecisionSummary(summary)
+  }
+  onCleanup(() => {
+    if (decisionTimer) clearTimeout(decisionTimer)
+  })
   const session = createMemo(() => sync.session.get(route.sessionID))
   const primaryRoot = createMemo(() => sync.data.session_root[route.sessionID]?.find((root) => root.primary))
 
@@ -328,9 +340,28 @@ export function Session() {
     if (session()?.parentID && !isTeamMember()) return []
     return children().flatMap((x) => sync.data.question[x.id] ?? [])
   })
+  const questionTool = createMemo(() => {
+    const tool = questions()[0]?.tool
+    if (!tool) return
+    const part = sync.data.part[tool.messageID]?.find(
+      (candidate) => candidate.type === "tool" && candidate.callID === tool.callID,
+    )
+    return part?.type === "tool" ? part.tool : undefined
+  })
   const visible = createMemo(() => {
     if (session()?.parentID && !isTeamMember()) return false
     return permissions().length === 0 && questions().length === 0
+  })
+  createEffect(() => {
+    const summary = decisionSummary()
+    const show = visible()
+    if (decisionTimer) clearTimeout(decisionTimer)
+    decisionTimer = undefined
+    if (!summary || !show) return
+    decisionTimer = setTimeout(() => {
+      decisionTimer = undefined
+      setDecisionSummary(undefined)
+    }, 2400)
   })
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
@@ -1488,13 +1519,31 @@ export function Session() {
                   <PermissionPrompt
                     request={permissions()[0]}
                     directory={sync.session.get(permissions()[0].sessionID)?.directory}
+                    onResolved={showDecisionSummary}
                   />
                 </Show>
                 <Show when={permissions().length === 0 && questions().length > 0}>
                   <QuestionPrompt
                     request={questions()[0]}
                     directory={sync.session.get(questions()[0].sessionID)?.directory}
+                    tool={questionTool()}
+                    onResolved={showDecisionSummary}
                   />
+                </Show>
+                <Show when={permissions().length === 0 && questions().length === 0 && decisionSummary()} keyed>
+                  {(summary) => (
+                    <box
+                      backgroundColor={summary.variant === "cancelled" ? theme.error : theme.success}
+                      paddingLeft={2}
+                      paddingRight={2}
+                    >
+                      <text
+                        fg={selectedForeground(theme, summary.variant === "cancelled" ? theme.error : theme.success)}
+                      >
+                        {summary.variant === "cancelled" ? "✕" : "✓"} {summary.text}
+                      </text>
+                    </box>
+                  )}
                 </Show>
                 <Show when={session()?.parentID}>
                   <SubagentFooter />

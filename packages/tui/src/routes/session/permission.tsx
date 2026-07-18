@@ -3,7 +3,7 @@ import { dirname } from "node:path"
 import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
-import { useTheme, selectedForeground } from "../../context/theme"
+import { useTheme, selectedForeground, tint } from "../../context/theme"
 import type { PermissionRequest } from "@oc2-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
@@ -16,8 +16,11 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { OC2_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { Glyph } from "../../component/glyph"
+import { KeyHint } from "../../component/key-hint"
 
 type PermissionStage = "permission" | "always" | "reject"
+type PermissionReplyResult = { error?: unknown }
 
 function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
@@ -108,7 +111,11 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
+export function PermissionPrompt(props: {
+  request: PermissionRequest
+  directory?: string
+  onResolved?: (summary: { variant: "resolved" | "cancelled"; text: string }) => void
+}) {
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
@@ -160,30 +167,43 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               </Match>
             </Switch>
           }
-          options={{ confirm: "Confirm", cancel: "Cancel" }}
+          options={{ confirm: "Allow always", cancel: "Cancel" }}
           escapeKey="cancel"
           onSelect={(option) => {
-            setStore("stage", "permission")
-            if (option === "cancel") return
-            void sdk.client.permission.reply({
-              reply: "always",
-              requestID: props.request.id,
-              directory: props.directory,
-              workspace: project.workspace.current(),
-            })
+            if (option === "cancel") {
+              setStore("stage", "permission")
+              return
+            }
+            return sdk.client.permission
+              .reply({
+                reply: "always",
+                requestID: props.request.id,
+                directory: props.directory,
+                workspace: project.workspace.current(),
+              })
+              .then((result) => {
+                if (!result.error)
+                  props.onResolved?.({ variant: "resolved", text: "Permission resolved — Allow always" })
+                return result
+              })
           }}
         />
       </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           onConfirm={(message) => {
-            void sdk.client.permission.reply({
-              reply: "reject",
-              requestID: props.request.id,
-              directory: props.directory,
-              message: message || undefined,
-              workspace: project.workspace.current(),
-            })
+            return sdk.client.permission
+              .reply({
+                reply: "reject",
+                requestID: props.request.id,
+                directory: props.directory,
+                message: message || undefined,
+                workspace: project.workspace.current(),
+              })
+              .then((result) => {
+                if (!result.error) props.onResolved?.({ variant: "cancelled", text: "Permission denied" })
+                return result
+              })
           }}
           onCancel={() => {
             setStore("stage", "permission")
@@ -413,8 +433,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           const header = () => (
             <box flexDirection="column" gap={0}>
               <box flexDirection="row" gap={1} flexShrink={0}>
-                <text fg={theme.warning}>{"△"}</text>
+                <Glyph name="needs-you" />
                 <text fg={theme.text}>Permission required</text>
+                <text fg={theme.accent}>· waiting on you</text>
               </box>
               <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
                 <text fg={theme.textMuted} flexShrink={0}>
@@ -430,7 +451,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={{ once: "Allow once", always: "Allow always", reject: "Deny" }}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
@@ -443,20 +464,30 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                     setStore("stage", "reject")
                     return
                   }
-                  void sdk.client.permission.reply({
-                    reply: "reject",
+                  return sdk.client.permission
+                    .reply({
+                      reply: "reject",
+                      requestID: props.request.id,
+                      directory: props.directory,
+                      workspace: project.workspace.current(),
+                    })
+                    .then((result) => {
+                      if (!result.error) props.onResolved?.({ variant: "cancelled", text: "Permission denied" })
+                      return result
+                    })
+                }
+                return sdk.client.permission
+                  .reply({
+                    reply: "once",
                     requestID: props.request.id,
                     directory: props.directory,
                     workspace: project.workspace.current(),
                   })
-                  return
-                }
-                void sdk.client.permission.reply({
-                  reply: "once",
-                  requestID: props.request.id,
-                  directory: props.directory,
-                  workspace: project.workspace.current(),
-                })
+                  .then((result) => {
+                    if (!result.error)
+                      props.onResolved?.({ variant: "resolved", text: "Permission resolved — Allow once" })
+                    return result
+                  })
               }}
             />
           )
@@ -468,32 +499,53 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   )
 }
 
-function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: () => void }) {
+function RejectPrompt(props: { onConfirm: (message: string) => Promise<PermissionReplyResult>; onCancel: () => void }) {
   let input: TextareaRenderable
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
+  const [store, setStore] = createStore({ submitting: false })
+  const confirm = () => {
+    if (store.submitting) return
+    setStore("submitting", true)
+    void props
+      .onConfirm(input.plainText)
+      .then((result) => {
+        if (result.error) setStore("submitting", false)
+      })
+      .catch(() => setStore("submitting", false))
+  }
   useBindings(() => ({
     mode: OC2_BASE_MODE,
+    enabled: !store.submitting,
     commands: [
       {
         name: "app.exit",
         title: "Cancel permission rejection",
         category: "Permission",
         run() {
+          if (store.submitting) return
           props.onCancel()
         },
       },
     ],
     bindings: [
-      { key: "escape", desc: "Cancel permission rejection", group: "Permission", cmd: () => props.onCancel() },
+      {
+        key: "escape",
+        desc: "Cancel permission rejection",
+        group: "Permission",
+        cmd: () => {
+          if (store.submitting) return
+          props.onCancel()
+        },
+      },
       ...tuiConfig.keybinds.get("app.exit"),
       {
         key: "return",
         desc: "Confirm permission rejection",
         group: "Permission",
-        cmd: () => props.onConfirm(input.plainText),
+        cmd: confirm,
       },
     ],
   }))
@@ -507,7 +559,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
     >
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
         <box flexDirection="row" gap={1} paddingLeft={1}>
-          <text fg={theme.error}>{"△"}</text>
+          <text fg={theme.error}>{"✕"}</text>
           <text fg={theme.text}>Reject permission</text>
         </box>
         <box paddingLeft={1}>
@@ -556,21 +608,41 @@ function Prompt<const T extends Record<string, string>>(props: {
   options: T
   escapeKey?: keyof T
   fullscreen?: boolean
-  onSelect: (option: keyof T) => void
+  onSelect: (option: keyof T) => void | Promise<PermissionReplyResult>
 }) {
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
   const keys = Object.keys(props.options) as (keyof T)[]
   const [store, setStore] = createStore({
+    focused: keys[0],
     selected: keys[0],
     expanded: false,
+    submitting: false,
   })
   const narrow = createMemo(() => dimensions().width < 80)
   const fullscreenHint = useCommandShortcut("permission.prompt.fullscreen")
 
+  const move = (step: number) => {
+    const index = keys.indexOf(store.focused)
+    setStore("focused", keys[(index + step + keys.length) % keys.length])
+  }
+
+  const confirm = (option: keyof T = store.selected) => {
+    if (store.submitting) return
+    const result = props.onSelect(option)
+    if (!result) return
+    setStore("submitting", true)
+    void result
+      .then((outcome) => {
+        if (outcome.error) setStore("submitting", false)
+      })
+      .catch(() => setStore("submitting", false))
+  }
+
   useBindings(() => ({
     mode: OC2_BASE_MODE,
+    enabled: !store.submitting,
     commands: [
       {
         name: "app.exit",
@@ -578,7 +650,7 @@ function Prompt<const T extends Record<string, string>>(props: {
         category: "Permission",
         run() {
           if (!props.escapeKey) return
-          props.onSelect(props.escapeKey)
+          confirm(props.escapeKey)
         },
       },
       {
@@ -597,9 +669,7 @@ function Prompt<const T extends Record<string, string>>(props: {
         desc: "Previous permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx - 1 + keys.length) % keys.length]
-          setStore("selected", next)
+          move(-1)
         },
       },
       {
@@ -607,9 +677,7 @@ function Prompt<const T extends Record<string, string>>(props: {
         desc: "Previous permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx - 1 + keys.length) % keys.length]
-          setStore("selected", next)
+          move(-1)
         },
       },
       {
@@ -617,26 +685,49 @@ function Prompt<const T extends Record<string, string>>(props: {
         desc: "Next permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx + 1) % keys.length]
-          setStore("selected", next)
+          move(1)
         },
+      },
+      {
+        key: "up",
+        desc: "Previous permission option",
+        group: "Permission",
+        cmd: () => move(-1),
+      },
+      {
+        key: "down",
+        desc: "Next permission option",
+        group: "Permission",
+        cmd: () => move(1),
       },
       {
         key: "l",
         desc: "Next permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx + 1) % keys.length]
-          setStore("selected", next)
+          move(1)
         },
       },
+      {
+        key: "space",
+        desc: "Select permission option",
+        group: "Permission",
+        cmd: () => setStore("selected", store.focused),
+      },
+      ...keys.slice(0, 9).map((option, index) => ({
+        key: String(index + 1),
+        desc: `Select permission option ${index + 1}`,
+        group: "Permission",
+        cmd: () => {
+          setStore("focused", option)
+          setStore("selected", option)
+        },
+      })),
       {
         key: "return",
         desc: "Select permission option",
         group: "Permission",
-        cmd: () => props.onSelect(store.selected),
+        cmd: () => confirm(),
       },
       ...(props.escapeKey
         ? [
@@ -644,7 +735,7 @@ function Prompt<const T extends Record<string, string>>(props: {
               key: "escape",
               desc: "Reject permission",
               group: "Permission",
-              cmd: () => props.onSelect(props.escapeKey!),
+              cmd: () => confirm(props.escapeKey!),
             },
           ]
         : []),
@@ -660,7 +751,7 @@ function Prompt<const T extends Record<string, string>>(props: {
     <box
       backgroundColor={theme.backgroundPanel}
       border={["left"]}
-      borderColor={theme.warning}
+      borderColor={theme.accent}
       customBorderChars={SplitBorder.customBorderChars}
       {...(store.expanded
         ? { top: dimensions().height * -1 + 1, bottom: 1, left: 2, right: 2, position: "absolute" }
@@ -678,8 +769,9 @@ function Prompt<const T extends Record<string, string>>(props: {
           when={props.header}
           fallback={
             <box flexDirection="row" gap={1} paddingLeft={1} flexShrink={0}>
-              <text fg={theme.warning}>{"△"}</text>
+              <Glyph name="needs-you" />
               <text fg={theme.text}>{props.title}</text>
+              <text fg={theme.accent}>· waiting on you</text>
             </box>
           }
         >
@@ -701,38 +793,55 @@ function Prompt<const T extends Record<string, string>>(props: {
         justifyContent={narrow() ? "flex-start" : "space-between"}
         alignItems={narrow() ? "flex-start" : "center"}
       >
-        <box flexDirection="row" gap={1} flexShrink={0}>
+        <box flexDirection={narrow() ? "column" : "row"} gap={1} flexShrink={0}>
           <For each={keys}>
             {(option) => (
               <box
                 paddingLeft={1}
                 paddingRight={1}
-                backgroundColor={option === store.selected ? theme.warning : theme.backgroundMenu}
-                onMouseOver={() => setStore("selected", option)}
+                backgroundColor={
+                  option === store.focused ? tint(theme.backgroundMenu, theme.accent, 0.12) : theme.backgroundMenu
+                }
+                onMouseOver={() => setStore("focused", option)}
                 onMouseUp={() => {
+                  setStore("focused", option)
                   setStore("selected", option)
-                  props.onSelect(option)
                 }}
               >
-                <text fg={option === store.selected ? selectedForeground(theme, theme.warning) : theme.textMuted}>
-                  {props.options[option]}
+                <text
+                  fg={
+                    option === store.focused ? theme.accent : option === store.selected ? theme.text : theme.textMuted
+                  }
+                >
+                  <span style={{ bold: option === store.focused || option === store.selected }}>
+                    {option === store.selected ? "● " : "○ "}
+                    {props.options[option]}
+                  </span>
                 </text>
               </box>
             )}
           </For>
         </box>
-        <box flexDirection="row" gap={2} flexShrink={0}>
+        <box flexDirection={narrow() ? "column" : "row"} gap={narrow() ? 1 : 2} flexShrink={0}>
           <Show when={props.fullscreen}>
             <text fg={theme.text}>
               {fullscreenHint()} <span style={{ fg: theme.textMuted }}>{hint()}</span>
             </text>
           </Show>
-          <text fg={theme.text}>
-            {"⇆"} <span style={{ fg: theme.textMuted }}>select</span>
-          </text>
-          <text fg={theme.text}>
-            enter <span style={{ fg: theme.textMuted }}>confirm</span>
-          </text>
+          <KeyHint shortcut="↑↓" label="move" />
+          <Show when={props.escapeKey}>
+            <KeyHint shortcut="esc" label={String(props.escapeKey) === "reject" ? "deny" : "cancel"} />
+          </Show>
+          <box
+            paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={String(store.selected) === "reject" ? theme.error : theme.accent}
+            onMouseUp={() => confirm()}
+          >
+            <text fg={selectedForeground(theme, String(store.selected) === "reject" ? theme.error : theme.accent)}>
+              <b>{store.submitting ? "◐ Submitting" : `${props.options[store.selected]} ⏎`}</b>
+            </text>
+          </box>
         </box>
       </box>
     </box>
