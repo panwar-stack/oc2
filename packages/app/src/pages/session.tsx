@@ -1,4 +1,4 @@
-import type { Project, UserMessage } from "@oc2-ai/sdk/v2"
+import type { PendingSessionInput, Project, UserMessage } from "@oc2-ai/sdk/v2"
 import { useDialog } from "@oc2-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
 import {
@@ -44,7 +44,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
-import { type FollowupDraft, sendFollowupDraft } from "@/components/prompt-input/submit"
+import { type FollowupDraft, queueFollowupDraft } from "@/components/prompt-input/submit"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
 import {
   createOpenReviewFile,
@@ -65,20 +65,17 @@ import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { shouldUseV2NewSessionPage } from "@/pages/session/new-session-layout"
 import { Identifier } from "@/utils/id"
 import { SessionDetailsPanel, SessionStatusBar } from "@/pages/session/session-aggregate-chrome"
-import { TeamBoard } from "@/pages/session/team-board"
+import { TeamBoardView } from "@/pages/session/team-board"
 import { teamBoardFeatureEnabled } from "@/pages/session/session-chrome-model"
 import { diffs as list } from "@/utils/diffs"
-import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
 import { formatServerError } from "@/utils/server-errors"
 import { sessionPromptHandoffVersion, takeSessionPromptHandoff } from "@/pages/session/handoff"
 
 const emptyUserMessages: UserMessage[] = []
-type FollowupItem = FollowupDraft & { id: string }
-type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
-const emptyFollowups: FollowupItem[] = []
 const aggregateViews = ["session", "board", "tasks"] as const
+const compactAggregateViews = [...aggregateViews, "changes"] as const
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -229,6 +226,9 @@ export default function Page() {
     },
     aggregateView: "session" as "session" | "board" | "tasks",
     detailsOpen: false,
+    pendingSessionID: undefined as string | undefined,
+    pendingRevision: -1,
+    pendingInputs: [] as PendingSessionInput[],
   })
 
   const composer = createSessionComposerState({ trackElapsed: newSessionDesign })
@@ -279,7 +279,6 @@ export default function Page() {
   const teamBoardEnabled = () =>
     teamBoardFeatureEnabled({
       redesign: newSessionDesign(),
-      flag: import.meta.env.VITE_OC2_TEAM_BOARD,
       sessionID: params.id,
     })
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened() && !isV2NewSessionPage())
@@ -401,21 +400,6 @@ export default function Page() {
     deferRender: false,
   })
 
-  const [followup, setFollowup] = persisted(
-    Persist.serverWorkspace(serverSDK.scope, sdk.directory, "followup", ["followup.v1"]),
-    createStore<{
-      items: Record<string, FollowupItem[] | undefined>
-      failed: Record<string, string | undefined>
-      paused: Record<string, boolean | undefined>
-      edit: Record<string, FollowupEdit | undefined>
-    }>({
-      items: {},
-      failed: {},
-      paused: {},
-      edit: {},
-    }),
-  )
-
   createComputed((prev) => {
     const key = sessionKey()
     if (key !== prev) {
@@ -465,6 +449,20 @@ export default function Page() {
     return list
   })
   const mobileChanges = createMemo(() => !isDesktop() && store.mobileTab === "changes")
+  const aggregateNavigation = createMemo(() => (isDesktop() ? aggregateViews : compactAggregateViews))
+  const aggregateView = createMemo(() => (mobileChanges() ? "changes" : ui.aggregateView))
+  const selectAggregateView = (next: (typeof compactAggregateViews)[number]) => {
+    if (next === "changes") {
+      setStore("mobileTab", "changes")
+      return
+    }
+    setStore("mobileTab", "session")
+    setUi("aggregateView", next)
+  }
+  const exitTeamBoard = () => {
+    selectAggregateView("session")
+    queueMicrotask(() => document.querySelector<HTMLElement>("#session-view-tab-session")?.focus())
+  }
   const wantsReview = createMemo(() =>
     isDesktop()
       ? desktopFileTreeOpen() || (desktopReviewOpen() && activeTab() === "review")
@@ -1377,53 +1375,58 @@ export default function Page() {
 
   const busy = (sessionID: string) => sync.data.session_working(sessionID)
 
-  const queuedFollowups = createMemo(() => {
-    const id = params.id
-    if (!id) return emptyFollowups
-    return followup.items[id] ?? emptyFollowups
+  const [pendingLoad, { refetch: refetchPending }] = createResource(
+    () => (params.id ? ([params.id, sdk.directory] as const) : undefined),
+    async ([sessionID]) =>
+      sdk.client.v2.session.input
+        .pending({ sessionID, state: "pending", delivery: "queue" }, { throwOnError: false })
+        .then((response) =>
+          response.error
+            ? ({ status: "error", error: response.error, sessionID } as const)
+            : ({ status: "ready", value: response.data, sessionID } as const),
+        )
+        .catch((error) => ({ status: "error", error, sessionID }) as const),
+  )
+
+  createEffect(() => {
+    const sessionID = params.id
+    if (ui.pendingSessionID === sessionID) return
+    setUi({ pendingSessionID: sessionID, pendingRevision: -1, pendingInputs: [] })
   })
 
-  const editingFollowup = createMemo(() => {
-    const id = params.id
-    if (!id) return
-    return followup.edit[id]
+  createEffect(() => {
+    const result = pendingLoad.latest
+    if (!result || result.status !== "ready" || result.sessionID !== params.id) return
+    if (ui.pendingSessionID === result.sessionID && result.value.revision < ui.pendingRevision) return
+    setUi({
+      pendingSessionID: result.sessionID,
+      pendingRevision: result.value.revision,
+      pendingInputs: result.value.inputs,
+    })
   })
 
-  const followupMutation = useMutation(() => ({
-    mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
-      const item = (followup.items[input.sessionID] ?? []).find((entry) => entry.id === input.id)
-      if (!item) return
+  createEffect(
+    on(
+      sdk.connection.status,
+      (status, previous) => {
+        if (status !== "connected" || (previous !== "reconnecting" && previous !== "disconnected")) return
+        void refetchPending()
+      },
+      { defer: true },
+    ),
+  )
 
-      if (input.manual) setFollowup("paused", input.sessionID, undefined)
-      setFollowup("failed", input.sessionID, undefined)
-
-      const ok = await sendFollowupDraft({
-        client: sdk.client,
-        sync,
-        serverSync,
-        draft: item,
-        optimisticBusy: item.sessionDirectory === sdk.directory,
-      }).catch((err) => {
-        setFollowup("failed", input.sessionID, input.id)
-        fail(err)
-        return false
-      })
-      if (!ok) return
-
-      setFollowup("items", input.sessionID, (items) => (items ?? []).filter((entry) => entry.id !== input.id))
-      if (input.manual) resumeScroll()
-    },
-  }))
-
-  const followupBusy = (sessionID: string) =>
-    followupMutation.isPending && followupMutation.variables?.sessionID === sessionID
-
-  const sendingFollowup = createMemo(() => {
-    const id = params.id
-    if (!id) return
-    if (!followupBusy(id)) return
-    return followupMutation.variables?.id
+  onMount(() => {
+    const refreshVisible = () => {
+      if (document.visibilityState !== "visible") return
+      void refetchPending()
+    }
+    const timer = window.setInterval(refreshVisible, 30_000)
+    makeEventListener(document, "visibilitychange", refreshVisible)
+    onCleanup(() => window.clearInterval(timer))
   })
+
+  const queuedInputs = createMemo(() => (ui.pendingSessionID === params.id ? ui.pendingInputs : []))
 
   const queueEnabled = createMemo(() => {
     const id = params.id
@@ -1431,65 +1434,29 @@ export default function Page() {
     return settings.general.followup() === "queue" && busy(id) && !composer.blocked() && !isChildSession()
   })
 
-  const followupText = (item: FollowupDraft) => {
-    const text = item.prompt
-      .map((part) => {
-        if (part.type === "image") return `[image:${part.filename}]`
-        if (part.type === "file") return `[file:${part.path}]`
-        if (part.type === "agent") return `@${part.name}`
-        return part.content
-      })
-      .join("")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => !!line)
-
-    if (text) return text
-    return `[${language.t("common.attachment")}]`
-  }
-
+  let queueRetry: { draft: string; id: string } | undefined
   const queueFollowup = (draft: FollowupDraft) => {
-    setFollowup("items", draft.sessionID, (items) => [
-      ...(items ?? []),
-      { id: Identifier.ascending("message"), ...draft },
-    ])
-    setFollowup("failed", draft.sessionID, undefined)
-    setFollowup("paused", draft.sessionID, undefined)
+    const serialized = JSON.stringify(draft)
+    const id = queueRetry?.draft === serialized ? queueRetry.id : Identifier.ascending("message")
+    queueRetry = { draft: serialized, id }
+    return queueFollowupDraft({ client: sdk.client, draft, id })
+      .then(() => refetchPending())
+      .then(() => {
+        if (queueRetry?.id === id) queueRetry = undefined
+        return true
+      })
+      .catch((error) => {
+        fail(error)
+        return false
+      })
   }
 
-  const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
-
-  const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {
-    if (sync.session.get(sessionID)?.parentID) return Promise.resolve()
-    const item = (followup.items[sessionID] ?? []).find((entry) => entry.id === id)
-    if (!item) return Promise.resolve()
-    if (followupBusy(sessionID)) return Promise.resolve()
-
-    return followupMutation.mutateAsync({ sessionID, id, manual: opts?.manual })
-  }
-
-  const editFollowup = (id: string) => {
-    const sessionID = params.id
-    if (!sessionID) return
-    if (followupBusy(sessionID)) return
-
-    const item = queuedFollowups().find((entry) => entry.id === id)
-    if (!item) return
-
-    setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
-    setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
-    setFollowup("edit", sessionID, {
+  const followupDock = createMemo(() =>
+    queuedInputs().map((item) => ({
       id: item.id,
-      prompt: item.prompt,
-      context: item.context,
-    })
-  }
-
-  const clearFollowupEdit = () => {
-    const id = params.id
-    if (!id) return
-    setFollowup("edit", id, undefined)
-  }
+      text: item.prompt.text.trim() || `[${language.t("common.attachment")}]`,
+    })),
+  )
 
   const halt = (sessionID: string) =>
     busy(sessionID) ? sdk.client.session.abort({ sessionID }).catch(() => {}) : Promise.resolve()
@@ -1582,22 +1549,6 @@ export default function Page() {
 
   const actions = { revert }
 
-  createEffect(() => {
-    const sessionID = params.id
-    if (!sessionID) return
-
-    const item = queuedFollowups()[0]
-    if (!item) return
-    if (followupBusy(sessionID)) return
-    if (followup.failed[sessionID] === item.id) return
-    if (followup.paused[sessionID]) return
-    if (isChildSession()) return
-    if (composer.blocked()) return
-    if (busy(sessionID)) return
-
-    void sendFollowup(sessionID, item.id)
-  })
-
   createResizeObserver(
     () => promptDock,
     ({ height }) => {
@@ -1685,25 +1636,8 @@ export default function Page() {
         params.id && !isChildSession()
           ? {
               queue: queueEnabled,
-              sendsNext: () => {
-                const id = params.id
-                if (!id) return false
-                return !followup.failed[id] && !followup.paused[id]
-              },
               items: followupDock(),
-              sending: sendingFollowup(),
-              edit: editingFollowup(),
               onQueue: queueFollowup,
-              onAbort: () => {
-                const id = params.id
-                if (!id) return
-                setFollowup("paused", id, true)
-              },
-              onSend: (id) => {
-                void sendFollowup(params.id!, id, { manual: true })
-              },
-              onEdit: editFollowup,
-              onEditLoaded: clearFollowupEdit,
             }
           : undefined
       }
@@ -1733,7 +1667,7 @@ export default function Page() {
           "gap-2 p-2": settings.general.newLayoutDesigns(),
         }}
       >
-        <Show when={!isDesktop() && !!params.id}>
+        <Show when={!isDesktop() && !!params.id && !teamBoardEnabled()}>
           <Tabs value={store.mobileTab} class="h-auto">
             <Tabs.List>
               <Tabs.Trigger
@@ -1770,7 +1704,7 @@ export default function Page() {
             width: sessionPanelWidth(),
           }}
         >
-          <Show when={teamBoardEnabled() && !mobileChanges()}>
+          <Show when={teamBoardEnabled()}>
             <div
               role="tablist"
               aria-label="Session view"
@@ -1779,19 +1713,20 @@ export default function Page() {
                 if (event.key === "Escape") {
                   event.preventDefault()
                   event.stopPropagation()
-                  setUi("aggregateView", "session")
+                  selectAggregateView("session")
                   return
                 }
                 if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
                 event.preventDefault()
                 const offset = event.key === "ArrowRight" ? 1 : -1
-                const index = aggregateViews.indexOf(ui.aggregateView)
-                const next = aggregateViews[(index + offset + aggregateViews.length) % aggregateViews.length]!
-                setUi("aggregateView", next)
+                const views = aggregateNavigation()
+                const index = views.findIndex((view) => view === aggregateView())
+                const next = views[(index + offset + views.length) % views.length]!
+                selectAggregateView(next)
                 event.currentTarget.querySelector<HTMLButtonElement>(`[data-view='${next}']`)?.focus()
               }}
             >
-              <For each={aggregateViews}>
+              <For each={aggregateNavigation()}>
                 {(view) => (
                   <button
                     type="button"
@@ -1799,14 +1734,14 @@ export default function Page() {
                     id={`session-view-tab-${view}`}
                     data-view={view}
                     aria-controls="session-view-panel"
-                    aria-selected={ui.aggregateView === view}
-                    tabIndex={ui.aggregateView === view ? 0 : -1}
+                    aria-selected={aggregateView() === view}
+                    tabIndex={aggregateView() === view ? 0 : -1}
                     class="px-3 capitalize text-[var(--v2-text-text-muted)] focus-visible:shadow-[inset_0_0_0_1px_var(--v2-border-border-focus)]"
                     classList={{
                       "bg-[var(--v2-background-bg-layer-03)] font-bold text-[var(--v2-text-text-base)]":
-                        ui.aggregateView === view,
+                        aggregateView() === view,
                     }}
-                    onClick={() => setUi("aggregateView", view)}
+                    onClick={() => selectAggregateView(view)}
                   >
                     {view}
                   </button>
@@ -1822,10 +1757,8 @@ export default function Page() {
           >
             <div
               id="session-view-panel"
-              role={teamBoardEnabled() && !mobileChanges() ? "tabpanel" : undefined}
-              aria-labelledby={
-                teamBoardEnabled() && !mobileChanges() ? `session-view-tab-${ui.aggregateView}` : undefined
-              }
+              role={teamBoardEnabled() ? "tabpanel" : undefined}
+              aria-labelledby={teamBoardEnabled() ? `session-view-tab-${aggregateView()}` : undefined}
               class="min-w-0 flex-1 overflow-hidden"
             >
               <Switch>
@@ -1844,10 +1777,10 @@ export default function Page() {
                   </div>
                 </Match>
                 <Match when={params.id && teamBoardEnabled() && ui.aggregateView === "board"}>
-                  <TeamBoard sessionID={params.id!} mode="board" onExit={() => setUi("aggregateView", "session")} />
+                  <TeamBoardView sessionID={params.id!} mode="board" onExit={exitTeamBoard} />
                 </Match>
                 <Match when={params.id && teamBoardEnabled() && ui.aggregateView === "tasks"}>
-                  <TeamBoard sessionID={params.id!} mode="tasks" onExit={() => setUi("aggregateView", "session")} />
+                  <TeamBoardView sessionID={params.id!} mode="tasks" onExit={exitTeamBoard} />
                 </Match>
                 <Match when={params.id}>
                   <Show when={messagesReady()}>

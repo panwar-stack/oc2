@@ -1,6 +1,7 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./team_get_messages.txt"
 import { Team } from "@/team/team"
+import { TeamDelivery } from "@/team/delivery"
 import { Config } from "@/config/config"
 // Used to inspect stored tool parts when guarding against repeated empty mailbox polls.
 import { MessageV2 } from "@/session/message-v2"
@@ -13,6 +14,7 @@ export const TeamGetMessagesTool = Tool.define(
   "team_get_messages",
   Effect.gen(function* () {
     const team = yield* Team.Service
+    const delivery = yield* TeamDelivery.Service
     const config = yield* Config.Service
     const database = yield* Database.Service
 
@@ -29,6 +31,7 @@ export const TeamGetMessagesTool = Tool.define(
           // A missing team is still an empty read, not a repeated-poll signal.
           if (Option.isNone(context))
             return { title: "Team Messages", output: "No active team.", metadata: { count: 0, repeated: false } }
+          yield* delivery.wake(ctx.sessionID)
           const messages = yield* team.claimPendingMessages(ctx.sessionID, context.value.team.id)
           // Members are needed for both empty-mailbox status summaries and sender labels below.
           const members = yield* team.getMembers(context.value.team.id)

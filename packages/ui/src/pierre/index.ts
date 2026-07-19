@@ -169,6 +169,11 @@ export function createDefaultOptions<T>(style: FileDiffOptions<T>["diffStyle"]) 
   } as const
 }
 
+export function responsiveDiffStyle(style: FileDiffOptions<unknown>["diffStyle"], width?: number) {
+  if (style === "split" && width !== undefined && width < 880) return "unified" as const
+  return style ?? ("unified" as const)
+}
+
 export const styleVariables = {
   "--diffs-font-family": "var(--v2-font-family-mono)",
   "--diffs-font-size": "var(--v2-font-size-small)",

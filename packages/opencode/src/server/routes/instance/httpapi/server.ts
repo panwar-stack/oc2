@@ -51,6 +51,12 @@ import { Database } from "@oc2-ai/core/database/database"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
 import { Team } from "@/team/team"
+import { TeamBoard } from "@/team/board"
+import { TeamAttention } from "@/team/attention"
+import { TeamBoardOutbox } from "@/team/board-outbox"
+import { TeamLease } from "@/team/lease"
+import { TeamPlanReview } from "@/team/plan-review"
+import { TeamDelivery } from "@/team/delivery"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
 import { Vcs } from "@/project/vcs"
@@ -255,6 +261,12 @@ export function createRoutes(
       EventV2.defaultLayer,
       Skill.defaultLayer,
       Team.defaultLayer,
+      TeamAttention.defaultLayer,
+      TeamBoard.defaultLayer,
+      TeamBoardOutbox.defaultLayer,
+      TeamLease.defaultLayer,
+      TeamPlanReview.defaultLayer,
+      TeamDelivery.defaultLayer,
       Todo.defaultLayer,
       ToolRegistry.defaultLayer,
       Vcs.defaultLayer,

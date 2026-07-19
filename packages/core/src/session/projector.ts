@@ -488,7 +488,8 @@ export const layer = Layer.effectDiscard(
           admittedSeq: event.seq,
           id: event.data.messageID,
           sessionID: event.data.sessionID,
-          prompt: event.data.prompt,
+          activity: new SessionInput.PromptActivity({ type: "prompt", prompt: event.data.prompt }),
+          source: "prompt",
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
         })
@@ -504,7 +505,53 @@ export const layer = Layer.effectDiscard(
           yield* SessionInput.projectPromoted(db, {
             id: event.data.messageID,
             sessionID: event.data.sessionID,
-            prompt: event.data.prompt,
+            activity: new SessionInput.PromptActivity({ type: "prompt", prompt: event.data.prompt }),
+            source: "prompt",
+            timeCreated: event.data.timeCreated,
+            promotedSeq: event.seq,
+          }),
+        )
+      }),
+    )
+    yield* events.project(SessionEvent.TeamMessageLifecycle.Admitted, (event) =>
+      Effect.gen(function* () {
+        if (event.seq === undefined)
+          return yield* Effect.die("Synchronized Session event is missing aggregate sequence")
+        yield* SessionInput.projectAdmitted(db, {
+          admittedSeq: event.seq,
+          id: event.data.messageID,
+          sessionID: event.data.sessionID,
+          activity: new SessionInput.TeamMessageActivity({
+            type: "team_message",
+            team_id: event.data.teamID,
+            recipient_row_id: event.data.recipientRowID,
+            sender: event.data.sender,
+            body: event.data.body,
+          }),
+          source: "team_mailbox",
+          delivery: "steer",
+          timeCreated: event.data.timestamp,
+        })
+      }),
+    )
+    yield* events.project(SessionEvent.TeamMessageLifecycle.Promoted, (event) =>
+      Effect.gen(function* () {
+        if (event.seq === undefined)
+          return yield* Effect.die("Synchronized Session event is missing aggregate sequence")
+        yield* insertMessage(
+          db,
+          event,
+          yield* SessionInput.projectPromoted(db, {
+            id: event.data.messageID,
+            sessionID: event.data.sessionID,
+            activity: new SessionInput.TeamMessageActivity({
+              type: "team_message",
+              team_id: event.data.teamID,
+              recipient_row_id: event.data.recipientRowID,
+              sender: event.data.sender,
+              body: event.data.body,
+            }),
+            source: "team_mailbox",
             timeCreated: event.data.timeCreated,
             promotedSeq: event.seq,
           }),

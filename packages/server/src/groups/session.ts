@@ -106,6 +106,25 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     ),
   )
   .add(
+    HttpApiEndpoint.get("session.input.pending", "/api/session/:sessionID/input", {
+      params: { sessionID: SessionV2.ID },
+      query: Schema.Struct({
+        state: Schema.Literal("pending"),
+        delivery: Schema.Literal("queue"),
+      }),
+      success: SessionInput.PendingSessionInputs,
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.input.pending",
+          summary: "List pending queued inputs",
+          description: "Retrieve the durable queued prompts that have not been promoted into session history.",
+        }),
+      ),
+  )
+  .add(
     HttpApiEndpoint.post("session.prompt", "/api/session/:sessionID/prompt", {
       params: { sessionID: SessionV2.ID },
       payload: Schema.Struct({

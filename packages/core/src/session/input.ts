@@ -18,6 +18,36 @@ type DatabaseService = Database.Interface["db"]
 export const Delivery = Schema.Literals(["steer", "queue"])
 export type Delivery = typeof Delivery.Type
 
+export const Source = Schema.Literals(["prompt", "team_mailbox"])
+export type Source = typeof Source.Type
+
+export class PromptActivity extends Schema.Class<PromptActivity>("SessionInput.Activity.Prompt")({
+  type: Schema.Literal("prompt"),
+  prompt: Prompt,
+}) {}
+
+export class TeamMessageActivity extends Schema.Class<TeamMessageActivity>("SessionInput.Activity.TeamMessage")({
+  type: Schema.Literal("team_message"),
+  team_id: Schema.String,
+  recipient_row_id: Schema.String,
+  sender: Schema.String,
+  body: Schema.String,
+}) {}
+
+export const Activity = Schema.Union([PromptActivity, TeamMessageActivity]).pipe(Schema.toTaggedUnion("type"))
+export type Activity = typeof Activity.Type
+
+export class ActivityAdmission extends Schema.Class<ActivityAdmission>("SessionInput.ActivityAdmission")({
+  admittedSeq: NonNegativeInt,
+  id: SessionMessage.ID,
+  sessionID: SessionSchema.ID,
+  activity: Activity,
+  source: Source,
+  delivery: Delivery,
+  timeCreated: V2Schema.DateTimeUtcFromMillis,
+  promotedSeq: NonNegativeInt.pipe(Schema.optional),
+}) {}
+
 export class Admitted extends Schema.Class<Admitted>("SessionInput.Admitted")({
   admittedSeq: NonNegativeInt,
   id: SessionMessage.ID,
@@ -28,28 +58,139 @@ export class Admitted extends Schema.Class<Admitted>("SessionInput.Admitted")({
   promotedSeq: NonNegativeInt.pipe(Schema.optional),
 }) {}
 
+export class PendingSessionInput extends Schema.Class<PendingSessionInput>("PendingSessionInput")({
+  id: SessionMessage.ID,
+  sequence: NonNegativeInt,
+  delivery: Schema.Literal("queue"),
+  prompt: Prompt,
+  time_created: NonNegativeInt,
+}) {}
+
+export class PendingSessionInputs extends Schema.Class<PendingSessionInputs>("PendingSessionInputs")({
+  revision: NonNegativeInt,
+  inputs: Schema.Array(PendingSessionInput),
+}) {}
+
 const decodePrompt = Schema.decodeUnknownSync(Prompt)
 const encodePrompt = Schema.encodeSync(Prompt)
+const decodeActivity = Schema.decodeUnknownSync(Activity)
+const encodeActivity = Schema.encodeSync(Activity)
 
-const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
-  new Admitted({
+const fromRow = (row: typeof SessionInputTable.$inferSelect): ActivityAdmission =>
+  new ActivityAdmission({
     admittedSeq: row.admitted_seq,
     id: SessionMessage.ID.make(row.id),
     sessionID: SessionSchema.ID.make(row.session_id),
-    prompt: decodePrompt(row.prompt),
+    activity: decodeActivity(row.activity),
+    source: row.source,
     delivery: row.delivery,
     timeCreated: DateTime.makeUnsafe(row.time_created),
     ...(row.promoted_seq === null ? {} : { promotedSeq: row.promoted_seq }),
   })
 
-export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
+export const findActivity = Effect.fn("SessionInput.findActivity")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
   const row = yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie)
   return row === undefined ? undefined : fromRow(row)
+})
+
+export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
+  const stored = yield* findActivity(db, id)
+  if (stored === undefined || stored.activity.type !== "prompt") return undefined
+  return new Admitted({
+    admittedSeq: stored.admittedSeq,
+    id: stored.id,
+    sessionID: stored.sessionID,
+    prompt: stored.activity.prompt,
+    delivery: stored.delivery,
+    timeCreated: stored.timeCreated,
+    ...(stored.promotedSeq === undefined ? {} : { promotedSeq: stored.promotedSeq }),
+  })
 })
 
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
   id: SessionMessage.ID,
 }) {}
+
+export const admitActivity = Effect.fn("SessionInput.admitActivity")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: {
+    readonly id: SessionMessage.ID
+    readonly sessionID: SessionSchema.ID
+    readonly activity: Activity
+    readonly delivery: Delivery
+    readonly commit?: EventV2.PublishOptions["commit"]
+  },
+) {
+  const existing = yield* findActivity(db, input.id)
+  if (existing !== undefined)
+    return equivalentActivity(existing, input) ? existing : yield* Effect.die(new LifecycleConflict({ id: input.id }))
+  if (input.activity.type === "team_message" && input.delivery !== "steer")
+    return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+  const timestamp = yield* DateTime.now
+  return yield* Effect.gen(function* () {
+    const admittedSeq =
+      input.activity.type === "prompt"
+        ? yield* events
+            .publish(
+              SessionEvent.PromptLifecycle.Admitted,
+              {
+                messageID: input.id,
+                sessionID: input.sessionID,
+                timestamp,
+                prompt: input.activity.prompt,
+                delivery: input.delivery,
+              },
+              input.commit ? { commit: input.commit } : undefined,
+            )
+            .pipe(
+              Effect.map((event) => event.seq),
+              Effect.flatMap((seq) =>
+                seq === undefined ? Effect.die("Activity admission event is missing aggregate sequence") : Effect.succeed(seq),
+              ),
+            )
+        : yield* events
+            .publish(
+              SessionEvent.TeamMessageLifecycle.Admitted,
+              {
+                messageID: input.id,
+                sessionID: input.sessionID,
+                timestamp,
+                teamID: input.activity.team_id,
+                recipientRowID: input.activity.recipient_row_id,
+                sender: input.activity.sender,
+                body: input.activity.body,
+              },
+              input.commit ? { commit: input.commit } : undefined,
+            )
+            .pipe(
+              Effect.map((event) => event.seq),
+              Effect.flatMap((seq) =>
+                seq === undefined ? Effect.die("Activity admission event is missing aggregate sequence") : Effect.succeed(seq),
+              ),
+            )
+    return new ActivityAdmission({
+      admittedSeq,
+      id: input.id,
+      sessionID: input.sessionID,
+      activity: input.activity,
+      source: input.activity.type === "prompt" ? "prompt" : "team_mailbox",
+      delivery: input.delivery,
+      timeCreated: timestamp,
+    })
+  }).pipe(
+    Effect.catchDefect((defect) =>
+      findActivity(db, input.id).pipe(
+        Effect.flatMap((stored) =>
+          stored && equivalentActivity(stored, input) ? Effect.succeed(stored) : Effect.die(defect),
+        ),
+      ),
+    ),
+  )
+})
 
 export const admit = Effect.fn("SessionInput.admit")(function* (
   db: DatabaseService,
@@ -61,36 +202,22 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly delivery: Delivery
   },
 ) {
-  const existing = yield* find(db, input.id)
-  if (existing !== undefined) return existing
-  const timestamp = yield* DateTime.now
-  return yield* events
-    .publish(SessionEvent.PromptLifecycle.Admitted, {
-      messageID: input.id,
-      sessionID: input.sessionID,
-      timestamp,
-      prompt: input.prompt,
-      delivery: input.delivery,
-    })
-    .pipe(
-      Effect.flatMap((event) =>
-        event.seq === undefined
-          ? Effect.die("Prompt admission event is missing aggregate sequence")
-          : Effect.succeed(
-              new Admitted({
-                admittedSeq: event.seq,
-                id: input.id,
-                sessionID: input.sessionID,
-                prompt: input.prompt,
-                delivery: input.delivery,
-                timeCreated: timestamp,
-              }),
-            ),
-      ),
-      Effect.catchDefect((defect) =>
-        find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
-      ),
-    )
+  const stored = yield* admitActivity(db, events, {
+    id: input.id,
+    sessionID: input.sessionID,
+    activity: new PromptActivity({ type: "prompt", prompt: input.prompt }),
+    delivery: input.delivery,
+  })
+  if (stored.activity.type !== "prompt") return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+  return new Admitted({
+    admittedSeq: stored.admittedSeq,
+    id: stored.id,
+    sessionID: stored.sessionID,
+    prompt: stored.activity.prompt,
+    delivery: stored.delivery,
+    timeCreated: stored.timeCreated,
+    ...(stored.promotedSeq === undefined ? {} : { promotedSeq: stored.promotedSeq }),
+  })
 })
 
 export const latestSeq = Effect.fn("SessionInput.latestSeq")(function* (
@@ -106,17 +233,72 @@ export const latestSeq = Effect.fn("SessionInput.latestSeq")(function* (
   return row?.seq ?? -1
 })
 
+export const pendingQueued = Effect.fn("SessionInput.pendingQueued")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return yield* db
+    .transaction((tx) =>
+      Effect.gen(function* () {
+        const sequence = yield* tx
+          .select({ seq: EventSequenceTable.seq })
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, sessionID))
+          .get()
+        const rows = yield* tx
+          .select({
+            id: SessionInputTable.id,
+            sequence: SessionInputTable.admitted_seq,
+            activity: SessionInputTable.activity,
+            time_created: SessionInputTable.time_created,
+          })
+          .from(SessionInputTable)
+          .where(
+            and(
+              eq(SessionInputTable.session_id, sessionID),
+              isNull(SessionInputTable.promoted_seq),
+              eq(SessionInputTable.delivery, "queue"),
+              eq(SessionInputTable.source, "prompt"),
+            ),
+          )
+          .orderBy(asc(SessionInputTable.admitted_seq), asc(SessionInputTable.id))
+          .all()
+        return new PendingSessionInputs({
+          revision: Math.max(0, sequence?.seq ?? 0),
+          inputs: rows.map((row) => {
+            const activity = decodeActivity(row.activity)
+            if (activity.type !== "prompt") throw new Error("Queued prompt row has a non-prompt activity")
+            return new PendingSessionInput({
+              id: SessionMessage.ID.make(row.id),
+              sequence: row.sequence,
+              delivery: "queue",
+              prompt: activity.prompt,
+              time_created: row.time_created,
+            })
+          }),
+        })
+      }),
+    )
+    .pipe(Effect.orDie)
+})
+
 export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(function* (
   db: DatabaseService,
   input: {
     readonly admittedSeq: number
     readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
-    readonly prompt: Prompt
+    readonly activity: Activity
+    readonly source: Source
     readonly delivery: Delivery
     readonly timeCreated: DateTime.Utc
   },
 ) {
+  if (
+    (input.activity.type === "prompt" && input.source !== "prompt") ||
+    (input.activity.type === "team_message" && (input.source !== "team_mailbox" || input.delivery !== "steer"))
+  )
+    return yield* Effect.die(new LifecycleConflict({ id: input.id }))
   const message = yield* db
     .select({ id: SessionMessageTable.id })
     .from(SessionMessageTable)
@@ -130,7 +312,9 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
       id: input.id,
       session_id: input.sessionID,
       admitted_seq: input.admittedSeq,
-      prompt: encodePrompt(input.prompt),
+      prompt: input.activity.type === "prompt" ? encodePrompt(input.activity.prompt) : null,
+      activity: encodeActivity(input.activity),
+      source: input.source,
       delivery: input.delivery,
       time_created: DateTime.toEpochMillis(input.timeCreated),
     })
@@ -146,7 +330,8 @@ export const projectPromoted = Effect.fn("SessionInput.projectPromoted")(functio
   input: {
     readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
-    readonly prompt: Prompt
+    readonly activity: Activity
+    readonly source: Source
     readonly timeCreated: DateTime.Utc
     readonly promotedSeq: number
   },
@@ -167,7 +352,7 @@ export const projectPromoted = Effect.fn("SessionInput.projectPromoted")(functio
   if (!updated) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
   const stored = fromRow(updated)
   if (
-    !matchesPrompt(stored, input) ||
+    !equivalentActivity(stored, input) ||
     DateTime.toEpochMillis(stored.timeCreated) !== DateTime.toEpochMillis(input.timeCreated)
   )
     return yield* Effect.die(new LifecycleConflict({ id: input.id }))
@@ -195,6 +380,26 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+export const pendingTeamMessages = Effect.fn("SessionInput.pendingTeamMessages")(function* (
+  db: DatabaseService,
+  sessionID?: SessionSchema.ID,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.source, "team_mailbox"),
+        sessionID === undefined ? undefined : eq(SessionInputTable.session_id, sessionID),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.session_id), asc(SessionInputTable.admitted_seq), asc(SessionInputTable.id))
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(fromRow)
+})
+
 export const equivalent = (
   input: Admitted,
   expected: {
@@ -203,6 +408,20 @@ export const equivalent = (
     readonly delivery: Delivery
   },
 ) => input.delivery === expected.delivery && matchesPrompt(input, expected)
+
+export const equivalentActivity = (
+  input: ActivityAdmission,
+  expected: {
+    readonly sessionID: SessionSchema.ID
+    readonly activity: Activity
+    readonly delivery?: Delivery
+    readonly source?: Source
+  },
+) =>
+  input.sessionID === expected.sessionID &&
+  (expected.delivery === undefined || input.delivery === expected.delivery) &&
+  (expected.source === undefined || input.source === expected.source) &&
+  JSON.stringify(encodeActivity(input.activity)) === JSON.stringify(encodeActivity(expected.activity))
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&
@@ -214,7 +433,9 @@ export const guardReservedID = Effect.fn("SessionInput.guardReservedID")(functio
 ) {
   if (
     Schema.is(SessionEvent.PromptLifecycle.Admitted)(event) ||
-    Schema.is(SessionEvent.PromptLifecycle.Promoted)(event)
+    Schema.is(SessionEvent.PromptLifecycle.Promoted)(event) ||
+    Schema.is(SessionEvent.TeamMessageLifecycle.Admitted)(event) ||
+    Schema.is(SessionEvent.TeamMessageLifecycle.Promoted)(event)
   )
     return
   const id = reservedID(event)
@@ -257,6 +478,8 @@ export const projectLegacyPrompted = Effect.fn("SessionInput.projectLegacyPrompt
       session_id: input.sessionID,
       admitted_seq: input.promotedSeq,
       prompt: encodePrompt(input.prompt),
+      activity: encodeActivity(new PromptActivity({ type: "prompt", prompt: input.prompt })),
+      source: "prompt",
       delivery: input.delivery,
       promoted_seq: input.promotedSeq,
       time_created: DateTime.toEpochMillis(input.timeCreated),
@@ -276,23 +499,39 @@ const publish = Effect.fn("SessionInput.publish")(function* (
   rows: ReadonlyArray<typeof SessionInputTable.$inferSelect>,
 ) {
   for (const row of rows) {
+    const activity = decodeActivity(row.activity)
+    const timestamp = yield* DateTime.now
+    const recover = Effect.catchDefect((defect) =>
+      defect instanceof LifecycleConflict
+        ? findActivity(db, SessionMessage.ID.make(row.id)).pipe(
+            Effect.flatMap((stored) => (stored?.promotedSeq === undefined ? Effect.die(defect) : Effect.void)),
+          )
+        : Effect.die(defect),
+    )
+    if (activity.type === "prompt") {
+      yield* events
+        .publish(SessionEvent.PromptLifecycle.Promoted, {
+          sessionID,
+          timestamp,
+          messageID: SessionMessage.ID.make(row.id),
+          prompt: activity.prompt,
+          timeCreated: DateTime.makeUnsafe(row.time_created),
+        })
+        .pipe(recover)
+      continue
+    }
     yield* events
-      .publish(SessionEvent.PromptLifecycle.Promoted, {
+      .publish(SessionEvent.TeamMessageLifecycle.Promoted, {
         sessionID,
-        timestamp: yield* DateTime.now,
+        timestamp,
         messageID: SessionMessage.ID.make(row.id),
-        prompt: decodePrompt(row.prompt),
+        teamID: activity.team_id,
+        recipientRowID: activity.recipient_row_id,
+        sender: activity.sender,
+        body: activity.body,
         timeCreated: DateTime.makeUnsafe(row.time_created),
       })
-      .pipe(
-        Effect.catchDefect((defect) =>
-          defect instanceof LifecycleConflict
-            ? find(db, SessionMessage.ID.make(row.id)).pipe(
-                Effect.flatMap((stored) => (stored?.promotedSeq === undefined ? Effect.die(defect) : Effect.void)),
-              )
-            : Effect.die(defect),
-        ),
-      )
+      .pipe(recover)
   }
   return rows.length
 })
@@ -342,13 +581,21 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
   return row === undefined ? false : yield* publish(db, events, sessionID, [row]).pipe(Effect.as(true))
 })
 
-const toMessage = (input: Admitted) =>
-  new SessionMessage.User({
-    id: input.id,
-    type: "user",
-    text: input.prompt.text,
-    files: input.prompt.files,
-    agents: input.prompt.agents,
-    references: input.prompt.references,
-    time: { created: input.timeCreated },
-  })
+const toMessage = (input: ActivityAdmission) =>
+  input.activity.type === "prompt"
+    ? new SessionMessage.User({
+        id: input.id,
+        type: "user",
+        text: input.activity.prompt.text,
+        files: input.activity.prompt.files,
+        agents: input.activity.prompt.agents,
+        references: input.activity.prompt.references,
+        time: { created: input.timeCreated },
+      })
+    : new SessionMessage.System({
+        id: input.id,
+        type: "system",
+        text: ["<team-messages>", `From ${input.activity.sender}:`, input.activity.body, "</team-messages>"].join("\n"),
+        source: "team_mailbox",
+        time: { created: input.timeCreated },
+      })

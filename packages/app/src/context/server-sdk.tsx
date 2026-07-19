@@ -3,6 +3,7 @@ import { createSimpleContext } from "@oc2-ai/ui/context"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { batch, onCleanup, onMount } from "solid-js"
+import { createStore } from "solid-js/store"
 import { createSdkForServer } from "@/utils/server"
 import { useLanguage } from "./language"
 import { usePlatform } from "./platform"
@@ -107,7 +108,11 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   let attempt: AbortController | undefined
   let run: Promise<void> | undefined
   let started = false
+  let connectedOnce = false
   let generation = 0
+  const [connection, setConnection] = createStore<{
+    status: "connecting" | "connected" | "reconnecting" | "disconnected"
+  }>({ status: "disconnected" })
   const HEARTBEAT_TIMEOUT_MS = 15_000
   let lastEventAt = Date.now()
   let heartbeat: ReturnType<typeof setTimeout> | undefined
@@ -127,6 +132,7 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   const start = () => {
     if (started) return run
     started = true
+    setConnection("status", connectedOnce ? "reconnecting" : "connecting")
     const active = ++generation
     const previous = run
     const current = (async () => {
@@ -153,6 +159,8 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
               })
             },
           })
+          connectedOnce = true
+          setConnection("status", "connected")
           let yielded = Date.now()
           resetHeartbeat()
           for await (const event of events.stream) {
@@ -201,6 +209,7 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
         }
 
         if (abort.signal.aborted || !started || generation !== active) return
+        setConnection("status", "reconnecting")
         await wait(RECONNECT_DELAY_MS)
       }
     })().finally(() => {
@@ -215,6 +224,7 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   const stop = () => {
     started = false
     generation++
+    setConnection("status", "disconnected")
     attempt?.abort()
     clearHeartbeat()
   }
@@ -246,6 +256,9 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
     scope,
     url: server.http.url,
     client: sdk,
+    connection: {
+      status: () => connection.status,
+    },
     event: {
       on: emitter.on.bind(emitter),
       listen: emitter.listen.bind(emitter),
@@ -301,6 +314,7 @@ function createDirSdkContext(directory: string, serverSDK: ServerSDK) {
     scope: serverSDK.scope,
     directory,
     client,
+    connection: serverSDK.connection,
     event: emitter,
     get url() {
       return serverSDK.url

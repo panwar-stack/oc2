@@ -12,13 +12,17 @@ const directories = [
 ]
 const direct = [
   `${uiRoot}/src/components/basic-tool.css`,
+  `${uiRoot}/src/components/basic-tool.tsx`,
   `${uiRoot}/src/components/context-menu.css`,
   `${uiRoot}/src/components/dialog.css`,
   `${uiRoot}/src/components/dropdown-menu.css`,
   `${uiRoot}/src/components/markdown.css`,
   `${uiRoot}/src/components/message-part.css`,
+  `${uiRoot}/src/components/message-part.tsx`,
   `${uiRoot}/src/components/select.css`,
   `${uiRoot}/src/components/toast.css`,
+  `${uiRoot}/src/components/dock-prompt.tsx`,
+  `${uiRoot}/src/components/tool-error-card.tsx`,
   `${appRoot}/src/components/dialog-connect-provider.tsx`,
   `${appRoot}/src/components/dialog-custom-provider.tsx`,
   `${appRoot}/src/components/dialog-select-file.tsx`,
@@ -29,6 +33,7 @@ const direct = [
   `${appRoot}/src/components/prompt-input.tsx`,
   `${appRoot}/src/index.css`,
   `${appRoot}/src/pages/home.tsx`,
+  `${appRoot}/src/pages/error.tsx`,
   `${appRoot}/src/pages/layout.tsx`,
   `${appRoot}/src/pages/session/session-aggregate-chrome.tsx`,
   `${appRoot}/src/pages/session/team-board.tsx`,
@@ -59,6 +64,13 @@ const colorExceptions = new Map<string, Set<string>>([
   [`${appRoot}/src/components/prompt-input/image-attachments.tsx`, new Set(["bg-black/50", "text-white"])],
 ])
 const errors: string[] = []
+const attributeContract = [
+  `${uiRoot}/src/components/basic-tool.tsx`,
+  `${uiRoot}/src/components/dock-prompt.tsx`,
+  `${uiRoot}/src/components/message-part.tsx`,
+  `${uiRoot}/src/components/tool-error-card.tsx`,
+  `${appRoot}/src/pages/session/message-timeline.tsx`,
+]
 
 for (const item of contents) {
   for (const match of item.text.matchAll(/var\(--(v2-[\w-]+)/g)) {
@@ -82,6 +94,14 @@ for (const item of contents) {
       const line = item.text.slice(0, match.index).split("\n").length
       errors.push(`${item.path}:${line}: hardcoded color ${match[0]}`)
     }
+  }
+}
+
+for (const path of attributeContract) {
+  const text = await Bun.file(path).text()
+  for (const attribute of ["data-redesigned", "data-kind"]) {
+    if (!text.includes(attribute)) continue
+    errors.push(`${path}: forbidden redesign attribute ${attribute}`)
   }
 }
 

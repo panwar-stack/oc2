@@ -19,9 +19,10 @@ import {
 } from "@pierre/diffs"
 import { type PreloadFileDiffResult, type PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 import { createMediaQuery } from "@solid-primitives/media"
+import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { ComponentProps, createEffect, createMemo, createSignal, onCleanup, onMount, Show, splitProps } from "solid-js"
-import { createDefaultOptions, styleVariables } from "../pierre"
+import { createDefaultOptions, responsiveDiffStyle, styleVariables } from "../pierre"
 import { markCommentedDiffLines, markCommentedFileLines } from "../pierre/commented-lines"
 import { fixDiffSelection, findDiffSide, type DiffSelectionSide } from "../pierre/diff-selection"
 import { createFileFind } from "../pierre/file-find"
@@ -126,7 +127,7 @@ const sharedKeys = [
 ] as const
 
 const textKeys = ["file", ...sharedKeys] as const
-const diffKeys = ["fileDiff", "before", "after", "virtualize", ...sharedKeys] as const
+const diffKeys = ["fileDiff", "before", "after", "diffStyle", "virtualize", ...sharedKeys] as const
 
 // ---------------------------------------------------------------------------
 // Shared viewer hook
@@ -1010,6 +1011,13 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
     adapter,
   )
 
+  const [containerWidth, setContainerWidth] = createSignal<number>()
+  createResizeObserver(
+    () => viewer.container,
+    () => setContainerWidth(viewer.container.clientWidth),
+  )
+  const diffStyle = createMemo(() => responsiveDiffStyle(local.diffStyle, containerWidth()))
+
   const virtuals = createSharedVirtualStrategy(
     () => viewer.container,
     () => local.virtualize !== false,
@@ -1043,7 +1051,7 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
 
   const options = createMemo<FileDiffOptions<T>>(() => {
     const base = {
-      ...createDefaultOptions(props.diffStyle),
+      ...createDefaultOptions(diffStyle()),
       ...others,
       ...lineCallbacks,
     }
@@ -1076,7 +1084,7 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
 
   createEffect(() => {
     const opts = options()
-    const workerPool = large() ? getWorkerPool("unified") : getWorkerPool(props.diffStyle)
+    const workerPool = large() ? getWorkerPool("unified") : getWorkerPool(diffStyle())
     const virtualizer = virtuals.get()
     const beforeContents = typeof local.before?.contents === "string" ? local.before.contents : ""
     const afterContents = typeof local.after?.contents === "string" ? local.after.contents : ""

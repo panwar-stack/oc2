@@ -55,6 +55,7 @@ export class System extends Schema.Class<System>("Session.Message.System")({
   ...Base,
   type: Schema.Literal("system"),
   text: SessionEvent.ContextUpdated.data.fields.text,
+  source: Schema.Literal("team_mailbox").pipe(Schema.optional),
 }) {}
 
 export class Shell extends Schema.Class<Shell>("Session.Message.Shell")({

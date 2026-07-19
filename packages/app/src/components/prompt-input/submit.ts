@@ -171,6 +171,40 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   }
 }
 
+export function queueFollowupDraft(input: {
+  client: ReturnType<typeof useSDK>["client"]
+  draft: FollowupDraft
+  id: string
+}) {
+  const text = draftText(input.draft.prompt)
+  const { requestParts } = buildRequestParts({
+    prompt: input.draft.prompt,
+    context: input.draft.context,
+    images: draftImages(input.draft.prompt),
+    text,
+    sessionID: input.draft.sessionID,
+    messageID: input.id,
+    sessionDirectory: input.draft.sessionDirectory,
+  })
+  const prompt = {
+    text: requestParts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n"),
+    files: requestParts.flatMap((part) =>
+      part.type === "file" ? [{ uri: part.url, mime: part.mime, name: part.filename }] : [],
+    ),
+    agents: requestParts.flatMap((part) => (part.type === "agent" ? [{ name: part.name }] : [])),
+  } satisfies import("@oc2-ai/sdk/v2").Prompt
+
+  return input.client.v2.session.prompt({
+    sessionID: input.draft.sessionID,
+    id: input.id,
+    prompt,
+    delivery: "queue",
+  })
+}
+
 type PromptSubmitInput = {
   info: Accessor<{ id: string } | undefined>
   imageAttachments: Accessor<ImageAttachmentPart[]>
@@ -189,7 +223,7 @@ type PromptSubmitInput = {
   newSessionWorktree?: Accessor<string | undefined>
   onNewSessionWorktreeReset?: () => void
   shouldQueue?: Accessor<boolean>
-  onQueue?: (draft: FollowupDraft) => void
+  onQueue?: (draft: FollowupDraft) => Promise<boolean> | boolean
   onAbort?: () => void
   onSubmit?: () => void
 }
@@ -435,7 +469,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
 
     if (!isNewSession && mode === "normal" && input.shouldQueue?.()) {
-      input.onQueue?.(draft)
+      if ((await input.onQueue?.(draft)) === false) return
       clearContext()
       clearInput()
       return

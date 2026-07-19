@@ -1,6 +1,7 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./team_spawn.txt"
 import { Team } from "@/team/team"
+import { TeamDelivery } from "@/team/delivery"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { Agent } from "@/agent/agent"
@@ -92,6 +93,7 @@ export const TeamSpawnTool = Tool.define(
   "team_spawn",
   Effect.gen(function* () {
     const team = yield* Team.Service
+    const delivery = yield* TeamDelivery.Service
     const sessions = yield* Session.Service
     const agent = yield* Agent.Service
     const config = yield* Config.Service
@@ -324,7 +326,7 @@ export const TeamSpawnTool = Tool.define(
               })
               yield* Effect.forEach(
                 uniqueRecipients.filter((recipient) => recipient !== sender),
-                (recipient) => wakeTeamSession(ops, recipient).pipe(Effect.ignore, Effect.forkIn(scope)),
+                (recipient) => wakeTeamSession(delivery, recipient).pipe(Effect.ignore, Effect.forkIn(scope)),
                 { discard: true },
               )
             })

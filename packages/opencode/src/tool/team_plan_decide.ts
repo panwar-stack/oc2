@@ -1,6 +1,7 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./team_plan_decide.txt"
 import { Team } from "@/team/team"
+import { TeamDelivery } from "@/team/delivery"
 import { Session } from "@/session/session"
 import { Config } from "@/config/config"
 import { Permission } from "@/permission"
@@ -8,6 +9,8 @@ import type { TaskPromptOps } from "./task"
 import { wakeTeamSessionBounded } from "./team_wake"
 import { Effect, Option, Schema } from "effect"
 import { SessionID } from "@/session/schema"
+import { TeamPlanReview } from "@/team/plan-review"
+import { Cause, Exit } from "effect"
 
 const Parameters = Schema.Struct({
   member_name: Schema.String.annotate({ description: "Teammate name" }),
@@ -15,10 +18,14 @@ const Parameters = Schema.Struct({
   feedback: Schema.optional(Schema.String).annotate({ description: "Feedback for the teammate" }),
 })
 
+type Metadata = { reviewID?: string }
+
 export const TeamPlanDecideTool = Tool.define(
   "team_plan_decide",
   Effect.gen(function* () {
     const team = yield* Team.Service
+    const reviews = yield* TeamPlanReview.Service
+    const delivery = yield* TeamDelivery.Service
     const sessions = yield* Session.Service
     const config = yield* Config.Service
     return {
@@ -28,9 +35,10 @@ export const TeamPlanDecideTool = Tool.define(
         Effect.gen(function* () {
           const cfg = yield* config.get()
           if (!cfg.experimental?.agent_teams)
-            return { title: "Plan Decide", output: "Agent teams disabled.", metadata: {} }
+            return { title: "Plan Decide", output: "Agent teams disabled.", metadata: {} as Metadata }
           const activeTeam = yield* team.getActive(ctx.sessionID)
-          if (Option.isNone(activeTeam)) return { title: "Plan Decide Failed", output: "No active team.", metadata: {} }
+          if (Option.isNone(activeTeam))
+            return { title: "Plan Decide Failed", output: "No active team.", metadata: {} as Metadata }
           const members = yield* team.getMembers(activeTeam.value.id)
           const sessionMatch = members.find((member) => member.session_id === params.member_name)
           const nameMatches = sessionMatch ? [] : members.filter((member) => member.name === params.member_name)
@@ -38,21 +46,50 @@ export const TeamPlanDecideTool = Tool.define(
             return {
               title: "Plan Decide Failed",
               output: `Member name '${params.member_name}' is ambiguous. Use a session ID instead.`,
-              metadata: {},
+              metadata: {} as Metadata,
             }
           }
           const target = sessionMatch ?? nameMatches[0]
-          if (!target) return { title: "Plan Decide Failed", output: `No member '${params.member_name}'`, metadata: {} }
-          if (!target.plan_mode) {
+          if (!target)
             return {
               title: "Plan Decide Failed",
-              output: `Member '${params.member_name}' is not in plan mode.`,
-              metadata: {},
+              output: `No member '${params.member_name}'`,
+              metadata: {} as Metadata,
+            }
+          const review = yield* reviews.latest(activeTeam.value.id, target.id)
+          if (!review)
+            return {
+              title: "Plan Decide Failed",
+              output: `No submitted plan for '${params.member_name}'.`,
+              metadata: {} as Metadata,
+            }
+          const decidedExit = yield* reviews
+            .decide({
+              teamID: activeTeam.value.id,
+              reviewID: review.id,
+              viewerSessionID: ctx.sessionID,
+              decision: params.decision,
+              feedback: params.feedback,
+              expectedRevision: activeTeam.value.board_revision,
+            })
+            .pipe(Effect.exit)
+          if (Exit.isFailure(decidedExit)) {
+            const error = Cause.squash(decidedExit.cause)
+            return {
+              title: "Plan Decide Failed",
+              output: error instanceof Error ? error.message : String(error),
+              metadata: { reviewID: review.id } as Metadata,
             }
           }
+          const decided = decidedExit.value
+          if (!decided.changed)
+            return {
+              title: params.decision === "approve" ? "Plan Approved" : "Plan Rejected",
+              output: `Plan for ${params.member_name} was already ${decided.review.state}.`,
+              metadata: { reviewID: review.id } as Metadata,
+            }
 
           if (params.decision === "approve") {
-            yield* team.approveMemberPlan(target.id)
             const targetSessionID = SessionID.make(target.session_id)
             const session = yield* sessions.get(targetSessionID)
             const newPermission = removePlanModePermissionOverlay(session.permission ?? [])
@@ -76,9 +113,13 @@ export const TeamPlanDecideTool = Tool.define(
             })
             const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
             if (promptOps) {
-              yield* wakeTeamSessionBounded(promptOps, targetSessionID).pipe(Effect.ignore)
+              yield* wakeTeamSessionBounded(delivery, targetSessionID).pipe(Effect.ignore)
             }
-            return { title: "Plan Approved", output: `Plan for ${params.member_name} approved.`, metadata: {} }
+            return {
+              title: "Plan Approved",
+              output: `Plan for ${params.member_name} approved.`,
+              metadata: { reviewID: review.id } as Metadata,
+            }
           }
           yield* team.sendMessage({
             teamID: activeTeam.value.id,
@@ -99,12 +140,16 @@ export const TeamPlanDecideTool = Tool.define(
           })
           const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
           if (promptOps) {
-            yield* wakeTeamSessionBounded(promptOps, SessionID.make(target.session_id)).pipe(Effect.ignore)
+            yield* wakeTeamSessionBounded(delivery, SessionID.make(target.session_id)).pipe(Effect.ignore)
           }
-          return { title: "Plan Rejected", output: `Plan for ${params.member_name} rejected.`, metadata: {} }
+          return {
+            title: "Plan Rejected",
+            output: `Plan for ${params.member_name} rejected.`,
+            metadata: { reviewID: review.id } as Metadata,
+          }
         }).pipe(Effect.orDie),
     }
-  }),
+  }).pipe(Effect.provide(TeamPlanReview.defaultLayer)),
 )
 
 function removePlanModePermissionOverlay(rules: Permission.Rule[]) {

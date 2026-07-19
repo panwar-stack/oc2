@@ -24,11 +24,35 @@ describe("web timeline transcript contract", () => {
     const pierre = await Bun.file(import.meta.dir + "/../../../../ui/src/pierre/index.ts").text()
 
     expect(timeline).toContain('data-slot="session-turn-thinking-glyph"')
+    expect(timeline).toContain('data-variant={props.redesigned ? "v2" : "legacy"}')
+    expect(timeline).not.toContain("data-redesigned")
     expect(styles).toContain('[data-component="session-timeline"][data-layout="v2"]')
+    expect(styles).toContain(
+      '[data-timeline-row="AssistantPart"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"]',
+    )
+    expect(styles).toContain(
+      '[data-timeline-row="Retry"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"]',
+    )
+    expect(styles).toContain("border-left: 1px solid var(--v2-border-border-muted)")
+    expect(styles).toContain('[data-component="tool-part-wrapper"]')
+    expect(styles).toContain('[data-slot="session-turn-diff-view"]')
+    expect(styles).toContain("max-width: none")
+    expect(markdown).not.toContain("prefers-color-scheme")
     expect(marked).toContain("var(--v2-syntax-keyword)")
     expect(marked).toContain("var(--v2-diff-added)")
     expect(markdown).toContain("var(--v2-markdown-text, var(--markdown-text))")
     expect(pierre).toContain("var(--v2-diff-added-bg)")
     expect(`${marked}\n${markdown}\n${pierre}`).not.toMatch(/#[\da-f]{3,8}/i)
+  })
+
+  test("limits redesigned prose without constraining tools", async () => {
+    const styles = await Bun.file(import.meta.dir + "/../../../../ui/src/components/message-part.css").text()
+
+    expect(styles).toContain('[data-component="user-message"][data-variant="v2"]')
+    expect(styles).toContain("max-width: min(100%, var(--v2-timeline-max-width))")
+    expect(styles).toContain('[data-component="text-part"][data-variant="v2"]')
+    expect(styles).toContain('[data-component="tool-part-wrapper"][data-variant="v2"]')
+    expect(styles).not.toContain("data-redesigned")
+    expect(styles).not.toContain("@media (prefers-color-scheme: dark)")
   })
 })

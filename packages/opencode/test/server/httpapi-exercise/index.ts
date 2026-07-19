@@ -830,6 +830,16 @@ const scenarios: Scenario[] = [
     }))
     .json(404, object, "status"),
   http.protected
+    .get("/api/session/{sessionID}/input", "v2.session.input.pending")
+    .at((ctx) => ({
+      path: `${route("/api/session/{sessionID}/input", { sessionID: "ses_httpapi_missing" })}?${new URLSearchParams({
+        state: "pending",
+        delivery: "queue",
+      })}`,
+      headers: ctx.headers(),
+    }))
+    .json(404, object, "status"),
+  http.protected
     .get("/api/session/{sessionID}/message", "v2.session.messages")
     .at((ctx) => ({
       path: route("/api/session/{sessionID}/message", { sessionID: "ses_httpapi_missing" }),
@@ -1503,6 +1513,22 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
     }))
     .status(400),
+  http.protected
+    .get("/team/history", "team.history")
+    .at((ctx) => ({
+      path: `/team/history?${new URLSearchParams({ viewer_session_id: "ses_httpapi_missing" })}`,
+      headers: ctx.headers(),
+    }))
+    .json(200, array),
+  http.protected
+    .get("/team/{teamID}/board", "team.board")
+    .at((ctx) => ({
+      path: `${route("/team/{teamID}/board", { teamID: "team_httpapi_missing" })}?${new URLSearchParams({
+        viewer_session_id: "ses_httpapi_missing",
+      })}`,
+      headers: ctx.headers(),
+    }))
+    .status(404),
   http.protected
     .get("/team/{teamID}", "team.getById")
     .at((ctx) => ({

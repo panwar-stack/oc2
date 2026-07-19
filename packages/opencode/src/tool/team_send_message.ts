@@ -1,10 +1,9 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./team_send_message.txt"
 import { Team } from "@/team/team"
+import { TeamDelivery } from "@/team/delivery"
 import { Config } from "@/config/config"
-import type { TaskPromptOps } from "./task"
-import { wakeTeamSession, wakeTeamSessionBounded } from "./team_wake"
-import { Effect, Option, Schema, Scope } from "effect"
+import { Effect, Option, Schema } from "effect"
 
 const Parameters = Schema.Struct({
   recipient: Schema.String.annotate({ description: "The name or sessionID of the teammate" }),
@@ -17,8 +16,8 @@ export const TeamSendMessageTool = Tool.define(
   "team_send_message",
   Effect.gen(function* () {
     const team = yield* Team.Service
+    yield* TeamDelivery.Service
     const config = yield* Config.Service
-    const scope = yield* Scope.Scope
     return {
       description: DESCRIPTION,
       parameters: Parameters,
@@ -73,24 +72,13 @@ export const TeamSendMessageTool = Tool.define(
             body: params.body,
           })
           const lead = ctx.sessionID === context.value.team.lead_session_id
-          const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
-          if (promptOps) {
-            yield* Effect.forEach(
-              recipients.filter((recipient) => recipient !== ctx.sessionID),
-              (recipient) =>
-                lead
-                  ? wakeTeamSessionBounded(promptOps, recipient).pipe(Effect.ignore)
-                  : wakeTeamSession(promptOps, recipient).pipe(Effect.ignore, Effect.forkIn(scope)),
-              { concurrency: "unbounded", discard: true },
-            )
-          }
           return {
             title: "Message Sent",
             output: [
               `Sent to ${recipients.length} recipient(s).`,
               lead
-                ? "Lead session waited briefly for woken teammate run(s) to finish; wake waits are bounded."
-                : "Delivery is asynchronous. Busy recipients will only see this when their current run reaches the next prompt boundary.",
+                ? "Recipient activities were durably admitted and advisory wakes were issued."
+                : "Delivery is durable and asynchronous. Busy recipients will only see this when their current run reaches the next prompt boundary.",
               lead
                 ? "Check team_get_messages once for any teammate response before deciding the next coordination step."
                 : "Continue your assigned work unless this message reports a blocker.",

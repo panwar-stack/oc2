@@ -103,6 +103,7 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
   normalizeComponentNames(spec)
   collapseDuplicateComponents(spec)
   applyBillingProviderMetadataSchema(spec)
+  applyTeamBoardNullability(spec)
   applyLegacySchemaOverrides(spec)
   normalizeComponentDescriptions(spec)
   addLegacyErrorSchemas(spec)
@@ -185,6 +186,23 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
   }
   deleteUnusedLegacyErrorComponents(spec)
   return input
+}
+
+function applyTeamBoardNullability(spec: OpenApiSpec) {
+  const schemas = spec.components?.schemas
+  if (!schemas) return
+  const nullable = (component: string, fields: string[]) => {
+    const properties = schemas[component]?.properties
+    if (!properties) return
+    for (const field of fields) {
+      const property = properties[field]
+      if (property) properties[field] = { anyOf: [property, { type: "null" }] }
+    }
+  }
+  nullable("TeamBoardCurrentWork", ["id", "started_at"])
+  nullable("TeamBoardWorkerAttention", ["plan"])
+  nullable("TeamBoardWorker", ["role", "display_summary", "current_work", "elapsed_ms", "outcome"])
+  nullable("TeamBoardTask", ["assignee", "started_at", "completed_at"])
 }
 
 function applyBillingProviderMetadataSchema(spec: OpenApiSpec) {

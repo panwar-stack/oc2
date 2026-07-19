@@ -1000,7 +1000,7 @@ export function ContextToolGroup(props: { parts: ToolPart[]; redesigned?: boolea
             handleOpenChange(!open())
           }}
         >
-          <div data-component="context-tool-group-trigger" data-redesigned={props.redesigned ? "true" : undefined}>
+          <div data-component="context-tool-group-trigger" data-variant={props.redesigned ? "v2" : "legacy"}>
             <Show
               when={props.redesigned}
               fallback={
@@ -1211,7 +1211,7 @@ export function UserMessageDisplay(props: {
     <Dynamic
       component={props.redesigned ? "article" : "div"}
       data-component="user-message"
-      data-redesigned={props.redesigned ? "true" : undefined}
+      data-variant={props.redesigned ? "v2" : "legacy"}
       data-timeline-part-id={textPart()?.id}
       aria-label={props.redesigned ? "Your message" : undefined}
     >
@@ -1512,7 +1512,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     <Show when={!hideQuestion()}>
       <div
         data-component="tool-part-wrapper"
-        data-redesigned={props.redesigned ? "true" : undefined}
+        data-variant={props.redesigned ? "v2" : "legacy"}
         data-timeline-part-id={part().id}
         role={props.redesigned ? "region" : undefined}
         aria-label={props.redesigned ? `${info().title}, 1 tool call, ${aggregate().label}` : undefined}
@@ -1745,7 +1745,11 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
 
   return (
     <Show when={text()}>
-      <div data-component="text-part" data-timeline-part-id={part().id}>
+      <div
+        data-component="text-part"
+        data-variant={props.redesigned ? "v2" : "legacy"}
+        data-timeline-part-id={part().id}
+      >
         <div data-slot="text-part-body">
           <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
             <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />

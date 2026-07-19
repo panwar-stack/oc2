@@ -23,7 +23,10 @@ export interface MockServerConfig {
   permissions?: unknown[]
   sessionStatus?: Record<string, unknown>
   team?: MockResponse
+  teamHistory?: MockResponse
+  teamBoard?: MockResponse
   teamTasks?: MockResponse
+  pendingInputs?: MockResponse
 }
 
 interface MockResponse {
@@ -59,8 +62,13 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
     if (path === "/question") return json(route, config.questions ?? [])
     if (path === "/permission") return json(route, config.permissions ?? [])
     if (path === "/session/status") return json(route, config.sessionStatus ?? {})
+    if (path === "/team/history") return response(route, config.teamHistory ?? { body: [] })
     if (path === "/team") return response(route, config.team ?? { body: {} })
+    if (/^\/team\/[^/]+\/board$/.test(path)) return response(route, config.teamBoard ?? { body: {} })
     if (/^\/team\/[^/]+\/tasks$/.test(path)) return response(route, config.teamTasks ?? { body: [] })
+    if (/^\/api\/session\/[^/]+\/input$/.test(path)) {
+      return response(route, config.pendingInputs ?? { body: { revision: 0, inputs: [] } })
+    }
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
     if (path in staticRoutes) return json(route, staticRoutes[path])

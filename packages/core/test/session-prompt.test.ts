@@ -9,7 +9,7 @@ import { Project } from "@oc2-ai/core/project"
 import { ProjectTable } from "@oc2-ai/core/project/sql"
 import { AbsolutePath } from "@oc2-ai/core/schema"
 import { SessionV2 } from "@oc2-ai/core/session"
-import { Prompt } from "@oc2-ai/core/session/prompt"
+import { AgentAttachment, FileAttachment, Prompt, ReferenceAttachment } from "@oc2-ai/core/session/prompt"
 import { SessionMessage } from "@oc2-ai/core/session/message"
 import { SessionProjector } from "@oc2-ai/core/session/projector"
 import { SessionExecution } from "@oc2-ai/core/session/execution"
@@ -114,6 +114,200 @@ const interruptEvent = Database.Service.use(({ db }) =>
 )
 
 describe("SessionV2.prompt", () => {
+  it.effect("admits one exact team mailbox activity and promotes it as system history", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const id = SessionMessage.ID.make("msg_team_mailbox")
+      const activity = new SessionInput.TeamMessageActivity({
+        type: "team_message",
+        team_id: "team-1",
+        recipient_row_id: "recipient-1",
+        sender: "ses_sender",
+        body: "Review the completed implementation.",
+      })
+      let commits = 0
+
+      const first = yield* SessionInput.admitActivity(db, events, {
+        id,
+        sessionID,
+        activity,
+        delivery: "steer",
+        commit: () => Effect.sync(() => commits++),
+      })
+      const retried = yield* SessionInput.admitActivity(db, events, {
+        id,
+        sessionID,
+        activity,
+        delivery: "steer",
+        commit: () => Effect.sync(() => commits++),
+      })
+
+      expect(retried).toEqual(first)
+      expect(commits).toBe(1)
+      expect(yield* session.pendingInputs(sessionID)).toMatchObject({ inputs: [] })
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.TeamMessageLifecycle.Admitted.type, 1))).toBe(1)
+
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.TeamMessageLifecycle.Promoted.type, 1))).toBe(1)
+      expect(yield* session.messages({ sessionID })).toMatchObject([
+        {
+          id,
+          type: "system",
+          source: "team_mailbox",
+          text: "<team-messages>\nFrom ses_sender:\nReview the completed implementation.\n</team-messages>",
+        },
+      ])
+    }),
+  )
+
+  it.effect("rolls back team mailbox admission when its recipient commit fails", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const id = SessionMessage.ID.make("msg_team_commit_failure")
+
+      const exit = yield* SessionInput.admitActivity(db, events, {
+        id,
+        sessionID,
+        activity: new SessionInput.TeamMessageActivity({
+          type: "team_message",
+          team_id: "team-1",
+          recipient_row_id: "recipient-failure",
+          sender: "ses_sender",
+          body: "Do not persist partially.",
+        }),
+        delivery: "steer",
+        commit: () => Effect.die("recipient commit failed"),
+      }).pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* SessionInput.findActivity(db, id)).toBeUndefined()
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.TeamMessageLifecycle.Admitted.type, 1))).toBe(0)
+    }),
+  )
+
+  it.effect("replays team mailbox admission and promotion exactly once", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const id = SessionMessage.ID.make("msg_team_replay")
+      yield* SessionInput.admitActivity(db, events, {
+        id,
+        sessionID,
+        activity: new SessionInput.TeamMessageActivity({
+          type: "team_message",
+          team_id: "team-1",
+          recipient_row_id: "recipient-replay",
+          sender: "ses_sender",
+          body: "Replay this mailbox activity.",
+        }),
+        delivery: "steer",
+      })
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const recorded = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+
+      yield* events.remove(sessionID)
+      yield* db.delete(SessionInputTable).where(eq(SessionInputTable.session_id, sessionID)).run().pipe(Effect.orDie)
+      yield* db
+        .delete(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.replayAll(
+        recorded.map((event) => ({
+          id: event.id,
+          aggregateID: event.aggregate_id,
+          seq: event.seq,
+          type: event.type,
+          data: event.data,
+        })),
+      )
+
+      expect(yield* SessionInput.findActivity(db, id)).toMatchObject({
+        source: "team_mailbox",
+        activity: { type: "team_message", recipient_row_id: "recipient-replay" },
+        promotedSeq: 1,
+      })
+      expect(yield* session.messages({ sessionID })).toMatchObject([
+        {
+          id,
+          type: "system",
+          source: "team_mailbox",
+          text: "<team-messages>\nFrom ses_sender:\nReplay this mailbox activity.\n</team-messages>",
+        },
+      ])
+    }),
+  )
+
+  it.effect("returns pending queued prompts in durable admission order", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Steer now" }),
+        delivery: "steer",
+        resume: false,
+      })
+      const first = yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Queue first",
+          files: [new FileAttachment({ uri: "file:///project/first.ts", mime: "text/typescript", name: "first.ts" })],
+          agents: [new AgentAttachment({ name: "builder" })],
+          references: [
+            new ReferenceAttachment({ name: "issue", kind: "git", repository: "owner/repo", target: "123" }),
+          ],
+        }),
+        delivery: "queue",
+        resume: false,
+      })
+      const second = yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Queue second" }),
+        delivery: "queue",
+        resume: false,
+      })
+
+      const pending = yield* session.pendingInputs(sessionID)
+      expect(pending.revision).toBe(second.admittedSeq)
+      expect(pending.inputs.map((input) => input.id)).toEqual([first.id, second.id])
+      expect(pending.inputs[0]).toMatchObject({
+        sequence: first.admittedSeq,
+        delivery: "queue",
+        prompt: {
+          text: "Queue first",
+          files: [{ uri: "file:///project/first.ts", mime: "text/typescript", name: "first.ts" }],
+          agents: [{ name: "builder" }],
+          references: [{ name: "issue", kind: "git", repository: "owner/repo", target: "123" }],
+        },
+      })
+      expect(Number.isInteger(pending.inputs[0]!.time_created)).toBe(true)
+
+      yield* SessionInput.promoteNextQueued(db, events, sessionID)
+      const afterPromotion = yield* session.pendingInputs(sessionID)
+      expect(afterPromotion.revision).toBeGreaterThan(pending.revision)
+      expect(afterPromotion.inputs.map((input) => input.id)).toEqual([second.id])
+
+      const missing = yield* session.pendingInputs(SessionV2.ID.make("ses_pending_missing")).pipe(Effect.flip)
+      expect(missing._tag).toBe("Session.NotFoundError")
+    }),
+  )
+
   it.effect("delegates execution continuation through SessionExecution", () =>
     Effect.gen(function* () {
       yield* setup

@@ -12,6 +12,7 @@ export const TeamTable = sqliteTable(
     status: text({ enum: ["active", "closed", "cancelled"] })
       .notNull()
       .default("active"),
+    board_revision: integer().notNull().default(0),
     ...Timestamps,
   },
   (table) => ({
@@ -31,6 +32,22 @@ export const TeamMemberTable = sqliteTable(
     agent_type: text().notNull(),
     model: text({ mode: "json" }).$type<{ providerID: string; modelID: string; variant?: string } | null>(),
     role_prompt: text().notNull(),
+    role: text(),
+    display_summary: text(),
+    mutability: text({ enum: ["read_only", "write_allowed", "unknown"] })
+      .notNull()
+      .default("unknown"),
+    current_work_source: text({ enum: ["task", "assignment"] }),
+    current_work_id: text(),
+    work_started_at: integer(),
+    execution_epoch: integer().notNull().default(0),
+    execution_state: text({ enum: ["starting", "busy", "retry", "idle"] }),
+    lease_owner_id: text(),
+    lease_expires_at: integer(),
+    outcome_type: text({ enum: ["succeeded", "failed", "cancelled", "interrupted"] }),
+    outcome_label: text({ enum: ["completed", "failed", "cancelled", "interrupted"] }),
+    outcome_cause: text(),
+    outcome_at: integer(),
     status: text({ enum: ["starting", "blocked", "active", "idle", "completed", "cancelled"] })
       .notNull()
       .default("starting"),
@@ -66,6 +83,8 @@ export const TeamTaskTable = sqliteTable(
     assignee: text(),
     dependency_ids: text({ mode: "json" }).$type<string[] | null>(),
     metadata: text({ mode: "json" }).$type<Record<string, unknown> | null>(),
+    started_at: integer(),
+    completed_at: integer(),
     ...Timestamps,
   },
   (table) => ({
@@ -126,5 +145,76 @@ export const TeamUsageEventTable = sqliteTable(
   },
   (table) => ({
     team_idx: index("team_usage_event_team_idx").on(table.team_id, table.time_created),
+  }),
+)
+
+export const TeamBoardOutboxTable = sqliteTable(
+  "team_board_outbox",
+  {
+    id: text().primaryKey(),
+    team_id: text().notNull(),
+    revision: integer().notNull(),
+    reasons: text({ mode: "json" }).$type<string[]>().notNull(),
+    published_at: integer(),
+    ...Timestamps,
+  },
+  (table) => ({
+    revision_idx: uniqueIndex("team_board_outbox_revision_idx").on(table.team_id, table.revision),
+    pending_idx: index("team_board_outbox_pending_idx").on(table.published_at, table.team_id, table.revision),
+  }),
+)
+
+export const TeamPlanReviewTable = sqliteTable(
+  "team_plan_review",
+  {
+    id: text().primaryKey(),
+    team_id: text().notNull(),
+    member_id: text().notNull(),
+    submitted_by_session_id: text().notNull(),
+    plan_body: text().notNull(),
+    state: text({ enum: ["drafting", "submitted", "approved", "rejected"] })
+      .notNull()
+      .default("submitted"),
+    decision: text({ enum: ["approve", "reject"] }),
+    decision_feedback: text(),
+    decided_by_session_id: text(),
+    decided_at: integer(),
+    ...Timestamps,
+  },
+  (table) => ({
+    team_idx: uniqueIndex("team_plan_review_team_idx").on(table.team_id, table.id),
+    member_state_idx: index("team_plan_review_member_state_idx").on(
+      table.team_id,
+      table.member_id,
+      table.state,
+      table.time_created,
+    ),
+  }),
+)
+
+export const TeamAttentionTable = sqliteTable(
+  "team_attention",
+  {
+    id: text().primaryKey(),
+    team_id: text().notNull(),
+    member_id: text().notNull(),
+    session_id: text().notNull(),
+    kind: text({ enum: ["permission", "question"] }).notNull(),
+    detail_id: text().notNull(),
+    detail: text({ mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    state: text({ enum: ["open", "resolved", "cancelled"] })
+      .notNull()
+      .default("open"),
+    resolution: text(),
+    ...Timestamps,
+  },
+  (table) => ({
+    detail_idx: uniqueIndex("team_attention_detail_idx").on(table.kind, table.detail_id),
+    team_state_idx: index("team_attention_team_state_idx").on(
+      table.team_id,
+      table.state,
+      table.kind,
+      table.time_created,
+    ),
   }),
 )

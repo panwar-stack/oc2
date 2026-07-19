@@ -3,6 +3,7 @@ import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-j
 import { useTheme } from "../../context/theme"
 import { Locale } from "../../util/locale"
 import { Glyph } from "../../component/glyph"
+import { projectSessionContext } from "./session-projection"
 
 export type SessionContextUsage = { tokens: number; limit?: number }
 
@@ -14,17 +15,9 @@ export type SessionActivityState =
   | { type: "team"; interruptible: false; who: string; task?: string; started?: number }
 
 export function sessionContextHealth(input: SessionContextUsage) {
-  if (!input.limit || input.limit <= 0) return { level: "normal" as const, label: `ctx ${Locale.number(input.tokens)}` }
-  const percent = Math.min(100, Math.max(0, Math.floor((input.tokens / input.limit) * 100)))
-  const level = percent >= 90 ? ("danger" as const) : percent >= 70 ? ("warning" as const) : ("normal" as const)
-  const cells = Math.round((percent / 100) * 8)
-  return {
-    level,
-    percent,
-    gauge: `${"▰".repeat(cells)}${"▱".repeat(8 - cells)}`,
-    action: level === "danger" ? "fork/new" : level === "warning" ? "compact" : undefined,
-    label: `ctx ${Locale.number(input.tokens)} ${"▰".repeat(cells)}${"▱".repeat(8 - cells)} ${percent}%`,
-  }
+  const projection = projectSessionContext(input.tokens, input.limit)
+  if (projection.percent === undefined) return { ...projection, label: `ctx ${projection.tokensLabel}` }
+  return { ...projection, label: `ctx ${projection.tokensLabel} ${projection.gauge} ${projection.percent}%` }
 }
 
 export function sessionActivity(input: {

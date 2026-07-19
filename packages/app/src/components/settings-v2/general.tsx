@@ -243,6 +243,19 @@ export const SettingsGeneralV2: Component = () => {
         </SettingsRowV2>
 
         <SettingsRowV2
+          title={language.t("settings.general.row.followup.title")}
+          description={language.t("settings.general.row.followup.description")}
+        >
+          <div data-action="settings-followup-queue">
+            <Switch
+              aria-label={language.t("settings.general.row.followup.title")}
+              checked={settings.general.followup() === "queue"}
+              onChange={(checked) => settings.general.setFollowup(checked ? "queue" : "steer")}
+            />
+          </div>
+        </SettingsRowV2>
+
+        <SettingsRowV2
           title={language.t("settings.general.row.reasoningSummaries.title")}
           description={language.t("settings.general.row.reasoningSummaries.description")}
         >

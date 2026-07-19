@@ -11,4 +11,13 @@ describe("resumeStreamAfterPageShow", () => {
 
     expect(starts).toBe(1)
   })
+
+  test("exposes truthful stream lifecycle transitions", async () => {
+    const source = await Bun.file(import.meta.dir + "/server-sdk.tsx").text()
+    expect(source).toContain('{ status: "disconnected" }')
+    expect(source).toContain('setConnection("status", connectedOnce ? "reconnecting" : "connecting")')
+    expect(source).toContain('setConnection("status", "connected")')
+    expect(source).toContain('setConnection("status", "reconnecting")')
+    expect(source).toContain('setConnection("status", "disconnected")')
+  })
 })

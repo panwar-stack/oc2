@@ -21,11 +21,73 @@ function withSession(path: string, sessionID: string) {
   return `${path}?sessionID=${encodeURIComponent(sessionID)}`
 }
 
+function withViewer(path: string, sessionID: string) {
+  return `${path}?viewer_session_id=${encodeURIComponent(sessionID)}`
+}
+
 afterEach(async () => {
   await resetDatabase()
 })
 
 describe("team HttpApi", () => {
+  it.instance("discovers team history and returns one authoritative Board projection", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const team = yield* Team.Service
+      const info = yield* team.create({ name: "http-board", goal: "Expose Board", leadSessionID: "ses_board_lead" })
+      const member = yield* team.addMember({
+        teamID: info.id,
+        sessionID: "ses_board_member",
+        name: "worker",
+        agentType: "general",
+        rolePrompt: "PRIVATE ROLE PROMPT",
+      })
+      const task = yield* team.createTask({
+        teamID: info.id,
+        description: "Public task",
+        assignee: member.session_id,
+      })
+      yield* team.updateTask(info.id, task.id, { status: "in_progress" })
+      const headers = { "x-oc2-directory": test.directory }
+
+      const legacy = yield* request(withSession(TeamPaths.root, info.lead_session_id), { headers })
+      const selected = yield* request(withViewer(TeamPaths.root, member.session_id), { headers })
+      const history = yield* request(withViewer(`${TeamPaths.root}/history`, member.session_id), { headers })
+      const board = yield* request(withViewer(`${TeamPaths.root}/${info.id}/board`, member.session_id), { headers })
+      const outsider = yield* request(withViewer(`${TeamPaths.root}/${info.id}/board`, "ses_board_outsider"), {
+        headers,
+      })
+      const missing = yield* request(withViewer(`${TeamPaths.root}/missing-team/board`, member.session_id), { headers })
+      const legacyBody = yield* responseJson(legacy)
+      const selectedBody = yield* responseJson(selected)
+      const historyBody = yield* responseJson(history)
+      const boardBody = yield* responseJson(board)
+
+      expect(legacy.status, JSON.stringify(legacyBody)).toBe(200)
+      expect(selected.status, JSON.stringify(selectedBody)).toBe(200)
+      expect(legacyBody.id).toBe(info.id)
+      expect(selectedBody.id).toBe(info.id)
+      expect(history.status, JSON.stringify(historyBody)).toBe(200)
+      expect(historyBody).toEqual([expect.objectContaining({ id: info.id, status: "active" })])
+      expect(board.status, JSON.stringify(boardBody)).toBe(200)
+      expect(boardBody).toMatchObject({
+        team: { id: info.id, status: "active" },
+        viewer: { session_id: member.session_id, role: "member" },
+        counts: { workers: 1, claimed: 1, total_tasks: 1 },
+        workers: [
+          expect.objectContaining({
+            member_id: member.id,
+            state: "idle",
+            current_work: { source: "task", id: task.id, started_at: expect.any(Number) },
+          }),
+        ],
+      })
+      expect(JSON.stringify(boardBody)).not.toContain("PRIVATE ROLE PROMPT")
+      expect(outsider.status).toBe(400)
+      expect(missing.status).toBe(404)
+    }),
+  )
+
   it.instance("returns team evaluation reports", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

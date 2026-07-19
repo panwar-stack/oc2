@@ -216,7 +216,7 @@ export function BasicTool(props: BasicToolProps) {
   const trigger = () => (
     <div
       data-component="tool-trigger"
-      data-redesigned={props.redesigned ? "true" : undefined}
+      data-variant={props.redesigned ? "v2" : "legacy"}
       data-status={status()?.status}
       data-clickable={props.clickable ? "true" : undefined}
       data-hide-details={props.hideDetails ? "true" : undefined}

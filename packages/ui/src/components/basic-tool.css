@@ -170,7 +170,7 @@
   }
 }
 
-[data-component="tool-trigger"][data-redesigned="true"] {
+[data-component="tool-trigger"][data-variant="v2"] {
   min-height: 26px;
   padding: 0 var(--v2-space-3);
   border-bottom: 1px solid var(--v2-border-border-muted);

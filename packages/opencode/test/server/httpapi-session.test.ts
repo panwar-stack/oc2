@@ -619,6 +619,13 @@ describe("session HttpApi", () => {
         })
         expect(prompt.status).toBe(404)
         expect(yield* responseJson(prompt)).toEqual(expected)
+
+        const pendingInputs = yield* request(
+          `/api/session/${missing}/input?state=pending&delivery=queue`,
+          { headers },
+        )
+        expect(pendingInputs.status).toBe(404)
+        expect(yield* responseJson(pendingInputs)).toEqual(expected)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
@@ -667,6 +674,48 @@ describe("session HttpApi", () => {
           delivery: "steer",
           promoted_seq: null,
         })
+        const queued = yield* request(`/api/session/${session.id}/prompt`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({
+            id: "msg_http_queued",
+            prompt: {
+              text: "queued",
+              files: [{ uri: "file:///queued.ts", mime: "text/typescript", name: "queued.ts" }],
+              agents: [{ name: "builder" }],
+              references: [{ name: "issue", kind: "git", repository: "owner/repo", target: "123" }],
+            },
+            delivery: "queue",
+            resume: false,
+          }),
+        })
+        expect(queued.status).toBe(200)
+        const pending = yield* request(`/api/session/${session.id}/input?state=pending&delivery=queue`, { headers })
+        const pendingBody = yield* json<{
+          revision: number
+          inputs: Array<{
+            id: string
+            sequence: number
+            delivery: "queue"
+            prompt: { text: string; files?: unknown[]; agents?: unknown[]; references?: unknown[] }
+            time_created: number
+          }>
+        }>(pending)
+        expect(pending.status).toBe(200)
+        expect(pendingBody.inputs).toEqual([
+          expect.objectContaining({
+            id: "msg_http_queued",
+            sequence: pendingBody.revision,
+            delivery: "queue",
+            prompt: expect.objectContaining({
+              text: "queued",
+              files: [expect.objectContaining({ name: "queued.ts" })],
+              agents: [{ name: "builder" }],
+              references: [expect.objectContaining({ name: "issue", kind: "git" })],
+            }),
+            time_created: expect.any(Number),
+          }),
+        ])
         const conflict = yield* request(`/api/session/${session.id}/prompt`, {
           method: "POST",
           headers: { ...headers, "content-type": "application/json" },

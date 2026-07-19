@@ -93,7 +93,26 @@
       gap: var(--v2-space-3);
     }
 
-    [data-slot="session-turn-thinking"][data-redesigned="true"] {
+    [data-timeline-row="AssistantPart"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"],
+    [data-timeline-row="Thinking"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"],
+    [data-timeline-row="FuguStatus"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"],
+    [data-timeline-row="Retry"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"],
+    [data-timeline-row="DiffSummary"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"],
+    [data-timeline-row="Error"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"],
+    [data-timeline-row="TurnFooter"] > [data-component="session-turn"] > [data-slot="session-turn-message-container"] {
+      border-left: 1px solid var(--v2-border-border-muted);
+      padding-left: var(--v2-space-6);
+    }
+
+    [data-component="tool-part-wrapper"],
+    [data-component="tool-output"],
+    [data-slot="session-turn-diffs"],
+    [data-slot="session-turn-diff-view"] {
+      width: 100%;
+      max-width: none;
+    }
+
+    [data-slot="session-turn-thinking"][data-variant="v2"] {
       display: grid;
       grid-template-columns: auto auto minmax(0, 1fr);
       align-items: center;

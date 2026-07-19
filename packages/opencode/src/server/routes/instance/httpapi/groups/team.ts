@@ -4,13 +4,14 @@ import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { TeamBoard } from "@/team/board"
 
 const TeamInfoSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   goal: Schema.String,
   lead_session_id: Schema.String,
-  status: Schema.String,
+  status: Schema.Literals(["active", "closed", "cancelled"]),
   time_created: Schema.Number,
   time_updated: Schema.Number,
 }).annotate({ identifier: "TeamInfo" })
@@ -169,12 +170,37 @@ export const TeamPaths = {
 } as const
 
 export const TeamQuery = Schema.Struct({
-  sessionID: Schema.String,
+  sessionID: Schema.optional(Schema.String),
+  viewer_session_id: Schema.optional(Schema.String),
+})
+
+const TeamViewerQuery = Schema.Struct({
+  viewer_session_id: Schema.String,
 })
 
 const TeamAccessQuery = Schema.Struct({
   sessionID: Schema.String,
 })
+
+const TeamMailboxQuery = Schema.Struct({
+  viewer_session_id: Schema.String,
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.Number),
+})
+
+const TeamAttentionDetailSchema = Schema.Struct({
+  id: Schema.String,
+  member_id: Schema.String,
+  kind: Schema.Literals(["plan", "permission", "question"]),
+  state: Schema.String,
+  detail: Schema.Record(Schema.String, Schema.Unknown),
+}).annotate({ identifier: "TeamAttentionDetail" })
+
+const TeamPlanDecisionResultSchema = Schema.Struct({
+  changed: Schema.Boolean,
+  state: Schema.Literals(["approved", "rejected"]),
+  revision: Schema.Number,
+}).annotate({ identifier: "TeamPlanDecisionResult" })
 
 export const TeamApi = HttpApi.make("team").add(
   HttpApiGroup.make("team")
@@ -186,8 +212,88 @@ export const TeamApi = HttpApi.make("team").add(
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "team.get",
-          summary: "Get team by lead session",
-          description: "Get the active team for a given lead session ID.",
+          summary: "Get active team by session",
+          description: "Get the active team for a lead or member session selector.",
+        }),
+      ),
+      HttpApiEndpoint.get("getHistory", `${TeamPaths.root}/history`, {
+        query: TeamViewerQuery,
+        success: described(Schema.Array(TeamInfoSchema), "Team history"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "team.history",
+          summary: "Get team history",
+          description: "Get every team containing the selected lead or member session, newest first.",
+        }),
+      ),
+      HttpApiEndpoint.get("getBoard", `${TeamPaths.root}/:teamID/board`, {
+        params: { teamID: Schema.String },
+        query: TeamViewerQuery,
+        success: described(TeamBoard.Snapshot, "Authoritative team Board snapshot"),
+        error: [HttpApiError.BadRequest, HttpApiError.NotFound],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "team.board",
+          summary: "Get team Board",
+          description: "Get one coherent, data-minimized Board projection for a team.",
+        }),
+      ),
+      HttpApiEndpoint.get("getMailbox", `${TeamPaths.root}/:teamID/mailbox`, {
+        params: { teamID: Schema.String },
+        query: TeamMailboxQuery,
+        success: described(TeamBoard.MailboxPage, "Recipient-filtered team mailbox"),
+        error: [HttpApiError.BadRequest, HttpApiError.NotFound],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "team.mailbox",
+          summary: "Get team mailbox",
+          description: "Get one recipient's bounded, cursor-paginated team mailbox.",
+        }),
+      ),
+      HttpApiEndpoint.get("getAttention", `${TeamPaths.root}/:teamID/attention/:attentionID`, {
+        params: { teamID: Schema.String, attentionID: Schema.String },
+        query: TeamViewerQuery,
+        success: described(TeamAttentionDetailSchema, "Team attention detail"),
+        error: [HttpApiError.BadRequest, HttpApiError.NotFound],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "team.attention",
+          summary: "Get team attention detail",
+          description: "Get bounded plan, permission, or question detail for an authorized team viewer.",
+        }),
+      ),
+      HttpApiEndpoint.post("markMessagesRead", `${TeamPaths.root}/:teamID/messages/read`, {
+        params: { teamID: Schema.String },
+        query: TeamViewerQuery,
+        payload: Schema.Struct({
+          message_ids: Schema.Array(Schema.String),
+          expected_revision: Schema.Number,
+        }),
+        success: described(TeamBoard.MarkReadResult, "Mailbox read result"),
+        error: [HttpApiError.BadRequest, HttpApiError.NotFound, HttpApiError.Conflict],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "team.messages.read",
+          summary: "Mark team messages read",
+          description: "Mark delivered recipient messages read with Board revision compare-and-set.",
+        }),
+      ),
+      HttpApiEndpoint.post("decidePlan", `${TeamPaths.root}/:teamID/plans/:reviewID/decision`, {
+        params: { teamID: Schema.String, reviewID: Schema.String },
+        query: TeamViewerQuery,
+        payload: Schema.Struct({
+          decision: Schema.Literals(["approve", "reject"]),
+          feedback: Schema.optional(Schema.String),
+          expected_revision: Schema.Number,
+        }),
+        success: described(TeamPlanDecisionResultSchema, "Plan decision result"),
+        error: [HttpApiError.BadRequest, HttpApiError.NotFound, HttpApiError.Conflict],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "team.plans.decision",
+          summary: "Decide team plan",
+          description: "Approve or reject a submitted teammate plan with Board revision compare-and-set.",
         }),
       ),
       HttpApiEndpoint.get("getEval", `${TeamPaths.root}/:teamID/eval`, {

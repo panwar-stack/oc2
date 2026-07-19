@@ -9,8 +9,8 @@ export function SessionFollowupDock(props: {
   items: { id: string; text: string }[]
   sending?: string
   redesigned?: boolean
-  onSend: (id: string) => void
-  onEdit: (id: string) => void
+  onSend?: (id: string) => void
+  onEdit?: (id: string) => void
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({
@@ -96,24 +96,32 @@ export function SessionFollowupDock(props: {
             {(item) => (
               <div class="flex items-center gap-2 min-w-0 py-1">
                 <span class="min-w-0 flex-1 truncate text-13-regular text-text-strong">{item.text}</span>
-                <Button
-                  size="small"
-                  variant="secondary"
-                  class="shrink-0"
-                  disabled={!!props.sending}
-                  onClick={() => props.onSend(item.id)}
-                >
-                  {language.t("session.followupDock.sendNow")}
-                </Button>
-                <Button
-                  size="small"
-                  variant="ghost"
-                  class="shrink-0"
-                  disabled={!!props.sending}
-                  onClick={() => props.onEdit(item.id)}
-                >
-                  {language.t("session.followupDock.edit")}
-                </Button>
+                <Show when={props.onSend}>
+                  {(send) => (
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      class="shrink-0"
+                      disabled={!!props.sending}
+                      onClick={() => send()(item.id)}
+                    >
+                      {language.t("session.followupDock.sendNow")}
+                    </Button>
+                  )}
+                </Show>
+                <Show when={props.onEdit}>
+                  {(edit) => (
+                    <Button
+                      size="small"
+                      variant="ghost"
+                      class="shrink-0"
+                      disabled={!!props.sending}
+                      onClick={() => edit()(item.id)}
+                    >
+                      {language.t("session.followupDock.edit")}
+                    </Button>
+                  )}
+                </Show>
               </div>
             )}
           </For>

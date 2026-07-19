@@ -1,6 +1,11 @@
 import { SessionV2 } from "@oc2-ai/core/session"
+import { Database } from "@oc2-ai/core/database/database"
+import { EventV2 } from "@oc2-ai/core/event"
 import { LocationServiceMap } from "@oc2-ai/core/location-layer"
 import { PermissionSaved } from "@oc2-ai/core/permission/saved"
+import { ProjectV2 } from "@oc2-ai/core/project"
+import { SessionProjector } from "@oc2-ai/core/session/projector"
+import { SessionStore } from "@oc2-ai/core/session/store"
 import { Layer } from "effect"
 import { layer as locationLayer } from "./groups/location"
 import { sessionLocationLayer } from "./middleware/session-location"
@@ -18,6 +23,16 @@ import { HealthHandler } from "./handlers/health"
 import { QuestionHandler } from "./handlers/question"
 import * as SessionExecutionLocal from "@oc2-ai/core/session/execution/local"
 
+const sessionLayer = SessionV2.layer.pipe(
+  Layer.provide(SessionProjector.layer),
+  Layer.provide(SessionExecutionLocal.layer),
+  Layer.provide(SessionStore.layer),
+  Layer.provide(EventV2.layer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.orDie,
+)
+
 export const handlers = Layer.mergeAll(
   HealthHandler,
   AgentHandler,
@@ -34,8 +49,7 @@ export const handlers = Layer.mergeAll(
 ).pipe(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),
-  Layer.provide(SessionV2.defaultLayer),
-  Layer.provide(SessionExecutionLocal.defaultLayer),
+  Layer.provide(sessionLayer),
   Layer.provide(PermissionSaved.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
 )

@@ -5,6 +5,7 @@ import * as Log from "@oc2-ai/core/util/log"
 import { QuestionID } from "./schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
+import { TeamAttention } from "@/team/attention"
 
 const log = Log.create({ service: "question" })
 
@@ -133,6 +134,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const attention = yield* TeamAttention.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Question.state")(function* () {
         const state = {
@@ -151,6 +153,7 @@ export const layer = Layer.effect(
         return state
       }),
     )
+    yield* attention.reconcile("question", new Set())
 
     const ask = Effect.fn("Question.ask")(function* (input: {
       sessionID: SessionID
@@ -169,12 +172,19 @@ export const layer = Layer.effect(
         tool: input.tool,
       }
       pending.set(id, { info, deferred })
+      yield* attention.open({
+        sessionID: info.sessionID,
+        kind: "question",
+        detailID: String(info.id),
+        detail: { ...info },
+      })
       yield* events.publish(Event.Asked, info)
 
       return yield* Effect.ensuring(
         Deferred.await(deferred),
-        Effect.sync(() => {
+        Effect.gen(function* () {
           pending.delete(id)
+          yield* attention.cancel("question", String(id), "runtime_cancelled")
         }),
       )
     })
@@ -190,6 +200,7 @@ export const layer = Layer.effect(
         return yield* new NotFoundError({ requestID: input.requestID })
       }
       pending.delete(input.requestID)
+      yield* attention.resolve("question", String(input.requestID), "replied")
       log.info("replied", { requestID: input.requestID, answers: input.answers })
       yield* events.publish(Event.Replied, {
         sessionID: existing.info.sessionID,
@@ -207,6 +218,7 @@ export const layer = Layer.effect(
         return yield* new NotFoundError({ requestID })
       }
       pending.delete(requestID)
+      yield* attention.resolve("question", String(requestID), "rejected")
       log.info("rejected", { requestID })
       yield* events.publish(Event.Rejected, {
         sessionID: existing.info.sessionID,
@@ -224,6 +236,9 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(TeamAttention.defaultLayer),
+)
 
 export * as Question from "."

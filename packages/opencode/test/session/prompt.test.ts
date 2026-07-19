@@ -1255,7 +1255,7 @@ it.live("does not inject lead team guidance into teammate sessions", () =>
   ),
 )
 
-it.live("injects team mailbox messages into prompts and consumes the pending delivery", () =>
+it.live("does not inject durable team mailbox delivery as a legacy user prompt", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
       const prompt = yield* SessionPrompt.Service
@@ -1292,9 +1292,8 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
       const teamMessageParts = (yield* sessions.messages({ sessionID: lead.id }))
         .flatMap((message) => message.parts)
         .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Worker is ready."))
-      expect(teamMessageParts).toHaveLength(1)
-      expect(teamMessageParts[0].text).toContain("<team-messages>")
-      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("Worker is ready."))).toBe(true)
+      expect(teamMessageParts).toEqual([])
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("Worker is ready."))).toBe(false)
     }),
     {
       git: true,

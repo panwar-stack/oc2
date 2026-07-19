@@ -97,7 +97,7 @@ interface PromptInputProps {
   queuedCount?: () => number
   queuedSendsNext?: () => boolean
   workingElapsed?: () => string | undefined
-  onQueue?: (draft: FollowupDraft) => void
+  onQueue?: (draft: FollowupDraft) => Promise<boolean> | boolean
   onAbort?: () => void
   setAbort?: (abort: (() => Promise<unknown>) | undefined) => void
   onSubmit?: () => void

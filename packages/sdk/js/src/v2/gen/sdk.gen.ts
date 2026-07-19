@@ -246,12 +246,16 @@ import type {
   SyncStartResponses,
   SyncStealErrors,
   SyncStealResponses,
+  TeamBoardErrors,
+  TeamBoardResponses,
   TeamEvalErrors,
   TeamEvalResponses,
   TeamGetByIdErrors,
   TeamGetByIdResponses,
   TeamGetErrors,
   TeamGetResponses,
+  TeamHistoryErrors,
+  TeamHistoryResponses,
   TeamMessagesErrors,
   TeamMessagesResponses,
   TeamShutdownErrors,
@@ -319,6 +323,8 @@ import type {
   V2SessionCompactResponses,
   V2SessionContextErrors,
   V2SessionContextResponses,
+  V2SessionInputPendingErrors,
+  V2SessionInputPendingResponses,
   V2SessionListErrors,
   V2SessionListResponses,
   V2SessionMessagesErrors,
@@ -4839,19 +4845,79 @@ export class Sync extends HeyApiClient {
 
 export class Team extends HeyApiClient {
   /**
-   * Get team by lead session
+   * Get active team by session
    *
-   * Get the active team for a given lead session ID.
+   * Get the active team for a lead or member session selector.
    */
   public get<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
+    parameters?: {
+      sessionID?: string
+      viewer_session_id?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "sessionID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "viewer_session_id" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<TeamGetResponses, TeamGetErrors, ThrowOnError>({
       url: "/team",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get team history
+   *
+   * Get every team containing the selected lead or member session, newest first.
+   */
+  public history<ThrowOnError extends boolean = false>(
+    parameters: {
+      viewer_session_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "viewer_session_id" }] }])
+    return (options?.client ?? this.client).get<TeamHistoryResponses, TeamHistoryErrors, ThrowOnError>({
+      url: "/team/history",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get team Board
+   *
+   * Get one coherent, data-minimized Board projection for a team.
+   */
+  public board<ThrowOnError extends boolean = false>(
+    parameters: {
+      teamID: string
+      viewer_session_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "teamID" },
+            { in: "query", key: "viewer_session_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<TeamBoardResponses, TeamBoardErrors, ThrowOnError>({
+      url: "/team/{teamID}/board",
       ...options,
       ...params,
     })
@@ -5493,6 +5559,44 @@ export class Agent extends HeyApiClient {
   }
 }
 
+export class Input extends HeyApiClient {
+  /**
+   * List pending queued inputs
+   *
+   * Retrieve the durable queued prompts that have not been promoted into session history.
+   */
+  public pending<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      state: "pending"
+      delivery: "queue"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "state" },
+            { in: "query", key: "delivery" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2SessionInputPendingResponses,
+      V2SessionInputPendingErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/input",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Permission2 extends HeyApiClient {
   /**
    * List session permission requests
@@ -5811,6 +5915,11 @@ export class Session3 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _input?: Input
+  get input(): Input {
+    return (this._input ??= new Input({ client: this.client }))
   }
 
   private _permission?: Permission2

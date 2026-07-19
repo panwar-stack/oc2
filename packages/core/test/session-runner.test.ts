@@ -2759,6 +2759,83 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("sends promoted team mailbox activity to the provider once as system history", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      yield* SessionInput.admitActivity(db, events, {
+        id: SessionMessage.ID.make("msg_team_provider_history"),
+        sessionID,
+        activity: new SessionInput.TeamMessageActivity({
+          type: "team_message",
+          team_id: "team-1",
+          recipient_row_id: "recipient-provider-history",
+          sender: "ses_sender",
+          body: "Continue from the mailbox update.",
+        }),
+        delivery: "steer",
+      })
+      requests.length = 0
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual([])
+      const mailbox = requests[0]!.messages.filter((message) => message.role === "system")
+      expect(mailbox).toHaveLength(1)
+      expect(JSON.stringify(mailbox[0])).toContain("Continue from the mailbox update.")
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "system")).toMatchObject([
+        {
+          source: "team_mailbox",
+          text: "<team-messages>\nFrom ses_sender:\nContinue from the mailbox update.\n</team-messages>",
+        },
+      ])
+    }),
+  )
+
+  it.effect("coalesces team mailbox activity at the next active provider boundary", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const execution = yield* SessionExecution.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Start active work" }), resume: false })
+      requests.length = 0
+      responses = [successfulResponse, successfulResponse]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+
+      const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      const admitted = yield* SessionInput.admitActivity(db, events, {
+        id: SessionMessage.ID.make("msg_team_active_boundary"),
+        sessionID,
+        activity: new SessionInput.TeamMessageActivity({
+          type: "team_message",
+          team_id: "team-1",
+          recipient_row_id: "recipient-active-boundary",
+          sender: "ses_sender",
+          body: "Apply this at the safe boundary.",
+        }),
+        delivery: "steer",
+      })
+      yield* execution.wake(sessionID, admitted.admittedSeq)
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(running)
+      streamGate = undefined
+      streamStarted = undefined
+
+      expect(requests).toHaveLength(2)
+      expect(requests[0]!.messages.filter((message) => message.role === "system")).toEqual([])
+      const mailbox = requests[1]!.messages.filter((message) => message.role === "system")
+      expect(mailbox).toHaveLength(1)
+      expect(JSON.stringify(mailbox[0])).toContain("Apply this at the safe boundary.")
+    }),
+  )
+
   it.effect("preserves durable queued input for a later wake after interruption", () =>
     Effect.gen(function* () {
       yield* setup

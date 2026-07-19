@@ -13,6 +13,8 @@ import normalizeStoragePathsMigration from "@oc2-ai/core/database/migration/2026
 import sessionMessageProjectionOrderMigration from "@oc2-ai/core/database/migration/20260603040000_session_message_projection_order"
 import eventSourcedSessionInputMigration from "@oc2-ai/core/database/migration/20260604172448_event_sourced_session_input"
 import contextEpochAgentMigration from "@oc2-ai/core/database/migration/20260605042240_add_context_epoch_agent"
+import teamBoardMigration from "@oc2-ai/core/database/migration/20260718001000_add_team_board_semantics"
+import sessionInputActivityMigration from "@oc2-ai/core/database/migration/20260718002000_session_input_activity"
 import { ProjectV2 } from "@oc2-ai/core/project"
 import { ProjectTable } from "@oc2-ai/core/project/sql"
 import { AbsolutePath } from "@oc2-ai/core/schema"
@@ -185,6 +187,58 @@ describe("DatabaseMigration", () => {
           expect.objectContaining({ name: "session_input_session_promoted_seq_idx", unique: 1 }),
           expect.objectContaining({ name: "session_input_session_admitted_seq_idx", unique: 1 }),
         ])
+      }),
+    )
+  })
+
+  test("wraps existing prompt admissions as tagged activities without changing lifecycle order", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_activity')`)
+        yield* db.run(
+          sql`CREATE TABLE session_input (id text PRIMARY KEY, session_id text NOT NULL, prompt text NOT NULL, delivery text NOT NULL, admitted_seq integer NOT NULL, promoted_seq integer, time_created integer NOT NULL)`,
+        )
+        yield* db.run(
+          sql`CREATE INDEX session_input_session_pending_delivery_seq_idx ON session_input (session_id, promoted_seq, delivery, admitted_seq)`,
+        )
+        yield* db.run(
+          sql`CREATE UNIQUE INDEX session_input_session_admitted_seq_idx ON session_input (session_id, admitted_seq)`,
+        )
+        yield* db.run(
+          sql`CREATE UNIQUE INDEX session_input_session_promoted_seq_idx ON session_input (session_id, promoted_seq)`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created) VALUES ('msg_activity', 'ses_activity', '{"text":"Keep me"}', 'queue', 4, NULL, 123)`,
+        )
+
+        yield* DatabaseMigration.applyOnly(db, [sessionInputActivityMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT id, session_id, prompt, activity, source, delivery, admitted_seq, promoted_seq, time_created FROM session_input`,
+          ),
+        ).toEqual({
+          id: "msg_activity",
+          session_id: "ses_activity",
+          prompt: '{"text":"Keep me"}',
+          activity: '{"type":"prompt","prompt":{"text":"Keep me"}}',
+          source: "prompt",
+          delivery: "queue",
+          admitted_seq: 4,
+          promoted_seq: null,
+          time_created: 123,
+        })
+        expect(
+          (yield* db.all<{ name: string; unique: number }>(sql`PRAGMA index_list(session_input)`)).filter((index) =>
+            [
+              "session_input_session_pending_delivery_seq_idx",
+              "session_input_session_admitted_seq_idx",
+              "session_input_session_promoted_seq_idx",
+            ].includes(index.name),
+          ),
+        ).toHaveLength(3)
       }),
     )
   })
@@ -524,6 +578,51 @@ describe("DatabaseMigration", () => {
         yield* DatabaseMigration.applyOnly(db, [])
 
         expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual([{ id: "existing" }])
+      }),
+    )
+  })
+
+  test("adds durable team Board schema and backfills terminal outcomes", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE team (id text PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE team_member (id text PRIMARY KEY, status text NOT NULL, time_updated integer NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE team_task (id text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO team (id) VALUES ('team')`)
+        yield* db.run(
+          sql`INSERT INTO team_member (id, status, time_updated) VALUES ('done', 'completed', 10), ('cancelled', 'cancelled', 20), ('active', 'active', 30)`,
+        )
+
+        yield* DatabaseMigration.applyOnly(db, [teamBoardMigration])
+
+        expect(yield* db.get(sql`SELECT board_revision FROM team WHERE id = 'team'`)).toEqual({ board_revision: 0 })
+        expect(
+          yield* db.all(
+            sql`SELECT id, outcome_type, outcome_label, outcome_cause, outcome_at FROM team_member ORDER BY id`,
+          ),
+        ).toEqual([
+          { id: "active", outcome_type: null, outcome_label: null, outcome_cause: null, outcome_at: null },
+          {
+            id: "cancelled",
+            outcome_type: "cancelled",
+            outcome_label: "cancelled",
+            outcome_cause: "cause_unknown",
+            outcome_at: 20,
+          },
+          {
+            id: "done",
+            outcome_type: "succeeded",
+            outcome_label: "completed",
+            outcome_cause: "cause_unknown",
+            outcome_at: 10,
+          },
+        ])
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('team_board_outbox', 'team_plan_review', 'team_attention') ORDER BY name`,
+          ),
+        ).toEqual([{ name: "team_attention" }, { name: "team_board_outbox" }, { name: "team_plan_review" }])
       }),
     )
   })

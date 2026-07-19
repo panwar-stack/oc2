@@ -62,6 +62,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.input.pending",
+        Effect.fn(function* (ctx) {
+          return yield* session.pendingInputs(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+          )
+        }),
+      )
+      .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
           return {

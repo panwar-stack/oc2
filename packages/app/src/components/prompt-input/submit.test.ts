@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { Prompt } from "@/context/prompt"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
+let queueFollowupDraft: typeof import("./submit").queueFollowupDraft
 
 const createdClients: string[] = []
 const createdSessions: string[] = []
@@ -200,6 +201,7 @@ beforeAll(async () => {
 
   const mod = await import("./submit")
   createPromptSubmit = mod.createPromptSubmit
+  queueFollowupDraft = mod.queueFollowupDraft
 })
 
 beforeEach(() => {
@@ -342,5 +344,61 @@ describe("prompt submit worktree selection", () => {
 
     expect(storedSessions["/repo/worktree-a"]).toEqual([{ id: "session-1", title: "New session 1" }])
     expect(optimisticSeeded).toEqual([true])
+  })
+})
+
+describe("durable queued prompts", () => {
+  test("admits one stable queue input with converted files, images, and agents", async () => {
+    const calls: unknown[] = []
+    const client = {
+      v2: {
+        session: {
+          prompt: async (input: unknown) => {
+            calls.push(input)
+            return { data: undefined }
+          },
+        },
+      },
+    } as unknown as Parameters<typeof queueFollowupDraft>[0]["client"]
+
+    await queueFollowupDraft({
+      client,
+      id: "input-stable",
+      draft: {
+        sessionID: "session-1",
+        sessionDirectory: "/repo",
+        prompt: [
+          { type: "text", content: "Review", start: 0, end: 6 },
+          { type: "file", content: "@src/a.ts", path: "src/a.ts", start: 7, end: 16 },
+          { type: "agent", content: "@audit", name: "audit", start: 17, end: 23 },
+          {
+            type: "image",
+            id: "image-1",
+            filename: "screen.png",
+            mime: "image/png",
+            dataUrl: "data:image/png;base64,eA==",
+          },
+        ],
+        context: [],
+        agent: "build",
+        model: { providerID: "provider", modelID: "model" },
+      },
+    })
+
+    expect(calls).toEqual([
+      {
+        sessionID: "session-1",
+        id: "input-stable",
+        delivery: "queue",
+        prompt: {
+          text: "Review@src/a.ts@audit",
+          files: [
+            { uri: "file:///repo/src/a.ts", mime: "text/plain", name: "a.ts" },
+            { uri: "data:image/png;base64,eA==", mime: "image/png", name: "screen.png" },
+          ],
+          agents: [{ name: "audit" }],
+        },
+      },
+    ])
   })
 })

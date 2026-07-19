@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { groupDialogTeamTasks } from "../../../src/component/dialog-team"
 import { sessionActivity, sessionContextHealth } from "../../../src/routes/session/chrome"
-import { SESSION_ALL_SESSIONS_KEY, SESSION_TEAM_PANEL_KEY } from "../../../src/routes/session/session-keybinds"
+import { SESSION_ALL_SESSIONS_KEY, SESSION_TEAM_BOARD_KEY } from "../../../src/routes/session/session-keybinds"
 import { Definitions } from "../../../src/config/keybind"
 import { activeTurnStartedAt } from "../../../src/util/session-time"
 import {
@@ -28,6 +28,13 @@ describe("TUI session aggregate chrome", () => {
     expect(contextGaugeState(90, 100)).toMatchObject({ level: "danger", action: "fork or new session" })
     expect(Bun.stringWidth(contextGaugeState(70, 100).gauge ?? "")).toBe(8)
     expect(sessionContextHealth({ tokens: 90, limit: 100 }).label).toBe("ctx 90 ▰▰▰▰▰▰▰▱ 90%")
+    expect(contextGaugeState(15_800, 1_100_000)).toMatchObject({
+      label: "15.8K / 1.1M tok",
+      percent: 1,
+      cells: 0,
+      gauge: "▱▱▱▱▱▱▱▱",
+    })
+    expect(sessionContextHealth({ tokens: 15_800, limit: 1_100_000 }).label).toBe("ctx 15.8K ▱▱▱▱▱▱▱▱ 1%")
   })
 
   test("keeps waiting, local work, and teammate work truthful", () => {
@@ -78,7 +85,7 @@ describe("TUI session aggregate chrome", () => {
     expect(prompt).toContain("externalSessionChrome={props.externalSessionChrome}")
     expect(adapters).toContain('input.route.data.type === "session" && input.route.data.sessionID === props.sessionID')
     expect(prompt).toContain("!props.externalSessionChrome ? usage() : undefined")
-    expect(footer).toContain('props.externalSessionChrome && presentation().state !== "idle"')
+    expect(footer).toContain('props.externalSessionChrome && presentation().state === "working"')
     expect(footer).toContain('presentation().action === "steer"')
     expect(footer).toContain('presentation().action === "send"')
     expect(session).toContain("<SessionWorkingLine")
@@ -122,14 +129,14 @@ describe("TUI session aggregate chrome", () => {
       })
 
     expect(SESSION_ALL_SESSIONS_KEY).toBe("ctrl+o")
-    expect(SESSION_TEAM_PANEL_KEY).toBe("ctrl+y")
+    expect(SESSION_TEAM_BOARD_KEY).toBe("ctrl+y")
     expect(chordOwners(SESSION_ALL_SESSIONS_KEY)).toEqual([])
-    expect(chordOwners(SESSION_TEAM_PANEL_KEY)).toEqual([])
+    expect(chordOwners(SESSION_TEAM_BOARD_KEY)).toEqual(["team_board_toggle"])
     for (const chord of ["ctrl+f", "ctrl+g", "ctrl+b", "ctrl+t"]) expect(chordOwners(chord).length).toBeGreaterThan(0)
 
     const source = await Bun.file(import.meta.dir + "/../../../src/routes/session/index.tsx").text()
     expect(source).toContain('keymap.dispatchCommand("session.list")')
-    expect(source).toContain('keymap.dispatchCommand("team.panel.toggle")')
+    expect(source).toContain('value: "session.board.toggle"')
   })
 
   test("keeps Team actions confirmed, keyboard reachable, and decision failures retryable", async () => {

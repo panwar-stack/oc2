@@ -132,7 +132,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
       </box>
       <box width="100%" flexDirection="row" justifyContent="space-between">
         <Switch>
-          <Match when={props.externalSessionChrome && presentation().state !== "idle"}>
+          <Match when={props.externalSessionChrome && presentation().state === "working"}>
             <text />
           </Match>
           <Match when={presentation().state === "queued"}>

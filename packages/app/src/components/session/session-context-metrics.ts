@@ -1,4 +1,5 @@
 import type { AssistantMessage, Message } from "@oc2-ai/sdk/v2/client"
+import { projectSessionContext } from "../../pages/session/session-projection"
 
 type Provider = {
   id: string
@@ -69,7 +70,7 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Metrics =>
       cacheRead: message.tokens.cache.read,
       cacheWrite: message.tokens.cache.write,
       total,
-      usage: limit ? Math.round((total / limit) * 100) : null,
+      usage: limit ? (projectSessionContext(total, limit).percent ?? null) : null,
     },
   }
 }

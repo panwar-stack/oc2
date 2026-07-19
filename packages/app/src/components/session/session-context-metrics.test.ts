@@ -66,6 +66,13 @@ describe("getSessionContextMetrics", () => {
     expect(metrics.context?.modelLabel).toBe("GPT-4.1")
   })
 
+  test("floors the shared context percentage", () => {
+    const messages = [assistant("a1", { input: 15_800, output: 0, reasoning: 0, read: 0, write: 0 }, 0)]
+    const providers = [{ id: "openai", models: { "gpt-4.1": { limit: { context: 1_100_000 } } } }]
+
+    expect(getSessionContextMetrics(messages, providers).context?.usage).toBe(1)
+  })
+
   test("preserves fallback labels and null usage when model metadata is missing", () => {
     const messages = [assistant("a1", { input: 40, output: 10, reasoning: 0, read: 0, write: 0 }, 0.1, "p-1", "m-1")]
     const providers = [{ id: "p-1", models: {} }]

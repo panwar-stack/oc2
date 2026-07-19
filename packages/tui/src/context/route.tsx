@@ -12,6 +12,8 @@ export type SessionRoute = {
   type: "session"
   sessionID: string
   prompt?: PromptInfo
+  view?: "session" | "board" | "tasks"
+  teamID?: string
 }
 
 export type PluginRoute = {
@@ -41,11 +43,21 @@ export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
   },
 })
 
-function initialRoute(value: unknown): Route | undefined {
+export function initialRoute(value: unknown): Route | undefined {
   if (!value || typeof value !== "object" || !("type" in value)) return
   if (value.type === "home") return { type: "home" }
   if (value.type === "session" && "sessionID" in value && typeof value.sessionID === "string") {
-    return { type: "session", sessionID: value.sessionID }
+    const view =
+      "view" in value && (value.view === "session" || value.view === "board" || value.view === "tasks")
+        ? value.view
+        : undefined
+    const teamID = "teamID" in value && typeof value.teamID === "string" ? value.teamID : undefined
+    return {
+      type: "session",
+      sessionID: value.sessionID,
+      view,
+      teamID,
+    }
   }
   if (value.type === "plugin" && "id" in value && typeof value.id === "string") {
     return { type: "plugin", id: value.id }

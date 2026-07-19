@@ -7,6 +7,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
+import { TeamDelivery } from "@/team/delivery"
 import { TeamBroadcastTool } from "@/tool/team_broadcast"
 import { TeamGetMessagesTool } from "@/tool/team_get_messages"
 import { TeamPlanDecideTool } from "@/tool/team_plan_decide"
@@ -31,6 +32,10 @@ const ref = {
   modelID: ModelID.make("test-model"),
 }
 
+const teamDelivery = Layer.mock(TeamDelivery.Service, {
+  wake: () => Effect.void,
+})
+
 const it = testEffect(
   Layer.mergeAll(
     Agent.defaultLayer,
@@ -39,6 +44,7 @@ const it = testEffect(
     Database.defaultLayer,
     Session.defaultLayer,
     Team.defaultLayer,
+    teamDelivery,
     Truncate.defaultLayer,
   ),
 )
@@ -513,31 +519,30 @@ describe("tool.team_plan_decide", () => {
 })
 
 describe("team message wake safety", () => {
-  it.live("wakeTeamSession intentionally wakes the target twice", () =>
+  it.live("wakeTeamSession delegates one durable delivery wake", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
-          const { assistant, member } = yield* seed()
+          const { member } = yield* seed()
           const wakeCount = { value: 0 }
 
           yield* wakeTeamSession(
-            promptOps({
-              response: responseFor(assistant),
+            {
               wake: () =>
                 Effect.sync(() => {
                   wakeCount.value++
-                }).pipe(Effect.as(responseFor(assistant))),
-            }),
+                }),
+            },
             member.session_id,
           )
 
-          expect(wakeCount.value).toBe(2)
+          expect(wakeCount.value).toBe(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("team_send_message bounds lead wake waits", () =>
+  it.live("team_send_message reports durable advisory delivery", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -559,13 +564,13 @@ describe("team message wake safety", () => {
           )
 
           expect(result.title).toBe("Message Sent")
-          expect(result.output).toContain("wake waits are bounded")
+          expect(result.output).toContain("durably admitted")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("team_broadcast bounds lead wake waits", () =>
+  it.live("team_broadcast reports durable advisory delivery", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -587,7 +592,7 @@ describe("team message wake safety", () => {
           )
 
           expect(result.title).toBe("Broadcast Sent")
-          expect(result.output).toContain("wake waits are bounded")
+          expect(result.output).toContain("durably admitted")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

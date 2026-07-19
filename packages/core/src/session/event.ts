@@ -119,6 +119,38 @@ export namespace PromptLifecycle {
   export type Promoted = typeof Promoted.Type
 }
 
+export namespace TeamMessageLifecycle {
+  const Activity = {
+    teamID: Schema.String,
+    recipientRowID: Schema.String,
+    sender: Schema.String,
+    body: Schema.String,
+  }
+
+  export const Admitted = EventV2.define({
+    type: "session.next.team_message.admitted",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+      ...Activity,
+    },
+  })
+  export type Admitted = typeof Admitted.Type
+
+  export const Promoted = EventV2.define({
+    type: "session.next.team_message.promoted",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+      ...Activity,
+      timeCreated: V2Schema.DateTimeUtcFromMillis,
+    },
+  })
+  export type Promoted = typeof Promoted.Type
+}
+
 export const InterruptRequested = EventV2.define({
   type: "session.next.interrupt.requested",
   ...options,
@@ -562,6 +594,8 @@ const DurableDefinitions = [
   Prompted,
   PromptLifecycle.Admitted,
   PromptLifecycle.Promoted,
+  TeamMessageLifecycle.Admitted,
+  TeamMessageLifecycle.Promoted,
   InterruptRequested,
   ContextUpdated,
   Synthetic,

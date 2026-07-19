@@ -1,15 +1,16 @@
-import type { Todo } from "@oc2-ai/sdk/v2"
+import type { TeamBoard, Todo } from "@oc2-ai/sdk/v2"
 import { GaugeV2 } from "@oc2-ai/ui/v2/gauge-v2"
 import { KeyHintV2 } from "@oc2-ai/ui/v2/key-hint-v2"
 import { SectionHeadV2 } from "@oc2-ai/ui/v2/section-head-v2"
 import { StatusGlyph } from "@oc2-ai/ui/v2/status-glyph"
-import { For, Show, createMemo, createResource, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, createResource, on, onCleanup, onMount } from "solid-js"
 import { getSessionContextMetrics } from "@/components/session/session-context-metrics"
 import { useCommand } from "@/context/command"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
 import { useProviders } from "@/hooks/use-providers"
-import { contextGaugeState, rootSessionID, teamTaskGroup, visibleTodos } from "./session-chrome-model"
+import { visibleTodos } from "./session-chrome-model"
+import { projectSessionContext } from "./session-projection"
 
 function useSessionContext(sessionID: () => string | undefined) {
   const sync = useSync()
@@ -21,26 +22,29 @@ function useSessionContext(sessionID: () => string | undefined) {
 function ContextGauge(props: { sessionID?: string; actions?: boolean; kind?: "bar" | "text" }) {
   const command = useCommand()
   const context = useSessionContext(() => props.sessionID)
-  const state = createMemo(() => contextGaugeState(context()?.usage))
-  const action = () => state()?.action
+  const projection = createMemo(() => {
+    const value = context()
+    return value ? projectSessionContext(value.total, value.limit) : undefined
+  })
+  const action = () => projection()?.action
 
   return (
     <Show when={context()} fallback={<span class="text-[var(--v2-text-text-faint)]">○ usage unavailable</span>}>
       {(ctx) => (
         <div class="min-w-0 flex flex-col gap-1.5">
           <Show
-            when={state()}
+            when={projection()?.percent !== undefined}
             fallback={
               <span class="truncate text-[var(--v2-text-text-muted)]">
-                ctx {ctx().total.toLocaleString()} tokens · limit unavailable
+                ctx {projection()!.tokensLabel} tokens · limit unavailable
               </span>
             }
           >
             <GaugeV2
-              value={state()!.percent}
+              value={projection()!.percent!}
               max={100}
               kind={props.kind ?? "bar"}
-              label={`Context ${ctx().total.toLocaleString()} of ${ctx().limit!.toLocaleString()} tokens`}
+              label={`Context ${projection()!.tokensLabel} of ${projection()!.limitLabel} tokens, ${projection()!.percent}%`}
             />
           </Show>
           <Show when={props.actions && action()}>
@@ -54,9 +58,9 @@ function ContextGauge(props: { sessionID?: string; actions?: boolean; kind?: "ba
               </button>
             )}
           </Show>
-          <Show when={props.actions && ctx().limit}>
+          <Show when={props.actions && projection()?.headroomLabel}>
             <span class="truncate text-[var(--v2-font-size-micro)] text-[var(--v2-text-text-faint)]">
-              {Math.max(0, ctx().limit! - ctx().total).toLocaleString()} token headroom · warns at 70%
+              {projection()!.headroomLabel} token headroom · warns at 70%
             </span>
           </Show>
         </div>
@@ -82,74 +86,48 @@ export function SessionDetailsPanel(props: {
   const sync = useSync()
   const sdk = useSDK()
   const session = createMemo(() => (props.sessionID ? sync.session.get(props.sessionID) : undefined))
-  const teamSessionID = createMemo(() =>
-    props.sessionID ? rootSessionID(sync.data.session, props.sessionID) : undefined,
+  const [teamData, { refetch }] = createResource(
+    () => props.sessionID,
+    async (viewer_session_id) =>
+      (async () => {
+        const team = await sdk.client.team.get({ viewer_session_id }, { throwOnError: false })
+        if (team.error && team.response.status === 400) return { status: "none" } as const
+        if (team.error) return { status: "error", error: team.error } as const
+        if (!team.data || typeof team.data.id !== "string") return { status: "none" } as const
+        const board = await sdk.client.team.board({ teamID: team.data.id, viewer_session_id }, { throwOnError: false })
+        return board.error
+          ? ({ status: "error", error: board.error } as const)
+          : ({ status: "ready", value: board.data } as const)
+      })().catch((error) => ({ status: "error", error }) as const),
   )
-  const [teamData, { refetch }] = createResource(teamSessionID, async (sessionID) => {
-    const response = await sdk.client.team.get({ sessionID }, { throwOnError: false })
-    if (response.error && response.response.status === 400) return { team: undefined, tasks: [], assignees: [] }
-    if (response.error) throw response.error
-    const team = response.data
-    if (!team || typeof team !== "object" || Array.isArray(team) || typeof team.id !== "string") {
-      return { team: undefined, tasks: [], assignees: [] }
-    }
-    const responseTasks = await sdk.client.team.tasks({ teamID: team.id, sessionID }, { throwOnError: false })
-    if (responseTasks.error) throw responseTasks.error
-    const tasks = Array.isArray(responseTasks.data) ? responseTasks.data : []
-    const assignees = [...new Set(tasks.flatMap((task) => task.assignee ?? []))].map((name) => {
-      const assigned = tasks.filter((task) => task.assignee === name)
-      return {
-        name,
-        tasks: assigned,
-        session: sync.data.session.find(
-          (item) => item.parentID === sessionID && (item.id === name || item.title === name),
-        ),
-      }
-    })
-    return { team, tasks, assignees }
-  })
   onMount(() => {
-    const timer = window.setInterval(() => void refetch(), 5000)
-    onCleanup(() => window.clearInterval(timer))
+    const refreshVisible = () => {
+      if (document.visibilityState !== "visible") return
+      void refetch()
+    }
+    const timer = window.setInterval(refreshVisible, 30_000)
+    document.addEventListener("visibilitychange", refreshVisible)
+    onCleanup(() => {
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", refreshVisible)
+    })
   })
-  const assignees = createMemo(() => (teamData.error ? [] : (teamData()?.assignees ?? [])))
-  const pendingFor = (item: ReturnType<typeof assignees>[number]) =>
-    item.session
-      ? (sync.data.permission[item.session.id]?.length ?? 0) + (sync.data.question[item.session.id]?.length ?? 0)
-      : 0
-  const needsYou = createMemo(() => assignees().filter((item) => pendingFor(item) > 0))
-  const working = createMemo(() =>
-    assignees().filter(
-      (item) =>
-        pendingFor(item) === 0 &&
-        ((item.session && sync.data.session_working(item.session.id)) ||
-          item.tasks.some((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "working")),
+  createEffect(
+    on(
+      sdk.connection.status,
+      (status, previous) => {
+        if (status !== "connected" || (previous !== "reconnecting" && previous !== "disconnected")) return
+        void refetch()
+      },
+      { defer: true },
     ),
   )
-  const blocked = createMemo(() =>
-    assignees().filter(
-      (item) =>
-        pendingFor(item) === 0 &&
-        !item.tasks.some((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "working") &&
-        item.tasks.some((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "blocked"),
-    ),
-  )
-  const completed = createMemo(() =>
-    assignees().filter(
-      (item) =>
-        pendingFor(item) === 0 &&
-        !item.tasks.some((task) => {
-          const group = teamTaskGroup(task, teamData()?.tasks ?? [])
-          return group === "working" || group === "blocked"
-        }) &&
-        item.tasks.length > 0 &&
-        item.tasks.every((task) => teamTaskGroup(task, teamData()?.tasks ?? []) === "completed"),
-    ),
-  )
-  const idle = createMemo(() =>
-    Math.max(0, assignees().length - needsYou().length - working().length - blocked().length - completed().length),
-  )
-  const pending = createMemo(() => needsYou().reduce((count, item) => count + pendingFor(item), 0))
+  const board = createMemo((): TeamBoard | undefined => {
+    const result = teamData.latest
+    return result?.status === "ready" ? result.value : undefined
+  })
+  const workers = createMemo(() => board()?.workers ?? [])
+  const working = createMemo(() => workers().filter((item) => item.state === "working"))
   const done = createMemo(() => props.todos.filter((todo) => todo.status === "completed").length)
   const todo = createMemo(() => visibleTodos(props.todos))
 
@@ -211,7 +189,7 @@ export function SessionDetailsPanel(props: {
               aria-label="Team"
               class="border-t border-[var(--v2-border-border-base)] px-[var(--v2-space-7)] py-[var(--v2-space-6)]"
             >
-              <SectionHeadV2 label="Team" aggregate={assignees().length} size="compact" />
+              <SectionHeadV2 label="Team" aggregate={board()?.counts.workers ?? 0} size="compact" />
               <Show
                 when={!teamData.loading}
                 fallback={
@@ -221,11 +199,11 @@ export function SessionDetailsPanel(props: {
                 }
               >
                 <Show
-                  when={!teamData.error}
+                  when={teamData.latest?.status !== "error"}
                   fallback={<div class="mt-2 truncate text-[var(--v2-state-fg-danger)]">✕ team unavailable</div>}
                 >
                   <Show
-                    when={teamData()?.team}
+                    when={board()}
                     fallback={
                       <div class="mt-2 truncate text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]">
                         ○ single agent
@@ -233,10 +211,10 @@ export function SessionDetailsPanel(props: {
                     }
                   >
                     <Show
-                      when={assignees().length > 0}
+                      when={workers().length > 0}
                       fallback={
                         <div class="mt-2 truncate text-[var(--v2-font-size-meta)] text-[var(--v2-text-text-faint)]">
-                          ○ no assigned tasks
+                          ○ no workers
                         </div>
                       }
                     >
@@ -254,20 +232,20 @@ export function SessionDetailsPanel(props: {
                         </For>
                         <div class="flex items-center gap-1.5 text-[var(--v2-text-text-faint)]">
                           <StatusGlyph name="pending" /> <span class="min-w-0 flex-1 truncate">Dependency blocked</span>
-                          <span>{blocked().length}</span>
+                          <span>{board()!.counts.blocked}</span>
                         </div>
                         <div class="flex items-center gap-1.5 text-[var(--v2-text-text-faint)]">
                           <StatusGlyph name="pending" /> <span class="min-w-0 flex-1 truncate">Idle</span>
-                          <span>{idle()}</span>
+                          <span>{board()!.counts.idle}</span>
                         </div>
                         <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-success)]">
                           <StatusGlyph name="done" /> <span class="min-w-0 flex-1 truncate">Completed</span>
-                          <span>{completed().length}</span>
+                          <span>{board()!.counts.done}</span>
                         </div>
-                        <Show when={pending() > 0}>
+                        <Show when={board()!.counts.needs_you > 0}>
                           <div class="flex items-center gap-1.5 text-[var(--v2-state-fg-decision)]">
                             <StatusGlyph name="needs-you" /> <span class="min-w-0 flex-1 truncate">Waiting on you</span>
-                            <span>{pending()}</span>
+                            <span>{board()!.counts.needs_you}</span>
                           </div>
                         </Show>
                       </div>
@@ -335,6 +313,10 @@ export function SessionStatusBar(props: { sessionID?: string; waiting: boolean; 
   const command = useCommand()
   const session = createMemo(() => (props.sessionID ? sync.session.get(props.sessionID) : undefined))
   const context = useSessionContext(() => props.sessionID)
+  const contextProjection = createMemo(() => {
+    const value = context()
+    return value ? projectSessionContext(value.total, value.limit) : undefined
+  })
   const workers = createMemo(() =>
     props.sessionID
       ? sync.data.session.filter((item) => item.parentID === props.sessionID && sync.data.session_working(item.id))
@@ -353,7 +335,7 @@ export function SessionStatusBar(props: { sessionID?: string; waiting: boolean; 
           aria-label={
             props.waiting
               ? `${item().agent ?? "agent"}, ${item().title}, waiting on you`
-              : `${item().agent ?? "agent"}, ${item().title}, ${workers()} agents working, context ${context()?.usage ?? "unknown"} percent`
+              : `${item().agent ?? "agent"}, ${item().title}, ${workers()} agents working, context ${contextProjection()?.percent ?? "unknown"} percent`
           }
         >
           <strong class="shrink-0 text-[var(--v2-text-text-muted)]">{item().agent ?? "agent"}</strong>
@@ -374,11 +356,11 @@ export function SessionStatusBar(props: { sessionID?: string; waiting: boolean; 
                 <StatusGlyph name="running" /> {workers()} agents
               </span>
             </Show>
-            <Show when={context()?.usage !== null && context()?.usage !== undefined}>
+            <Show when={contextProjection()?.percent !== undefined}>
               <GaugeV2
-                value={context()!.usage!}
+                value={contextProjection()!.percent!}
                 max={100}
-                label={`ctx ${context()!.total.toLocaleString()}`}
+                label={`ctx ${contextProjection()!.tokensLabel} ${contextProjection()!.percent}%`}
                 kind="text"
               />
             </Show>

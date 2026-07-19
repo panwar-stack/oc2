@@ -239,6 +239,18 @@ export const SettingsGeneral: Component = () => {
         </SettingsRow>
 
         <SettingsRow
+          title={language.t("settings.general.row.followup.title")}
+          description={language.t("settings.general.row.followup.description")}
+        >
+          <div data-action="settings-followup-queue">
+            <Switch
+              checked={settings.general.followup() === "queue"}
+              onChange={(checked) => settings.general.setFollowup(checked ? "queue" : "steer")}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
           title={language.t("settings.general.row.reasoningSummaries.title")}
           description={language.t("settings.general.row.reasoningSummaries.description")}
         >
@@ -545,7 +557,6 @@ export const SettingsGeneral: Component = () => {
             />
           </div>
         </SettingsRow>
-
       </SettingsList>
     </div>
   )

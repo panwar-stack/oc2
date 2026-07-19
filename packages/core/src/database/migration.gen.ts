@@ -39,5 +39,7 @@ export const migrations = (
     import("./migration/20260605003541_add_session_context_snapshot"),
     import("./migration/20260605042240_add_context_epoch_agent"),
     import("./migration/20260612000000_add_team_member_daemon_lifecycle"),
+    import("./migration/20260718001000_add_team_board_semantics"),
+    import("./migration/20260718002000_session_input_activity"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

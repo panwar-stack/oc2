@@ -2,6 +2,7 @@ import { TextField } from "@oc2-ai/ui/text-field"
 import * as Sentry from "@sentry/solid"
 import { Logo } from "@oc2-ai/ui/logo"
 import { Button } from "@oc2-ai/ui/button"
+import { StateBlockV2 } from "@oc2-ai/ui/v2/state-block-v2"
 import { Component, createSignal, Show } from "solid-js"
 import { usePlatform } from "@/context/platform"
 import { useLanguage } from "@/context/language"
@@ -223,12 +224,16 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
   const formattedError = () => formatError(props.error, language.t)
 
   return (
-    <div class="relative flex-1 h-screen w-screen min-h-0 flex flex-col items-center justify-center bg-background-base font-sans">
-      <div class="w-2/3 max-w-3xl flex flex-col items-center justify-center gap-8">
+    <div class="relative flex-1 h-screen w-screen min-h-0 flex flex-col items-center justify-center bg-[var(--v2-background-bg-base)] font-sans text-[var(--v2-text-text-base)]">
+      <div data-slot="error-page-content" class="w-[min(92vw,48rem)] flex flex-col items-center justify-center gap-8">
         <Logo class="w-58.5 opacity-12 shrink-0" />
-        <div class="flex flex-col items-center gap-2 text-center">
-          <h1 class="text-lg font-medium text-text-strong">{language.t("error.page.title")}</h1>
-          <p class="text-sm text-text-weak">{language.t(errorDescriptionKey(props.error))}</p>
+        <div data-slot="error-page-state" class="w-full flex justify-center">
+          <StateBlockV2
+            variant="error"
+            scale="full"
+            title={language.t("error.page.title")}
+            description={language.t(errorDescriptionKey(props.error))}
+          />
         </div>
         <TextField
           value={formattedError()}
@@ -261,12 +266,12 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
             }}
           </Show>
         </div>
-        <div class="flex flex-col items-center gap-2">
+        <div class="flex flex-col items-center gap-2 text-[var(--v2-text-text-muted)]">
           <div class="flex items-center justify-center gap-1">
             {language.t("error.page.report.prefix")}
             <button
               type="button"
-              class="flex items-center text-text-interactive-base gap-1"
+              class="flex items-center gap-1 rounded-[var(--v2-radius-chip)] text-[var(--v2-text-text-accent)] outline-none focus-visible:shadow-[var(--v2-shadow-focus)]"
               onClick={() =>
                 platform.openLink("https://github.com/panwar-stack/oc2/issues/new?template=bug-report.yml")
               }
@@ -276,7 +281,9 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
           </div>
           <Show when={platform.version}>
             {(version) => (
-              <p class="text-xs text-text-weak">{language.t("error.page.version", { version: version() })}</p>
+              <p class="text-xs text-[var(--v2-text-text-faint)]">
+                {language.t("error.page.version", { version: version() })}
+              </p>
             )}
           </Show>
         </div>

@@ -1271,56 +1271,6 @@ export const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    const deliverTeamMessages = Effect.fn("SessionPrompt.deliverTeamMessages")(function* (input: {
-      session: Session.Info
-      lastUser: SessionV1.User
-    }) {
-      const context = yield* team.getContext(input.session.id)
-      if (Option.isNone(context)) return false
-      const messages = yield* team.claimPendingMessages(input.session.id, context.value.team.id)
-      if (messages.length === 0) return false
-
-      const members = yield* team.getMembers(context.value.team.id)
-      const senderName = (sender: string) => {
-        if (sender === context.value.team.lead_session_id) return "lead"
-        return members.find((member) => member.session_id === sender)?.name ?? sender
-      }
-      const userMsg: SessionV1.User = {
-        id: MessageID.ascending(),
-        sessionID: input.session.id,
-        role: "user",
-        time: { created: Date.now() },
-        agent: input.lastUser.agent,
-        model: input.lastUser.model,
-        tools: input.lastUser.tools,
-      }
-      yield* sessions.updateMessage(userMsg)
-      yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: userMsg.id,
-        sessionID: input.session.id,
-        type: "text",
-        synthetic: true,
-        text: [
-          "<team-messages>",
-          context.value.member
-            ? "You have pending team mailbox messages. Address them now and continue your teammate task."
-            : "You have pending team mailbox messages. As team lead, coordinate follow-up work and report to the user when the team goal is complete. Do NOT attempt to do teammate tasks yourself — your role is to delegate, wait for results, and integrate them. Trust your teammates to complete their assigned work. As you process these messages, look for new sub-tasks that can be split off and delegated to new or existing teammates.",
-          "",
-          ...messages.map((message) =>
-            [`From ${senderName(message.sender)} (${message.sender}):`, message.body].join("\n"),
-          ),
-          "</team-messages>",
-        ].join("\n"),
-      } satisfies SessionV1.TextPart)
-      yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, input.session.id), {
-        concurrency: "unbounded",
-        discard: true,
-      })
-      yield* sessions.touch(input.session.id)
-      return true
-    })
-
     const teamLeadSystemPrompt = Effect.fn("SessionPrompt.teamLeadSystemPrompt")(function* (input: {
       session: Session.Info
       agent: Agent.Info
@@ -1404,7 +1354,6 @@ Do not create a team for trivial one step requests or when the user explicitly a
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
           const primaryLastUserMsg = msgs.findLast((msg) => msg.info.role === "user" && msg.info.id === lastUser.id)
-          if (yield* deliverTeamMessages({ session, lastUser }).pipe(Effect.orDie)) continue
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,

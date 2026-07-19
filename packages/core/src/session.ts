@@ -141,6 +141,7 @@ export interface Interface {
     delivery?: SessionInput.Delivery
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  readonly pendingInputs: (sessionID: SessionSchema.ID) => Effect.Effect<SessionInput.PendingSessionInputs, NotFoundError>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -374,6 +375,10 @@ export const layer = Layer.effect(
           }),
         ),
       ),
+      pendingInputs: Effect.fn("V2Session.pendingInputs")(function* (sessionID) {
+        yield* result.get(sessionID)
+        return yield* SessionInput.pendingQueued(db, sessionID)
+      }),
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })
       }),

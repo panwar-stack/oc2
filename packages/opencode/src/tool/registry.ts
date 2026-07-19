@@ -76,6 +76,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { Team } from "@/team/team"
+import { TeamDelivery } from "@/team/delivery"
 import { Memory } from "@/memory/memory"
 
 const log = Log.create({ service: "tool.registry" })
@@ -138,6 +139,7 @@ export const layer: Layer.Layer<
   | RuntimeFlags.Service
   | Database.Service
   | Team.Service
+  | TeamDelivery.Service
   | Memory.Service
 > = Layer.effect(
   Service,
@@ -149,6 +151,7 @@ export const layer: Layer.Layer<
     const flags = yield* RuntimeFlags.Service
     const memory = yield* Memory.Service
     const opengrep = yield* Opengrep.Service
+    yield* TeamDelivery.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -454,7 +457,7 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Skill.defaultLayer),
       Layer.provide(Agent.defaultLayer),
       Layer.provide(Session.defaultLayer),
-      Layer.provide(Layer.mergeAll(BackgroundJob.defaultLayer, Team.defaultLayer)),
+      Layer.provide(Layer.mergeAll(BackgroundJob.defaultLayer, Team.defaultLayer, TeamDelivery.defaultLayer)),
       Layer.provide(Provider.defaultLayer),
       Layer.provide(Reference.defaultLayer),
       Layer.provide(LSP.defaultLayer),

@@ -15,6 +15,38 @@ function unwrap<T>(opt: Option.Option<T>): T {
 }
 
 describe("team", () => {
+  it.live("returns lead and member team history including closed teams", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const selector = "ses_history_selector"
+
+        expect(yield* team.getHistory("ses_history_missing")).toEqual([])
+        const closed = yield* team.create({ name: "history-closed", goal: "Past", leadSessionID: selector })
+        yield* team.shutdown(closed.id)
+        yield* Effect.sleep("2 millis")
+        const active = yield* team.create({ name: "history-active", goal: "Present", leadSessionID: selector })
+        yield* Effect.sleep("2 millis")
+        const memberTeam = yield* team.create({
+          name: "history-member",
+          goal: "Membership",
+          leadSessionID: "ses_history_other_lead",
+        })
+        yield* team.addMember({
+          teamID: memberTeam.id,
+          sessionID: selector,
+          name: "historian",
+          agentType: "general",
+          rolePrompt: "Inspect history",
+        })
+
+        const history = yield* team.getHistory(selector)
+        expect(history.map((item) => item.id)).toEqual([memberTeam.id, active.id, closed.id])
+        expect(history.find((item) => item.id === closed.id)?.status).toBe("closed")
+      }),
+    ),
+  )
+
   it.live("create team and enforce one active team per lead", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {

@@ -157,7 +157,7 @@ function TimelineThinkingRow(props: {
   const language = useLanguage()
 
   return (
-    <div data-slot="session-turn-thinking" data-redesigned={props.redesigned ? "true" : undefined}>
+    <div data-slot="session-turn-thinking" data-variant={props.redesigned ? "v2" : "legacy"}>
       <Show when={props.redesigned} fallback={<TextShimmer text={language.t("ui.sessionTurn.status.thinking")} />}>
         <span data-slot="session-turn-thinking-glyph" aria-hidden="true">
           ◐

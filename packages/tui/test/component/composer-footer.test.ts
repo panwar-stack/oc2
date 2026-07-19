@@ -46,4 +46,10 @@ describe("composerFooterPresentation", () => {
       action: "queue",
     })
   })
+
+  test("keeps queued confirmation visible with external working chrome", async () => {
+    const source = await Bun.file(new URL("../../src/component/composer-footer.tsx", import.meta.url)).text()
+    expect(source).toContain('props.externalSessionChrome && presentation().state === "working"')
+    expect(source).toContain("· sends next")
+  })
 })

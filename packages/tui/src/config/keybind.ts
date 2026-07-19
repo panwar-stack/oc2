@@ -110,6 +110,7 @@ export const Definitions = {
   session_quick_switch_8: keybind("<leader>8", "Switch to session in quick slot 8"),
   session_quick_switch_9: keybind("<leader>9", "Switch to session in quick slot 9"),
   team_cycle_lead: keybind("none", "Go to team lead session"),
+  team_board_toggle: keybind("ctrl+y", "Toggle team Board"),
   team_panel_toggle: keybind("none", "Toggle team panel"),
   team_task_list: keybind("none", "Toggle team task list"),
 
@@ -314,6 +315,7 @@ export const CommandMap = {
   session_quick_switch_8: "session.quick_switch.8",
   session_quick_switch_9: "session.quick_switch.9",
   team_cycle_lead: "team.cycle.lead",
+  team_board_toggle: "session.board.toggle",
   team_panel_toggle: "team.panel.toggle",
   team_task_list: "team.task.list",
   stash_delete: "stash.delete",

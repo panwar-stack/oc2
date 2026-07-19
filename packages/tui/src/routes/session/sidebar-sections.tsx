@@ -3,6 +3,7 @@ import { For, Show, createMemo, createSignal } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { Locale } from "../../util/locale"
 import { tint } from "../../theme"
+import { projectSessionContext } from "./session-projection"
 
 const CONTENT_WIDTH = 28
 
@@ -60,16 +61,17 @@ export function SidebarSessionSection(props: {
 }
 
 export function contextGaugeState(tokens: number, limit?: number) {
-  if (!limit || limit <= 0) return { level: "normal" as const, label: `${Locale.number(tokens)} tokens` }
-  const percent = Math.min(100, Math.max(0, Math.floor((tokens / limit) * 100)))
-  const cells = Math.round((percent / 100) * 8)
-  const level = percent >= 90 ? ("danger" as const) : percent >= 70 ? ("warning" as const) : ("normal" as const)
+  const projection = projectSessionContext(tokens, limit)
+  if (projection.percent === undefined) return { ...projection, label: `${projection.tokensLabel} tokens` }
   return {
-    level,
-    percent,
-    gauge: `${"▰".repeat(cells)}${"▱".repeat(8 - cells)}`,
-    action: level === "danger" ? "fork or new session" : level === "warning" ? "compact suggested" : undefined,
-    label: `${Locale.number(tokens)} / ${Locale.number(limit)} tok`,
+    ...projection,
+    action:
+      projection.level === "danger"
+        ? "fork or new session"
+        : projection.level === "warning"
+          ? "compact suggested"
+          : undefined,
+    label: `${projection.tokensLabel} / ${projection.limitLabel} tok`,
   }
 }
 

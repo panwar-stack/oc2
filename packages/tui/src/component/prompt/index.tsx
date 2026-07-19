@@ -9,7 +9,18 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  onMount,
+  createSignal,
+  onCleanup,
+  on,
+  Show,
+  Switch,
+  Match,
+} from "solid-js"
 import "opentui-spinner/solid"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -38,7 +49,7 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { AssistantMessage, FilePart, UserMessage } from "@oc2-ai/sdk/v2"
+import type { AssistantMessage, FilePart, PendingSessionInputs, UserMessage } from "@oc2-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
@@ -66,6 +77,8 @@ import { readLocalAttachment } from "./local-attachment"
 import { ComposerFooter } from "../composer-footer"
 import { reduceTuiMotion } from "../glyph"
 import { activeTurnStartedAt } from "../../util/session-time"
+import { projectSessionContext } from "../../routes/session/session-projection"
+import { acceptPendingSnapshot, createQueueInputID, nextQueueAttempt, toQueuedPrompt } from "./queue"
 
 export type PromptProps = {
   sessionID?: string
@@ -187,6 +200,9 @@ export function Prompt(props: PromptProps) {
     })
   })
   const working = createMemo(() => status().type !== "idle" || teammateWorking())
+  const activeLocalTurn = createMemo(
+    () => Boolean(props.sessionID) && status().type !== "idle" && props.interruptible !== false,
+  )
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -197,6 +213,49 @@ export function Prompt(props: PromptProps) {
   const dimensions = useTerminalDimensions()
   const { theme, syntax } = useTheme()
   const kv = useKV()
+  const [storedDelivery, setStoredDelivery] = kv.signal<"steer" | "queue">("prompt_delivery", "steer")
+  const delivery = createMemo(() => (storedDelivery() === "queue" ? "queue" : "steer"))
+  const [pendingSnapshot, setPendingSnapshot] = createSignal<
+    { sessionID: string; value: PendingSessionInputs } | undefined
+  >()
+  const [queuedInputs, { mutate: setQueuedInputs, refetch: refetchQueuedInputs }] = createResource(
+    () => props.sessionID,
+    async (sessionID) => {
+      const response = await sdk.client.v2.session.input
+        .pending({ sessionID, state: "pending", delivery: "queue" }, { throwOnError: false })
+        .catch(() => undefined)
+      if (!response || response.error) return
+      return { sessionID, value: response.data }
+    },
+  )
+  createEffect(() => {
+    const next = queuedInputs()
+    if (!next) return
+    setPendingSnapshot((current) => ({
+      sessionID: next.sessionID,
+      value:
+        current?.sessionID === next.sessionID
+          ? acceptPendingSnapshot(current.value, next.value)
+          : next.value,
+    }))
+  })
+  createEffect(
+    on(
+      sdk.connection.status,
+      (status, previous) => {
+        if (status !== "connected" || previous === undefined || previous === "connected") return
+        void refetchQueuedInputs()
+      },
+      { defer: true },
+    ),
+  )
+  onMount(() => {
+    const timer = setInterval(() => {
+      if (props.visible === false || !props.sessionID) return
+      void refetchQueuedInputs()
+    }, 30_000)
+    onCleanup(() => clearInterval(timer))
+  })
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
@@ -327,10 +386,10 @@ export function Prompt(props: PromptProps) {
     const tokens = consumedTokens(last.tokens)
 
     const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
-    const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
+    const context = projectSessionContext(tokens, model?.limit.context)
     const cost = session?.cost ?? 0
     return {
-      context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
+      context: context.percent === undefined ? context.tokensLabel : `${context.tokensLabel} (${context.percent}%)`,
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
@@ -476,6 +535,16 @@ export function Prompt(props: PromptProps) {
           } finally {
             setStore("clipboardPending", (pending) => pending - 1)
           }
+        },
+      },
+      {
+        title: delivery() === "queue" ? "Use steer delivery" : "Queue prompts during active turns",
+        name: "session.queued_prompts",
+        category: "Session",
+        enabled: activeLocalTurn(),
+        run: () => {
+          setStoredDelivery(() => (delivery() === "queue" ? "steer" : "queue"))
+          dialog.clear()
         },
       },
       {
@@ -663,6 +732,7 @@ export function Prompt(props: PromptProps) {
       "prompt.stash.pop",
       "prompt.stash.list",
       "session.interrupt",
+      "session.queued_prompts",
       "workspace.set",
       "session.move",
     ]),
@@ -1020,6 +1090,16 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
+  let queueAttempt: { id: string; key: string } | undefined
+  createEffect(
+    on(
+      () => props.sessionID,
+      () => {
+        queueAttempt = undefined
+      },
+      { defer: true },
+    ),
+  )
   async function submit() {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -1197,25 +1277,62 @@ export function Prompt(props: PromptProps) {
         parts: nonTextParts.filter((x) => x.type === "file"),
       })
     } else {
-      move.startSubmit()
-      sdk.client.session
-        .prompt({
+      if (activeLocalTurn() && delivery() === "queue") {
+        const queuedPrompt = toQueuedPrompt(editorParts.map((part) => part.text).join("") + inputText, nonTextParts)
+        queueAttempt = nextQueueAttempt(queueAttempt, queuedPrompt, createQueueInputID)
+        const admitted = await sdk.client.v2.session
+          .prompt({ sessionID, id: queueAttempt.id, prompt: queuedPrompt, delivery: "queue" })
+          .catch((error) => {
+            toast.show({ message: errorMessage(error), variant: "error" })
+            return undefined
+          })
+        if (!admitted || admitted.error) {
+          if (admitted?.error) toast.show({ message: errorMessage(admitted.error), variant: "error" })
+          return false
+        }
+        const authoritative = await sdk.client.v2.session.input
+          .pending({ sessionID, state: "pending", delivery: "queue" }, { throwOnError: false })
+          .catch(() => undefined)
+        if (!authoritative || authoritative.error) {
+          toast.show({
+            message: authoritative?.error
+              ? errorMessage(authoritative.error)
+              : "Prompt queued, but pending state could not be verified. Retry to reconcile.",
+            variant: "error",
+          })
+          return false
+        }
+        setQueuedInputs({ sessionID, value: authoritative.data })
+        setPendingSnapshot((current) => ({
           sessionID,
-          ...selectedModel,
-          agent: agent.name,
-          model: selectedModel,
-          variant,
-          parts: [
-            ...editorParts,
-            {
-              type: "text",
-              text: inputText,
-            },
-            ...nonTextParts,
-          ],
-        })
-        .catch(() => {})
-      if (editorParts.length > 0) editor.markSelectionSent()
+          value:
+            current?.sessionID === sessionID
+              ? acceptPendingSnapshot(current.value, authoritative.data)
+              : authoritative.data,
+        }))
+        queueAttempt = undefined
+        if (editorParts.length > 0) editor.markSelectionSent()
+      } else {
+        move.startSubmit()
+        sdk.client.session
+          .prompt({
+            sessionID,
+            ...selectedModel,
+            agent: agent.name,
+            model: selectedModel,
+            variant,
+            parts: [
+              ...editorParts,
+              {
+                type: "text",
+                text: inputText,
+              },
+              ...nonTextParts,
+            ],
+          })
+          .catch(() => {})
+        if (editorParts.length > 0) editor.markSelectionSent()
+      }
     }
     history.append({
       ...store.prompt,
@@ -1583,8 +1700,8 @@ export function Prompt(props: PromptProps) {
           working={working()}
           activeTurn={status().type !== "idle"}
           teammateWorking={teammateWorking()}
-          delivery="steer"
-          queued={0}
+          delivery={activeLocalTurn() ? delivery() : "steer"}
+          queued={pendingSnapshot()?.sessionID === props.sessionID ? pendingSnapshot()!.value.inputs.length : 0}
           hasDraft={status().type !== "idle" && !!store.prompt.input}
           interrupt={store.interrupt}
           interruptible={props.interruptible !== false}

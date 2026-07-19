@@ -3706,9 +3706,121 @@ export type TeamInfo = {
   name: string
   goal: string
   lead_session_id: string
-  status: string
+  status: "active" | "closed" | "cancelled"
   time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type TeamBoardTeam = {
+  id: string
+  name: string
+  goal: string
+  lead_session_id: string
+  status: "active" | "closed" | "cancelled"
+}
+
+export type TeamBoardViewer = {
+  session_id: string
+  role: "lead" | "member"
+}
+
+export type TeamBoardCounts = {
+  workers: number
+  working: number
+  blocked: number
+  idle: number
+  done: number
+  errored: number
+  cancelled: number
+  needs_you: number
+  unread: number
+  claimed: number
+  total_tasks: number
+}
+
+export type TeamBoardCurrentWork = {
+  source: "task" | "assignment"
+  id: string | null
+  started_at: number | null
+}
+
+export type TeamBoardPlanReview = {
+  review_id: string
+  state: "drafting" | "submitted" | "approved" | "rejected"
+}
+
+export type TeamBoardWorkerAttention = {
+  plan: TeamBoardPlanReview | null
+  permissions: number
+  questions: number
+}
+
+export type TeamBoardOutcome = {
+  type: "succeeded" | "failed" | "cancelled" | "interrupted"
+  label: "completed" | "failed" | "cancelled" | "interrupted"
+}
+
+export type TeamBoardWorker = {
+  member_id: string
+  session_id: string
+  name: string
+  agent_type: string
+  role: string | null
+  state: "working" | "blocked" | "needs_you" | "idle" | "completed" | "errored"
+  lifecycle: "task" | "daemon"
+  work_mode: "plan" | "implement"
+  mutability: "read_only" | "write_allowed" | "unknown"
+  display_summary: string | null
+  current_work: TeamBoardCurrentWork | null
+  elapsed_ms: number | null
+  mailbox: {
+    unread: number
+  }
+  attention: TeamBoardWorkerAttention
+  dependency_ids: Array<string>
+  outcome: TeamBoardOutcome | null
+  result_persisted: boolean
+  time_created: number
+  time_updated: number
+}
+
+export type TeamBoardTask = {
+  id: string
+  description: string
+  status: "pending" | "in_progress" | "completed" | "cancelled"
+  assignee: string | null
+  dependency_ids: Array<string>
+  started_at: number | null
+  completed_at: number | null
+}
+
+export type TeamBoardDependency = {
+  id: string
+  kind: "member" | "task"
+  from_id: string
+  to_id: string
+  label: "waits_on"
+  satisfied: boolean
+}
+
+export type TeamBoardAttentionItem = {
+  id: string
+  member_id: string
+  kind: "plan" | "permission" | "question"
+  actionable: boolean
+  detail_id: string
+}
+
+export type TeamBoard = {
+  team: TeamBoardTeam
+  viewer: TeamBoardViewer
+  revision: number
+  generated_at: number
+  counts: TeamBoardCounts
+  workers: Array<TeamBoardWorker>
+  tasks: Array<TeamBoardTask>
+  dependencies: Array<TeamBoardDependency>
+  attention_items: Array<TeamBoardAttentionItem>
 }
 
 export type TeamEvalNode = {
@@ -3914,16 +4026,29 @@ export type InvalidCursorError = {
   message: string
 }
 
-export type ConflictError = {
-  _tag: "ConflictError"
-  message: string
-  resource?: string
+export type PendingSessionInput = {
+  id: string
+  sequence: number
+  delivery: "queue"
+  prompt: Prompt
+  time_created: number
+}
+
+export type PendingSessionInputs = {
+  revision: number
+  inputs: Array<PendingSessionInput>
 }
 
 export type SessionNotFoundError = {
   _tag: "SessionNotFoundError"
   sessionID: string
   message: string
+}
+
+export type ConflictError = {
+  _tag: "ConflictError"
+  message: string
+  resource?: string
 }
 
 export type ServiceUnavailableError = {
@@ -10313,8 +10438,9 @@ export type SyncHistoryListResponse = SyncHistoryListResponses[keyof SyncHistory
 export type TeamGetData = {
   body?: never
   path?: never
-  query: {
-    sessionID: string
+  query?: {
+    sessionID?: string
+    viewer_session_id?: string
   }
   url: "/team"
 }
@@ -10336,6 +10462,66 @@ export type TeamGetResponses = {
 }
 
 export type TeamGetResponse = TeamGetResponses[keyof TeamGetResponses]
+
+export type TeamHistoryData = {
+  body?: never
+  path?: never
+  query: {
+    viewer_session_id: string
+  }
+  url: "/team/history"
+}
+
+export type TeamHistoryErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type TeamHistoryError = TeamHistoryErrors[keyof TeamHistoryErrors]
+
+export type TeamHistoryResponses = {
+  /**
+   * Team history
+   */
+  200: Array<TeamInfo>
+}
+
+export type TeamHistoryResponse = TeamHistoryResponses[keyof TeamHistoryResponses]
+
+export type TeamBoardData = {
+  body?: never
+  path: {
+    teamID: string
+  }
+  query: {
+    viewer_session_id: string
+  }
+  url: "/team/{teamID}/board"
+}
+
+export type TeamBoardErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type TeamBoardError = TeamBoardErrors[keyof TeamBoardErrors]
+
+export type TeamBoardResponses = {
+  /**
+   * Authoritative team Board snapshot
+   */
+  200: TeamBoard
+}
+
+export type TeamBoardResponse = TeamBoardResponses[keyof TeamBoardResponses]
 
 export type TeamEvalData = {
   body?: never
@@ -11205,6 +11391,44 @@ export type V2SessionListResponses = {
 }
 
 export type V2SessionListResponse = V2SessionListResponses[keyof V2SessionListResponses]
+
+export type V2SessionInputPendingData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query: {
+    state: "pending"
+    delivery: "queue"
+  }
+  url: "/api/session/{sessionID}/input"
+}
+
+export type V2SessionInputPendingErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionInputPendingError = V2SessionInputPendingErrors[keyof V2SessionInputPendingErrors]
+
+export type V2SessionInputPendingResponses = {
+  /**
+   * PendingSessionInputs
+   */
+  200: PendingSessionInputs
+}
+
+export type V2SessionInputPendingResponse = V2SessionInputPendingResponses[keyof V2SessionInputPendingResponses]
 
 export type V2SessionPromptData = {
   body: {

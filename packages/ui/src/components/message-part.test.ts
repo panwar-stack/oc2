@@ -46,4 +46,18 @@ describe("assistantTurnTokenCount", () => {
     expect(source).toContain("const elapsedSubscribers = new Set")
     expect(source.match(/window\.setInterval/g)?.length).toBe(1)
   })
+
+  test("uses canonical redesign attributes on migrated transcript blocks", async () => {
+    const files = await Promise.all(
+      ["message-part.tsx", "basic-tool.tsx", "dock-prompt.tsx", "tool-error-card.tsx"].map((file) =>
+        Bun.file(new URL(`./${file}`, import.meta.url)).text(),
+      ),
+    )
+    const source = files.join("\n")
+
+    expect(source).not.toContain("data-redesigned")
+    expect(source).not.toContain("data-kind")
+    expect(source).toContain('data-variant={props.redesigned ? "v2" : "legacy"}')
+    expect(source).toContain('data-slot="tool-error-card"')
+  })
 })

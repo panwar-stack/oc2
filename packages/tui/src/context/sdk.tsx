@@ -2,7 +2,7 @@ import { createOpencodeClient } from "@oc2-ai/sdk/v2"
 import type { GlobalEvent } from "@oc2-ai/sdk/v2"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { createSimpleContext } from "./helper"
-import { batch, onCleanup, onMount } from "solid-js"
+import { batch, createSignal, onCleanup, onMount } from "solid-js"
 
 export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
@@ -19,6 +19,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
+    const [connectionStatus, setConnectionStatus] = createSignal<
+      "connecting" | "connected" | "reconnecting" | "disconnected"
+    >("connecting")
 
     function createSDK() {
       return createOpencodeClient({
@@ -83,15 +86,30 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       sse?.abort()
       const ctrl = new AbortController()
       sse = ctrl
+      setConnectionStatus("connecting")
       ;(async () => {
         let attempt = 0
         while (true) {
           if (abort.signal.aborted || ctrl.signal.aborted) break
 
-          const events = await sdk.global.event({
-            signal: ctrl.signal,
-            sseMaxRetryAttempts: 0,
-          })
+          const events = await sdk.global
+            .event({
+              signal: ctrl.signal,
+              sseMaxRetryAttempts: 0,
+            })
+            .catch(() => undefined)
+
+          if (!events) {
+            attempt += 1
+            if (abort.signal.aborted || ctrl.signal.aborted) break
+            setConnectionStatus(attempt === 1 ? "reconnecting" : "disconnected")
+            const backoff = Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)
+            await new Promise((resolve) => setTimeout(resolve, backoff))
+            continue
+          }
+
+          setConnectionStatus("connected")
+          attempt = 0
 
           if (Flag.OC2_EXPERIMENTAL_WORKSPACES) {
             // Start syncing workspaces, it's important to do this after
@@ -108,6 +126,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           if (queue.length > 0) flush()
           attempt += 1
           if (abort.signal.aborted || ctrl.signal.aborted) break
+          setConnectionStatus("reconnecting")
 
           // Exponential backoff
           const backoff = Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)
@@ -118,7 +137,13 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     onMount(async () => {
       if (props.events) {
-        const unsub = await props.events.subscribe(handleEvent)
+        setConnectionStatus("connecting")
+        const unsub = await props.events.subscribe(handleEvent).catch(() => undefined)
+        if (!unsub) {
+          setConnectionStatus("disconnected")
+          return
+        }
+        setConnectionStatus("connected")
         onCleanup(unsub)
 
         if (Flag.OC2_EXPERIMENTAL_WORKSPACES) {
@@ -132,6 +157,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     })
 
     onCleanup(() => {
+      setConnectionStatus("disconnected")
       abort.abort()
       sse?.abort()
       if (timer) clearTimeout(timer)
@@ -144,6 +170,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       },
       directory: props.directory,
       event: emitter,
+      connection: {
+        status: connectionStatus,
+      },
       fetch: props.fetch ?? fetch,
       url: props.url,
     }

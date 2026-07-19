@@ -26,7 +26,14 @@ import { SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
-import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
+import {
+  BoxRenderable,
+  ScrollBoxRenderable,
+  addDefaultParsers,
+  TextAttributes,
+  RGBA,
+  type Renderable,
+} from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type { AssistantMessage, Part, Provider, ToolPart, UserMessage, TextPart, ReasoningPart } from "@oc2-ai/sdk/v2"
 import { useLocal } from "../../context/local"
@@ -82,7 +89,6 @@ import { ThinkingRow } from "../../component/thinking-row"
 import { ToolGroupHeader, ToolRow, toolRowDuration } from "../../component/tool-row"
 import {
   SESSION_ALL_SESSIONS_KEY,
-  SESSION_TEAM_PANEL_KEY,
   sessionBindingCommands,
   sessionGlobalBindingCommands,
   sessionGlobalUnfocusedBindingCommands,
@@ -90,6 +96,8 @@ import {
 import { SessionStatusLine, SessionWorkingLine, sessionActivity } from "./chrome"
 import { consumedTokens, currentContextMessage } from "../../util/context-usage"
 import { activeTurnStartedAt } from "../../util/session-time"
+import { TeamBoard } from "./team-board"
+import type { BoardView } from "./team-board-model"
 
 addDefaultParsers(parsers.parsers)
 
@@ -211,6 +219,7 @@ export function Session() {
   const pluginRuntime = usePluginRuntime()
   const route = useRouteData("session")
   const { navigate } = useRoute()
+  const sessionView = createMemo<BoardView>(() => route.view ?? "session")
   const sync = useSync()
   const event = useEvent()
   const project = useProject()
@@ -401,13 +410,18 @@ export function Session() {
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
 
-  const sidebarPresentation = createMemo(() =>
+  const requestedSidebarPresentation = createMemo(() =>
     sessionSidebarPresentation({
       width: dimensions().width,
       parent: !!session()?.parentID,
       open: sidebarOpen(),
       preference: sidebar(),
     }),
+  )
+  const sidebarPresentation = createMemo(() =>
+    sessionView() !== "session" && dimensions().width < 100
+      ? "hidden"
+      : requestedSidebarPresentation(),
   )
   const sidebarVisible = createMemo(() => sidebarPresentation() !== "hidden")
   const showTimestamps = createMemo(() => timestamps() === "show")
@@ -546,6 +560,29 @@ export function Session() {
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
   const renderer = useRenderer()
+  let sessionFocus: Renderable | undefined
+
+  function showSessionView(view: BoardView, restoreFocus = true) {
+    const current = sessionView()
+    if (view !== "session" && current === "session") {
+      sessionFocus = renderer.currentFocusedRenderable ?? undefined
+      sessionFocus?.blur()
+    }
+    navigate({ ...route, view })
+    if (view !== "session" || !restoreFocus) return
+    setTimeout(() => {
+      if (sessionFocus && !sessionFocus.isDestroyed) {
+        sessionFocus.focus()
+        return
+      }
+      prompt?.focus()
+    }, 1)
+  }
+
+  createEffect(() => {
+    if (sessionView() === "session" || (permissions().length === 0 && questions().length === 0)) return
+    showSessionView("session", false)
+  })
 
   function hasNavigableText(message: UserMessage | AssistantMessage) {
     const parts = sync.data.part[message.id]
@@ -1287,6 +1324,15 @@ export function Session() {
       }),
     },
     {
+      title: sessionView() === "session" ? "Open Team Board" : "Return to Session",
+      value: "session.board.toggle",
+      category: "Team",
+      run: () => {
+        if (dialog.stack.length > 0 || permissions().length > 0 || questions().length > 0) return
+        showSessionView(sessionView() === "session" ? "board" : "session")
+      },
+    },
+    {
       title: "Toggle team panel",
       value: "team.panel.toggle",
       category: "Team",
@@ -1338,21 +1384,18 @@ export function Session() {
   useBindings(() => ({
     mode: OC2_BASE_MODE,
     priority: 2,
+    bindings: tuiConfig.keybinds.get("session.board.toggle"),
+  }))
+
+  useBindings(() => ({
+    mode: OC2_BASE_MODE,
+    priority: 2,
     bindings: [
       {
         key: SESSION_ALL_SESSIONS_KEY,
         desc: "List all sessions",
         group: "Session",
         cmd: () => keymap.dispatchCommand("session.list"),
-      },
-      {
-        key: SESSION_TEAM_PANEL_KEY,
-        desc: "Open team panel",
-        group: "Team",
-        cmd: () => {
-          if (!teamsEnabled()) return
-          keymap.dispatchCommand("team.panel.toggle")
-        },
       },
     ],
   }))
@@ -1466,6 +1509,7 @@ export function Session() {
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
               <scrollbox
+                visible={sessionView() === "session"}
                 ref={(r) => (scroll = r)}
                 onMouseOver={startTimelineScrollSync}
                 onMouseOut={stopTimelineScrollSync}
@@ -1596,7 +1640,16 @@ export function Session() {
                   )}
                 </For>
               </scrollbox>
-              <box flexShrink={0}>
+              <TeamBoard
+                visible={sessionView() !== "session"}
+                sessionID={route.sessionID}
+                view={sessionView() === "tasks" ? "tasks" : "board"}
+                teamID={route.teamID}
+                onView={showSessionView}
+                onBack={() => showSessionView("session")}
+                onTeamID={(teamID) => navigate({ ...route, teamID })}
+              />
+              <box id="session-composer-layer" visible={sessionView() === "session"} flexShrink={0}>
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
@@ -1635,15 +1688,15 @@ export function Session() {
                     name="session_prompt"
                     mode="replace"
                     session_id={route.sessionID}
-                    visible={visible()}
-                    disabled={disabled()}
+                    visible={visible() && sessionView() === "session"}
+                    disabled={disabled() || sessionView() !== "session"}
                     on_submit={toBottom}
                     ref={bind}
                   >
                     <Prompt
-                      visible={visible()}
+                      visible={visible() && sessionView() === "session"}
                       ref={bind}
-                      disabled={disabled()}
+                      disabled={disabled() || sessionView() !== "session"}
                       onSubmit={() => {
                         toBottom()
                       }}
@@ -1654,6 +1707,8 @@ export function Session() {
                     />
                   </pluginRuntime.Slot>
                 </Show>
+              </box>
+              <box id="session-persistent-chrome" flexShrink={0}>
                 <Show when={activity()}>
                   {(state) => (
                     <SessionWorkingLine
@@ -1678,25 +1733,27 @@ export function Session() {
               </box>
             </Show>
           </box>
-          <Show when={sidebarVisible()}>
-            <Switch>
-              <Match when={sidebarPresentation() === "wide"}>
-                <Sidebar sessionID={route.sessionID} />
-              </Match>
-              <Match when={sidebarPresentation() === "overlay"}>
-                <box
-                  position="absolute"
-                  top={0}
-                  left={0}
-                  right={0}
-                  bottom={0}
-                  alignItems="flex-end"
-                  backgroundColor={theme.scrimLight}
-                >
-                  <Sidebar sessionID={route.sessionID} overlay />
-                </box>
-              </Match>
-            </Switch>
+          <Show when={sidebarVisible() || requestedSidebarPresentation() !== "hidden"}>
+            <box visible={sidebarVisible()}>
+              <Switch>
+                <Match when={requestedSidebarPresentation() === "wide"}>
+                  <Sidebar sessionID={route.sessionID} />
+                </Match>
+                <Match when={requestedSidebarPresentation() === "overlay"}>
+                  <box
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    right={0}
+                    bottom={0}
+                    alignItems="flex-end"
+                    backgroundColor={theme.scrimLight}
+                  >
+                    <Sidebar sessionID={route.sessionID} overlay />
+                  </box>
+                </Match>
+              </Switch>
+            </box>
           </Show>
         </box>
       </context.Provider>

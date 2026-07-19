@@ -7,6 +7,7 @@ import os from "os"
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
+import { TeamAttention } from "@/team/attention"
 
 const log = Log.create({ service: "permission" })
 
@@ -83,6 +84,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const attention = yield* TeamAttention.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -103,6 +105,7 @@ export const layer = Layer.effect(
         return state
       }),
     )
+    yield* attention.reconcile("permission", new Set())
 
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
@@ -113,6 +116,7 @@ export const layer = Layer.effect(
         const rule = evaluate(request.permission, pattern, ruleset, approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
+          if (isMutating(request.permission)) yield* attention.setMutability(request.sessionID, "read_only")
           return yield* new PermissionV1.DeniedError({
             ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
           })
@@ -121,7 +125,10 @@ export const layer = Layer.effect(
         needsAsk = true
       }
 
-      if (!needsAsk) return
+      if (!needsAsk) {
+        if (isMutating(request.permission)) yield* attention.setMutability(request.sessionID, "write_allowed")
+        return
+      }
 
       const id = request.id ?? PermissionV1.ID.ascending()
       const info: PermissionV1.Request = {
@@ -137,11 +144,18 @@ export const layer = Layer.effect(
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
+      yield* attention.open({
+        sessionID: info.sessionID,
+        kind: "permission",
+        detailID: info.id,
+        detail: { ...info },
+      })
       yield* events.publish(Event.Asked, info)
       return yield* Effect.ensuring(
         Deferred.await(deferred),
-        Effect.sync(() => {
+        Effect.gen(function* () {
           pending.delete(id)
+          yield* attention.cancel("permission", id, "runtime_cancelled")
         }),
       )
     })
@@ -152,6 +166,7 @@ export const layer = Layer.effect(
       if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
 
       pending.delete(input.requestID)
+      yield* attention.resolve("permission", input.requestID, input.reply)
       yield* events.publish(Event.Replied, {
         sessionID: existing.info.sessionID,
         requestID: existing.info.id,
@@ -169,6 +184,7 @@ export const layer = Layer.effect(
         for (const [id, item] of pending.entries()) {
           if (item.info.sessionID !== existing.info.sessionID) continue
           pending.delete(id)
+          yield* attention.resolve("permission", id, "reject")
           yield* events.publish(Event.Replied, {
             sessionID: item.info.sessionID,
             requestID: item.info.id,
@@ -197,6 +213,7 @@ export const layer = Layer.effect(
         )
         if (!ok) continue
         pending.delete(id)
+        yield* attention.resolve("permission", id, "always")
         yield* events.publish(Event.Replied, {
           sessionID: item.info.sessionID,
           requestID: item.info.id,
@@ -252,6 +269,12 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   )
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer))
+const isMutating = (permission: string) =>
+  permission === "bash" || permission === "write" || permission === "edit" || permission === "apply_patch"
+
+export const defaultLayer = layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(TeamAttention.defaultLayer),
+)
 
 export * as Permission from "."

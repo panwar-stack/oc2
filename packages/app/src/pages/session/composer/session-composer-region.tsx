@@ -35,15 +35,15 @@ export function SessionComposerRegion(props: {
   onResponseSubmit: () => void
   followup?: {
     queue: () => boolean
-    sendsNext: () => boolean
+    sendsNext?: () => boolean
     items: { id: string; text: string }[]
     sending?: string
     edit?: { id: string; prompt: FollowupDraft["prompt"]; context: FollowupDraft["context"] }
-    onQueue: (draft: FollowupDraft) => void
-    onAbort: () => void
-    onSend: (id: string) => void
-    onEdit: (id: string) => void
-    onEditLoaded: () => void
+    onQueue: (draft: FollowupDraft) => Promise<boolean> | boolean
+    onAbort?: () => void
+    onSend?: (id: string) => void
+    onEdit?: (id: string) => void
+    onEditLoaded?: () => void
   }
   revert?: {
     items: { id: string; text: string }[]
