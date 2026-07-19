@@ -66,6 +66,25 @@ describe("TUI session aggregate chrome", () => {
     expect(activeTurnStartedAt([{ id: "assistant", role: "assistant", time: { created: 20 } }])).toBeUndefined()
   })
 
+  test("keeps aggregate activity and status chrome externally owned", async () => {
+    const [session, prompt, footer, adapters] = await Promise.all([
+      Bun.file(import.meta.dir + "/../../../src/routes/session/index.tsx").text(),
+      Bun.file(import.meta.dir + "/../../../src/component/prompt/index.tsx").text(),
+      Bun.file(import.meta.dir + "/../../../src/component/composer-footer.tsx").text(),
+      Bun.file(import.meta.dir + "/../../../src/plugin/adapters.tsx").text(),
+    ])
+
+    expect(session).toContain("externalSessionChrome")
+    expect(prompt).toContain("externalSessionChrome={props.externalSessionChrome}")
+    expect(adapters).toContain('input.route.data.type === "session" && input.route.data.sessionID === props.sessionID')
+    expect(prompt).toContain("!props.externalSessionChrome ? usage() : undefined")
+    expect(footer).toContain('props.externalSessionChrome && presentation().state !== "idle"')
+    expect(footer).toContain('presentation().action === "steer"')
+    expect(footer).toContain('presentation().action === "send"')
+    expect(session).toContain("<SessionWorkingLine")
+    expect(session).toContain("<SessionStatusLine")
+  })
+
   test("orders todos and preserves task assignees and dependencies", () => {
     expect(
       orderSidebarTodos([

@@ -248,6 +248,9 @@ export function createTuiApiAdapters(input: Input): Omit<TuiPluginApi, "lifecycl
         return (
           <Prompt
             sessionID={props.sessionID}
+            externalSessionChrome={
+              input.route.data.type === "session" && input.route.data.sessionID === props.sessionID
+            }
             visible={props.visible}
             disabled={props.disabled}
             onSubmit={props.onSubmit}

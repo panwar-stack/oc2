@@ -1649,6 +1649,7 @@ export function Session() {
                       }}
                       sessionID={route.sessionID}
                       interruptible={!session()?.parentID}
+                      externalSessionChrome
                       right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
                     />
                   </pluginRuntime.Slot>

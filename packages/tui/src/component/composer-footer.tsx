@@ -31,6 +31,7 @@ function fadeColor(color: RGBA, alpha: number) {
 
 type ComposerFooterProps = {
   mode: "normal" | "shell"
+  externalSessionChrome?: boolean
   leader: boolean
   status: SessionStatus
   working: boolean
@@ -131,6 +132,9 @@ export function ComposerFooter(props: ComposerFooterProps) {
       </box>
       <box width="100%" flexDirection="row" justifyContent="space-between">
         <Switch>
+          <Match when={props.externalSessionChrome && presentation().state !== "idle"}>
+            <text />
+          </Match>
           <Match when={presentation().state === "queued"}>
             <box paddingLeft={1} flexDirection="row" gap={1}>
               <text fg={theme.text}>✓ queued</text>

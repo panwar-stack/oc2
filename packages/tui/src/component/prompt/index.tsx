@@ -77,6 +77,7 @@ export type PromptProps = {
   hint?: JSX.Element
   right?: JSX.Element
   showPlaceholder?: boolean
+  externalSessionChrome?: boolean
   placeholders?: {
     normal?: string[]
     shell?: string[]
@@ -1576,6 +1577,7 @@ export function Prompt(props: PromptProps) {
         </Show>
         <ComposerFooter
           mode={store.mode}
+          externalSessionChrome={props.externalSessionChrome}
           leader={leader()}
           status={status()}
           working={working()}
@@ -1681,7 +1683,7 @@ export function Prompt(props: PromptProps) {
               <Switch>
                 <Match when={store.mode === "normal"}>
                   <Switch>
-                    <Match when={usage()}>
+                    <Match when={!props.externalSessionChrome ? usage() : undefined}>
                       {(item) => (
                         <text fg={theme.textMuted} wrapMode="none">
                           {[item().context, item().cost].filter(Boolean).join(" · ")}
