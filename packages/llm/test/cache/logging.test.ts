@@ -95,4 +95,21 @@ describe("cache invocation logging", () => {
     expect(event({ plan, telemetry }).notification).toMatchObject({ code: "unexpected_cache_miss" })
     expect(event({ plan, telemetry, notification: null }).notification).toBeNull()
   })
+
+  test("normalizes absent telemetry for every invocation with a cache plan", () => {
+    expect(event({ requestID: "request-2", route: "ai-sdk", plan })).toMatchObject({
+      type: "cache-invocation",
+      requestID: "request-2",
+      provider: "openai",
+      model: "gpt-5",
+      route: "ai-sdk",
+      mode: "automatic",
+      eligible: true,
+      classification: "cache_telemetry_unavailable",
+      verified: false,
+      metricsAvailable: false,
+      stablePrefixFingerprint: "sha256:stable",
+      cacheKey: "oc2-cache-key",
+    })
+  })
 })
