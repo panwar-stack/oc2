@@ -247,6 +247,7 @@ const AnthropicEvent = Schema.Struct({
 type AnthropicEvent = Schema.Schema.Type<typeof AnthropicEvent>
 
 interface ParserState {
+  readonly modelID: string
   readonly tools: ToolStream.State<number>
   readonly usage?: AnthropicUsage
   readonly pendingFinish?: {
@@ -659,7 +660,7 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // iterations, summing message and compaction entries yields the complete
 // executor usage. Advisor iterations are billed under their own model and are
 // retained only as metadata.
-const mapUsage = (usage: AnthropicUsage | undefined): Usage | undefined => {
+const mapUsage = (usage: AnthropicUsage | undefined, modelID: string): Usage | undefined => {
   if (!usage || usage.input_tokens == null || usage.output_tokens === undefined) return undefined
   const executor = (usage.iterations ?? []).filter((item) => item.type !== "advisor_message")
   const nonCached = executor.length ? executor.reduce((sum, item) => sum + item.input_tokens, 0) : usage.input_tokens
@@ -686,7 +687,7 @@ const mapUsage = (usage: AnthropicUsage | undefined): Usage | undefined => {
       cacheWrite: cacheWrite !== undefined,
       cacheTelemetry: CacheTelemetry.normalize({
         provider: "anthropic",
-        model: "claude-*",
+        model: modelID,
         inputTokens: ProviderShared.sumTokens(nonCached, cacheRead, cacheWrite) ?? null,
         cacheReadTokens: cacheRead ?? null,
         cacheWriteTokens: cacheWrite ?? null,
@@ -882,7 +883,7 @@ const onContentBlockStop = Effect.fn("AnthropicMessages.onContentBlockStop")(fun
 
 const onMessageDelta = (state: ParserState, event: AnthropicEvent): StepResult => {
   const merged = mergeUsage(state.usage, event.usage)
-  const usage = event.usage?.output_tokens === undefined ? undefined : mapUsage(merged)
+  const usage = event.usage?.output_tokens === undefined ? undefined : mapUsage(merged, state.modelID)
   return [
     {
       ...state,
@@ -982,7 +983,8 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: Protocol.jsonEvent(AnthropicEvent),
-    initial: () => ({
+    initial: (request) => ({
+      modelID: request.model.id,
       tools: ToolStream.empty<number>(),
       terminal: false,
       lifecycle: Lifecycle.initial(),

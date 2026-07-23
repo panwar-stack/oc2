@@ -135,6 +135,7 @@ const GeminiEvent = Schema.Struct({
 type GeminiEvent = Schema.Schema.Type<typeof GeminiEvent>
 
 interface ParserState {
+  readonly modelID: string
   readonly finishReason?: string
   readonly hasToolCalls: boolean
   readonly nextToolCallId: number
@@ -329,7 +330,7 @@ const fromRequest = Effect.fn("Gemini.fromRequest")(function* (request: LLMReque
 // `cachedContentTokenCount` subset. `candidatesTokenCount` is *exclusive*
 // of `thoughtsTokenCount` — visible-only, not a total — so we sum the two
 // to produce the inclusive `outputTokens` the rest of the contract expects.
-const mapUsage = (usage: GeminiUsage | undefined) => {
+const mapUsage = (usage: GeminiUsage | undefined, modelID: string) => {
   if (!usage) return undefined
   if (usage.promptTokenCount === undefined || usage.candidatesTokenCount === undefined) return undefined
   const cached = usage.cachedContentTokenCount
@@ -354,7 +355,7 @@ const mapUsage = (usage: GeminiUsage | undefined) => {
       reasoning: usage.thoughtsTokenCount !== undefined,
       cacheTelemetry: CacheTelemetry.normalize({
         provider: "google",
-        model: "",
+        model: modelID,
         inputTokens: usage.promptTokenCount,
         cacheReadTokens: cached ?? null,
         cacheWriteTokens: null,
@@ -407,7 +408,7 @@ const finish = (state: ParserState): ReadonlyArray<LLMEvent> =>
 const step = (state: ParserState, event: GeminiEvent) => {
   const nextState = {
     ...state,
-    usage: event.usageMetadata ? (mapUsage(event.usageMetadata) ?? state.usage) : state.usage,
+    usage: event.usageMetadata ? (mapUsage(event.usageMetadata, state.modelID) ?? state.usage) : state.usage,
   }
   const candidate = event.candidates?.[0]
   if (!candidate?.content)
@@ -485,7 +486,12 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: Protocol.jsonEvent(GeminiEvent),
-    initial: () => ({ hasToolCalls: false, nextToolCallId: 0, lifecycle: Lifecycle.initial() }),
+    initial: (request) => ({
+      modelID: request.model.id,
+      hasToolCalls: false,
+      nextToolCallId: 0,
+      lifecycle: Lifecycle.initial(),
+    }),
     step,
     onHalt: finish,
   },

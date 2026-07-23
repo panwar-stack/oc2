@@ -77,6 +77,8 @@ export interface CachePlan {
 }
 
 export interface CacheTelemetry {
+  readonly provider?: string
+  readonly model?: string
   readonly inputTokens: number | null
   readonly cacheReadTokens: number | null
   readonly cacheWriteTokens: number | null
