@@ -558,6 +558,27 @@ const StepFinishAccountingWrite = Schema.Struct({
   pricing: AccountingPricingWrite.pipe(Schema.optional),
 }).annotate({ identifier: "StepFinishAccountingWrite" })
 
+const CacheStatus = Schema.Struct({
+  classification: Schema.Literals([
+    "cache_hit",
+    "cache_write",
+    "expected_cache_miss",
+    "unexpected_cache_miss",
+    "cache_unsupported",
+    "cache_telemetry_unavailable",
+    "cache_configuration_error",
+    "provider_error",
+  ]),
+  metricsAvailable: Schema.Boolean,
+  eligible: Schema.Boolean,
+  verified: Schema.Boolean,
+  read: Schema.Finite,
+  write: Schema.Finite,
+  miss: Schema.optional(Schema.Finite),
+  savings: Schema.optional(Schema.Finite),
+}).annotate({ identifier: "CacheStatus" })
+export type CacheStatus = Types.DeepMutable<Schema.Schema.Type<typeof CacheStatus>>
+
 export const StepFinishPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("step-finish"),
@@ -575,6 +596,7 @@ export const StepFinishPart = Schema.Struct({
       write: Schema.Finite,
     }),
   }),
+  cacheStatus: Schema.optional(CacheStatus),
   accounting: Schema.optional(StepFinishAccounting),
 }).annotate({ identifier: "StepFinishPart" })
 export type StepFinishPart = Omit<Types.DeepMutable<Schema.Schema.Type<typeof StepFinishPart>>, "accounting"> & {
@@ -598,6 +620,7 @@ const StepFinishPartWrite = Schema.Struct({
       write: NonNegativeInt,
     }),
   }),
+  cacheStatus: Schema.optional(CacheStatus),
   accounting: Schema.optional(StepFinishAccountingWrite),
 })
   .check(
@@ -875,6 +898,7 @@ export const Assistant = Schema.Struct({
       write: Schema.Finite,
     }),
   }),
+  cacheStatus: Schema.optional(CacheStatus),
   structured: Schema.optional(Schema.Any),
   variant: Schema.optional(Schema.String),
   finish: Schema.optional(Schema.String),

@@ -93,6 +93,26 @@ export const MessagePart = Schema.Union([
 ]).annotate({ identifier: "MessagePart", discriminator: "type" })
 export type MessagePart = Schema.Schema.Type<typeof MessagePart>
 
+const CacheStatus = Schema.Struct({
+  classification: Schema.Literals([
+    "cache_hit",
+    "cache_write",
+    "expected_cache_miss",
+    "unexpected_cache_miss",
+    "cache_unsupported",
+    "cache_telemetry_unavailable",
+    "cache_configuration_error",
+    "provider_error",
+  ]),
+  metricsAvailable: Schema.Boolean,
+  eligible: Schema.Boolean,
+  verified: Schema.Boolean,
+  read: Schema.Finite,
+  write: Schema.Finite,
+  miss: Schema.optional(Schema.Finite),
+  savings: Schema.optional(Schema.Finite),
+}).annotate({ identifier: "CacheStatus" })
+
 export const Info = Schema.Struct({
   id: Schema.String,
   role: Schema.Literals(["user", "assistant"]),
@@ -138,6 +158,7 @@ export const Info = Schema.Struct({
             write: Schema.Finite,
           }),
         }),
+        cacheStatus: Schema.optional(CacheStatus),
       }),
     ),
     snapshot: Schema.optional(Schema.String),

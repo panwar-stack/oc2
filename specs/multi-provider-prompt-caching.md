@@ -17,6 +17,9 @@ The implementation strategy is incremental: first add shared cache capabilities 
 - V2/core request flow in `packages/core/src/session/runner/llm.ts` already computes a tool definition digest and sets cache hints, but it does not share a full cache audit layer with V1.
 - Usage normalization in `packages/opencode/src/session/llm/ai-sdk.ts` already recovers some cache read/write data for Anthropic, DeepSeek, OpenRouter, xAI, and generic AI SDK responses.
 - Session cost accounting in `packages/opencode/src/session/session.ts` already distinguishes input, output, cache read, and cache write costs when pricing metadata exists.
+- Direct interactive TUI status lives in `packages/opencode/src/cli/cmd/run/footer.ts`, `packages/opencode/src/cli/cmd/run/footer.view.tsx`, and `packages/opencode/src/cli/cmd/run/types.ts`; `FooterState` currently exposes `status`, `duration`, and `usage`, but no dedicated prompt-cache status field.
+- `packages/opencode/src/cli/cmd/run/session-data.ts` formats usage from assistant message updates and includes cache read/write token counts in totals, but it does not surface cache hit/write/miss/telemetry state as a distinct footer/statusline signal.
+- `packages/opencode/src/session/message.ts` currently stores assistant token cache counts at `metadata.assistant.tokens.cache.read/write`, but it does not store normalized cache classification or footer-safe cache status metadata.
 - Provider/model metadata in `packages/opencode/src/provider/provider.ts` includes model costs and generic capabilities, but not a centralized prompt-cache capability registry.
 - Tests already cover selected request shaping and usage accounting in `test/provider/transform.test.ts`, `test/session/llm.test.ts`, `test/session/llm-provider-parity.test.ts`, `test/session/session.test.ts`, `test/session/compaction.test.ts`, ACP, stats, and OpenAPI tests.
 - No dedicated prompt caching documentation was found under `docs/` or `packages/opencode`.
@@ -43,7 +46,7 @@ The implementation strategy is incremental: first add shared cache capabilities 
 | Guardrails | Missing | No preflight validation for field leakage, unsupported options, invalid breakpoints, unstable prefixes, or incompatible cache keys. |
 | Retry/fallback behavior | Partially complete | Retry flow exists in `src/session/retry.ts` and `src/session/processor.ts`, but cache-affecting retry changes are not tracked. |
 | Conversation compaction/session restore | Partially complete | Compaction exists in `src/session/compaction.ts`; cache invalidation and expected-miss marking are missing. |
-| User notification | Missing | No prompt-cache-specific warning event or user-facing notification. |
+| User-visible cache status | Missing | Prompt-cache state is not surfaced in direct-mode footer/statusline areas. `src/cli/cmd/run/types.ts` has no cache status field, `src/cli/cmd/run/session-data.ts` only folds cache tokens into usage totals, and `src/cli/cmd/run/footer.view.tsx` has no dedicated cache status segment. |
 | Structured logging | Partially complete | Stream logs exist in V1/V2; cache policy, fingerprints, classification, and safe diagnostics are missing. |
 | Diagnostics | Missing | No component-level diffing for unexpected misses. |
 | Cost accounting | Partially complete | Existing cache read/write pricing exists; missing normalized cache cost impact and provider-aware unavailable handling. |
@@ -58,6 +61,8 @@ The implementation strategy is incremental: first add shared cache capabilities 
 - Provider-specific fields must not leak across providers.
 - Full prompts, source code, tool arguments, files, images, credentials, and personal data must not be logged.
 - A single miss must not create a user warning unless provider telemetry and expectation state prove an unexpected miss.
+- Footer/statusline cache status must be concise, non-blocking, and content-free: show only normalized state such as warming, hit, write, expected miss, unexpected miss, unsupported, or telemetry unavailable.
+- Normal cache states must not be rendered as warnings. Only verified unexpected misses, invalid configuration, and provider failures may use warning/error styling or notification paths.
 - Keep V1 and V2 behavior compatible except for improved caching controls, validation, telemetry, diagnostics, and warnings.
 
 ## Design
@@ -149,6 +154,24 @@ export interface CacheTelemetry {
   estimatedUncachedCost: number | null
   estimatedSavings: number | null
 }
+
+export interface CacheStatusView {
+  label: string
+  severity: "muted" | "normal" | "warning" | "error"
+  classification: CacheClassification
+  visibleState:
+    | "warming"
+    | "hit"
+    | "write"
+    | "expected_miss"
+    | "unexpected_miss"
+    | "unsupported"
+    | "telemetry_unavailable"
+    | "error"
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
+  estimatedSavings: number | null
+}
 ```
 
 ### Provider Behavior
@@ -159,6 +182,19 @@ export interface CacheTelemetry {
 | Anthropic | Use valid `cache_control` on supported system, tool, and message blocks. Enforce breakpoint limit and duration support. Parse `cache_creation_input_tokens` and `cache_read_input_tokens`. |
 | Moonshot AI/Kimi | Treat as provider-managed automatic caching. Send no OpenAI or Anthropic cache fields. Classify missing cache telemetry as `cache_telemetry_unavailable`, not failure. |
 | DeepSeek | Treat as provider-managed automatic prefix caching. Parse `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`. Use warmup and best-effort rules before classifying misses. |
+
+### Footer And Statusline Visibility
+
+- Derive a sanitized `CacheStatusView` from normalized `CacheTelemetry` for every assistant turn.
+- Persist or emit the normalized cache classification through an existing assistant-message-safe path before footer rendering. First-pass target: add footer-safe cache status metadata alongside assistant token metadata in `packages/opencode/src/session/message.ts`, then include it in the `message.updated` data consumed by `packages/opencode/src/cli/cmd/run/session-data.ts`.
+- Surface the latest applicable cache status in direct interactive footer/statusline UI:
+  - Extend `packages/opencode/src/cli/cmd/run/types.ts` `FooterState` and `FooterPatch` with an optional cache status field.
+  - Update `packages/opencode/src/cli/cmd/run/session-data.ts` to map assistant-message cache status metadata into the footer patch, instead of only folding cache tokens into usage totals.
+  - Preserve `packages/opencode/src/cli/cmd/run/footer.ts` as the footer state merger for stream patches.
+  - Render the cache status as a compact statusline segment in `packages/opencode/src/cli/cmd/run/footer.view.tsx`, near usage/model metadata and behind the existing responsive width policy in `packages/opencode/src/cli/cmd/run/footer.width.ts`.
+- Suggested labels: `cache warming`, `cache hit`, `cache write`, `cache expected miss`, `cache unexpected miss`, `cache unavailable`, `cache unsupported`, `cache error`.
+- Use muted/normal severity for warming, hit, write, expected miss, unsupported, and telemetry unavailable. Use warning/error severity only for verified unexpected miss, invalid cache configuration, or provider error.
+- Do not expose prompts, fingerprints, cache keys, provider raw fields, component names, source file names, or tool arguments in footer/statusline text.
 
 ### Documentation Updates
 
@@ -277,23 +313,34 @@ Review:
 
 Fresh read-only reviewer stress-checks state isolation, eviction, concurrency, and false-positive warning suppression.
 
-### PR 7: Logging, Diagnostics, And User Notifications
+### PR 7: Logging, Diagnostics, Footer Status, And User Notifications
 
 - Emit one structured cache event for every model invocation.
 - Include fingerprints, counts, classification, provider/model, request/turn/session IDs, retry attempt, breakpoints, cache key, duration, and corrective action.
 - Add component-level diagnostics for unexpected misses without exposing prompt content.
+- Add new cache logging, warning, and diagnostics tests under `packages/opencode/test/cache/`.
+- Add sanitized user-visible cache status for footer/statusline surfaces.
+- Wire direct-mode status through:
+  - `packages/opencode/src/session/message.ts`
+  - `packages/opencode/src/cli/cmd/run/types.ts`
+  - `packages/opencode/src/cli/cmd/run/session-data.ts`
+  - `packages/opencode/src/cli/cmd/run/footer.ts`
+  - `packages/opencode/src/cli/cmd/run/footer.view.tsx`
+  - `packages/opencode/src/cli/cmd/run/footer.width.ts`
+- Keep cache status distinct from usage totals: usage may continue to include cache read/write tokens, while the footer/statusline shows cache classification.
 - Add user notifications only for verified unexpected misses, invalid cache configuration, and provider failures.
-- Suppress notifications for first writes, warmup, below-threshold prompts, compaction, expected expiration, best-effort single misses, and unavailable telemetry.
+- Suppress warning/error styling and notifications for first writes, warmup, below-threshold prompts, compaction, expected expiration, best-effort single misses, unsupported caching, and unavailable telemetry.
 
 Verification:
 
 - `bun test --timeout 30000 test/cache/logging.test.ts test/cache/warnings.test.ts test/cache/diagnostics.test.ts`
+- `bun test --timeout 30000 test/cli/run/session-data.test.ts test/cli/run/footer.view.test.tsx test/cli/run/footer.width.test.ts`
 - `bun test --timeout 30000 test/acp/usage.test.ts test/acp/service-session.test.ts`
 - `bun typecheck`
 
 Review:
 
-Fresh read-only reviewer verifies no sensitive data is logged and user messages clearly distinguish failure, configuration error, provider error, and unverifiable telemetry.
+Fresh read-only reviewer verifies no sensitive data is logged or rendered, footer/statusline labels clearly distinguish cache hit/write/warmup/miss/unavailable/unsupported states, responsive width behavior remains readable, and user notifications remain limited to verified unexpected misses, configuration errors, and provider errors.
 
 ### PR 8: Cost Accounting Integration
 
