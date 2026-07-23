@@ -463,6 +463,7 @@ export const layer = Layer.effect(
           },
         ],
         model,
+        cacheIntent: "compaction",
       })
 
       if (result === "compact") {

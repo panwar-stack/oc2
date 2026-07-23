@@ -6,7 +6,7 @@ import { Log } from "@oc2-ai/core/util/log"
 import { Cause, Context, DateTime, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
-import type { LLMEvent as LLMEventType } from "@oc2-ai/llm"
+import { CachePlanner, type LLMEvent as LLMEventType } from "@oc2-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
 import type { LLMClientService } from "@oc2-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
@@ -32,6 +32,7 @@ import { LLMNativeRuntime } from "./llm/native-runtime"
 import { ProviderTimingLifecycle } from "./llm/provider-timing"
 import { LLMRequestPrep } from "./llm/request"
 import type { TaskPromptOps } from "@/tool/task"
+import { SessionRetry, type CacheUse } from "./retry"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -53,6 +54,10 @@ export type StreamInput = {
   attempt?: number
   toolChoice?: "auto" | "required" | "none"
   forbidImplicitTools?: boolean
+  cacheIntent?: SessionRetry.CacheIntent
+  cache?: {
+    onPrepared?: (cache: CacheUse) => Effect.Effect<void>
+  }
 }
 
 export type StreamRequest = StreamInput & {
@@ -170,6 +175,16 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      const reportCacheUse = (requestFormat: string) =>
+        prepared.params.cachePlan
+          ? input.cache?.onPrepared?.(
+              SessionRetry.cacheUse({
+                plan: prepared.params.cachePlan,
+                requestFormat,
+                promptVersion: CachePlanner.CACHE_PLANNER_VERSION,
+              }),
+            ) ?? Effect.void
+          : Effect.void
       const telemetryAttributes = langfuseTelemetryAttributes({
         sessionID: input.sessionID,
         userID: cfg.username ?? "unknown",
@@ -312,6 +327,7 @@ const live: Layer.Layer<
           timing: input.timing,
         })
         if (native.type === "supported") {
+          yield* reportCacheUse("native")
           yield* Effect.logInfo("llm runtime selected").pipe(
             Effect.annotateLogs({
               "llm.runtime": "native",
@@ -342,6 +358,7 @@ const live: Layer.Layer<
           "llm.model": input.model.id,
         }),
       )
+      yield* reportCacheUse("ai-sdk")
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       const identity = {
