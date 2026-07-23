@@ -1,5 +1,7 @@
 import {
+  CacheDiagnostics,
   CacheHint,
+  CacheLogging,
   CachePlanner,
   LLM,
   LLMClient,
@@ -306,6 +308,7 @@ export const layer = Layer.effect(
           ...(repositoryContext ? { repositoryContext } : {}),
         },
       })
+      const requestCachePlan = CachePlanner.planCacheRequest(request).plan
       yield* Effect.logDebug("Prepared LLM request tool definitions digest").pipe(
         Effect.annotateLogs({
           sessionID: session.id,
@@ -334,6 +337,7 @@ export const layer = Layer.effect(
       let ttftMs: number | undefined
       let eventCount = 0
       let finishReason: string | undefined
+      let usageEvent: LLMEvent | undefined
       const streamFields = {
         sessionID: session.id,
         messageID: publisher.plannedAssistantMessageID(),
@@ -357,7 +361,11 @@ export const layer = Layer.effect(
                 ttftMs = Date.now() - startedAt
                 log.info("stream.first", { ...streamFields, ttftMs })
               }
-              if (event.type === "finish" || event.type === "step-finish") finishReason = event.reason
+              if (event.type === "finish" || event.type === "step-finish") {
+                finishReason = event.reason
+                if (event.usage) usageEvent = event
+              }
+              if (event.type === "provider-error" && event.usage) usageEvent = event
               if (overflowFailure) return
               if (LLMEvent.is.providerError(event)) {
                 if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
@@ -440,6 +448,21 @@ export const layer = Layer.effect(
               eventCount,
               finishReason,
             })
+          }
+          const telemetry = usageEvent && "usage" in usageEvent ? usageEvent.usage?.cacheTelemetry : undefined
+          if (telemetry) {
+            const contextOverflow = isContextOverflowFailure(overflowFailure ?? failure)
+            log.info("cache.invocation", CacheLogging.event({
+              requestID: request.id,
+              provider: model.provider,
+              model: model.id,
+              route: model.route.id,
+              plan: requestCachePlan,
+              telemetry,
+              providerFailure: !contextOverflow && (stream._tag === "Failure" || publisher.hasProviderError()),
+              ...(contextOverflow ? { notification: null } : {}),
+              diagnostic: CacheDiagnostics.diagnoseUnexpectedMiss({ plan: requestCachePlan, telemetry }),
+            }))
           }
           yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           yield* withPublication(

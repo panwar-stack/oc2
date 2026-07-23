@@ -30,9 +30,18 @@ import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { CanonicalUsage, toolFileSourceFromUri, Usage, type LLMEvent, type ProviderErrorEvent } from "@oc2-ai/llm"
+import {
+  CanonicalUsage,
+  CacheGuardrails,
+  CacheTelemetry,
+  toolFileSourceFromUri,
+  Usage,
+  type LLMEvent,
+  type ProviderErrorEvent,
+} from "@oc2-ai/llm"
 import { ToolOutput } from "@oc2-ai/core/tool-output"
 import { LLMAISDK } from "./llm/ai-sdk"
+import { TuiEvent } from "@/server/tui-event"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
@@ -44,6 +53,35 @@ function stableInputKey(value: unknown): string {
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, item]) => `${JSON.stringify(key)}:${stableInputKey(item)}`)
     .join(",")}}`
+}
+
+function cacheMetadataGuardrails(
+  previous: SessionRetry.CacheUse,
+  current: SessionRetry.CacheUse,
+  kind: SessionRetry.CacheChangeKind,
+  retryID: string,
+) {
+  const previousUse = {
+    provider: previous.provider,
+    model: previous.model,
+    cacheKey: previous.cacheKey,
+    stablePrefixFingerprint: previous.stablePrefixFingerprint,
+    trafficPartition: null,
+    componentFingerprints: previous.componentFingerprints,
+  }
+  const currentUse = {
+    provider: current.provider,
+    model: current.model,
+    cacheKey: current.cacheKey,
+    stablePrefixFingerprint: current.stablePrefixFingerprint,
+    trafficPartition: null,
+    componentFingerprints: current.componentFingerprints,
+  }
+  return CacheGuardrails.combine(
+    CacheGuardrails.checkIncompatibleCacheKeyReuse({ previous: previousUse, current: currentUse }),
+    CacheGuardrails.checkUnstablePrefixChange({ previous: previousUse, current: currentUse }),
+    ...(kind === "retry" ? [CacheGuardrails.checkRetryPrefixChange({ original: previousUse, retry: currentUse, retryID })] : []),
+  )
 }
 
 export type Result = "compact" | "stop" | "continue"
@@ -108,6 +146,9 @@ interface ProcessorContext extends Input {
       }
     | undefined
   v2FragmentsFlushed: boolean
+  cacheIntent: SessionRetry.CacheIntent
+  cacheUse: SessionRetry.CacheUse | undefined
+  cacheExpectedMiss: boolean
 }
 
 type StreamEvent = LLMEvent
@@ -158,6 +199,9 @@ export const layer = Layer.effect(
         providerStepTerminals: new Map(),
         providerFailure: undefined,
         v2FragmentsFlushed: false,
+        cacheIntent: "conversation",
+        cacheUse: undefined,
+        cacheExpectedMiss: false,
         reasoningMap: {},
         v2AssistantMessageID: undefined,
       }
@@ -204,6 +248,84 @@ export const layer = Layer.effect(
         ctx.v2AssistantMessageID === undefined
           ? Effect.die("V2 step settlement has no owning assistant message")
           : Effect.succeed(ctx.v2AssistantMessageID)
+
+      const recordCacheUse = Effect.fn("SessionProcessor.recordCacheUse")(function* (
+        value: SessionRetry.CacheUse,
+        kind: SessionRetry.CacheChangeKind,
+        attempt: number,
+      ) {
+        const info = yield* session.get(ctx.sessionID)
+        const current = SessionRetry.metadata(info.metadata)
+        const previous = kind === "retry" ? ctx.cacheUse : current.last
+        if (previous) {
+          const guardrails = cacheMetadataGuardrails(previous, value, kind, ctx.assistantMessage.id)
+          if (!guardrails.valid) {
+            return yield* Effect.fail(
+              new Error(`Prompt cache configuration invalid: ${guardrails.errors.map((item) => item.message).join(" ")}`),
+            )
+          }
+          for (const warning of guardrails.warnings) {
+            log.warn("cache.guardrail", { issue: warning })
+            yield* Effect.logWarning("prompt cache guardrail").pipe(Effect.annotateLogs({ issue: warning }))
+          }
+          const warning = guardrails.warnings[0]
+          if (warning) {
+            yield* events
+              .publish(TuiEvent.ToastShow, {
+                title: "Prompt Cache Warning",
+                message: warning.message,
+                variant: "warning",
+                duration: 8000,
+              })
+              .pipe(Effect.ignore)
+          }
+        }
+        const result = SessionRetry.record({
+          metadata: current,
+          current: value,
+          kind,
+          attempt,
+          intent: ctx.cacheIntent,
+          previous,
+        })
+        ctx.cacheUse = value
+        ctx.cacheExpectedMiss = result.expectedMiss
+        yield* session.setMetadata({
+          sessionID: ctx.sessionID,
+          metadata: {
+            ...(info.metadata ?? {}),
+            [SessionRetry.CACHE_METADATA_KEY]: result.metadata,
+          },
+        })
+      })
+
+      const usageWithCacheExpectation = (value: Usage) => {
+        if (!ctx.cacheExpectedMiss || !value.cacheTelemetry) return value
+        return Usage.from({
+          inputTokens: value.inputTokens,
+          outputTokens: value.outputTokens,
+          nonCachedInputTokens: value.nonCachedInputTokens,
+          cacheReadInputTokens: value.cacheReadInputTokens,
+          cacheWriteInputTokens: value.cacheWriteInputTokens,
+          reasoningTokens: value.reasoningTokens,
+          totalTokens: value.totalTokens,
+          providerTotalTokens: value.providerTotalTokens,
+          providerMetadata: value.providerMetadata,
+          cacheTelemetry: CacheTelemetry.normalize({
+            provider: value.cacheTelemetry.provider ?? ctx.model.providerID,
+            model: value.cacheTelemetry.model ?? ctx.model.id,
+            inputTokens: value.cacheTelemetry.inputTokens,
+            cacheReadTokens: value.cacheTelemetry.cacheReadTokens,
+            cacheWriteTokens: value.cacheTelemetry.cacheWriteTokens,
+            cacheMissTokens: value.cacheTelemetry.cacheMissTokens,
+            metricsAvailable: value.cacheTelemetry.metricsAvailable,
+            eligible: value.cacheTelemetry.eligible,
+            expected: true,
+            warmupRequestNumber: value.cacheTelemetry.warmupRequestNumber,
+            providerRawUsageFieldNames: value.cacheTelemetry.providerRawUsageFieldNames,
+          }),
+        })
+      }
 
       const readToolCall = Effect.fn("SessionProcessor.readToolCall")(function* (toolCallID: string) {
         const call = ctx.toolcalls[toolCallID]
@@ -337,13 +459,13 @@ export const layer = Layer.effect(
         if (ctx.providerTiming?.active) LLM.finishProviderAttempt(ctx.providerTiming, "error")
         const timing = LLM.takeCurrentProviderStep(ctx.providerTiming)
         const usage = value.usage
-          ? Usage.from({
+          ? usageWithCacheExpectation(Usage.from({
               ...value.usage,
               providerMetadata: LLMAISDK.mergeUsageProviderMetadata(
                 value.providerMetadata,
                 value.usage.providerMetadata,
               ),
-            })
+            }))
           : undefined
         const canonical = usage ? CanonicalUsage.fromUsage(usage) : undefined
         const calculated =
@@ -820,10 +942,10 @@ export const layer = Layer.effect(
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             const usage = Session.getUsage({
               model: ctx.model,
-              usage: value.usage ?? new Usage({}),
+              usage: usageWithCacheExpectation(value.usage ? Usage.from(value.usage) : new Usage({})),
               metadata: value.providerMetadata,
             })
-            const canonical = value.usage ? CanonicalUsage.fromUsage(value.usage) : undefined
+            const canonical = value.usage ? CanonicalUsage.fromUsage(usageWithCacheExpectation(Usage.from(value.usage))) : undefined
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -1147,6 +1269,9 @@ export const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
         ctx.toolMayHaveTouchedFiles = false
+        ctx.cacheIntent = streamInput.cacheIntent ?? (ctx.assistantMessage.summary ? "summary" : "conversation")
+        ctx.cacheUse = undefined
+        ctx.cacheExpectedMiss = false
         const retryStartedAt = yield* Clock.currentTimeMillis
         let attempt = 1
 
@@ -1156,7 +1281,15 @@ export const layer = Layer.effect(
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream({ ...streamInput, messageID: ctx.assistantMessage.id, attempt })
+            const stream = llm.stream({
+              ...streamInput,
+              messageID: ctx.assistantMessage.id,
+              attempt,
+              cache: {
+                ...streamInput.cache,
+                onPrepared: (value) => recordCacheUse(value, attempt === 1 ? "resume" : "retry", attempt).pipe(Effect.orDie),
+              },
+            })
             ctx.providerTiming = LLM.providerTiming(stream)
             ctx.providerEventStep = undefined
             ctx.providerStepTerminals.clear()

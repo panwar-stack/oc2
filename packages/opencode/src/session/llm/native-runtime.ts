@@ -1,4 +1,5 @@
 import type { Auth } from "@/auth"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { errorMessage } from "@/util/error"
@@ -8,7 +9,10 @@ import { Cause, Effect, FiberSet, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { FetchHttpClient } from "effect/unstable/http"
 import {
+  CacheGuardrails,
+  InvalidRequestReason,
   LLMEvent,
+  LLMError,
   LLMRequest,
   Tool as NativeTool,
   ToolFailure,
@@ -40,6 +44,7 @@ type StreamInput = {
   readonly topK?: number
   readonly maxOutputTokens?: number
   readonly providerOptions?: Record<string, any>
+  readonly cachePlan?: CachePlan
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
   readonly timing?: ProviderTimingLifecycle.ProviderTiming
@@ -101,6 +106,7 @@ export function stream(input: StreamInput): StreamResult {
     maxOutputTokens: input.maxOutputTokens,
     providerOptions: ProviderTransform.providerOptions(input.model, input.providerOptions ?? {}),
     headers: { ...providerHeaders(input.provider.options.headers), ...input.headers },
+    cachePlan: input.cachePlan,
   })
   const stream = Stream.scoped(
     Stream.unwrap(
@@ -111,65 +117,81 @@ export function stream(input: StreamInput): StreamResult {
           let terminal: "step-finish" | "provider-error" | undefined
           let finish = false
           ProviderTimingLifecycle.beginProviderStep(input.timing, 0)
-          return input.llmClient
-            .stream(
-              LLMRequest.update(request, {
-                tools: [...request.tools, ...toDefinitions(tools)],
+          const requestWithTools = LLMRequest.update(request, {
+            tools: [...request.tools, ...toDefinitions(tools)],
+          })
+          const guardrails = nativeGuardrails(requestWithTools)
+          if (!guardrails.valid)
+            return Stream.fail(
+              new LLMError({
+                module: "LLMNativeRuntime",
+                method: "stream",
+                reason: new InvalidRequestReason({
+                  message: `Prompt cache configuration invalid: ${guardrails.errors.map((item) => item.message).join(" ")}`,
+                }),
               }),
-              {
-                onDispatch: () => ProviderTimingLifecycle.beginProviderAttempt(input.timing),
-                onDispatchFailure: () => {
-                  if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "error")
-                },
-              },
             )
-            .pipe(
-              Stream.mapEffect((event) =>
-                Effect.sync(() => {
-                  if (terminal) {
-                    if (terminal === "step-finish" && event.type === "finish" && !finish) {
-                      finish = true
-                      return event
-                    }
-                    throw new Error("Provider emitted content after a terminal event")
-                  }
-                  if (event.type === "step-finish") {
-                    if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "success")
-                    terminal = "step-finish"
-                  }
-                  if (event.type === "provider-error") {
+          return Stream.fromEffect(
+            Effect.forEach(guardrails.warnings, (warning) =>
+              Effect.logWarning("prompt cache guardrail").pipe(Effect.annotateLogs({ issue: warning })),
+            ),
+          ).pipe(
+            Stream.drain,
+            Stream.concat(
+              input.llmClient
+                .stream(requestWithTools, {
+                  onDispatch: () => ProviderTimingLifecycle.beginProviderAttempt(input.timing),
+                  onDispatchFailure: () => {
                     if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "error")
-                    terminal = "provider-error"
-                  }
-                  return event
-                }),
-              ),
-              Stream.concat(
-                Stream.suspend(() => {
-                  if (terminal) return Stream.empty
-                  if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "eof")
-                  terminal = "provider-error"
-                  return Stream.make(
-                    LLMEvent.providerError({ message: "Provider stream ended without a terminal event" }),
-                  )
-                }),
-              ),
-              Stream.onError((cause) =>
-                Effect.sync(() => {
-                  if (input.timing?.active) {
-                    ProviderTimingLifecycle.finishProviderAttempt(
-                      input.timing,
-                      Cause.hasInterruptsOnly(cause) ? "interrupt" : "error",
-                    )
-                  }
-                }),
-              ),
-              Stream.ensuring(
-                Effect.sync(() => {
-                  if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "interrupt")
-                }),
-              ),
-            )
+                  },
+                })
+                .pipe(
+                  Stream.mapEffect((event) =>
+                    Effect.sync(() => {
+                      if (terminal) {
+                        if (terminal === "step-finish" && event.type === "finish" && !finish) {
+                          finish = true
+                          return event
+                        }
+                        throw new Error("Provider emitted content after a terminal event")
+                      }
+                      if (event.type === "step-finish") {
+                        if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "success")
+                        terminal = "step-finish"
+                      }
+                      if (event.type === "provider-error") {
+                        if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "error")
+                        terminal = "provider-error"
+                      }
+                      return event
+                    }),
+                  ),
+                  Stream.concat(
+                    Stream.suspend(() => {
+                      if (terminal) return Stream.empty
+                      if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "eof")
+                      terminal = "provider-error"
+                      return Stream.make(LLMEvent.providerError({ message: "Provider stream ended without a terminal event" }))
+                    }),
+                  ),
+                  Stream.onError((cause) =>
+                    Effect.sync(() => {
+                      if (input.timing?.active) {
+                        ProviderTimingLifecycle.finishProviderAttempt(
+                          input.timing,
+                          Cause.hasInterruptsOnly(cause) ? "interrupt" : "error",
+                        )
+                      }
+                    }),
+                  ),
+                  Stream.ensuring(
+                    Effect.sync(() => {
+                      if (input.timing?.active) ProviderTimingLifecycle.finishProviderAttempt(input.timing, "interrupt")
+                    }),
+                  ),
+                ),
+            ),
+          )
         }).pipe(
           Stream.flatMap((event) =>
             event.type !== "tool-call" || event.providerExecuted
@@ -203,6 +225,52 @@ export function stream(input: StreamInput): StreamResult {
     stream: fetch ? stream.pipe(Stream.provideService(FetchHttpClient.Fetch, fetch)) : stream,
   }
 }
+
+function nativeGuardrails(request: LLMRequest) {
+  const plan = request.metadata?.cachePlan
+  if (!isCachePlan(plan)) return CacheGuardrails.combine()
+  const fields = nativeCacheFields(request)
+  return CacheGuardrails.combine(
+    CacheGuardrails.checkUnsupportedFields({ provider: plan.provider, model: plan.model, fields }),
+    CacheGuardrails.checkProviderFieldLeakage({ provider: plan.provider, model: plan.model, fields }),
+    CacheGuardrails.checkInvalidDuration({ provider: plan.provider, model: plan.model, duration: plan.duration }),
+    CacheGuardrails.checkBreakpointOverflow({ provider: plan.provider, model: plan.model, breakpoints: plan.breakpoints }),
+  )
+}
+
+function nativeCacheFields(request: LLMRequest) {
+  const options = request.providerOptions ?? {}
+  return [
+    ...collectOptionCacheFields(options),
+    ...request.system.flatMap((part) => (part.cache ? ["cache_control"] : [])),
+    ...request.tools.flatMap((tool) => (tool.cache ? ["cache_control"] : [])),
+    ...request.messages.flatMap((message) =>
+      message.content.flatMap((part) => ("cache" in part && part.cache ? ["cache_control"] : [])),
+    ),
+  ]
+}
+
+function collectOptionCacheFields(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(collectOptionCacheFields)
+  if (typeof value !== "object" || value === null) return []
+  return Object.entries(value).flatMap(([key, item]) => [
+    ...(key === "promptCacheKey" || key === "prompt_cache_key" ? ["prompt_cache_key"] : []),
+    ...(key === "cache_control" || key === "cacheControl" ? ["cache_control"] : []),
+    ...(key === "cachePoint" ? ["cachePoint"] : []),
+    ...collectOptionCacheFields(item),
+  ])
+}
+
+const isCachePlan = (value: unknown): value is CachePlan =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  "model" in value &&
+  "mode" in value &&
+  "cacheKey" in value &&
+  "eligible" in value &&
+  "breakpoints" in value &&
+  Array.isArray(value.breakpoints)
 
 function providerFetch(input: Pick<StreamInput, "provider" | "auth">): typeof globalThis.fetch | undefined {
   if (input.provider.id !== "openai" || input.auth?.type !== "oauth") return undefined

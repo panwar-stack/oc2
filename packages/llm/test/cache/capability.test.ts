@@ -22,6 +22,85 @@ describe("cache capability registry", () => {
     expect(cacheCapabilityRecords.every((record) => record.version === CACHE_CAPABILITY_VERSION)).toBe(true)
   })
 
+  test("covers the prompt caching provider compatibility matrix", () => {
+    const matrix = [
+      {
+        provider: "openai",
+        model: "gpt-5.5",
+        expected: {
+          status: "known",
+          promptCaching: "automatic_and_explicit",
+          requestFields: ["prompt_cache_key"],
+          reportsCacheReadTokens: true,
+          reportsCacheWriteTokens: true,
+          reportsCacheMissTokens: false,
+          conclusiveVerification: true,
+        },
+      },
+      {
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        expected: {
+          status: "known",
+          promptCaching: "explicit",
+          requestFields: ["cache_control"],
+          maximumBreakpoints: 4,
+          supportedDurations: ["5m", "1h"],
+          conclusiveVerification: true,
+        },
+      },
+      {
+        provider: "moonshot",
+        model: "kimi-k2",
+        expected: {
+          status: "known",
+          promptCaching: "automatic",
+          requestFields: [],
+          telemetryUnavailable: true,
+          conclusiveVerification: false,
+        },
+      },
+      {
+        provider: "kimi",
+        model: "kimi-latest",
+        expected: {
+          status: "known",
+          promptCaching: "automatic",
+          requestFields: [],
+          telemetryUnavailable: true,
+          conclusiveVerification: false,
+        },
+      },
+      {
+        provider: "deepseek",
+        model: "deepseek-chat",
+        expected: {
+          status: "known",
+          promptCaching: "automatic",
+          requestFields: [],
+          reportsCacheReadTokens: true,
+          reportsCacheMissTokens: true,
+          conclusiveVerification: false,
+        },
+      },
+      {
+        provider: "future",
+        model: "future-model",
+        expected: {
+          status: "unknown",
+          promptCaching: "unsupported",
+          requestFields: [],
+          telemetryUnavailable: true,
+          conclusiveVerification: false,
+        },
+      },
+    ] as const
+
+    for (const item of matrix) {
+      expect(getCacheCapabilities(item.provider, item.model)).toMatchObject(item.expected)
+    }
+  })
+
   test("OpenAI supports automatic caching with explicit routing keys but no breakpoints", () => {
     const capabilities = getCacheCapabilities("openai", "gpt-4o-mini")
 
@@ -164,6 +243,8 @@ describe("cache capability registry", () => {
       duration: null,
     }
     const telemetry: CacheTelemetry = {
+      provider: "moonshot",
+      model: "kimi-k2",
       inputTokens: null,
       cacheReadTokens: null,
       cacheWriteTokens: null,

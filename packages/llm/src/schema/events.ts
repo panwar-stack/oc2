@@ -9,6 +9,8 @@ import { CacheTelemetry } from "../cache/telemetry"
 const UsageToken = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 
 const CacheTelemetrySchema = Schema.Struct({
+  provider: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
   inputTokens: Schema.NullOr(UsageToken),
   cacheReadTokens: Schema.NullOr(UsageToken),
   cacheWriteTokens: Schema.NullOr(UsageToken),
@@ -353,9 +355,7 @@ export const LLMEvent = Object.assign(llmEventTagged, {
     }),
   providerError: (input: ProviderErrorInput) => {
     const { cacheTelemetryClassification, ...event } = input
-    const classification =
-      cacheTelemetryClassification ??
-      (input.classification === "context-overflow" ? "cache_configuration_error" : "provider_error")
+    const classification = cacheTelemetryClassification ?? "provider_error"
     return ProviderErrorEvent.make({
       ...event,
       usage: errorUsage(event.usage, classification),

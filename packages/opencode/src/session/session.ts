@@ -494,9 +494,15 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
       )
     : undefined
   const cost = pricing?.source === "provider" ? pricing.amount : (estimateAmount ?? 0)
+  const cacheTelemetry = cacheTelemetryWithCostImpact({
+    telemetry: input.usage.cacheTelemetry,
+    model: input.model,
+    rate: pricing?.rate,
+  })
   return {
     cost,
     tokens,
+    ...(cacheTelemetry ? { cacheTelemetry } : {}),
     pricing:
       pricing === undefined
         ? undefined
@@ -507,6 +513,60 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
           },
   }
 }
+
+type CacheTelemetryInfo = NonNullable<Usage["cacheTelemetry"]>
+
+const cacheTelemetryWithCostImpact = (input: {
+  readonly telemetry?: CacheTelemetryInfo
+  readonly model: Provider.Model
+  readonly rate?: {
+    readonly input: number
+    readonly cache: {
+      readonly read: number
+      readonly write: number
+    }
+  }
+}): CacheTelemetryInfo | undefined => {
+  if (!input.telemetry) return undefined
+  if (
+    !input.rate ||
+    input.telemetry.provider !== input.model.providerID ||
+    input.telemetry.model !== input.model.id ||
+    input.telemetry.inputTokens === null
+  ) {
+    return input.telemetry
+  }
+
+  const reportedCacheReadTokens =
+    input.telemetry.classification === "unexpected_cache_miss"
+      ? (input.telemetry.cacheMissTokens ?? input.telemetry.uncachedInputTokens)
+      : input.telemetry.cacheReadTokens
+  if (reportedCacheReadTokens === null && input.telemetry.cacheWriteTokens === null) return input.telemetry
+
+  const cacheReadTokens = reportedCacheReadTokens ?? 0
+  const cacheWriteTokens = input.telemetry.cacheWriteTokens ?? 0
+  const uncachedInputTokens = Math.max(0, input.telemetry.inputTokens - cacheReadTokens - cacheWriteTokens)
+  const estimatedCacheCost = safeCost(
+    new Decimal(0)
+      .add(new Decimal(uncachedInputTokens).mul(input.rate.input).div(1_000_000))
+      .add(new Decimal(cacheReadTokens).mul(input.rate.cache.read).div(1_000_000))
+      .add(new Decimal(cacheWriteTokens).mul(input.rate.cache.write).div(1_000_000))
+      .toNumber(),
+  )
+  const estimatedUncachedCost = safeCost(
+    new Decimal(input.telemetry.inputTokens).mul(input.rate.input).div(1_000_000).toNumber(),
+  )
+
+  return {
+    ...input.telemetry,
+    estimatedCacheCost,
+    estimatedUncachedCost,
+    estimatedSavings: safeFiniteCost(new Decimal(estimatedUncachedCost).sub(estimatedCacheCost).toNumber()),
+  }
+}
+
+const safeCost = (value: number) => (Number.isFinite(value) ? Math.max(0, value) : 0)
+const safeFiniteCost = (value: number) => (Number.isFinite(value) ? value : 0)
 
 export class BusyError extends Schema.TaggedErrorClass<BusyError>()("SessionBusyError", {
   sessionID: SessionID,

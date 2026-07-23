@@ -345,6 +345,8 @@ describe("Gemini route", () => {
           },
         },
         cacheTelemetry: {
+          provider: "google",
+          model: "gemini-2.5-flash",
           inputTokens: 5,
           cacheReadTokens: 1,
           cacheWriteTokens: null,
@@ -475,6 +477,8 @@ describe("Gemini route", () => {
         totalTokens: 6,
         providerMetadata: { google: { promptTokenCount: 5, candidatesTokenCount: 1 } },
         cacheTelemetry: {
+          provider: "google",
+          model: "gemini-2.5-flash",
           inputTokens: 5,
           cacheReadTokens: null,
           cacheWriteTokens: null,

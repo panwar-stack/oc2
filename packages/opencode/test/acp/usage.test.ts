@@ -178,6 +178,33 @@ describe("acp usage", () => {
     ).toBe(0)
   })
 
+  test("reports cache read and write tokens separately for prompt cache impact", () => {
+    expect(
+      UsageService.buildUsage({
+        cost: 0.42,
+        tokens: {
+          input: 50,
+          output: 10,
+          reasoning: 5,
+          cache: { read: 40, write: 15 },
+        },
+      }),
+    ).toEqual({
+      inputTokens: 50,
+      outputTokens: 10,
+      thoughtTokens: 5,
+      cachedReadTokens: 40,
+      cachedWriteTokens: 15,
+      totalTokens: 120,
+    })
+    expect(
+      UsageService.promptUsed({
+        cost: 0.42,
+        tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 40, write: 15 } },
+      }),
+    ).toBe(105)
+  })
+
   test("finds the latest assistant message", () => {
     expect(
       UsageService.latestAssistantMessage([assistant({ cost: 1, modelID: "older" }), user(), assistant({ cost: 2 })]),

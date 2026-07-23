@@ -133,3 +133,22 @@ Set `ACME_API_KEY` as described in the
 are passed to the provider SDK; consult that provider's documentation before
 adding them. Plugins that add providers or authentication are covered in
 [Extensions](extensions.md).
+
+## Prompt Caching Compatibility
+
+OC2 plans prompt caching per provider and only sends request fields that the
+selected provider supports. See [Prompt Caching](prompt-caching.md) for the
+planner, telemetry, diagnostics, guardrails, lifecycle, and cost details.
+
+| Provider | Models | Cache mode | Request fields | Usage telemetry | Verification |
+| --- | --- | --- | --- | --- | --- |
+| OpenAI | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with OC2-derived routing key | `prompt_cache_key` | cached read and write tokens | conclusive |
+| Anthropic | `claude-*` | Explicit breakpoints | `cache_control` | cache creation and read tokens | conclusive |
+| Moonshot / Kimi | `kimi*`, `moonshot*` | Provider-managed automatic | none | unavailable | best effort |
+| DeepSeek | `deepseek-*` | Provider-managed automatic | none | hit and miss tokens | best effort |
+| Unknown providers or models | unmatched | disabled | none | unavailable | unavailable |
+
+Provider-specific cache fields are not portable. For example, OC2 will not send
+OpenAI `prompt_cache_key` to Kimi or DeepSeek OpenAI-compatible endpoints, and
+will not send Anthropic `cache_control` outside providers that accept explicit
+breakpoints.
