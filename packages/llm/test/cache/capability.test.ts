@@ -164,6 +164,8 @@ describe("cache capability registry", () => {
       duration: null,
     }
     const telemetry: CacheTelemetry = {
+      provider: "moonshot",
+      model: "kimi-k2",
       inputTokens: null,
       cacheReadTokens: null,
       cacheWriteTokens: null,

@@ -428,7 +428,7 @@ const mapFinishReason = (reason: string): FinishReason => {
 
 // Bedrock reports fresh input separately from cache reads and writes.
 // Bedrock does not break reasoning out of `outputTokens` for any current model.
-const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
+const mapUsage = (usage: BedrockUsageSchema | undefined, modelID: string): Usage | undefined => {
   if (!usage) return undefined
   if (usage.inputTokens === undefined || usage.outputTokens === undefined) return undefined
   return ProviderShared.usage(
@@ -445,7 +445,7 @@ const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
       cacheWrite: usage.cacheWriteInputTokens !== undefined,
       cacheTelemetry: CacheTelemetry.normalize({
         provider: "bedrock",
-        model: "",
+        model: modelID,
         inputTokens: usage.inputTokens + (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0),
         cacheReadTokens: usage.cacheReadInputTokens ?? null,
         cacheWriteTokens: usage.cacheWriteInputTokens ?? null,
@@ -460,6 +460,7 @@ const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
 }
 
 interface ParserState {
+  readonly modelID: string
   readonly tools: ToolStream.State<number>
   // Bedrock splits the finish into `messageStop` (carries `stopReason`) and
   // `metadata` (carries usage). Hold the terminal event in state so `onHalt`
@@ -543,7 +544,7 @@ const step = (state: ParserState, event: BedrockEvent) =>
               metadataReceived: true,
               pendingFinish: {
                 reason: state.pendingFinish?.reason ?? "stop",
-                usage: mapUsage(event.metadata.usage),
+                usage: mapUsage(event.metadata.usage, state.modelID),
               },
             },
         [],
@@ -709,7 +710,8 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: BedrockEvent,
-    initial: () => ({
+    initial: (request) => ({
+      modelID: request.model.id,
       tools: ToolStream.empty<number>(),
       pendingFinish: undefined,
       failed: false,
