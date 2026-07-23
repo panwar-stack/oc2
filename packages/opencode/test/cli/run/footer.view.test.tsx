@@ -16,6 +16,7 @@ import {
   RunSubagentSelectBody,
   RunVariantSelectBody,
 } from "@/cli/cmd/run/footer.command"
+import { RunFooter } from "@/cli/cmd/run/footer"
 import { RunFooterView } from "@/cli/cmd/run/footer.view"
 import { RunEntryContent } from "@/cli/cmd/run/scrollback.writer"
 import { RUN_THEME_FALLBACK, type RunTheme } from "@/cli/cmd/run/theme"
@@ -314,6 +315,62 @@ test("run entry content updates when live commit text changes", async () => {
 
     expect(app.captureCharFrame()).toContain("I need to inspect the codebase")
   } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("footer state keeps prompt cache status after turn becomes idle", async () => {
+  const app = await testRender(() => <box width={120} height={8} />, {
+    width: 120,
+    height: 8,
+    kittyKeyboard: true,
+  })
+  const keymap = createDefaultOpenTuiKeymap(app.renderer)
+  const offKeymap = registerOpencodeKeymap(keymap, app.renderer, tuiConfig)
+  const footer = new RunFooter(app.renderer, {
+    directory: "/tmp",
+    findFiles: async () => [],
+    agents: [],
+    resources: [],
+    sessionID: () => undefined,
+    agentLabel: "opencode",
+    modelLabel: "GPT-5",
+    model: { providerID: "opencode", modelID: "gpt-5" },
+    variant: undefined,
+    first: false,
+    theme: RUN_THEME_FALLBACK,
+    keymap,
+    tuiConfig,
+    backgroundSubagents: true,
+    diffStyle: "auto",
+    onPermissionReply: () => {},
+    onQuestionReply: () => {},
+    onQuestionReject: () => {},
+    onInterrupt: () => {},
+    onBackground: () => {},
+    onEditorOpen: async () => undefined,
+  })
+
+  try {
+    footer.event({
+      type: "stream.patch",
+      patch: {
+        phase: "running",
+        status: "assistant responding",
+        usage: "2 tokens",
+        cacheStatus: "cache hit 42.0K read",
+      },
+    })
+    expect((footer as unknown as { state: () => FooterState }).state().cacheStatus).toBe("cache hit 42.0K read")
+
+    footer.event({ type: "turn.idle", queue: 0 })
+
+    const state = (footer as unknown as { state: () => FooterState }).state()
+    expect(state.cacheStatus).toBe("cache hit 42.0K read")
+    expect(state.status).toBe("")
+  } finally {
+    footer.destroy()
+    offKeymap()
     app.renderer.destroy()
   }
 })

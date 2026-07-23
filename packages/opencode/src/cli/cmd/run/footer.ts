@@ -155,7 +155,6 @@ function eventPatch(next: FooterEvent): FooterPatch | undefined {
     return {
       phase: "idle",
       status: "",
-      cacheStatus: "",
       queue: next.queue,
     }
   }
