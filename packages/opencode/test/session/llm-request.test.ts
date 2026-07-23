@@ -132,4 +132,98 @@ describe("session.llm.request", () => {
       expect(Object.hasOwn(prepared.headers, "x-oc2-session")).toBe(false)
     }),
   )
+
+  it.effect("derives and scrubs prompt cache request fields across provider families", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const cases = [
+        {
+          providerID: "openai",
+          modelID: "gpt-5-mini",
+          npm: "@ai-sdk/openai",
+          expectedMode: "automatic",
+          expectsPromptCacheKey: true,
+        },
+        {
+          providerID: "anthropic",
+          modelID: "claude-sonnet-4-5",
+          npm: "@ai-sdk/anthropic",
+          expectedMode: "explicit",
+          expectsPromptCacheKey: false,
+        },
+        {
+          providerID: "moonshot",
+          modelID: "kimi-k2",
+          npm: "@ai-sdk/openai-compatible",
+          expectedMode: "automatic",
+          expectsPromptCacheKey: false,
+        },
+        {
+          providerID: "kimi",
+          modelID: "kimi-latest",
+          npm: "@ai-sdk/openai-compatible",
+          expectedMode: "automatic",
+          expectsPromptCacheKey: false,
+        },
+        {
+          providerID: "deepseek",
+          modelID: "deepseek-chat",
+          npm: "@ai-sdk/openai-compatible",
+          expectedMode: "automatic",
+          expectsPromptCacheKey: false,
+        },
+        {
+          providerID: "future",
+          modelID: "future-model",
+          npm: "@ai-sdk/openai-compatible",
+          expectedMode: "disabled",
+          expectsPromptCacheKey: false,
+        },
+      ] as const
+
+      for (const item of cases) {
+        const providerID = ProviderV2.ID.make(item.providerID)
+        const modelID = ModelV2.ID.make(item.modelID)
+        const prepared = yield* prepare({
+          user: { ...user, model: { providerID, modelID } },
+          sessionID,
+          model: {
+            ...model,
+            id: modelID,
+            providerID,
+            api: {
+              id: item.modelID,
+              url: `https://api.${item.providerID}.test/v1`,
+              npm: item.npm,
+            },
+          },
+          agent,
+          system: [],
+          messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+          tools: {},
+          provider: {
+            ...provider,
+            id: providerID,
+            options: { promptCacheKey: "manual-camel", prompt_cache_key: "manual-snake" },
+          },
+          auth: undefined,
+          plugin,
+          flags,
+          isWorkflow: false,
+        })
+
+        expect(prepared.params.cachePlan).toMatchObject({ provider: item.providerID, model: item.modelID, mode: item.expectedMode })
+        const messageTransformOptions: Record<string, unknown> = prepared.messageTransformOptions
+        if (item.expectsPromptCacheKey) {
+          expect(prepared.params.options.promptCacheKey).toMatch(/^oc2-v1-/)
+          expect(messageTransformOptions.promptCacheKey).toBe(prepared.params.options.promptCacheKey)
+        } else {
+          expect(prepared.params.options.promptCacheKey).toBeUndefined()
+          expect(messageTransformOptions.promptCacheKey).toBeUndefined()
+        }
+        expect(prepared.params.options.prompt_cache_key).toBeUndefined()
+        expect(messageTransformOptions.prompt_cache_key).toBeUndefined()
+      }
+    }),
+  )
 })
