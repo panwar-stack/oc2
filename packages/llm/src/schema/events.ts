@@ -353,9 +353,7 @@ export const LLMEvent = Object.assign(llmEventTagged, {
     }),
   providerError: (input: ProviderErrorInput) => {
     const { cacheTelemetryClassification, ...event } = input
-    const classification =
-      cacheTelemetryClassification ??
-      (input.classification === "context-overflow" ? "cache_configuration_error" : "provider_error")
+    const classification = cacheTelemetryClassification ?? "provider_error"
     return ProviderErrorEvent.make({
       ...event,
       usage: errorUsage(event.usage, classification),
