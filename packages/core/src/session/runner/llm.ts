@@ -1,5 +1,6 @@
 import {
   CacheHint,
+  CachePlanner,
   LLM,
   LLMClient,
   LLMError,
@@ -250,25 +251,60 @@ export const layer = Layer.effect(
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const toolDigest = toolDefinitionsDigest(toolMaterialization.definitions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const stableSystem = [agent.info?.system, system.baseline].filter(
-        (part): part is string => part !== undefined && part.length > 0,
-      )
+      const repositoryContext =
+        system.baseline.length > 0
+          ? {
+              version: CachePlanner.CACHE_PLANNER_VERSION,
+              fingerprint: Hash.sha256(system.baseline),
+            }
+          : undefined
+      const stableSystem = [
+        ...(agent.info?.system
+          ? [
+              {
+                ...SystemPart.make(agent.info.system),
+                metadata: { cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION } },
+              },
+            ]
+          : []),
+        ...(repositoryContext
+          ? [
+              {
+                ...SystemPart.make(system.baseline),
+                metadata: {
+                  cache: {
+                    stable: true,
+                    version: repositoryContext.version,
+                    fingerprint: repositoryContext.fingerprint,
+                    component: "repository-context",
+                  },
+                },
+                cache: new CacheHint({ type: "ephemeral" }),
+              },
+            ]
+          : []),
+      ]
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        cache: { tools: true, system: false, messages: "latest-user-message" },
+        cache: { tools: true, system: true, messages: "latest-user-message" },
         system: [
-          ...stableSystem.map((part, index) => {
-            const stable = SystemPart.make(part)
-            return index === stableSystem.length - 1
-              ? { ...stable, cache: new CacheHint({ type: "ephemeral" }) }
-              : stable
-          }),
-          ...(system.variableContext.length === 0 ? [] : [SystemPart.make(system.variableContext)]),
+          ...stableSystem,
+          ...(system.variableContext.length === 0
+            ? []
+            : [
+                {
+                  ...SystemPart.make(system.variableContext),
+                  metadata: { cache: { stable: false, version: CachePlanner.CACHE_PLANNER_VERSION } },
+                },
+              ]),
         ],
         messages: toLLMMessages(context, model),
         tools: toolMaterialization.definitions,
-        metadata: { toolDefinitionsDigest: toolDigest },
+        metadata: {
+          toolDefinitionsDigest: toolDigest,
+          ...(repositoryContext ? { repositoryContext } : {}),
+        },
       })
       yield* Effect.logDebug("Prepared LLM request tool definitions digest").pipe(
         Effect.annotateLogs({

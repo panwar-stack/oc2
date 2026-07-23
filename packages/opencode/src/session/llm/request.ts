@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
+import { CachePlanner, type CachePlan } from "@oc2-ai/llm/cache/planner"
 import type { Auth } from "@/auth"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
@@ -45,6 +46,7 @@ export type Prepared = {
     readonly topK?: number
     readonly maxOutputTokens?: number
     readonly options: Record<string, any>
+    readonly cachePlan?: CachePlan
   }
   readonly messageTransformOptions: Record<string, any>
   readonly headers: Record<string, string>
@@ -112,40 +114,6 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           ...input.messages,
         ]
 
-  const params = yield* input.plugin.trigger(
-    "chat.params",
-    {
-      sessionID: input.sessionID,
-      agent: input.agent.name,
-      model: input.model,
-      provider: input.provider,
-      message: input.user,
-    },
-    {
-      temperature: input.model.capabilities.temperature
-        ? (input.agent.temperature ?? ProviderTransform.temperature(input.model))
-        : undefined,
-      topP: input.agent.topP ?? ProviderTransform.topP(input.model),
-      topK: ProviderTransform.topK(input.model),
-      maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
-      options,
-    },
-  )
-
-  const { headers } = yield* input.plugin.trigger(
-    "chat.headers",
-    {
-      sessionID: input.sessionID,
-      agent: input.agent.name,
-      model: input.model,
-      provider: input.provider,
-      message: input.user,
-    },
-    {
-      headers: {},
-    },
-  )
-
   const tools = resolveTools(input)
   if (
     !input.forbidImplicitTools &&
@@ -165,6 +133,73 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       execute: async () => ({ output: "", title: "", metadata: {} }),
     })
   }
+
+  const stablePrompt = [
+    SystemPrompt.TOKEN_BUDGET_GUIDANCE,
+    ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+  ]
+  const cacheBoundary = CachePlanner.planCache({
+    provider: input.model.providerID,
+    model: input.model.api.id,
+    cachePolicy: "auto",
+    system: stablePrompt.map((text) => ({
+      type: "text",
+      text,
+      metadata: { cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION } },
+    })),
+    tools: Object.entries(tools).map(([name, tool]) => ({
+      name,
+      description: tool.description ?? "",
+      inputSchema: schemaFromTool(tool),
+    })),
+    providerConfig: input.provider.options,
+    modelConfig: {
+      provider: input.model.providerID,
+      model: input.model.api.id,
+      generation: {
+        temperature: input.agent.temperature ?? ProviderTransform.temperature(input.model),
+        topP: input.agent.topP ?? ProviderTransform.topP(input.model),
+        topK: ProviderTransform.topK(input.model),
+        maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
+      },
+      cachePolicy: "auto",
+    },
+  })
+
+  const params = yield* input.plugin.trigger(
+    "chat.params",
+    {
+      sessionID: input.sessionID,
+      agent: input.agent.name,
+      model: input.model,
+      provider: input.provider,
+      message: input.user,
+    },
+    {
+      temperature: input.model.capabilities.temperature
+        ? (input.agent.temperature ?? ProviderTransform.temperature(input.model))
+        : undefined,
+      topP: input.agent.topP ?? ProviderTransform.topP(input.model),
+      topK: ProviderTransform.topK(input.model),
+      maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
+      options,
+      cachePlan: cacheBoundary.plan,
+    },
+  )
+
+  const { headers } = yield* input.plugin.trigger(
+    "chat.headers",
+    {
+      sessionID: input.sessionID,
+      agent: input.agent.name,
+      model: input.model,
+      provider: input.provider,
+      message: input.user,
+    },
+    {
+      headers: {},
+    },
+  )
 
   return {
     system,
@@ -194,6 +229,11 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
       (input.user.tools?.["*"] !== false || input.user.tools?.[k] === true) &&
       !disabled.has(k),
   )
+}
+
+function schemaFromTool(tool: Tool) {
+  if ("inputSchema" in tool) return tool.inputSchema
+  return undefined
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {

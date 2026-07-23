@@ -29,7 +29,7 @@ const geminiModel = Gemini.route
   .model({ id: "gemini-2.5-flash" })
 
 describe("applyCachePolicy", () => {
-  it.effect("undefined cache resolves to 'auto' (the recommended default)", () =>
+  it.effect("undefined cache resolves to 'auto' without caching unmarked system content", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -39,21 +39,20 @@ describe("applyCachePolicy", () => {
         }),
       )
 
-      // No explicit cache field → auto policy fires → last system part + latest
-      // user message both get cache_control markers.
+      // No explicit cache metadata means both the system string and user turn stay dynamic.
       expect(prepared.body).toMatchObject({
-        system: [{ type: "text", text: "You are concise.", cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }] }],
+        system: [{ type: "text", text: "You are concise.", cache_control: undefined }],
+        messages: [{ role: "user", content: [{ type: "text", text: "hi", cache_control: undefined }] }],
       })
     }),
   )
 
-  it.effect("'auto' marks the last tool, last system part, and latest user message on Anthropic", () =>
+  it.effect("'auto' marks stable tools and explicitly stable system but not user messages on Anthropic", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
           model: anthropicModel,
-          system: "Sys A",
+          system: [{ type: "text", text: "Sys A", metadata: { cache: { stable: true, version: 1 } } }],
           tools: [{ name: "t1", description: "t1", inputSchema: { type: "object", properties: {} } }],
           messages: [
             Message.user("first user"),
@@ -72,7 +71,7 @@ describe("applyCachePolicy", () => {
           { role: "assistant", content: [{ type: "text", text: "assistant reply" }] },
           {
             role: "user",
-            content: [{ type: "text", text: "latest user message", cache_control: { type: "ephemeral" } }],
+            content: [{ type: "text", text: "latest user message", cache_control: undefined }],
           },
         ],
       })
@@ -115,7 +114,7 @@ describe("applyCachePolicy", () => {
     }),
   )
 
-  it.effect("'auto' on Bedrock emits cachePoint markers in the right places", () =>
+  it.effect("'auto' on Bedrock does not cache unmarked system content", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -131,11 +130,11 @@ describe("applyCachePolicy", () => {
         toolConfig: {
           tools: [{ toolSpec: { name: "t1" } }, { cachePoint: { type: "default" } }],
         },
-        system: [{ text: "Sys" }, { cachePoint: { type: "default" } }],
+        system: [{ text: "Sys" }],
         messages: [
           { role: "user", content: [{ text: "first user" }] },
           { role: "assistant", content: [{ text: "reply" }] },
-          { role: "user", content: [{ text: "latest user" }, { cachePoint: { type: "default" } }] },
+          { role: "user", content: [{ text: "latest user" }] },
         ],
       })
     }),
@@ -195,7 +194,7 @@ describe("applyCachePolicy", () => {
 
       const body = prepared.body as { system: Array<{ text: string; cache_control?: unknown }> }
       expect(body.system[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" })
-      expect(body.system[1]?.cache_control).toEqual({ type: "ephemeral" })
+      expect(body.system[1]?.cache_control).toBeUndefined()
     }),
   )
 
@@ -204,7 +203,7 @@ describe("applyCachePolicy", () => {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
           model: anthropicModel,
-          system: "Sys",
+          system: [{ type: "text", text: "Sys", metadata: { cache: { stable: true, version: 1 } } }],
           prompt: "hi",
           cache: { system: true, ttlSeconds: 3600 },
         }),
@@ -216,12 +215,21 @@ describe("applyCachePolicy", () => {
     }),
   )
 
-  it.effect("messages: { tail: 2 } marks the last 2 message boundaries", () =>
+  it.effect("messages: { tail: 2 } only marks explicitly stable message boundaries", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
           model: anthropicModel,
-          messages: [Message.user("u1"), Message.assistant("a1"), Message.user("u2"), Message.assistant("a2")],
+          messages: [
+            Message.user("u1"),
+            new Message({
+              role: "system",
+              metadata: { cache: { stable: true, version: 1 } },
+              content: [{ type: "text", text: "stable system message" }],
+            }),
+            Message.user("u2"),
+            Message.assistant("a2"),
+          ],
           cache: { messages: { tail: 2 } },
         }),
       )
@@ -229,12 +237,12 @@ describe("applyCachePolicy", () => {
       const body = prepared.body as { messages: Array<{ content: Array<{ cache_control?: unknown }> }> }
       expect(body.messages[0]?.content[0]?.cache_control).toBeUndefined()
       expect(body.messages[1]?.content[0]?.cache_control).toBeUndefined()
-      expect(body.messages[2]?.content[0]?.cache_control).toEqual({ type: "ephemeral" })
-      expect(body.messages[3]?.content[0]?.cache_control).toEqual({ type: "ephemeral" })
+      expect(body.messages[2]?.content[0]?.cache_control).toBeUndefined()
+      expect(body.messages[3]?.content[0]?.cache_control).toBeUndefined()
     }),
   )
 
-  it.effect("'latest-assistant' marks the last assistant message", () =>
+  it.effect("'latest-assistant' does not mark dynamic assistant messages", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -246,17 +254,21 @@ describe("applyCachePolicy", () => {
 
       const body = prepared.body as { messages: Array<{ content: Array<{ cache_control?: unknown }> }> }
       expect(body.messages[0]?.content[0]?.cache_control).toBeUndefined()
-      expect(body.messages[1]?.content[0]?.cache_control).toEqual({ type: "ephemeral" })
+      expect(body.messages[1]?.content[0]?.cache_control).toBeUndefined()
       expect(body.messages[2]?.content[0]?.cache_control).toBeUndefined()
     }),
   )
 
-  test("returns the same request reference when policy is a no-op (pure function)", () => {
+  test("attaches cache plan metadata when policy has no wire mutations", () => {
     const request = LLM.request({
       model: anthropicModel,
       prompt: "hi",
       cache: "none",
     })
-    expect(applyCachePolicy(request)).toBe(request)
+    const planned = applyCachePolicy(request)
+
+    expect(planned).not.toBe(request)
+    expect(planned.messages).toEqual(request.messages)
+    expect(planned.metadata?.cachePlan).toMatchObject({ mode: "disabled", eligible: false })
   })
 })
