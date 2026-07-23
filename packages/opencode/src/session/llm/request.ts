@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
+import { CacheGuardrails } from "@oc2-ai/llm"
 import { CachePlanner, type CachePlan } from "@oc2-ai/llm/cache/planner"
 import type { Auth } from "@/auth"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
@@ -49,6 +50,7 @@ export type Prepared = {
     readonly cachePlan?: CachePlan
   }
   readonly messageTransformOptions: Record<string, any>
+  readonly cacheGuardrails: CacheGuardrails.CacheGuardrailResult
   readonly headers: Record<string, string>
 }
 
@@ -191,6 +193,27 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   )
   scrubPromptCacheKeys(options, promptCacheKey)
   scrubPromptCacheKeys(params.options, promptCacheKey)
+  const cachePlan = isCachePlan(params.cachePlan) ? params.cachePlan : cacheBoundary.plan
+  const preparedParams = { ...params, cachePlan }
+  const cacheGuardrails = CacheGuardrails.combine(
+    CacheGuardrails.checkUnsupportedFields({
+      provider: cachePlan.provider,
+      model: cachePlan.model,
+      fields: cacheRequestFields(input.model, preparedParams.options, cachePlan),
+    }),
+    CacheGuardrails.checkProviderFieldLeakage({
+      provider: cachePlan.provider,
+      model: cachePlan.model,
+      fields: cacheRequestFields(input.model, preparedParams.options, cachePlan),
+    }),
+    CacheGuardrails.checkInvalidDuration({ provider: cachePlan.provider, model: cachePlan.model, duration: cachePlan.duration }),
+    CacheGuardrails.checkBreakpointOverflow({ provider: cachePlan.provider, model: cachePlan.model, breakpoints: cachePlan.breakpoints }),
+  )
+  if (!cacheGuardrails.valid) {
+    return yield* Effect.fail(
+      new Error(`Prompt cache configuration invalid: ${cacheGuardrails.errors.map((item) => item.message).join(" ")}`),
+    )
+  }
 
   const { headers } = yield* input.plugin.trigger(
     "chat.headers",
@@ -210,8 +233,9 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system,
     messages,
     tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
-    params,
-    messageTransformOptions: { ...options, cachePlan: cacheBoundary.plan },
+    params: preparedParams,
+    messageTransformOptions: { ...options, cachePlan },
+    cacheGuardrails,
     headers: {
       "x-session-affinity": input.sessionID,
       ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
@@ -246,6 +270,44 @@ function scrubPromptCacheKeys(options: Record<string, any>, promptCacheKey: stri
   delete options.prompt_cache_key
   if (promptCacheKey) options.promptCacheKey = promptCacheKey
 }
+
+function cacheRequestFields(model: Provider.Model, options: Record<string, any>, plan: CachePlan) {
+  return [
+    ...collectCacheFields(options),
+    ...(promptCacheKeyFromOptions(options) ? ["prompt_cache_key"] : []),
+    ...(plan.eligible && plan.mode === "explicit" && plan.breakpoints.length > 0 ? explicitCacheFields(model) : []),
+  ]
+}
+
+function collectCacheFields(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(collectCacheFields)
+  if (typeof value !== "object" || value === null) return []
+  return Object.entries(value).flatMap(([key, item]) => [
+    ...(key === "cache_control" || key === "cacheControl" ? ["cache_control"] : []),
+    ...(key === "cachePoint" ? ["cachePoint"] : []),
+    ...collectCacheFields(item),
+  ])
+}
+
+function promptCacheKeyFromOptions(options: Record<string, any>) {
+  return typeof options.promptCacheKey === "string" || typeof options.prompt_cache_key === "string"
+}
+
+function explicitCacheFields(model: Provider.Model) {
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") return ["cache_control"]
+  return []
+}
+
+const isCachePlan = (value: unknown): value is CachePlan =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  "model" in value &&
+  "mode" in value &&
+  "cacheKey" in value &&
+  "eligible" in value &&
+  "breakpoints" in value &&
+  Array.isArray(value.breakpoints)
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {
   for (const msg of messages) {

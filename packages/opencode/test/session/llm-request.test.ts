@@ -2,7 +2,8 @@ import { describe, expect } from "bun:test"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
-import { Effect } from "effect"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
+import { Cause, Effect, Exit } from "effect"
 import type { ModelMessage } from "ai"
 import type { Agent } from "@/agent/agent"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -224,6 +225,72 @@ describe("session.llm.request", () => {
         expect(prepared.params.options.prompt_cache_key).toBeUndefined()
         expect(messageTransformOptions.prompt_cache_key).toBeUndefined()
       }
+    }),
+  )
+
+  it.effect("fails definitely invalid prompt cache request fields during request prep", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const exit = yield* prepare({
+        user,
+        sessionID,
+        model,
+        agent: { ...agent, options: { cache_control: { type: "ephemeral" } } },
+        system: [],
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {},
+        provider,
+        auth: undefined,
+        plugin,
+        flags,
+        isWorkflow: false,
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Prompt cache configuration invalid")
+    }),
+  )
+
+  it.effect("keeps warning-only prompt cache guardrails available without failing", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const providerID = ProviderV2.ID.make("anthropic")
+      const modelID = ModelV2.ID.make("claude-sonnet-4-5")
+      const prepared = yield* prepare({
+        user: { ...user, model: { providerID, modelID } },
+        sessionID,
+        model: {
+          ...model,
+          id: modelID,
+          providerID,
+          api: { id: "claude-sonnet-4-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+        },
+        agent,
+        system: [],
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {},
+        provider: { ...provider, id: providerID },
+        auth: undefined,
+        plugin: {
+          ...plugin,
+          trigger: (name, input, output) => {
+            if (name !== "chat.params") return plugin.trigger(name, input, output)
+            const params = output as { cachePlan: CachePlan }
+            return Effect.succeed({
+              ...output,
+              cachePlan: {
+                ...params.cachePlan,
+                breakpoints: Array.from({ length: 5 }, (_, index) => ({ component: "system", contentType: "system", index })),
+              },
+            })
+          },
+        },
+        flags,
+        isWorkflow: false,
+      })
+
+      expect(prepared.cacheGuardrails.valid).toBe(true)
+      expect(prepared.cacheGuardrails.warnings.map((item) => item.code)).toEqual(["breakpoint_overflow"])
     }),
   )
 })
