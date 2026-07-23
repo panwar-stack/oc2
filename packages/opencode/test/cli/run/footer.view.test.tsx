@@ -144,6 +144,7 @@ function footerState(input: Partial<FooterState> = {}) {
     model: "gpt-5",
     duration: "",
     usage: "",
+    cacheStatus: "",
     first: false,
     interrupt: 0,
     exit: 0,
@@ -872,6 +873,7 @@ test("direct footer shows editable prompts and additional queued work while runn
     model: "gpt-5",
     duration: "",
     usage: "",
+    cacheStatus: "",
     first: false,
     interrupt: 0,
     exit: 0,
@@ -1066,6 +1068,37 @@ test("direct footer shows full usage metadata when room is available", async () 
     const frame = app.captureCharFrame()
 
     expect(frame).toContain("159.6K (16%) · $4.23")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer shows cache status with usage metadata when room is available", async () => {
+  const app = await renderFooter({
+    state: { usage: "159.6K (16%) · $4.23", cacheStatus: "cache hit 42K read" },
+  })
+
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+
+    expect(frame).toContain("159.6K (16%) · $4.23 · cache hit 42K read")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer hides cache status in narrow statusline", async () => {
+  const app = await renderFooter({
+    width: 79,
+    state: { usage: "159.6K", cacheStatus: "cache hit 42K read" },
+  })
+
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+
+    expect(frame).not.toContain("cache hit")
   } finally {
     app.cleanup()
   }

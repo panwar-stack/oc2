@@ -330,6 +330,25 @@ export type StepStartPart = {
   snapshot?: string
 }
 
+export type CacheStatus = {
+  classification:
+    | "cache_hit"
+    | "cache_write"
+    | "expected_cache_miss"
+    | "unexpected_cache_miss"
+    | "cache_unsupported"
+    | "cache_telemetry_unavailable"
+    | "cache_configuration_error"
+    | "provider_error"
+  metricsAvailable: boolean
+  eligible: boolean
+  verified: boolean
+  read: number
+  write: number
+  miss?: number
+  savings?: number
+}
+
 export type StepFinishCanonicalUsage = {
   input: number
   output: number
@@ -402,6 +421,7 @@ export type StepFinishPart = {
       write: number
     }
   }
+  cacheStatus?: CacheStatus
   accounting?: StepFinishAccounting
 }
 
@@ -619,6 +639,7 @@ export type AssistantMessage = {
       write: number
     }
   }
+  cacheStatus?: CacheStatus
   structured?: unknown
   variant?: string
   finish?: string
@@ -3684,6 +3705,7 @@ export type StepFinishPartWrite = {
       write: number
     }
   }
+  cacheStatus?: CacheStatus
   accounting?: StepFinishAccountingWrite
 }
 

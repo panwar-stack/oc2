@@ -44,6 +44,23 @@ type Tokens = {
   }
 }
 
+type CacheStatus = {
+  classification?: string
+  read?: number
+  write?: number
+}
+
+type AssistantInfo = {
+  id?: string
+  role: MessageRole
+  providerID?: string
+  modelID?: string
+  tokens?: Tokens
+  cost?: number
+  cacheStatus?: CacheStatus
+  error?: { name?: string; message?: string; data?: { message?: string } }
+}
+
 type PartKind = "assistant" | "reasoning" | "user"
 type MessageRole = "assistant" | "user"
 type Dict = Record<string, unknown>
@@ -158,6 +175,46 @@ function formatUsage(
   }
 
   return text
+}
+
+function formatCacheStatus(status: CacheStatus | undefined, tokens: Tokens | undefined) {
+  const read = safeNumber(status?.read ?? tokens?.cache?.read)
+  const write = safeNumber(status?.write ?? tokens?.cache?.write)
+  const suffix = formatCacheTokenSuffix(read, write)
+
+  switch (status?.classification) {
+    case "cache_hit":
+      return suffix ? `cache hit ${suffix}` : "cache hit"
+    case "cache_write":
+      return suffix ? `cache write ${suffix}` : "cache write"
+    case "expected_cache_miss":
+      return "cache expected miss"
+    case "unexpected_cache_miss":
+      return "cache unexpected miss"
+    case "cache_unsupported":
+      return "cache unsupported"
+    case "cache_telemetry_unavailable":
+      return "cache unavailable"
+    case "cache_configuration_error":
+    case "provider_error":
+      return "cache error"
+  }
+
+  if (read > 0 && write > 0) return `cache ${Locale.number(read)} read/${Locale.number(write)} write`
+  if (read > 0) return `cache ${Locale.number(read)} read`
+  if (write > 0) return `cache ${Locale.number(write)} write`
+  return ""
+}
+
+function formatCacheTokenSuffix(read: number, write: number) {
+  if (read > 0 && write > 0) return `${Locale.number(read)} read/${Locale.number(write)} write`
+  if (read > 0) return `${Locale.number(read)} read`
+  if (write > 0) return `${Locale.number(write)} write`
+  return ""
+}
+
+function safeNumber(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0
 }
 
 export function formatError(error: {
@@ -827,7 +884,7 @@ export function reduceSessionData(input: SessionDataInput): SessionDataOutput {
       return out(data, commits)
     }
 
-    const info = event.properties.info
+    const info = event.properties.info as AssistantInfo
     if (typeof info.id === "string") {
       data.role.set(info.id, info.role)
       replay(data, commits, info.id, info.role, input.thinking)
@@ -843,15 +900,25 @@ export function reduceSessionData(input: SessionDataInput): SessionDataOutput {
       next = { status: "assistant responding" }
     }
 
+    const limit =
+      info.providerID && info.modelID ? input.limits[modelKey(info.providerID, info.modelID)] : undefined
     const usage = formatUsage(
       info.tokens,
-      input.limits[modelKey(info.providerID, info.modelID)],
+      limit,
       typeof info.cost === "number" ? info.cost : undefined,
     )
     if (usage) {
       next = {
         ...next,
         usage,
+      }
+    }
+
+    const cacheStatus = formatCacheStatus(info.cacheStatus, info.tokens)
+    if (cacheStatus || info.tokens || info.cacheStatus) {
+      next = {
+        ...next,
+        cacheStatus,
       }
     }
 

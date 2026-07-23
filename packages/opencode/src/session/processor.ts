@@ -39,6 +39,7 @@ import {
   type LLMEvent,
   type ProviderErrorEvent,
 } from "@oc2-ai/llm"
+import type { CacheTelemetry as CacheTelemetryInfo } from "@oc2-ai/llm/cache/capability"
 import { ToolOutput } from "@oc2-ai/core/tool-output"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { TuiEvent } from "@/server/tui-event"
@@ -53,6 +54,20 @@ function stableInputKey(value: unknown): string {
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, item]) => `${JSON.stringify(key)}:${stableInputKey(item)}`)
     .join(",")}}`
+}
+
+function cacheStatusFromTelemetry(telemetry: CacheTelemetryInfo | undefined): SessionV1.CacheStatus | undefined {
+  if (!telemetry) return undefined
+  return {
+    classification: telemetry.classification,
+    metricsAvailable: telemetry.metricsAvailable,
+    eligible: telemetry.eligible,
+    verified: telemetry.verified,
+    read: telemetry.cacheReadTokens ?? 0,
+    write: telemetry.cacheWriteTokens ?? 0,
+    ...(telemetry.cacheMissTokens === null ? {} : { miss: telemetry.cacheMissTokens }),
+    ...(telemetry.estimatedSavings === null ? {} : { savings: telemetry.estimatedSavings }),
+  }
 }
 
 function cacheMetadataGuardrails(
@@ -498,6 +513,7 @@ export const layer = Layer.effect(
                 ...(calculated.pricing ? { pricing: calculated.pricing } : {}),
               })
             : undefined
+        const cacheStatus = cacheStatusFromTelemetry(calculated?.cacheTelemetry)
 
         yield* flushV2Fragments()
         if (accounting) {
@@ -518,8 +534,11 @@ export const layer = Layer.effect(
               reasoning: authoritative.reasoning,
               cache: authoritative.cache,
             },
+            ...(cacheStatus ? { cacheStatus } : {}),
             accounting,
           })
+          if (cacheStatus) ctx.assistantMessage.cacheStatus = cacheStatus
+          else delete ctx.assistantMessage.cacheStatus
           ctx.assistantMessage.cost += cost
           yield* session.updateMessage(ctx.assistantMessage)
         }
@@ -945,6 +964,7 @@ export const layer = Layer.effect(
               usage: usageWithCacheExpectation(value.usage ? Usage.from(value.usage) : new Usage({})),
               metadata: value.providerMetadata,
             })
+            const cacheStatus = cacheStatusFromTelemetry(usage.cacheTelemetry)
             const canonical = value.usage ? CanonicalUsage.fromUsage(usageWithCacheExpectation(Usage.from(value.usage))) : undefined
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
@@ -983,6 +1003,8 @@ export const layer = Layer.effect(
             ctx.assistantMessage.finish = value.reason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
+            if (cacheStatus) ctx.assistantMessage.cacheStatus = cacheStatus
+            else delete ctx.assistantMessage.cacheStatus
             yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.reason,
@@ -991,6 +1013,7 @@ export const layer = Layer.effect(
               sessionID: ctx.assistantMessage.sessionID,
               type: "step-finish",
               tokens: usage.tokens,
+              ...(cacheStatus ? { cacheStatus } : {}),
               cost: usage.cost,
               duration: Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0,
             })

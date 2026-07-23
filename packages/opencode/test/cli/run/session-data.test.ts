@@ -592,4 +592,49 @@ describe("run session data", () => {
       }),
     ])
   })
+
+  test("emits footer cache status from assistant cache metadata", () => {
+    const out = reduce(
+      createSessionData(),
+      assistant("msg-1", {
+        cacheStatus: {
+          classification: "cache_hit",
+          read: 42000,
+          write: 0,
+        },
+      }),
+    )
+
+    expect(out.footer?.patch).toEqual({
+      status: "assistant responding",
+      usage: "2",
+      cacheStatus: "cache hit 42.0K read",
+    })
+  })
+
+  test("emits footer cache status from cache token fallback", () => {
+    const out = reduce(
+      createSessionData(),
+      assistant("msg-1", {
+        tokens: {
+          input: 1,
+          output: 1,
+          reasoning: 0,
+          cache: { read: 12000, write: 3000 },
+        },
+      }),
+    )
+
+    expect(out.footer?.patch?.cacheStatus).toBe("cache 12.0K read/3.0K write")
+  })
+
+  test("clears footer cache status when assistant update has no cache signal", () => {
+    const out = reduce(createSessionData(), assistant("msg-1"))
+
+    expect(out.footer?.patch).toEqual({
+      status: "assistant responding",
+      usage: "2",
+      cacheStatus: "",
+    })
+  })
 })

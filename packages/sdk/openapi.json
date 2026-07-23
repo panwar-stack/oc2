@@ -14736,6 +14736,54 @@
         ],
         "additionalProperties": false
       },
+      "CacheStatus": {
+        "type": "object",
+        "properties": {
+          "classification": {
+            "type": "string",
+            "enum": [
+              "cache_hit",
+              "cache_write",
+              "expected_cache_miss",
+              "unexpected_cache_miss",
+              "cache_unsupported",
+              "cache_telemetry_unavailable",
+              "cache_configuration_error",
+              "provider_error"
+            ]
+          },
+          "metricsAvailable": {
+            "type": "boolean"
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "read": {
+            "type": "number"
+          },
+          "write": {
+            "type": "number"
+          },
+          "miss": {
+            "type": "number"
+          },
+          "savings": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "classification",
+          "metricsAvailable",
+          "eligible",
+          "verified",
+          "read",
+          "write"
+        ],
+        "additionalProperties": false
+      },
       "StepFinishCanonicalUsage": {
         "type": "object",
         "properties": {
@@ -15022,6 +15070,9 @@
               "cache"
             ],
             "additionalProperties": false
+          },
+          "cacheStatus": {
+            "$ref": "#/components/schemas/CacheStatus"
           },
           "accounting": {
             "$ref": "#/components/schemas/StepFinishAccounting"
@@ -15842,6 +15893,9 @@
               "cache"
             ],
             "additionalProperties": false
+          },
+          "cacheStatus": {
+            "$ref": "#/components/schemas/CacheStatus"
           },
           "structured": {},
           "variant": {
@@ -28092,6 +28146,9 @@
               "cache"
             ],
             "additionalProperties": false
+          },
+          "cacheStatus": {
+            "$ref": "#/components/schemas/CacheStatus"
           },
           "accounting": {
             "$ref": "#/components/schemas/StepFinishAccountingWrite"

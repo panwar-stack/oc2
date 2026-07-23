@@ -137,6 +137,7 @@ function eventPatch(next: FooterEvent): FooterPatch | undefined {
     return {
       phase: "running",
       status: "sending prompt",
+      cacheStatus: "",
       queue: next.queue,
       interrupt: 0,
       exit: 0,
@@ -154,6 +155,7 @@ function eventPatch(next: FooterEvent): FooterPatch | undefined {
     return {
       phase: "idle",
       status: "",
+      cacheStatus: "",
       queue: next.queue,
     }
   }
@@ -244,6 +246,7 @@ export class RunFooter implements FooterApi {
       model: options.modelLabel,
       duration: "",
       usage: "",
+      cacheStatus: "",
       first: options.first,
       interrupt: 0,
       exit: 0,
@@ -491,6 +494,7 @@ export class RunFooter implements FooterApi {
       model: typeof next.model === "string" ? next.model : prev.model,
       duration: typeof next.duration === "string" ? next.duration : prev.duration,
       usage: typeof next.usage === "string" ? next.usage : prev.usage,
+      cacheStatus: typeof next.cacheStatus === "string" ? next.cacheStatus : prev.cacheStatus,
       first: typeof next.first === "boolean" ? next.first : prev.first,
       interrupt:
         typeof next.interrupt === "number" && Number.isFinite(next.interrupt)
