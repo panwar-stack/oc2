@@ -3,8 +3,28 @@ import { ContentBlockID, FinishReason, ProtocolID, ProviderMetadata, RouteID, To
 import { ModelSchema } from "./options"
 import { ToolOutput, ToolResultValue } from "./messages"
 import { ProviderFailureClassification } from "./errors"
+import { cacheClassifications, type CacheClassification } from "../cache/capability"
+import { CacheTelemetry } from "../cache/telemetry"
 
 const UsageToken = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
+const CacheTelemetrySchema = Schema.Struct({
+  inputTokens: Schema.NullOr(UsageToken),
+  cacheReadTokens: Schema.NullOr(UsageToken),
+  cacheWriteTokens: Schema.NullOr(UsageToken),
+  cacheMissTokens: Schema.NullOr(UsageToken),
+  uncachedInputTokens: Schema.NullOr(UsageToken),
+  metricsAvailable: Schema.Boolean,
+  eligible: Schema.Boolean,
+  expected: Schema.Boolean,
+  verified: Schema.Boolean,
+  classification: Schema.Literals(cacheClassifications),
+  providerRawUsageFieldNames: Schema.Array(Schema.String),
+  warmupRequestNumber: Schema.NullOr(UsageToken),
+  estimatedCacheCost: Schema.NullOr(Schema.Number),
+  estimatedUncachedCost: Schema.NullOr(Schema.Number),
+  estimatedSavings: Schema.NullOr(Schema.Number),
+})
 
 export class CanonicalUsage extends Schema.Class<CanonicalUsage>("LLM.CanonicalUsage")({
   input: UsageToken,
@@ -51,6 +71,7 @@ const UsageWrite = Schema.Struct({
   totalTokens: Schema.optional(UsageToken),
   providerTotalTokens: Schema.optional(UsageToken),
   providerMetadata: Schema.optional(ProviderMetadata),
+  cacheTelemetry: Schema.optional(CacheTelemetrySchema),
 })
 
 /**
@@ -106,6 +127,7 @@ export class Usage extends Schema.Class<Usage>("LLM.Usage")({
   totalTokens: Schema.optional(Schema.Number),
   providerTotalTokens: Schema.optional(Schema.Number),
   providerMetadata: Schema.optional(ProviderMetadata),
+  cacheTelemetry: Schema.optional(CacheTelemetrySchema),
 }) {
   /**
    * Visible output tokens — `outputTokens` minus `reasoningTokens`, clamped
@@ -282,6 +304,10 @@ type WithID<Event extends { readonly id: unknown }, ID> = Omit<Event, "type" | "
 type WithUsage<Event extends { readonly usage?: Usage }> = Omit<Event, "type" | "usage"> & {
   readonly usage?: UsageInput
 }
+type ErrorCacheClassification = Extract<CacheClassification, "provider_error" | "cache_configuration_error">
+type ProviderErrorInput = WithUsage<ProviderErrorEvent> & {
+  readonly cacheTelemetryClassification?: ErrorCacheClassification
+}
 
 const contentBlockID = (value: ContentBlockID | string) => ContentBlockID.make(value)
 const toolCallID = (value: ToolCallID | string) => ToolCallID.make(value)
@@ -325,11 +351,16 @@ export const LLMEvent = Object.assign(llmEventTagged, {
       ...input,
       usage: input.usage === undefined ? undefined : Usage.from(input.usage),
     }),
-  providerError: (input: WithUsage<ProviderErrorEvent>) =>
-    ProviderErrorEvent.make({
-      ...input,
-      usage: input.usage === undefined ? undefined : Usage.from(input.usage),
-    }),
+  providerError: (input: ProviderErrorInput) => {
+    const { cacheTelemetryClassification, ...event } = input
+    const classification =
+      cacheTelemetryClassification ??
+      (input.classification === "context-overflow" ? "cache_configuration_error" : "provider_error")
+    return ProviderErrorEvent.make({
+      ...event,
+      usage: errorUsage(event.usage, classification),
+    })
+  },
   is: {
     stepStart: llmEventTagged.guards["step-start"],
     textStart: llmEventTagged.guards["text-start"],
@@ -350,6 +381,24 @@ export const LLMEvent = Object.assign(llmEventTagged, {
   },
 })
 export type LLMEvent = Schema.Schema.Type<typeof llmEventTagged>
+
+const errorUsage = (input: UsageInput | undefined, classification: ErrorCacheClassification) => {
+  if (input === undefined) return undefined
+  const usage = Usage.from(input)
+  if (!usage.cacheTelemetry) return usage
+  return Usage.from({
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    nonCachedInputTokens: usage.nonCachedInputTokens,
+    cacheReadInputTokens: usage.cacheReadInputTokens,
+    cacheWriteInputTokens: usage.cacheWriteInputTokens,
+    reasoningTokens: usage.reasoningTokens,
+    totalTokens: usage.totalTokens,
+    providerTotalTokens: usage.providerTotalTokens,
+    providerMetadata: usage.providerMetadata,
+    cacheTelemetry: CacheTelemetry.forceClassification(usage.cacheTelemetry, classification),
+  })
+}
 
 export class PreparedRequest extends Schema.Class<PreparedRequest>("LLM.PreparedRequest")({
   id: Schema.String,

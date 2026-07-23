@@ -10,6 +10,17 @@ export type CacheClassification =
   | "cache_configuration_error"
   | "provider_error"
 
+export const cacheClassifications = [
+  "cache_hit",
+  "cache_write",
+  "expected_cache_miss",
+  "unexpected_cache_miss",
+  "cache_unsupported",
+  "cache_telemetry_unavailable",
+  "cache_configuration_error",
+  "provider_error",
+] as const satisfies ReadonlyArray<CacheClassification>
+
 export type CachePromptCaching = "unsupported" | "automatic" | "explicit" | "automatic_and_explicit"
 export type CacheMode = "disabled" | "automatic" | "implicit" | "explicit"
 export type CacheSupportedMode = "automatic" | "implicit" | "explicit"

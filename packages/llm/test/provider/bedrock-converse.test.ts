@@ -289,6 +289,14 @@ describe("Bedrock Converse route", () => {
             cacheWriteInputTokens: 2,
           },
         },
+        cacheTelemetry: {
+          inputTokens: 10,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 2,
+          cacheMissTokens: null,
+          uncachedInputTokens: 5,
+          classification: "cache_unsupported",
+        },
       })
     }),
   )

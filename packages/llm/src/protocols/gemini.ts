@@ -16,6 +16,7 @@ import {
   type ToolResultContentPart,
   type Usage,
 } from "../schema"
+import { CacheTelemetry } from "../cache/telemetry"
 import { JsonObject, optionalArray, ProviderShared } from "./shared"
 import { GeminiToolSchema } from "./utils/gemini-tool-schema"
 import { Lifecycle } from "./utils/lifecycle"
@@ -348,7 +349,22 @@ const mapUsage = (usage: GeminiUsage | undefined) => {
       providerTotal: usage.totalTokenCount,
       providerMetadata: { google: usage },
     },
-    { cacheRead: cached !== undefined, reasoning: usage.thoughtsTokenCount !== undefined },
+    {
+      cacheRead: cached !== undefined,
+      reasoning: usage.thoughtsTokenCount !== undefined,
+      cacheTelemetry: CacheTelemetry.normalize({
+        provider: "google",
+        model: "",
+        inputTokens: usage.promptTokenCount,
+        cacheReadTokens: cached ?? null,
+        cacheWriteTokens: null,
+        providerRawUsageFieldNames: [
+          "promptTokenCount",
+          ...(cached === undefined ? [] : ["cachedContentTokenCount"]),
+        ],
+        metricsAvailable: cached !== undefined,
+      }),
+    },
   )
 }
 

@@ -1036,6 +1036,49 @@ describe("session.llm.ai-sdk adapter", () => {
         prompt_cache_miss_tokens: 60,
       },
     })
+    expect(events[0]?.type === "step-finish" ? events[0].usage?.cacheTelemetry : undefined).toMatchObject({
+      inputTokens: 100,
+      cacheReadTokens: 40,
+      cacheWriteTokens: null,
+      cacheMissTokens: 60,
+      uncachedInputTokens: 60,
+      classification: "cache_hit",
+      verified: true,
+      providerRawUsageFieldNames: ["prompt_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"],
+    })
+  })
+
+  test("classifies Moonshot missing cache telemetry as unavailable", async () => {
+    const events = await adapt(
+      [
+        {
+          type: "finish-step",
+          response: { id: "moonshot-response", timestamp: new Date(0), modelId: "kimi-k2" },
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          usage: {
+            inputTokens: 100,
+            outputTokens: 20,
+            totalTokens: 120,
+            inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+            outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+          },
+          providerMetadata: undefined,
+        },
+      ],
+      { providerID: "moonshot", modelID: "kimi-k2", apiPackage: "@ai-sdk/openai-compatible" },
+    )
+
+    expect(events[0]?.type === "step-finish" ? events[0].usage?.cacheTelemetry : undefined).toMatchObject({
+      inputTokens: 100,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      cacheMissTokens: null,
+      uncachedInputTokens: null,
+      metricsAvailable: false,
+      classification: "cache_telemetry_unavailable",
+      verified: false,
+    })
   })
 
   test("keeps the first terminal raw usage but fills usage after a usage-less finish", async () => {
@@ -1397,6 +1440,52 @@ describe("session.llm.ai-sdk adapter", () => {
       reasoning: 0,
       cache: { read: 40, write: 0 },
       providerTotal: 120,
+    })
+  })
+
+  test("preserves reported zero DeepSeek cache misses in cumulative profiled telemetry", async () => {
+    const identity = {
+      providerID: "deepseek",
+      modelID: "deepseek-chat",
+      apiPackage: "@ai-sdk/openai-compatible",
+    }
+    const events = await adapt(
+      [
+        uncheckedAdapterEvent({
+          type: "finish-step",
+          response: { id: "zero-miss", timestamp: new Date(0), modelId: identity.modelID },
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          usage: {
+            inputTokens: 100,
+            outputTokens: 20,
+            totalTokens: 120,
+            inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: undefined },
+            outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+            raw: {
+              prompt_tokens: 100,
+              completion_tokens: 20,
+              total_tokens: 120,
+              prompt_cache_hit_tokens: 0,
+              prompt_cache_miss_tokens: 0,
+            },
+          },
+          providerMetadata: undefined,
+        }),
+        uncheckedAdapterEvent({ type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: {} }),
+      ],
+      identity,
+    )
+
+    expect(events[0]?.type === "step-finish" ? events[0].usage?.cacheTelemetry : undefined).toMatchObject({
+      cacheReadTokens: 0,
+      cacheMissTokens: 0,
+      providerRawUsageFieldNames: ["prompt_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"],
+    })
+    expect(events[1]?.type === "finish" ? events[1].usage?.cacheTelemetry : undefined).toMatchObject({
+      cacheReadTokens: 0,
+      cacheMissTokens: 0,
+      providerRawUsageFieldNames: ["prompt_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"],
     })
   })
 

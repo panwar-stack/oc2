@@ -17,6 +17,7 @@ import {
 } from "../schema"
 import { BedrockEventStream } from "./bedrock-event-stream"
 import { isContextOverflow } from "../provider-error"
+import { CacheTelemetry } from "../cache/telemetry"
 import { JsonObject, optionalArray, ProviderShared } from "./shared"
 import { BedrockAuth } from "./utils/bedrock-auth"
 import { BedrockCache } from "./utils/bedrock-cache"
@@ -442,6 +443,18 @@ const mapUsage = (usage: BedrockUsageSchema | undefined): Usage | undefined => {
     {
       cacheRead: usage.cacheReadInputTokens !== undefined,
       cacheWrite: usage.cacheWriteInputTokens !== undefined,
+      cacheTelemetry: CacheTelemetry.normalize({
+        provider: "bedrock",
+        model: "",
+        inputTokens: usage.inputTokens + (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0),
+        cacheReadTokens: usage.cacheReadInputTokens ?? null,
+        cacheWriteTokens: usage.cacheWriteInputTokens ?? null,
+        providerRawUsageFieldNames: [
+          "inputTokens",
+          ...(usage.cacheReadInputTokens === undefined ? [] : ["cacheReadInputTokens"]),
+          ...(usage.cacheWriteInputTokens === undefined ? [] : ["cacheWriteInputTokens"]),
+        ],
+      }),
     },
   )
 }
@@ -502,6 +515,7 @@ const step = (state: ParserState, event: BedrockEvent) =>
             classification: event.validationException && isContextOverflow(message) ? "context-overflow" : undefined,
             retryable: event.throttlingException !== undefined,
             usage: state.pendingFinish?.usage,
+            cacheTelemetryClassification: event.validationException ? "cache_configuration_error" : "provider_error",
           }),
         ],
       ] as const

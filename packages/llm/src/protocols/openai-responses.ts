@@ -20,6 +20,7 @@ import {
 } from "../schema"
 import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { isContextOverflow } from "../provider-error"
+import { CacheTelemetry } from "../cache/telemetry"
 import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolStream } from "./utils/tool-stream"
@@ -250,6 +251,7 @@ interface ParserState {
 
 interface OpenAIResponsesUsageProfile {
   readonly providerMetadata: "openai" | "xai"
+  readonly model?: string
   readonly outputTokens: "inclusive" | "exclusive"
   readonly cacheInput: "inclusive" | "xai-conditional"
 }
@@ -266,8 +268,10 @@ const XAI_RESPONSES_USAGE_PROFILE: OpenAIResponsesUsageProfile = {
   cacheInput: "xai-conditional",
 }
 
-const openAIResponsesUsageProfile = (request: LLMRequest) =>
-  String(request.model.provider) === "xai" ? XAI_RESPONSES_USAGE_PROFILE : OPENAI_RESPONSES_USAGE_PROFILE
+const openAIResponsesUsageProfile = (request: LLMRequest) => ({
+  ...(String(request.model.provider) === "xai" ? XAI_RESPONSES_USAGE_PROFILE : OPENAI_RESPONSES_USAGE_PROFILE),
+  model: String(request.model.id),
+})
 
 type ReasoningSummaryStatus = "active" | "can-conclude" | "concluded"
 
@@ -580,7 +584,23 @@ const mapUsage = (profile: OpenAIResponsesUsageProfile, usage: OpenAIResponsesUs
       providerTotal: usage.total_tokens,
       providerMetadata: { [profile.providerMetadata]: sanitized },
     },
-    { cacheRead: cached !== undefined, cacheWrite: cacheWrite !== undefined, reasoning: reasoning !== undefined },
+    {
+      cacheRead: cached !== undefined,
+      cacheWrite: cacheWrite !== undefined,
+      reasoning: reasoning !== undefined,
+      cacheTelemetry: CacheTelemetry.normalize({
+        provider: profile.providerMetadata,
+        model: profile.model ?? "",
+        inputTokens: usage.input_tokens,
+        cacheReadTokens: cached ?? null,
+        cacheWriteTokens: cacheWrite ?? null,
+        providerRawUsageFieldNames: [
+          "input_tokens",
+          ...(cached === undefined ? [] : ["input_tokens_details.cached_tokens"]),
+          ...(cacheWrite === undefined ? [] : ["input_tokens_details.cache_write_tokens"]),
+        ],
+      }),
+    },
   )
 }
 

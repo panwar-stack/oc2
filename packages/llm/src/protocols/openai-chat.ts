@@ -18,6 +18,7 @@ import {
   type Usage,
 } from "../schema"
 import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
+import { CacheTelemetry } from "../cache/telemetry"
 import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolStream } from "./utils/tool-stream"
@@ -184,6 +185,8 @@ interface ParserState {
 
 interface OpenAIChatUsageProfile {
   readonly providerMetadata: string
+  readonly cacheProvider: string
+  readonly model?: string
   readonly completionTokens: "inclusive" | "exclusive"
   readonly cacheRead: "prompt-details" | "deepseek"
   readonly cacheInput: "inclusive" | "xai-conditional"
@@ -193,6 +196,7 @@ interface OpenAIChatUsageProfile {
 
 const OPENAI_USAGE_PROFILE: OpenAIChatUsageProfile = {
   providerMetadata: "openai",
+  cacheProvider: "openai",
   completionTokens: "inclusive",
   cacheRead: "prompt-details",
   cacheInput: "inclusive",
@@ -220,6 +224,7 @@ const DEEPINFRA_EXCLUDED_REASONING_USAGE_PROFILE: OpenAIChatUsageProfile = {
 const DEEPSEEK_USAGE_PROFILE: OpenAIChatUsageProfile = {
   ...OPENAI_USAGE_PROFILE,
   providerMetadata: "deepseek",
+  cacheProvider: "deepseek",
   cacheRead: "deepseek",
 }
 
@@ -232,14 +237,15 @@ const OPENROUTER_USAGE_PROFILE: OpenAIChatUsageProfile = {
 
 const openAIChatUsageProfile = (request: LLMRequest): OpenAIChatUsageProfile => {
   const provider = String(request.model.provider)
-  if (provider === "xai") return XAI_USAGE_PROFILE
-  if (provider === "deepseek") return DEEPSEEK_USAGE_PROFILE
-  if (provider === "openrouter") return OPENROUTER_USAGE_PROFILE
-  if (provider !== "deepinfra") return OPENAI_USAGE_PROFILE
-  const model = String(request.model.id).toLowerCase()
-  return model.startsWith("google/gemini-") || model.startsWith("google/gemma-")
-    ? DEEPINFRA_EXCLUDED_REASONING_USAGE_PROFILE
-    : DEEPINFRA_USAGE_PROFILE
+  const model = String(request.model.id)
+  if (provider === "xai") return { ...XAI_USAGE_PROFILE, model }
+  if (provider === "deepseek") return { ...DEEPSEEK_USAGE_PROFILE, model }
+  if (provider === "openrouter") return { ...OPENROUTER_USAGE_PROFILE, model }
+  if (provider !== "deepinfra") return { ...OPENAI_USAGE_PROFILE, cacheProvider: provider, model }
+  const normalizedModel = model.toLowerCase()
+  return normalizedModel.startsWith("google/gemini-") || normalizedModel.startsWith("google/gemma-")
+    ? { ...DEEPINFRA_EXCLUDED_REASONING_USAGE_PROFILE, model }
+    : { ...DEEPINFRA_USAGE_PROFILE, model }
 }
 
 const invalid = ProviderShared.invalidRequest
@@ -542,6 +548,24 @@ const mapUsage = (profile: OpenAIChatUsageProfile, usage: OpenAIChatEvent["usage
       cacheRead: cached !== undefined,
       cacheWrite: cacheWrite !== undefined,
       reasoning: reasoning !== undefined,
+      cacheTelemetry: CacheTelemetry.normalize({
+        provider: profile.cacheProvider,
+        model: profile.model ?? "",
+        inputTokens: usage.prompt_tokens,
+        cacheReadTokens: cached ?? null,
+        cacheWriteTokens: cacheWrite ?? null,
+        cacheMissTokens: usage.prompt_cache_miss_tokens ?? null,
+        providerRawUsageFieldNames: [
+          "prompt_tokens",
+          ...(cached === undefined
+            ? []
+            : [profile.cacheRead === "deepseek" && usage.prompt_cache_hit_tokens !== undefined
+                ? "prompt_cache_hit_tokens"
+                : "prompt_tokens_details.cached_tokens"]),
+          ...(cacheWrite === undefined ? [] : ["prompt_tokens_details.cache_write_tokens"]),
+          ...(usage.prompt_cache_miss_tokens === undefined ? [] : ["prompt_cache_miss_tokens"]),
+        ],
+      }),
     },
   )
 }

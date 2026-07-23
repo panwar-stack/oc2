@@ -9,12 +9,14 @@ import {
   CanonicalUsage,
   Usage,
   type CanonicalUsageInput,
+  type UsageInput,
   type ContentPart,
   type LLMRequest,
   type MediaPart,
   type TextPart,
   type ToolResultPart,
 } from "../schema"
+import type { CacheTelemetry } from "../cache/capability"
 import { isRecord } from "../utils/record"
 export { isRecord }
 
@@ -120,12 +122,17 @@ export const sumTokens = (...values: ReadonlyArray<number | undefined>): number 
 
 export const usage = (
   input: CanonicalUsageInput,
-  reported: { readonly cacheRead?: boolean; readonly cacheWrite?: boolean; readonly reasoning?: boolean } = {},
+  reported: {
+    readonly cacheRead?: boolean
+    readonly cacheWrite?: boolean
+    readonly reasoning?: boolean
+    readonly cacheTelemetry?: CacheTelemetry
+  } = {},
 ): Usage => {
   const canonical = CanonicalUsage.from(input)
   const inputTokens = canonical.input + canonical.cache.read + canonical.cache.write
   const outputTokens = canonical.output + canonical.reasoning
-  return Usage.from({
+  const usageInput: UsageInput = {
     inputTokens,
     outputTokens,
     nonCachedInputTokens: canonical.input,
@@ -135,7 +142,9 @@ export const usage = (
     totalTokens: totalTokens(inputTokens, outputTokens, canonical.providerTotal),
     providerTotalTokens: canonical.providerTotal,
     providerMetadata: canonical.providerMetadata,
-  })
+    cacheTelemetry: reported.cacheTelemetry,
+  }
+  return Usage.from(usageInput)
 }
 
 export const eventError = (route: string, message: string, raw?: string) =>

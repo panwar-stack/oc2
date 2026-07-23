@@ -32,6 +32,7 @@
     "./cache/fingerprint": "./src/cache/fingerprint.ts",
     "./cache/lowering": "./src/cache/lowering.ts",
     "./cache/planner": "./src/cache/planner.ts",
+    "./cache/telemetry": "./src/cache/telemetry.ts",
     "./protocols": "./src/protocols/index.ts",
     "./protocols/anthropic-messages": "./src/protocols/anthropic-messages.ts",
     "./protocols/bedrock-converse": "./src/protocols/bedrock-converse.ts",
