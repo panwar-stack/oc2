@@ -1,5 +1,6 @@
 import type { NamedError } from "@oc2-ai/core/util/error"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 import { Cause, Duration, Effect, Schedule } from "effect"
 import { MessageV2 } from "./message-v2"
 import { iife } from "@/util/iife"
@@ -18,6 +19,146 @@ export type Retryable = {
     message: string
     label: string
     link?: string
+  }
+}
+
+export const CACHE_METADATA_KEY = "promptCache"
+export const CACHE_RETRY_METADATA_VERSION = 1
+
+export type CacheIntent = "conversation" | "compaction" | "summary"
+export type CacheChangeKind = "resume" | "retry"
+export type CacheChangeReason =
+  | "provider"
+  | "model"
+  | "request_format"
+  | "prompt_version"
+  | "repository_context_version"
+  | "tools"
+  | "schemas"
+  | "stable_prefix"
+
+export type CacheUse = {
+  version: typeof CACHE_RETRY_METADATA_VERSION
+  provider: string
+  model: string
+  requestFormat: string
+  promptVersion: number
+  repositoryContextVersion: number | null
+  stablePrefixFingerprint: string
+  toolsFingerprint: string | null
+  schemasFingerprint: string | null
+  componentFingerprints: Record<string, string>
+  cacheKey: string | null
+  eligible: boolean
+  mode: CachePlan["mode"]
+}
+
+export type CacheChange = {
+  version: typeof CACHE_RETRY_METADATA_VERSION
+  kind: CacheChangeKind
+  attempt: number
+  reasons: CacheChangeReason[]
+  expectedMiss: boolean
+  previous: CacheUse
+  current: CacheUse
+  observedAt: number
+}
+
+export type CacheMetadata = {
+  version: typeof CACHE_RETRY_METADATA_VERSION
+  last?: CacheUse
+  auxiliary?: CacheUse
+  changes: CacheChange[]
+}
+
+export function cacheUse(input: {
+  plan: CachePlan
+  requestFormat: string
+  promptVersion: number
+  repositoryContextVersion?: number | null
+}): CacheUse {
+  return {
+    version: CACHE_RETRY_METADATA_VERSION,
+    provider: input.plan.provider,
+    model: input.plan.model,
+    requestFormat: input.requestFormat,
+    promptVersion: input.promptVersion,
+    repositoryContextVersion: input.repositoryContextVersion ?? null,
+    stablePrefixFingerprint: input.plan.stablePrefixFingerprint,
+    toolsFingerprint: input.plan.componentFingerprints.tools ?? null,
+    schemasFingerprint: input.plan.componentFingerprints.schemas ?? null,
+    componentFingerprints: { ...input.plan.componentFingerprints },
+    cacheKey: input.plan.cacheKey,
+    eligible: input.plan.eligible,
+    mode: input.plan.mode,
+  }
+}
+
+export function metadata(input: unknown): CacheMetadata {
+  if (!isRecord(input)) return { version: CACHE_RETRY_METADATA_VERSION, changes: [] }
+  const raw = input[CACHE_METADATA_KEY]
+  if (!isRecord(raw) || raw.version !== CACHE_RETRY_METADATA_VERSION) {
+    return { version: CACHE_RETRY_METADATA_VERSION, changes: [] }
+  }
+  return {
+    version: CACHE_RETRY_METADATA_VERSION,
+    last: useFrom(raw.last),
+    auxiliary: useFrom(raw.auxiliary),
+    changes: Array.isArray(raw.changes) ? raw.changes.flatMap(changeFrom).slice(-32) : [],
+  }
+}
+
+export function compare(previous: CacheUse, current: CacheUse): CacheChangeReason[] {
+  return [
+    ...(previous.provider === current.provider ? [] : ["provider" as const]),
+    ...(previous.model === current.model ? [] : ["model" as const]),
+    ...(previous.requestFormat === current.requestFormat ? [] : ["request_format" as const]),
+    ...(previous.promptVersion === current.promptVersion ? [] : ["prompt_version" as const]),
+    ...(previous.repositoryContextVersion === current.repositoryContextVersion
+      ? []
+      : ["repository_context_version" as const]),
+    ...(previous.toolsFingerprint === current.toolsFingerprint ? [] : ["tools" as const]),
+    ...(previous.schemasFingerprint === current.schemasFingerprint ? [] : ["schemas" as const]),
+    ...(previous.stablePrefixFingerprint === current.stablePrefixFingerprint ? [] : ["stable_prefix" as const]),
+  ]
+}
+
+export function expectedMiss(input: { intent: CacheIntent; reasons: CacheChangeReason[] }) {
+  return input.intent !== "conversation" && input.reasons.includes("stable_prefix")
+}
+
+export function record(input: {
+  metadata: CacheMetadata
+  current: CacheUse
+  kind: CacheChangeKind
+  attempt: number
+  intent: CacheIntent
+  previous?: CacheUse
+  observedAt?: number
+}): { metadata: CacheMetadata; change?: CacheChange; expectedMiss: boolean } {
+  const reasons = input.previous ? compare(input.previous, input.current) : []
+  const expected = expectedMiss({ intent: input.intent, reasons })
+  const change: CacheChange | undefined = input.previous && reasons.length > 0
+    ? {
+        version: CACHE_RETRY_METADATA_VERSION,
+        kind: input.kind,
+        attempt: input.attempt,
+        reasons,
+        expectedMiss: expected,
+        previous: input.previous,
+        current: input.current,
+        observedAt: input.observedAt ?? Date.now(),
+      }
+    : undefined
+  return {
+    metadata: {
+      version: CACHE_RETRY_METADATA_VERSION,
+      last: input.intent === "conversation" ? input.current : input.metadata.last,
+      auxiliary: input.intent === "conversation" ? input.metadata.auxiliary : input.current,
+      changes: [...input.metadata.changes, ...(change ? [change] : [])].slice(-32),
+    },
+    change,
+    expectedMiss: expected,
   }
 }
 
@@ -161,6 +302,84 @@ function parseJSON(value: unknown) {
       return undefined
     }
   })
+}
+
+function useFrom(value: unknown): CacheUse | undefined {
+  if (!isRecord(value)) return undefined
+  if (
+    value.version !== CACHE_RETRY_METADATA_VERSION ||
+    typeof value.provider !== "string" ||
+    typeof value.model !== "string" ||
+    typeof value.requestFormat !== "string" ||
+    typeof value.promptVersion !== "number" ||
+    typeof value.stablePrefixFingerprint !== "string" ||
+    typeof value.eligible !== "boolean" ||
+    typeof value.mode !== "string" ||
+    !isRecord(value.componentFingerprints)
+  ) {
+    return undefined
+  }
+  return {
+    version: CACHE_RETRY_METADATA_VERSION,
+    provider: value.provider,
+    model: value.model,
+    requestFormat: value.requestFormat,
+    promptVersion: value.promptVersion,
+    repositoryContextVersion:
+      typeof value.repositoryContextVersion === "number" ? value.repositoryContextVersion : null,
+    stablePrefixFingerprint: value.stablePrefixFingerprint,
+    toolsFingerprint: typeof value.toolsFingerprint === "string" ? value.toolsFingerprint : null,
+    schemasFingerprint: typeof value.schemasFingerprint === "string" ? value.schemasFingerprint : null,
+    componentFingerprints: Object.fromEntries(
+      Object.entries(value.componentFingerprints).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    ),
+    cacheKey: typeof value.cacheKey === "string" ? value.cacheKey : null,
+    eligible: value.eligible,
+    mode: value.mode as CachePlan["mode"],
+  }
+}
+
+function changeFrom(value: unknown): CacheChange[] {
+  if (!isRecord(value)) return []
+  const previous = useFrom(value.previous)
+  const current = useFrom(value.current)
+  if (
+    value.version !== CACHE_RETRY_METADATA_VERSION ||
+    (value.kind !== "resume" && value.kind !== "retry") ||
+    typeof value.attempt !== "number" ||
+    typeof value.expectedMiss !== "boolean" ||
+    typeof value.observedAt !== "number" ||
+    !Array.isArray(value.reasons) ||
+    !previous ||
+    !current
+  ) {
+    return []
+  }
+  return [
+    {
+      version: CACHE_RETRY_METADATA_VERSION,
+      kind: value.kind,
+      attempt: value.attempt,
+      expectedMiss: value.expectedMiss,
+      observedAt: value.observedAt,
+      reasons: value.reasons.filter(isChangeReason),
+      previous,
+      current,
+    },
+  ]
+}
+
+function isChangeReason(value: unknown): value is CacheChangeReason {
+  return (
+    value === "provider" ||
+    value === "model" ||
+    value === "request_format" ||
+    value === "prompt_version" ||
+    value === "repository_context_version" ||
+    value === "tools" ||
+    value === "schemas" ||
+    value === "stable_prefix"
+  )
 }
 
 export function policy(opts: {
