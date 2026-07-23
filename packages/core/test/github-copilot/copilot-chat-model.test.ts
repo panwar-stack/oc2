@@ -536,6 +536,33 @@ describe("doStream", () => {
 })
 
 describe("request body", () => {
+  test("should lower service tier provider option", async () => {
+    let capturedBody: unknown
+    const mockFetch = mock(async (_url: string, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string)
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`))
+            controller.close()
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      )
+    })
+
+    const model = createModel(mockFetch)
+
+    await model.doStream({
+      prompt: TEST_PROMPT,
+      providerOptions: { copilot: { serviceTier: "flex" } },
+      includeRawChunks: false,
+    })
+
+    expect(capturedBody).toMatchObject({ service_tier: "flex" })
+    expect(capturedBody).not.toHaveProperty("serviceTier")
+  })
+
   test("should send tools in OpenAI format", async () => {
     let capturedBody: unknown
     const mockFetch = mock(async (_url: string, init?: RequestInit) => {

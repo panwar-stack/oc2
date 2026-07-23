@@ -147,11 +147,13 @@ describe("OpenAI Chat route", () => {
         LLM.request({
           model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-4o-mini"),
           prompt: "think",
-          providerOptions: { openai: { reasoningEffort: "low" } },
+          providerOptions: { openai: { reasoningEffort: "low", serviceTier: "flex" } },
         }),
       )
 
       expect(prepared.body.store).toBe(false)
+      expect(prepared.body.service_tier).toBe("flex")
+      expect(prepared.body).not.toHaveProperty("serviceTier")
       expect(prepared.body.reasoning_effort).toBe("low")
     }),
   )
