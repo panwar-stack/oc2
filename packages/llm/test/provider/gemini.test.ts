@@ -344,6 +344,23 @@ describe("Gemini route", () => {
             cachedContentTokenCount: 1,
           },
         },
+        cacheTelemetry: {
+          inputTokens: 5,
+          cacheReadTokens: 1,
+          cacheWriteTokens: null,
+          cacheMissTokens: null,
+          uncachedInputTokens: 4,
+          metricsAvailable: true,
+          eligible: false,
+          expected: true,
+          verified: false,
+          classification: "cache_unsupported",
+          providerRawUsageFieldNames: ["promptTokenCount", "cachedContentTokenCount"],
+          warmupRequestNumber: null,
+          estimatedCacheCost: null,
+          estimatedUncachedCost: null,
+          estimatedSavings: null,
+        },
       })
       expect(response.events).toEqual([
         { type: "step-start", index: 0 },
@@ -457,6 +474,23 @@ describe("Gemini route", () => {
         reasoningTokens: undefined,
         totalTokens: 6,
         providerMetadata: { google: { promptTokenCount: 5, candidatesTokenCount: 1 } },
+        cacheTelemetry: {
+          inputTokens: 5,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          cacheMissTokens: null,
+          uncachedInputTokens: null,
+          metricsAvailable: false,
+          eligible: false,
+          expected: true,
+          verified: false,
+          classification: "cache_unsupported",
+          providerRawUsageFieldNames: ["promptTokenCount"],
+          warmupRequestNumber: null,
+          estimatedCacheCost: null,
+          estimatedUncachedCost: null,
+          estimatedSavings: null,
+        },
       })
 
       expect(response.toolCalls).toEqual([

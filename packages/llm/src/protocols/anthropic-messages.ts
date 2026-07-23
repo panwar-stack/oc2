@@ -22,6 +22,7 @@ import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./share
 import { isContextOverflow } from "../provider-error"
 import * as Cache from "./utils/cache"
 import { CacheLowering } from "../cache/lowering"
+import { CacheTelemetry } from "../cache/telemetry"
 import type { CachePlan } from "../cache/capability"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolStream } from "./utils/tool-stream"
@@ -680,7 +681,22 @@ const mapUsage = (usage: AnthropicUsage | undefined): Usage | undefined => {
       providerTotal: undefined,
       providerMetadata: { anthropic: usage },
     },
-    { cacheRead: cacheRead !== undefined, cacheWrite: cacheWrite !== undefined },
+    {
+      cacheRead: cacheRead !== undefined,
+      cacheWrite: cacheWrite !== undefined,
+      cacheTelemetry: CacheTelemetry.normalize({
+        provider: "anthropic",
+        model: "claude-*",
+        inputTokens: ProviderShared.sumTokens(nonCached, cacheRead, cacheWrite) ?? null,
+        cacheReadTokens: cacheRead ?? null,
+        cacheWriteTokens: cacheWrite ?? null,
+        providerRawUsageFieldNames: [
+          "input_tokens",
+          ...(cacheRead === undefined ? [] : ["cache_read_input_tokens"]),
+          ...(cacheWrite === undefined ? [] : ["cache_creation_input_tokens"]),
+        ],
+      }),
+    },
   )
 }
 

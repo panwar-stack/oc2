@@ -1,4 +1,4 @@
-import { FinishReason, LLMEvent, ProviderMetadata, ToolResultValue } from "@oc2-ai/llm"
+import { CacheTelemetry, FinishReason, LLMEvent, ProviderMetadata, ToolResultValue } from "@oc2-ai/llm"
 import { ProviderShared } from "@oc2-ai/llm/protocols"
 import { Effect, Schema } from "effect"
 import { type streamText } from "ai"
@@ -32,14 +32,14 @@ const usageProfile = (identity: UsageIdentity | undefined): UsageProfile => {
 // Profiled providers need raw terminal provenance because the AI SDK retains usage from non-terminal chunks.
 export const requiresRawChunks = (identity: UsageIdentity) => usageProfile(identity) !== "standard"
 
-const usageTotal = () => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
+const usageTotal = () => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cacheMiss: 0 })
 
 export function adapterState(identity?: UsageIdentity) {
   return {
     identity,
     usageProfile: usageProfile(identity),
     profileUsageTotal: usageTotal(),
-    profileUsageReported: { cacheRead: false, cacheWrite: false, reasoning: false },
+    profileUsageReported: { cacheRead: false, cacheWrite: false, cacheMiss: false, reasoning: false },
     profileUsageSteps: 0,
     profileUsageComplete: true,
     providerTotal: undefined as number | undefined,
@@ -204,9 +204,15 @@ type UsageTuple = {
   readonly reasoning: number
   readonly cacheRead: number
   readonly cacheWrite: number
+  readonly cacheMiss?: number
   readonly providerTotal?: number
   readonly providerMetadata?: ProviderMetadata
-  readonly reported: { readonly cacheRead: boolean; readonly cacheWrite: boolean; readonly reasoning: boolean }
+  readonly reported: {
+    readonly cacheRead: boolean
+    readonly cacheWrite: boolean
+    readonly cacheMiss?: boolean
+    readonly reasoning: boolean
+  }
 }
 
 type ProfileUsageObservation =
@@ -414,11 +420,13 @@ function profileUsage(profile: UsageProfile, value: unknown): ProfileUsageObserv
       reasoning: reasoning ?? 0,
       cacheRead: cacheRead ?? 0,
       cacheWrite: cacheWrite ?? 0,
+      cacheMiss: promptCacheMiss.value,
       providerTotal: reportedTotal,
       providerMetadata,
       reported: {
         cacheRead: cacheRead !== undefined,
         cacheWrite: cacheWrite !== undefined,
+        cacheMiss: promptCacheMiss.value !== undefined,
         reasoning: reasoning !== undefined,
       },
     },
@@ -508,6 +516,7 @@ function genericUsage(
     reasoning: reasoning ?? 0,
     cacheRead: cacheRead ?? 0,
     cacheWrite: cacheWrite ?? 0,
+    cacheMiss: undefined,
     providerTotal: metadataProviderTotal(metadata),
     providerMetadata: usageProviderMetadata(metadata),
     reported: {
@@ -521,6 +530,7 @@ function genericUsage(
 function usage(
   value: unknown,
   options: {
+    readonly identity?: UsageIdentity
     readonly metadata?: ProviderMetadata
     readonly profile: UsageProfile
     readonly cacheReadAdjustment?: number
@@ -545,6 +555,7 @@ function usage(
     )
   if (!base) return undefined
   const metadata = mergeUsageProviderMetadata(options.metadata, raw?.providerMetadata)
+  const telemetry = cacheTelemetry(options.profile, options.identity, base)
   return ProviderShared.usage(
     {
       input: base.input,
@@ -558,8 +569,34 @@ function usage(
       cacheRead: base.reported.cacheRead,
       cacheWrite: base.reported.cacheWrite,
       reasoning: base.reported.reasoning,
+      cacheTelemetry: telemetry,
     },
   )
+}
+
+function cacheTelemetry(profile: UsageProfile, identity: UsageIdentity | undefined, usage: UsageTuple) {
+  const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite
+  return CacheTelemetry.normalize({
+    provider: identity?.providerID ?? profile,
+    model: identity?.modelID ?? "",
+    inputTokens,
+    cacheReadTokens: usage.reported.cacheRead ? usage.cacheRead : null,
+    cacheWriteTokens: usage.reported.cacheWrite ? usage.cacheWrite : null,
+    cacheMissTokens: usage.reported.cacheMiss ? (usage.cacheMiss ?? 0) : null,
+    providerRawUsageFieldNames: cacheTelemetryFieldNames(profile, usage),
+  })
+}
+
+function cacheTelemetryFieldNames(profile: UsageProfile, usage: UsageTuple) {
+  const inputField = profile === "xai" ? "input_tokens" : "prompt_tokens"
+  return [
+    inputField,
+    ...(usage.reported.cacheRead
+      ? [profile === "deepseek" ? "prompt_cache_hit_tokens" : `${inputField}_details.cached_tokens`]
+      : []),
+    ...(usage.reported.cacheWrite ? [`${inputField}_details.cache_write_tokens`] : []),
+    ...(usage.reported.cacheMiss ? ["prompt_cache_miss_tokens"] : []),
+  ]
 }
 
 function recordProfileUsage(
@@ -579,8 +616,10 @@ function recordProfileUsage(
   state.profileUsageTotal.reasoning += usage.reasoning
   state.profileUsageTotal.cacheRead += usage.cacheRead
   state.profileUsageTotal.cacheWrite += usage.cacheWrite
+  state.profileUsageTotal.cacheMiss += usage.cacheMiss ?? 0
   state.profileUsageReported.cacheRead ||= usage.reported.cacheRead
   state.profileUsageReported.cacheWrite ||= usage.reported.cacheWrite
+  state.profileUsageReported.cacheMiss ||= usage.reported.cacheMiss === true
   state.profileUsageReported.reasoning ||= usage.reported.reasoning
   if (usage.providerTotal === undefined) state.providerTotalComplete = false
   else state.providerTotal = (state.providerTotal ?? 0) + usage.providerTotal
@@ -597,7 +636,26 @@ function cumulativeProfileUsage(state: ReturnType<typeof adapterState>) {
       cache: { read: state.profileUsageTotal.cacheRead, write: state.profileUsageTotal.cacheWrite },
       providerTotal: state.providerTotalComplete ? state.providerTotal : undefined,
     },
-    state.profileUsageReported,
+    {
+      ...state.profileUsageReported,
+      cacheTelemetry: CacheTelemetry.normalize({
+        provider: state.identity?.providerID ?? state.usageProfile,
+        model: state.identity?.modelID ?? "",
+        inputTokens: state.profileUsageTotal.input + state.profileUsageTotal.cacheRead + state.profileUsageTotal.cacheWrite,
+        cacheReadTokens: state.profileUsageReported.cacheRead ? state.profileUsageTotal.cacheRead : null,
+        cacheWriteTokens: state.profileUsageReported.cacheWrite ? state.profileUsageTotal.cacheWrite : null,
+        cacheMissTokens: state.profileUsageReported.cacheMiss ? state.profileUsageTotal.cacheMiss : null,
+        providerRawUsageFieldNames: cacheTelemetryFieldNames(state.usageProfile, {
+          input: state.profileUsageTotal.input,
+          output: state.profileUsageTotal.output,
+          reasoning: state.profileUsageTotal.reasoning,
+          cacheRead: state.profileUsageTotal.cacheRead,
+          cacheWrite: state.profileUsageTotal.cacheWrite,
+          cacheMiss: state.profileUsageTotal.cacheMiss,
+          reported: state.profileUsageReported,
+        }),
+      }),
+    },
   )
 }
 
@@ -675,7 +733,7 @@ export function toLLMEvents(
         state.profileRawSeen = false
         state.profileRawUsage = undefined
         state.copilotTotalNanoAiu = undefined
-        const stepUsage = usage(eventUsage, { metadata, profile: state.usageProfile, profileUsage })
+        const stepUsage = usage(eventUsage, { identity: state.identity, metadata, profile: state.usageProfile, profileUsage })
         return [
           LLMEvent.stepFinish({
             index: state.step++,
@@ -694,6 +752,7 @@ export function toLLMEvents(
             usage:
               state.usageProfile === "standard"
                 ? usage(event.totalUsage, {
+                    identity: state.identity,
                     profile: state.usageProfile,
                     cacheReadAdjustment: state.cacheReadAdjustment,
                     cacheWriteAdjustment: state.cacheWriteAdjustment,

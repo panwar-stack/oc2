@@ -6,7 +6,7 @@ import { Auth, LLMClient } from "../../src/route"
 import * as OpenAICompatible from "../../src/providers/openai-compatible"
 import * as OpenAICompatibleChat from "../../src/protocols/openai-compatible-chat"
 import { it } from "../lib/effect"
-import { dynamicResponse } from "../lib/http"
+import { dynamicResponse, fixedResponse } from "../lib/http"
 import { sseEvents } from "../lib/sse"
 
 const Json = Schema.fromJsonString(Schema.Unknown)
@@ -233,6 +233,36 @@ describe("OpenAI-compatible Chat route", () => {
       expect(response.text).toBe("Hello!")
       expect(response.usage).toMatchObject({ inputTokens: 5, outputTokens: 2, totalTokens: 7 })
       expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "stop" })
+    }),
+  )
+
+  it.effect("classifies native DeepSeek cache telemetry with DeepSeek capabilities", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              deltaChunk({ role: "assistant", content: "Hello" }),
+              deltaChunk({}, "stop"),
+              usageChunk({
+                prompt_tokens: 100,
+                completion_tokens: 2,
+                total_tokens: 102,
+                prompt_cache_hit_tokens: 0,
+                prompt_cache_miss_tokens: 100,
+              }),
+            ),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        ),
+      )
+
+      expect(response.usage?.cacheTelemetry).toMatchObject({
+        cacheReadTokens: 0,
+        cacheMissTokens: 100,
+        classification: "expected_cache_miss",
+        providerRawUsageFieldNames: ["prompt_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"],
+      })
     }),
   )
 })
