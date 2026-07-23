@@ -3,6 +3,7 @@ import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "@oc2-ai/core/models-dev"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 import { iife } from "@/util/iife"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
@@ -320,30 +321,11 @@ function normalizeMessages(
   return msgs
 }
 
-function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
+function applyCaching(msgs: ModelMessage[], model: Provider.Model, plan: CachePlan | undefined): ModelMessage[] {
   const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
   const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
-
-  const providerOptions = {
-    anthropic: {
-      cacheControl: { type: "ephemeral" },
-    },
-    openrouter: {
-      cacheControl: { type: "ephemeral" },
-    },
-    bedrock: {
-      cachePoint: { type: "default" },
-    },
-    openaiCompatible: {
-      cache_control: { type: "ephemeral" },
-    },
-    copilot: {
-      copilot_cache_control: { type: "ephemeral" },
-    },
-    alibaba: {
-      cacheControl: { type: "ephemeral" },
-    },
-  }
+  const providerOptions = cachingProviderOptions(model, plan)
+  if (!providerOptions) return msgs
 
   for (const msg of unique([...system, ...final])) {
     const useMessageLevelOptions =
@@ -370,6 +352,36 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage
 
   return msgs
 }
+
+function cachingProviderOptions(model: Provider.Model, plan: CachePlan | undefined) {
+  if (explicitOpenAICacheUnsupported(model)) return undefined
+  if (plan && (!plan.eligible || plan.mode === "disabled" || plan.breakpoints.length === 0)) return undefined
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") {
+    return { anthropic: { cacheControl: { type: "ephemeral" } } }
+  }
+  if (model.api.npm === "@ai-sdk/amazon-bedrock") return { bedrock: { cachePoint: { type: "default" } } }
+  if (model.api.npm === "@openrouter/ai-sdk-provider") return { openrouter: { cacheControl: { type: "ephemeral" } } }
+  if (model.api.npm === "@ai-sdk/openai-compatible") return { openaiCompatible: { cache_control: { type: "ephemeral" } } }
+  if (model.api.npm === "@ai-sdk/github-copilot") return { copilot: { copilot_cache_control: { type: "ephemeral" } } }
+  if (model.api.npm === "@ai-sdk/alibaba") return { alibaba: { cacheControl: { type: "ephemeral" } } }
+  return undefined
+}
+
+function cachePlanOption(options: Record<string, unknown>): CachePlan | undefined {
+  const plan = options.cachePlan
+  return isCachePlan(plan) ? plan : undefined
+}
+
+const isCachePlan = (value: unknown): value is CachePlan =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  "model" in value &&
+  "mode" in value &&
+  "cacheKey" in value &&
+  "eligible" in value &&
+  "breakpoints" in value &&
+  Array.isArray(value.breakpoints)
 
 function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
   return msgs.map((msg) => {
@@ -412,6 +424,7 @@ function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMes
 export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
+  const cachePlan = cachePlanOption(options)
   if (
     (model.providerID === "anthropic" ||
       model.providerID === "google-vertex-anthropic" ||
@@ -423,7 +436,7 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
       model.api.npm === "@ai-sdk/alibaba") &&
     model.api.npm !== "@ai-sdk/gateway"
   ) {
-    msgs = applyCaching(msgs, model)
+    msgs = applyCaching(msgs, model, cachePlan)
   }
 
   // Remap providerOptions keys from stored providerID to expected SDK key
@@ -1010,6 +1023,7 @@ export function options(input: {
   model: Provider.Model
   sessionID: string
   providerOptions?: Record<string, any>
+  cachePlan?: CachePlan
 }): Record<string, any> {
   const result: Record<string, any> = {}
 
@@ -1032,7 +1046,6 @@ export function options(input: {
 
   if (input.model.api.npm === "@ai-sdk/azure") {
     result["store"] = false
-    result["promptCacheKey"] = input.sessionID
   }
 
   if (input.model.api.npm === "@openrouter/ai-sdk-provider" || input.model.api.npm === "@llmgateway/ai-sdk-provider") {
@@ -1058,9 +1071,8 @@ export function options(input: {
     }
   }
 
-  if (input.model.providerID === "openai" || input.providerOptions?.setCacheKey) {
-    result["promptCacheKey"] = input.sessionID
-  }
+  const promptCacheKey = promptCacheKeyForPlan(input.model, input.cachePlan)
+  if (promptCacheKey) result["promptCacheKey"] = promptCacheKey
 
   if (input.model.api.npm === "@ai-sdk/google" || input.model.api.npm === "@ai-sdk/google-vertex") {
     if (input.model.capabilities.reasoning) {
@@ -1132,13 +1144,6 @@ export function options(input: {
     }
   }
 
-  if (input.model.providerID === "venice") {
-    result["promptCacheKey"] = input.sessionID
-  }
-
-  if (input.model.providerID === "openrouter") {
-    result["prompt_cache_key"] = input.sessionID
-  }
   if (input.model.api.npm === "@ai-sdk/gateway") {
     result["gateway"] = {
       caching: "auto",
@@ -1146,6 +1151,19 @@ export function options(input: {
   }
 
   return result
+}
+
+const promptCacheKeyForPlan = (model: Provider.Model, plan: CachePlan | undefined) => {
+  if (explicitOpenAICacheUnsupported(model)) return undefined
+  if (model.providerID !== "openai" && model.api.npm !== "@ai-sdk/openai") return undefined
+  if (!plan?.eligible || plan.mode === "disabled" || plan.provider !== "openai" || !plan.cacheKey) return undefined
+  return plan.cacheKey
+}
+
+const explicitOpenAICacheUnsupported = (model: Provider.Model) => {
+  const provider = model.providerID.toLowerCase()
+  const modelID = model.api.id.toLowerCase()
+  return ["deepseek", "kimi", "moonshot", "moonshot-ai", "moonshotai"].includes(provider) || modelID.includes("kimi")
 }
 
 export function smallOptions(model: Provider.Model) {

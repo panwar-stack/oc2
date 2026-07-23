@@ -403,6 +403,72 @@ describe("session.llm-native.request", () => {
     }),
   )
 
+  it.effect("lowers native OpenAI prompt cache key from the shared CachePlan", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: baseModel,
+        apiKey: "test-key",
+        system: ["Stable system"],
+        messages: [{ role: "user", content: "hi" }],
+        tools: {
+          bash: tool({
+            description: "Run a command",
+            inputSchema: jsonSchema({ type: "object", properties: { command: { type: "string" } } }),
+          }),
+        },
+        providerOptions: { openai: { promptCacheKey: "manual-key" } },
+      })
+
+      expect(prepared.body).toMatchObject({ prompt_cache_key: expect.stringMatching(/^oc2-v1-/) })
+      expect((prepared.body as { prompt_cache_key?: string }).prompt_cache_key).not.toBe("manual-key")
+    }),
+  )
+
+  it.effect("does not lower manual prompt cache keys for unsupported OpenAI-compatible models", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("deepseek"),
+          api: { ...baseModel.api, id: "deepseek-chat", url: "https://api.deepseek.com/v1", npm: "@ai-sdk/openai-compatible" },
+        },
+        apiKey: "test-key",
+        system: ["Stable system"],
+        messages: [{ role: "user", content: "hi" }],
+        providerOptions: { openai: { promptCacheKey: "manual-key" } },
+      })
+
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_key")
+      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+    }),
+  )
+
+  it.effect("lowers native Anthropic CachePlan breakpoints without leaking cache hints", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("anthropic"),
+          api: { ...baseModel.api, id: "claude-sonnet-4-5", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+        },
+        apiKey: "test-key",
+        system: ["Stable system"],
+        messages: [{ role: "user", content: "hi" }],
+        tools: {
+          bash: tool({
+            description: "Run a command",
+            inputSchema: jsonSchema({ type: "object", properties: { command: { type: "string" } } }),
+          }),
+        },
+      })
+
+      expect(prepared.body).toMatchObject({
+        tools: [{ name: "bash", cache_control: { type: "ephemeral" } }],
+        system: [{ type: "text", text: "Stable system", cache_control: undefined }],
+      })
+    }),
+  )
+
   test("fails fast for unsupported provider packages", () => {
     expect(() =>
       LLMNative.request({
