@@ -64,12 +64,20 @@ describe("cache guardrails", () => {
   })
 
   test("fails provider field leakage across provider families", () => {
-    const result = checkProviderFieldLeakage({ provider: "deepseek", model: "deepseek-chat", fields: ["prompt_cache_key"] })
+    const cases = [
+      { provider: "deepseek", model: "deepseek-chat", fields: ["prompt_cache_key"], field: "prompt_cache_key" },
+      { provider: "moonshot", model: "kimi-k2", fields: ["prompt_cache_key"], field: "prompt_cache_key" },
+      { provider: "kimi", model: "kimi-latest", fields: ["cache_control"], field: "cache_control" },
+      { provider: "openai", model: "gpt-5", fields: ["cache_control"], field: "cache_control" },
+      { provider: "future", model: "future-model", fields: ["prompt_cache_key"], field: "prompt_cache_key" },
+    ]
 
-    expect(result).toMatchObject({
-      valid: false,
-      errors: [{ code: "provider_field_leakage", severity: "error", field: "prompt_cache_key" }],
-    })
+    for (const item of cases) {
+      expect(checkProviderFieldLeakage(item)).toMatchObject({
+        valid: false,
+        errors: [{ code: "provider_field_leakage", severity: "error", field: item.field }],
+      })
+    }
   })
 
   test("fails incompatible cache key reuse", () => {

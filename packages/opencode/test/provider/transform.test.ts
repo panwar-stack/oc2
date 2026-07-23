@@ -118,36 +118,48 @@ describe("ProviderTransform.options - promptCacheKey", () => {
     expect(result.promptCacheKey).toBe("oc2-v1-stable-prefix")
   })
 
-  test("should not use CachePlan cacheKey for unsupported compatible providers", () => {
-    const moonshotModel = {
-      ...mockModel,
-      providerID: "moonshot",
-      api: {
-        id: "kimi-k2",
-        url: "https://api.moonshot.cn",
-        npm: "@ai-sdk/openai-compatible",
-      },
+  test("should not use CachePlan cacheKey outside supported OpenAI models", () => {
+    const models = [
+      { providerID: "anthropic", id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" },
+      { providerID: "moonshot", id: "kimi-k2", npm: "@ai-sdk/openai-compatible" },
+      { providerID: "kimi", id: "kimi-latest", npm: "@ai-sdk/openai-compatible" },
+      { providerID: "deepseek", id: "deepseek-chat", npm: "@ai-sdk/openai-compatible" },
+      { providerID: "future", id: "future-model", npm: "@ai-sdk/openai-compatible" },
+    ]
+
+    for (const model of models) {
+      const result = ProviderTransform.options({
+        model: {
+          ...mockModel,
+          id: `${model.providerID}/${model.id}`,
+          providerID: model.providerID,
+          api: {
+            id: model.id,
+            url: `https://api.${model.providerID}.test`,
+            npm: model.npm,
+          },
+        },
+        sessionID,
+        providerOptions: {},
+        cachePlan: {
+          provider: "openai",
+          model: model.id,
+          mode: "automatic",
+          cacheKey: "oc2-v1-stable-prefix",
+          trafficPartition: null,
+          stablePrefixFingerprint: "sha256:stable-prefix",
+          componentFingerprints: {},
+          prefixTokenCount: null,
+          minimumPrefixTokens: 1024,
+          eligible: true,
+          breakpoints: [],
+          duration: null,
+        },
+      })
+      expect(result.promptCacheKey).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain("prompt_cache_key")
+      expect(JSON.stringify(result)).not.toContain("cache_control")
     }
-    const result = ProviderTransform.options({
-      model: moonshotModel,
-      sessionID,
-      providerOptions: {},
-      cachePlan: {
-        provider: "openai",
-        model: "kimi-k2",
-        mode: "automatic",
-        cacheKey: "oc2-v1-stable-prefix",
-        trafficPartition: null,
-        stablePrefixFingerprint: "sha256:stable-prefix",
-        componentFingerprints: {},
-        prefixTokenCount: null,
-        minimumPrefixTokens: 1024,
-        eligible: true,
-        breakpoints: [],
-        duration: null,
-      },
-    })
-    expect(result.promptCacheKey).toBeUndefined()
   })
 
   test("should not use disabled CachePlan cacheKey for OpenAI models", () => {
@@ -2560,6 +2572,60 @@ describe("ProviderTransform.message - cache control on gateway", () => {
 
     expect(JSON.stringify(result)).not.toContain("cache_control")
     expect(JSON.stringify(result)).not.toContain("cacheControl")
+  })
+
+  test("Moonshot/Kimi and unknown compatible models do not receive explicit cache fields", () => {
+    const cases = [
+      { providerID: "moonshot", id: "kimi-k2" },
+      { providerID: "kimi", id: "kimi-latest" },
+      { providerID: "future", id: "future-model" },
+    ]
+    const msgs = [
+      {
+        role: "system",
+        content: "Stable system",
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    ] as any[]
+
+    for (const item of cases) {
+      const result = ProviderTransform.message(
+        msgs.map((message) => ({ ...message })),
+        createModel({
+          providerID: item.providerID,
+          api: {
+            id: item.id,
+            url: `https://api.${item.providerID}.test`,
+            npm: "@ai-sdk/openai-compatible",
+          },
+          id: item.id,
+        }),
+        {
+          cachePlan: {
+            provider: item.providerID,
+            model: item.id,
+            mode: "automatic",
+            cacheKey: null,
+            trafficPartition: null,
+            stablePrefixFingerprint: "sha256:stable-prefix",
+            componentFingerprints: {},
+            prefixTokenCount: null,
+            minimumPrefixTokens: null,
+            eligible: item.providerID !== "future",
+            breakpoints: [],
+            duration: null,
+          },
+        },
+      ) as any[]
+
+      expect(JSON.stringify(result)).not.toContain("prompt_cache_key")
+      expect(JSON.stringify(result)).not.toContain("promptCacheKey")
+      expect(JSON.stringify(result)).not.toContain("cache_control")
+      expect(JSON.stringify(result)).not.toContain("cacheControl")
+    }
   })
 })
 
