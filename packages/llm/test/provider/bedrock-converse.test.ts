@@ -290,6 +290,8 @@ describe("Bedrock Converse route", () => {
           },
         },
         cacheTelemetry: {
+          provider: "bedrock",
+          model: "anthropic.claude-3-5-sonnet-20240620-v1:0",
           inputTokens: 10,
           cacheReadTokens: 3,
           cacheWriteTokens: 2,

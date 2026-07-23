@@ -54,8 +54,8 @@ export const event = (input: CacheInvocationLogInput): CacheInvocationLogEvent =
   return {
     type: "cache-invocation",
     requestID: input.requestID ?? null,
-    provider: input.provider ?? plan?.provider ?? "unknown",
-    model: input.model ?? plan?.model ?? "unknown",
+    provider: input.provider ?? telemetry?.provider ?? plan?.provider ?? "unknown",
+    model: input.model ?? telemetry?.model ?? plan?.model ?? "unknown",
     route: input.route ?? null,
     mode: plan?.mode ?? null,
     eligible: telemetry?.eligible ?? plan?.eligible ?? false,

@@ -391,6 +391,10 @@ describe("Anthropic Messages route", () => {
         nonCachedInputTokens: 5,
         cacheReadInputTokens: 1,
         totalTokens: 8,
+        cacheTelemetry: {
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+        },
       })
       expect(CanonicalUsage.fromUsage(response.usage!)?.providerTotal).toBeUndefined()
       expect(response.events.find((event) => event.type === "reasoning-end")).toMatchObject({
@@ -729,10 +733,35 @@ describe("Anthropic Messages route", () => {
         inputTokens: 5,
         outputTokens: 1,
         nonCachedInputTokens: 5,
-        cacheReadInputTokens: undefined,
-        cacheWriteInputTokens: undefined,
         totalTokens: 6,
-        providerMetadata: { anthropic: { input_tokens: 5, output_tokens: 1 } },
+        providerMetadata: {
+          anthropic: {
+            input_tokens: 5,
+            output_tokens: 1,
+            cache_creation_input_tokens: undefined,
+            cache_read_input_tokens: undefined,
+            iterations: undefined,
+          },
+        },
+        cacheTelemetry: {
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          inputTokens: 5,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          cacheMissTokens: null,
+          uncachedInputTokens: null,
+          metricsAvailable: false,
+          eligible: true,
+          expected: false,
+          verified: false,
+          classification: "cache_telemetry_unavailable",
+          providerRawUsageFieldNames: ["input_tokens"],
+          warmupRequestNumber: null,
+          estimatedCacheCost: null,
+          estimatedUncachedCost: null,
+          estimatedSavings: null,
+        },
       })
 
       expect(response.toolCalls).toEqual([

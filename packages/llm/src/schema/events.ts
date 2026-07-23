@@ -9,6 +9,8 @@ import { CacheTelemetry } from "../cache/telemetry"
 const UsageToken = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 
 const CacheTelemetrySchema = Schema.Struct({
+  provider: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
   inputTokens: Schema.NullOr(UsageToken),
   cacheReadTokens: Schema.NullOr(UsageToken),
   cacheWriteTokens: Schema.NullOr(UsageToken),

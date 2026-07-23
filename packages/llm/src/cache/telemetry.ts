@@ -56,6 +56,8 @@ export const normalize = (input: CacheTelemetryInput): CacheTelemetry => {
   const estimatedCacheCost = money(input.estimatedCacheCost)
   const estimatedUncachedCost = money(input.estimatedUncachedCost)
   return {
+    provider: input.provider,
+    model: input.model,
     inputTokens,
     cacheReadTokens,
     cacheWriteTokens,
