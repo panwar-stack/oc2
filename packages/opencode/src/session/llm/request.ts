@@ -84,14 +84,69 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     !input.small && input.model.variants && input.user.model.variant
       ? input.model.variants[input.user.model.variant]
       : {}
+  const tools = resolveTools(input)
+  const stablePrompt = [
+    SystemPrompt.TOKEN_BUDGET_GUIDANCE,
+    ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+  ]
+  const generation = {
+    temperature: input.agent.temperature ?? ProviderTransform.temperature(input.model),
+    topP: input.agent.topP ?? ProviderTransform.topP(input.model),
+    topK: ProviderTransform.topK(input.model),
+    maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
+  }
+  if (
+    !input.forbidImplicitTools &&
+    input.model.providerID.includes("github-copilot") &&
+    Object.keys(tools).length === 0 &&
+    hasToolCalls(input.messages)
+  ) {
+    // Copilot needs a tools field when replaying prior tool calls, even if no tools are currently enabled.
+    tools["_noop"] = aiTool({
+      description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          reason: { type: "string", description: "Unused" },
+        },
+      }),
+      execute: async () => ({ output: "", title: "", metadata: {} }),
+    })
+  }
+
+  const cacheBoundary = CachePlanner.planCache({
+    provider: input.model.providerID,
+    model: input.model.api.id,
+    cachePolicy: "auto",
+    system: stablePrompt.map((text) => ({
+      type: "text",
+      text,
+      metadata: { cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION } },
+    })),
+    tools: Object.entries(tools).map(([name, tool]) => ({
+      name,
+      description: tool.description ?? "",
+      inputSchema: schemaFromTool(tool),
+    })),
+    providerConfig: input.provider.options,
+    modelConfig: {
+      provider: input.model.providerID,
+      model: input.model.api.id,
+      generation,
+      cachePolicy: "auto",
+    },
+  })
   const base = input.small
     ? ProviderTransform.smallOptions(input.model)
     : ProviderTransform.options({
         model: input.model,
         sessionID: input.sessionID,
         providerOptions: input.provider.options,
+        cachePlan: cacheBoundary.plan,
       })
   const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
+  const promptCacheKey = typeof base.promptCacheKey === "string" ? base.promptCacheKey : undefined
+  scrubPromptCacheKeys(options, promptCacheKey)
   if (
     input.model.api.npm === "@ai-sdk/azure" &&
     (input.provider.options.useCompletionUrls || input.model.options.useCompletionUrls || options.useCompletionUrls)
@@ -114,58 +169,6 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           ...input.messages,
         ]
 
-  const tools = resolveTools(input)
-  if (
-    !input.forbidImplicitTools &&
-    input.model.providerID.includes("github-copilot") &&
-    Object.keys(tools).length === 0 &&
-    hasToolCalls(input.messages)
-  ) {
-    // Copilot needs a tools field when replaying prior tool calls, even if no tools are currently enabled.
-    tools["_noop"] = aiTool({
-      description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
-      inputSchema: jsonSchema({
-        type: "object",
-        properties: {
-          reason: { type: "string", description: "Unused" },
-        },
-      }),
-      execute: async () => ({ output: "", title: "", metadata: {} }),
-    })
-  }
-
-  const stablePrompt = [
-    SystemPrompt.TOKEN_BUDGET_GUIDANCE,
-    ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-  ]
-  const cacheBoundary = CachePlanner.planCache({
-    provider: input.model.providerID,
-    model: input.model.api.id,
-    cachePolicy: "auto",
-    system: stablePrompt.map((text) => ({
-      type: "text",
-      text,
-      metadata: { cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION } },
-    })),
-    tools: Object.entries(tools).map(([name, tool]) => ({
-      name,
-      description: tool.description ?? "",
-      inputSchema: schemaFromTool(tool),
-    })),
-    providerConfig: input.provider.options,
-    modelConfig: {
-      provider: input.model.providerID,
-      model: input.model.api.id,
-      generation: {
-        temperature: input.agent.temperature ?? ProviderTransform.temperature(input.model),
-        topP: input.agent.topP ?? ProviderTransform.topP(input.model),
-        topK: ProviderTransform.topK(input.model),
-        maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
-      },
-      cachePolicy: "auto",
-    },
-  })
-
   const params = yield* input.plugin.trigger(
     "chat.params",
     {
@@ -186,6 +189,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       cachePlan: cacheBoundary.plan,
     },
   )
+  scrubPromptCacheKeys(options, promptCacheKey)
+  scrubPromptCacheKeys(params.options, promptCacheKey)
 
   const { headers } = yield* input.plugin.trigger(
     "chat.headers",
@@ -206,7 +211,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     messages,
     tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
     params,
-    messageTransformOptions: options,
+    messageTransformOptions: { ...options, cachePlan: cacheBoundary.plan },
     headers: {
       "x-session-affinity": input.sessionID,
       ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
@@ -234,6 +239,12 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
 function schemaFromTool(tool: Tool) {
   if ("inputSchema" in tool) return tool.inputSchema
   return undefined
+}
+
+function scrubPromptCacheKeys(options: Record<string, any>, promptCacheKey: string | undefined) {
+  delete options.promptCacheKey
+  delete options.prompt_cache_key
+  if (promptCacheKey) options.promptCacheKey = promptCacheKey
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {

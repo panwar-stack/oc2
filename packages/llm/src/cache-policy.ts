@@ -10,10 +10,9 @@ import { planCacheRequest, resolveCachePolicy } from "./cache/planner"
 import { CacheHint } from "./schema/options"
 import { LLMRequest, Message, ToolDefinition, type ContentPart } from "./schema/messages"
 
-// Protocols whose wire format ignores inline cache markers (OpenAI's implicit
-// prefix caching, Gemini's implicit + out-of-band CachedContent). Skip the
-// whole policy pass for these — emitting hints would be harmless but pointless.
-const RESPECTS_INLINE_HINTS = new Set(["anthropic-messages", "bedrock-converse"])
+// Bedrock still lowers cache markers from inline `CacheHint`s. Anthropic lowers
+// the shared CachePlan directly so provider cache fields stay protocol-local.
+const RESPECTS_INLINE_HINTS = new Set(["bedrock-converse"])
 
 const makeHint = (ttlSeconds: number | undefined): CacheHint =>
   ttlSeconds !== undefined ? new CacheHint({ type: "ephemeral", ttlSeconds }) : new CacheHint({ type: "ephemeral" })

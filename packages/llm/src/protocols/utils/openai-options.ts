@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import type { LLMRequest, ReasoningEffort, TextVerbosity as TextVerbosityValue } from "../../schema"
 import { ReasoningEfforts, TextVerbosity } from "../../schema"
+import { CacheLowering } from "../../cache/lowering"
 
 export const OpenAIReasoningEfforts = ReasoningEfforts.filter(
   (effort): effort is Exclude<ReasoningEffort, "max"> => effort !== "max",
@@ -71,8 +72,7 @@ export const include = (request: LLMRequest): ReadonlyArray<OpenAIResponseInclud
 }
 
 export const promptCacheKey = (request: LLMRequest) => {
-  const value = options(request)?.promptCacheKey
-  return typeof value === "string" ? value : undefined
+  return CacheLowering.openAIPromptCacheKey(request)
 }
 
 export const textVerbosity = (request: LLMRequest) => {

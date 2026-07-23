@@ -5,7 +5,7 @@ import { LLMRequestPrep } from "@/session/llm/request"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
 
-describe("ProviderTransform.options - setCacheKey", () => {
+describe("ProviderTransform.options - promptCacheKey", () => {
   const sessionID = "test-session-123"
 
   const mockModel = {
@@ -40,13 +40,13 @@ describe("ProviderTransform.options - setCacheKey", () => {
     headers: {},
   } as any
 
-  test("should set promptCacheKey when providerOptions.setCacheKey is true", () => {
+  test("should ignore legacy providerOptions.setCacheKey", () => {
     const result = ProviderTransform.options({
       model: mockModel,
       sessionID,
       providerOptions: { setCacheKey: true },
     })
-    expect(result.promptCacheKey).toBe(sessionID)
+    expect(result.promptCacheKey).toBeUndefined()
   })
 
   test("should not set promptCacheKey when providerOptions.setCacheKey is false", () => {
@@ -72,7 +72,7 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBeUndefined()
   })
 
-  test("should set promptCacheKey for openai provider regardless of setCacheKey", () => {
+  test("should not set promptCacheKey for OpenAI without an eligible CachePlan", () => {
     const openaiModel = {
       ...mockModel,
       providerID: "openai",
@@ -83,7 +83,216 @@ describe("ProviderTransform.options - setCacheKey", () => {
       },
     }
     const result = ProviderTransform.options({ model: openaiModel, sessionID, providerOptions: {} })
-    expect(result.promptCacheKey).toBe(sessionID)
+    expect(result.promptCacheKey).toBeUndefined()
+  })
+
+  test("should prefer CachePlan cacheKey for supported OpenAI models", () => {
+    const openaiModel = {
+      ...mockModel,
+      providerID: "openai",
+      api: {
+        id: "gpt-4o-mini",
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+    }
+    const result = ProviderTransform.options({
+      model: openaiModel,
+      sessionID,
+      providerOptions: {},
+      cachePlan: {
+        provider: "openai",
+        model: "gpt-4o-mini",
+        mode: "automatic",
+        cacheKey: "oc2-v1-stable-prefix",
+        trafficPartition: null,
+        stablePrefixFingerprint: "sha256:stable-prefix",
+        componentFingerprints: {},
+        prefixTokenCount: null,
+        minimumPrefixTokens: 1024,
+        eligible: true,
+        breakpoints: [],
+        duration: null,
+      },
+    })
+    expect(result.promptCacheKey).toBe("oc2-v1-stable-prefix")
+  })
+
+  test("should not use CachePlan cacheKey for unsupported compatible providers", () => {
+    const moonshotModel = {
+      ...mockModel,
+      providerID: "moonshot",
+      api: {
+        id: "kimi-k2",
+        url: "https://api.moonshot.cn",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+    const result = ProviderTransform.options({
+      model: moonshotModel,
+      sessionID,
+      providerOptions: {},
+      cachePlan: {
+        provider: "openai",
+        model: "kimi-k2",
+        mode: "automatic",
+        cacheKey: "oc2-v1-stable-prefix",
+        trafficPartition: null,
+        stablePrefixFingerprint: "sha256:stable-prefix",
+        componentFingerprints: {},
+        prefixTokenCount: null,
+        minimumPrefixTokens: 1024,
+        eligible: true,
+        breakpoints: [],
+        duration: null,
+      },
+    })
+    expect(result.promptCacheKey).toBeUndefined()
+  })
+
+  test("should not use disabled CachePlan cacheKey for OpenAI models", () => {
+    const openaiModel = {
+      ...mockModel,
+      providerID: "openai",
+      api: {
+        id: "gpt-4o-mini",
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+    }
+    const result = ProviderTransform.options({
+      model: openaiModel,
+      sessionID,
+      providerOptions: { setCacheKey: true },
+      cachePlan: {
+        provider: "openai",
+        model: "gpt-4o-mini",
+        mode: "disabled",
+        cacheKey: "oc2-v1-disabled",
+        trafficPartition: null,
+        stablePrefixFingerprint: "sha256:stable-prefix",
+        componentFingerprints: {},
+        prefixTokenCount: null,
+        minimumPrefixTokens: 1024,
+        eligible: false,
+        breakpoints: [],
+        duration: null,
+      },
+    })
+    expect(result.promptCacheKey).toBeUndefined()
+  })
+
+  test("chat.params plugin cannot add manual prompt cache keys without eligible plan", async () => {
+    const moonshotModel = {
+      ...mockModel,
+      providerID: "moonshot",
+      api: {
+        id: "kimi-k2",
+        url: "https://api.moonshot.cn",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+    const result = await Effect.runPromise(
+      LLMRequestPrep.prepare({
+        user: {
+          id: "msg_user-test",
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "test",
+          model: { providerID: "moonshot", modelID: "kimi-k2" },
+        } as any,
+        sessionID,
+        model: moonshotModel,
+        agent: { name: "test", mode: "primary", options: {}, permission: [] } as any,
+        system: [],
+        messages: [{ role: "user", content: "Hello" }],
+        tools: {},
+        provider: { id: "moonshot", options: {} } as any,
+        auth: undefined,
+        plugin: {
+          trigger: (name: string, _input: unknown, output: { options?: Record<string, unknown> }) => {
+            if (name === "chat.params" && output.options) {
+              output.options.promptCacheKey = "manual-camel"
+              output.options.prompt_cache_key = "manual-snake"
+            }
+            return Effect.succeed(output)
+          },
+          list: () => Effect.succeed([]),
+          init: () => Effect.void,
+        } as any,
+        flags: { outputTokenMax: 32_000, client: "test" } as any,
+        isWorkflow: false,
+      }),
+    )
+    expect(result.params.options.promptCacheKey).toBeUndefined()
+    expect(result.params.options.prompt_cache_key).toBeUndefined()
+  })
+
+  test("chat.params plugin cannot override plan-derived prompt cache key", async () => {
+    const openaiModel = {
+      ...mockModel,
+      providerID: "openai",
+      api: {
+        id: "gpt-4o-mini",
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+    }
+    const result = await Effect.runPromise(
+      LLMRequestPrep.prepare({
+        user: {
+          id: "msg_user-test",
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "test",
+          model: { providerID: "openai", modelID: "gpt-4o-mini" },
+        } as any,
+        sessionID,
+        model: openaiModel,
+        agent: { name: "test", mode: "primary", options: {}, permission: [] } as any,
+        system: [],
+        messages: [{ role: "user", content: "Hello" }],
+        tools: {},
+        provider: { id: "openai", options: {} } as any,
+        auth: undefined,
+        plugin: {
+          trigger: (name: string, _input: unknown, output: { options?: Record<string, unknown> }) => {
+            if (name === "chat.params" && output.options) {
+              output.options.promptCacheKey = "manual-camel"
+              output.options.prompt_cache_key = "manual-snake"
+            }
+            return Effect.succeed(output)
+          },
+          list: () => Effect.succeed([]),
+          init: () => Effect.void,
+        } as any,
+        flags: { outputTokenMax: 32_000, client: "test" } as any,
+        isWorkflow: false,
+      }),
+    )
+    expect(result.params.options.promptCacheKey).toMatch(/^oc2-v1-/)
+    expect(result.params.options.promptCacheKey).not.toBe("manual-camel")
+    expect(result.params.options.prompt_cache_key).toBeUndefined()
+  })
+
+  test("should not force legacy setCacheKey for DeepSeek", () => {
+    const deepseekModel = {
+      ...mockModel,
+      providerID: "deepseek",
+      api: {
+        id: "deepseek-chat",
+        url: "https://api.deepseek.com",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+    const result = ProviderTransform.options({
+      model: deepseekModel,
+      sessionID,
+      providerOptions: { setCacheKey: true },
+    })
+    expect(result.promptCacheKey).toBeUndefined()
   })
 
   test("should set store=false for openai provider", () => {
@@ -2267,7 +2476,7 @@ describe("ProviderTransform.message - cache control on gateway", () => {
     expect(result[0].providerOptions).toBeUndefined()
   })
 
-  test("non-gateway anthropic keeps existing cache control behavior", () => {
+  test("non-gateway anthropic applies only anthropic cache control", () => {
     const model = createModel({
       providerID: "anthropic",
       api: {
@@ -2295,35 +2504,10 @@ describe("ProviderTransform.message - cache control on gateway", () => {
           type: "ephemeral",
         },
       },
-      openrouter: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
-      bedrock: {
-        cachePoint: {
-          type: "default",
-        },
-      },
-      openaiCompatible: {
-        cache_control: {
-          type: "ephemeral",
-        },
-      },
-      copilot: {
-        copilot_cache_control: {
-          type: "ephemeral",
-        },
-      },
-      alibaba: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
     })
   })
 
-  test("google-vertex-anthropic applies cache control", () => {
+  test("google-vertex-anthropic applies only anthropic cache control", () => {
     const model = createModel({
       providerID: "google-vertex-anthropic",
       api: {
@@ -2352,32 +2536,30 @@ describe("ProviderTransform.message - cache control on gateway", () => {
           type: "ephemeral",
         },
       },
-      openrouter: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
-      bedrock: {
-        cachePoint: {
-          type: "default",
-        },
-      },
-      openaiCompatible: {
-        cache_control: {
-          type: "ephemeral",
-        },
-      },
-      copilot: {
-        copilot_cache_control: {
-          type: "ephemeral",
-        },
-      },
-      alibaba: {
-        cacheControl: {
-          type: "ephemeral",
-        },
-      },
     })
+  })
+
+  test("DeepSeek compatible models do not receive explicit cache fields", () => {
+    const model = createModel({
+      providerID: "deepseek",
+      api: {
+        id: "deepseek-chat",
+        url: "https://api.deepseek.com",
+        npm: "@ai-sdk/openai-compatible",
+      },
+      id: "deepseek-chat",
+    })
+    const msgs = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, {}) as any[]
+
+    expect(JSON.stringify(result)).not.toContain("cache_control")
+    expect(JSON.stringify(result)).not.toContain("cacheControl")
   })
 })
 

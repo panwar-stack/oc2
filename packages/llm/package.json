@@ -30,6 +30,7 @@
     "./cache/capability": "./src/cache/capability.ts",
     "./cache/canonical": "./src/cache/canonical.ts",
     "./cache/fingerprint": "./src/cache/fingerprint.ts",
+    "./cache/lowering": "./src/cache/lowering.ts",
     "./cache/planner": "./src/cache/planner.ts",
     "./protocols": "./src/protocols/index.ts",
     "./protocols/anthropic-messages": "./src/protocols/anthropic-messages.ts",
