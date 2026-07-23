@@ -143,6 +143,17 @@ describe("OpenAI-compatible Chat route", () => {
     }),
   )
 
+  it.effect("lowers compatible service tier options", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.updateRequest(request, { providerOptions: { openai: { serviceTier: "flex" } } }),
+      )
+
+      expect(prepared.body).toMatchObject({ service_tier: "flex" })
+      expect(prepared.body).not.toHaveProperty("serviceTier")
+    }),
+  )
+
   it.effect("matches AI SDK compatible tool request body fixture", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(

@@ -15,6 +15,11 @@ export const openaiCompatibleProviderOptions = z.object({
   reasoningEffort: z.string().optional(),
 
   /**
+   * OpenAI service tier for compatible chat requests.
+   */
+  serviceTier: z.enum(["auto", "flex", "priority"]).optional(),
+
+  /**
    * Controls the verbosity of the generated text. Defaults to `medium`.
    */
   textVerbosity: z.string().optional(),
