@@ -11,6 +11,8 @@ export type {
 export * from "./schema"
 export * as CachePlanner from "./cache/planner"
 export * as CacheTelemetry from "./cache/telemetry"
+export * as CacheState from "./cache/state"
+export * as CacheGuardrails from "./cache/guardrails"
 export { Tool, ToolFailure, toDefinitions } from "./tool"
 export { ToolRuntime } from "./tool-runtime"
 export type { DispatchResult as ToolDispatchResult, ToolSettlement } from "./tool-runtime"
