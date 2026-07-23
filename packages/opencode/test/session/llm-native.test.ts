@@ -377,6 +377,32 @@ describe("session.llm-native.request", () => {
     expect(openrouter.route.endpoint.baseURL).toBe("https://openrouter.ai/api/v1")
   })
 
+  it.effect("leaves unmarked native system context out of cache hints", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("anthropic"),
+          api: { ...baseModel.api, id: "claude-sonnet-4-5", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+        },
+        apiKey: "test-key",
+        system: ["Generated at 2026-07-22T12:00:00Z"],
+        messages: [
+          { role: "system", content: "Session timestamp 2026-07-22T12:00:01Z" },
+          { role: "user", content: "hi" },
+        ],
+      })
+
+      expect(prepared.body).toMatchObject({
+        system: [
+          { type: "text", text: "Generated at 2026-07-22T12:00:00Z", cache_control: undefined },
+          { type: "text", text: "Session timestamp 2026-07-22T12:00:01Z", cache_control: undefined },
+        ],
+      })
+      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+    }),
+  )
+
   test("fails fast for unsupported provider packages", () => {
     expect(() =>
       LLMNative.request({

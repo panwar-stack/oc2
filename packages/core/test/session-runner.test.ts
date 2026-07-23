@@ -920,10 +920,13 @@ describe("SessionRunnerLLM", () => {
 
       const request = capturedRequest()
       const digest = toolDefinitionsDigestOf(request)
-      expect(request.metadata).toEqual({ toolDefinitionsDigest: digest })
+      expect(request.metadata).toMatchObject({
+        toolDefinitionsDigest: digest,
+        repositoryContext: { version: 1, fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      })
       expect(request.providerOptions?.openai?.promptCacheKey).toBe(sessionID)
       expect(request.providerOptions?.openai?.promptCacheKey).not.toBe(digest)
-      expect(request.cache).toEqual({ tools: true, system: false, messages: "latest-user-message" })
+      expect(request.cache).toEqual({ tools: true, system: true, messages: "latest-user-message" })
       expect(request.tools.every((tool) => tool.metadata?.toolDefinitionsDigest === undefined)).toBe(true)
       expect(
         JSON.stringify({
@@ -937,6 +940,31 @@ describe("SessionRunnerLLM", () => {
           responseFormat: request.responseFormat,
         }),
       ).not.toContain(digest)
+    }),
+  )
+
+  it.effect("does not tag the agent system prompt as repository context when the baseline is empty", () =>
+    Effect.gen(function* () {
+      yield* setup
+      systemRemoved = true
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.system = "Build agent instructions"
+          agent.mode = "primary"
+        }),
+      )
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
+
+      resetRequestCapture()
+      yield* session.resume(sessionID)
+
+      const request = capturedRequest()
+      expect(request.system.map((part) => part.text)).toEqual(["Build agent instructions"])
+      expect(request.system[0]?.metadata).toEqual({ cache: { stable: true, version: 1 } })
+      expect(request.metadata?.repositoryContext).toBeUndefined()
+      expect(JSON.stringify(request)).not.toContain("e3b0c44298fc1c149afbf4c8996fb924")
     }),
   )
 
@@ -1146,7 +1174,7 @@ describe("SessionRunnerLLM", () => {
       expect(request?.system[0]?.cache).toBeUndefined()
       expect(request?.system[1]?.cache?.type).toBe("ephemeral")
       expect(request?.system[2]?.cache).toBeUndefined()
-      expect(request?.cache).toEqual({ tools: true, system: false, messages: "latest-user-message" })
+      expect(request?.cache).toEqual({ tools: true, system: true, messages: "latest-user-message" })
     }),
   )
 
