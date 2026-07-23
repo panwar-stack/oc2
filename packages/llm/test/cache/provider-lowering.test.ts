@@ -21,11 +21,23 @@ const kimiModel = OpenAICompatible.configure({
   apiKey: "test",
 }).model("kimi-k2")
 
+const kimiAliasModel = OpenAICompatible.configure({
+  provider: "kimi",
+  baseURL: "https://api.kimi.test/v1",
+  apiKey: "test",
+}).model("kimi-latest")
+
 const deepseekModel = OpenAICompatible.configure({
   provider: "deepseek",
   baseURL: "https://api.deepseek.test/v1",
   apiKey: "test",
 }).model("deepseek-chat")
+
+const unknownModel = OpenAICompatible.configure({
+  provider: "future",
+  baseURL: "https://api.future.test/v1",
+  apiKey: "test",
+}).model("future-model")
 
 describe("provider cache lowering", () => {
   it.effect("OpenAI derives prompt_cache_key from the CachePlan", () =>
@@ -42,13 +54,17 @@ describe("provider cache lowering", () => {
 
       expect(prepared.body).toMatchObject({ prompt_cache_key: expect.stringMatching(/^oc2-v1-/) })
       expect((prepared.body as { prompt_cache_key?: string }).prompt_cache_key).not.toBe("manual-key")
+      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
     }),
   )
 
-  it.effect("Kimi and DeepSeek do not receive explicit OpenAI cache fields", () =>
+  it.effect("Moonshot/Kimi, DeepSeek, and unknown models do not receive explicit cache fields", () =>
     Effect.gen(function* () {
       const kimi = yield* LLMClient.prepare(
         LLM.request({ model: kimiModel, system: "Stable system", prompt: "hi", cache: "auto" }),
+      )
+      const kimiAlias = yield* LLMClient.prepare(
+        LLM.request({ model: kimiAliasModel, system: "Stable system", prompt: "hi", cache: "auto" }),
       )
       const deepseek = yield* LLMClient.prepare(
         LLM.request({
@@ -59,11 +75,20 @@ describe("provider cache lowering", () => {
           cache: "auto",
         }),
       )
+      const unknown = yield* LLMClient.prepare(
+        LLM.request({
+          model: unknownModel,
+          system: "Stable system",
+          prompt: "hi",
+          providerOptions: { openai: { promptCacheKey: "manual-key" } },
+          cache: "auto",
+        }),
+      )
 
-      expect(JSON.stringify(kimi.body)).not.toContain("prompt_cache_key")
-      expect(JSON.stringify(deepseek.body)).not.toContain("prompt_cache_key")
-      expect(JSON.stringify(kimi.body)).not.toContain("cache_control")
-      expect(JSON.stringify(deepseek.body)).not.toContain("cache_control")
+      for (const body of [kimi.body, kimiAlias.body, deepseek.body, unknown.body]) {
+        expect(JSON.stringify(body)).not.toContain("prompt_cache_key")
+        expect(JSON.stringify(body)).not.toContain("cache_control")
+      }
     }),
   )
 
@@ -78,6 +103,7 @@ describe("provider cache lowering", () => {
           ],
           tools: [{ name: "t1", description: "t1", inputSchema: { type: "object", properties: {} } }],
           prompt: "hi",
+          providerOptions: { openai: { promptCacheKey: "manual-key" } },
           cache: { tools: true, system: true, ttlSeconds: 3600 },
         }),
       )
@@ -89,6 +115,7 @@ describe("provider cache lowering", () => {
           { type: "text", text: "Dynamic system", cache_control: undefined },
         ],
       })
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_key")
     }),
   )
 
