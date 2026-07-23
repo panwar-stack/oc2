@@ -88,6 +88,13 @@ describe("cache telemetry classification", () => {
     expect(
       LLMEvent.providerError({ message: "too long", classification: "context-overflow", usage }).usage?.cacheTelemetry,
     ).toMatchObject({
+      classification: "provider_error",
+      verified: false,
+    })
+    expect(
+      LLMEvent.providerError({ message: "invalid cache", usage, cacheTelemetryClassification: "cache_configuration_error" })
+        .usage?.cacheTelemetry,
+    ).toMatchObject({
       classification: "cache_configuration_error",
       verified: false,
     })
