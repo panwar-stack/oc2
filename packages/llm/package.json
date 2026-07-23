@@ -28,6 +28,8 @@
     "./providers/openrouter": "./src/providers/openrouter.ts",
     "./providers/xai": "./src/providers/xai.ts",
     "./cache/capability": "./src/cache/capability.ts",
+    "./cache/canonical": "./src/cache/canonical.ts",
+    "./cache/fingerprint": "./src/cache/fingerprint.ts",
     "./protocols": "./src/protocols/index.ts",
     "./protocols/anthropic-messages": "./src/protocols/anthropic-messages.ts",
     "./protocols/bedrock-converse": "./src/protocols/bedrock-converse.ts",
