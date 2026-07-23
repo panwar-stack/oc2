@@ -6,7 +6,7 @@ import { Log } from "@oc2-ai/core/util/log"
 import { Cause, Context, DateTime, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
-import { CachePlanner, type LLMEvent as LLMEventType } from "@oc2-ai/llm"
+import { CacheLogging, CachePlanner, type LLMEvent as LLMEventType } from "@oc2-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
 import type { LLMClientService } from "@oc2-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
@@ -33,6 +33,7 @@ import { ProviderTimingLifecycle } from "./llm/provider-timing"
 import { LLMRequestPrep } from "./llm/request"
 import type { TaskPromptOps } from "@/tool/task"
 import { SessionRetry, type CacheUse } from "./retry"
+import { TuiEvent } from "@/server/tui-event"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -177,13 +178,49 @@ const live: Layer.Layer<
       })
       const reportCacheUse = (requestFormat: string) =>
         prepared.params.cachePlan
-          ? input.cache?.onPrepared?.(
-              SessionRetry.cacheUse({
+          ? Effect.gen(function* () {
+              const event = CacheLogging.event({
+                requestID: input.messageID ?? input.user.id,
+                provider: input.model.providerID,
+                model: input.model.api.id,
+                route: requestFormat,
                 plan: prepared.params.cachePlan,
-                requestFormat,
-                promptVersion: CachePlanner.CACHE_PLANNER_VERSION,
-              }),
-            ) ?? Effect.void
+              })
+              l.info("cache.invocation", { cache: event })
+              yield* Effect.logInfo("prompt cache invocation").pipe(Effect.annotateLogs({ cache: event }))
+              if (event.notification) {
+                yield* events
+                  .publish(TuiEvent.ToastShow, {
+                    title: "Prompt Cache",
+                    message: event.notification.message,
+                    variant: event.notification.severity === "error" ? "error" : "warning",
+                    duration: 8000,
+                  })
+                  .pipe(Effect.ignore)
+              }
+              for (const warning of prepared.cacheGuardrails.warnings) {
+                l.warn("cache.guardrail", { issue: warning })
+                yield* Effect.logWarning("prompt cache guardrail").pipe(Effect.annotateLogs({ issue: warning }))
+              }
+              const warning = prepared.cacheGuardrails.warnings[0]
+              if (warning) {
+                yield* events
+                  .publish(TuiEvent.ToastShow, {
+                    title: "Prompt Cache Warning",
+                    message: warning.message,
+                    variant: "warning",
+                    duration: 8000,
+                  })
+                  .pipe(Effect.ignore)
+              }
+              yield* (input.cache?.onPrepared?.(
+                SessionRetry.cacheUse({
+                  plan: prepared.params.cachePlan,
+                  requestFormat,
+                  promptVersion: CachePlanner.CACHE_PLANNER_VERSION,
+                }),
+              ) ?? Effect.void)
+            })
           : Effect.void
       const telemetryAttributes = langfuseTelemetryAttributes({
         sessionID: input.sessionID,
@@ -322,6 +359,7 @@ const live: Layer.Layer<
           topK: prepared.params.topK,
           maxOutputTokens: prepared.params.maxOutputTokens,
           providerOptions: prepared.params.options,
+          cachePlan: prepared.params.cachePlan,
           headers: prepared.headers,
           abort: input.abort,
           timing: input.timing,

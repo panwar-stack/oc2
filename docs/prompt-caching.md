@@ -74,6 +74,12 @@ Prompt caching guardrails detect unsupported request fields, provider field
 leakage, invalid durations, breakpoint overflow, incompatible cache key reuse,
 unstable prefix changes, and retry prefix changes.
 
+Definitely invalid request fields and incompatible cache-key reuse fail before
+the provider call. Ambiguous cases, breakpoint overflow, and prefix changes are
+recorded as warning logs. When OC2 runs inside the TUI and the event bridge is
+available, warning/error toast events are also published on that existing TUI
+notification channel; non-TUI and headless runs should rely on logs.
+
 The shared cache layer exposes bounded expectation-state helpers keyed by safe
 fingerprints. Runtime session metadata records cache-affecting retry and
 lifecycle changes without storing prompt content. Diagnostics use the available

@@ -1,4 +1,5 @@
 import type { CacheDiagnostic, CachePlan, CacheTelemetry } from "./capability"
+import { normalize } from "./telemetry"
 import { notification, type CacheNotification } from "./warnings"
 
 export interface CacheInvocationLogInput {
@@ -49,8 +50,9 @@ export interface CacheInvocationLogEvent {
 }
 
 export const event = (input: CacheInvocationLogInput): CacheInvocationLogEvent => {
-  const telemetry = input.telemetry ?? null
   const plan = input.plan ?? null
+  const telemetry = input.telemetry ??
+    (plan ? normalize({ provider: input.provider ?? plan.provider, model: input.model ?? plan.model, plan }) : null)
   return {
     type: "cache-invocation",
     requestID: input.requestID ?? null,

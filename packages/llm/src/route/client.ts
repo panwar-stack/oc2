@@ -8,8 +8,11 @@ import { HttpTransport } from "./transport"
 import type { Transport, TransportRuntime } from "./transport"
 import { WebSocketExecutor } from "./transport"
 import type { Protocol } from "./protocol"
+import { CacheGuardrails } from "../cache/guardrails"
+import { CacheLogging } from "../cache/logging"
 import { applyCachePolicy } from "../cache-policy"
 import * as ProviderShared from "../protocols/shared"
+import type { CachePlan } from "../cache/capability"
 import type { LLMError, LLMEvent, PreparedRequestOf, ProtocolID, ProviderOptions } from "../schema"
 import {
   GenerationOptions,
@@ -19,6 +22,7 @@ import {
   Model,
   ModelLimits,
   LLMError as LLMErrorClass,
+  InvalidRequestReason,
   PreparedRequest,
   ProviderID,
   mergeGenerationOptions,
@@ -370,6 +374,19 @@ const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest) {
   const body = yield* route.body
     .from(resolved)
     .pipe(Effect.flatMap(ProviderShared.validateWith(Schema.decodeUnknownEffect(route.body.schema))))
+  const guardrails = cacheGuardrails(resolved, body)
+  if (!guardrails.valid) {
+    return yield* new LLMErrorClass({
+      module: "LLM",
+      method: "compile",
+      reason: new InvalidRequestReason({
+        message: `Prompt cache configuration invalid: ${guardrails.errors.map((item) => item.message).join(" ")}`,
+      }),
+    })
+  }
+  yield* Effect.forEach(guardrails.warnings, (warning) =>
+    Effect.logWarning("prompt cache guardrail").pipe(Effect.annotateLogs({ issue: warning })),
+  )
   const prepared = yield* route.prepareTransport(body, resolved)
 
   return {
@@ -399,6 +416,20 @@ const streamRequestWith =
     Stream.unwrap(
       Effect.gen(function* () {
         const compiled = yield* compile(request)
+        const plan = requestCachePlan(compiled.request)
+        if (plan) {
+          yield* Effect.logInfo("prompt cache invocation").pipe(
+            Effect.annotateLogs({
+              cache: CacheLogging.event({
+                requestID: compiled.request.id,
+                provider: compiled.request.model.provider,
+                model: compiled.request.model.id,
+                route: compiled.route.id,
+                plan,
+              }),
+            }),
+          )
+        }
         const webSocket = runtime.webSocket
         return compiled.route.streamPrepared(compiled.prepared, compiled.request, {
           ...runtime,
@@ -415,6 +446,45 @@ const streamRequestWith =
         })
       }),
     )
+
+const requestCachePlan = (request: LLMRequest) => {
+  const plan = request.metadata?.cachePlan
+  return isCachePlan(plan) ? plan : undefined
+}
+
+const cacheGuardrails = (request: LLMRequest, body: unknown) => {
+  const plan = requestCachePlan(request)
+  if (!plan) return CacheGuardrails.combine()
+  const fields = collectCacheFields(body)
+  return CacheGuardrails.combine(
+    CacheGuardrails.checkUnsupportedFields({ provider: plan.provider, model: plan.model, fields }),
+    CacheGuardrails.checkProviderFieldLeakage({ provider: plan.provider, model: plan.model, fields }),
+    CacheGuardrails.checkInvalidDuration({ provider: plan.provider, model: plan.model, duration: plan.duration }),
+    CacheGuardrails.checkBreakpointOverflow({ provider: plan.provider, model: plan.model, breakpoints: plan.breakpoints }),
+  )
+}
+
+const collectCacheFields = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.flatMap(collectCacheFields)
+  if (typeof value !== "object" || value === null) return []
+  return Object.entries(value).flatMap(([key, item]) => [
+    ...(key === "prompt_cache_key" ? ["prompt_cache_key"] : []),
+    ...(key === "cache_control" ? ["cache_control"] : []),
+    ...(key === "cachePoint" ? ["cachePoint"] : []),
+    ...collectCacheFields(item),
+  ])
+}
+
+const isCachePlan = (value: unknown): value is CachePlan =>
+  typeof value === "object" &&
+  value !== null &&
+  "provider" in value &&
+  "model" in value &&
+  "mode" in value &&
+  "cacheKey" in value &&
+  "eligible" in value &&
+  "breakpoints" in value &&
+  Array.isArray(value.breakpoints)
 
 const generateWith = (stream: Interface["stream"]) =>
   Effect.fn("LLM.generate")(function* (request: LLMRequest) {

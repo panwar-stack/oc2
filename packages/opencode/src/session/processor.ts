@@ -30,9 +30,18 @@ import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { CanonicalUsage, CacheTelemetry, toolFileSourceFromUri, Usage, type LLMEvent, type ProviderErrorEvent } from "@oc2-ai/llm"
+import {
+  CanonicalUsage,
+  CacheGuardrails,
+  CacheTelemetry,
+  toolFileSourceFromUri,
+  Usage,
+  type LLMEvent,
+  type ProviderErrorEvent,
+} from "@oc2-ai/llm"
 import { ToolOutput } from "@oc2-ai/core/tool-output"
 import { LLMAISDK } from "./llm/ai-sdk"
+import { TuiEvent } from "@/server/tui-event"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
@@ -44,6 +53,35 @@ function stableInputKey(value: unknown): string {
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, item]) => `${JSON.stringify(key)}:${stableInputKey(item)}`)
     .join(",")}}`
+}
+
+function cacheMetadataGuardrails(
+  previous: SessionRetry.CacheUse,
+  current: SessionRetry.CacheUse,
+  kind: SessionRetry.CacheChangeKind,
+  retryID: string,
+) {
+  const previousUse = {
+    provider: previous.provider,
+    model: previous.model,
+    cacheKey: previous.cacheKey,
+    stablePrefixFingerprint: previous.stablePrefixFingerprint,
+    trafficPartition: null,
+    componentFingerprints: previous.componentFingerprints,
+  }
+  const currentUse = {
+    provider: current.provider,
+    model: current.model,
+    cacheKey: current.cacheKey,
+    stablePrefixFingerprint: current.stablePrefixFingerprint,
+    trafficPartition: null,
+    componentFingerprints: current.componentFingerprints,
+  }
+  return CacheGuardrails.combine(
+    CacheGuardrails.checkIncompatibleCacheKeyReuse({ previous: previousUse, current: currentUse }),
+    CacheGuardrails.checkUnstablePrefixChange({ previous: previousUse, current: currentUse }),
+    ...(kind === "retry" ? [CacheGuardrails.checkRetryPrefixChange({ original: previousUse, retry: currentUse, retryID })] : []),
+  )
 }
 
 export type Result = "compact" | "stop" | "continue"
@@ -219,6 +257,29 @@ export const layer = Layer.effect(
         const info = yield* session.get(ctx.sessionID)
         const current = SessionRetry.metadata(info.metadata)
         const previous = kind === "retry" ? ctx.cacheUse : current.last
+        if (previous) {
+          const guardrails = cacheMetadataGuardrails(previous, value, kind, ctx.assistantMessage.id)
+          if (!guardrails.valid) {
+            return yield* Effect.fail(
+              new Error(`Prompt cache configuration invalid: ${guardrails.errors.map((item) => item.message).join(" ")}`),
+            )
+          }
+          for (const warning of guardrails.warnings) {
+            log.warn("cache.guardrail", { issue: warning })
+            yield* Effect.logWarning("prompt cache guardrail").pipe(Effect.annotateLogs({ issue: warning }))
+          }
+          const warning = guardrails.warnings[0]
+          if (warning) {
+            yield* events
+              .publish(TuiEvent.ToastShow, {
+                title: "Prompt Cache Warning",
+                message: warning.message,
+                variant: "warning",
+                duration: 8000,
+              })
+              .pipe(Effect.ignore)
+          }
+        }
         const result = SessionRetry.record({
           metadata: current,
           current: value,

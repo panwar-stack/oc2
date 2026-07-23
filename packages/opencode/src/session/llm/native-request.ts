@@ -1,4 +1,5 @@
 import type { JsonSchema, LLMRequest, ProviderMetadata } from "@oc2-ai/llm"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 import { LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@oc2-ai/llm"
 import {
   AmazonBedrock,
@@ -32,6 +33,7 @@ export type RequestInput = {
   readonly maxOutputTokens?: number
   readonly providerOptions?: LLMRequest["providerOptions"]
   readonly headers?: Record<string, string>
+  readonly cachePlan?: CachePlan
 }
 
 const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
@@ -190,6 +192,7 @@ export const request = (input: RequestInput) => {
     toolChoice: input.toolChoice,
     generation: generation(input),
     providerOptions: input.providerOptions,
+    metadata: input.cachePlan ? { cachePlan: input.cachePlan } : undefined,
   })
 }
 
