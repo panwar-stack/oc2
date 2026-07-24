@@ -424,6 +424,32 @@ describe("session.llm-native.request", () => {
     }),
   )
 
+  it.effect("lowers native OpenAI-compatible prompt cache key from the shared CachePlan", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("github-copilot"),
+          api: { ...baseModel.api, id: "gpt-5.5", url: "https://api.githubcopilot.test/v1", npm: "@ai-sdk/openai-compatible" },
+        },
+        apiKey: "test-key",
+        system: ["Stable system"],
+        messages: [{ role: "user", content: "hi" }],
+        tools: {
+          bash: tool({
+            description: "Run a command",
+            inputSchema: jsonSchema({ type: "object", properties: { command: { type: "string" } } }),
+          }),
+        },
+        providerOptions: { openai: { promptCacheKey: "manual-key" } },
+      })
+
+      expect(prepared.body).toMatchObject({ prompt_cache_key: expect.stringMatching(/^oc2-v1-/) })
+      expect((prepared.body as { prompt_cache_key?: string }).prompt_cache_key).not.toBe("manual-key")
+      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+    }),
+  )
+
   it.effect("does not lower manual prompt cache keys for unsupported OpenAI-compatible models", () =>
     Effect.gen(function* () {
       const prepared = yield* prepareNativeRequest({
@@ -489,14 +515,25 @@ describe("session.llm-native.request", () => {
         provider: { ...providerInfo, id: ProviderV2.ID.oc2 },
         auth: undefined,
       }),
-    ).toEqual({ type: "unsupported", reason: "provider is not openai or anthropic" })
+    ).toEqual({ type: "unsupported", reason: "provider is not openai, OpenAI-compatible, or anthropic" })
     expect(
       LLMNativeRuntime.status({
         model: { ...baseModel, providerID: ProviderV2.ID.make("google") },
         provider: { ...providerInfo, id: ProviderV2.ID.make("google") },
         auth: undefined,
       }),
-    ).toEqual({ type: "unsupported", reason: "provider is not openai or anthropic" })
+    ).toEqual({ type: "unsupported", reason: "provider is not openai, OpenAI-compatible, or anthropic" })
+    expect(
+      LLMNativeRuntime.status({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("github-copilot"),
+          api: { ...baseModel.api, npm: "@ai-sdk/openai-compatible", url: "https://api.githubcopilot.test/v1" },
+        },
+        provider: { ...providerInfo, id: ProviderV2.ID.make("github-copilot") },
+        auth: undefined,
+      }),
+    ).toMatchObject({ type: "supported", apiKey: "test-openai-key" })
     expect(
       LLMNativeRuntime.status({
         model: baseModel,
@@ -587,7 +624,7 @@ describe("session.llm-native.request", () => {
           providerID: provider.id,
           modelID: scenario.modelID,
           effectiveAPI: { package: scenario.api.package, url: scenario.api.url },
-          reason: "provider is not openai or anthropic",
+          reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic",
         })
         expect(aiSdkCalled).toBeFalse()
         expect(transportCalls).toBe(0)

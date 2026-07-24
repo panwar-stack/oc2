@@ -1,5 +1,5 @@
 import type { LLMRequest } from "../schema/messages"
-import type { CacheDuration, CachePlan } from "./capability"
+import { getCacheCapabilities, type CacheDuration, type CachePlan } from "./capability"
 
 const EXPLICIT_OPENAI_CACHE_DENYLIST = new Set(["deepseek", "kimi", "moonshot", "moonshot-ai", "moonshotai"])
 
@@ -15,7 +15,14 @@ export const openAIPromptCacheKey = (request: LLMRequest): string | undefined =>
   if (EXPLICIT_OPENAI_CACHE_DENYLIST.has(provider) || model.includes("kimi")) return undefined
 
   const plan = requestCachePlan(request)
-  if (plan?.provider === "openai" && plan.mode !== "disabled" && plan.eligible && plan.cacheKey) return plan.cacheKey
+  if (!plan) return undefined
+  if (
+    plan.mode !== "disabled" &&
+    plan.eligible &&
+    plan.cacheKey &&
+    getCacheCapabilities(plan.provider, plan.model).requestFields.includes("prompt_cache_key")
+  )
+    return plan.cacheKey
   return undefined
 }
 

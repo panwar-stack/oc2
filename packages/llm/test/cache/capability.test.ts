@@ -38,6 +38,19 @@ describe("cache capability registry", () => {
         },
       },
       {
+        provider: "github-copilot",
+        model: "gpt-5.5",
+        expected: {
+          status: "known",
+          promptCaching: "automatic_and_explicit",
+          requestFields: ["prompt_cache_key"],
+          reportsCacheReadTokens: true,
+          reportsCacheWriteTokens: true,
+          reportsCacheMissTokens: false,
+          conclusiveVerification: true,
+        },
+      },
+      {
         provider: "anthropic",
         model: "claude-sonnet-4-5",
         expected: {
@@ -136,6 +149,19 @@ describe("cache capability registry", () => {
       promptCaching: "automatic_and_explicit",
       supportsCacheKey: true,
       minimumPrefixTokens: 1024,
+      requestFields: ["prompt_cache_key"],
+    })
+  })
+
+  test("OpenAI-compatible GPT-like providers inherit OpenAI prompt caching capabilities", () => {
+    const capabilities = getCacheCapabilities("custom-compatible", "gpt-5.5")
+
+    expect(capabilities).toMatchObject({
+      provider: "custom-compatible",
+      status: "known",
+      modelPattern: "gpt-4.1*|gpt-4o*|gpt-5*|o1*|o3*|o4*",
+      promptCaching: "automatic_and_explicit",
+      supportsCacheKey: true,
       requestFields: ["prompt_cache_key"],
     })
   })

@@ -148,7 +148,39 @@ describe("ProviderTransform.options - promptCacheKey", () => {
     expect(result.promptCacheKey).toBe("oc2-v1-stable-prefix")
   })
 
-  test("should not use CachePlan cacheKey outside supported OpenAI models", () => {
+  test("should use CachePlan cacheKey for OpenAI-compatible GPT-like models", () => {
+    const compatibleModel = {
+      ...mockModel,
+      providerID: "github-copilot",
+      api: {
+        id: "gpt-5.5",
+        url: "https://api.githubcopilot.test",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+    const result = ProviderTransform.options({
+      model: compatibleModel,
+      sessionID,
+      providerOptions: {},
+      cachePlan: {
+        provider: "github-copilot",
+        model: "gpt-5.5",
+        mode: "automatic",
+        cacheKey: "oc2-v1-stable-prefix",
+        trafficPartition: null,
+        stablePrefixFingerprint: "sha256:stable-prefix",
+        componentFingerprints: {},
+        prefixTokenCount: null,
+        minimumPrefixTokens: 1024,
+        eligible: true,
+        breakpoints: [],
+        duration: null,
+      },
+    })
+    expect(result.promptCacheKey).toBe("oc2-v1-stable-prefix")
+  })
+
+  test("should not use CachePlan cacheKey outside supported OpenAI-compatible models", () => {
     const models = [
       { providerID: "anthropic", id: "claude-sonnet-4-5", npm: "@ai-sdk/anthropic" },
       { providerID: "moonshot", id: "kimi-k2", npm: "@ai-sdk/openai-compatible" },
@@ -172,7 +204,7 @@ describe("ProviderTransform.options - promptCacheKey", () => {
         sessionID,
         providerOptions: {},
         cachePlan: {
-          provider: "openai",
+          provider: model.providerID,
           model: model.id,
           mode: "automatic",
           cacheKey: "oc2-v1-stable-prefix",
@@ -274,11 +306,11 @@ describe("ProviderTransform.options - promptCacheKey", () => {
   test("chat.params plugin cannot override plan-derived prompt cache key", async () => {
     const openaiModel = {
       ...mockModel,
-      providerID: "openai",
+      providerID: "github-copilot",
       api: {
-        id: "gpt-4o-mini",
-        url: "https://api.openai.com",
-        npm: "@ai-sdk/openai",
+        id: "gpt-5.5",
+        url: "https://api.githubcopilot.test",
+        npm: "@ai-sdk/openai-compatible",
       },
     }
     const result = await Effect.runPromise(
@@ -289,7 +321,7 @@ describe("ProviderTransform.options - promptCacheKey", () => {
           role: "user",
           time: { created: Date.now() },
           agent: "test",
-          model: { providerID: "openai", modelID: "gpt-4o-mini" },
+          model: { providerID: "github-copilot", modelID: "gpt-5.5" },
         } as any,
         sessionID,
         model: openaiModel,
@@ -297,7 +329,7 @@ describe("ProviderTransform.options - promptCacheKey", () => {
         system: [],
         messages: [{ role: "user", content: "Hello" }],
         tools: {},
-        provider: { id: "openai", options: {} } as any,
+        provider: { id: "github-copilot", options: {} } as any,
         auth: undefined,
         plugin: {
           trigger: (name: string, _input: unknown, output: { options?: Record<string, unknown> }) => {

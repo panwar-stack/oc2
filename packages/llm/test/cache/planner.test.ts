@@ -97,6 +97,24 @@ describe("cache planner", () => {
     expect(changed.plan.cacheKey).toBe(base.plan.cacheKey)
   })
 
+  test("OpenAI-compatible GPT-like providers get OpenAI cache keys", () => {
+    const planned = planCache({
+      provider: "github-copilot",
+      model: "gpt-5.5",
+      cachePolicy: "auto",
+      system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+    })
+
+    expect(planned.plan).toMatchObject({
+      provider: "github-copilot",
+      model: "gpt-5.5",
+      mode: "automatic",
+      eligible: true,
+      minimumPrefixTokens: 1024,
+    })
+    expect(planned.plan.cacheKey).toMatch(/^oc2-v1-[0-9a-f]{64}$/)
+  })
+
   test("volatile cache routing fields do not affect stable prefix fingerprint", () => {
     const base = planCache({
       provider: "openai",

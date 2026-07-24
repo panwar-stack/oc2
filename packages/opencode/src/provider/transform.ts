@@ -4,6 +4,7 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "@oc2-ai/core/models-dev"
 import type { CachePlan } from "@oc2-ai/llm/cache/planner"
+import { getCacheCapabilities } from "@oc2-ai/llm/cache/capability"
 import { iife } from "@/util/iife"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
@@ -1163,10 +1164,17 @@ export function options(input: {
 
 const promptCacheKeyForPlan = (model: Provider.Model, plan: CachePlan | undefined) => {
   if (explicitOpenAICacheUnsupported(model)) return undefined
-  if (model.providerID !== "openai" && model.api.npm !== "@ai-sdk/openai") return undefined
-  if (!plan?.eligible || plan.mode === "disabled" || plan.provider !== "openai" || !plan.cacheKey) return undefined
+  if (!usesOpenAICacheKey(model)) return undefined
+  if (!plan?.eligible || plan.mode === "disabled" || !plan.cacheKey) return undefined
+  if (!getCacheCapabilities(plan.provider, plan.model).requestFields.includes("prompt_cache_key")) return undefined
   return plan.cacheKey
 }
+
+const usesOpenAICacheKey = (model: Provider.Model) =>
+  model.providerID === "openai" ||
+  model.api.npm === "@ai-sdk/openai" ||
+  model.api.npm === "@ai-sdk/openai-compatible" ||
+  model.api.npm === "@ai-sdk/github-copilot"
 
 const explicitOpenAICacheUnsupported = (model: Provider.Model) => {
   const provider = model.providerID.toLowerCase()
