@@ -954,6 +954,21 @@ describe("ProviderTransform.providerOptions", () => {
     })
   })
 
+  test("maps OpenAI-compatible service tier to request body key", () => {
+    const model = createModel({
+      providerID: "deepseek",
+      api: {
+        id: "deepseek-chat",
+        url: "https://api.deepseek.com",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+
+    expect(ProviderTransform.providerOptions(model, { reasoningEffort: "high", serviceTier: "flex" })).toEqual({
+      deepseek: { reasoningEffort: "high", service_tier: "flex" },
+    })
+  })
+
   test("uses groq slug for groq models", () => {
     const model = createModel({
       providerID: "vercel",
