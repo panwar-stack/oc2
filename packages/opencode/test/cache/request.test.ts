@@ -132,4 +132,49 @@ describe("prompt cache request preparation", () => {
       expect(Object.keys(second.tools)).toEqual(["alpha", "beta"])
     }),
   )
+
+  it.effect("replaces user supplied OpenAI prompt cache keys", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const manualModel = {
+        ...model,
+        options: { promptCacheKey: "manual-model-camel", prompt_cache_key: "manual-model-snake" },
+      }
+      const manualAgent = {
+        ...agent,
+        options: { promptCacheKey: "manual-agent-camel", prompt_cache_key: "manual-agent-snake" },
+      }
+      const manualPlugin: Plugin.Interface = {
+        ...plugin,
+        trigger: (name, _input, output) => {
+          if (name === "chat.params") {
+            const params = output as { options: Record<string, unknown> }
+            params.options.promptCacheKey = "manual-plugin-camel"
+            params.options.prompt_cache_key = "manual-plugin-snake"
+          }
+          return Effect.succeed(output)
+        },
+      }
+
+      const prepared = yield* prepare({
+        user,
+        sessionID,
+        model: manualModel,
+        agent: manualAgent,
+        system: [],
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {},
+        provider,
+        auth: undefined,
+        plugin: manualPlugin,
+        flags,
+        isWorkflow: false,
+      })
+
+      expect(prepared.params.options.promptCacheKey).toMatch(/^oc2-v1-/)
+      expect(prepared.params.options.promptCacheKey).not.toMatch(/^manual-/)
+      expect(prepared.params.options.prompt_cache_key).toBeUndefined()
+      expect(JSON.stringify(prepared.params.options)).not.toContain("manual-")
+    }),
+  )
 })

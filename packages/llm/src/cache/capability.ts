@@ -35,6 +35,9 @@ export interface CacheCapabilities {
   readonly supportsCacheKey: boolean
   readonly supportsBreakpoints: boolean
   readonly supportsDuration: boolean
+  readonly supportsPromptCacheOptions: boolean
+  readonly supportsPromptCacheBreakpoints: boolean
+  readonly supportsPromptCacheRetention: boolean
   readonly minimumPrefixTokens: number | null
   readonly maximumBreakpoints: number | null
   readonly reportsCacheReadTokens: boolean
@@ -123,6 +126,9 @@ export const unknownCacheCapabilities: CacheCapabilities = {
   supportsCacheKey: false,
   supportsBreakpoints: false,
   supportsDuration: false,
+  supportsPromptCacheOptions: false,
+  supportsPromptCacheBreakpoints: false,
+  supportsPromptCacheRetention: false,
   minimumPrefixTokens: null,
   maximumBreakpoints: null,
   reportsCacheReadTokens: false,
@@ -152,6 +158,9 @@ export const cacheCapabilityRecords = [
     supportsCacheKey: true,
     supportsBreakpoints: false,
     supportsDuration: false,
+    supportsPromptCacheOptions: false,
+    supportsPromptCacheBreakpoints: false,
+    supportsPromptCacheRetention: false,
     minimumPrefixTokens: 1024,
     maximumBreakpoints: null,
     reportsCacheReadTokens: true,
@@ -184,6 +193,9 @@ export const cacheCapabilityRecords = [
     supportsCacheKey: false,
     supportsBreakpoints: true,
     supportsDuration: true,
+    supportsPromptCacheOptions: false,
+    supportsPromptCacheBreakpoints: false,
+    supportsPromptCacheRetention: false,
     minimumPrefixTokens: 2048,
     maximumBreakpoints: 4,
     reportsCacheReadTokens: true,
@@ -211,6 +223,9 @@ export const cacheCapabilityRecords = [
     supportsCacheKey: false,
     supportsBreakpoints: true,
     supportsDuration: true,
+    supportsPromptCacheOptions: false,
+    supportsPromptCacheBreakpoints: false,
+    supportsPromptCacheRetention: false,
     minimumPrefixTokens: 1024,
     maximumBreakpoints: 4,
     reportsCacheReadTokens: true,
@@ -238,6 +253,9 @@ export const cacheCapabilityRecords = [
     supportsCacheKey: false,
     supportsBreakpoints: false,
     supportsDuration: false,
+    supportsPromptCacheOptions: false,
+    supportsPromptCacheBreakpoints: false,
+    supportsPromptCacheRetention: false,
     minimumPrefixTokens: null,
     maximumBreakpoints: null,
     reportsCacheReadTokens: false,
@@ -265,6 +283,9 @@ export const cacheCapabilityRecords = [
     supportsCacheKey: false,
     supportsBreakpoints: false,
     supportsDuration: false,
+    supportsPromptCacheOptions: false,
+    supportsPromptCacheBreakpoints: false,
+    supportsPromptCacheRetention: false,
     minimumPrefixTokens: null,
     maximumBreakpoints: null,
     reportsCacheReadTokens: true,

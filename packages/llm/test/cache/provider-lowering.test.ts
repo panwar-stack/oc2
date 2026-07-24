@@ -61,6 +61,9 @@ describe("provider cache lowering", () => {
       expect(prepared.body).toMatchObject({ prompt_cache_key: expect.stringMatching(/^oc2-v1-/) })
       expect((prepared.body as { prompt_cache_key?: string }).prompt_cache_key).not.toBe("manual-key")
       expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_options")
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint")
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_retention")
     }),
   )
 

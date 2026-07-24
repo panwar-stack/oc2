@@ -44,7 +44,7 @@ export interface PrefixUse {
 }
 
 const providerFields = new Map([
-  ["openai", new Set(["prompt_cache_key"])],
+  ["openai", new Set(["prompt_cache_key", "prompt_cache_options", "prompt_cache_breakpoint", "prompt_cache_retention"])],
   ["anthropic", new Set(["cache_control"])],
   ["bedrock", new Set(["cachePoint"])],
 ])
@@ -56,7 +56,7 @@ export const checkUnsupportedFields = (input: {
   readonly capabilities?: CacheCapabilities
 }) => {
   const capabilities = input.capabilities ?? getCacheCapabilities(input.provider, input.model)
-  const allowed = new Set(capabilities.requestFields)
+  const allowed = new Set(capabilities.requestFields.filter((field) => supportsRequestField(capabilities, field)))
   const severity = capabilities.status === "unknown" ? "warning" : "error"
   return result(
     input.fields
@@ -75,6 +75,13 @@ export const checkUnsupportedFields = (input: {
         }),
       ),
   )
+}
+
+const supportsRequestField = (capabilities: CacheCapabilities, field: string) => {
+  if (field === "prompt_cache_options") return capabilities.supportsPromptCacheOptions
+  if (field === "prompt_cache_breakpoint") return capabilities.supportsPromptCacheBreakpoints
+  if (field === "prompt_cache_retention") return capabilities.supportsPromptCacheRetention
+  return true
 }
 
 export const checkInvalidDuration = (input: {
