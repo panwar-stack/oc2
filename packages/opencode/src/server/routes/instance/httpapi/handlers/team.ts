@@ -9,7 +9,7 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
     const team = yield* Team.Service
 
     const getBySession = Effect.fn("TeamHttpApi.getBySession")(function* (ctx: { query: { sessionID: string } }) {
-      const result = yield* team.getActive(ctx.query.sessionID)
+      const result = yield* team.getByLeadSession(ctx.query.sessionID)
       if (Option.isNone(result)) {
         return yield* new HttpApiError.BadRequest({})
       }

@@ -187,7 +187,7 @@ export const TeamApi = HttpApi.make("team").add(
         OpenApi.annotations({
           identifier: "team.get",
           summary: "Get team by lead session",
-          description: "Get the active team for a given lead session ID.",
+          description: "Get the latest team for a given lead session ID.",
         }),
       ),
       HttpApiEndpoint.get("getEval", `${TeamPaths.root}/:teamID/eval`, {

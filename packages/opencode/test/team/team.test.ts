@@ -55,6 +55,63 @@ describe("team", () => {
         const closed = yield* team.get(first.id)
         expect(Option.isSome(closed)).toBe(true)
         expect(unwrap(closed).status).toBe("closed")
+
+        const byLeadSession = yield* team.getByLeadSession(leadSessionID)
+        expect(Option.isSome(byLeadSession)).toBe(true)
+        expect(unwrap(byLeadSession).id).toBe(second.id)
+      }),
+    ),
+  )
+
+  it.live("prefers active team by lead session when creation times tie", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_recreate_tie"
+        const originalNow = Date.now
+        const originalRandomUUID = crypto.randomUUID
+
+        Date.now = () => 123
+        crypto.randomUUID = () => "ffffffff-ffff-4fff-8fff-ffffffffffff"
+
+        yield* Effect.acquireRelease(
+          Effect.void,
+          () =>
+            Effect.sync(() => {
+              Date.now = originalNow
+              crypto.randomUUID = originalRandomUUID
+            }),
+        )
+
+        const first = yield* team.create({ name: "first-team", goal: "First goal", leadSessionID })
+        yield* team.shutdown(first.id)
+        crypto.randomUUID = () => "00000000-0000-4000-8000-000000000000"
+        yield* team.create({ name: "second-team", goal: "Second goal", leadSessionID })
+
+        const byLeadSession = yield* team.getByLeadSession(leadSessionID)
+        expect(Option.isSome(byLeadSession)).toBe(true)
+        expect(unwrap(byLeadSession).id).toBe("00000000-0000-4000-8000-000000000000")
+        expect(unwrap(byLeadSession).status).toBe("active")
+      }),
+    ),
+  )
+
+  it.live("resolves closed team by lead session", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_closed_lookup"
+
+        const created = yield* team.create({ name: "closed-team", goal: "Goal", leadSessionID })
+        yield* team.shutdown(created.id)
+
+        const active = yield* team.getActive(leadSessionID)
+        expect(Option.isNone(active)).toBe(true)
+
+        const byLeadSession = yield* team.getByLeadSession(leadSessionID)
+        expect(Option.isSome(byLeadSession)).toBe(true)
+        expect(unwrap(byLeadSession).id).toBe(created.id)
+        expect(unwrap(byLeadSession).status).toBe("closed")
       }),
     ),
   )

@@ -5,7 +5,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Context, Effect, Layer, Schema, Option } from "effect"
-import { eq, and, asc } from "drizzle-orm"
+import { eq, and, asc, desc, sql } from "drizzle-orm"
 import {
   TeamTable,
   TeamMemberTable,
@@ -64,6 +64,7 @@ export type UsageEvent = {
 export interface Interface {
   create: (input: { name: string; goal: string; leadSessionID: string }) => Effect.Effect<Info>
   getActive: (leadSessionID: string) => Effect.Effect<Option.Option<Info>>
+  getByLeadSession: (leadSessionID: string) => Effect.Effect<Option.Option<Info>>
   get: (teamID: string) => Effect.Effect<Option.Option<Info>>
   shutdown: (teamID: string) => Effect.Effect<void>
   addMember: (input: {
@@ -195,6 +196,17 @@ export const layer = Layer.effect(
         .select()
         .from(TeamTable)
         .where(and(eq(TeamTable.lead_session_id, leadSessionID), eq(TeamTable.status, "active")))
+        .get()
+        .pipe(Effect.orDie)
+      return toOption(row)
+    })
+
+    const getByLeadSession = Effect.fn("Team.getByLeadSession")(function* (leadSessionID: string) {
+      const row = yield* db
+        .select()
+        .from(TeamTable)
+        .where(eq(TeamTable.lead_session_id, leadSessionID))
+        .orderBy(asc(sql`case when ${TeamTable.status} = 'active' then 0 else 1 end`), desc(TeamTable.time_created), desc(TeamTable.id))
         .get()
         .pipe(Effect.orDie)
       return toOption(row)
@@ -996,6 +1008,7 @@ export const layer = Layer.effect(
     return Service.of({
       create,
       getActive,
+      getByLeadSession,
       get,
       shutdown,
       addMember,

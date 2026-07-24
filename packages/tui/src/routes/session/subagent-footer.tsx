@@ -26,7 +26,7 @@ export function SubagentFooter() {
     (parentID) =>
       sdk.client.team
         .get({ sessionID: parentID })
-        .then((res) => (res.data?.status === "active" ? res.data : undefined))
+        .then((res) => res.data ?? undefined)
         .catch(() => undefined),
   )
 
