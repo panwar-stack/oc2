@@ -2946,6 +2946,8 @@ describe("session.llm.stream", () => {
         expect(body.temperature).toBe(0.4)
         expect(body.top_p).toBe(0.8)
         expect(body.stream).toBe(true)
+        expect(body.service_tier).toBe("flex")
+        expect(body.serviceTier).toBeUndefined()
 
         const maxTokens = (body.max_tokens as number | undefined) ?? (body.max_output_tokens as number | undefined)
         const expectedMaxTokens = ProviderTransform.maxOutputTokens(resolved)

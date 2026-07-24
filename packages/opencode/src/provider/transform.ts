@@ -1259,6 +1259,10 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   if (model.api.npm === "@ai-sdk/azure") {
     return { openai: options, azure: options }
   }
+  if (model.api.npm === "@ai-sdk/openai-compatible" && options.serviceTier !== undefined) {
+    const { serviceTier, ...rest } = options
+    return { [key]: { ...rest, service_tier: serviceTier } }
+  }
   return { [key]: options }
 }
 
