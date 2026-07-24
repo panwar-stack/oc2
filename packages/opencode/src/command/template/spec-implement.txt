@@ -4,14 +4,12 @@ Read and resolve $1 first. MUST use agent teams.
 
 Record the invoking worktree path, status, branch, and committed HEAD as base_sha. Treat it as read only.
 
-Create one branch and one external worktree from base_sha. Perform all edits, tests, reviews, and commits there.
+Create one external worktree from base_sha. Perform all edits, tests, reviews, and commits there.
 
 Do not modify, merge into, fast forward, rebase, cherry pick, clean, reset, stash, switch, or commit in the invoking worktree. Stop if implementation depends on uncommitted source changes there.
 
-When $2 is provided, implement only that pull request. Otherwise, complete $1 one pull request at a time. For each pull request, implement, test, review, verify, and commit before continuing.
+When PR number - $2 - is provided, implement only that pull request. Otherwise, complete $1 one pull request at a time. For each pull request, implement, test, review, verify, and commit before continuing.
 
 Do not implement unrelated work. MUST Audit the full implementation when complete.
 
-Before responding, verify the invoking worktree is unchanged. Preserve both worktrees and branches.
-
-Report the external worktree path, branch, base_sha, commits, verification results, audit results, and final status. Confirm nothing was merged back.
+Before responding, verify the invoking worktree is unchanged. Preserve both worktrees.
