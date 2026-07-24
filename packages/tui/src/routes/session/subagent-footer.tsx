@@ -54,6 +54,8 @@ export function SubagentFooter() {
   })
 
   const usage = createMemo(() => {
+    if (isTeamMember()) return
+
     const msg = messages()
     const last = currentContextMessage(msg)
     if (!last) return
