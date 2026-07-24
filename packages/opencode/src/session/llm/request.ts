@@ -115,6 +115,9 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       execute: async () => ({ output: "", title: "", metadata: {} }),
     })
   }
+  const sortedTools: Record<string, Tool> = Object.fromEntries(
+    Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b)),
+  )
 
   const cacheBoundary = CachePlanner.planCache({
     provider: input.model.providerID,
@@ -125,7 +128,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       text,
       metadata: { cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION } },
     })),
-    tools: Object.entries(tools).map(([name, tool]) => ({
+    tools: Object.entries(sortedTools).map(([name, tool]) => ({
       name,
       description: tool.description ?? "",
       inputSchema: schemaFromTool(tool),
@@ -232,7 +235,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   return {
     system,
     messages,
-    tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
+    tools: sortedTools,
     params: preparedParams,
     messageTransformOptions: { ...options, cachePlan },
     cacheGuardrails,
