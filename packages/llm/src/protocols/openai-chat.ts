@@ -205,15 +205,20 @@ const OPENAI_USAGE_PROFILE: OpenAIChatUsageProfile = {
   metadataShape: "direct",
 }
 
-const XAI_USAGE_PROFILE: OpenAIChatUsageProfile = {
+const OPENAI_COMPATIBLE_USAGE_PROFILE: OpenAIChatUsageProfile = {
   ...OPENAI_USAGE_PROFILE,
+  cacheWrite: false,
+}
+
+const XAI_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  ...OPENAI_COMPATIBLE_USAGE_PROFILE,
   providerMetadata: "xai",
   completionTokens: "exclusive",
   cacheInput: "xai-conditional",
 }
 
 const DEEPINFRA_USAGE_PROFILE: OpenAIChatUsageProfile = {
-  ...OPENAI_USAGE_PROFILE,
+  ...OPENAI_COMPATIBLE_USAGE_PROFILE,
   providerMetadata: "deepinfra",
 }
 
@@ -223,7 +228,7 @@ const DEEPINFRA_EXCLUDED_REASONING_USAGE_PROFILE: OpenAIChatUsageProfile = {
 }
 
 const DEEPSEEK_USAGE_PROFILE: OpenAIChatUsageProfile = {
-  ...OPENAI_USAGE_PROFILE,
+  ...OPENAI_COMPATIBLE_USAGE_PROFILE,
   providerMetadata: "deepseek",
   cacheProvider: "deepseek",
   cacheRead: "deepseek",
@@ -242,7 +247,12 @@ const openAIChatUsageProfile = (request: LLMRequest): OpenAIChatUsageProfile => 
   if (provider === "xai") return { ...XAI_USAGE_PROFILE, model }
   if (provider === "deepseek") return { ...DEEPSEEK_USAGE_PROFILE, model }
   if (provider === "openrouter") return { ...OPENROUTER_USAGE_PROFILE, model }
-  if (provider !== "deepinfra") return { ...OPENAI_USAGE_PROFILE, cacheProvider: provider, model }
+  if (provider !== "deepinfra")
+    return {
+      ...(provider === "openai" ? OPENAI_USAGE_PROFILE : OPENAI_COMPATIBLE_USAGE_PROFILE),
+      cacheProvider: provider,
+      model,
+    }
   const normalizedModel = model.toLowerCase()
   return normalizedModel.startsWith("google/gemini-") || normalizedModel.startsWith("google/gemma-")
     ? { ...DEEPINFRA_EXCLUDED_REASONING_USAGE_PROFILE, model }

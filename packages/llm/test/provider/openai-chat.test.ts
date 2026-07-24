@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Schema, Stream } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { CanonicalUsage, LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
+import { CacheTelemetry, CanonicalUsage, LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
 import * as OpenAICompatible from "../../src/providers/openai-compatible"
@@ -37,6 +37,13 @@ const providerUsageFixtures = {
     completion_tokens: 12,
     total_tokens: 22,
     prompt_tokens_details: { cached_tokens: 2 },
+    completion_tokens_details: { reasoning_tokens: 7 },
+  },
+  openaiCacheWrite: {
+    prompt_tokens: 100,
+    completion_tokens: 12,
+    total_tokens: 112,
+    prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
     completion_tokens_details: { reasoning_tokens: 7 },
   },
   xai: {
@@ -553,6 +560,15 @@ describe("OpenAI Chat route", () => {
             completion_tokens_details: { reasoning_tokens: 0 },
           },
         },
+        cacheTelemetry: CacheTelemetry.normalize({
+          provider: "openai",
+          model: "gpt-4o-mini",
+          inputTokens: 5,
+          cacheReadTokens: 1,
+          cacheWriteTokens: null,
+          cacheMissTokens: null,
+          providerRawUsageFieldNames: ["prompt_tokens", "prompt_tokens_details.cached_tokens"],
+        }),
       })
 
       expect(response.text).toBe("Hello!")
@@ -647,6 +663,77 @@ describe("OpenAI Chat route", () => {
         providerMetadata: { openai: providerUsageFixtures.openai },
       })
       expect(response.usage?.visibleOutputTokens).toBe(5)
+    }),
+  )
+
+  it.effect("counts first-party OpenAI Chat cache writes from provider usage", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(sseEvents(deltaChunk({}, "stop"), usageChunk(providerUsageFixtures.openaiCacheWrite))),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 100,
+        outputTokens: 12,
+        nonCachedInputTokens: 60,
+        cacheReadInputTokens: 30,
+        cacheWriteInputTokens: 10,
+        reasoningTokens: 7,
+        totalTokens: 112,
+        providerTotalTokens: 112,
+        providerMetadata: { openai: providerUsageFixtures.openaiCacheWrite },
+      })
+      expect(CanonicalUsage.fromUsage(response.usage)).toMatchObject({
+        input: 60,
+        cache: { read: 30, write: 10 },
+        providerTotal: 112,
+      })
+      expect(response.usage?.cacheTelemetry).toMatchObject({
+        provider: "openai",
+        cacheWriteTokens: 10,
+        providerRawUsageFieldNames: [
+          "prompt_tokens",
+          "prompt_tokens_details.cached_tokens",
+          "prompt_tokens_details.cache_write_tokens",
+        ],
+      })
+    }),
+  )
+
+  it.effect("does not count inherited OpenAI-compatible cache writes without an explicit profile", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          model: XAI.configure({ baseURL: "https://api.x.ai/v1", apiKey: "test" }).chat("grok-3-mini"),
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              usageChunk({
+                prompt_tokens: 100,
+                completion_tokens: 9,
+                total_tokens: 111,
+                prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+                completion_tokens_details: { reasoning_tokens: 2 },
+              }),
+            ),
+          ),
+        ),
+      )
+
+      expect(response.usage).toMatchObject({
+        inputTokens: 100,
+        outputTokens: 11,
+        nonCachedInputTokens: 70,
+        cacheReadInputTokens: 30,
+        reasoningTokens: 2,
+        providerTotalTokens: 111,
+      })
+      expect(response.usage?.cacheWriteInputTokens).toBeUndefined()
+      expect(response.usage?.cacheTelemetry?.cacheWriteTokens).toBeNull()
     }),
   )
 
