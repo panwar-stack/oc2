@@ -146,6 +146,13 @@ describe("session.llm.request", () => {
           expectsPromptCacheKey: true,
         },
         {
+          providerID: "github-copilot",
+          modelID: "gpt-5.5",
+          npm: "@ai-sdk/openai-compatible",
+          expectedMode: "automatic",
+          expectsPromptCacheKey: true,
+        },
+        {
           providerID: "anthropic",
           modelID: "claude-sonnet-4-5",
           npm: "@ai-sdk/anthropic",

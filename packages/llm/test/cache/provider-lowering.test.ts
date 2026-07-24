@@ -15,6 +15,12 @@ const openaiModel = OpenAIChat.route
   .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
   .model({ id: "gpt-4o-mini" })
 
+const compatibleGPTModel = OpenAICompatible.configure({
+  provider: "github-copilot",
+  baseURL: "https://api.githubcopilot.test/v1",
+  apiKey: "test",
+}).model("gpt-5.5")
+
 const kimiModel = OpenAICompatible.configure({
   provider: "moonshot",
   baseURL: "https://api.moonshot.test/v1",
@@ -45,6 +51,24 @@ describe("provider cache lowering", () => {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
           model: openaiModel,
+          system: [{ type: "text", text: "Stable system", metadata: { cache: { stable: true, version: 1 } } }],
+          prompt: "hi",
+          providerOptions: { openai: { promptCacheKey: "manual-key" } },
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({ prompt_cache_key: expect.stringMatching(/^oc2-v1-/) })
+      expect((prepared.body as { prompt_cache_key?: string }).prompt_cache_key).not.toBe("manual-key")
+      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+    }),
+  )
+
+  it.effect("OpenAI-compatible GPT-like providers derive prompt_cache_key from the CachePlan", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model: compatibleGPTModel,
           system: [{ type: "text", text: "Stable system", metadata: { cache: { stable: true, version: 1 } } }],
           prompt: "hi",
           providerOptions: { openai: { promptCacheKey: "manual-key" } },

@@ -130,7 +130,7 @@ export const checkProviderFieldLeakage = (input: {
   readonly model: string
   readonly fields: ReadonlyArray<string>
 }) => {
-  const normalizedProvider = normalizeProvider(input.provider)
+  const normalizedProvider = normalizeProvider(input.provider, input.model)
   return result(
     input.fields.flatMap((field) => {
       const owner = [...providerFields.entries()].find(([provider, fields]) => provider !== normalizedProvider && fields.has(field))
@@ -210,10 +210,11 @@ const result = (issues: ReadonlyArray<CacheGuardrailIssue>): CacheGuardrailResul
 
 const issue = (input: CacheGuardrailIssue): CacheGuardrailIssue => input
 
-const normalizeProvider = (provider: string) => {
+const normalizeProvider = (provider: string, model?: string) => {
   const lower = provider.toLowerCase()
   if (lower === "amazon-bedrock" || lower === "bedrock-converse") return "bedrock"
   if (lower === "moonshot-ai" || lower === "moonshotai" || lower === "kimi") return "moonshot"
+  if (model && getCacheCapabilities(provider, model).requestFields.includes("prompt_cache_key")) return "openai"
   return lower
 }
 

@@ -41,4 +41,29 @@ describe("ModelRequest", () => {
       body: {},
     })
   })
+
+  test("normalizes OpenAI-compatible options with OpenAI semantics", () => {
+    expect(
+      ModelRequest.normalizeAiSdkOptions("@ai-sdk/openai-compatible", {
+        promptCacheKey: "cache-key",
+        reasoning_effort: "high",
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+        textVerbosity: "low",
+        service_tier: "flex",
+        custom_extension: true,
+      }),
+    ).toEqual({
+      generation: {},
+      options: {
+        promptCacheKey: "cache-key",
+        reasoningEffort: "high",
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+        textVerbosity: "low",
+        serviceTier: "flex",
+      },
+      body: { custom_extension: true },
+    })
+  })
 })

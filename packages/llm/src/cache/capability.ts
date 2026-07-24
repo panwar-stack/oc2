@@ -285,6 +285,9 @@ export const cacheCapabilityRecords = [
   },
 ] as const satisfies ReadonlyArray<CacheCapabilities>
 
+const openAICapabilities = cacheCapabilityRecords[0]
+const openAICompatibleUnsupportedProviders = new Set(["deepseek", "kimi", "moonshot", "moonshot-ai", "moonshotai"])
+
 export const getUnknownCacheCapabilities = (provider = "unknown", modelPattern = "*"): CacheCapabilities => ({
   ...unknownCacheCapabilities,
   provider,
@@ -300,7 +303,18 @@ export const getCacheCapabilities = (provider: string, model: string): CacheCapa
       capabilities.modelPattern.split("|").some((pattern) => matchesPattern(normalizedModel, pattern)),
   )
 
-  return record ?? getUnknownCacheCapabilities(normalizedProvider, model)
+  if (record) return record
+
+  if (isOpenAICompatibleModel(normalizedProvider, normalizedModel)) {
+    return { ...openAICapabilities, provider: normalizedProvider }
+  }
+
+  return getUnknownCacheCapabilities(normalizedProvider, model)
+}
+
+const isOpenAICompatibleModel = (provider: string, model: string) => {
+  if (openAICompatibleUnsupportedProviders.has(provider) || model.includes("kimi")) return false
+  return openAICapabilities.modelPattern.split("|").some((pattern) => matchesPattern(model, pattern))
 }
 
 const matchesPattern = (value: string, pattern: string) => {

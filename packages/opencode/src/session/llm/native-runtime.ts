@@ -59,11 +59,11 @@ function statusWithFetch(
   fetch: typeof globalThis.fetch | undefined,
 ): RuntimeStatus {
   const providerID = input.model.providerID
-  if (providerID !== "openai" && providerID !== "anthropic")
-    return { type: "unsupported", reason: "provider is not openai or anthropic" }
   const npm = input.model.api.npm
   if (npm !== "@ai-sdk/openai" && npm !== "@ai-sdk/openai-compatible" && npm !== "@ai-sdk/anthropic")
     return { type: "unsupported", reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic" }
+  if (providerID !== "openai" && providerID !== "anthropic" && npm !== "@ai-sdk/openai-compatible")
+    return { type: "unsupported", reason: "provider is not openai, OpenAI-compatible, or anthropic" }
   if (input.auth?.type === "oauth" && !(input.provider.id === "openai" && fetch)) {
     return { type: "unsupported", reason: "OAuth auth requires a provider fetch override" }
   }
@@ -71,10 +71,14 @@ function statusWithFetch(
   const apiKey = typeof input.provider.options.apiKey === "string" ? input.provider.options.apiKey : input.provider.key
   if (!apiKey) return { type: "unsupported", reason: "API key is not configured" }
 
+  const baseURL = typeof input.provider.options.baseURL === "string" ? input.provider.options.baseURL : input.model.api.url || undefined
+  if (npm === "@ai-sdk/openai-compatible" && !baseURL)
+    return { type: "unsupported", reason: "OpenAI-compatible provider requires a base URL" }
+
   return {
     type: "supported",
     apiKey,
-    baseURL: typeof input.provider.options.baseURL === "string" ? input.provider.options.baseURL : undefined,
+    baseURL,
   }
 }
 
@@ -104,7 +108,7 @@ export function stream(input: StreamInput): StreamResult {
     topP: input.topP,
     topK: input.topK,
     maxOutputTokens: input.maxOutputTokens,
-    providerOptions: ProviderTransform.providerOptions(input.model, input.providerOptions ?? {}),
+    providerOptions: nativeProviderOptions(input.model, input.providerOptions ?? {}),
     headers: { ...providerHeaders(input.provider.options.headers), ...input.headers },
     cachePlan: input.cachePlan,
   })
@@ -224,6 +228,11 @@ export function stream(input: StreamInput): StreamResult {
     ...current,
     stream: fetch ? stream.pipe(Stream.provideService(FetchHttpClient.Fetch, fetch)) : stream,
   }
+}
+
+function nativeProviderOptions(model: Provider.Model, options: Record<string, any>) {
+  if (model.api.npm === "@ai-sdk/openai-compatible") return { openai: options }
+  return ProviderTransform.providerOptions(model, options)
 }
 
 function nativeGuardrails(request: LLMRequest) {
