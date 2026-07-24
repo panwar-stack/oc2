@@ -326,18 +326,9 @@ export const layer = Layer.effect(
           totalTokens: value.totalTokens,
           providerTotalTokens: value.providerTotalTokens,
           providerMetadata: value.providerMetadata,
-          cacheTelemetry: CacheTelemetry.normalize({
-            provider: value.cacheTelemetry.provider ?? ctx.model.providerID,
-            model: value.cacheTelemetry.model ?? ctx.model.id,
-            inputTokens: value.cacheTelemetry.inputTokens,
-            cacheReadTokens: value.cacheTelemetry.cacheReadTokens,
-            cacheWriteTokens: value.cacheTelemetry.cacheWriteTokens,
-            cacheMissTokens: value.cacheTelemetry.cacheMissTokens,
-            metricsAvailable: value.cacheTelemetry.metricsAvailable,
-            eligible: value.cacheTelemetry.eligible,
-            expected: true,
-            warmupRequestNumber: value.cacheTelemetry.warmupRequestNumber,
-            providerRawUsageFieldNames: value.cacheTelemetry.providerRawUsageFieldNames,
+          cacheTelemetry: CacheTelemetry.withExpectedMiss(value.cacheTelemetry, {
+            provider: ctx.model.providerID,
+            model: ctx.model.id,
           }),
         })
       }
@@ -1311,6 +1302,7 @@ export const layer = Layer.effect(
               cache: {
                 ...streamInput.cache,
                 onPrepared: (value) => recordCacheUse(value, attempt === 1 ? "resume" : "retry", attempt).pipe(Effect.orDie),
+                expectedMiss: () => ctx.cacheExpectedMiss,
               },
             })
             ctx.providerTiming = LLM.providerTiming(stream)
