@@ -3,10 +3,17 @@ import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { serviceUse } from "@oc2-ai/core/effect/service-use"
 import { Log } from "@oc2-ai/core/util/log"
-import { Cause, Context, DateTime, Effect, Layer } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
-import { CacheLogging, CachePlanner, type LLMEvent as LLMEventType } from "@oc2-ai/llm"
+import {
+  CacheLogging,
+  CachePlanner,
+  CacheState,
+  CacheTelemetry,
+  type LLMEvent as LLMEventType,
+} from "@oc2-ai/llm"
+import type { CachePlan, CacheTelemetry as CacheTelemetryInfo } from "@oc2-ai/llm/cache/capability"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@oc2-ai/llm/route"
 import type { LLMClientService } from "@oc2-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
@@ -58,6 +65,7 @@ export type StreamInput = {
   cacheIntent?: SessionRetry.CacheIntent
   cache?: {
     onPrepared?: (cache: CacheUse) => Effect.Effect<void>
+    expectedMiss?: () => boolean
   }
 }
 
@@ -86,9 +94,20 @@ export const withProviderTiming = <A extends object>(stream: A, timing: Provider
 export const MissingProviderTerminalError = ProviderTimingLifecycle.MissingProviderTerminalError
 
 type ProviderRunResult =
-  | { type: "native"; stream: Stream.Stream<LLMEventType, unknown> }
+  | { type: "native"; stream: Stream.Stream<LLMEventType, unknown>; cache?: CacheRuntime }
   | { type: "event-stream"; stream: Stream.Stream<LLMEventType, unknown> }
-  | { type: "ai-sdk"; result: ReturnType<typeof streamText>; identity: LLMAISDK.UsageIdentity }
+  | { type: "ai-sdk"; result: ReturnType<typeof streamText>; identity: LLMAISDK.UsageIdentity; cache?: CacheRuntime }
+
+type CacheRuntime = {
+  readonly checker: CacheState.CacheRegressionChecker
+  readonly plan: CachePlan
+  readonly route: string
+  readonly sessionID: string
+  readonly requestID: string
+  readonly providerID: string
+  readonly modelID: string
+  readonly expectedMiss: () => boolean
+}
 
 export interface Interface {
   readonly stream: (input: StreamInput) => Stream.Stream<LLMEventType, unknown>
@@ -120,6 +139,8 @@ const live: Layer.Layer<
     const events = yield* EventV2Bridge.Service
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
+    const scope = yield* Scope.Scope
+    const cacheChecker = CacheState.createRegressionChecker()
 
     const runProvider = Effect.fn("LLM.runProvider")(function* (input: StreamRequest) {
       const l = log
@@ -176,52 +197,48 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
-      const reportCacheUse = (requestFormat: string) =>
-        prepared.params.cachePlan
-          ? Effect.gen(function* () {
-              const event = CacheLogging.event({
-                requestID: input.messageID ?? input.user.id,
-                provider: input.model.providerID,
-                model: input.model.api.id,
-                route: requestFormat,
-                plan: prepared.params.cachePlan,
+      const registerCacheUse = (requestFormat: string): Effect.Effect<CacheRuntime | undefined> =>
+        Effect.gen(function* () {
+          const plan = prepared.params.cachePlan
+          if (!plan) return undefined
+          cacheChecker.register({
+            sessionID: input.sessionID,
+            requestID: input.messageID ?? input.user.id,
+            plan,
+          })
+          for (const warning of prepared.cacheGuardrails.warnings) {
+            l.warn("cache.guardrail", { issue: warning })
+            yield* Effect.logWarning("prompt cache guardrail").pipe(Effect.annotateLogs({ issue: warning }))
+          }
+          const warning = prepared.cacheGuardrails.warnings[0]
+          if (warning) {
+            yield* events
+              .publish(TuiEvent.ToastShow, {
+                title: "Prompt Cache Warning",
+                message: warning.message,
+                variant: "warning",
+                duration: 8000,
               })
-              l.info("cache.invocation", { cache: event })
-              yield* Effect.logInfo("prompt cache invocation").pipe(Effect.annotateLogs({ cache: event }))
-              if (event.notification) {
-                yield* events
-                  .publish(TuiEvent.ToastShow, {
-                    title: "Prompt Cache",
-                    message: event.notification.message,
-                    variant: event.notification.severity === "error" ? "error" : "warning",
-                    duration: 8000,
-                  })
-                  .pipe(Effect.ignore)
-              }
-              for (const warning of prepared.cacheGuardrails.warnings) {
-                l.warn("cache.guardrail", { issue: warning })
-                yield* Effect.logWarning("prompt cache guardrail").pipe(Effect.annotateLogs({ issue: warning }))
-              }
-              const warning = prepared.cacheGuardrails.warnings[0]
-              if (warning) {
-                yield* events
-                  .publish(TuiEvent.ToastShow, {
-                    title: "Prompt Cache Warning",
-                    message: warning.message,
-                    variant: "warning",
-                    duration: 8000,
-                  })
-                  .pipe(Effect.ignore)
-              }
-              yield* (input.cache?.onPrepared?.(
-                SessionRetry.cacheUse({
-                  plan: prepared.params.cachePlan,
-                  requestFormat,
-                  promptVersion: CachePlanner.CACHE_PLANNER_VERSION,
-                }),
-              ) ?? Effect.void)
-            })
-          : Effect.void
+              .pipe(Effect.ignore)
+          }
+          yield* (input.cache?.onPrepared?.(
+            SessionRetry.cacheUse({
+              plan,
+              requestFormat,
+              promptVersion: CachePlanner.CACHE_PLANNER_VERSION,
+            }),
+          ) ?? Effect.void)
+          return {
+            checker: cacheChecker,
+            plan,
+            route: requestFormat,
+            sessionID: input.sessionID,
+            requestID: input.messageID ?? input.user.id,
+            providerID: input.model.providerID,
+            modelID: input.model.api.id,
+            expectedMiss: () => input.cache?.expectedMiss?.() ?? false,
+          }
+        })
       const telemetryAttributes = langfuseTelemetryAttributes({
         sessionID: input.sessionID,
         userID: cfg.username ?? "unknown",
@@ -365,7 +382,7 @@ const live: Layer.Layer<
           timing: input.timing,
         })
         if (native.type === "supported") {
-          yield* reportCacheUse("native")
+          const cache = yield* registerCacheUse("native")
           yield* Effect.logInfo("llm runtime selected").pipe(
             Effect.annotateLogs({
               "llm.runtime": "native",
@@ -376,6 +393,7 @@ const live: Layer.Layer<
           return {
             type: "native" as const,
             stream: native.stream,
+            cache,
           }
         }
         yield* Effect.logInfo("llm runtime selected").pipe(
@@ -396,7 +414,7 @@ const live: Layer.Layer<
           "llm.model": input.model.id,
         }),
       )
-      yield* reportCacheUse("ai-sdk")
+      const cache = yield* registerCacheUse("ai-sdk")
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       const identity = {
@@ -407,6 +425,7 @@ const live: Layer.Layer<
       return {
         type: "ai-sdk" as const,
         identity,
+        cache,
         result: streamText({
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
           includeRawChunks: input.model.providerID.includes("github-copilot") || LLMAISDK.requiresRawChunks(identity),
@@ -485,8 +504,42 @@ const live: Layer.Layer<
     })
 
     const toEventStream = (result: ProviderRunResult) => {
-      if (result.type === "native" || result.type === "event-stream") return result.stream
+      const stream = result.type === "native" || result.type === "event-stream" ? result.stream : aiSdkEventStream(result)
+      if (result.type === "event-stream" || !result.cache) return stream
 
+      let telemetry: CacheTelemetryInfo | undefined
+      let providerFailure = false
+      return stream.pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            telemetry = cacheTelemetryFromEvent(event) ?? telemetry
+            if (event.type === "provider-error") providerFailure = true
+          }),
+        ),
+        Stream.onError((cause) =>
+          Effect.sync(() => {
+            providerFailure = !Cause.hasInterruptsOnly(cause)
+          }),
+        ),
+        Stream.ensuring(
+          Effect.gen(function* () {
+            const expectedMiss = result.cache.expectedMiss()
+            yield* logCacheInvocation(result.cache, expectedMiss, () => telemetry, () => providerFailure).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => log.warn("cache.invocation failed", { cause: Cause.pretty(cause) })),
+              ),
+              Effect.forkIn(scope),
+              Effect.catchCause((cause) =>
+                Effect.sync(() => log.warn("cache.invocation fork failed", { cause: Cause.pretty(cause) })),
+              ),
+              Effect.asVoid,
+            )
+          }),
+        ),
+      )
+    }
+
+    const aiSdkEventStream = (result: Extract<ProviderRunResult, { type: "ai-sdk" }>) => {
       const state = LLMAISDK.adapterState(result.identity)
       return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
         e instanceof Error ? e : new Error(String(e)),
@@ -495,6 +548,49 @@ const live: Layer.Layer<
         Stream.flatMap((events) => Stream.fromIterable(events)),
       )
     }
+
+    const logCacheInvocation = (
+      cache: CacheRuntime,
+      expectedMiss: boolean,
+      telemetryRef: () => CacheTelemetryInfo | undefined,
+      providerFailureRef: () => boolean,
+    ) =>
+      Effect.gen(function* () {
+        const telemetry = telemetryRef()
+        const expectedTelemetry =
+          expectedMiss && telemetry
+            ? CacheTelemetry.withExpectedMiss(telemetry, { provider: cache.providerID, model: cache.modelID })
+            : telemetry
+        const regression = cache.checker.complete({
+          sessionID: cache.sessionID,
+          requestID: cache.requestID,
+          plan: cache.plan,
+          telemetry: expectedTelemetry,
+          expectedMiss,
+        })
+        const event = CacheLogging.event({
+          requestID: cache.requestID,
+          provider: cache.providerID,
+          model: cache.modelID,
+          route: cache.route,
+          plan: cache.plan,
+          telemetry: expectedTelemetry,
+          providerFailure: providerFailureRef(),
+          diagnostic: regression.diagnostic,
+        })
+        log.info("cache.invocation", { ...event, regression })
+        yield* Effect.logInfo("prompt cache invocation").pipe(Effect.annotateLogs({ cache: event, regression }))
+        if (event.notification) {
+          yield* events
+            .publish(TuiEvent.ToastShow, {
+              title: "Prompt Cache",
+              message: event.notification.message,
+              variant: event.notification.severity === "error" ? "error" : "warning",
+              duration: 8000,
+            })
+            .pipe(Effect.ignore)
+        }
+      })
 
     const executeProvider: LLMFugu.Execute = (input) =>
       Stream.unwrap(runProvider(input).pipe(Effect.map(toEventStream)))
@@ -634,5 +730,10 @@ export const langfuseTelemetryAttributes = (input: {
 }
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+const cacheTelemetryFromEvent = (event: LLMEventType): CacheTelemetryInfo | undefined => {
+  if (event.type !== "step-finish" && event.type !== "finish" && event.type !== "provider-error") return undefined
+  return event.usage?.cacheTelemetry
+}
 
 export * as LLM from "./llm"

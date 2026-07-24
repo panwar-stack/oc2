@@ -1,4 +1,5 @@
-import { getCacheCapabilities, type CachePlan, type CacheTelemetry } from "./capability"
+import { getCacheCapabilities, type CacheDiagnostic, type CachePlan, type CacheTelemetry } from "./capability"
+import { CacheDiagnostics } from "./diagnostics"
 
 export type CacheExpectationWarningCode =
   | "warmup"
@@ -70,6 +71,47 @@ export interface CacheExpectationStore {
   readonly clear: () => void
   readonly entries: () => ReadonlyArray<CacheExpectationEntry>
   readonly size: () => number
+}
+
+export type CacheRegressionStatus =
+  | "pass"
+  | "warmup"
+  | "expected_miss"
+  | "unexpected_miss"
+  | "unsupported"
+  | "inconclusive"
+
+export interface CacheRegressionResult {
+  readonly status: CacheRegressionStatus
+  readonly sessionID: string
+  readonly requestID?: string | null
+  readonly providerID: string
+  readonly modelID: string
+  readonly promptCacheKey?: string
+  readonly stablePrefixHash?: string
+  readonly cacheStatus: string
+  readonly cachedInputTokens?: number
+  readonly cacheWriteTokens?: number
+  readonly expectedCachedTokens?: number
+  readonly diagnostic?: CacheDiagnostic
+}
+
+export interface CacheRegressionChecker {
+  readonly register: (input: {
+    readonly sessionID: string
+    readonly requestID?: string | null
+    readonly plan: CachePlan
+    readonly observedAt?: number | Date
+  }) => CacheExpectationEntry
+  readonly complete: (input: {
+    readonly sessionID: string
+    readonly requestID?: string | null
+    readonly plan: CachePlan
+    readonly telemetry?: CacheTelemetry | null
+    readonly expectedMiss?: boolean
+    readonly observedAt?: number | Date
+  }) => CacheRegressionResult
+  readonly store: CacheExpectationStore
 }
 
 export const createStore = (options: CacheExpectationStoreOptions = {}): CacheExpectationStore => {
@@ -166,6 +208,77 @@ export const createStore = (options: CacheExpectationStoreOptions = {}): CacheEx
     entries: () => [...records.values()].map(cloneEntry),
     size: () => records.size,
   }
+}
+
+export const createRegressionChecker = (options: CacheExpectationStoreOptions = {}): CacheRegressionChecker => {
+  const store = createStore(options)
+
+  return {
+    register: (input) => store.observe({ plan: input.plan, observedAt: input.observedAt, eligible: false }),
+    complete: (input) => {
+      const previous = store.get(expectationKey({ plan: input.plan }))
+      const entry = store.observe({
+        plan: input.plan,
+        telemetry: input.telemetry ?? null,
+        observedAt: input.observedAt,
+        eligible: input.plan.eligible,
+      })
+      const status = regressionStatus({
+        plan: input.plan,
+        telemetry: input.telemetry ?? null,
+        previous,
+        entry,
+        expectedMiss: input.expectedMiss === true,
+      })
+      const diagnostic = status === "unexpected_miss"
+        ? CacheDiagnostics.diagnoseUnexpectedMiss({ plan: input.plan, telemetry: input.telemetry ?? null, previous })
+        : null
+      return {
+        status,
+        sessionID: input.sessionID,
+        ...(input.requestID === undefined ? {} : { requestID: input.requestID }),
+        providerID: input.plan.provider,
+        modelID: input.plan.model,
+        ...(input.plan.cacheKey ? { promptCacheKey: input.plan.cacheKey } : {}),
+        stablePrefixHash: input.plan.stablePrefixFingerprint,
+        cacheStatus: input.telemetry?.classification ?? "cache_telemetry_unavailable",
+        ...(positive(input.telemetry?.cacheReadTokens) ? { cachedInputTokens: input.telemetry.cacheReadTokens } : {}),
+        ...(positive(input.telemetry?.cacheWriteTokens) ? { cacheWriteTokens: input.telemetry.cacheWriteTokens } : {}),
+        ...(input.plan.prefixTokenCount === null ? {} : { expectedCachedTokens: input.plan.prefixTokenCount }),
+        ...(diagnostic ? { diagnostic } : {}),
+      }
+    },
+    store,
+  }
+}
+
+const regressionStatus = (input: {
+  readonly plan: CachePlan
+  readonly telemetry: CacheTelemetry | null
+  readonly previous: CacheExpectationEntry | undefined
+  readonly entry: CacheExpectationEntry
+  readonly expectedMiss: boolean
+}): CacheRegressionStatus => {
+  if (!input.plan.eligible || input.telemetry?.classification === "cache_unsupported") return "unsupported"
+  if (input.expectedMiss) return "expected_miss"
+  if (!input.telemetry || !input.telemetry.metricsAvailable || input.telemetry.classification === "cache_telemetry_unavailable") {
+    return "inconclusive"
+  }
+  if (input.telemetry.expected || input.telemetry.classification === "expected_cache_miss") {
+    return "expected_miss"
+  }
+  if (
+    input.telemetry.classification === "cache_write" &&
+    input.entry.warmup.active &&
+    (input.previous?.writeCount ?? 0) === 0
+  ) {
+    return "warmup"
+  }
+  if (input.telemetry.classification === "unexpected_cache_miss") return "unexpected_miss"
+  if (input.telemetry.classification === "provider_error" || input.telemetry.classification === "cache_configuration_error") {
+    return "inconclusive"
+  }
+  return "pass"
 }
 
 const expectationKey = (input: CacheExpectationObservation): CacheExpectationKey => {

@@ -89,6 +89,28 @@ export const forceClassification = (
   verified: false,
 })
 
+export const withExpectedMiss = (
+  telemetry: CacheTelemetry,
+  fallback: { readonly provider: string; readonly model: string },
+): CacheTelemetry =>
+  normalize({
+    provider: telemetry.provider ?? fallback.provider,
+    model: telemetry.model ?? fallback.model,
+    inputTokens: telemetry.inputTokens,
+    cacheReadTokens: telemetry.cacheReadTokens,
+    cacheWriteTokens: telemetry.cacheWriteTokens,
+    cacheMissTokens: telemetry.cacheMissTokens,
+    metricsAvailable: telemetry.metricsAvailable,
+    eligible: telemetry.eligible,
+    expected: true,
+    providerError: telemetry.classification === "provider_error",
+    configurationError: telemetry.classification === "cache_configuration_error",
+    warmupRequestNumber: telemetry.warmupRequestNumber,
+    providerRawUsageFieldNames: telemetry.providerRawUsageFieldNames,
+    estimatedCacheCost: telemetry.estimatedCacheCost,
+    estimatedUncachedCost: telemetry.estimatedUncachedCost,
+  })
+
 const classify = (input: {
   readonly capabilities: CacheCapabilities
   readonly providerError: boolean
