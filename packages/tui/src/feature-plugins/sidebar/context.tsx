@@ -1,7 +1,7 @@
 import type { TuiPlugin, TuiPluginApi } from "@oc2-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo } from "solid-js"
-import { consumedTokens, currentContextMessage } from "../../util/context-usage"
+import { consumedTokens, currentContextMessage, formatCacheStatus } from "../../util/context-usage"
 
 const id = "internal:sidebar-context"
 
@@ -22,6 +22,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       return {
         tokens: 0,
         percent: null,
+        cacheStatus: undefined,
       }
     }
 
@@ -30,6 +31,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return {
       tokens,
       percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : null,
+      cacheStatus: formatCacheStatus(last.cacheStatus, last.tokens),
     }
   })
 
@@ -41,6 +43,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       <text fg={theme().textMuted}>{state().tokens.toLocaleString()} tokens</text>
       <text fg={theme().textMuted}>{state().percent ?? 0}% used</text>
       <text fg={theme().textMuted}>{money.format(cost())} spent</text>
+      {state().cacheStatus && <text fg={theme().textMuted}>{state().cacheStatus}</text>}
     </box>
   )
 }
