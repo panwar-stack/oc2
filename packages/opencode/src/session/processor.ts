@@ -164,6 +164,7 @@ interface ProcessorContext extends Input {
   cacheIntent: SessionRetry.CacheIntent
   cacheUse: SessionRetry.CacheUse | undefined
   cacheExpectedMiss: boolean
+  cacheAttemptUse: SessionRetry.CacheUse | undefined
 }
 
 type StreamEvent = LLMEvent
@@ -217,6 +218,7 @@ export const layer = Layer.effect(
         cacheIntent: "conversation",
         cacheUse: undefined,
         cacheExpectedMiss: false,
+        cacheAttemptUse: undefined,
         reasoningMap: {},
         v2AssistantMessageID: undefined,
       }
@@ -304,6 +306,7 @@ export const layer = Layer.effect(
           previous,
         })
         ctx.cacheUse = value
+        ctx.cacheAttemptUse = value
         ctx.cacheExpectedMiss = result.expectedMiss
         yield* session.setMetadata({
           sessionID: ctx.sessionID,
@@ -332,6 +335,30 @@ export const layer = Layer.effect(
           }),
         })
       }
+
+      const publishCacheRegression = Effect.fn("SessionProcessor.publishCacheRegression")(function* (input: {
+        readonly telemetry: CacheTelemetryInfo | undefined
+        readonly messageID?: SessionMessage.ID
+        readonly partID?: string
+        readonly timestamp: DateTime.Utc
+      }) {
+        if (!input.telemetry) return
+        const regression = SessionEvent.cacheRegressionData({
+          sessionID: ctx.sessionID,
+          messageID: input.messageID,
+          partID: input.partID,
+          providerID: ctx.model.providerID,
+          modelID: ctx.model.id,
+          telemetry: input.telemetry,
+          stablePrefixHash: ctx.cacheAttemptUse?.stablePrefixFingerprint,
+          toolSchemaHash: ctx.cacheAttemptUse?.toolsFingerprint,
+        })
+        if (!regression) return
+        yield* events.publish(SessionEvent.CacheRegression, {
+          ...regression,
+          timestamp: input.timestamp,
+        })
+      })
 
       const readToolCall = Effect.fn("SessionProcessor.readToolCall")(function* (toolCallID: string) {
         const call = ctx.toolcalls[toolCallID]
@@ -510,7 +537,7 @@ export const layer = Layer.effect(
         if (accounting) {
           const authoritative = accounting.usage.authoritative
           const cost = accounting.pricing?.amount ?? 0
-          yield* session.updatePart({
+          const part = yield* session.updatePart({
             id: PartID.ascending(),
             messageID: ctx.assistantMessage.id,
             sessionID: ctx.sessionID,
@@ -527,6 +554,12 @@ export const layer = Layer.effect(
             },
             ...(cacheStatus ? { cacheStatus } : {}),
             accounting,
+          })
+          yield* publishCacheRegression({
+            telemetry: calculated?.cacheTelemetry,
+            messageID: ctx.v2AssistantMessageID,
+            partID: part.id,
+            timestamp: DateTime.makeUnsafe(completed),
           })
           if (cacheStatus) ctx.assistantMessage.cacheStatus = cacheStatus
           else delete ctx.assistantMessage.cacheStatus
@@ -957,12 +990,14 @@ export const layer = Layer.effect(
             })
             const cacheStatus = cacheStatusFromTelemetry(usage.cacheTelemetry)
             const canonical = value.usage ? CanonicalUsage.fromUsage(usageWithCacheExpectation(Usage.from(value.usage))) : undefined
+            let assistantMessageID: SessionMessage.ID | undefined
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
+                assistantMessageID = yield* currentV2AssistantMessage()
                 yield* events.publish(SessionEvent.Step.Ended, {
                   sessionID: ctx.sessionID,
-                  assistantMessageID: yield* currentV2AssistantMessage(),
+                  assistantMessageID,
                   finish: value.reason,
                   cost: usage.cost,
                   tokens: usage.tokens,
@@ -996,7 +1031,7 @@ export const layer = Layer.effect(
             ctx.assistantMessage.tokens = usage.tokens
             if (cacheStatus) ctx.assistantMessage.cacheStatus = cacheStatus
             else delete ctx.assistantMessage.cacheStatus
-            yield* session.updatePart({
+            const part = yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.reason,
               snapshot: completedSnapshot,
@@ -1007,6 +1042,12 @@ export const layer = Layer.effect(
               ...(cacheStatus ? { cacheStatus } : {}),
               cost: usage.cost,
               duration: Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0,
+            })
+            yield* publishCacheRegression({
+              telemetry: usage.cacheTelemetry,
+              messageID: assistantMessageID,
+              partID: part.id,
+              timestamp: DateTime.makeUnsafe(completed),
             })
             yield* session.updateMessage(ctx.assistantMessage)
             if (ctx.snapshot) {
@@ -1286,6 +1327,7 @@ export const layer = Layer.effect(
         ctx.cacheIntent = streamInput.cacheIntent ?? (ctx.assistantMessage.summary ? "summary" : "conversation")
         ctx.cacheUse = undefined
         ctx.cacheExpectedMiss = false
+        ctx.cacheAttemptUse = undefined
         const retryStartedAt = yield* Clock.currentTimeMillis
         let attempt = 1
 

@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { CanonicalUsage, ProviderMetadata } from "@oc2-ai/llm"
+import type { CacheDiagnostic, CachePlan, CacheTelemetry } from "@oc2-ai/llm/cache/capability"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { NonNegativeInt } from "../schema"
@@ -555,6 +556,78 @@ export namespace Fugu {
   export type Status = typeof Status.Type
 }
 
+export const CacheRegressionClassification = Schema.Literals([
+  "unexpected_miss",
+  "expected_miss",
+  "warmup",
+  "unsupported",
+  "inconclusive",
+])
+export type CacheRegressionClassification = typeof CacheRegressionClassification.Type
+
+export const CacheRegression = EventV2.define({
+  type: "session.next.cache.regression",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessageID.ID.pipe(Schema.optional),
+    partID: Schema.String.pipe(Schema.optional),
+    providerID: Schema.String,
+    modelID: Schema.String,
+    classification: CacheRegressionClassification,
+    stablePrefixHash: Schema.String.pipe(Schema.optional),
+    toolSchemaHash: Schema.String.pipe(Schema.optional),
+    cachedInputTokens: NonNegativeInt.pipe(Schema.optional),
+    cacheWriteTokens: NonNegativeInt.pipe(Schema.optional),
+    diagnosticReason: Schema.String.pipe(Schema.optional),
+    correctiveAction: Schema.String.pipe(Schema.optional),
+  },
+})
+export type CacheRegression = typeof CacheRegression.Type
+
+export const cacheRegressionData = (input: {
+  readonly sessionID: SessionSchema.ID
+  readonly messageID?: SessionMessageID.ID
+  readonly partID?: string
+  readonly providerID?: string
+  readonly modelID?: string
+  readonly telemetry: CacheTelemetry
+  readonly plan?: CachePlan | null
+  readonly stablePrefixHash?: string | null
+  readonly toolSchemaHash?: string | null
+  readonly diagnostic?: CacheDiagnostic | null
+}): Omit<typeof CacheRegression.data.Type, "timestamp"> | undefined => {
+  const classification = cacheRegressionClassification(input.telemetry)
+  if (!classification) return undefined
+  return {
+    sessionID: input.sessionID,
+    ...(input.messageID ? { messageID: input.messageID } : {}),
+    ...(input.partID ? { partID: input.partID } : {}),
+    providerID: input.providerID ?? input.telemetry.provider ?? input.plan?.provider ?? "unknown",
+    modelID: input.modelID ?? input.telemetry.model ?? input.plan?.model ?? "unknown",
+    classification,
+    ...(input.stablePrefixHash ?? input.plan?.stablePrefixFingerprint
+      ? { stablePrefixHash: input.stablePrefixHash ?? input.plan?.stablePrefixFingerprint }
+      : {}),
+    ...(input.toolSchemaHash ?? input.plan?.componentFingerprints.tools
+      ? { toolSchemaHash: input.toolSchemaHash ?? input.plan?.componentFingerprints.tools }
+      : {}),
+    ...(input.telemetry.cacheReadTokens === null ? {} : { cachedInputTokens: input.telemetry.cacheReadTokens }),
+    ...(input.telemetry.cacheWriteTokens === null ? {} : { cacheWriteTokens: input.telemetry.cacheWriteTokens }),
+    ...(input.diagnostic?.reason ? { diagnosticReason: input.diagnostic.reason } : {}),
+    ...(input.diagnostic?.correctiveAction ? { correctiveAction: input.diagnostic.correctiveAction } : {}),
+  }
+}
+
+const cacheRegressionClassification = (telemetry: CacheTelemetry): CacheRegressionClassification | undefined => {
+  if (telemetry.classification === "cache_hit") return undefined
+  if (telemetry.classification === "cache_write") return "warmup"
+  if (telemetry.classification === "expected_cache_miss") return "expected_miss"
+  if (telemetry.classification === "unexpected_cache_miss") return "unexpected_miss"
+  if (telemetry.classification === "cache_unsupported") return "unsupported"
+  return "inconclusive"
+}
+
 const DurableDefinitions = [
   AgentSwitched,
   ModelSwitched,
@@ -583,6 +656,7 @@ const DurableDefinitions = [
   Retried,
   Compaction.Started,
   Compaction.Ended,
+  CacheRegression,
 ] as const
 const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta, Fugu.Status] as const
 

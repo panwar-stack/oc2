@@ -464,28 +464,66 @@ export const layerWith = (options?: LayerOptions) =>
         return Effect.gen(function* () {
           const definition = syncRegistry.get(event.type)
           if (!definition) {
-            yield* Effect.die(
-              new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` }),
-            )
-          } else {
-            const payload = {
-              id: event.id,
-              type: definition.type,
-              version: definition.sync.version,
-              data: definition.decode(event.data),
-              replay: true,
-            } as Payload
-            const committed = yield* commitSyncEvent(definition, payload, {
-              seq: event.seq,
-              aggregateID: event.aggregateID,
-              ownerID: options?.ownerID,
-              strictOwner: options?.strictOwner,
-            })
-            if (committed && options?.publish) {
-              yield* notify({ ...payload, seq: committed.seq }, true)
-            }
+            yield* advanceUnknownReplay(event, options?.ownerID)
+            return
+          }
+          const payload = {
+            id: event.id,
+            type: definition.type,
+            version: definition.sync.version,
+            data: definition.decode(event.data),
+            replay: true,
+          } as Payload
+          const committed = yield* commitSyncEvent(definition, payload, {
+            seq: event.seq,
+            aggregateID: event.aggregateID,
+            ownerID: options?.ownerID,
+            strictOwner: options?.strictOwner,
+          })
+          if (committed && options?.publish) {
+            yield* notify({ ...payload, seq: committed.seq }, true)
           }
         })
+      }
+
+      function advanceUnknownReplay(event: SerializedEvent, ownerID: string | undefined) {
+        return db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const row = yield* db
+                  .select({ seq: EventSequenceTable.seq, ownerID: EventSequenceTable.owner_id })
+                  .from(EventSequenceTable)
+                  .where(eq(EventSequenceTable.aggregate_id, event.aggregateID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const latest = row?.seq ?? -1
+                if (event.seq <= latest) return
+                if (row?.ownerID && row.ownerID !== ownerID) return
+                if (event.seq !== latest + 1) {
+                  yield* Effect.die(
+                    new InvalidSyncEventError({
+                      type: event.type,
+                      message: `Sequence mismatch for aggregate ${event.aggregateID}: expected ${latest + 1}, got ${event.seq}`,
+                    }),
+                  )
+                }
+                yield* db
+                  .insert(EventSequenceTable)
+                  .values([{ aggregate_id: event.aggregateID, seq: event.seq, owner_id: ownerID }])
+                  .onConflictDoUpdate({
+                    target: EventSequenceTable.aggregate_id,
+                    set: {
+                      seq: event.seq,
+                      ...(ownerID && row?.ownerID == null ? { owner_id: ownerID } : {}),
+                    },
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
       }
 
       function replayAll(
@@ -549,11 +587,9 @@ export const layerWith = (options?: LayerOptions) =>
 
       const streamAll = (): Stream.Stream<Payload> => Stream.fromPubSub(all)
 
-      const decodeSerializedEvent = (event: SerializedEvent): CursorEvent => {
+      const decodeSerializedEvent = (event: SerializedEvent): CursorEvent | undefined => {
         const definition = syncRegistry.get(event.type)
-        if (!definition) {
-          throw new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` })
-        }
+        if (!definition) return undefined
         return {
           cursor: Cursor.make(event.seq),
           event: {
@@ -577,17 +613,19 @@ export const layerWith = (options?: LayerOptions) =>
               .all(),
           ),
           Effect.orDie,
-          Effect.map((rows) =>
-            rows.map((event) =>
-              decodeSerializedEvent({
+          Effect.map((rows) => ({
+            cursor: rows.at(-1)?.seq,
+            events: rows.flatMap((event) => {
+              const decoded = decodeSerializedEvent({
                 id: event.id,
                 aggregateID: event.aggregate_id,
                 seq: event.seq,
                 type: event.type,
                 data: event.data,
-              }),
-            ),
-          ),
+              })
+              return decoded ? [decoded] : []
+            }),
+          })),
         )
 
       const subscribeSynchronized = (aggregateID: string) =>
@@ -619,11 +657,12 @@ export const layerWith = (options?: LayerOptions) =>
             const synchronized = yield* subscribeSynchronized(input.aggregateID)
             let cursor = input.after ?? -1
             const read = Effect.suspend(() => readAfter(input.aggregateID, cursor)).pipe(
-              Effect.tap((events) =>
+              Effect.tap((batch) =>
                 Effect.sync(() => {
-                  cursor = events.at(-1)?.cursor ?? cursor
+                  cursor = batch.cursor ?? cursor
                 }),
               ),
+              Effect.map((batch) => batch.events),
             )
             const historical = yield* read
             const live = Stream.fromSubscription(synchronized).pipe(
