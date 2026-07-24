@@ -28,7 +28,7 @@ import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
 import { destroyRenderer } from "../../util/renderer"
-import { consumedTokens, currentContextMessage } from "../../util/context-usage"
+import { consumedTokens, currentContextMessage, formatCacheStatus } from "../../util/context-usage"
 import { promptOffsetWidth } from "../../prompt/display"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "../../prompt/history"
@@ -321,6 +321,7 @@ export function Prompt(props: PromptProps) {
     const cost = session?.cost ?? 0
     return {
       context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
+      cacheStatus: formatCacheStatus(last.cacheStatus, last.tokens),
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
@@ -1728,7 +1729,7 @@ export function Prompt(props: PromptProps) {
                     <Match when={usage()}>
                       {(item) => (
                         <text fg={theme.textMuted} wrapMode="none">
-                          {[item().context, item().cost].filter(Boolean).join(" · ")}
+                          {[item().context, item().cacheStatus, item().cost].filter(Boolean).join(" · ")}
                         </text>
                       )}
                     </Match>
