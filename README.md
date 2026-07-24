@@ -1,4 +1,4 @@
-<div align="center">
+<div align="left">
 
 # OC2
 
@@ -6,7 +6,11 @@
 
 Investigate a repository, edit with permission gates, resume the session later, or divide a larger job among coordinated workers. OC2 keeps the session, tools, repository context, and model provider behind one interface.
 
-![OC2 coding agent interface](./packages/ui/src/assets/images/social-share.png)
+<img
+  src="./packages/ui/src/assets/images/social-share.png"
+  alt="OC2 coding agent interface"
+  height="200"
+/>
 
 </div>
 
