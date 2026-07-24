@@ -67,7 +67,7 @@ export const openAIDefaultOptions = (
   modelID: string,
   options: { readonly textVerbosity?: boolean } = {},
 ): ProviderOptions | undefined =>
-  mergeProviderOptions(openAIProviderOptions({ store: false }), gpt5DefaultOptions(modelID, options))
+  mergeProviderOptions(openAIProviderOptions({ store: false, serviceTier: "flex" }), gpt5DefaultOptions(modelID, options))
 
 export const withOpenAIOptions = <Options extends { readonly providerOptions?: OpenAIProviderOptionsInput }>(
   modelID: string,

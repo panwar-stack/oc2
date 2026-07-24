@@ -158,6 +158,33 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("defaults OpenAI Chat service tier to flex", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-4o-mini"),
+          prompt: "default tier",
+        }),
+      )
+
+      expect(prepared.body.service_tier).toBe("flex")
+    }),
+  )
+
+  it.effect("allows OpenAI Chat service tier overrides", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-4o-mini"),
+          prompt: "default tier",
+          providerOptions: { openai: { serviceTier: "auto" } },
+        }),
+      )
+
+      expect(prepared.body.service_tier).toBe("auto")
+    }),
+  )
+
   it.effect("adds native query params to the Chat Completions URL", () =>
     LLMClient.generate(
       LLM.updateRequest(request, {

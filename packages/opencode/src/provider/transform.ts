@@ -1048,6 +1048,14 @@ export function options(input: {
     result["store"] = false
   }
 
+  if (
+    input.model.providerID === "openai" ||
+    input.model.api.npm === "@ai-sdk/openai" ||
+    input.model.api.npm === "@ai-sdk/openai-compatible"
+  ) {
+    result["serviceTier"] = "flex"
+  }
+
   if (input.model.api.npm === "@openrouter/ai-sdk-provider" || input.model.api.npm === "@llmgateway/ai-sdk-provider") {
     result["usage"] = {
       include: true,
