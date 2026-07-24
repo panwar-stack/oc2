@@ -715,7 +715,6 @@ function createLayer(input: StreamInput) {
                 questions: sessionQuestions,
                 thinking: input.thinking,
                 limits: input.limits(),
-                providers: input.providers?.(),
               })
             : undefined
           const replay =
@@ -726,7 +725,6 @@ function createLayer(input: StreamInput) {
                   questions: sessionQuestions,
                   thinking: input.thinking,
                   limits: input.limits(),
-                  providers: input.providers?.(),
                 })
               : history
 
@@ -1028,7 +1026,6 @@ function createLayer(input: StreamInput) {
                 questions: sessionQuestions,
                 thinking: input.thinking,
                 limits: input.limits(),
-                providers: input.providers?.(),
               })
               const activeCommits = replayActiveText(history.data, state.data)
               return {
@@ -1046,7 +1043,6 @@ function createLayer(input: StreamInput) {
                         questions: sessionQuestions,
                         thinking: input.thinking,
                         limits: input.limits(),
-                        providers: input.providers?.(),
                       })
                     : history,
               }

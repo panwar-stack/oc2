@@ -85,7 +85,6 @@ export type FooterState = {
   status: string
   queue: number
   model: string
-  duration: string
   usage: string
   cacheStatus: string
   first: boolean
@@ -97,12 +96,6 @@ export type FooterState = {
 export type FooterPatch = Partial<FooterState>
 
 export type RunDiffStyle = "auto" | "stacked"
-
-export type TurnSummary = {
-  agent: string
-  model: string
-  duration: string
-}
 
 export type ScrollbackOptions = {
   diffStyle?: RunDiffStyle
@@ -265,10 +258,6 @@ export type FooterEvent =
       queue: number
     }
   | {
-      type: "turn.duration"
-      duration: string
-    }
-  | {
       type: "stream.patch"
       patch: FooterPatch
     }
@@ -306,7 +295,6 @@ export type StreamCommit = {
   text: string
   phase: StreamPhase
   source: StreamSource
-  summary?: TurnSummary
   messageID?: string
   partID?: string
   tool?: string

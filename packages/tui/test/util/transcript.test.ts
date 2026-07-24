@@ -171,12 +171,14 @@ describe("transcript", () => {
 
     test("includes metadata when enabled", () => {
       const result = formatAssistantHeader(baseMsg, true)
-      expect(result).toBe("## Assistant (Build · claude-sonnet-4-20250514 · 5.4s)\n\n")
+      expect(result).toBe("## Assistant (Build · claude-sonnet-4-20250514)\n\n")
+      expect(result).not.toContain("5.4s")
     })
 
     test("uses model display name when available", () => {
       const result = formatAssistantHeader(baseMsg, true, providers)
-      expect(result).toBe("## Assistant (Build · Claude Sonnet 4 · 5.4s)\n\n")
+      expect(result).toBe("## Assistant (Build · Claude Sonnet 4)\n\n")
+      expect(result).not.toContain("5.4s")
     })
 
     test("excludes metadata when disabled", () => {
@@ -380,7 +382,8 @@ describe("transcript", () => {
       }
       const parts: Part[] = [{ id: "p1", sessionID: "ses_123", messageID: "msg_123", type: "text", text: "Hi there" }]
       const result = formatMessage(msg, parts, options)
-      expect(result).toContain("## Assistant (Build · Claude Sonnet 4 · 5.4s)")
+      expect(result).toContain("## Assistant (Build · Claude Sonnet 4)")
+      expect(result).not.toContain("5.4s")
       expect(result).toContain("Hi there")
     })
   })
@@ -435,7 +438,8 @@ describe("transcript", () => {
       expect(result).toContain("**Session ID:** ses_abc123")
       expect(result).toContain("## User")
       expect(result).toContain("Hello")
-      expect(result).toContain("## Assistant (Build · Claude Sonnet 4 · 0.5s)")
+      expect(result).toContain("## Assistant (Build · Claude Sonnet 4)")
+      expect(result).not.toContain("0.5s")
       expect(result).toContain("Hi!")
       expect(result).toContain("---")
     })
@@ -472,7 +476,8 @@ describe("transcript", () => {
         assistantMetadata: true,
       })
 
-      expect(result).toContain("## Assistant (Build · claude-sonnet-4-20250514 · 0.5s)")
+      expect(result).toContain("## Assistant (Build · claude-sonnet-4-20250514)")
+      expect(result).not.toContain("0.5s")
     })
 
     test("formats transcript without assistant metadata", () => {
@@ -605,7 +610,8 @@ describe("transcript", () => {
         providers,
       })
 
-      expect(result).toContain("## Assistant (Build · Claude Sonnet 4 · 0.5s)")
+      expect(result).toContain("## Assistant (Build · Claude Sonnet 4)")
+      expect(result).not.toContain("0.5s")
       expect(result).toContain("_Thinking:_\n\nThinking through export")
       expect(result).toContain("**Input:**\n```json")
       expect(result).toContain('"command": "pwd"')

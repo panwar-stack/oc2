@@ -325,13 +325,6 @@ export function Prompt(props: PromptProps) {
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
-  const elapsed = createMemo(() => {
-    if (!props.sessionID) return
-    const processing = sync.session.get(props.sessionID)?.time.processing
-    if (processing === undefined) return
-    return formatDuration(Math.floor(processing / 1000)) || "0s"
-  })
-
   const [store, setStore] = createStore<{
     prompt: PromptInfo
     mode: "normal" | "shell"
@@ -1718,13 +1711,6 @@ export function Prompt(props: PromptProps) {
               </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
-                  <Show when={elapsed()}>
-                    {(value) => (
-                      <text fg={theme.textMuted} wrapMode="none">
-                        AI {value()}
-                      </text>
-                    )}
-                  </Show>
                   <Switch>
                     <Match when={usage()}>
                       {(item) => (

@@ -388,7 +388,7 @@ describe("prompt footer", () => {
     }
   })
 
-  test("renders elapsed time before usage and commands when session is synced", async () => {
+  test("renders usage before commands when session is synced", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
     Global.Path.state = tmp.path
@@ -404,32 +404,11 @@ describe("prompt footer", () => {
       await app.renderOnce()
       const frame = app.captureCharFrame()
 
-      expect(frame).toContain("1m")
-      expect(frame).toContain("1.6K (16%) · $0.05")
+      expect(frame).toContain("1.6K (16%) · cache 400 read/5 write · $0.05")
       expect(frame).toContain("ctrl+p commands")
-      expect(frame.indexOf("1m")).toBeLessThan(frame.indexOf("1.6K (16%) · $0.05"))
-      expect(frame.indexOf("1.6K (16%) · $0.05")).toBeLessThan(frame.indexOf("ctrl+p commands"))
-    } finally {
-      app.renderer.destroy()
-      Global.Path.state = previous
-    }
-  })
-
-  test("hides elapsed time when session data is unavailable", async () => {
-    const previous = Global.Path.state
-    await using tmp = await tmpdir()
-    Global.Path.state = tmp.path
-    await Bun.write(`${tmp.path}/kv.json`, "{}")
-    const { app } = await mountPrompt({ sessionID: "missing" })
-
-    try {
-      await app.renderOnce()
-      const frame = app.captureCharFrame()
-
-      expect(frame).not.toContain("1m")
-      expect(frame).toContain("tab agents")
-      expect(frame).toContain("ctrl+p commands")
-      expect(frame.indexOf("tab agents")).toBeLessThan(frame.indexOf("ctrl+p commands"))
+      expect(frame.indexOf("1.6K (16%) · cache 400 read/5 write · $0.05")).toBeLessThan(
+        frame.indexOf("ctrl+p commands"),
+      )
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous

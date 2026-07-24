@@ -5,10 +5,9 @@
 // an active ordinary turn are exposed for edit/removal until they begin.
 //
 // The queue also handles /exit, /quit, and /new commands, empty-prompt rejection,
-// and tracks per-turn wall-clock duration for the footer status line.
+// and tracks active/queued prompt state for the footer status line.
 //
 // Resolves when the footer closes and all in-flight work finishes.
-import * as Locale from "@/util/locale"
 import { MessageID, PartID } from "@/session/schema"
 import { isExitCommand, isNewCommand } from "./prompt.shared"
 import type { FooterApi, FooterEvent, FooterQueuedPrompt, RunPrompt } from "./types"
@@ -182,7 +181,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
               queue: state.queue.length,
             },
           )
-          const start = Date.now()
           const ctrl = new AbortController()
           state.ctrl = ctrl
 
@@ -226,19 +224,6 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
           } finally {
             if (state.ctrl === ctrl) {
               state.ctrl = undefined
-            }
-
-            if (sent.mode !== "shell") {
-              const duration = Locale.duration(Math.max(0, Date.now() - start))
-              emit(
-                {
-                  type: "turn.duration",
-                  duration,
-                },
-                {
-                  duration,
-                },
-              )
             }
             state.active = undefined
           }

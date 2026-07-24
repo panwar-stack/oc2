@@ -248,7 +248,6 @@ export function Session() {
   const messageIndex = createMemo(() => {
     const list = messages()
     const userMessageIDs = new Set<string>()
-    const userCreatedAtByID = new Map<string, number>()
     const userMessages: UserMessage[] = []
     let completedAssistantID: string | undefined
     let lastAssistant: AssistantMessage | undefined
@@ -257,7 +256,6 @@ export function Session() {
     for (const message of list) {
       if (message.role === "user") {
         userMessageIDs.add(message.id)
-        userCreatedAtByID.set(message.id, message.time.created)
         userMessages.push(message)
         lastUserID = message.id
         continue
@@ -279,7 +277,6 @@ export function Session() {
 
     return {
       userMessageIDs,
-      userCreatedAtByID,
       userMessages,
       pendingAssistant,
       pendingAssistantID: pendingAssistant?.id,
@@ -1469,9 +1466,6 @@ export function Session() {
                         <AssistantMessage
                           last={row.type === "message" && lastAssistant()?.id === row.message.id}
                           message={row.type === "message" ? (row.message as AssistantMessage) : (undefined as never)}
-                          parentUserCreatedAt={messageIndex().userCreatedAtByID.get(
-                            row.type === "message" ? (row.message as AssistantMessage).parentID : "",
-                          )}
                           parts={sync.data.part[row.type === "message" ? row.message.id : ""] ?? []}
                         />
                       </Match>
@@ -1667,7 +1661,6 @@ function AssistantMessage(props: {
   message: AssistantMessage
   parts: Part[]
   last: boolean
-  parentUserCreatedAt?: number
 }) {
   const ctx = use()
   const local = useLocal()
@@ -1676,13 +1669,6 @@ function AssistantMessage(props: {
 
   const final = createMemo(() => {
     return props.message.finish && !["tool-calls", "unknown"].includes(props.message.finish)
-  })
-
-  const duration = createMemo(() => {
-    if (!final()) return 0
-    if (!props.message.time.completed) return 0
-    if (props.parentUserCreatedAt === undefined) return 0
-    return props.message.time.completed - props.parentUserCreatedAt
   })
 
   const childShortcut = useCommandShortcut("session.child.first")
@@ -1756,9 +1742,6 @@ function AssistantMessage(props: {
               </span>{" "}
               <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
               <span style={{ fg: theme.textMuted }}> · {model()}</span>
-              <Show when={duration()}>
-                <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
-              </Show>
               <Show when={props.message.error?.name === "MessageAbortedError"}>
                 <span style={{ fg: theme.textMuted }}> · interrupted</span>
               </Show>

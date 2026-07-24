@@ -50,10 +50,6 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   const messages = createMemo(() => sync.data.messages[props.sessionID] ?? [])
   const renderedMessages = createMemo(() => messages().toReversed())
   const lastAssistant = createMemo(() => renderedMessages().findLast((message) => message.type === "assistant"))
-  const lastUserCreated = (index: number) =>
-    renderedMessages()
-      .slice(0, index)
-      .findLast((message) => message.type === "user")?.time.created
 
   createEffect(() => {
     void sync.session.message.sync(props.sessionID)
@@ -100,7 +96,6 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
                       last={lastAssistant()?.id === message.id}
                       syntax={syntax()}
                       subtleSyntax={subtleSyntax()}
-                      start={lastUserCreated(index())}
                     />
                   </Match>
                   <Match when={message.type === "synthetic"}>
@@ -287,14 +282,9 @@ function AssistantMessage(props: {
   last: boolean
   syntax: SyntaxStyle
   subtleSyntax: SyntaxStyle
-  start?: number
 }) {
   const { theme } = useTheme()
   const local = useLocal()
-  const duration = createMemo(() => {
-    if (!props.message.time.completed) return 0
-    return props.message.time.completed - (props.start ?? props.message.time.created)
-  })
   const model = createMemo(() => {
     const variant = props.message.model.variant ? `/${props.message.model.variant}` : ""
     return `${props.message.model.providerID}/${props.message.model.id}${variant}`
@@ -345,9 +335,6 @@ function AssistantMessage(props: {
             <span style={{ fg: local.agent.color(props.message.agent) }}>▣ </span>
             <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.agent)}</span>
             <span style={{ fg: theme.textMuted }}> · {model()}</span>
-            <Show when={duration()}>
-              <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
-            </Show>
           </text>
         </box>
       </Show>
