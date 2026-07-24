@@ -201,7 +201,7 @@ const OPENAI_USAGE_PROFILE: OpenAIChatUsageProfile = {
   completionTokens: "inclusive",
   cacheRead: "prompt-details",
   cacheInput: "inclusive",
-  cacheWrite: false,
+  cacheWrite: true,
   metadataShape: "direct",
 }
 
