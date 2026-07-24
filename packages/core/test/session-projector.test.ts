@@ -20,7 +20,8 @@ import { SessionInput } from "@oc2-ai/core/session/input"
 import { SessionStore } from "@oc2-ai/core/session/store"
 import { PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
-import { CanonicalUsage } from "@oc2-ai/llm"
+import { CacheTelemetry, CanonicalUsage } from "@oc2-ai/llm"
+import type { CacheTelemetry as CacheTelemetryInfo } from "@oc2-ai/llm/cache/capability"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -67,6 +68,108 @@ const seedSession = Effect.fnUntraced(function* (db: Database.Interface["db"]) {
 })
 
 describe("SessionProjector", () => {
+  it.effect("persists cache regression events without projecting session rows", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* seedSession(db)
+      const events = yield* EventV2.Service
+      const regression = SessionEvent.cacheRegressionData({
+        sessionID,
+        messageID: SessionMessage.ID.make("msg_cache_regression"),
+        partID: "prt_cache_regression",
+        providerID: "openai",
+        modelID: "gpt-5",
+        telemetry: CacheTelemetry.normalize({
+          provider: "openai",
+          model: "gpt-5",
+          inputTokens: 2048,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          cacheMissTokens: 2048,
+          expected: false,
+        }),
+        stablePrefixHash: "cache:stable-prefix:v1:sha256:safe",
+        toolSchemaHash: "cache:component:tools:v1:sha256:safe",
+        diagnostic: {
+          provider: "openai",
+          model: "gpt-5",
+          classification: "unexpected_cache_miss",
+          stablePrefixFingerprint: "cache:stable-prefix:v1:sha256:safe",
+          previousStablePrefixFingerprint: null,
+          components: [],
+          reason: "Provider reported uncached prompt tokens after the cache was expected to be warm.",
+          correctiveAction: "Compare safe cache fingerprints across adjacent invocations; prompt content is intentionally omitted.",
+        },
+      })
+      expect(regression).toMatchObject({
+        classification: "unexpected_miss",
+        providerID: "openai",
+        modelID: "gpt-5",
+        stablePrefixHash: "cache:stable-prefix:v1:sha256:safe",
+        toolSchemaHash: "cache:component:tools:v1:sha256:safe",
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+      })
+      expect(regression).not.toHaveProperty("expectedCachedTokens")
+      if (!regression) return yield* Effect.die("Expected cache regression data")
+
+      yield* events.publish(SessionEvent.CacheRegression, {
+        ...regression,
+        timestamp: created,
+      })
+
+      expect(yield* db.select().from(SessionMessageTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* db.select().from(PartTable).all().pipe(Effect.orDie)).toEqual([])
+      const stored = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.CacheRegression.type, 1)))
+        .get()
+      expect(stored?.data).toMatchObject({
+        classification: "unexpected_miss",
+        providerID: "openai",
+        modelID: "gpt-5",
+      })
+    }),
+  )
+
+  it.effect("maps cache telemetry classifications for durable regression events", () =>
+    Effect.sync(() => {
+    const data = (classification: CacheTelemetryInfo["classification"]) =>
+      SessionEvent.cacheRegressionData({
+        sessionID,
+        telemetry: {
+          provider: "openai",
+          model: "gpt-5",
+          inputTokens: 2048,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          cacheMissTokens: 2048,
+          uncachedInputTokens: 2048,
+          metricsAvailable: true,
+          eligible: classification !== "cache_unsupported",
+          expected: false,
+          verified: false,
+          classification,
+          providerRawUsageFieldNames: [],
+          warmupRequestNumber: null,
+          estimatedCacheCost: null,
+          estimatedUncachedCost: null,
+          estimatedSavings: null,
+        },
+      })
+
+    expect(data("cache_hit")).toBeUndefined()
+    expect(data("cache_write")?.classification).toBe("warmup")
+    expect(data("expected_cache_miss")?.classification).toBe("expected_miss")
+    expect(data("unexpected_cache_miss")?.classification).toBe("unexpected_miss")
+    expect(data("cache_unsupported")?.classification).toBe("unsupported")
+    expect(data("cache_telemetry_unavailable")?.classification).toBe("inconclusive")
+    expect(data("provider_error")?.classification).toBe("inconclusive")
+    expect(data("cache_configuration_error")?.classification).toBe("inconclusive")
+    }),
+  )
+
   it.effect("applies aggregate terminal accounting once and rejects conflicting terminals", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service

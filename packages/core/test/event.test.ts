@@ -746,20 +746,101 @@ describe("EventV2", () => {
     }),
   )
 
-  it.effect("replay defects on unknown event type", () =>
+  it.effect("replay skips unknown event types while preserving aggregate order", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const received = new Array<EventV2.Payload>()
+      yield* events.project(SyncMessage, (event) =>
+        Effect.sync(() => {
+          received.push(event)
+        }),
+      )
+
+      yield* events.replay({
+        id: EventV2.ID.create(),
+        type: "unknown.event.1",
+        seq: 0,
+        aggregateID,
+        data: {},
+      })
+      yield* events.replay({
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(SyncMessage.type, 1),
+        seq: 1,
+        aggregateID,
+        data: { id: aggregateID, text: "known" },
+      })
+      const rows = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, aggregateID))
+        .all()
+        .pipe(Effect.orDie)
+      const sequence = yield* db
+        .select({ seq: EventSequenceTable.seq })
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, aggregateID))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(received.map((event) => event.data)).toEqual([{ id: aggregateID, text: "known" }])
+      expect(rows.map((row) => row.type)).toEqual([EventV2.versionedType(SyncMessage.type, 1)])
+      expect(rows.map((row) => row.seq)).toEqual([1])
+      expect(sequence).toEqual({ seq: 1 })
+    }),
+  )
+
+  it.effect("aggregate streams skip unknown stored event types", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      yield* db
+        .insert(EventSequenceTable)
+        .values([{ aggregate_id: aggregateID, seq: 1 }])
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(EventTable)
+        .values([
+          { id: EventV2.ID.create(), aggregate_id: aggregateID, seq: 0, type: "unknown.event.1", data: {} },
+          {
+            id: EventV2.ID.create(),
+            aggregate_id: aggregateID,
+            seq: 1,
+            type: EventV2.versionedType(SyncMessage.type, 1),
+            data: { id: aggregateID, text: "known" },
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const read = yield* events.aggregateEvents({ aggregateID }).pipe(Stream.take(1), Stream.runCollect)
+
+      expect(Array.from(read).map((item) => [item.cursor, item.event.data])).toEqual([
+        [EventV2.Cursor.make(1), { id: aggregateID, text: "known" }],
+      ])
+    }),
+  )
+
+  it.effect("replay still defects on invalid known event data", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = EventV2.ID.create()
+
       const exit = yield* events
         .replay({
           id: EventV2.ID.create(),
-          type: "unknown.event.1",
+          type: EventV2.versionedType(SyncMessage.type, 1),
           seq: 0,
-          aggregateID: EventV2.ID.create(),
-          data: {},
+          aggregateID,
+          data: { id: aggregateID },
         })
         .pipe(Effect.exit)
 
-      expect(String(exit)).toContain("Unknown sync event type")
+      expect(String(exit)).toContain("text")
     }),
   )
 

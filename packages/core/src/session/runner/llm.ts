@@ -452,6 +452,7 @@ export const layer = Layer.effect(
           const telemetry = usageEvent && "usage" in usageEvent ? usageEvent.usage?.cacheTelemetry : undefined
           if (telemetry) {
             const contextOverflow = isContextOverflowFailure(overflowFailure ?? failure)
+            const diagnostic = CacheDiagnostics.diagnoseUnexpectedMiss({ plan: requestCachePlan, telemetry })
             log.info("cache.invocation", CacheLogging.event({
               requestID: request.id,
               provider: model.provider,
@@ -461,8 +462,23 @@ export const layer = Layer.effect(
               telemetry,
               providerFailure: !contextOverflow && (stream._tag === "Failure" || publisher.hasProviderError()),
               ...(contextOverflow ? { notification: null } : {}),
-              diagnostic: CacheDiagnostics.diagnoseUnexpectedMiss({ plan: requestCachePlan, telemetry }),
+              diagnostic,
             }))
+            const regression = SessionEvent.cacheRegressionData({
+              sessionID: session.id,
+              messageID: publisher.plannedAssistantMessageID(),
+              providerID: model.provider,
+              modelID: model.id,
+              telemetry,
+              plan: requestCachePlan,
+              diagnostic,
+            })
+            if (regression) {
+              yield* events.publish(SessionEvent.CacheRegression, {
+                ...regression,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
           }
           yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           yield* withPublication(

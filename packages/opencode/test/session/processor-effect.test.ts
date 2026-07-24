@@ -295,6 +295,87 @@ const mirrorUsage = Usage.from({
   reasoningTokens: 2,
   totalTokens: 17,
 })
+
+const usageWithCacheTelemetry = (classification: "cache_hit" | "unexpected_cache_miss") =>
+  Usage.from({
+    inputTokens: 2048,
+    outputTokens: 5,
+    totalTokens: 2053,
+    nonCachedInputTokens: classification === "unexpected_cache_miss" ? 2048 : 1024,
+    cacheReadInputTokens: classification === "cache_hit" ? 1024 : 0,
+    cacheTelemetry: {
+      provider: ref.providerID,
+      model: ref.modelID,
+      inputTokens: 2048,
+      cacheReadTokens: classification === "cache_hit" ? 1024 : 0,
+      cacheWriteTokens: 0,
+      cacheMissTokens: classification === "unexpected_cache_miss" ? 2048 : 0,
+      uncachedInputTokens: classification === "unexpected_cache_miss" ? 2048 : 1024,
+      metricsAvailable: true,
+      eligible: true,
+      expected: false,
+      verified: true,
+      classification,
+      providerRawUsageFieldNames: ["input_tokens_details.cached_tokens"],
+      warmupRequestNumber: null,
+      estimatedCacheCost: null,
+      estimatedUncachedCost: null,
+      estimatedSavings: null,
+    },
+  })
+
+const cacheTelemetryLLM = (classification: "cache_hit" | "unexpected_cache_miss") =>
+  Layer.succeed(
+    LLM.Service,
+    LLM.Service.of({
+      stream: (input) => {
+        const events = [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: usageWithCacheTelemetry(classification) }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]
+        let now = 0
+        const timing = LLM.makeProviderTiming(() => now)
+        LLM.beginProviderStep(timing, 0)
+        now = 100
+        LLM.beginProviderAttempt(timing)
+        now = 150
+        LLM.finishProviderAttempt(timing, "success")
+        const prepared = input.cache?.onPrepared?.({
+          version: 1,
+          provider: ref.providerID,
+          model: ref.modelID,
+          requestFormat: "test",
+          promptVersion: 1,
+          repositoryContextVersion: null,
+          stablePrefixFingerprint: "cache:stable-prefix:v1:sha256:test",
+          toolsFingerprint: "cache:component:tools:v1:sha256:test",
+          schemasFingerprint: null,
+          componentFingerprints: { tools: "cache:component:tools:v1:sha256:test" },
+          cacheKey: "prompt-cache-key",
+          eligible: true,
+          mode: "explicit",
+        }) ?? Effect.void
+        return LLM.withProviderTiming(
+          Stream.unwrap(prepared.pipe(Effect.as(Stream.fromIterable(events)))),
+          timing,
+        )
+      },
+    }),
+  )
+
+const cacheRegressionEnv = (classification: "cache_hit" | "unexpected_cache_miss") =>
+  SessionProcessor.layer.pipe(
+    Layer.provide(summary),
+    Layer.provide(Image.defaultLayer),
+    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(cacheTelemetryLLM(classification)),
+    Layer.provideMerge(deps),
+  )
+
+const itCacheRegression = (classification: "cache_hit" | "unexpected_cache_miss") =>
+  testEffect(cacheRegressionEnv(classification))
+
 const mirrorUsageLLM = Layer.succeed(
   LLM.Service,
   LLM.Service.of({
@@ -611,6 +692,102 @@ itMirrorUsage.live("session.processor effect tests publish authoritative mirror 
         expect(persisted?.parts.filter((part) => part.type === "step-finish").map((part) => part.duration)).toEqual([
           50, 30,
         ])
+      }),
+    { config: cfg },
+  ),
+)
+
+itCacheRegression("unexpected_cache_miss").live("session.processor effect tests publish cache regression events", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "cache miss")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const regressions: Array<typeof SessionEvent.CacheRegression.Type> = []
+        const off = yield* events.listen((event) => {
+          if (event.type === SessionEvent.CacheRegression.type)
+            regressions.push(event as typeof SessionEvent.CacheRegression.Type)
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "cache miss" }],
+          tools: {},
+        })
+        yield* off
+
+        expect(regressions).toHaveLength(1)
+        expect(regressions[0]?.data).toMatchObject({
+          sessionID: chat.id,
+          classification: "unexpected_miss",
+          providerID: ref.providerID,
+          modelID: ref.modelID,
+          stablePrefixHash: "cache:stable-prefix:v1:sha256:test",
+          toolSchemaHash: "cache:component:tools:v1:sha256:test",
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+        })
+        expect(regressions[0]?.data).not.toHaveProperty("expectedCachedTokens")
+        expect(regressions[0]?.data.partID).toStartWith("prt")
+        expect(regressions[0]?.data.messageID).toStartWith("msg_")
+      }),
+    { config: cfg },
+  ),
+)
+
+itCacheRegression("cache_hit").live("session.processor effect tests skip cache regression events for hits", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "cache hit")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        let regressions = 0
+        const off = yield* events.listen((event) => {
+          if (event.type === SessionEvent.CacheRegression.type) regressions++
+          return Effect.void
+        })
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+
+        yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "cache hit" }],
+          tools: {},
+        })
+        yield* off
+
+        expect(regressions).toBe(0)
       }),
     { config: cfg },
   ),
