@@ -152,3 +152,10 @@ Provider-specific cache fields are not portable. For example, OC2 will not send
 OpenAI `prompt_cache_key` to Kimi or DeepSeek OpenAI-compatible endpoints, and
 will not send Anthropic `cache_control` outside providers that accept explicit
 breakpoints.
+
+For first-party OpenAI, OC2 derives a deterministic `prompt_cache_key` from the
+stable prompt prefix when the selected model supports it. OC2 does not send
+default OpenAI `prompt_cache_options`, `prompt_cache_breakpoint`, or legacy
+`prompt_cache_retention` fields. GPT-5.6+ cache writes can be billable, so
+explicit breakpoints are not enabled by default. Use session stats output to see
+reported cache read and write tokens.

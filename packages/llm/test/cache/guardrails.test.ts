@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { CachePlan } from "@oc2-ai/llm/cache/capability"
+import { getCacheCapabilities, type CacheCapabilities, type CachePlan } from "@oc2-ai/llm/cache/capability"
 import {
   checkBreakpointOverflow,
   checkIncompatibleCacheKeyReuse,
@@ -28,6 +28,27 @@ describe("cache guardrails", () => {
     expect(unknown).toMatchObject({
       valid: true,
       warnings: [{ code: "unsupported_field", severity: "warning", field: "cache_control" }],
+    })
+  })
+
+  test("rejects unsupported OpenAI explicit cache fields unless capability-enabled", () => {
+    const fields = ["prompt_cache_options", "prompt_cache_breakpoint", "prompt_cache_retention"]
+    const openai = checkUnsupportedFields({ provider: "openai", model: "gpt-5", fields })
+    const enabled: CacheCapabilities = {
+      ...getCacheCapabilities("openai", "gpt-5"),
+      supportsPromptCacheOptions: true,
+      supportsPromptCacheBreakpoints: true,
+      supportsPromptCacheRetention: true,
+      requestFields: ["prompt_cache_key", ...fields],
+    }
+
+    expect(openai).toMatchObject({
+      valid: false,
+      errors: fields.map((field) => ({ code: "unsupported_field", severity: "error", field })),
+    })
+    expect(checkUnsupportedFields({ provider: "openai", model: "gpt-5", fields, capabilities: enabled })).toMatchObject({
+      valid: true,
+      errors: [],
     })
   })
 
@@ -69,6 +90,9 @@ describe("cache guardrails", () => {
       { provider: "moonshot", model: "kimi-k2", fields: ["prompt_cache_key"], field: "prompt_cache_key" },
       { provider: "kimi", model: "kimi-latest", fields: ["cache_control"], field: "cache_control" },
       { provider: "openai", model: "gpt-5", fields: ["cache_control"], field: "cache_control" },
+      { provider: "anthropic", model: "claude-sonnet-4-5", fields: ["prompt_cache_options"], field: "prompt_cache_options" },
+      { provider: "deepseek", model: "deepseek-chat", fields: ["prompt_cache_breakpoint"], field: "prompt_cache_breakpoint" },
+      { provider: "moonshot", model: "kimi-k2", fields: ["prompt_cache_retention"], field: "prompt_cache_retention" },
       { provider: "future", model: "future-model", fields: ["prompt_cache_key"], field: "prompt_cache_key" },
     ]
 

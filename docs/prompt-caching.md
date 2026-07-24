@@ -42,6 +42,10 @@ OC2 lowers the shared plan into provider-local wire fields:
 
 - OpenAI receives `prompt_cache_key` only for known OpenAI models with an
   eligible plan.
+- OpenAI does not receive default `prompt_cache_options`,
+  `prompt_cache_breakpoint`, or `prompt_cache_retention` fields. GPT-5.6+
+  cache writes can be billable, so explicit breakpoints are intentionally not a
+  default cost-saving behavior.
 - Anthropic receives `cache_control` only on planned explicit breakpoints or on
   pre-existing manual `CacheHint`s.
 - Moonshot/Kimi, DeepSeek, and unknown models receive no explicit prompt cache
@@ -90,13 +94,14 @@ possible.
 ## Cost Impact
 
 Assistant usage keeps cache read and write tokens separate from uncached input
-and output tokens. Session stats, ACP usage updates, and compaction accounting
-include cache tokens so users can see prompt-cache impact and provider cost
-discounts where the model catalog exposes cache read and write rates.
+and output tokens. Session stats output, ACP usage updates, and compaction
+accounting include cache tokens so users can see prompt-cache reads, writes,
+and provider cost discounts where the model catalog exposes cache read and write
+rates.
 
-Cache writes may cost more on providers such as Anthropic. Cache reads usually
-receive discounts, but OC2 reports the provider usage it observes rather than
-assuming savings when telemetry is unavailable.
+Cache writes may cost more on providers such as Anthropic and GPT-5.6+ OpenAI
+models. Cache reads usually receive discounts, but OC2 reports the provider
+usage it observes rather than assuming savings when telemetry is unavailable.
 
 ## Lifecycle
 
