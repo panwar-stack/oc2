@@ -242,8 +242,12 @@ export const createRegressionChecker = (options: CacheExpectationStoreOptions = 
         ...(input.plan.cacheKey ? { promptCacheKey: input.plan.cacheKey } : {}),
         stablePrefixHash: input.plan.stablePrefixFingerprint,
         cacheStatus: input.telemetry?.classification ?? "cache_telemetry_unavailable",
-        ...(positive(input.telemetry?.cacheReadTokens) ? { cachedInputTokens: input.telemetry.cacheReadTokens } : {}),
-        ...(positive(input.telemetry?.cacheWriteTokens) ? { cacheWriteTokens: input.telemetry.cacheWriteTokens } : {}),
+        ...(input.telemetry?.cacheReadTokens === null || input.telemetry?.cacheReadTokens === undefined
+          ? {}
+          : { cachedInputTokens: input.telemetry.cacheReadTokens }),
+        ...(input.telemetry?.cacheWriteTokens === null || input.telemetry?.cacheWriteTokens === undefined
+          ? {}
+          : { cacheWriteTokens: input.telemetry.cacheWriteTokens }),
         ...(input.plan.prefixTokenCount === null ? {} : { expectedCachedTokens: input.plan.prefixTokenCount }),
         ...(diagnostic ? { diagnostic } : {}),
       }

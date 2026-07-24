@@ -20,7 +20,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { ModelsDev } from "@oc2-ai/core/models-dev"
 import { Plugin } from "@/plugin"
 
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 import type { Agent } from "../../src/agent/agent"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -3096,6 +3096,118 @@ describe("session.llm.stream", () => {
           },
         },
       }),
+    },
+  )
+
+  it.instance(
+    "publishes cache regression events from checker results",
+    () =>
+      Effect.gen(function* () {
+        const model = loadFixture("openai", "gpt-5.2").model
+        const responseChunks = [
+          {
+            type: "response.created",
+            response: {
+              id: "resp-cache-regression",
+              created_at: Math.floor(Date.now() / 1000),
+              model: model.id,
+              service_tier: null,
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "message",
+              id: "item-cache-regression",
+              status: "in_progress",
+              role: "assistant",
+              content: [],
+            },
+          },
+          {
+            type: "response.content_part.added",
+            item_id: "item-cache-regression",
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "", annotations: [] },
+          },
+          {
+            type: "response.output_text.delta",
+            item_id: "item-cache-regression",
+            delta: "Hello",
+            logprobs: null,
+          },
+          {
+            type: "response.completed",
+            response: {
+              incomplete_details: null,
+              usage: {
+                input_tokens: 2_048,
+                input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+                output_tokens: 1,
+                output_tokens_details: null,
+              },
+              service_tier: null,
+            },
+          },
+        ]
+        const request = waitRequest("/responses", createEventResponse(responseChunks, true))
+        const events = yield* EventV2Bridge.Service
+        const regressions: EventV2.Data<typeof SessionEvent.CacheRegression>[] = []
+        const off = yield* events.subscribeCallback(SessionEvent.CacheRegression, (event) => {
+          regressions.push(event.data)
+        })
+
+        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const sessionID = SessionID.make("session-test-cache-regression")
+        yield* drain({
+          user: {
+            id: MessageID.make("msg_user-cache-regression"),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: "test",
+            model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
+          },
+          sessionID,
+          model: resolved,
+          agent: testAgent(),
+          system: ["You are a helpful assistant."],
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+          cache: {
+            onPrepared: (value) =>
+              Effect.sync(() => {
+                expect(value.stablePrefixFingerprint).toStartWith("cache:stable-prefix:")
+              }),
+          },
+        })
+        yield* Effect.promise(() => request)
+
+        yield* pollWithTimeout(
+          Effect.sync(() => (regressions.length === 1 ? true : undefined)),
+          "cache regression event was not published",
+        )
+        off()
+        expect(regressions[0]).toMatchObject({
+          sessionID,
+          messageID: "msg_user-cache-regression",
+          classification: "unexpected_miss",
+          providerID: "openai",
+          modelID: model.id,
+          cachedInputTokens: 0,
+        })
+        expect(regressions[0]?.stablePrefixHash).toStartWith("cache:stable-prefix:")
+        expect(regressions[0]?.diagnosticReason).toBeString()
+        expect(JSON.stringify(regressions[0])).not.toContain("You are a helpful assistant")
+        expect(JSON.stringify(regressions[0])).not.toContain("Hello")
+      }),
+    {
+      config: () => {
+        const model = loadFixture("openai", "gpt-5.2").model
+        return openAIConfig(model, `${state.server!.url.origin}/v1`)
+      },
     },
   )
 

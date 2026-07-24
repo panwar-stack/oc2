@@ -336,30 +336,6 @@ export const layer = Layer.effect(
         })
       }
 
-      const publishCacheRegression = Effect.fn("SessionProcessor.publishCacheRegression")(function* (input: {
-        readonly telemetry: CacheTelemetryInfo | undefined
-        readonly messageID?: SessionMessage.ID
-        readonly partID?: string
-        readonly timestamp: DateTime.Utc
-      }) {
-        if (!input.telemetry) return
-        const regression = SessionEvent.cacheRegressionData({
-          sessionID: ctx.sessionID,
-          messageID: input.messageID,
-          partID: input.partID,
-          providerID: ctx.model.providerID,
-          modelID: ctx.model.id,
-          telemetry: input.telemetry,
-          stablePrefixHash: ctx.cacheAttemptUse?.stablePrefixFingerprint,
-          toolSchemaHash: ctx.cacheAttemptUse?.toolsFingerprint,
-        })
-        if (!regression) return
-        yield* events.publish(SessionEvent.CacheRegression, {
-          ...regression,
-          timestamp: input.timestamp,
-        })
-      })
-
       const readToolCall = Effect.fn("SessionProcessor.readToolCall")(function* (toolCallID: string) {
         const call = ctx.toolcalls[toolCallID]
         if (!call) return undefined
@@ -554,12 +530,6 @@ export const layer = Layer.effect(
             },
             ...(cacheStatus ? { cacheStatus } : {}),
             accounting,
-          })
-          yield* publishCacheRegression({
-            telemetry: calculated?.cacheTelemetry,
-            messageID: ctx.v2AssistantMessageID,
-            partID: part.id,
-            timestamp: DateTime.makeUnsafe(completed),
           })
           if (cacheStatus) ctx.assistantMessage.cacheStatus = cacheStatus
           else delete ctx.assistantMessage.cacheStatus
@@ -1042,12 +1012,6 @@ export const layer = Layer.effect(
               ...(cacheStatus ? { cacheStatus } : {}),
               cost: usage.cost,
               duration: Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0,
-            })
-            yield* publishCacheRegression({
-              telemetry: usage.cacheTelemetry,
-              messageID: assistantMessageID,
-              partID: part.id,
-              timestamp: DateTime.makeUnsafe(completed),
             })
             yield* session.updateMessage(ctx.assistantMessage)
             if (ctx.snapshot) {

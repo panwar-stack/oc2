@@ -565,7 +565,7 @@ export const CacheRegressionClassification = Schema.Literals([
 ])
 export type CacheRegressionClassification = typeof CacheRegressionClassification.Type
 
-export const CacheRegression = EventV2.define({
+export const CacheRegressionV1 = EventV2.define({
   type: "session.next.cache.regression",
   ...options,
   schema: {
@@ -583,6 +583,26 @@ export const CacheRegression = EventV2.define({
     correctiveAction: Schema.String.pipe(Schema.optional),
   },
 })
+
+export const CacheRegression = EventV2.define({
+  type: "session.next.cache.regression",
+  sync: { aggregate: "sessionID", version: 2 },
+  schema: {
+    ...Base,
+    messageID: SessionMessageID.ID.pipe(Schema.optional),
+    partID: Schema.String.pipe(Schema.optional),
+    providerID: Schema.String,
+    modelID: Schema.String,
+    classification: CacheRegressionClassification,
+    stablePrefixHash: Schema.String.pipe(Schema.optional),
+    toolSchemaHash: Schema.String.pipe(Schema.optional),
+    cachedInputTokens: NonNegativeInt.pipe(Schema.optional),
+    cacheWriteTokens: NonNegativeInt.pipe(Schema.optional),
+    expectedCachedTokens: NonNegativeInt.pipe(Schema.optional),
+    diagnosticReason: Schema.String.pipe(Schema.optional),
+    correctiveAction: Schema.String.pipe(Schema.optional),
+  },
+})
 export type CacheRegression = typeof CacheRegression.Type
 
 export const cacheRegressionData = (input: {
@@ -595,10 +615,16 @@ export const cacheRegressionData = (input: {
   readonly plan?: CachePlan | null
   readonly stablePrefixHash?: string | null
   readonly toolSchemaHash?: string | null
+  readonly classification?: CacheRegressionClassification | null
+  readonly cachedInputTokens?: number | null
+  readonly cacheWriteTokens?: number | null
+  readonly expectedCachedTokens?: number | null
   readonly diagnostic?: CacheDiagnostic | null
 }): Omit<typeof CacheRegression.data.Type, "timestamp"> | undefined => {
-  const classification = cacheRegressionClassification(input.telemetry)
+  const classification = input.classification ?? cacheRegressionClassification(input.telemetry)
   if (!classification) return undefined
+  const cachedInputTokens = input.cachedInputTokens ?? input.telemetry.cacheReadTokens
+  const cacheWriteTokens = input.cacheWriteTokens ?? input.telemetry.cacheWriteTokens
   return {
     sessionID: input.sessionID,
     ...(input.messageID ? { messageID: input.messageID } : {}),
@@ -606,14 +632,17 @@ export const cacheRegressionData = (input: {
     providerID: input.providerID ?? input.telemetry.provider ?? input.plan?.provider ?? "unknown",
     modelID: input.modelID ?? input.telemetry.model ?? input.plan?.model ?? "unknown",
     classification,
-    ...(input.stablePrefixHash ?? input.plan?.stablePrefixFingerprint
+    ...((input.stablePrefixHash ?? input.plan?.stablePrefixFingerprint)
       ? { stablePrefixHash: input.stablePrefixHash ?? input.plan?.stablePrefixFingerprint }
       : {}),
-    ...(input.toolSchemaHash ?? input.plan?.componentFingerprints.tools
+    ...((input.toolSchemaHash ?? input.plan?.componentFingerprints.tools)
       ? { toolSchemaHash: input.toolSchemaHash ?? input.plan?.componentFingerprints.tools }
       : {}),
-    ...(input.telemetry.cacheReadTokens === null ? {} : { cachedInputTokens: input.telemetry.cacheReadTokens }),
-    ...(input.telemetry.cacheWriteTokens === null ? {} : { cacheWriteTokens: input.telemetry.cacheWriteTokens }),
+    ...(cachedInputTokens === null || cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(cacheWriteTokens === null || cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(input.expectedCachedTokens === undefined || input.expectedCachedTokens === null
+      ? {}
+      : { expectedCachedTokens: input.expectedCachedTokens }),
     ...(input.diagnostic?.reason ? { diagnosticReason: input.diagnostic.reason } : {}),
     ...(input.diagnostic?.correctiveAction ? { correctiveAction: input.diagnostic.correctiveAction } : {}),
   }

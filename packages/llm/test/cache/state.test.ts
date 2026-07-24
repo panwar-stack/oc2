@@ -139,7 +139,7 @@ describe("cache expectation state", () => {
 
   test("classifies runtime expectations without storing prompt content", () => {
     const checker = createRegressionChecker()
-    const item = plan({ provider: "openai", model: "gpt-5", stablePrefixFingerprint: "fp-runtime" })
+    const item = plan({ provider: "openai", model: "gpt-5", stablePrefixFingerprint: "fp-runtime", prefixTokenCount: 128 })
 
     checker.register({ sessionID: "ses-runtime", requestID: "msg-1", plan: item })
     expect(
@@ -157,6 +157,7 @@ describe("cache expectation state", () => {
       stablePrefixHash: "fp-runtime",
       cacheStatus: "cache_write",
       cacheWriteTokens: 70,
+      expectedCachedTokens: 128,
     })
 
     const miss = checker.complete({

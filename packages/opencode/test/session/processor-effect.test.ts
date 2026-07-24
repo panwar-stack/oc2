@@ -697,7 +697,7 @@ itMirrorUsage.live("session.processor effect tests publish authoritative mirror 
   ),
 )
 
-itCacheRegression("unexpected_cache_miss").live("session.processor effect tests publish cache regression events", () =>
+itCacheRegression("unexpected_cache_miss").live("session.processor effect tests leave cache regression events to LLM runtime", () =>
   provideTmpdirInstance(
     (dir) =>
       Effect.gen(function* () {
@@ -733,20 +733,7 @@ itCacheRegression("unexpected_cache_miss").live("session.processor effect tests 
         })
         yield* off
 
-        expect(regressions).toHaveLength(1)
-        expect(regressions[0]?.data).toMatchObject({
-          sessionID: chat.id,
-          classification: "unexpected_miss",
-          providerID: ref.providerID,
-          modelID: ref.modelID,
-          stablePrefixHash: "cache:stable-prefix:v1:sha256:test",
-          toolSchemaHash: "cache:component:tools:v1:sha256:test",
-          cachedInputTokens: 0,
-          cacheWriteTokens: 0,
-        })
-        expect(regressions[0]?.data).not.toHaveProperty("expectedCachedTokens")
-        expect(regressions[0]?.data.partID).toStartWith("prt")
-        expect(regressions[0]?.data.messageID).toStartWith("msg_")
+        expect(regressions).toHaveLength(0)
       }),
     { config: cfg },
   ),

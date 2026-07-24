@@ -26,6 +26,7 @@ import { Permission } from "@/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
 import { SessionEvent } from "@oc2-ai/core/session/event"
+import { SessionMessage } from "@oc2-ai/core/session/message"
 import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
@@ -108,6 +109,10 @@ type CacheRuntime = {
   readonly modelID: string
   readonly expectedMiss: () => boolean
 }
+
+const cacheRegressionClassification = (
+  status: CacheState.CacheRegressionStatus,
+): SessionEvent.CacheRegressionClassification | undefined => (status === "pass" ? undefined : status)
 
 export interface Interface {
   readonly stream: (input: StreamInput) => Stream.Stream<LLMEventType, unknown>
@@ -504,9 +509,11 @@ const live: Layer.Layer<
     })
 
     const toEventStream = (result: ProviderRunResult) => {
-      const stream = result.type === "native" || result.type === "event-stream" ? result.stream : aiSdkEventStream(result)
+      const stream =
+        result.type === "native" || result.type === "event-stream" ? result.stream : aiSdkEventStream(result)
       if (result.type === "event-stream" || !result.cache) return stream
 
+      const cache = result.cache
       let telemetry: CacheTelemetryInfo | undefined
       let providerFailure = false
       return stream.pipe(
@@ -523,8 +530,13 @@ const live: Layer.Layer<
         ),
         Stream.ensuring(
           Effect.gen(function* () {
-            const expectedMiss = result.cache.expectedMiss()
-            yield* logCacheInvocation(result.cache, expectedMiss, () => telemetry, () => providerFailure).pipe(
+            const expectedMiss = cache.expectedMiss()
+            yield* logCacheInvocation(
+              cache,
+              expectedMiss,
+              () => telemetry,
+              () => providerFailure,
+            ).pipe(
               Effect.catchCause((cause) =>
                 Effect.sync(() => log.warn("cache.invocation failed", { cause: Cause.pretty(cause) })),
               ),
@@ -580,6 +592,13 @@ const live: Layer.Layer<
         })
         log.info("cache.invocation", { ...event, regression })
         yield* Effect.logInfo("prompt cache invocation").pipe(Effect.annotateLogs({ cache: event, regression }))
+        const durableRegression = cacheRegressionEvent(regression, expectedTelemetry, cache.plan)
+        if (durableRegression) {
+          yield* events.publish(SessionEvent.CacheRegression, {
+            ...durableRegression,
+            timestamp: DateTime.makeUnsafe(Date.now()),
+          })
+        }
         if (event.notification) {
           yield* events
             .publish(TuiEvent.ToastShow, {
@@ -735,5 +754,48 @@ const cacheTelemetryFromEvent = (event: LLMEventType): CacheTelemetryInfo | unde
   if (event.type !== "step-finish" && event.type !== "finish" && event.type !== "provider-error") return undefined
   return event.usage?.cacheTelemetry
 }
+
+const cacheRegressionEvent = (
+  regression: CacheState.CacheRegressionResult,
+  telemetry: CacheTelemetryInfo | undefined,
+  plan: CachePlan,
+): Omit<typeof SessionEvent.CacheRegression.data.Type, "timestamp"> | undefined => {
+  const classification = cacheRegressionClassification(regression.status)
+  if (!classification) return undefined
+  return SessionEvent.cacheRegressionData({
+    sessionID: SessionID.make(regression.sessionID),
+    ...(regression.requestID ? { messageID: SessionMessage.ID.make(regression.requestID) } : {}),
+    providerID: regression.providerID,
+    modelID: regression.modelID,
+    telemetry: telemetry ?? cacheRegressionTelemetry(regression),
+    plan,
+    stablePrefixHash: regression.stablePrefixHash,
+    classification,
+    cachedInputTokens: regression.cachedInputTokens,
+    cacheWriteTokens: regression.cacheWriteTokens,
+    expectedCachedTokens: regression.expectedCachedTokens,
+    diagnostic: regression.diagnostic,
+  })
+}
+
+const cacheRegressionTelemetry = (regression: CacheState.CacheRegressionResult): CacheTelemetryInfo => ({
+  provider: regression.providerID,
+  model: regression.modelID,
+  inputTokens: regression.expectedCachedTokens ?? regression.cachedInputTokens ?? regression.cacheWriteTokens ?? 0,
+  cacheReadTokens: regression.cachedInputTokens ?? null,
+  cacheWriteTokens: regression.cacheWriteTokens ?? null,
+  cacheMissTokens: null,
+  uncachedInputTokens: null,
+  metricsAvailable: false,
+  eligible: regression.status !== "unsupported",
+  expected: regression.status === "expected_miss",
+  verified: false,
+  classification: "cache_telemetry_unavailable",
+  providerRawUsageFieldNames: [],
+  warmupRequestNumber: null,
+  estimatedCacheCost: null,
+  estimatedUncachedCost: null,
+  estimatedSavings: null,
+})
 
 export * as LLM from "./llm"

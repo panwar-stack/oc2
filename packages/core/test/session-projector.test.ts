@@ -90,6 +90,7 @@ describe("SessionProjector", () => {
         }),
         stablePrefixHash: "cache:stable-prefix:v1:sha256:safe",
         toolSchemaHash: "cache:component:tools:v1:sha256:safe",
+        expectedCachedTokens: 1024,
         diagnostic: {
           provider: "openai",
           model: "gpt-5",
@@ -109,8 +110,8 @@ describe("SessionProjector", () => {
         toolSchemaHash: "cache:component:tools:v1:sha256:safe",
         cachedInputTokens: 0,
         cacheWriteTokens: 0,
+        expectedCachedTokens: 1024,
       })
-      expect(regression).not.toHaveProperty("expectedCachedTokens")
       if (!regression) return yield* Effect.die("Expected cache regression data")
 
       yield* events.publish(SessionEvent.CacheRegression, {
@@ -123,7 +124,7 @@ describe("SessionProjector", () => {
       const stored = yield* db
         .select()
         .from(EventTable)
-        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.CacheRegression.type, 1)))
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.CacheRegression.type, 2)))
         .get()
       expect(stored?.data).toMatchObject({
         classification: "unexpected_miss",
@@ -135,38 +136,78 @@ describe("SessionProjector", () => {
 
   it.effect("maps cache telemetry classifications for durable regression events", () =>
     Effect.sync(() => {
-    const data = (classification: CacheTelemetryInfo["classification"]) =>
-      SessionEvent.cacheRegressionData({
-        sessionID,
-        telemetry: {
-          provider: "openai",
-          model: "gpt-5",
-          inputTokens: 2048,
-          cacheReadTokens: 0,
+      const data = (classification: CacheTelemetryInfo["classification"]) =>
+        SessionEvent.cacheRegressionData({
+          sessionID,
+          telemetry: {
+            provider: "openai",
+            model: "gpt-5",
+            inputTokens: 2048,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cacheMissTokens: 2048,
+            uncachedInputTokens: 2048,
+            metricsAvailable: true,
+            eligible: classification !== "cache_unsupported",
+            expected: false,
+            verified: false,
+            classification,
+            providerRawUsageFieldNames: [],
+            warmupRequestNumber: null,
+            estimatedCacheCost: null,
+            estimatedUncachedCost: null,
+            estimatedSavings: null,
+          },
+        })
+
+      expect(data("cache_hit")).toBeUndefined()
+      expect(data("cache_write")?.classification).toBe("warmup")
+      expect(data("expected_cache_miss")?.classification).toBe("expected_miss")
+      expect(data("unexpected_cache_miss")?.classification).toBe("unexpected_miss")
+      expect(data("cache_unsupported")?.classification).toBe("unsupported")
+      expect(data("cache_telemetry_unavailable")?.classification).toBe("inconclusive")
+      expect(data("provider_error")?.classification).toBe("inconclusive")
+      expect(data("cache_configuration_error")?.classification).toBe("inconclusive")
+    }),
+  )
+
+  it.effect("replays old cache regression events without expected cached tokens", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = sessionID
+      const received = new Array<EventV2.Payload>()
+      yield* events.project(SessionEvent.CacheRegression, (event) =>
+        Effect.sync(() => {
+          received.push(event)
+        }),
+      )
+
+      yield* events.replay({
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(SessionEvent.CacheRegression.type, 1),
+        seq: 0,
+        aggregateID,
+        data: {
+          sessionID,
+          timestamp: 0,
+          providerID: "openai",
+          modelID: "gpt-5",
+          classification: "unexpected_miss",
+          stablePrefixHash: "cache:stable-prefix:v1:sha256:safe",
+          cachedInputTokens: 0,
           cacheWriteTokens: 0,
-          cacheMissTokens: 2048,
-          uncachedInputTokens: 2048,
-          metricsAvailable: true,
-          eligible: classification !== "cache_unsupported",
-          expected: false,
-          verified: false,
-          classification,
-          providerRawUsageFieldNames: [],
-          warmupRequestNumber: null,
-          estimatedCacheCost: null,
-          estimatedUncachedCost: null,
-          estimatedSavings: null,
         },
       })
 
-    expect(data("cache_hit")).toBeUndefined()
-    expect(data("cache_write")?.classification).toBe("warmup")
-    expect(data("expected_cache_miss")?.classification).toBe("expected_miss")
-    expect(data("unexpected_cache_miss")?.classification).toBe("unexpected_miss")
-    expect(data("cache_unsupported")?.classification).toBe("unsupported")
-    expect(data("cache_telemetry_unavailable")?.classification).toBe("inconclusive")
-    expect(data("provider_error")?.classification).toBe("inconclusive")
-    expect(data("cache_configuration_error")?.classification).toBe("inconclusive")
+      expect(received).toHaveLength(1)
+      expect(received[0]?.data).toMatchObject({
+        classification: "unexpected_miss",
+        providerID: "openai",
+        modelID: "gpt-5",
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+      })
+      expect(received[0]?.data).not.toHaveProperty("expectedCachedTokens")
     }),
   )
 
