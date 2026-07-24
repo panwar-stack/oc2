@@ -1,4 +1,4 @@
-import { ProviderID, type ModelID } from "../schema"
+import { mergeProviderOptions, ProviderID, type ModelID } from "../schema"
 import * as OpenAICompatibleChat from "../protocols/openai-compatible-chat"
 import type { RouteDefaultsInput } from "../route/client"
 import { AuthOptions, type ProviderAuthOption } from "../route/auth-options"
@@ -24,6 +24,7 @@ export const configure = (input: GenericModelOptions) => {
   const { provider: _, baseURL, apiKey: _apiKey, auth: _auth, ...rest } = input
   const route = OpenAICompatibleChat.route.with({
     ...rest,
+    providerOptions: mergeProviderOptions({ openai: { serviceTier: "flex" } }, input.providerOptions),
     provider,
     endpoint: { baseURL },
     auth: AuthOptions.bearer(input, []),

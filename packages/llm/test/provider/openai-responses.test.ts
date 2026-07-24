@@ -77,6 +77,33 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("defaults OpenAI Responses service tier to flex", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-4.1-mini"),
+          prompt: "default tier",
+        }),
+      )
+
+      expect(prepared.body.service_tier).toBe("flex")
+    }),
+  )
+
+  it.effect("allows OpenAI Responses service tier overrides", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-4.1-mini"),
+          prompt: "override tier",
+          providerOptions: { openai: { serviceTier: "auto" } },
+        }),
+      )
+
+      expect(prepared.body.service_tier).toBe("auto")
+    }),
+  )
+
   it.effect("omits unsupported semantic service tiers", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(

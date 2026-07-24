@@ -86,6 +86,36 @@ describe("ProviderTransform.options - promptCacheKey", () => {
     expect(result.promptCacheKey).toBeUndefined()
   })
 
+  test("should default OpenAI service tier to flex", () => {
+    const openaiModel = {
+      ...mockModel,
+      providerID: "openai",
+      api: {
+        id: "gpt-4o-mini",
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+    }
+
+    const result = ProviderTransform.options({ model: openaiModel, sessionID, providerOptions: {} })
+    expect(result.serviceTier).toBe("flex")
+  })
+
+  test("should default OpenAI-compatible service tier to flex", () => {
+    const compatibleModel = {
+      ...mockModel,
+      providerID: "deepseek",
+      api: {
+        id: "deepseek-chat",
+        url: "https://api.deepseek.com",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+
+    const result = ProviderTransform.options({ model: compatibleModel, sessionID, providerOptions: {} })
+    expect(result.serviceTier).toBe("flex")
+  })
+
   test("should prefer CachePlan cacheKey for supported OpenAI models", () => {
     const openaiModel = {
       ...mockModel,
