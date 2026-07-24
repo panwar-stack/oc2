@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { CachePlan } from "@oc2-ai/llm/cache/capability"
-import { createStore, type CacheExpectationKey } from "@oc2-ai/llm/cache/state"
+import { createRegressionChecker, createStore, type CacheExpectationKey } from "@oc2-ai/llm/cache/state"
 import { CacheTelemetry } from "@oc2-ai/llm/cache/telemetry"
 
 const plan = (input: Partial<CachePlan> & Pick<CachePlan, "provider" | "model" | "stablePrefixFingerprint">): CachePlan => ({
@@ -135,5 +135,78 @@ describe("cache expectation state", () => {
 
     expect(changed.configurationFingerprints.route).toBe("b")
     expect(changed.warnings.at(-1)).toMatchObject({ code: "configuration_change", observedAt: expect.any(Number) })
+  })
+
+  test("classifies runtime expectations without storing prompt content", () => {
+    const checker = createRegressionChecker()
+    const item = plan({ provider: "openai", model: "gpt-5", stablePrefixFingerprint: "fp-runtime" })
+
+    checker.register({ sessionID: "ses-runtime", requestID: "msg-1", plan: item })
+    expect(
+      checker.complete({
+        sessionID: "ses-runtime",
+        requestID: "msg-1",
+        plan: item,
+        telemetry: CacheTelemetry.normalize({ provider: "openai", model: "gpt-5", inputTokens: 100, cacheWriteTokens: 70 }),
+      }),
+    ).toMatchObject({
+      status: "warmup",
+      sessionID: "ses-runtime",
+      providerID: "openai",
+      modelID: "gpt-5",
+      stablePrefixHash: "fp-runtime",
+      cacheStatus: "cache_write",
+      cacheWriteTokens: 70,
+    })
+
+    const miss = checker.complete({
+      sessionID: "ses-runtime",
+      requestID: "msg-2",
+      plan: item,
+      telemetry: CacheTelemetry.normalize({ provider: "openai", model: "gpt-5", inputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 }),
+    })
+
+    expect(miss.status).toBe("unexpected_miss")
+    expect(miss.diagnostic).toMatchObject({ stablePrefixFingerprint: "fp-runtime" })
+    expect(JSON.stringify(miss)).not.toContain("secret prompt")
+    expect(JSON.stringify(miss)).not.toContain("secret message")
+  })
+
+  test("keeps expected misses authoritative before telemetry availability", () => {
+    const checker = createRegressionChecker()
+    const item = plan({ provider: "openai", model: "gpt-5", stablePrefixFingerprint: "fp-expected" })
+
+    checker.register({ sessionID: "ses-runtime", plan: item })
+
+    expect(
+      checker.complete({
+        sessionID: "ses-runtime",
+        plan: item,
+        telemetry: null,
+        expectedMiss: true,
+      }),
+    ).toMatchObject({ status: "expected_miss", cacheStatus: "cache_telemetry_unavailable" })
+  })
+
+  test("marks retry and compaction telemetry as expected without losing provider errors", () => {
+    expect(
+      CacheTelemetry.withExpectedMiss(
+        CacheTelemetry.normalize({
+          provider: "openai",
+          model: "gpt-5",
+          inputTokens: 100,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          warmupRequestNumber: 2,
+        }),
+        { provider: "openai", model: "gpt-5" },
+      ),
+    ).toMatchObject({ expected: true, classification: "expected_cache_miss", verified: false })
+    expect(
+      CacheTelemetry.withExpectedMiss(
+        CacheTelemetry.normalize({ provider: "openai", model: "gpt-5", providerError: true }),
+        { provider: "openai", model: "gpt-5" },
+      ),
+    ).toMatchObject({ expected: true, classification: "provider_error", verified: false })
   })
 })
