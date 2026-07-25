@@ -12,6 +12,58 @@ import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
 import { onCleanup } from "solid-js"
 
+type CacheRegressionEvent = Extract<Event, { type: "session.next.cache.regression" }>
+
+function cacheStatusFromRegression(event: CacheRegressionEvent): NonNullable<SessionMessageAssistant["cacheStatus"]> {
+  switch (event.properties.classification) {
+    case "unexpected_miss":
+      return {
+        classification: "unexpected_cache_miss",
+        metricsAvailable: true,
+        eligible: true,
+        verified: true,
+        read: event.properties.cachedInputTokens ?? 0,
+        write: event.properties.cacheWriteTokens ?? 0,
+      }
+    case "expected_miss":
+      return {
+        classification: "expected_cache_miss",
+        metricsAvailable: true,
+        eligible: true,
+        verified: false,
+        read: event.properties.cachedInputTokens ?? 0,
+        write: event.properties.cacheWriteTokens ?? 0,
+      }
+    case "warmup":
+      return {
+        classification: "cache_write",
+        metricsAvailable: true,
+        eligible: true,
+        verified: true,
+        read: event.properties.cachedInputTokens ?? 0,
+        write: event.properties.cacheWriteTokens ?? 0,
+      }
+    case "unsupported":
+      return {
+        classification: "cache_unsupported",
+        metricsAvailable: true,
+        eligible: false,
+        verified: false,
+        read: event.properties.cachedInputTokens ?? 0,
+        write: event.properties.cacheWriteTokens ?? 0,
+      }
+    case "inconclusive":
+      return {
+        classification: "cache_telemetry_unavailable",
+        metricsAvailable: false,
+        eligible: true,
+        verified: false,
+        read: event.properties.cachedInputTokens ?? 0,
+        write: event.properties.cacheWriteTokens ?? 0,
+      }
+  }
+}
+
 function activeAssistant(messages: SessionMessage[]) {
   const index = messages.findIndex((message) => message.type === "assistant" && !message.time.completed)
   if (index < 0) return
@@ -596,6 +648,14 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             currentAssistant.time.completed = event.properties.timestamp
             currentAssistant.finish = "error"
             currentAssistant.error = event.properties.error
+          })
+          break
+        case "session.next.cache.regression":
+          if (!event.properties.messageID) break
+          update(event.properties.sessionID, (draft) => {
+            const currentAssistant = ownedAssistant(draft, event.properties.messageID!)
+            if (!currentAssistant) return
+            currentAssistant.cacheStatus = cacheStatusFromRegression(event)
           })
           break
         case "session.next.text.started":

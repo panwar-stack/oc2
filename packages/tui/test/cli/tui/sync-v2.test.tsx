@@ -376,6 +376,58 @@ test("sync v2 projects cache status from live step end", async () => {
   }
 })
 
+test("sync v2 projects cache status from a live cache regression event", async () => {
+  const { app, events, sync } = await mountSyncV2()
+
+  try {
+    emitTwice(events, {
+      id: "evt_cache_regression_started",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-cache-regression",
+        assistantMessageID: "msg_assistant_cache_regression",
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_cache_regression",
+      type: "session.next.cache.regression",
+      properties: {
+        sessionID: "session-cache-regression",
+        messageID: "msg_assistant_cache_regression",
+        timestamp: 2,
+        providerID: "provider",
+        modelID: "model",
+        classification: "unexpected_miss",
+        stablePrefixHash: "safe-fingerprint",
+        diagnosticReason: "stable_prefix_changed",
+      },
+    })
+
+    await wait(() => {
+      const assistant = sync.session.message.fromSession("session-cache-regression")[0]
+      return assistant?.type === "assistant" && assistant.cacheStatus?.classification === "unexpected_cache_miss"
+    })
+    const assistant = sync.session.message.fromSession("session-cache-regression")[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.cacheStatus).toEqual({
+      classification: "unexpected_cache_miss",
+      metricsAvailable: true,
+      eligible: true,
+      verified: true,
+      read: 0,
+      write: 0,
+    })
+    expect(JSON.stringify(assistant.cacheStatus)).not.toContain("safe-fingerprint")
+    expect(JSON.stringify(assistant.cacheStatus)).not.toContain("stable_prefix_changed")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("sync v2 hydration merge keeps newer live cache status", async () => {
   const response = Promise.withResolvers<Response>()
   const calls = createFetch((url) => {
@@ -449,6 +501,65 @@ test("sync v2 hydration merge keeps newer live cache status", async () => {
     if (assistant?.type !== "assistant") return
     expect(assistant.time.completed).toBe(3)
     expect(assistant.cacheStatus).toMatchObject({ classification: "cache_hit", read: 8 })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sync v2 replays buffered cache regression status after hydration", async () => {
+  const response = Promise.withResolvers<Response>()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/session-cache-regression/message") return response.promise
+    return undefined
+  })
+  const { app, events, sync } = await mountSyncV2(calls)
+
+  try {
+    const hydration = sync.session.message.sync("session-cache-regression")
+    emitTwice(events, {
+      id: "evt_cache_regression_buffered_started",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-cache-regression",
+        assistantMessageID: "msg_assistant_cache_regression",
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_cache_regression_buffered",
+      type: "session.next.cache.regression",
+      properties: {
+        sessionID: "session-cache-regression",
+        messageID: "msg_assistant_cache_regression",
+        timestamp: 2,
+        providerID: "provider",
+        modelID: "model",
+        classification: "warmup",
+        cacheWriteTokens: 12,
+      },
+    })
+    response.resolve(
+      json({
+        data: [
+          {
+            id: "msg_assistant_cache_regression",
+            type: "assistant",
+            agent: "build",
+            model: { id: "model", providerID: "provider" },
+            content: [],
+            time: { created: 1 },
+          },
+        ],
+      }),
+    )
+    await hydration
+
+    const assistant = sync.session.message.fromSession("session-cache-regression")[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.cacheStatus).toMatchObject({ classification: "cache_write", write: 12 })
   } finally {
     app.renderer.destroy()
   }
