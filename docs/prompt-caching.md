@@ -101,7 +101,7 @@ Regression statuses are:
 - `pass`: a hit or otherwise valid cache result matched the expectation.
 - `warmup`: the provider wrote cache during the configured warmup window.
 - `expected_miss`: the miss was known in advance, such as first use,
-  compaction, unsupported cache behavior, or retention expiry.
+  compaction, or retention expiry.
 - `unexpected_miss`: conclusive telemetry reported a miss after the prefix was
   expected to be warm.
 - `unsupported`: the plan or provider does not support verified prompt caching.
