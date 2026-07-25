@@ -189,6 +189,21 @@ describe("cache expectation state", () => {
     ).toMatchObject({ status: "expected_miss", cacheStatus: "cache_telemetry_unavailable" })
   })
 
+  test("classifies first verified miss as warmup for first-request providers", () => {
+    const checker = createRegressionChecker()
+    const item = plan({ provider: "openai", model: "gpt-5", stablePrefixFingerprint: "fp-first-miss" })
+
+    checker.register({ sessionID: "ses-runtime", plan: item })
+
+    expect(
+      checker.complete({
+        sessionID: "ses-runtime",
+        plan: item,
+        telemetry: CacheTelemetry.normalize({ provider: "openai", model: "gpt-5", inputTokens: 4096, cacheReadTokens: 0, cacheWriteTokens: 0 }),
+      }),
+    ).toMatchObject({ status: "warmup", cacheStatus: "unexpected_cache_miss" })
+  })
+
   test("marks retry and compaction telemetry as expected without losing provider errors", () => {
     expect(
       CacheTelemetry.withExpectedMiss(

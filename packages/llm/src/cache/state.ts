@@ -278,6 +278,7 @@ const regressionStatus = (input: {
   ) {
     return "warmup"
   }
+  if (input.telemetry.classification === "unexpected_cache_miss" && input.entry.warmup.active) return "warmup"
   if (input.telemetry.classification === "unexpected_cache_miss") return "unexpected_miss"
   if (input.telemetry.classification === "provider_error" || input.telemetry.classification === "cache_configuration_error") {
     return "inconclusive"

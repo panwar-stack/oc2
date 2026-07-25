@@ -33,6 +33,7 @@ import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { SessionEvent } from "@oc2-ai/core/session/event"
+import { TuiEvent } from "@/server/tui-event"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -297,6 +298,29 @@ describe("session.llm.telemetry", () => {
       { role: "system", content: "system guidance" },
       { role: "user", content: "hello" },
     ])
+  })
+})
+
+describe("session.llm cache notifications", () => {
+  test("suppresses visible cache regression notifications for warmup and expected misses", () => {
+    const notification = {
+      code: "unexpected_cache_miss" as const,
+      classification: "unexpected_cache_miss" as const,
+      severity: "warning" as const,
+      message: "Provider reported an unexpected prompt cache miss after the cache was expected to be warm.",
+    }
+
+    expect(LLM.shouldShowCacheRegressionNotification("warmup", notification)).toBe(false)
+    expect(LLM.shouldShowCacheRegressionNotification("expected_miss", notification)).toBe(false)
+    expect(LLM.shouldShowCacheRegressionNotification("unexpected_miss", notification)).toBe(true)
+    expect(
+      LLM.shouldShowCacheRegressionNotification("warmup", {
+        code: "provider_error",
+        classification: "provider_error",
+        severity: "error",
+        message: "Provider request failed before prompt cache behavior could be verified.",
+      }),
+    ).toBe(true)
   })
 })
 
@@ -3152,6 +3176,7 @@ describe("session.llm.stream", () => {
             },
           },
         ]
+        const warmupRequest = waitRequest("/responses", createEventResponse(responseChunks, true))
         const request = waitRequest("/responses", createEventResponse(responseChunks, true))
         const events = yield* EventV2Bridge.Service
         const regressions: EventV2.Data<typeof SessionEvent.CacheRegression>[] = []
@@ -3161,6 +3186,24 @@ describe("session.llm.stream", () => {
 
         const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
         const sessionID = SessionID.make("session-test-cache-regression")
+        yield* drain({
+          user: {
+            id: MessageID.make("msg_user-cache-regression-warmup"),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: "test",
+            model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
+          },
+          sessionID,
+          model: resolved,
+          agent: testAgent(),
+          system: ["You are a helpful assistant."],
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+        yield* Effect.promise(() => warmupRequest)
+
         yield* drain({
           user: {
             id: MessageID.make("msg_user-cache-regression"),
@@ -3186,11 +3229,19 @@ describe("session.llm.stream", () => {
         yield* Effect.promise(() => request)
 
         yield* pollWithTimeout(
-          Effect.sync(() => (regressions.length === 1 ? true : undefined)),
+          Effect.sync(() => (regressions.length === 2 ? true : undefined)),
           "cache regression event was not published",
         )
         off()
         expect(regressions[0]).toMatchObject({
+          sessionID,
+          messageID: "msg_user-cache-regression-warmup",
+          classification: "warmup",
+          providerID: "openai",
+          modelID: model.id,
+          cachedInputTokens: 0,
+        })
+        expect(regressions[1]).toMatchObject({
           sessionID,
           messageID: "msg_user-cache-regression",
           classification: "unexpected_miss",
@@ -3198,10 +3249,10 @@ describe("session.llm.stream", () => {
           modelID: model.id,
           cachedInputTokens: 0,
         })
-        expect(regressions[0]?.stablePrefixHash).toStartWith("cache:stable-prefix:")
-        expect(regressions[0]?.diagnosticReason).toBeString()
-        expect(JSON.stringify(regressions[0])).not.toContain("You are a helpful assistant")
-        expect(JSON.stringify(regressions[0])).not.toContain("Hello")
+        expect(regressions[1]?.stablePrefixHash).toStartWith("cache:stable-prefix:")
+        expect(regressions[1]?.diagnosticReason).toBeString()
+        expect(JSON.stringify(regressions[1])).not.toContain("You are a helpful assistant")
+        expect(JSON.stringify(regressions[1])).not.toContain("Hello")
       }),
     {
       config: () => {
@@ -3209,6 +3260,115 @@ describe("session.llm.stream", () => {
         return openAIConfig(model, `${state.server!.url.origin}/v1`)
       },
     },
+  )
+
+  it.instance(
+    "does not toast prompt cache misses during first-turn warmup",
+    () =>
+      Effect.gen(function* () {
+        const model = loadFixture("openai", "gpt-5.2").model
+        const responseChunks = [
+          {
+            type: "response.created",
+            response: {
+              id: "resp-cache-warmup",
+              created_at: Math.floor(Date.now() / 1000),
+              model: model.id,
+              service_tier: null,
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "message",
+              id: "item-cache-warmup",
+              status: "in_progress",
+              role: "assistant",
+              content: [],
+            },
+          },
+          {
+            type: "response.content_part.added",
+            item_id: "item-cache-warmup",
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "", annotations: [] },
+          },
+          {
+            type: "response.output_text.delta",
+            item_id: "item-cache-warmup",
+            delta: "Hello",
+            logprobs: null,
+          },
+          {
+            type: "response.completed",
+            response: {
+              incomplete_details: null,
+              usage: {
+                input_tokens: 2_048,
+                input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+                output_tokens: 1,
+                output_tokens_details: null,
+              },
+              service_tier: null,
+            },
+          },
+        ]
+        const request = waitRequest("/responses", createEventResponse(responseChunks, true))
+        const events = yield* EventV2Bridge.Service
+        const toasts: EventV2.Data<typeof TuiEvent.ToastShow>[] = []
+        const off = yield* events.subscribeCallback(TuiEvent.ToastShow, (event) => {
+          toasts.push(event.data)
+        })
+        const regressions: EventV2.Data<typeof SessionEvent.CacheRegression>[] = []
+        const offRegression = yield* events.subscribeCallback(SessionEvent.CacheRegression, (event) => {
+          regressions.push(event.data)
+        })
+
+        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const sessionID = SessionID.make("session-test-cache-warmup")
+        yield* drain({
+          user: {
+            id: MessageID.make("msg_user-cache-warmup"),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: "test",
+            model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
+          },
+          sessionID,
+          model: resolved,
+          agent: testAgent(),
+          system: ["You are a helpful assistant."],
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+        yield* Effect.promise(() => request)
+        yield* pollWithTimeout(
+          Effect.sync(() => (regressions.length === 1 ? true : undefined)),
+          "cache warmup regression event was not published",
+        )
+        off()
+        offRegression()
+        expect(regressions[0]).toMatchObject({
+          sessionID,
+          messageID: "msg_user-cache-warmup",
+          classification: "warmup",
+          providerID: "openai",
+          modelID: model.id,
+          cachedInputTokens: 0,
+        })
+        expect(
+          toasts.some(
+            (toast) =>
+              toast.title === "Prompt Cache" &&
+              toast.message ===
+                "Provider reported an unexpected prompt cache miss after the cache was expected to be warm.",
+          ),
+        ).toBe(false)
+      }),
+    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
   )
 
   it.instance(

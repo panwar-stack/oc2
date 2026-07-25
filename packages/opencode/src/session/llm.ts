@@ -115,6 +115,11 @@ const cacheRegressionClassification = (
   status: CacheState.CacheRegressionStatus,
 ): SessionEvent.CacheRegressionClassification | undefined => (status === "pass" ? undefined : status)
 
+export const shouldShowCacheRegressionNotification = (
+  status: CacheState.CacheRegressionStatus,
+  notification: NonNullable<ReturnType<typeof CacheLogging.event>["notification"]>,
+) => notification.code !== "unexpected_cache_miss" || (status !== "warmup" && status !== "expected_miss")
+
 export interface Interface {
   readonly stream: (input: StreamInput) => Stream.Stream<LLMEventType, unknown>
 }
@@ -612,7 +617,7 @@ const live: Layer.Layer<
             timestamp: DateTime.makeUnsafe(Date.now()),
           })
         }
-        if (event.notification) {
+        if (event.notification && shouldShowCacheRegressionNotification(regression.status, event.notification)) {
           yield* events
             .publish(TuiEvent.ToastShow, {
               title: "Prompt Cache",
