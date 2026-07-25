@@ -102,7 +102,6 @@ Rationale:
 - Sort tools before cache planning and before provider execution.
 - Keep the stable prompt prefix separate from dynamic context where possible.
 - Stable prefix candidates:
-  - token budget guidance
   - agent/provider prompt
   - stable tool schemas
 - Dynamic content must remain after the stable prefix:

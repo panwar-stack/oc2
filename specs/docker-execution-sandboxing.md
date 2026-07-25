@@ -268,7 +268,6 @@ A fresh read-only reviewer must specifically challenge bypasses: direct IP acces
 
 - Update `packages/web/src/content/docs/tools.mdx` to explain that shell execution can be sandboxed.
 - Update `packages/web/src/content/docs/plugins.mdx` to clarify `shell.env` env values are passed into sandboxed shell execution.
-- Update stale non-sandboxed wording in `packages/opencode/src/session/prompt/kimi.txt` only if sandbox config is enabled in runtime prompt context.
 - Update `packages/opencode/src/file/protected.ts` wording if protected-file behavior changes under sandboxing.
 - Keep ecosystem/plugin references unchanged unless they become misleading.
 

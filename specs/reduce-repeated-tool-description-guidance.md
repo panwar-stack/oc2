@@ -24,7 +24,7 @@ The implementation strategy is to shorten high-frequency tool-description text t
 
 ## Non-Negotiables
 
-- Must not edit `packages/opencode/src/session/prompt/default.txt`, `gpt.txt`, `codex.txt`, or `SystemPrompt.provider(...)` in the first pass.
+- Must not edit `packages/opencode/src/session/prompt/default.txt` or `SystemPrompt.provider(...)` in the first pass.
 - Must preserve Shell safety rules: no destructive git unless explicit, no commits/PRs unless explicit, quote paths with spaces, use `workdir` instead of `cd`, avoid shell for file read/write/search/edit when specialized tools exist.
 - Must preserve Task safety rules: use subagents for complex multi-step work, do not duplicate delegated work, trust completed subagent results, resume with `task_id` when needed.
 - Must preserve tool schema shape and tool IDs.

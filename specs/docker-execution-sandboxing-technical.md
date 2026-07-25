@@ -339,7 +339,6 @@ Adversarial check:
 - Update `packages/web/src/content/docs/tools.mdx` to describe sandboxed shell execution.
 - Update `packages/web/src/content/docs/permissions.mdx` if `sandbox_network` is shipped.
 - Update `packages/web/src/content/docs/plugins.mdx` to describe how `shell.env` values enter sandboxed execution.
-- Update `packages/opencode/src/session/prompt/kimi.txt` only if runtime prompt context can accurately state sandbox status.
 - Update `packages/opencode/src/file/protected.ts` only if protected file messaging changes.
 
 Verification:

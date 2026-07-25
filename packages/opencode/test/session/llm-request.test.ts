@@ -11,7 +11,6 @@ import type { Plugin } from "@/plugin"
 import type { Provider } from "@/provider/provider"
 import { prepare } from "@/session/llm/request"
 import { MessageID, SessionID } from "@/session/schema"
-import { SystemPrompt } from "@/session/system"
 import { testEffect } from "../lib/effect"
 
 const model: Provider.Model = {
@@ -77,7 +76,7 @@ const plugin: Plugin.Interface = {
 const it = testEffect(RuntimeFlags.layer())
 
 describe("session.llm.request", () => {
-  it.effect("prepends token-budget guidance before all other system sections", () =>
+  it.effect("combines agent, session, and user system sections", () =>
     Effect.gen(function* () {
       const flags = yield* RuntimeFlags.Service
       const prepared = yield* prepare({
@@ -96,7 +95,6 @@ describe("session.llm.request", () => {
       })
 
       const expectedSystem = [
-        SystemPrompt.TOKEN_BUDGET_GUIDANCE,
         "agent custom prompt",
         "session instruction",
         "user instruction",

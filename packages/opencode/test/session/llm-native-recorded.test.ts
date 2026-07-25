@@ -22,7 +22,6 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { Agent } from "../../src/agent/agent"
 import { LLM } from "../../src/session/llm"
 import { MessageID, SessionID } from "../../src/session/schema"
-import { TOKEN_BUDGET_GUIDANCE } from "../../src/session/system"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@oc2-ai/core/provider"
@@ -213,12 +212,9 @@ const redactRecordedBody = (body: string) =>
     .replace(/wrk_[A-Z0-9]+/g, "wrk_redacted")
     .replace(/"safety_identifier"\s*:\s*"user-[^"]+"/g, '"safety_identifier":"user_redacted"')
     .replace(/"(access|access_token|refresh|refresh_token|accountId|account_id)"\s*:\s*"[^"]+"/g, '"$1":"redacted"')
-    .replaceAll(JSON.stringify(`${TOKEN_BUDGET_GUIDANCE}\n\n`).slice(1, -1), "")
 
 const JsonBody = Schema.fromJsonString(Schema.Unknown)
 const decodeJsonBody = Schema.decodeUnknownOption(JsonBody)
-const normalizeString = (value: string) =>
-  value.startsWith(TOKEN_BUDGET_GUIDANCE) ? value.slice(TOKEN_BUDGET_GUIDANCE.length).replace(/^\n+/, "") : value
 const canonicalize = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonicalize)
   if (value && typeof value === "object") {
@@ -228,7 +224,6 @@ const canonicalize = (value: unknown): unknown => {
         .map((key) => [key, canonicalize((value as Record<string, unknown>)[key])]),
     )
   }
-  if (typeof value === "string") return normalizeString(value)
   return value
 }
 const canonicalRequest = (snapshot: HttpRecorder.RequestSnapshot) =>
