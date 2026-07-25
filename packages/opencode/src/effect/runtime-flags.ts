@@ -47,6 +47,7 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
   experimentalEventSystem: enabledByExperimental("OC2_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("OC2_EXPERIMENTAL_WORKSPACES"),
   experimentalIconDiscovery: enabledByExperimental("OC2_EXPERIMENTAL_ICON_DISCOVERY"),
+  experimentalPromptCacheSelfHealing: bool("OC2_EXPERIMENTAL_PROMPT_CACHE_SELF_HEALING"),
   outputTokenMax: positiveInteger("OC2_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   bashDefaultTimeoutMs: positiveInteger("OC2_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("OC2_EXPERIMENTAL_NATIVE_LLM"),

@@ -9,6 +9,7 @@ import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import {
   CacheLogging,
   CachePlanner,
+  CacheSelfHealing,
   CacheState,
   CacheTelemetry,
   type LLMEvent as LLMEventType,
@@ -146,6 +147,7 @@ const live: Layer.Layer<
     const flags = yield* RuntimeFlags.Service
     const scope = yield* Scope.Scope
     const cacheChecker = CacheState.createRegressionChecker()
+    const cacheSelfHealing = CacheSelfHealing.createPolicy({ mode: flags.experimentalPromptCacheSelfHealing ? "observe" : "off" })
 
     const runProvider = Effect.fn("LLM.runProvider")(function* (input: StreamRequest) {
       const l = log
@@ -580,6 +582,13 @@ const live: Layer.Layer<
           telemetry: expectedTelemetry,
           expectedMiss,
         })
+        const healing = cacheSelfHealing.observe({
+          result: regression,
+          plan: cache.plan,
+          telemetry: expectedTelemetry,
+          diagnostic: regression.diagnostic,
+          providerFailure: providerFailureRef(),
+        })
         const event = CacheLogging.event({
           requestID: cache.requestID,
           provider: cache.providerID,
@@ -590,6 +599,10 @@ const live: Layer.Layer<
           providerFailure: providerFailureRef(),
           diagnostic: regression.diagnostic,
         })
+        for (const action of healing.actions) {
+          log.warn("cache.self_healing", { action })
+          yield* Effect.logWarning("prompt cache self-healing action").pipe(Effect.annotateLogs({ action }))
+        }
         log.info("cache.invocation", { ...event, regression })
         yield* Effect.logInfo("prompt cache invocation").pipe(Effect.annotateLogs({ cache: event, regression }))
         const durableRegression = cacheRegressionEvent(regression, expectedTelemetry, cache.plan)
