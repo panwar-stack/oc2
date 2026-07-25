@@ -240,12 +240,12 @@ describe("stats aggregate", () => {
       expect(Object.keys(stats.modelUsage).sort()).toEqual(["p1/m1", "p2/m2"])
       expect(stats.modelUsage["p1/m1"]).toEqual({
         messages: 3,
-        tokens: { input: 120, output: 250, cache: { read: 10, write: 2 } },
+        tokens: { input: 120, output: 240, reasoning: 10, cache: { read: 10, write: 2 } },
         cost: 0.012,
       })
       expect(stats.modelUsage["p2/m2"]).toEqual({
         messages: 1,
-        tokens: { input: 100, output: 160, cache: { read: 0, write: 0 } },
+        tokens: { input: 100, output: 150, reasoning: 10, cache: { read: 0, write: 0 } },
         cost: 0.01,
       })
       expect(stats.toolUsage).toEqual({ bash: 3, read: 1, edit: 1 })

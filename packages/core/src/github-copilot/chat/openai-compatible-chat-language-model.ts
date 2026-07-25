@@ -281,9 +281,16 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
       usage: {
         inputTokens: {
           total: responseBody.usage?.prompt_tokens ?? undefined,
-          noCache: undefined,
+          noCache:
+            responseBody.usage?.prompt_tokens != null &&
+            (responseBody.usage.prompt_tokens_details?.cached_tokens != null ||
+              responseBody.usage.prompt_tokens_details?.cache_write_tokens != null)
+              ? responseBody.usage.prompt_tokens -
+                (responseBody.usage.prompt_tokens_details.cached_tokens ?? 0) -
+                (responseBody.usage.prompt_tokens_details.cache_write_tokens ?? 0)
+              : undefined,
           cacheRead: responseBody.usage?.prompt_tokens_details?.cached_tokens ?? undefined,
-          cacheWrite: undefined,
+          cacheWrite: responseBody.usage?.prompt_tokens_details?.cache_write_tokens ?? undefined,
         },
         outputTokens: {
           total: responseBody.usage?.completion_tokens ?? undefined,
@@ -356,6 +363,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
       promptTokens: number | undefined
       promptTokensDetails: {
         cachedTokens: number | undefined
+        cacheWriteTokens: number | undefined
       }
       totalTokens: number | undefined
     } = {
@@ -368,6 +376,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
       promptTokens: undefined,
       promptTokensDetails: {
         cachedTokens: undefined,
+        cacheWriteTokens: undefined,
       },
       totalTokens: undefined,
     }
@@ -448,6 +457,9 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
               }
               if (prompt_tokens_details?.cached_tokens != null) {
                 usage.promptTokensDetails.cachedTokens = prompt_tokens_details?.cached_tokens
+              }
+              if (prompt_tokens_details?.cache_write_tokens != null) {
+                usage.promptTokensDetails.cacheWriteTokens = prompt_tokens_details?.cache_write_tokens
               }
             }
 
@@ -696,11 +708,15 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
                 inputTokens: {
                   total: usage.promptTokens,
                   noCache:
-                    usage.promptTokens != undefined && usage.promptTokensDetails.cachedTokens != undefined
-                      ? usage.promptTokens - usage.promptTokensDetails.cachedTokens
+                    usage.promptTokens != undefined &&
+                    (usage.promptTokensDetails.cachedTokens != undefined ||
+                      usage.promptTokensDetails.cacheWriteTokens != undefined)
+                      ? usage.promptTokens -
+                        (usage.promptTokensDetails.cachedTokens ?? 0) -
+                        (usage.promptTokensDetails.cacheWriteTokens ?? 0)
                       : undefined,
                   cacheRead: usage.promptTokensDetails.cachedTokens,
-                  cacheWrite: undefined,
+                  cacheWrite: usage.promptTokensDetails.cacheWriteTokens,
                 },
                 outputTokens: {
                   total: usage.completionTokens,
@@ -711,6 +727,13 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
                   prompt_tokens: usage.promptTokens ?? null,
                   completion_tokens: usage.completionTokens ?? null,
                   total_tokens: usage.totalTokens ?? null,
+                  prompt_tokens_details:
+                    usage.promptTokensDetails.cachedTokens != null || usage.promptTokensDetails.cacheWriteTokens != null
+                      ? {
+                          cached_tokens: usage.promptTokensDetails.cachedTokens ?? null,
+                          cache_write_tokens: usage.promptTokensDetails.cacheWriteTokens ?? null,
+                        }
+                      : undefined,
                 },
               },
               providerMetadata,
@@ -732,6 +755,7 @@ const openaiCompatibleTokenUsageSchema = z
     prompt_tokens_details: z
       .object({
         cached_tokens: z.number().nullish(),
+        cache_write_tokens: z.number().nullish(),
       })
       .nullish(),
     completion_tokens_details: z

@@ -748,11 +748,14 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
         inputTokens: {
           total: response.usage.input_tokens,
           noCache:
-            response.usage.input_tokens_details?.cached_tokens != null
-              ? response.usage.input_tokens - response.usage.input_tokens_details.cached_tokens
+            response.usage.input_tokens_details?.cached_tokens != null ||
+            response.usage.input_tokens_details?.cache_write_tokens != null
+              ? response.usage.input_tokens -
+                (response.usage.input_tokens_details.cached_tokens ?? 0) -
+                (response.usage.input_tokens_details.cache_write_tokens ?? 0)
               : undefined,
           cacheRead: response.usage.input_tokens_details?.cached_tokens ?? undefined,
-          cacheWrite: undefined,
+          cacheWrite: response.usage.input_tokens_details?.cache_write_tokens ?? undefined,
         },
         outputTokens: {
           total: response.usage.output_tokens,
@@ -809,12 +812,14 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       totalTokens: number | undefined
       reasoningTokens: number | undefined
       cachedInputTokens: number | undefined
+      cacheWriteTokens: number | undefined
     } = {
       inputTokens: undefined,
       outputTokens: undefined,
       totalTokens: undefined,
       reasoningTokens: undefined,
       cachedInputTokens: undefined,
+      cacheWriteTokens: undefined,
     }
     const logprobs: Array<z.infer<typeof LOGPROBS_SCHEMA>> = []
     let responseId: string | null = null
@@ -1268,9 +1273,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               }
               usage.inputTokens = value.response.usage.input_tokens
               usage.outputTokens = value.response.usage.output_tokens
-              usage.totalTokens = value.response.usage.input_tokens + value.response.usage.output_tokens
+              usage.totalTokens = value.response.usage.total_tokens ?? undefined
               usage.reasoningTokens = value.response.usage.output_tokens_details?.reasoning_tokens ?? undefined
               usage.cachedInputTokens = value.response.usage.input_tokens_details?.cached_tokens ?? undefined
+              usage.cacheWriteTokens = value.response.usage.input_tokens_details?.cache_write_tokens ?? undefined
               if (typeof value.response.service_tier === "string") {
                 serviceTier = value.response.service_tier
               }
@@ -1326,11 +1332,11 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                 inputTokens: {
                   total: usage.inputTokens,
                   noCache:
-                    usage.inputTokens != null && usage.cachedInputTokens != null
-                      ? usage.inputTokens - usage.cachedInputTokens
+                    usage.inputTokens != null && (usage.cachedInputTokens != null || usage.cacheWriteTokens != null)
+                      ? usage.inputTokens - (usage.cachedInputTokens ?? 0) - (usage.cacheWriteTokens ?? 0)
                       : undefined,
                   cacheRead: usage.cachedInputTokens,
-                  cacheWrite: undefined,
+                  cacheWrite: usage.cacheWriteTokens,
                 },
                 outputTokens: {
                   total: usage.outputTokens,
@@ -1341,6 +1347,13 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                   input_tokens: usage.inputTokens,
                   output_tokens: usage.outputTokens,
                   total_tokens: usage.totalTokens,
+                  input_tokens_details:
+                    usage.cachedInputTokens != null || usage.cacheWriteTokens != null
+                      ? {
+                          cached_tokens: usage.cachedInputTokens ?? null,
+                          cache_write_tokens: usage.cacheWriteTokens ?? null,
+                        }
+                      : undefined,
                 },
               },
               providerMetadata,
@@ -1356,9 +1369,12 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
 const usageSchema = z.object({
   input_tokens: z.number(),
-  input_tokens_details: z.object({ cached_tokens: z.number().nullish() }).nullish(),
+  input_tokens_details: z
+    .object({ cached_tokens: z.number().nullish(), cache_write_tokens: z.number().nullish() })
+    .nullish(),
   output_tokens: z.number(),
   output_tokens_details: z.object({ reasoning_tokens: z.number().nullish() }).nullish(),
+  total_tokens: z.number().nullish(),
 })
 
 const textDeltaChunkSchema = z.object({

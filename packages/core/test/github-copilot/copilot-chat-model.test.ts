@@ -533,6 +533,34 @@ describe("doStream", () => {
     const rawChunks = parts.filter((p) => p.type === "raw")
     expect(rawChunks.length).toBeGreaterThan(0)
   })
+
+  test("maps cache-write tokens from streamed API usage", async () => {
+    const mockFetch = createMockFetch([
+      `data: {"id":"chatcmpl-cache-write","object":"chat.completion.chunk","created":1677652288,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":2},"prompt_tokens":20,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":7},"total_tokens":25}}`,
+      `data: [DONE]`,
+    ])
+    const model = createModel(mockFetch)
+
+    const { stream } = await model.doStream({
+      prompt: TEST_PROMPT,
+      includeRawChunks: false,
+    })
+
+    const parts = await convertReadableStreamToArray(stream)
+    expect(parts.find((p) => p.type === "finish")).toMatchObject({
+      type: "finish",
+      usage: {
+        inputTokens: { total: 20, noCache: 10, cacheRead: 3, cacheWrite: 7 },
+        outputTokens: { total: 5, reasoning: 2 },
+        raw: {
+          prompt_tokens: 20,
+          completion_tokens: 5,
+          total_tokens: 25,
+          prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 7 },
+        },
+      },
+    })
+  })
 })
 
 describe("request body", () => {

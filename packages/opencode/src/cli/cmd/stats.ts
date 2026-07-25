@@ -28,6 +28,7 @@ export interface SessionStats {
       tokens: {
         input: number
         output: number
+        reasoning: number
         cache: {
           read: number
           write: number
@@ -195,7 +196,8 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
       messages: sql<number>`count(*)`,
       cost: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.cost'), 0)), 0)`,
       input: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.input'), 0)), 0)`,
-      output: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.output'), 0) + coalesce(json_extract(${MessageTable.data}, '$.tokens.reasoning'), 0)), 0)`,
+      output: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.output'), 0)), 0)`,
+      reasoning: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.reasoning'), 0)), 0)`,
       cacheRead: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.cache.read'), 0)), 0)`,
       cacheWrite: sql<number>`coalesce(sum(coalesce(json_extract(${MessageTable.data}, '$.tokens.cache.write'), 0)), 0)`,
     })
@@ -217,7 +219,12 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
     if (!row.providerID || !row.modelID) continue
     stats.modelUsage[`${row.providerID}/${row.modelID}`] = {
       messages: row.messages,
-      tokens: { input: row.input, output: row.output, cache: { read: row.cacheRead, write: row.cacheWrite } },
+      tokens: {
+        input: row.input,
+        output: row.output,
+        reasoning: row.reasoning,
+        cache: { read: row.cacheRead, write: row.cacheWrite },
+      },
       cost: row.cost,
     }
   }
@@ -298,6 +305,7 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
   console.log(renderRow("Median Tokens/Session", formatNumber(Math.round(medianTokensPerSession))))
   console.log(renderRow("Input", formatNumber(stats.totalTokens.input)))
   console.log(renderRow("Output", formatNumber(stats.totalTokens.output)))
+  console.log(renderRow("Reasoning", formatNumber(stats.totalTokens.reasoning)))
   console.log(renderRow("Cache Read", formatNumber(stats.totalTokens.cache.read)))
   console.log(renderRow("Cache Write", formatNumber(stats.totalTokens.cache.write)))
   console.log("└────────────────────────────────────────────────────────┘")
@@ -317,6 +325,7 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
       console.log(renderRow("  Messages", usage.messages.toLocaleString()))
       console.log(renderRow("  Input Tokens", formatNumber(usage.tokens.input)))
       console.log(renderRow("  Output Tokens", formatNumber(usage.tokens.output)))
+      console.log(renderRow("  Reasoning Tokens", formatNumber(usage.tokens.reasoning)))
       console.log(renderRow("  Cache Read", formatNumber(usage.tokens.cache.read)))
       console.log(renderRow("  Cache Write", formatNumber(usage.tokens.cache.write)))
       console.log(renderRow("  Cost", `$${usage.cost.toFixed(4)}`))
