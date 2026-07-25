@@ -326,6 +326,134 @@ test("sync v2 skips pending delta replay when the snapshot already contains it",
   }
 })
 
+test("sync v2 projects cache status from live step end", async () => {
+  const { app, events, sync } = await mountSyncV2()
+
+  try {
+    emitTwice(events, {
+      id: "evt_cache_step_started",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-cache",
+        assistantMessageID: "msg_assistant_cache",
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_cache_step_ended",
+      type: "session.next.step.ended",
+      properties: {
+        sessionID: "session-cache",
+        assistantMessageID: "msg_assistant_cache",
+        timestamp: 2,
+        finish: "stop",
+        cost: 0.01,
+        tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 8, write: 0 } },
+        cacheStatus: {
+          classification: "cache_hit",
+          metricsAvailable: true,
+          eligible: true,
+          verified: true,
+          read: 8,
+          write: 0,
+          savings: 0.02,
+        },
+      },
+    })
+
+    await wait(() => {
+      const assistant = sync.session.message.fromSession("session-cache")[0]
+      return assistant?.type === "assistant" && assistant.cacheStatus?.classification === "cache_hit"
+    })
+    const assistant = sync.session.message.fromSession("session-cache")[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.cacheStatus).toMatchObject({ classification: "cache_hit", read: 8, savings: 0.02 })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sync v2 hydration merge keeps newer live cache status", async () => {
+  const response = Promise.withResolvers<Response>()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/session-cache/message") return response.promise
+    return undefined
+  })
+  const { app, events, sync } = await mountSyncV2(calls)
+
+  try {
+    const hydration = sync.session.message.sync("session-cache")
+    emitTwice(events, {
+      id: "evt_cache_live_started",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-cache",
+        assistantMessageID: "msg_assistant_cache",
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_cache_live_ended",
+      type: "session.next.step.ended",
+      properties: {
+        sessionID: "session-cache",
+        assistantMessageID: "msg_assistant_cache",
+        timestamp: 3,
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 8, write: 0 } },
+        cacheStatus: {
+          classification: "cache_hit",
+          metricsAvailable: true,
+          eligible: true,
+          verified: true,
+          read: 8,
+          write: 0,
+        },
+      },
+    })
+    response.resolve(
+      json({
+        data: [
+          {
+            id: "msg_assistant_cache",
+            type: "assistant",
+            agent: "build",
+            model: { id: "model", providerID: "provider" },
+            content: [],
+            time: { created: 1, completed: 2 },
+            finish: "stop",
+            cost: 0,
+            tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 4 } },
+            cacheStatus: {
+              classification: "cache_write",
+              metricsAvailable: true,
+              eligible: true,
+              verified: true,
+              read: 0,
+              write: 4,
+            },
+          },
+        ],
+      }),
+    )
+    await hydration
+
+    const assistant = sync.session.message.fromSession("session-cache")[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.time.completed).toBe(3)
+    expect(assistant.cacheStatus).toMatchObject({ classification: "cache_hit", read: 8 })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("sync v2 settles pending tools when a live failure arrives", async () => {
   const events = createEventSource()
   const calls = createFetch()

@@ -324,6 +324,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     const finalUsage = canonical(finish?.usage)
     const failedUsage = canonical(providerError?.usage)
     if (stepFinish || finish) {
+      const cacheStatus = SessionEvent.cacheStatusData(finish?.usage?.cacheTelemetry ?? stepFinish?.usage?.cacheTelemetry)
       const usage = stepUsage
         ? {
             authoritative: stepUsage,
@@ -347,6 +348,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         assistantMessageID: yield* startAssistant(DateTime.makeUnsafe(time.started)),
         finish: stepFinish?.reason ?? finish!.reason,
         ...projected,
+        ...(cacheStatus ? { cacheStatus } : {}),
         accounting: owned,
       })
       terminal = "ended"

@@ -33083,6 +33083,9 @@
                   "snapshot": {
                     "type": "string"
                   },
+                  "cacheStatus": {
+                    "$ref": "#/components/schemas/CacheStatus"
+                  },
                   "accounting": {
                     "$ref": "#/components/schemas/SessionStepAccounting"
                   }
@@ -35247,6 +35250,9 @@
           },
           "error": {
             "$ref": "#/components/schemas/SessionErrorUnknown"
+          },
+          "cacheStatus": {
+            "$ref": "#/components/schemas/CacheStatus"
           },
           "accounting": {
             "$ref": "#/components/schemas/SessionStepAccounting"
@@ -39301,6 +39307,9 @@
               },
               "snapshot": {
                 "type": "string"
+              },
+              "cacheStatus": {
+                "$ref": "#/components/schemas/CacheStatus"
               },
               "accounting": {
                 "$ref": "#/components/schemas/SessionStepAccounting"

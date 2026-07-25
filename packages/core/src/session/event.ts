@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { CanonicalUsage, ProviderMetadata } from "@oc2-ai/llm"
-import type { CacheDiagnostic, CachePlan, CacheTelemetry } from "@oc2-ai/llm/cache/capability"
+import { cacheClassifications, type CacheDiagnostic, type CachePlan, type CacheTelemetry } from "@oc2-ai/llm/cache/capability"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { NonNegativeInt } from "../schema"
@@ -48,6 +48,32 @@ export const UnknownError = Schema.Struct({
   identifier: "Session.Error.Unknown",
 })
 export type UnknownError = typeof UnknownError.Type
+
+export const CacheStatus = Schema.Struct({
+  classification: Schema.Literals(cacheClassifications),
+  metricsAvailable: Schema.Boolean,
+  eligible: Schema.Boolean,
+  verified: Schema.Boolean,
+  read: Schema.Finite,
+  write: Schema.Finite,
+  miss: Schema.Finite.pipe(Schema.optional),
+  savings: Schema.Finite.pipe(Schema.optional),
+}).annotate({ identifier: "CacheStatus" })
+export type CacheStatus = typeof CacheStatus.Type
+
+export const cacheStatusData = (telemetry: CacheTelemetry | undefined): CacheStatus | undefined => {
+  if (!telemetry) return undefined
+  return {
+    classification: telemetry.classification,
+    metricsAvailable: telemetry.metricsAvailable,
+    eligible: telemetry.eligible,
+    verified: telemetry.verified,
+    read: telemetry.cacheReadTokens ?? 0,
+    write: telemetry.cacheWriteTokens ?? 0,
+    ...(telemetry.cacheMissTokens === null ? {} : { miss: telemetry.cacheMissTokens }),
+    ...(telemetry.estimatedSavings === null ? {} : { savings: telemetry.estimatedSavings }),
+  }
+}
 
 export const AgentSwitched = EventV2.define({
   type: "session.next.agent.switched",
@@ -263,6 +289,7 @@ export namespace Step {
         }),
       }),
       snapshot: Schema.String.pipe(Schema.optional),
+      cacheStatus: CacheStatus.pipe(Schema.optional),
       accounting: Accounting.pipe(Schema.optional),
     },
   })

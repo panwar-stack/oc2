@@ -128,6 +128,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         finish: value.finish,
         cost: value.cost,
         tokens: value.tokens,
+        cacheStatus: value.cacheStatus,
         error: value.error,
         snapshot: value.snapshot?.end,
         accounting: value.accounting,
@@ -282,6 +283,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           draft.finish = event.data.finish
           draft.cost = event.data.cost
           draft.tokens = event.data.tokens
+          if (event.data.cacheStatus) draft.cacheStatus = event.data.cacheStatus
+          else delete draft.cacheStatus
           draft.accounting = event.data.accounting
           draft.snapshot = event.data.snapshot
             ? { ...draft.snapshot, end: event.data.snapshot }

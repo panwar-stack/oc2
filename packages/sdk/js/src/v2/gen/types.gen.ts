@@ -49,6 +49,7 @@ export type Event =
   | EventSessionError
   | EventSessionIdle
   | EventSessionNextAgentSwitched
+  | EventSessionNextCacheRegression
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
   | EventSessionNextCompactionStarted
@@ -1244,6 +1245,26 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.cache.regression"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID?: string
+          partID?: string
+          providerID: string
+          modelID: string
+          classification: "unexpected_miss" | "expected_miss" | "warmup" | "unsupported" | "inconclusive"
+          stablePrefixHash?: string
+          toolSchemaHash?: string
+          cachedInputTokens?: number
+          cacheWriteTokens?: number
+          expectedCachedTokens?: number
+          diagnosticReason?: string
+          correctiveAction?: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.compaction.delta"
         properties: {
           timestamp: number
@@ -1461,6 +1482,7 @@ export type GlobalEvent = {
             }
           }
           snapshot?: string
+          cacheStatus?: CacheStatus
           accounting?: SessionStepAccounting
         }
       }
@@ -1806,6 +1828,7 @@ export type GlobalEvent = {
     | SyncEventSessionCreated
     | SyncEventSessionDeleted
     | SyncEventSessionNextAgentSwitched
+    | SyncEventSessionNextCacheRegression
     | SyncEventSessionNextCompactionEnded
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextContextUpdated
@@ -4422,6 +4445,33 @@ export type SyncEventSessionNextAgentSwitched = {
   }
 }
 
+export type SyncEventSessionNextCacheRegression = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.cache.regression.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID?: string
+      partID?: string
+      providerID: string
+      modelID: string
+      classification: "unexpected_miss" | "expected_miss" | "warmup" | "unsupported" | "inconclusive"
+      stablePrefixHash?: string
+      toolSchemaHash?: string
+      cachedInputTokens?: number
+      cacheWriteTokens?: number
+      expectedCachedTokens?: number
+      diagnosticReason?: string
+      correctiveAction?: string
+    }
+  }
+}
+
 export type SyncEventSessionNextCompactionEnded = {
   type: "sync"
   id: string
@@ -4703,6 +4753,7 @@ export type SyncEventSessionNextStepEnded = {
         }
       }
       snapshot?: string
+      cacheStatus?: CacheStatus
       accounting?: SessionStepAccounting
     }
   }
@@ -5263,6 +5314,7 @@ export type SessionMessageAssistant = {
       write: number
     }
   }
+  cacheStatus?: CacheStatus
   error?: SessionErrorUnknown
   accounting?: SessionStepAccounting
 }
@@ -5967,6 +6019,27 @@ export type EventSessionNextAgentSwitched = {
   }
 }
 
+export type EventSessionNextCacheRegression = {
+  id: string
+  type: "session.next.cache.regression"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID?: string
+    partID?: string
+    providerID: string
+    modelID: string
+    classification: "unexpected_miss" | "expected_miss" | "warmup" | "unsupported" | "inconclusive"
+    stablePrefixHash?: string
+    toolSchemaHash?: string
+    cachedInputTokens?: number
+    cacheWriteTokens?: number
+    expectedCachedTokens?: number
+    diagnosticReason?: string
+    correctiveAction?: string
+  }
+}
+
 export type EventSessionNextCompactionDelta = {
   id: string
   type: "session.next.compaction.delta"
@@ -6203,6 +6276,7 @@ export type EventSessionNextStepEnded = {
       }
     }
     snapshot?: string
+    cacheStatus?: CacheStatus
     accounting?: SessionStepAccounting
   }
 }

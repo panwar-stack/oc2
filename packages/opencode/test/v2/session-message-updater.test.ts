@@ -63,6 +63,66 @@ test.skip("step snapshots carry over to assistant messages", () => {
   expect(state.messages[0].finish).toBe("stop")
 })
 
+test("step ended stores cache status on assistant messages", () => {
+  const state: SessionMessageUpdater.MemoryState = { messages: [] }
+  const sessionID = SessionID.make("session")
+  const assistantMessageID = SessionMessage.ID.create()
+
+  Effect.runSync(
+    SessionMessageUpdater.update(SessionMessageUpdater.memory(state), {
+      id: EventV2.ID.create(),
+      type: "session.next.step.started",
+      data: {
+        sessionID,
+        assistantMessageID,
+        timestamp: DateTime.makeUnsafe(1),
+        agent: "build",
+        model: {
+          id: ModelV2.ID.make("model"),
+          providerID: ProviderV2.ID.make("provider"),
+          variant: ModelV2.VariantID.make("default"),
+        },
+      },
+    } satisfies SessionEvent.Event),
+  )
+
+  Effect.runSync(
+    SessionMessageUpdater.update(SessionMessageUpdater.memory(state), {
+      id: EventV2.ID.create(),
+      type: "session.next.step.ended",
+      data: {
+        sessionID,
+        assistantMessageID,
+        timestamp: DateTime.makeUnsafe(2),
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 8, write: 0 } },
+        cacheStatus: {
+          classification: "cache_hit",
+          metricsAvailable: true,
+          eligible: true,
+          verified: true,
+          read: 8,
+          write: 0,
+          savings: 0.01,
+        },
+      },
+    } satisfies SessionEvent.Event),
+  )
+
+  expect(state.messages[0]?.type).toBe("assistant")
+  if (state.messages[0]?.type !== "assistant") return
+  expect(state.messages[0].cacheStatus).toEqual({
+    classification: "cache_hit",
+    metricsAvailable: true,
+    eligible: true,
+    verified: true,
+    read: 8,
+    write: 0,
+    savings: 0.01,
+  })
+})
+
 test.skip("text ended populates assistant text content", () => {
   const state: SessionMessageUpdater.MemoryState = { messages: [] }
   const sessionID = SessionID.make("session")

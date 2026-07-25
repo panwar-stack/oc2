@@ -139,6 +139,8 @@ function mergeAssistantSnapshot(message: SessionMessage, live: SessionMessage | 
   if (live.finish !== undefined && (liveIsNewer || merged.finish === undefined)) merged.finish = live.finish
   if (live.cost !== undefined && (liveIsNewer || merged.cost === undefined)) merged.cost = live.cost
   if (live.tokens !== undefined && (liveIsNewer || merged.tokens === undefined)) merged.tokens = live.tokens
+  if (live.cacheStatus !== undefined && (liveIsNewer || merged.cacheStatus === undefined))
+    merged.cacheStatus = live.cacheStatus
   if (live.error !== undefined && (liveIsNewer || merged.error === undefined)) merged.error = live.error
   if (live.snapshot?.end !== undefined && (liveIsNewer || merged.snapshot?.end === undefined))
     merged.snapshot = { ...merged.snapshot, end: live.snapshot.end }
@@ -580,6 +582,8 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             currentAssistant.finish = event.properties.finish
             currentAssistant.cost = event.properties.cost
             currentAssistant.tokens = event.properties.tokens
+            if (event.properties.cacheStatus) currentAssistant.cacheStatus = event.properties.cacheStatus
+            else delete currentAssistant.cacheStatus
             if (event.properties.snapshot)
               currentAssistant.snapshot = { ...currentAssistant.snapshot, end: event.properties.snapshot }
           })

@@ -971,6 +971,7 @@ export const layer = Layer.effect(
                   finish: value.reason,
                   cost: usage.cost,
                   tokens: usage.tokens,
+                  ...(cacheStatus ? { cacheStatus } : {}),
                   snapshot: completedSnapshot,
                   timestamp: DateTime.makeUnsafe(completed),
                   accounting: {

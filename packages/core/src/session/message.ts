@@ -162,6 +162,7 @@ export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistan
       write: Schema.Finite,
     }),
   }).pipe(Schema.optional),
+  cacheStatus: SessionEvent.CacheStatus.pipe(Schema.optional),
   error: SessionEvent.Step.Failed.data.fields.error.pipe(Schema.optional),
   accounting: SessionEvent.Step.Accounting.pipe(Schema.optional),
   time: Schema.Struct({
