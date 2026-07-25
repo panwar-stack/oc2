@@ -7,6 +7,7 @@ import * as AnthropicMessages from "../src/protocols/anthropic-messages"
 import * as Gemini from "../src/protocols/gemini"
 import * as OpenAIChat from "../src/protocols/openai-chat"
 import { applyCachePolicy } from "../src/cache-policy"
+import { checkLocalCacheRegression, type LocalCacheRegressionFixture } from "../src/cache/regression-checker"
 import { it } from "./lib/effect"
 
 const anthropicModel = AnthropicMessages.route
@@ -270,5 +271,180 @@ describe("applyCachePolicy", () => {
     expect(planned).not.toBe(request)
     expect(planned.messages).toEqual(request.messages)
     expect(planned.metadata?.cachePlan).toMatchObject({ mode: "disabled", eligible: false })
+  })
+})
+
+describe("local cache regression checker", () => {
+  test("returns a machine-readable pass report for stable local cache fixtures", () => {
+    const fixtures: ReadonlyArray<LocalCacheRegressionFixture> = [
+      {
+        name: "stable-openai-cache-key",
+        build: () =>
+          LLM.request({
+            model: openaiModel,
+            system: [
+              { type: "text", text: "stable openai prefix secret", metadata: { cache: { stable: true, version: 1 } } },
+            ],
+            prompt: "dynamic openai tail secret",
+            cache: "auto",
+          }),
+        expect: {
+          stablePrefix: "same",
+          cacheKey: "same",
+          components: { system: "same", modelConfig: "same" },
+          stableBoundary: { system: [0] },
+          dynamicBoundary: { messages: [0] },
+        },
+      },
+      {
+        name: "stable-tool-schema-ordering",
+        build: (run) =>
+          LLM.request({
+            model: anthropicModel,
+            system: [
+              { type: "text", text: "stable tool prefix secret", metadata: { cache: { stable: true, version: 1 } } },
+            ],
+            tools: [
+              {
+                name: "read",
+                description: "Read a file",
+                inputSchema:
+                  run === "first"
+                    ? {
+                        type: "object",
+                        properties: { path: { type: "string" }, mode: { type: "string" } },
+                        required: ["path"],
+                      }
+                    : {
+                        required: ["path"],
+                        properties: { mode: { type: "string" }, path: { type: "string" } },
+                        type: "object",
+                      },
+              },
+            ],
+            prompt: "dynamic tool tail secret",
+            cache: "auto",
+          }),
+        expect: {
+          stablePrefix: "same",
+          cacheKey: "absent",
+          components: { tools: "same" },
+          stableBoundary: { system: [0], tools: [0] },
+          dynamicBoundary: { messages: [0] },
+        },
+      },
+      {
+        name: "stable-provider-model-config-fingerprint",
+        build: (run) =>
+          LLM.request({
+            model: openaiModel,
+            system: [
+              { type: "text", text: "stable config prefix secret", metadata: { cache: { stable: true, version: 1 } } },
+            ],
+            prompt: "dynamic config tail secret",
+            generation: run === "first" ? { temperature: 0, maxTokens: 128 } : { maxTokens: 128, temperature: 0 },
+            providerOptions:
+              run === "first"
+                ? { openai: { store: false, metadata: { b: 2, a: 1 } } }
+                : { openai: { metadata: { a: 1, b: 2 }, store: false } },
+            cache: "auto",
+          }),
+        expect: {
+          stablePrefix: "same",
+          cacheKey: "same",
+          components: { providerConfig: "same", modelConfig: "same" },
+        },
+      },
+      {
+        name: "dynamic-user-tail-excluded-from-stable-prefix",
+        build: (run) =>
+          LLM.request({
+            model: openaiModel,
+            system: [
+              { type: "text", text: "stable tail prefix secret", metadata: { cache: { stable: true, version: 1 } } },
+            ],
+            prompt: run === "first" ? "dynamic tail first secret" : "dynamic tail second secret",
+            cache: "auto",
+          }),
+        expect: {
+          stablePrefix: "same",
+          cacheKey: "same",
+          components: { messages: "same" },
+          stableBoundary: { system: [0], messages: [] },
+          dynamicBoundary: { messages: [0] },
+        },
+      },
+    ]
+
+    const report = checkLocalCacheRegression(fixtures)
+
+    expect(report).toMatchObject({
+      version: 1,
+      status: "pass",
+      summary: { pass: 4, fail: 0, skip: 0, inconclusive: 0 },
+    })
+    expect(report.checks).toHaveLength(4)
+    for (const check of report.checks) {
+      expect(check.status).toBe("pass")
+      expect(check.reasonCodes).toEqual([])
+      expect(check.first?.stablePrefixFingerprint).toBe(check.second?.stablePrefixFingerprint)
+    }
+
+    const openai = report.checks.find((check) => check.name === "stable-openai-cache-key")
+    expect(openai?.first?.cacheKey).toMatch(/^oc2-v1-[0-9a-f]{64}$/)
+    expect(openai?.first?.cacheKey).toBe(openai?.second?.cacheKey)
+
+    const serialized = JSON.stringify(report)
+    expect(serialized).not.toContain("secret")
+    expect(serialized).not.toContain("dynamic tail first")
+    expect(serialized).not.toContain("dynamic tail second")
+    expect(serialized).not.toContain("stable openai prefix")
+  })
+
+  test("reports fail, skip, and inconclusive without raw prompt text", () => {
+    const report = checkLocalCacheRegression([
+      {
+        name: "changed-stable-prefix",
+        build: (run) =>
+          LLM.request({
+            model: openaiModel,
+            system: [
+              {
+                type: "text",
+                text: run === "first" ? "stable first failure secret" : "stable second failure secret",
+                metadata: { cache: { stable: true, version: 1 } },
+              },
+            ],
+            prompt: "dynamic failure tail secret",
+            cache: "auto",
+          }),
+      },
+      {
+        name: "ineligible-cache-plan",
+        build: () => LLM.request({ model: openaiModel, prompt: "skip prompt secret", cache: "auto" }),
+      },
+      {
+        name: "fixture-error",
+        build: () => {
+          throw new Error("inconclusive prompt secret")
+        },
+      },
+    ])
+
+    expect(report.status).toBe("fail")
+    expect(report.summary).toEqual({ pass: 0, fail: 1, skip: 1, inconclusive: 1 })
+    expect(report.checks.find((check) => check.name === "changed-stable-prefix")).toMatchObject({
+      status: "fail",
+      reasonCodes: ["stable_prefix_changed"],
+    })
+    expect(report.checks.find((check) => check.name === "ineligible-cache-plan")).toMatchObject({
+      status: "skip",
+      reasonCodes: ["cache_plan_ineligible"],
+    })
+    expect(report.checks.find((check) => check.name === "fixture-error")).toMatchObject({
+      status: "inconclusive",
+      reasonCodes: ["fixture_build_or_plan_error", "Error"],
+    })
+    expect(JSON.stringify(report)).not.toContain("secret")
   })
 })

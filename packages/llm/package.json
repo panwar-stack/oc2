@@ -37,6 +37,7 @@
     "./cache/diagnostics": "./src/cache/diagnostics.ts",
     "./cache/warnings": "./src/cache/warnings.ts",
     "./cache/logging": "./src/cache/logging.ts",
+    "./cache/regression-checker": "./src/cache/regression-checker.ts",
     "./cache/telemetry": "./src/cache/telemetry.ts",
     "./protocols": "./src/protocols/index.ts",
     "./protocols/anthropic-messages": "./src/protocols/anthropic-messages.ts",
