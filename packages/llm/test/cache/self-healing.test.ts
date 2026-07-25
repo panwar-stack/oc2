@@ -30,7 +30,7 @@ const result = (input: Partial<CacheRegressionResult> = {}): CacheRegressionResu
   ...input,
 })
 
-const telemetry = (classification: CacheTelemetry["classification"]): CacheTelemetry => ({
+const telemetry = (classification: CacheTelemetry["classification"], input: Partial<CacheTelemetry> = {}): CacheTelemetry => ({
   provider: "anthropic",
   model: "claude-sonnet-4-5",
   inputTokens: 100,
@@ -48,6 +48,7 @@ const telemetry = (classification: CacheTelemetry["classification"]): CacheTelem
   estimatedCacheCost: null,
   estimatedUncachedCost: null,
   estimatedSavings: null,
+  ...input,
 })
 
 const diagnostic = (input: Partial<CacheDiagnostic> = {}): CacheDiagnostic => ({
@@ -132,6 +133,95 @@ describe("cache self-healing policy", () => {
     expect(patched.trafficPartition).toBe(partition)
     expect(patched.cacheKey).toContain(`:${partition}`)
     expect(patched.cacheKey?.length).toBeLessThanOrEqual(40)
+  })
+
+  test("ignores unsupported providers, models, and telemetry even in enforce mode", () => {
+    const policy = createPolicy({ mode: "enforce", repeatedMissThreshold: 1, providerErrorThreshold: 1 })
+    const unsupported = plan({ provider: "future", model: "future-model" })
+    const unsupportedModel = plan({ provider: "openai", model: "text-davinci-003" })
+    const unsupportedVerification = plan({ provider: "deepseek", model: "deepseek-chat", cacheKey: null })
+    const miss = result({
+      providerID: "future",
+      modelID: "future-model",
+      cacheStatus: "unexpected_cache_miss",
+      diagnostic: diagnostic({ provider: "future", model: "future-model" }),
+    })
+
+    const unsupportedProvider = policy.observe({
+      result: miss,
+      plan: unsupported,
+      telemetry: telemetry("unexpected_cache_miss", { provider: "future", model: "future-model" }),
+      providerFailure: true,
+      observedAt: 1,
+    })
+    const unsupportedKnownProviderModel = policy.observe({
+      result: result({ providerID: "openai", modelID: "text-davinci-003", cacheStatus: "provider_error" }),
+      plan: unsupportedModel,
+      telemetry: telemetry("provider_error", { provider: "openai", model: "text-davinci-003" }),
+      providerFailure: true,
+      observedAt: 2,
+    })
+    const unsupportedTelemetry = policy.observe({
+      result: result({ status: "unsupported", cacheStatus: "cache_unsupported" }),
+      plan: plan(),
+      telemetry: telemetry("cache_unsupported"),
+      observedAt: 3,
+    })
+    const nonConclusiveProvider = policy.observe({
+      result: result({ providerID: "deepseek", modelID: "deepseek-chat", cacheStatus: "unexpected_cache_miss" }),
+      plan: unsupportedVerification,
+      telemetry: telemetry("unexpected_cache_miss", { provider: "deepseek", model: "deepseek-chat" }),
+      observedAt: 4,
+    })
+
+    expect(unsupportedProvider.actions).toEqual([])
+    expect(unsupportedProvider.counters).toEqual([])
+    expect(unsupportedKnownProviderModel.actions).toEqual([])
+    expect(unsupportedKnownProviderModel.counters).toEqual([])
+    expect(unsupportedTelemetry.actions).toEqual([])
+    expect(unsupportedTelemetry.counters).toEqual([])
+    expect(nonConclusiveProvider.actions).toEqual([])
+    expect(nonConclusiveProvider.counters).toEqual([])
+    expect(policy.activeActions()).toEqual([])
+    expect(policy.applyPlan(unsupported, 2)).toBe(unsupported)
+  })
+
+  test("ignores ineligible cache plans even in enforce mode", () => {
+    const policy = createPolicy({ mode: "enforce", repeatedMissThreshold: 1, providerErrorThreshold: 1 })
+    const ineligible = plan({
+      mode: "disabled",
+      eligible: false,
+      cacheKey: null,
+      breakpoints: [],
+      duration: null,
+    })
+    const belowThreshold = plan({
+      prefixTokenCount: 512,
+      minimumPrefixTokens: 1024,
+    })
+
+    const decision = policy.observe({
+      result: result({ diagnostic: diagnostic() }),
+      plan: ineligible,
+      telemetry: telemetry("unexpected_cache_miss", { eligible: false }),
+      providerFailure: true,
+      observedAt: 1,
+    })
+    const belowThresholdDecision = policy.observe({
+      result: result({ cacheStatus: "unexpected_cache_miss", diagnostic: diagnostic() }),
+      plan: belowThreshold,
+      telemetry: telemetry("unexpected_cache_miss"),
+      providerFailure: true,
+      observedAt: 2,
+    })
+
+    expect(decision.actions).toEqual([])
+    expect(decision.counters).toEqual([])
+    expect(belowThresholdDecision.actions).toEqual([])
+    expect(belowThresholdDecision.counters).toEqual([])
+    expect(policy.activeActions()).toEqual([])
+    expect(policy.applyPlan(ineligible, 1)).toBe(ineligible)
+    expect(policy.applyPlan(belowThreshold, 2)).toBe(belowThreshold)
   })
 
   test("emits corrective labels for schema churn and volatile prefix with cooldown", () => {

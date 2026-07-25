@@ -1,4 +1,4 @@
-import type { CacheDiagnostic, CacheDiagnosticComponent, CachePlan, CacheTelemetry } from "./capability"
+import { getCacheCapabilities, type CacheDiagnostic, type CacheDiagnosticComponent, type CachePlan, type CacheTelemetry } from "./capability"
 import type { CacheRegressionResult } from "./state"
 
 export type CacheSelfHealingMode = "off" | "observe" | "enforce"
@@ -111,6 +111,15 @@ export const createPolicy = (options: CacheSelfHealingOptions = {}): CacheSelfHe
     const context = observationContext(input)
     const actions: Array<CacheSelfHealingAction> = []
 
+    if (!isEligibleObservation(input, context)) {
+      return {
+        mode,
+        observedAt,
+        actions: [],
+        counters: snapshotCounters(counters),
+      }
+    }
+
     if (input.result.status === "pass") resetStableCounters(counters, context)
 
     if (isProviderError(input)) {
@@ -178,7 +187,7 @@ export const createPolicy = (options: CacheSelfHealingOptions = {}): CacheSelfHe
   const applyPlan = (plan: CachePlan, observedAt?: number | Date): CachePlan => {
     const at = toMillis(observedAt ?? now())
     pruneInterventions(interventions, at)
-    if (mode !== "enforce") return plan
+    if (mode !== "enforce" || !isEligiblePlan(plan)) return plan
     let next = plan
     const disable = interventions.get(providerInterventionKey("disable_explicit_cache", plan.provider, plan.model))
     if (disable && next.mode === "explicit" && next.eligible) {
@@ -210,6 +219,26 @@ export const createPolicy = (options: CacheSelfHealingOptions = {}): CacheSelfHe
       interventions.clear()
     },
   }
+}
+
+const isEligibleObservation = (
+  input: CacheSelfHealingObservation,
+  context: ReturnType<typeof observationContext>,
+) => {
+  if (input.result.status === "unsupported" || input.telemetry?.classification === "cache_unsupported") return false
+  if (input.telemetry?.eligible === false) return false
+  if (input.plan && !isEligiblePlan(input.plan)) return false
+
+  const capabilities = getCacheCapabilities(context.provider, context.model)
+  return capabilities.promptCaching !== "unsupported" && capabilities.supportedModes.length > 0 && capabilities.conclusiveVerification
+}
+
+const isEligiblePlan = (plan: CachePlan) => {
+  if (!plan.eligible || plan.mode === "disabled") return false
+  if (plan.prefixTokenCount !== null && plan.minimumPrefixTokens !== null && plan.prefixTokenCount < plan.minimumPrefixTokens) return false
+
+  const capabilities = getCacheCapabilities(plan.provider, plan.model)
+  return capabilities.promptCaching !== "unsupported" && capabilities.supportedModes.length > 0 && capabilities.conclusiveVerification
 }
 
 const actionFor = (action: CacheSelfHealingAction): CacheSelfHealingAction => action
