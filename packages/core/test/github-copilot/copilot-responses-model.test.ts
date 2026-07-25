@@ -33,6 +33,10 @@ function createMockFetch(chunks: string[]) {
   })
 }
 
+function createJsonMockFetch(body: unknown) {
+  return mock(async () => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }))
+}
+
 function createModel(fetchFn: ReturnType<typeof mock>) {
   return new OpenAIResponsesLanguageModel("test-model", {
     provider: "copilot.responses",
@@ -43,10 +47,48 @@ function createModel(fetchFn: ReturnType<typeof mock>) {
 }
 
 describe("responses model usage", () => {
+  test("preserves non-stream raw usage details", async () => {
+    const rawUsage = {
+      input_tokens: 20,
+      input_tokens_details: { cached_tokens: 3, cache_write_tokens: 7 },
+      output_tokens: 5,
+      output_tokens_details: { reasoning_tokens: 2 },
+      total_tokens: 32,
+      extra_billing_field: 123,
+    }
+    const model = createModel(
+      createJsonMockFetch({
+        id: "resp-generate-raw-usage",
+        created_at: 1677652288,
+        model: "test-model",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            id: "msg-1",
+            content: [{ type: "output_text", text: "ok", annotations: [] }],
+          },
+        ],
+        usage: rawUsage,
+      }),
+    )
+
+    const result = await model.doGenerate({
+      prompt: TEST_PROMPT,
+      includeRawChunks: false,
+    })
+
+    expect(result.usage).toMatchObject({
+      inputTokens: { total: 20, noCache: 10, cacheRead: 3, cacheWrite: 7 },
+      outputTokens: { total: 5, reasoning: 2 },
+      raw: rawUsage,
+    })
+  })
+
   test("maps cache-write tokens from streamed API usage", async () => {
     const mockFetch = createMockFetch([
       `data: {"type":"response.created","response":{"id":"resp-cache-write","created_at":1677652288,"model":"test-model"}}`,
-      `data: {"type":"response.completed","response":{"usage":{"input_tokens":20,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":7},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":32},"service_tier":"default"}}`,
+      `data: {"type":"response.completed","response":{"usage":{"input_tokens":20,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":7},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":32,"extra_billing_field":123},"service_tier":"default"}}`,
       `data: [DONE]`,
     ])
     const model = createModel(mockFetch)
@@ -67,6 +109,8 @@ describe("responses model usage", () => {
           output_tokens: 5,
           total_tokens: 32,
           input_tokens_details: { cached_tokens: 3, cache_write_tokens: 7 },
+          output_tokens_details: { reasoning_tokens: 2 },
+          extra_billing_field: 123,
         },
       },
     })

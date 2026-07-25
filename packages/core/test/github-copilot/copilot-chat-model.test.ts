@@ -91,6 +91,10 @@ function createMockFetch(chunks: string[]) {
   })
 }
 
+function createJsonMockFetch(body: unknown) {
+  return mock(async () => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }))
+}
+
 function createModel(fetchFn: ReturnType<typeof mock>) {
   return new OpenAICompatibleChatLanguageModel("test-model", {
     provider: "copilot.chat",
@@ -99,6 +103,41 @@ function createModel(fetchFn: ReturnType<typeof mock>) {
     fetch: fetchFn as any,
   })
 }
+
+describe("doGenerate", () => {
+  test("preserves non-stream raw usage details", async () => {
+    const rawUsage = {
+      prompt_tokens: 11,
+      completion_tokens: 7,
+      total_tokens: 20,
+      prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 3 },
+      completion_tokens_details: { accepted_prediction_tokens: 1 },
+      reasoning_tokens: 5,
+      extra_billing_field: 123,
+    }
+    const model = createModel(
+      createJsonMockFetch({
+        id: "chatcmpl-generate-raw-usage",
+        created: 1677652288,
+        model: "test-model",
+        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: rawUsage,
+      }),
+    )
+
+    const result = await model.doGenerate({
+      prompt: TEST_PROMPT,
+      includeRawChunks: false,
+    })
+
+    expect(result.usage).toMatchObject({
+      inputTokens: { total: 11, noCache: 6, cacheRead: 2, cacheWrite: 3 },
+      outputTokens: { total: 12, reasoning: 5 },
+      raw: rawUsage,
+    })
+    expect(result.usage.outputTokens.total! - result.usage.outputTokens.reasoning!).toBe(rawUsage.completion_tokens)
+  })
+})
 
 describe("doStream", () => {
   test("should stream text deltas", async () => {
@@ -204,7 +243,54 @@ describe("doStream", () => {
       finishReason: { unified: "tool-calls" },
       usage: {
         inputTokens: { total: 19581 },
-        outputTokens: { total: 53 },
+        outputTokens: { total: 187, reasoning: 134 },
+        raw: {
+          completion_tokens: 53,
+          prompt_tokens: 19581,
+          prompt_tokens_details: { cached_tokens: 17068 },
+          total_tokens: 19768,
+          reasoning_tokens: 134,
+        },
+      },
+    })
+    if (finish?.type !== "finish") throw new Error("expected finish")
+    expect(finish.usage.outputTokens.total! - finish.usage.outputTokens.reasoning!).toBe(53)
+  })
+
+  test("preserves streamed raw usage details", async () => {
+    const rawUsage = {
+      prompt_tokens: 11,
+      completion_tokens: 7,
+      total_tokens: 20,
+      prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 3 },
+      completion_tokens_details: { reasoning_tokens: 5, accepted_prediction_tokens: 1 },
+      extra_billing_field: 123,
+    }
+    const mockFetch = createMockFetch([
+      `data: ${JSON.stringify({
+        id: "chatcmpl-raw-usage",
+        object: "chat.completion.chunk",
+        created: 1677652288,
+        model: "test-model",
+        choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: rawUsage,
+      })}`,
+      `data: [DONE]`,
+    ])
+    const model = createModel(mockFetch)
+
+    const { stream } = await model.doStream({
+      prompt: TEST_PROMPT,
+      includeRawChunks: false,
+    })
+
+    const parts = await convertReadableStreamToArray(stream)
+    expect(parts.find((p) => p.type === "finish")).toMatchObject({
+      type: "finish",
+      usage: {
+        inputTokens: { total: 11, noCache: 6, cacheRead: 2, cacheWrite: 3 },
+        outputTokens: { total: 7, reasoning: 5 },
+        raw: rawUsage,
       },
     })
   })
@@ -259,7 +345,7 @@ describe("doStream", () => {
       finishReason: { unified: "stop" },
       usage: {
         inputTokens: { total: 5778 },
-        outputTokens: { total: 59 },
+        outputTokens: { total: 154, reasoning: 95 },
       },
       providerMetadata: {
         copilot: {
@@ -391,7 +477,7 @@ describe("doStream", () => {
       finishReason: { unified: "tool-calls" },
       usage: {
         inputTokens: { total: 3767 },
-        outputTokens: { total: 19 },
+        outputTokens: { total: 30, reasoning: 11 },
       },
     })
   })

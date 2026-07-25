@@ -1,5 +1,7 @@
 import {
   APICallError,
+  isJSONObject,
+  type JSONObject,
   type JSONValue,
   type LanguageModelV3,
   type LanguageModelV3CallOptions,
@@ -762,7 +764,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
           text: undefined,
           reasoning: response.usage.output_tokens_details?.reasoning_tokens ?? undefined,
         },
-        raw: response.usage,
+        raw: rawResponseUsage(rawResponse) ?? response.usage,
       },
       request: { body },
       response: {
@@ -813,6 +815,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       reasoningTokens: number | undefined
       cachedInputTokens: number | undefined
       cacheWriteTokens: number | undefined
+      raw: JSONObject | undefined
     } = {
       inputTokens: undefined,
       outputTokens: undefined,
@@ -820,6 +823,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       reasoningTokens: undefined,
       cachedInputTokens: undefined,
       cacheWriteTokens: undefined,
+      raw: undefined,
     }
     const logprobs: Array<z.infer<typeof LOGPROBS_SCHEMA>> = []
     let responseId: string | null = null
@@ -1277,6 +1281,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               usage.reasoningTokens = value.response.usage.output_tokens_details?.reasoning_tokens ?? undefined
               usage.cachedInputTokens = value.response.usage.input_tokens_details?.cached_tokens ?? undefined
               usage.cacheWriteTokens = value.response.usage.input_tokens_details?.cache_write_tokens ?? undefined
+              usage.raw = rawResponseUsage(chunk.rawValue) ?? value.response.usage
               if (typeof value.response.service_tier === "string") {
                 serviceTier = value.response.service_tier
               }
@@ -1343,7 +1348,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                   text: undefined,
                   reasoning: usage.reasoningTokens,
                 },
-                raw: {
+                raw: usage.raw ?? ({
                   input_tokens: usage.inputTokens,
                   output_tokens: usage.outputTokens,
                   total_tokens: usage.totalTokens,
@@ -1354,7 +1359,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                           cache_write_tokens: usage.cacheWriteTokens ?? null,
                         }
                       : undefined,
-                },
+                } satisfies JSONObject),
               },
               providerMetadata,
             })
@@ -1376,6 +1381,16 @@ const usageSchema = z.object({
   output_tokens_details: z.object({ reasoning_tokens: z.number().nullish() }).nullish(),
   total_tokens: z.number().nullish(),
 })
+
+function rawResponseUsage(value: unknown) {
+  if (!isJSONObject(value)) return undefined
+  const topLevelUsage = value.usage
+  if (isJSONObject(topLevelUsage)) return topLevelUsage
+  const response = value.response
+  if (!isJSONObject(response)) return undefined
+  const usage = response.usage
+  return isJSONObject(usage) ? usage : undefined
+}
 
 const textDeltaChunkSchema = z.object({
   type: z.literal("response.output_text.delta"),

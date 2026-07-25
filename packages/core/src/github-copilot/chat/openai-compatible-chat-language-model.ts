@@ -1,6 +1,8 @@
 import {
   APICallError,
   InvalidResponseDataError,
+  isJSONObject,
+  type JSONObject,
   type LanguageModelV3,
   type LanguageModelV3CallOptions,
   type LanguageModelV3Content,
@@ -293,11 +295,14 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
           cacheWrite: responseBody.usage?.prompt_tokens_details?.cache_write_tokens ?? undefined,
         },
         outputTokens: {
-          total: responseBody.usage?.completion_tokens ?? undefined,
+          total: chatOutputTokensTotal(responseBody.usage),
           text: undefined,
-          reasoning: responseBody.usage?.completion_tokens_details?.reasoning_tokens ?? undefined,
+          reasoning:
+            responseBody.usage?.completion_tokens_details?.reasoning_tokens ??
+            responseBody.usage?.reasoning_tokens ??
+            undefined,
         },
-        raw: responseBody.usage ?? undefined,
+        raw: rawUsage(rawResponse) ?? responseBody.usage ?? undefined,
       },
       providerMetadata,
       request: { body },
@@ -360,12 +365,14 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
         acceptedPredictionTokens: number | undefined
         rejectedPredictionTokens: number | undefined
       }
+      reasoningTokensFromTopLevel: boolean
       promptTokens: number | undefined
       promptTokensDetails: {
         cachedTokens: number | undefined
         cacheWriteTokens: number | undefined
       }
       totalTokens: number | undefined
+      raw: JSONObject | undefined
     } = {
       completionTokens: undefined,
       completionTokensDetails: {
@@ -373,12 +380,14 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
         acceptedPredictionTokens: undefined,
         rejectedPredictionTokens: undefined,
       },
+      reasoningTokensFromTopLevel: false,
       promptTokens: undefined,
       promptTokensDetails: {
         cachedTokens: undefined,
         cacheWriteTokens: undefined,
       },
       totalTokens: undefined,
+      raw: undefined,
     }
     let isFirstChunk = true
     const providerOptionsName = this.providerOptionsName
@@ -439,13 +448,16 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
                 total_tokens,
                 prompt_tokens_details,
                 completion_tokens_details,
+                reasoning_tokens,
               } = value.usage
 
+              usage.raw = rawUsage(chunk.rawValue) ?? value.usage
               usage.promptTokens = prompt_tokens ?? undefined
               usage.completionTokens = completion_tokens ?? undefined
               usage.totalTokens = total_tokens ?? undefined
-              if (completion_tokens_details?.reasoning_tokens != null) {
-                usage.completionTokensDetails.reasoningTokens = completion_tokens_details?.reasoning_tokens
+              if (completion_tokens_details?.reasoning_tokens != null || reasoning_tokens != null) {
+                usage.completionTokensDetails.reasoningTokens = completion_tokens_details?.reasoning_tokens ?? reasoning_tokens
+                usage.reasoningTokensFromTopLevel = completion_tokens_details?.reasoning_tokens == null && reasoning_tokens != null
               }
               if (completion_tokens_details?.accepted_prediction_tokens != null) {
                 usage.completionTokensDetails.acceptedPredictionTokens =
@@ -719,11 +731,16 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
                   cacheWrite: usage.promptTokensDetails.cacheWriteTokens,
                 },
                 outputTokens: {
-                  total: usage.completionTokens,
+                  total:
+                    usage.completionTokens === undefined
+                      ? undefined
+                      : usage.reasoningTokensFromTopLevel
+                        ? usage.completionTokens + (usage.completionTokensDetails.reasoningTokens ?? 0)
+                        : usage.completionTokens,
                   text: undefined,
                   reasoning: usage.completionTokensDetails.reasoningTokens,
                 },
-                raw: {
+                raw: usage.raw ?? ({
                   prompt_tokens: usage.promptTokens ?? null,
                   completion_tokens: usage.completionTokens ?? null,
                   total_tokens: usage.totalTokens ?? null,
@@ -734,7 +751,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
                           cache_write_tokens: usage.promptTokensDetails.cacheWriteTokens ?? null,
                         }
                       : undefined,
-                },
+                } satisfies JSONObject),
               },
               providerMetadata,
             })
@@ -765,8 +782,21 @@ const openaiCompatibleTokenUsageSchema = z
         rejected_prediction_tokens: z.number().nullish(),
       })
       .nullish(),
+    reasoning_tokens: z.number().nullish(),
   })
   .nullish()
+
+function rawUsage(value: unknown) {
+  if (!isJSONObject(value)) return undefined
+  const usage = value.usage
+  return isJSONObject(usage) ? usage : undefined
+}
+
+function chatOutputTokensTotal(usage: z.infer<typeof openaiCompatibleTokenUsageSchema>) {
+  if (usage?.completion_tokens == null) return undefined
+  if (usage.completion_tokens_details?.reasoning_tokens != null) return usage.completion_tokens
+  return usage.reasoning_tokens == null ? usage.completion_tokens : usage.completion_tokens + usage.reasoning_tokens
+}
 
 // limited version of the schema, focussed on what is needed for the implementation
 // this approach limits breakages when the API changes and increases efficiency
