@@ -48,6 +48,7 @@ describe("RuntimeFlags", () => {
       expect(flags.experimentalEventSystem).toBe(true)
       expect(flags.experimentalWorkspaces).toBe(true)
       expect(flags.experimentalIconDiscovery).toBe(true)
+      expect(flags.experimentalPromptCacheSelfHealing).toBe(false)
       expect(flags.experimentalNativeLlm).toBe(false)
       expect(flags.experimentalWebSockets).toBe(false)
       expect(flags.client).toBe("desktop")
@@ -85,6 +86,16 @@ describe("RuntimeFlags", () => {
 
       expect(explicit.experimentalWebSockets).toBe(true)
       expect(umbrella.experimentalWebSockets).toBe(false)
+    }),
+  )
+
+  it.effect("enables prompt cache self-healing via dedicated observe-only flag", () =>
+    Effect.gen(function* () {
+      const explicit = yield* readFlags.pipe(Effect.provide(fromConfig({ OC2_EXPERIMENTAL_PROMPT_CACHE_SELF_HEALING: "true" })))
+      const umbrella = yield* readFlags.pipe(Effect.provide(fromConfig({ OC2_EXPERIMENTAL: "true" })))
+
+      expect(explicit.experimentalPromptCacheSelfHealing).toBe(true)
+      expect(umbrella.experimentalPromptCacheSelfHealing).toBe(false)
     }),
   )
 

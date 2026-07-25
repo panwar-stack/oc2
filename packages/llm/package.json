@@ -37,6 +37,7 @@
     "./cache/diagnostics": "./src/cache/diagnostics.ts",
     "./cache/warnings": "./src/cache/warnings.ts",
     "./cache/logging": "./src/cache/logging.ts",
+    "./cache/self-healing": "./src/cache/self-healing.ts",
     "./cache/regression-checker": "./src/cache/regression-checker.ts",
     "./cache/telemetry": "./src/cache/telemetry.ts",
     "./protocols": "./src/protocols/index.ts",
