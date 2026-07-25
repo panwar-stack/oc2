@@ -35,13 +35,32 @@ Run `LLMClient.stream(request)` instead of `generate` when you want incremental 
 
 ## Caching
 
-Prompt caching is **on by default**. Every `LLMRequest` resolves to `cache: "auto"` unless the caller opts out with `cache: "none"`. Each protocol translates `CacheHint`s to its wire format (`cache_control` on Anthropic, `cachePoint` on Bedrock; OpenAI and Gemini do implicit caching server-side and don't need inline markers — auto is a no-op there).
+Prompt caching is planned for every `LLMRequest` from provider/model
+capabilities. Supported providers get a `CachePlan` containing the stable-prefix
+fingerprint, eligibility, provider-specific request fields, and any explicit
+breakpoints. Unsupported or unknown providers keep fingerprints for diagnostics
+but send no cache controls.
 
 ### Auto placement
 
-`"auto"` places three breakpoints — last tool definition, last system part, latest user message. The last-user-message boundary is the load-bearing detail: in a tool-use loop, a single user turn expands into many assistant/tool round-trips, all sharing that prefix. Caching at that boundary lets every intra-turn API call hit.
+`"auto"` separates stable prefix material from dynamic request content. Stable
+material includes system guidance, configured agent prompt, enabled tools, and
+messages explicitly marked stable. Dynamic material includes current user turns,
+tool results, timestamps, request IDs, and manual cache keys.
 
-The math justifies the default: Anthropic's 5-minute cache write is 1.25× base, read is 0.1×, so a single reuse within 5 minutes already wins. One-shot completions below the per-model minimum-cacheable-token threshold silently no-op on the wire, so the worst case is harmless.
+Provider lowering is intentionally narrow:
+
+- OpenAI-compatible routes receive `prompt_cache_key` only when the selected
+  model supports that request field. The key is derived from the stable-prefix
+  fingerprint; manual keys are scrubbed.
+- Anthropic receives `cache_control` only for planned explicit breakpoints or
+  existing manual `CacheHint`s, with the provider breakpoint cap enforced.
+- Providers with provider-managed automatic caching, unsupported models, and
+  unknown models receive no explicit cache fields.
+
+Cache writes can have additional cost on some providers, while reads often have
+discounts. Use normalized cache usage instead of assuming savings when telemetry
+is unavailable.
 
 ### Opting out
 
@@ -81,14 +100,33 @@ LLM.request({
 
 ### Provider behavior table
 
-| Protocol                | `cache: "auto"`                                                           |
-| ----------------------- | ------------------------------------------------------------------------- |
-| Anthropic Messages      | emits up to 3 `cache_control` markers (4-breakpoint cap enforced)         |
-| Bedrock Converse        | emits up to 3 `cachePoint` blocks (4-breakpoint cap enforced)             |
-| OpenAI Chat / Responses | no-op (implicit caching above 1024 tokens)                                |
-| Gemini                  | no-op (implicit caching on 2.5+; explicit `CachedContent` is out-of-band) |
+| Protocol / provider     | `cache: "auto"` |
+| ----------------------- | ---------------- |
+| OpenAI Chat / Responses | Sends a derived `prompt_cache_key` for supported OpenAI models and reads cached/write token telemetry when present. |
+| Anthropic Messages      | Emits planned `cache_control` markers within the 4-breakpoint cap and reads cache creation/read token telemetry. |
+| Bedrock Converse        | Emits `cachePoint` blocks from hints/plans where supported by the route. |
+| Gemini                  | Does not send inline markers; explicit `CachedContent` is out-of-band. |
+| Unknown/unsupported     | Sends no explicit cache fields and reports diagnostics only. |
 
 Normalized cache usage is read back into `response.usage.cacheReadInputTokens` and `cacheWriteInputTokens` across every provider.
+
+### Runtime regression checks
+
+When telemetry is available, the runtime records bounded expectation state keyed
+by provider, model, stable-prefix fingerprint, and traffic partition. It
+classifies results as hits, writes, expected misses, unexpected misses,
+unsupported cache, telemetry unavailable, configuration errors, or provider
+errors. First eligible requests and cache writes during provider warmup are
+expected; repeated misses after warmup can produce diagnostics.
+
+Self-healing is driven by those diagnostics, not by prompt content. Policies are
+off unless a caller enables observe or enforce mode. Observe mode reports the
+future action it would take. Enforce mode applies actions only to future request
+plans: warning on volatile prefixes or schema churn, rotating a cache partition
+after repeated stable-prefix mismatches, or temporarily disabling explicit cache
+markers after repeated provider errors. Actions are bounded by thresholds,
+cooldowns, and TTLs, and roll back when they expire or successful cache
+observations reset counters.
 
 ## Providers
 

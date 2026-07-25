@@ -59,18 +59,89 @@ override `promptCacheKey` unless OC2 produced an eligible OpenAI cache plan.
 OC2 normalizes provider usage into cache telemetry with nullable fields for
 read, write, miss, and uncached input tokens. Classifications include:
 
-- `cache_hit`
-- `cache_write`
-- `expected_cache_miss`
-- `unexpected_cache_miss`
-- `cache_unsupported`
-- `cache_telemetry_unavailable`
-- `cache_configuration_error`
-- `provider_error`
+- `cache_hit`: conclusive telemetry reported cached input tokens for an
+  eligible prompt-cache plan.
+- `cache_write`: the provider created or refreshed cache state. This is normal
+  during warmup and after provider retention expires.
+- `expected_cache_miss`: OC2 expected the request not to hit cache, for example
+  the first eligible request for a stable prefix, an explicit compaction miss,
+  or a known retention-window miss.
+- `unexpected_cache_miss`: telemetry showed a miss after the stable prefix was
+  already expected to be warm.
+- `cache_unsupported`: the provider/model does not have supported prompt-cache
+  request fields or conclusive cache behavior.
+- `cache_telemetry_unavailable`: the provider response did not include enough
+  usage fields to verify cache behavior.
+- `cache_configuration_error`: OC2 detected invalid or incompatible cache
+  configuration before treating the response as a cache result.
+- `provider_error`: the provider call failed, so cache behavior could not be
+  verified.
 
 Providers with conclusive telemetry, such as OpenAI and Anthropic, can verify
 hits and writes. Providers without conclusive telemetry, such as Moonshot/Kimi
 and best-effort DeepSeek flows, remain diagnostic rather than authoritative.
+
+## Runtime Regression Checker
+
+The runtime checker is separate from cache planning. Planning decides which
+stable prompt prefix, routing key, and explicit breakpoints are eligible before a
+request is sent. The checker observes completed requests and compares the
+provider telemetry against the expectation for the already-planned stable-prefix
+fingerprint.
+
+For each eligible request, OC2 stores bounded expectation state keyed by
+provider, model, stable-prefix fingerprint, and traffic partition. The state
+tracks first and last observation time, eligible request count, reads, writes,
+misses, telemetry gaps, warmup status, retention expiry, and component
+fingerprints. It stores only fingerprints and counters, not prompt text, user
+messages, tool output, or other prompt content.
+
+Regression statuses are:
+
+- `pass`: a hit or otherwise valid cache result matched the expectation.
+- `warmup`: the provider wrote cache during the configured warmup window.
+- `expected_miss`: the miss was known in advance, such as first use,
+  compaction, unsupported cache behavior, or retention expiry.
+- `unexpected_miss`: conclusive telemetry reported a miss after the prefix was
+  expected to be warm.
+- `unsupported`: the plan or provider does not support verified prompt caching.
+- `inconclusive`: telemetry was missing or the provider failed, so OC2 cannot
+  prove a regression.
+
+### Expected warmup behavior
+
+Supported providers normally need at least one eligible request to populate the
+cache. During this warmup window, cache writes and first-request misses are
+expected and should not be treated as regressions. Providers with fixed retention
+windows, such as Anthropic's default ephemeral cache, can also return expected
+misses after expiry. Providers without conclusive telemetry may stay
+`inconclusive` even when caching is working.
+
+### Self-healing actions and rollback
+
+Self-healing consumes only regression results, safe fingerprints, telemetry
+counts, and diagnostic component names. It never retries or alters an in-flight
+user request just to improve caching. Actions apply only to future requests and
+are bounded by thresholds, cooldowns, and TTLs so they can roll back
+automatically when the action expires or a pass resets the relevant counters.
+
+Possible actions are:
+
+- `emit_warning`: warn that repeated unexpected misses correlate with volatile
+  stable-prefix components or tool/schema churn. Operators should move dynamic
+  content behind the cache boundary or stabilize tool schema order and
+  definitions.
+- `rotate_cache_partition`: rotate the future routing-key partition for a stable
+  prefix after repeated stable-prefix mismatches.
+- `disable_explicit_cache`: temporarily disable future explicit cache markers for
+  a provider/model after repeated provider errors.
+
+In opencode, the policy is off by default and can be enabled in observe-only mode
+with `OC2_EXPERIMENTAL_PROMPT_CACHE_SELF_HEALING`. In observe mode, OC2 records
+and logs the action it would take without changing future request plans. The LLM
+policy also supports an explicit enforce mode for callers that opt into applying
+active actions to future plans. Rollback is automatic: expired interventions are
+pruned, and successful cache observations reset non-provider-error counters.
 
 ## Guardrails, State, And Diagnostics
 
@@ -90,6 +161,10 @@ lifecycle changes without storing prompt content. Diagnostics use the available
 plan, telemetry, and lifecycle fingerprints to identify changed components,
 explain why caching was not verified, and suggest corrective action when
 possible.
+
+When OC2 runs in an interactive TUI with the event bridge available, runtime
+cache warnings and errors can also appear as Prompt Cache toast notifications.
+Headless and non-TUI runs should use structured logs and cache-regression events.
 
 ## Cost Impact
 
