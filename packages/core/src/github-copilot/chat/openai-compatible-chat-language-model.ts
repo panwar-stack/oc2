@@ -170,12 +170,11 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
         seed,
         ...Object.fromEntries(
           Object.entries(providerOptions?.[this.providerOptionsName] ?? {}).filter(
-            ([key]) => !Object.keys(openaiCompatibleProviderOptions.shape).includes(key),
+            ([key]) => key !== "service_tier" && !Object.keys(openaiCompatibleProviderOptions.shape).includes(key),
           ),
         ),
 
         reasoning_effort: compatibleOptions.reasoningEffort,
-        service_tier: compatibleOptions.serviceTier,
         verbosity: compatibleOptions.textVerbosity,
 
         // messages:

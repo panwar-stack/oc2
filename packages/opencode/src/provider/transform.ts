@@ -1049,14 +1049,6 @@ export function options(input: {
     result["store"] = false
   }
 
-  if (
-    input.model.providerID === "openai" ||
-    input.model.api.npm === "@ai-sdk/openai" ||
-    input.model.api.npm === "@ai-sdk/openai-compatible"
-  ) {
-    result["serviceTier"] = "flex"
-  }
-
   if (input.model.api.npm === "@openrouter/ai-sdk-provider" || input.model.api.npm === "@llmgateway/ai-sdk-provider") {
     result["usage"] = {
       include: true,
@@ -1213,6 +1205,11 @@ const SLUG_OVERRIDES: Record<string, string> = {
 }
 
 export function providerOptions(model: Provider.Model, options: { [x: string]: any }) {
+  const withoutServiceTier = (input: { [x: string]: any }) => {
+    const { serviceTier, service_tier, ...rest } = input
+    return rest
+  }
+
   if (model.api.npm === "@ai-sdk/gateway") {
     // Gateway providerOptions are split across two namespaces:
     // - `gateway`: gateway-native routing/caching controls (order, only, byok, etc.)
@@ -1223,7 +1220,7 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
     const rawSlug = i > 0 ? model.api.id.slice(0, i) : undefined
     const slug = rawSlug ? (SLUG_OVERRIDES[rawSlug] ?? rawSlug) : undefined
     const gateway = options.gateway
-    const rest = Object.fromEntries(Object.entries(options).filter(([k]) => k !== "gateway"))
+    const rest = withoutServiceTier(Object.fromEntries(Object.entries(options).filter(([k]) => k !== "gateway")))
     const has = Object.keys(rest).length > 0
 
     const result: Record<string, any> = {}
@@ -1257,11 +1254,15 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   // providerOptions["openai"], but OpenAIResponsesLanguageModel checks
   // "azure" first. Pass both so model options work on either code path.
   if (model.api.npm === "@ai-sdk/azure") {
-    return { openai: options, azure: options }
+    const rest = withoutServiceTier(options)
+    return { openai: rest, azure: rest }
   }
-  if (model.api.npm === "@ai-sdk/openai-compatible" && options.serviceTier !== undefined) {
-    const { serviceTier, ...rest } = options
-    return { [key]: { ...rest, service_tier: serviceTier } }
+  if (
+    model.api.npm === "@ai-sdk/openai" ||
+    model.api.npm === "@ai-sdk/openai-compatible" ||
+    model.api.npm === "@ai-sdk/github-copilot"
+  ) {
+    return { [key]: withoutServiceTier(options) }
   }
   return { [key]: options }
 }

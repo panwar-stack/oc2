@@ -143,18 +143,18 @@ describe("OpenAI-compatible Chat route", () => {
     }),
   )
 
-  it.effect("lowers compatible service tier options", () =>
+  it.effect("omits compatible service tier options", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.updateRequest(request, { providerOptions: { openai: { serviceTier: "priority" } } }),
       )
 
-      expect(prepared.body).toMatchObject({ service_tier: "priority" })
+      expect(prepared.body).not.toHaveProperty("service_tier")
       expect(prepared.body).not.toHaveProperty("serviceTier")
     }),
   )
 
-  it.effect("defaults compatible facade service tier to flex", () =>
+  it.effect("does not default compatible facade service tier", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -163,7 +163,7 @@ describe("OpenAI-compatible Chat route", () => {
         }),
       )
 
-      expect(prepared.body).toMatchObject({ service_tier: "flex" })
+      expect(prepared.body).not.toHaveProperty("service_tier")
     }),
   )
 

@@ -650,7 +650,7 @@ describe("doStream", () => {
 })
 
 describe("request body", () => {
-  test("should lower service tier provider option", async () => {
+  test("should omit service tier provider option", async () => {
     let capturedBody: unknown
     const mockFetch = mock(async (_url: string, init?: RequestInit) => {
       capturedBody = JSON.parse(init?.body as string)
@@ -669,11 +669,11 @@ describe("request body", () => {
 
     await model.doStream({
       prompt: TEST_PROMPT,
-      providerOptions: { copilot: { serviceTier: "flex" } },
+      providerOptions: { copilot: { serviceTier: "auto", service_tier: "priority" } },
       includeRawChunks: false,
     })
 
-    expect(capturedBody).toMatchObject({ service_tier: "flex" })
+    expect(capturedBody).not.toHaveProperty("service_tier")
     expect(capturedBody).not.toHaveProperty("serviceTier")
   })
 

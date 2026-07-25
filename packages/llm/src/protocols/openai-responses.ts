@@ -496,7 +496,6 @@ const lowerOptions: (request: LLMRequest) => Effect.Effect<OpenAIResponsesOption
   const include = OpenAIOptions.include(request)
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
-  const serviceTier = OpenAIOptions.serviceTier(request)
   return {
     ...(instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
@@ -504,7 +503,6 @@ const lowerOptions: (request: LLMRequest) => Effect.Effect<OpenAIResponsesOption
     ...(include ? { include } : {}),
     ...(effort || summary ? { reasoning: { effort, summary } } : {}),
     ...(verbosity ? { text: { verbosity } } : {}),
-    ...(serviceTier ? { service_tier: serviceTier } : {}),
   }
 })
 

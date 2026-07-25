@@ -66,18 +66,18 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("lowers semantic service tier options", () =>
+  it.effect("preserves semantic service tier options without lowering them", () =>
     Effect.gen(function* () {
       const input = LLM.updateRequest(request, { providerOptions: { openai: { serviceTier: "priority" } } })
       expect(input.providerOptions).toEqual({ openai: { serviceTier: "priority" } })
       const prepared = yield* LLMClient.prepare(input)
 
-      expect(prepared.body).toMatchObject({ service_tier: "priority" })
+      expect(prepared.body).not.toHaveProperty("service_tier")
       expect(prepared.body).not.toHaveProperty("serviceTier")
     }),
   )
 
-  it.effect("defaults OpenAI Responses service tier to flex", () =>
+  it.effect("does not default OpenAI Responses service tier", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
@@ -86,11 +86,11 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
-      expect(prepared.body.service_tier).toBe("flex")
+      expect(prepared.body).not.toHaveProperty("service_tier")
     }),
   )
 
-  it.effect("allows OpenAI Responses service tier overrides", () =>
+  it.effect("omits OpenAI Responses service tier overrides", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
@@ -100,7 +100,7 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
-      expect(prepared.body.service_tier).toBe("auto")
+      expect(prepared.body).not.toHaveProperty("service_tier")
     }),
   )
 

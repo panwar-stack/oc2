@@ -86,7 +86,7 @@ describe("ProviderTransform.options - promptCacheKey", () => {
     expect(result.promptCacheKey).toBeUndefined()
   })
 
-  test("should default OpenAI service tier to flex", () => {
+  test("should not default OpenAI service tier", () => {
     const openaiModel = {
       ...mockModel,
       providerID: "openai",
@@ -98,10 +98,10 @@ describe("ProviderTransform.options - promptCacheKey", () => {
     }
 
     const result = ProviderTransform.options({ model: openaiModel, sessionID, providerOptions: {} })
-    expect(result.serviceTier).toBe("flex")
+    expect(result.serviceTier).toBeUndefined()
   })
 
-  test("should default OpenAI-compatible service tier to flex", () => {
+  test("should not default OpenAI-compatible service tier", () => {
     const compatibleModel = {
       ...mockModel,
       providerID: "deepseek",
@@ -113,7 +113,7 @@ describe("ProviderTransform.options - promptCacheKey", () => {
     }
 
     const result = ProviderTransform.options({ model: compatibleModel, sessionID, providerOptions: {} })
-    expect(result.serviceTier).toBe("flex")
+    expect(result.serviceTier).toBeUndefined()
   })
 
   test("should prefer CachePlan cacheKey for supported OpenAI models", () => {
@@ -954,7 +954,7 @@ describe("ProviderTransform.providerOptions", () => {
     })
   })
 
-  test("maps OpenAI-compatible service tier to request body key", () => {
+  test("omits OpenAI-compatible service tier provider options", () => {
     const model = createModel({
       providerID: "deepseek",
       api: {
@@ -964,9 +964,36 @@ describe("ProviderTransform.providerOptions", () => {
       },
     })
 
-    expect(ProviderTransform.providerOptions(model, { reasoningEffort: "high", serviceTier: "flex" })).toEqual({
-      deepseek: { reasoningEffort: "high", service_tier: "flex" },
+    expect(ProviderTransform.providerOptions(model, { reasoningEffort: "high", serviceTier: "auto" })).toEqual({
+      deepseek: { reasoningEffort: "high" },
     })
+  })
+
+  test("omits OpenAI-family service tier provider options", () => {
+    const options = { store: false, serviceTier: "auto", service_tier: "priority" }
+
+    expect(ProviderTransform.providerOptions(createModel(), options)).toEqual({ openai: { store: false } })
+    expect(
+      ProviderTransform.providerOptions(
+        createModel({ api: { id: "gpt-5", url: "https://api.githubcopilot.com", npm: "@ai-sdk/github-copilot" } }),
+        options,
+      ),
+    ).toEqual({ copilot: { store: false } })
+    expect(
+      ProviderTransform.providerOptions(
+        createModel({ api: { id: "gpt-5", url: "https://azure.openai.com", npm: "@ai-sdk/azure" } }),
+        options,
+      ),
+    ).toEqual({
+      openai: { store: false },
+      azure: { store: false },
+    })
+    expect(
+      ProviderTransform.providerOptions(
+        createModel({ api: { id: "openai/gpt-5", url: "https://ai-gateway.vercel.sh/v1", npm: "@ai-sdk/gateway" } }),
+        options,
+      ),
+    ).toEqual({ openai: { store: false } })
   })
 
   test("uses groq slug for groq models", () => {

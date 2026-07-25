@@ -159,13 +159,13 @@ describe("OpenAI Chat route", () => {
       )
 
       expect(prepared.body.store).toBe(false)
-      expect(prepared.body.service_tier).toBe("flex")
+      expect(prepared.body).not.toHaveProperty("service_tier")
       expect(prepared.body).not.toHaveProperty("serviceTier")
       expect(prepared.body.reasoning_effort).toBe("low")
     }),
   )
 
-  it.effect("defaults OpenAI Chat service tier to flex", () =>
+  it.effect("does not default OpenAI Chat service tier", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
@@ -174,11 +174,11 @@ describe("OpenAI Chat route", () => {
         }),
       )
 
-      expect(prepared.body.service_tier).toBe("flex")
+      expect(prepared.body).not.toHaveProperty("service_tier")
     }),
   )
 
-  it.effect("allows OpenAI Chat service tier overrides", () =>
+  it.effect("omits OpenAI Chat service tier overrides", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
@@ -188,7 +188,7 @@ describe("OpenAI Chat route", () => {
         }),
       )
 
-      expect(prepared.body.service_tier).toBe("auto")
+      expect(prepared.body).not.toHaveProperty("service_tier")
     }),
   )
 

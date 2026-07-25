@@ -287,7 +287,6 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       store: openaiOptions?.store,
       user: openaiOptions?.user,
       instructions: openaiOptions?.instructions,
-      service_tier: openaiOptions?.serviceTier,
       include,
       prompt_cache_key: openaiOptions?.promptCacheKey,
       safety_identifier: openaiOptions?.safetyIdentifier,
@@ -355,8 +354,6 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
         feature: "serviceTier",
         details: "flex processing is only available for o3, o4-mini, and gpt-5 models",
       })
-      // Remove from args if not supported
-      baseArgs.service_tier = undefined
     }
 
     // Validate priority processing support
@@ -367,8 +364,6 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
         details:
           "priority processing is only available for supported models (gpt-4, gpt-5, gpt-5-mini, o3, o4-mini) and requires Enterprise access. gpt-5-nano is not supported",
       })
-      // Remove from args if not supported
-      baseArgs.service_tier = undefined
     }
 
     const {
