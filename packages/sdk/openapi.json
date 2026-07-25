@@ -9516,7 +9516,7 @@
             }
           }
         },
-        "description": "Get the active team for a given lead session ID.",
+        "description": "Get the latest team for a given lead session ID.",
         "summary": "Get team by lead session",
         "x-codeSamples": [
           {
@@ -13734,6 +13734,9 @@
           },
           {
             "$ref": "#/components/schemas/EventSessionNextAgentSwitched"
+          },
+          {
+            "$ref": "#/components/schemas/EventSessionNextCacheRegression"
           },
           {
             "$ref": "#/components/schemas/EventSessionNextCompactionDelta"
@@ -18426,6 +18429,94 @@
                   "type": {
                     "type": "string",
                     "enum": [
+                      "session.next.cache.regression"
+                    ]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "timestamp": {
+                        "type": "number"
+                      },
+                      "sessionID": {
+                        "type": "string",
+                        "pattern": "^ses"
+                      },
+                      "messageID": {
+                        "type": "string",
+                        "pattern": "^msg_"
+                      },
+                      "partID": {
+                        "type": "string"
+                      },
+                      "providerID": {
+                        "type": "string"
+                      },
+                      "modelID": {
+                        "type": "string"
+                      },
+                      "classification": {
+                        "type": "string",
+                        "enum": [
+                          "unexpected_miss",
+                          "expected_miss",
+                          "warmup",
+                          "unsupported",
+                          "inconclusive"
+                        ]
+                      },
+                      "stablePrefixHash": {
+                        "type": "string"
+                      },
+                      "toolSchemaHash": {
+                        "type": "string"
+                      },
+                      "cachedInputTokens": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "cacheWriteTokens": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "expectedCachedTokens": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "diagnosticReason": {
+                        "type": "string"
+                      },
+                      "correctiveAction": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "timestamp",
+                      "sessionID",
+                      "providerID",
+                      "modelID",
+                      "classification"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "properties"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
                       "session.next.compaction.delta"
                     ]
                   },
@@ -19426,6 +19517,9 @@
                       },
                       "snapshot": {
                         "type": "string"
+                      },
+                      "cacheStatus": {
+                        "$ref": "#/components/schemas/CacheStatus"
                       },
                       "accounting": {
                         "$ref": "#/components/schemas/SessionStepAccounting"
@@ -20897,6 +20991,9 @@
               },
               {
                 "$ref": "#/components/schemas/SyncEventSessionNextAgentSwitched"
+              },
+              {
+                "$ref": "#/components/schemas/SyncEventSessionNextCacheRegression"
               },
               {
                 "$ref": "#/components/schemas/SyncEventSessionNextCompactionEnded"
@@ -31868,6 +31965,123 @@
         ],
         "additionalProperties": false
       },
+      "SyncEventSessionNextCacheRegression": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "sync"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "syncEvent": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "session.next.cache.regression.2"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^evt_"
+              },
+              "seq": {
+                "type": "number"
+              },
+              "aggregateID": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "timestamp": {
+                    "type": "number"
+                  },
+                  "sessionID": {
+                    "type": "string",
+                    "pattern": "^ses"
+                  },
+                  "messageID": {
+                    "type": "string",
+                    "pattern": "^msg_"
+                  },
+                  "partID": {
+                    "type": "string"
+                  },
+                  "providerID": {
+                    "type": "string"
+                  },
+                  "modelID": {
+                    "type": "string"
+                  },
+                  "classification": {
+                    "type": "string",
+                    "enum": [
+                      "unexpected_miss",
+                      "expected_miss",
+                      "warmup",
+                      "unsupported",
+                      "inconclusive"
+                    ]
+                  },
+                  "stablePrefixHash": {
+                    "type": "string"
+                  },
+                  "toolSchemaHash": {
+                    "type": "string"
+                  },
+                  "cachedInputTokens": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "cacheWriteTokens": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "expectedCachedTokens": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "diagnosticReason": {
+                    "type": "string"
+                  },
+                  "correctiveAction": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "timestamp",
+                  "sessionID",
+                  "providerID",
+                  "modelID",
+                  "classification"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "seq",
+              "aggregateID",
+              "data"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "syncEvent"
+        ],
+        "additionalProperties": false
+      },
       "SyncEventSessionNextCompactionEnded": {
         "type": "object",
         "properties": {
@@ -35248,11 +35462,11 @@
             ],
             "additionalProperties": false
           },
-          "error": {
-            "$ref": "#/components/schemas/SessionErrorUnknown"
-          },
           "cacheStatus": {
             "$ref": "#/components/schemas/CacheStatus"
+          },
+          "error": {
+            "$ref": "#/components/schemas/SessionErrorUnknown"
           },
           "accounting": {
             "$ref": "#/components/schemas/SessionStepAccounting"
@@ -38286,6 +38500,94 @@
               "sessionID",
               "messageID",
               "agent"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "EventSessionNextCacheRegression": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "session.next.cache.regression"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "timestamp": {
+                "type": "number"
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "messageID": {
+                "type": "string",
+                "pattern": "^msg_"
+              },
+              "partID": {
+                "type": "string"
+              },
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              },
+              "classification": {
+                "type": "string",
+                "enum": [
+                  "unexpected_miss",
+                  "expected_miss",
+                  "warmup",
+                  "unsupported",
+                  "inconclusive"
+                ]
+              },
+              "stablePrefixHash": {
+                "type": "string"
+              },
+              "toolSchemaHash": {
+                "type": "string"
+              },
+              "cachedInputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheWriteTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expectedCachedTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "diagnosticReason": {
+                "type": "string"
+              },
+              "correctiveAction": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "timestamp",
+              "sessionID",
+              "providerID",
+              "modelID",
+              "classification"
             ],
             "additionalProperties": false
           }

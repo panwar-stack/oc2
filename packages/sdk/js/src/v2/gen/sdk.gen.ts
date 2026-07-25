@@ -4841,7 +4841,7 @@ export class Team extends HeyApiClient {
   /**
    * Get team by lead session
    *
-   * Get the active team for a given lead session ID.
+   * Get the latest team for a given lead session ID.
    */
   public get<ThrowOnError extends boolean = false>(
     parameters: {
