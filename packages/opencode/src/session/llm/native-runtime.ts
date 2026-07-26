@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream"
 import { FetchHttpClient } from "effect/unstable/http"
 import {
   CacheGuardrails,
+  CachePlanner,
   InvalidRequestReason,
   LLMEvent,
   LLMError,
@@ -17,7 +18,6 @@ import {
   Tool as NativeTool,
   ToolFailure,
   ToolRuntime,
-  toDefinitions,
   type JsonSchema,
 } from "@oc2-ai/llm"
 import type { LLMClientShape } from "@oc2-ai/llm/route"
@@ -86,6 +86,8 @@ export function stream(input: StreamInput): StreamResult {
   const fetch = providerFetch(input)
   const current = statusWithFetch(input, fetch)
   if (current.type === "unsupported") return current
+  const unsupportedCacheHint = unsupportedNativeCacheHint(input.model, input.messages)
+  if (unsupportedCacheHint) return { type: "unsupported", reason: unsupportedCacheHint }
 
   // Integration point with @oc2-ai/llm: native-request lowers session data
   // into an LLMRequest, then LLMClient handles route selection and transport.
@@ -98,20 +100,31 @@ export function stream(input: StreamInput): StreamResult {
   // — if a field ever needs to differ between the two surfaces, the
   // translation belongs here, not split across both packages.
   const tools = nativeTools(input.tools, input)
-  const request = LLMNative.request({
+  let request = LLMNative.request({
     model: input.model,
     apiKey: current.apiKey,
     baseURL: current.baseURL,
-    messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}),
+    messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}, { caching: false }),
     toolChoice: input.toolChoice,
     temperature: input.temperature,
     topP: input.topP,
     topK: input.topK,
     maxOutputTokens: input.maxOutputTokens,
+    tools: Object.fromEntries(
+      Object.entries(input.tools).map(([name, item]) => [
+        name,
+        {
+          description: item.description,
+          inputSchema: nativeSchema(item.inputSchema),
+          providerOptions: item.providerOptions,
+        },
+      ]),
+    ),
     providerOptions: nativeProviderOptions(input.model, input.providerOptions ?? {}),
     headers: { ...providerHeaders(input.provider.options.headers), ...input.headers },
     cachePlan: input.cachePlan,
   })
+  if (input.cachePlan) request = reconcilePreparedCachePlan(request, input.cachePlan)
   const stream = Stream.scoped(
     Stream.unwrap(
       Effect.gen(function* () {
@@ -121,9 +134,7 @@ export function stream(input: StreamInput): StreamResult {
           let terminal: "step-finish" | "provider-error" | undefined
           let finish = false
           ProviderTimingLifecycle.beginProviderStep(input.timing, 0)
-          const requestWithTools = LLMRequest.update(request, {
-            tools: [...request.tools, ...toDefinitions(tools)],
-          })
+          const requestWithTools = request
           const guardrails = nativeGuardrails(requestWithTools)
           if (!guardrails.valid)
             return Stream.fail(
@@ -230,6 +241,44 @@ export function stream(input: StreamInput): StreamResult {
   }
 }
 
+function reconcilePreparedCachePlan(request: LLMRequest, plan: CachePlan) {
+  const seeded = LLMRequest.update(request, {
+    cache:
+      plan.mode === "disabled" || !plan.eligible
+        ? "none"
+        : {
+            tools: true,
+            system: true,
+            messages: "latest-user-message",
+            ttlSeconds: plan.duration === "1h" ? 3600 : 300,
+          },
+    system: request.system.map((part, index) =>
+      plan.breakpoints.some((breakpoint) => breakpoint.component === "system" && breakpoint.index === index)
+        ? { ...part, metadata: { ...part.metadata, cache: { stable: true } } }
+        : part,
+    ),
+  })
+  const boundary = CachePlanner.planCacheRequest(seeded)
+  const fresh = boundary.plan
+  return LLMRequest.update(seeded, {
+    metadata: {
+      ...seeded.metadata,
+      cachePlan: CachePlanner.reconcileCachePlan(
+        fresh,
+        {
+          ...fresh,
+          mode: plan.mode,
+          eligible: plan.eligible,
+          breakpoints: plan.breakpoints,
+          duration: plan.duration,
+          requestCacheControl: plan.requestCacheControl,
+        },
+        boundary.stable,
+      ),
+    },
+  })
+}
+
 function nativeProviderOptions(model: Provider.Model, options: Record<string, any>) {
   if (model.api.npm === "@ai-sdk/openai-compatible") return { openai: options }
   return ProviderTransform.providerOptions(model, options)
@@ -243,7 +292,12 @@ function nativeGuardrails(request: LLMRequest) {
     CacheGuardrails.checkUnsupportedFields({ provider: plan.provider, model: plan.model, fields }),
     CacheGuardrails.checkProviderFieldLeakage({ provider: plan.provider, model: plan.model, fields }),
     CacheGuardrails.checkInvalidDuration({ provider: plan.provider, model: plan.model, duration: plan.duration }),
-    CacheGuardrails.checkBreakpointOverflow({ provider: plan.provider, model: plan.model, breakpoints: plan.breakpoints }),
+    CacheGuardrails.checkBreakpointOverflow({
+      provider: plan.provider,
+      model: plan.model,
+      breakpoints: plan.breakpoints,
+      requestCacheControl: plan.requestCacheControl,
+    }),
   )
 }
 
@@ -251,6 +305,9 @@ function nativeCacheFields(request: LLMRequest) {
   const options = request.providerOptions ?? {}
   return [
     ...collectOptionCacheFields(options),
+    ...(isCachePlan(request.metadata?.cachePlan) && request.metadata.cachePlan.requestCacheControl
+      ? ["cache_control"]
+      : []),
     ...request.system.flatMap((part) => (part.cache ? ["cache_control"] : [])),
     ...request.tools.flatMap((tool) => (tool.cache ? ["cache_control"] : [])),
     ...request.messages.flatMap((message) =>
@@ -293,6 +350,39 @@ function providerHeaders(value: unknown): Record<string, string> | undefined {
   return Object.fromEntries(
     Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   )
+}
+
+function unsupportedNativeCacheHint(model: Provider.Model, messages: ModelMessage[]) {
+  if (model.api.npm !== "@ai-sdk/anthropic") return undefined
+  for (const message of messages) {
+    if (
+      hasAnthropicCacheHint(message.providerOptions, model) &&
+      message.role !== "system" &&
+      Array.isArray(message.content) &&
+      message.content.at(-1)?.type !== "text" &&
+      message.content.at(-1)?.type !== "tool-result"
+    ) {
+      return "native Anthropic requests cannot preserve the message-level cache hint on this content"
+    }
+    if (!Array.isArray(message.content)) continue
+    for (const part of message.content) {
+      if (!("providerOptions" in part) || !hasAnthropicCacheHint(part.providerOptions, model)) continue
+      if (part.type === "text" || part.type === "tool-result") continue
+      return `native Anthropic requests cannot preserve cache hints on ${part.type} content`
+    }
+  }
+  return undefined
+}
+
+function hasAnthropicCacheHint(value: unknown, model: Provider.Model) {
+  if (!isRecord(value)) return false
+  for (const key of new Set(["anthropic", String(model.providerID)])) {
+    const options = value[key]
+    if (!isRecord(options)) continue
+    const cache = options.cacheControl ?? options.cache_control
+    if (isRecord(cache) && cache.type === "ephemeral") return true
+  }
+  return false
 }
 
 function nativeSchema(value: unknown): JsonSchema {

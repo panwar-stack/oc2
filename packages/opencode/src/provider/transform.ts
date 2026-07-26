@@ -1,9 +1,9 @@
-import type { ModelMessage, ToolResultPart } from "ai"
+import type { ModelMessage, Tool, ToolResultPart } from "ai"
 import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "@oc2-ai/core/models-dev"
-import type { CachePlan } from "@oc2-ai/llm/cache/planner"
+import { messageBreakpointPartIndex, type CachePlan } from "@oc2-ai/llm/cache/planner"
 import { getCacheCapabilities } from "@oc2-ai/llm/cache/capability"
 import { iife } from "@/util/iife"
 
@@ -322,13 +322,55 @@ function normalizeMessages(
   return msgs
 }
 
-function applyCaching(msgs: ModelMessage[], model: Provider.Model, plan: CachePlan | undefined): ModelMessage[] {
-  const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
-  const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
+const ANTHROPIC_CACHE_HINT_CAP = 4
+
+function applyCaching(
+  msgs: ModelMessage[],
+  model: Provider.Model,
+  plan: CachePlan | undefined,
+  options: Record<string, unknown>,
+): ModelMessage[] {
   const providerOptions = cachingProviderOptions(model, plan)
   if (!providerOptions) return msgs
+  let remaining = cacheHintBudget(msgs, model, options)
+  const system = msgs.filter((msg) => msg.role === "system")
+  const messages = msgs.filter((msg) => msg.role !== "system")
+  const targets: ModelMessage[] = []
+  if (plan) {
+    for (const breakpoint of plan.breakpoints) {
+      const target =
+        breakpoint.component === "system"
+          ? system[breakpoint.index]
+          : breakpoint.component === "messages"
+            ? messages[breakpoint.index]
+            : undefined
+      if (target) targets.push(target)
+    }
+  } else {
+    targets.push(...unique([...system.slice(0, 2), ...messages.slice(-2)]))
+  }
 
-  for (const msg of unique([...system, ...final])) {
+  for (const msg of targets) {
+    if (remaining <= 0) break
+    if (plan && model.api.npm === "@ai-sdk/anthropic" && msg.role !== "system") {
+      if (Array.isArray(msg.content)) {
+        const index = messageBreakpointPartIndex({ content: msg.content })
+        const target = msg.content[index]
+        if (
+          !target ||
+          target.type === "tool-approval-request" ||
+          target.type === "tool-approval-response" ||
+          hasProviderCacheHint(target.providerOptions, providerOptions)
+        )
+          continue
+        target.providerOptions = mergeDeep(target.providerOptions ?? {}, providerOptions)
+      } else {
+        if (hasProviderCacheHint(msg.providerOptions, providerOptions)) continue
+        msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, providerOptions)
+      }
+      remaining--
+      continue
+    }
     const useMessageLevelOptions =
       model.providerID === "anthropic" ||
       model.providerID.includes("bedrock") ||
@@ -343,22 +385,55 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model, plan: CachePl
         lastContent.type !== "tool-approval-request" &&
         lastContent.type !== "tool-approval-response"
       ) {
+        if (hasProviderCacheHint(lastContent.providerOptions, providerOptions)) continue
         lastContent.providerOptions = mergeDeep(lastContent.providerOptions ?? {}, providerOptions)
+        remaining--
         continue
       }
     }
 
+    if (hasProviderCacheHint(msg.providerOptions, providerOptions)) continue
     msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, providerOptions)
+    remaining--
   }
 
   return msgs
 }
 
+export function tools(tools: Record<string, Tool>, model: Provider.Model, plan: CachePlan | undefined) {
+  const providerOptions = cachingProviderOptions(model, plan)
+  if (!providerOptions || !plan) return tools
+  const entries = Object.entries(tools)
+  let changed = false
+  for (const breakpoint of plan.breakpoints) {
+    if (breakpoint.component !== "tools") continue
+    const entry = entries[breakpoint.index]
+    if (!entry || hasProviderCacheHint(entry[1].providerOptions, providerOptions)) continue
+    entry[1] = {
+      ...entry[1],
+      providerOptions: mergeDeep(entry[1].providerOptions ?? {}, providerOptions),
+    }
+    changed = true
+  }
+  return changed ? Object.fromEntries(entries) : tools
+}
+
 function cachingProviderOptions(model: Provider.Model, plan: CachePlan | undefined) {
   if (explicitOpenAICacheUnsupported(model)) return undefined
-  if (plan && (!plan.eligible || plan.mode === "disabled" || plan.breakpoints.length === 0)) return undefined
+  if (plan && (plan.provider !== model.providerID || plan.model !== model.api.id)) return undefined
+  if (
+    plan &&
+    (!plan.eligible ||
+      (plan.mode !== "explicit" && plan.mode !== "automatic_and_explicit") ||
+      plan.breakpoints.length === 0)
+  )
+    return undefined
   if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") {
-    return { anthropic: { cacheControl: { type: "ephemeral" } } }
+    return {
+      anthropic: {
+        cacheControl: plan?.duration === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" },
+      },
+    }
   }
   if (model.api.npm === "@ai-sdk/amazon-bedrock") return { bedrock: { cachePoint: { type: "default" } } }
   if (model.api.npm === "@openrouter/ai-sdk-provider") return { openrouter: { cacheControl: { type: "ephemeral" } } }
@@ -368,9 +443,65 @@ function cachingProviderOptions(model: Provider.Model, plan: CachePlan | undefin
   return undefined
 }
 
-function cachePlanOption(options: Record<string, unknown>): CachePlan | undefined {
+function cacheHintBudget(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
+  if (model.api.npm !== "@ai-sdk/anthropic" && model.api.npm !== "@ai-sdk/google-vertex/anthropic") {
+    return Number.POSITIVE_INFINITY
+  }
+  const explicit = msgs.reduce((count, message) => {
+    const messageHint = hasAnthropicCacheHint(message.providerOptions) ? 1 : 0
+    if (!Array.isArray(message.content)) return count + messageHint
+    const parts = message.content.filter(
+      (part) =>
+        part.type !== "tool-approval-request" &&
+        part.type !== "tool-approval-response" &&
+        hasAnthropicPartCacheHint(part),
+    ).length
+    const last = message.content.at(-1)
+    return count + parts + (messageHint && (!last || !hasAnthropicPartCacheHint(last)) ? 1 : 0)
+  }, 0)
+  const request = isCacheControl(options.cacheControl) || isCacheControl(options.cache_control) ? 1 : 0
+  const tools = typeof options.oc2CacheToolHintCount === "number" ? options.oc2CacheToolHintCount : 0
+  return Math.max(0, ANTHROPIC_CACHE_HINT_CAP - explicit - request - tools)
+}
+
+function hasAnthropicPartCacheHint(part: Exclude<ModelMessage["content"], string>[number]) {
+  if (part.type === "tool-approval-request" || part.type === "tool-approval-response") return false
+  if (hasAnthropicCacheHint(part.providerOptions)) return true
+  if (part.type !== "tool-result" || !isRecord(part.output)) return false
+  const output = part.output
+  if ("providerOptions" in output && hasAnthropicCacheHint(output.providerOptions)) return true
+  if (output.type !== "content" || !Array.isArray(output.value)) return false
+  return output.value.some(
+    (item) => isRecord(item) && "providerOptions" in item && hasAnthropicCacheHint(item.providerOptions),
+  )
+}
+
+function hasAnthropicCacheHint(value: unknown) {
+  if (!isRecord(value)) return false
+  const anthropic = value.anthropic
+  return isRecord(anthropic) && (isCacheControl(anthropic.cacheControl) || isCacheControl(anthropic.cache_control))
+}
+
+function hasProviderCacheHint(current: unknown, generated: Record<string, any>) {
+  if (!isRecord(current)) return false
+  return Object.entries(generated).some(([provider, options]) => {
+    const existing = current[provider]
+    if (!isRecord(existing) || !isRecord(options)) return false
+    return Object.keys(options).some((key) => existing[key] !== undefined)
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isCacheControl(value: unknown) {
+  return isRecord(value) && value.type === "ephemeral" && (value.ttl === undefined || value.ttl === "5m" || value.ttl === "1h")
+}
+
+function cachePlanOption(options: Record<string, unknown>, model: Provider.Model): CachePlan | undefined {
   const plan = options.cachePlan
-  return isCachePlan(plan) ? plan : undefined
+  return isCachePlan(plan) && plan.provider === model.providerID && plan.model === model.api.id ? plan : undefined
 }
 
 const isCachePlan = (value: unknown): value is CachePlan =>
@@ -422,10 +553,18 @@ function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMes
   })
 }
 
-export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
+export function message(
+  msgs: ModelMessage[],
+  model: Provider.Model,
+  options: Record<string, unknown>,
+  config: { readonly caching?: boolean } = {},
+) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
-  const cachePlan = cachePlanOption(options)
+  if (model.api.npm === "@ai-sdk/anthropic" && model.providerID !== "anthropic") {
+    msgs = scrubUnsupportedAnthropicCacheHints(msgs, model)
+  }
+  const cachePlan = cachePlanOption(options, model)
   if (
     (model.providerID === "anthropic" ||
       model.providerID === "google-vertex-anthropic" ||
@@ -437,7 +576,7 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
       model.api.npm === "@ai-sdk/alibaba") &&
     model.api.npm !== "@ai-sdk/gateway"
   ) {
-    msgs = applyCaching(msgs, model, cachePlan)
+    if (config.caching !== false) msgs = applyCaching(msgs, model, cachePlan, options)
   }
 
   // Remap providerOptions keys from stored providerID to expected SDK key
@@ -468,6 +607,46 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
   }
 
   return msgs
+}
+
+function scrubUnsupportedAnthropicCacheHints(msgs: ModelMessage[], model: Provider.Model) {
+  const scrub = (value: Record<string, any> | undefined) => {
+    if (!value) return value
+    const result = { ...value }
+    for (const key of new Set(["anthropic", String(model.providerID)])) {
+      const provider = result[key]
+      if (!isRecord(provider)) continue
+      const { cacheControl, cache_control, ...rest } = provider
+      if (cacheControl === undefined && cache_control === undefined) continue
+      if (Object.keys(rest).length === 0) delete result[key]
+      else result[key] = rest
+    }
+    return Object.keys(result).length === 0 ? undefined : result
+  }
+  return msgs.map((message) => {
+    if (!Array.isArray(message.content)) return { ...message, providerOptions: scrub(message.providerOptions) }
+    return {
+      ...message,
+      providerOptions: scrub(message.providerOptions),
+      content: message.content.map((part) => {
+        if (part.type === "tool-approval-request" || part.type === "tool-approval-response") return part
+        const result = { ...part, providerOptions: scrub(part.providerOptions) }
+        if (result.type !== "tool-result" || !isRecord(result.output)) return result
+        const output: Record<string, any> = {
+          ...result.output,
+          providerOptions: scrub("providerOptions" in result.output ? result.output.providerOptions : undefined),
+        }
+        if (output.type === "content" && Array.isArray(output.value)) {
+          output.value = output.value.map((item) =>
+            isRecord(item)
+              ? { ...item, providerOptions: scrub("providerOptions" in item ? item.providerOptions : undefined) }
+              : item,
+          )
+        }
+        return { ...result, output }
+      }),
+    } as ModelMessage
+  })
 }
 
 export function temperature(model: Provider.Model) {
@@ -1074,6 +1253,8 @@ export function options(input: {
 
   const promptCacheKey = promptCacheKeyForPlan(input.model, input.cachePlan)
   if (promptCacheKey) result["promptCacheKey"] = promptCacheKey
+  const requestCacheControl = anthropicRequestCacheControl(input.model, input.cachePlan)
+  if (requestCacheControl) result["cacheControl"] = requestCacheControl
 
   if (input.model.api.npm === "@ai-sdk/google" || input.model.api.npm === "@ai-sdk/google-vertex") {
     if (input.model.capabilities.reasoning) {
@@ -1152,6 +1333,13 @@ export function options(input: {
   }
 
   return result
+}
+
+const anthropicRequestCacheControl = (model: Provider.Model, plan: CachePlan | undefined) => {
+  if (model.providerID !== "anthropic" || model.api.npm !== "@ai-sdk/anthropic") return undefined
+  if (plan?.provider !== model.providerID || plan.model !== model.api.id) return undefined
+  if (!plan?.eligible || (plan.mode !== "automatic" && plan.mode !== "automatic_and_explicit")) return undefined
+  return plan.requestCacheControl
 }
 
 const promptCacheKeyForPlan = (model: Provider.Model, plan: CachePlan | undefined) => {

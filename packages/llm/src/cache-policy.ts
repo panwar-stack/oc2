@@ -6,7 +6,7 @@
 // dynamic turn messages out of the stable prefix unless a caller marks a message
 // explicitly stable. Manual `cache: CacheHint` placements are preserved.
 //
-import { planCacheRequest, resolveCachePolicy } from "./cache/planner"
+import { messageBreakpointPartIndex, planCacheRequest, reconcileCachePlan, resolveCachePolicy } from "./cache/planner"
 import { CacheHint } from "./schema/options"
 import { LLMRequest, Message, ToolDefinition, type ContentPart } from "./schema/messages"
 
@@ -40,8 +40,7 @@ const markMessageAt = (messages: ReadonlyArray<Message>, index: number, hint: Ca
   if (index < 0 || index >= messages.length) return messages
   const target = messages[index]!
   if (target.content.length === 0) return messages
-  const lastTextIndex = target.content.findLastIndex((part) => part.type === "text")
-  const markAt = lastTextIndex >= 0 ? lastTextIndex : target.content.length - 1
+  const markAt = messageBreakpointPartIndex(target)
   const existing = target.content[markAt]!
   if ("cache" in existing && existing.cache) return messages
   const nextContent = target.content.map((part, i) => (i === markAt ? ({ ...part, cache: hint } as ContentPart) : part))
@@ -56,8 +55,13 @@ const markMessageAt = (messages: ReadonlyArray<Message>, index: number, hint: Ca
 
 export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
   const planned = planCacheRequest(request)
+  const plan = reconcileCachePlan(planned.plan, request.metadata?.cachePlan, planned.stable)
   const requestWithPlan = LLMRequest.update(request, {
-    metadata: { ...request.metadata, cachePlan: planned.plan, cacheBoundary: { version: planned.version, stable: planned.stable, dynamic: planned.dynamic } },
+    metadata: {
+      ...request.metadata,
+      cachePlan: plan,
+      cacheBoundary: { version: planned.version, stable: planned.stable, dynamic: planned.dynamic },
+    },
   })
   if (!RESPECTS_INLINE_HINTS.has(request.model.route.id)) return requestWithPlan
   const policy = resolveCachePolicy(request.cache)
@@ -67,7 +71,7 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
   let tools = request.tools
   let system = request.system
   let messages = request.messages
-  for (const breakpoint of planned.plan.breakpoints) {
+  for (const breakpoint of plan.breakpoints) {
     if (breakpoint.component === "tools") tools = markToolAt(tools, breakpoint.index, hint)
     if (breakpoint.component === "system") system = markSystemAt(system, breakpoint.index, hint)
     if (breakpoint.component === "messages") messages = markMessageAt(messages, breakpoint.index, hint)

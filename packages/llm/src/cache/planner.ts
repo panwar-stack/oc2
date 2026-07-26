@@ -69,6 +69,8 @@ export const planCacheRequest = (request: LLMRequest): CacheBoundaryPlan =>
     modelConfig: {
       provider: request.model.provider,
       model: request.model.id,
+      routeID: request.model.route.id,
+      protocolID: request.model.route.protocol,
       generation: request.generation,
       responseFormat: request.responseFormat,
       cachePolicy: request.cache,
@@ -167,6 +169,74 @@ export const planCache = (input: CachePlannerInput): CacheBoundaryPlan => {
   }
 }
 
+export const reconcileCachePlan = (
+  fresh: CachePlan,
+  value: unknown,
+  stable?: CacheBoundarySelection,
+): CachePlan => {
+  if (!isCachePlan(value)) return fresh
+  if (
+    value.provider !== fresh.provider ||
+    value.model !== fresh.model ||
+    value.stablePrefixFingerprint !== fresh.stablePrefixFingerprint ||
+    !sameRecord(value.componentFingerprints, fresh.componentFingerprints)
+  )
+    return fresh
+  if (hasDuplicateBreakpointTarget(value.breakpoints)) return fresh
+  if (!value.breakpoints.every((breakpoint) => hasBreakpoint(fresh.breakpoints, breakpoint, stable))) return fresh
+  const capabilities = getCacheCapabilities(fresh.provider, fresh.model)
+  const maximum = capabilities.maximumBreakpoints
+  if (maximum !== null && value.breakpoints.length + (value.requestCacheControl ? 1 : 0) > maximum) return fresh
+  if (!allowedModes(fresh.mode).has(value.mode)) return fresh
+  if (value.mode === "disabled") {
+    if (value.eligible || value.breakpoints.length > 0 || value.requestCacheControl || value.duration !== null) return fresh
+  } else if (!fresh.eligible || !value.eligible) {
+    return fresh
+  }
+  if (value.mode === "automatic" && value.breakpoints.length > 0) return fresh
+  if (value.mode === "implicit" && (value.breakpoints.length > 0 || value.requestCacheControl)) return fresh
+  if (value.mode === "explicit" && value.requestCacheControl) return fresh
+  if (value.mode === "automatic_and_explicit" && (!value.requestCacheControl || value.breakpoints.length === 0)) return fresh
+  if (value.breakpoints.length > 0 && value.mode !== "explicit" && value.mode !== "automatic_and_explicit") return fresh
+  if (value.duration !== null && value.duration !== "5m" && value.duration !== "1h") return fresh
+  if (value.duration !== null && fresh.duration === null) return fresh
+  const automatic = value.mode === "automatic" || value.mode === "automatic_and_explicit"
+  const anthropic = fresh.provider === "anthropic"
+  if (
+    anthropic &&
+    automatic &&
+    (!value.requestCacheControl ||
+      value.duration === null ||
+      !capabilities.supportedDurations.includes(value.duration))
+  )
+    return fresh
+  if (
+    anthropic &&
+    value.mode !== "disabled" &&
+    value.breakpoints.length > 0 &&
+    (value.duration === null || !capabilities.supportedDurations.includes(value.duration))
+  )
+    return fresh
+  if (
+    value.requestCacheControl &&
+    (value.requestCacheControl.type !== "ephemeral" ||
+      (value.requestCacheControl.ttl !== undefined && value.requestCacheControl.ttl !== "1h"))
+  )
+    return fresh
+  if (value.requestCacheControl && !fresh.requestCacheControl) return fresh
+  if (value.requestCacheControl && value.duration === null) return fresh
+  if (value.requestCacheControl?.ttl === "1h" && value.duration !== "1h") return fresh
+  if (value.requestCacheControl && value.requestCacheControl.ttl === undefined && value.duration !== "5m") return fresh
+  return {
+    ...fresh,
+    mode: value.mode,
+    eligible: value.eligible,
+    breakpoints: value.breakpoints,
+    duration: value.duration,
+    requestCacheControl: value.requestCacheControl,
+  }
+}
+
 const stableSystemIndexes = (system: ReadonlyArray<CacheSystemPartInput>, defaultStability: "stable" | "dynamic") =>
   system.flatMap((part, index) => {
     const stable = cacheStable(part.metadata)
@@ -186,6 +256,11 @@ const stableMessageIndexes = (
 
 const stableMessage = (message: CacheMessageInput) =>
   message.role === "system" && cacheStable(message.metadata) === true && !message.content.some((part) => isToolPart(part.type))
+
+export const messageBreakpointPartIndex = (message: { readonly content: ReadonlyArray<{ readonly type?: string }> }) => {
+  const lastText = message.content.findLastIndex((part) => part.type === "text")
+  return lastText >= 0 ? lastText : message.content.length - 1
+}
 
 const cacheStable = (metadata: unknown) => {
   if (!isRecord(metadata)) return undefined
@@ -237,8 +312,7 @@ const hasAutomaticSlot = (input: {
     }
     const message = input.messages[breakpoint.index]
     if (!message || message.content.length === 0) continue
-    const lastText = message.content.findLastIndex((part) => part.type === "text")
-    const partIndex = lastText >= 0 ? lastText : message.content.length - 1
+    const partIndex = messageBreakpointPartIndex(message)
     occupied.add(`messages:${breakpoint.index}:${partIndex}`)
   }
   return occupied.size < input.maximumBreakpoints
@@ -268,6 +342,68 @@ const sanitizeProviderConfig = (value: Record<string, unknown> | null | undefine
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+const isCachePlan = (value: unknown): value is CachePlan =>
+  isRecord(value) &&
+  typeof value.provider === "string" &&
+  typeof value.model === "string" &&
+  typeof value.stablePrefixFingerprint === "string" &&
+  isRecord(value.componentFingerprints) &&
+  Object.values(value.componentFingerprints).every((fingerprint) => typeof fingerprint === "string") &&
+  CACHE_MODES.has(value.mode) &&
+  typeof value.eligible === "boolean" &&
+  (value.duration === null || value.duration === "5m" || value.duration === "1h") &&
+  (value.requestCacheControl === undefined ||
+    (isRecord(value.requestCacheControl) &&
+      value.requestCacheControl.type === "ephemeral" &&
+      (value.requestCacheControl.ttl === undefined || value.requestCacheControl.ttl === "1h"))) &&
+  Array.isArray(value.breakpoints) &&
+  value.breakpoints.every(
+    (breakpoint) =>
+      isRecord(breakpoint) &&
+      typeof breakpoint.component === "string" &&
+      typeof breakpoint.contentType === "string" &&
+      Number.isInteger(breakpoint.index) &&
+      (breakpoint.index as number) >= 0,
+  )
+
+const CACHE_MODES = new Set<unknown>(["disabled", "automatic", "implicit", "explicit", "automatic_and_explicit"])
+
+const hasDuplicateBreakpointTarget = (breakpoints: CachePlan["breakpoints"]) => {
+  const targets = new Set<string>()
+  for (const breakpoint of breakpoints) {
+    const target = `${breakpoint.component}:${breakpoint.index}`
+    if (targets.has(target)) return true
+    targets.add(target)
+  }
+  return false
+}
+
+const allowedModes = (mode: CacheMode): ReadonlySet<CacheMode> => {
+  if (mode === "automatic_and_explicit")
+    return new Set(["disabled", "automatic", "explicit", "automatic_and_explicit"])
+  return new Set(["disabled", mode])
+}
+
+const hasBreakpoint = (
+  fresh: CachePlan["breakpoints"],
+  value: CachePlan["breakpoints"][number],
+  stable: CacheBoundarySelection | undefined,
+) =>
+  fresh.some(
+    (breakpoint) =>
+      breakpoint.component === value.component &&
+      breakpoint.contentType === value.contentType &&
+      breakpoint.index === value.index,
+  ) ||
+  (value.component === "tools" && value.contentType === "tool" && stable?.tools.includes(value.index) === true) ||
+  (value.component === "system" && value.contentType === "system" && stable?.system.includes(value.index) === true) ||
+  (value.component === "messages" && value.contentType === "message" && stable?.messages.includes(value.index) === true)
+
+const sameRecord = (left: Record<string, string>, right: Record<string, string>) => {
+  const keys = Object.keys({ ...left, ...right })
+  return keys.every((key) => left[key] === right[key])
+}
 
 const isToolPart = (type: unknown) => type === "tool-call" || type === "tool-result"
 

@@ -1,6 +1,6 @@
-import type { JsonSchema, LLMRequest, ProviderMetadata } from "@oc2-ai/llm"
+import type { ContentPart, JsonSchema, LLMRequest, ProviderMetadata } from "@oc2-ai/llm"
 import type { CachePlan } from "@oc2-ai/llm/cache/planner"
-import { LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@oc2-ai/llm"
+import { CacheHint, LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@oc2-ai/llm"
 import {
   AmazonBedrock,
   Anthropic,
@@ -17,6 +17,7 @@ import { isRecord } from "@/util/record"
 type ToolInput = {
   readonly description?: string
   readonly inputSchema?: unknown
+  readonly providerOptions?: unknown
 }
 
 export type RequestInput = {
@@ -49,9 +50,27 @@ const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
 const partProviderMetadata = (part: Record<string, unknown>) =>
   providerMetadata(part.providerMetadata) ?? providerMetadata(part.providerOptions)
 
-const textPart = (part: Record<string, unknown>) => ({
+const cacheHint = (model: Provider.Model, value: unknown): CacheHint | undefined => {
+  if (model.api.npm !== "@ai-sdk/anthropic" && model.api.npm !== "@ai-sdk/google-vertex/anthropic") return undefined
+  if (!isRecord(value)) return undefined
+  for (const key of new Set(["anthropic", String(model.providerID)])) {
+    const options = value[key]
+    if (!isRecord(options)) continue
+    const control = options.cacheControl ?? options.cache_control
+    if (!isRecord(control) || control.type !== "ephemeral") continue
+    if (control.ttl !== undefined && control.ttl !== "5m" && control.ttl !== "1h") continue
+    return new CacheHint({
+      type: "ephemeral",
+      ttlSeconds: control.ttl === "1h" ? 3600 : control.ttl === "5m" ? 300 : undefined,
+    })
+  }
+  return undefined
+}
+
+const textPart = (part: Record<string, unknown>, model: Provider.Model) => ({
   type: "text" as const,
   text: typeof part.text === "string" ? part.text : "",
+  cache: cacheHint(model, part.providerOptions),
   providerMetadata: partProviderMetadata(part),
 })
 
@@ -66,22 +85,28 @@ const mediaPart = (part: Record<string, unknown>) => {
   }
 }
 
-const toolResult = (part: Record<string, unknown>) => {
+const toolResult = (part: Record<string, unknown>, model: Provider.Model) => {
   const output = isRecord(part.output) ? part.output : { type: "json", value: part.output }
   const type = output.type === "text" ? "text" : output.type === "error-text" ? "error" : "json"
+  const outputProviderOptions =
+    output.providerOptions ??
+    (output.type === "content" && Array.isArray(output.value)
+      ? output.value.find((item) => isRecord(item) && item.providerOptions !== undefined)?.providerOptions
+      : undefined)
   return ToolResultPart.make({
     id: typeof part.toolCallId === "string" ? part.toolCallId : "",
     name: typeof part.toolName === "string" ? part.toolName : "",
     result: "value" in output ? output.value : output,
     resultType: type,
+    cache: cacheHint(model, part.providerOptions) ?? cacheHint(model, outputProviderOptions),
     providerExecuted: typeof part.providerExecuted === "boolean" ? part.providerExecuted : undefined,
     providerMetadata: partProviderMetadata(part),
   })
 }
 
-const contentPart = (part: unknown) => {
+const contentPart = (part: unknown, model: Provider.Model) => {
   if (!isRecord(part)) throw new Error("Native LLM request adapter only supports object content parts")
-  if (part.type === "text") return textPart(part)
+  if (part.type === "text") return textPart(part, model)
   if (part.type === "file") return mediaPart(part)
   if (part.type === "reasoning")
     return {
@@ -97,21 +122,35 @@ const contentPart = (part: unknown) => {
       providerExecuted: typeof part.providerExecuted === "boolean" ? part.providerExecuted : undefined,
       providerMetadata: partProviderMetadata(part),
     })
-  if (part.type === "tool-result") return toolResult(part)
+  if (part.type === "tool-result") return toolResult(part, model)
   throw new Error(`Native LLM request adapter does not support ${String(part.type)} content parts`)
 }
 
-const content = (value: ModelMessage["content"]) =>
-  typeof value === "string" ? [{ type: "text" as const, text: value }] : value.map(contentPart)
+const content = (value: ModelMessage["content"], model: Provider.Model): ContentPart[] =>
+  typeof value === "string"
+    ? [{ type: "text" as const, text: value, cache: undefined }]
+    : value.map((part) => contentPart(part, model))
 
-const messages = (input: readonly ModelMessage[]) => {
-  const system = input.flatMap((message) => (message.role === "system" ? [SystemPart.make(message.content)] : []))
+const messages = (input: readonly ModelMessage[], model: Provider.Model) => {
+  const system = input.flatMap((message) =>
+    message.role === "system"
+      ? [{ ...SystemPart.make(message.content), cache: cacheHint(model, message.providerOptions) }]
+      : [],
+  )
   const messages = input.flatMap((message) => {
     if (message.role === "system") return []
+    const converted = content(message.content, model)
+    const messageCache = cacheHint(model, message.providerOptions)
+    if (messageCache) {
+      const index = converted.findLastIndex((part) => part.type === "text" || part.type === "tool-result")
+      const part = converted[index]
+      if (part?.type === "text" && !part.cache) converted[index] = { ...part, cache: messageCache }
+      if (part?.type === "tool-result" && !part.cache) converted[index] = { ...part, cache: messageCache }
+    }
     return [
       Message.make({
         role: message.role,
-        content: content(message.content),
+        content: converted,
         native: isRecord(message.providerOptions) ? { providerOptions: message.providerOptions } : undefined,
       }),
     ]
@@ -125,12 +164,13 @@ const schema = (value: unknown): JsonSchema => {
   return value
 }
 
-const tools = (input: Record<string, ToolInput> | undefined): ToolDefinition[] =>
+const tools = (input: Record<string, ToolInput> | undefined, model: Provider.Model): ToolDefinition[] =>
   Object.entries(input ?? {}).map(([name, item]) =>
     ToolDefinition.make({
       name,
       description: item.description ?? "",
       inputSchema: schema(item.inputSchema),
+      cache: cacheHint(model, item.providerOptions),
     }),
   )
 
@@ -181,14 +221,14 @@ export const model = (input: Provider.Model | RequestInput, headers?: Record<str
 }
 
 export const request = (input: RequestInput) => {
-  const converted = messages(input.messages)
+  const converted = messages(input.messages, input.model)
   // This is the only native adapter boundary that should construct canonical
   // @oc2-ai/llm request objects from opencode's session/AI SDK-shaped data.
   return LLM.request({
     model: model(input, input.headers),
     system: [...(input.system ?? []).map(SystemPart.make), ...converted.system],
     messages: converted.messages,
-    tools: tools(input.tools),
+    tools: tools(input.tools, input.model),
     toolChoice: input.toolChoice,
     generation: generation(input),
     providerOptions: input.providerOptions,

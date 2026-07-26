@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { LLMEvent, ToolFailure } from "@oc2-ai/llm"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 import { LLMClient, RequestExecutor, WebSocketExecutor, type LLMClientShape } from "@oc2-ai/llm/route"
 import { jsonSchema, tool, type ModelMessage, type Tool } from "ai"
 import { Effect, Fiber, Layer, Stream } from "effect"
@@ -127,6 +128,22 @@ const openAIResponses = {
 }
 
 const prepareNativeRequest = (input: NativeRequestInput) => LLMClient.prepare(LLMNative.request(input))
+
+const anthropicCachePlan: CachePlan = {
+  provider: "anthropic",
+  model: "claude-sonnet-4-5",
+  mode: "automatic_and_explicit",
+  cacheKey: null,
+  trafficPartition: null,
+  stablePrefixFingerprint: "sha256:opencode-stable-prefix",
+  componentFingerprints: {},
+  prefixTokenCount: null,
+  minimumPrefixTokens: 1024,
+  eligible: true,
+  breakpoints: [{ component: "system", contentType: "system", index: 0 }],
+  duration: "5m",
+  requestCacheControl: { type: "ephemeral" },
+}
 
 const expectOpenAIResponsesRequest = (input: {
   readonly history: NativeRequestInput["messages"]
@@ -489,8 +506,110 @@ describe("session.llm-native.request", () => {
       })
 
       expect(prepared.body).toMatchObject({
+        cache_control: { type: "ephemeral" },
         tools: [{ name: "bash", cache_control: { type: "ephemeral" } }],
         system: [{ type: "text", text: "Stable system", cache_control: undefined }],
+      })
+    }),
+  )
+
+  it.effect("rejects an unvalidated stale Anthropic CachePlan during native compilation", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("anthropic"),
+          api: { ...baseModel.api, id: "claude-sonnet-4-5", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+        },
+        apiKey: "test-key",
+        system: ["Stable system from opencode"],
+        messages: [{ role: "user", content: "hi" }],
+        cachePlan: {
+          ...anthropicCachePlan,
+          model: "claude-haiku-stale",
+          duration: "1h",
+          requestCacheControl: { type: "ephemeral", ttl: "1h" },
+        },
+      })
+
+      expect(prepared.body).toMatchObject({
+        cache_control: undefined,
+        system: [
+          {
+            type: "text",
+            text: "Stable system from opencode",
+            cache_control: undefined,
+          },
+        ],
+      })
+    }),
+  )
+
+  it.effect("preserves manual Anthropic tool cache settings in native requests", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("anthropic"),
+          api: { ...baseModel.api, id: "claude-sonnet-4-5", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+        },
+        apiKey: "test-key",
+        messages: [{ role: "user", content: "hi" }],
+        tools: {
+          bash: {
+            description: "Run a command",
+            inputSchema: { type: "object", properties: { command: { type: "string" } } },
+            providerOptions: { anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } } },
+          },
+        },
+      })
+
+      expect(prepared.body).toMatchObject({
+        tools: [{ name: "bash", cache_control: { type: "ephemeral", ttl: "1h" } }],
+      })
+    }),
+  )
+
+  it.effect("preserves hosted assistant tool-result cache hints in native requests", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          providerID: ProviderV2.ID.make("anthropic"),
+          api: { ...baseModel.api, id: "claude-sonnet-4-5", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+        },
+        apiKey: "test-key",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: "srv-1",
+                toolName: "web_search",
+                output: { type: "json", value: { results: [] } },
+                providerExecuted: true,
+                providerOptions: { anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } } },
+              },
+            ],
+          } as any,
+        ],
+      })
+
+      expect(prepared.body).toMatchObject({
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "web_search_tool_result",
+                tool_use_id: "srv-1",
+                content: { results: [] },
+                cache_control: { type: "ephemeral", ttl: "1h" },
+              },
+            ],
+          },
+        ],
       })
     }),
   )
@@ -652,6 +771,48 @@ describe("session.llm-native.request", () => {
         auth: undefined,
       }),
     ).toMatchObject({ type: "supported", apiKey: "test-anthropic-key" })
+  })
+
+  test("falls back when native Anthropic cannot preserve a manual part cache hint", () => {
+    const result = LLMNativeRuntime.stream({
+      model: {
+        ...baseModel,
+        providerID: ProviderV2.ID.make("anthropic"),
+        api: { ...baseModel.api, id: "claude-sonnet-4-5", url: "https://api.anthropic.com/v1", npm: "@ai-sdk/anthropic" },
+      },
+      provider: {
+        ...providerInfo,
+        id: ProviderV2.ID.make("anthropic"),
+        options: { apiKey: "test-anthropic-key" },
+      },
+      auth: undefined,
+      llmClient: {
+        prepare: () => Effect.die("unused"),
+        stream: () => Stream.die("unused"),
+        generate: () => Effect.die("unused"),
+      },
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              data: "data:image/png;base64,Zm9v",
+              mediaType: "image/png",
+              providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+            },
+          ],
+        },
+      ],
+      tools: {},
+      headers: {},
+      abort: new AbortController().signal,
+    })
+
+    expect(result).toEqual({
+      type: "unsupported",
+      reason: "native Anthropic requests cannot preserve cache hints on file content",
+    })
   })
 
   test("prefers provider api key over stored auth", () => {

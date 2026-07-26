@@ -14,6 +14,14 @@ const anthropicModel = AnthropicMessages.route
   .with({ endpoint: { baseURL: "https://api.anthropic.test/v1/" }, auth: Auth.header("x-api-key", "test") })
   .model({ id: "claude-sonnet-4-5" })
 
+const alternateAnthropicModel = AnthropicMessages.route
+  .with({
+    id: "anthropic-messages-alternate",
+    endpoint: { baseURL: "https://api.anthropic.test/v1/" },
+    auth: Auth.header("x-api-key", "test"),
+  })
+  .model({ id: "claude-sonnet-4-5" })
+
 const bedrockModel = AmazonBedrock.configure({
   credentials: { region: "us-east-1", accessKeyId: "fixture", secretAccessKey: "fixture" },
 }).model("anthropic.claude-3-5-sonnet-20241022-v2:0")
@@ -321,6 +329,91 @@ describe("applyCachePolicy", () => {
 
     expect(planned.metadata?.cachePlan).toMatchObject({ mode: "automatic" })
     expect((planned.metadata?.cachePlan as { requestCacheControl?: object }).requestCacheControl).toBeUndefined()
+  })
+
+  test("rejects supplied plans from stale models, prompts, and routes", () => {
+    const make = (model: typeof anthropicModel, text: string, cachePlan?: unknown) =>
+      LLM.request({
+        model,
+        system: [{ type: "text", text, metadata: { cache: { stable: true, version: 1 } } }],
+        prompt: "hi",
+        cache: "auto",
+        metadata: cachePlan ? { cachePlan } : undefined,
+      })
+    const fresh = applyCachePolicy(make(anthropicModel, "current"))
+    const freshPlan = fresh.metadata?.cachePlan as Record<string, any>
+    const stalePrompt = applyCachePolicy(make(anthropicModel, "old prompt")).metadata?.cachePlan
+    const staleRoute = applyCachePolicy(make(alternateAnthropicModel, "current")).metadata?.cachePlan
+    const staleModel = { ...freshPlan, model: "claude-opus-4-5" }
+
+    for (const supplied of [staleModel, stalePrompt, staleRoute]) {
+      const reconciled = applyCachePolicy(make(anthropicModel, "current", supplied)).metadata?.cachePlan
+      expect(reconciled).toMatchObject({
+        provider: freshPlan.provider,
+        model: freshPlan.model,
+        stablePrefixFingerprint: freshPlan.stablePrefixFingerprint,
+        componentFingerprints: freshPlan.componentFingerprints,
+      })
+    }
+  })
+
+  test("preserves a validated intentional disabled override", () => {
+    const request = LLM.request({
+      model: anthropicModel,
+      system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+      prompt: "hi",
+      cache: "auto",
+    })
+    const freshPlan = applyCachePolicy(request).metadata?.cachePlan as Record<string, any>
+    const supplied = {
+      ...freshPlan,
+      mode: "disabled",
+      eligible: false,
+      breakpoints: [],
+      duration: null,
+      requestCacheControl: undefined,
+    }
+    const reconciled = applyCachePolicy(
+      LLM.request({
+        model: anthropicModel,
+        system: request.system,
+        messages: request.messages,
+        cache: request.cache,
+        metadata: { cachePlan: supplied },
+      }),
+    )
+
+    expect(reconciled.metadata?.cachePlan).toMatchObject({ mode: "disabled", eligible: false, breakpoints: [] })
+  })
+
+  test("preserves a validated breakpoint override within the current stable boundary", () => {
+    const make = (cachePlan?: unknown) =>
+      LLM.request({
+        model: anthropicModel,
+        system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+        tools: [
+          { name: "first", description: "first", inputSchema: { type: "object" } },
+          { name: "second", description: "second", inputSchema: { type: "object" } },
+        ],
+        prompt: "hi",
+        cache: "auto",
+        metadata: cachePlan ? { cachePlan } : undefined,
+      })
+    const freshPlan = applyCachePolicy(make()).metadata?.cachePlan as Record<string, any>
+    const supplied = {
+      ...freshPlan,
+      breakpoints: freshPlan.breakpoints.map((breakpoint: Record<string, any>) =>
+        breakpoint.component === "tools" ? { ...breakpoint, index: 0 } : breakpoint,
+      ),
+    }
+    const reconciled = applyCachePolicy(make(supplied))
+
+    expect(reconciled.metadata?.cachePlan).toMatchObject({
+      breakpoints: [
+        { component: "tools", contentType: "tool", index: 0 },
+        { component: "system", contentType: "system", index: 0 },
+      ],
+    })
   })
 })
 

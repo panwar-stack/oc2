@@ -154,8 +154,9 @@ describe("session.llm.request", () => {
           providerID: "anthropic",
           modelID: "claude-sonnet-4-5",
           npm: "@ai-sdk/anthropic",
-          expectedMode: "explicit",
+          expectedMode: "automatic_and_explicit",
           expectsPromptCacheKey: false,
+          expectsRequestCacheControl: true,
         },
         {
           providerID: "moonshot",
@@ -176,6 +177,13 @@ describe("session.llm.request", () => {
           modelID: "deepseek-chat",
           npm: "@ai-sdk/openai-compatible",
           expectedMode: "automatic",
+          expectsPromptCacheKey: false,
+        },
+        {
+          providerID: "minimax",
+          modelID: "minimax-m2",
+          npm: "@ai-sdk/anthropic",
+          expectedMode: "disabled",
           expectsPromptCacheKey: false,
         },
         {
@@ -219,6 +227,13 @@ describe("session.llm.request", () => {
         })
 
         expect(prepared.params.cachePlan).toMatchObject({ provider: item.providerID, model: item.modelID, mode: item.expectedMode })
+        if ("expectsRequestCacheControl" in item && item.expectsRequestCacheControl) {
+          expect(prepared.params.cachePlan?.requestCacheControl).toEqual({ type: "ephemeral" })
+          expect(prepared.params.options.cacheControl).toEqual({ type: "ephemeral" })
+        } else {
+          expect(prepared.params.cachePlan?.requestCacheControl).toBeUndefined()
+          expect(prepared.params.options.cacheControl).toBeUndefined()
+        }
         const messageTransformOptions: Record<string, unknown> = prepared.messageTransformOptions
         if (item.expectsPromptCacheKey) {
           expect(prepared.params.options.promptCacheKey).toMatch(/^oc2-v1-/)
@@ -256,7 +271,7 @@ describe("session.llm.request", () => {
     }),
   )
 
-  it.effect("keeps warning-only prompt cache guardrails available without failing", () =>
+  it.effect("falls back to the fresh plan when a plugin injects invalid breakpoints", () =>
     Effect.gen(function* () {
       const flags = yield* RuntimeFlags.Service
       const providerID = ProviderV2.ID.make("anthropic")
@@ -295,7 +310,243 @@ describe("session.llm.request", () => {
       })
 
       expect(prepared.cacheGuardrails.valid).toBe(true)
-      expect(prepared.cacheGuardrails.warnings.map((item) => item.code)).toEqual(["breakpoint_overflow"])
+      expect(prepared.cacheGuardrails.warnings).toEqual([])
+      expect(prepared.params.cachePlan?.breakpoints).toEqual([
+        { component: "system", contentType: "system", index: 0 },
+      ])
+    }),
+  )
+
+  it.effect("preserves an explicit Anthropic request cache TTL", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const providerID = ProviderV2.ID.make("anthropic")
+      const modelID = ModelV2.ID.make("claude-sonnet-4-5")
+      const prepared = yield* prepare({
+        user: { ...user, model: { providerID, modelID } },
+        sessionID,
+        model: {
+          ...model,
+          id: modelID,
+          providerID,
+          api: { id: "claude-sonnet-4-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+        },
+        agent: { ...agent, options: { cache_control: { type: "ephemeral", ttl: "1h" } } },
+        system: [],
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {},
+        provider: { ...provider, id: providerID },
+        auth: undefined,
+        plugin,
+        flags,
+        isWorkflow: false,
+      })
+
+      expect(prepared.params.options.cacheControl).toEqual({ type: "ephemeral", ttl: "1h" })
+      expect(prepared.params.options.cache_control).toBeUndefined()
+      expect(prepared.params.cachePlan).toMatchObject({
+        mode: "automatic_and_explicit",
+        duration: "1h",
+        requestCacheControl: { type: "ephemeral", ttl: "1h" },
+      })
+    }),
+  )
+
+  it.effect("keeps a plugin-supplied CachePlan authoritative", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const providerID = ProviderV2.ID.make("anthropic")
+      const modelID = ModelV2.ID.make("claude-sonnet-4-5")
+      const prepared = yield* prepare({
+        user: { ...user, model: { providerID, modelID } },
+        sessionID,
+        model: {
+          ...model,
+          id: modelID,
+          providerID,
+          api: { id: "claude-sonnet-4-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+        },
+        agent,
+        system: [],
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {},
+        provider: { ...provider, id: providerID },
+        auth: undefined,
+        plugin: {
+          ...plugin,
+          trigger: (name, input, output) => {
+            if (name !== "chat.params") return plugin.trigger(name, input, output)
+            const params = output as { cachePlan: CachePlan }
+            return Effect.succeed({
+              ...output,
+              cachePlan: {
+                ...params.cachePlan,
+                mode: "disabled" as const,
+                eligible: false,
+                breakpoints: [],
+                duration: null,
+                requestCacheControl: undefined,
+              },
+            })
+          },
+        },
+        flags,
+        isWorkflow: false,
+      })
+
+      expect(prepared.params.cachePlan).toMatchObject({ mode: "disabled", eligible: false, breakpoints: [] })
+      expect(prepared.params.options.cacheControl).toBeUndefined()
+    }),
+  )
+
+  it.effect("rejects a plugin CachePlan fingerprinted for stale transformed system content", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const providerID = ProviderV2.ID.make("anthropic")
+      const modelID = ModelV2.ID.make("claude-sonnet-4-5")
+      const anthropicModel: Provider.Model = {
+        ...model,
+        id: modelID,
+        providerID,
+        api: { id: "claude-sonnet-4-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+      }
+      const common = {
+        user: { ...user, model: { providerID, modelID } },
+        sessionID,
+        model: anthropicModel,
+        agent,
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {},
+        provider: { ...provider, id: providerID },
+        auth: undefined,
+        flags,
+        isWorkflow: false,
+      }
+      const previous = yield* prepare({
+        ...common,
+        system: ["old session instruction"],
+        plugin,
+      })
+      const stale = previous.params.cachePlan
+      const prepared = yield* prepare({
+        ...common,
+        system: ["new session instruction"],
+        plugin: {
+          ...plugin,
+          trigger: (name, input, output) =>
+            name === "chat.params" ? Effect.succeed({ ...output, cachePlan: stale }) : plugin.trigger(name, input, output),
+        },
+      })
+
+      expect(prepared.params.cachePlan?.stablePrefixFingerprint).not.toBe(stale?.stablePrefixFingerprint)
+      expect(prepared.params.cachePlan).toMatchObject({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        mode: "automatic_and_explicit",
+      })
+    }),
+  )
+
+  it.effect("skips automatic request caching when a manual block uses a conflicting TTL", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const providerID = ProviderV2.ID.make("anthropic")
+      const modelID = ModelV2.ID.make("claude-sonnet-4-5")
+      const prepared = yield* prepare({
+        user: { ...user, model: { providerID, modelID } },
+        sessionID,
+        model: {
+          ...model,
+          id: modelID,
+          providerID,
+          api: { id: "claude-sonnet-4-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+        },
+        agent,
+        system: [],
+        messages: [
+          {
+            role: "user",
+            content: "hello",
+            providerOptions: { anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } } },
+          },
+        ] satisfies ModelMessage[],
+        tools: {},
+        provider: { ...provider, id: providerID },
+        auth: undefined,
+        plugin,
+        flags,
+        isWorkflow: false,
+      })
+
+      expect(prepared.params.cachePlan).toMatchObject({
+        mode: "explicit",
+        breakpoints: [],
+        requestCacheControl: undefined,
+      })
+      expect(prepared.params.options.cacheControl).toBeUndefined()
+    }),
+  )
+
+  it.effect("preserves a valid plugin breakpoint override within the current tool boundary", () =>
+    Effect.gen(function* () {
+      const flags = yield* RuntimeFlags.Service
+      const providerID = ProviderV2.ID.make("anthropic")
+      const modelID = ModelV2.ID.make("claude-sonnet-4-5")
+      const cacheControl = { anthropic: { cacheControl: { type: "ephemeral" as const } } }
+      const prepared = yield* prepare({
+        user: { ...user, model: { providerID, modelID } },
+        sessionID,
+        model: {
+          ...model,
+          id: modelID,
+          providerID,
+          api: { id: "claude-sonnet-4-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+        },
+        agent,
+        system: [],
+        messages: [{ role: "user", content: "hello" }] satisfies ModelMessage[],
+        tools: {
+          first: {
+            description: "First",
+            inputSchema: { type: "object" },
+            providerOptions: cacheControl,
+          },
+          second: {
+            description: "Second",
+            inputSchema: { type: "object" },
+            providerOptions: cacheControl,
+          },
+        } as any,
+        provider: { ...provider, id: providerID },
+        auth: undefined,
+        plugin: {
+          ...plugin,
+          trigger: (name, input, output) => {
+            if (name !== "chat.params") return plugin.trigger(name, input, output)
+            const params = output as { cachePlan: CachePlan }
+            return Effect.succeed({
+              ...output,
+              cachePlan: {
+                ...params.cachePlan,
+                breakpoints: params.cachePlan.breakpoints.map((breakpoint) =>
+                  breakpoint.component === "tools" ? { ...breakpoint, index: 0 } : breakpoint,
+                ),
+              },
+            })
+          },
+        },
+        flags,
+        isWorkflow: false,
+      })
+
+      expect(prepared.params.cachePlan).toMatchObject({
+        mode: "automatic_and_explicit",
+        breakpoints: [
+          { component: "tools", contentType: "tool", index: 0 },
+          { component: "system", contentType: "system", index: 0 },
+        ],
+        requestCacheControl: { type: "ephemeral" },
+      })
     }),
   )
 })
