@@ -47,7 +47,14 @@ describe("cache status formatting", () => {
   test("labels cache-hit reads as cached tokens", () => {
     expect(
       formatCacheStatus(
-        { classification: "cache_hit", read: 114_200, write: 0 },
+        {
+          classification: "cache_hit",
+          read: 114_200,
+          write: 0,
+          metricsAvailable: true,
+          eligible: true,
+          verified: true,
+        },
         { ...empty, cache: { read: 114_200, write: 0 } },
       ),
     ).toBe("cache hit · 114.2K cached")
