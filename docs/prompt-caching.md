@@ -6,13 +6,13 @@ prefixes without leaking provider-specific cache controls across SDKs.
 
 ## Provider Behavior
 
-| Provider | Models | Cache mode | Request fields | Usage telemetry | Notes |
-| --- | --- | --- | --- | --- | --- |
-| OpenAI | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with explicit routing key | `prompt_cache_key` | Cached read and write tokens | OC2 derives the key from the stable-prefix fingerprint and ignores manual keys. |
-| Anthropic | `claude-*` | Explicit breakpoints | `cache_control` | Cache creation and read tokens | Supports up to four breakpoints and `5m` or `1h` ephemeral TTLs. Haiku uses a 2048-token minimum prefix; other Claude models use 1024. |
-| Moonshot / Kimi | `kimi*`, `moonshot*` | Provider-managed automatic | none | unavailable | OC2 does not send OpenAI or Anthropic cache fields because verification is not conclusive. |
-| DeepSeek | `deepseek-*` | Provider-managed automatic | none | Hit and miss tokens | OC2 uses telemetry for diagnostics but does not send explicit OpenAI-compatible cache fields. |
-| Unknown | unmatched provider/model | disabled | none | unavailable | OC2 keeps fingerprints for diagnostics but treats caching as unsupported. |
+| Provider        | Models                                               | Cache mode                          | Request fields                            | Usage telemetry                | Notes                                                                                         |
+| --------------- | ---------------------------------------------------- | ----------------------------------- | ----------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------- |
+| OpenAI          | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with explicit routing key | `prompt_cache_key`                        | Cached read and write tokens   | OC2 derives the key from the stable-prefix fingerprint and ignores manual keys.               |
+| Anthropic       | `claude-*`                                           | Automatic plus explicit breakpoints | top-level and block-level `cache_control` | Cache creation and read tokens | Defaults to the lower-write-cost `5m` ephemeral TTL. `1h` is opt-in.                          |
+| Moonshot / Kimi | `kimi*`, `moonshot*`                                 | Provider-managed automatic          | none                                      | unavailable                    | OC2 does not send OpenAI or Anthropic cache fields because verification is not conclusive.    |
+| DeepSeek        | `deepseek-*`                                         | Provider-managed automatic          | none                                      | Hit and miss tokens            | OC2 uses telemetry for diagnostics but does not send explicit OpenAI-compatible cache fields. |
+| Unknown         | unmatched provider/model                             | disabled                            | none                                      | unavailable                    | OC2 keeps fingerprints for diagnostics but treats caching as unsupported.                     |
 
 See [Providers And Models](providers.md#prompt-caching-compatibility) for the
 same compatibility matrix in the provider guide.
@@ -46,8 +46,11 @@ OC2 lowers the shared plan into provider-local wire fields:
   `prompt_cache_breakpoint`, or `prompt_cache_retention` fields. GPT-5.6+
   cache writes can be billable, so explicit breakpoints are intentionally not a
   default cost-saving behavior.
-- Anthropic receives `cache_control` only on planned explicit breakpoints or on
-  pre-existing manual `CacheHint`s.
+- Anthropic receives top-level `cache_control` for automatic caching together
+  with block-level `cache_control` on planned explicit breakpoints or
+  pre-existing manual `CacheHint`s. Anthropic permits four cache controls per
+  request, so OC2 preserves four explicit breakpoints and omits the automatic
+  control when no slot remains.
 - Moonshot/Kimi, DeepSeek, and unknown models receive no explicit prompt cache
   fields.
 
@@ -175,8 +178,12 @@ and provider cost discounts where the model catalog exposes cache read and write
 rates.
 
 Cache writes may cost more on providers such as Anthropic and GPT-5.6+ OpenAI
-models. Cache reads usually receive discounts, but OC2 reports the provider
-usage it observes rather than assuming savings when telemetry is unavailable.
+models. Anthropic defaults to the `5m` ephemeral TTL, whose cache writes cost
+1.25x base input, instead of `1h`, whose cache writes cost 2x base input. The
+`1h` TTL is an explicit opt-in for workloads that value reuse across longer
+gaps enough to accept the higher write cost. The lower default write cost does
+not guarantee savings; net cost depends on reuse and cache-read discounts. OC2
+reports the usage it observes rather than assuming savings.
 
 ## Lifecycle
 
