@@ -4,6 +4,8 @@ import { HttpClientRequest } from "effect/unstable/http"
 import { CacheHint, CanonicalUsage, LLM, LLMError, Message, ToolCallPart, Usage } from "../../src"
 import { Auth, LLMClient } from "../../src/route"
 import * as AnthropicMessages from "../../src/protocols/anthropic-messages"
+import { applyCachePolicy } from "../../src/cache-policy"
+import type { CachePlan } from "../../src/cache/capability"
 import { continuationRequest, nativeAnthropicMessagesContinuation } from "../continuation-scenarios"
 import { it } from "../lib/effect"
 import { dynamicResponse, fixedResponse, truncatedStream } from "../lib/http"
@@ -1228,6 +1230,7 @@ describe("Anthropic Messages route", () => {
                 name: "web_search",
                 result: { type: "json", value: [{ url: "https://example.com" }] },
                 providerExecuted: true,
+                cache: new CacheHint({ type: "ephemeral" }),
               },
               { type: "text", text: "Found it." },
             ]),
@@ -1247,6 +1250,7 @@ describe("Anthropic Messages route", () => {
                 type: "web_search_tool_result",
                 tool_use_id: "srvtoolu_abc",
                 content: [{ url: "https://example.com" }],
+                cache_control: { type: "ephemeral" },
               },
               { type: "text", text: "Found it." },
             ],
@@ -1342,6 +1346,213 @@ describe("Anthropic Messages route", () => {
       expect(prepared.body).toMatchObject({
         system: [{ type: "text", text: "system", cache_control: { type: "ephemeral", ttl: "1h" } }],
       })
+    }),
+  )
+
+  it.effect("emits automatic-only top-level cache_control", () =>
+    Effect.gen(function* () {
+      const planned = applyCachePolicy(
+        LLM.request({
+          model,
+          system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+          prompt: "hi",
+          cache: "auto",
+        }),
+      )
+      const plan = planned.metadata?.cachePlan as CachePlan
+      const automatic = LLM.updateRequest(planned, {
+        metadata: { ...planned.metadata, cachePlan: { ...plan, mode: "automatic", breakpoints: [] } },
+      })
+
+      const body = yield* AnthropicMessages.protocol.body.from(automatic)
+
+      expect(body.cache_control).toEqual({ type: "ephemeral" })
+      expect(body.system).toEqual([{ type: "text", text: "stable" }])
+    }),
+  )
+
+  it.effect("emits top-level automatic and block-level explicit cache_control together", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+          prompt: "hi",
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body.cache_control).toEqual({ type: "ephemeral" })
+      expect(prepared.body.system).toEqual([
+        { type: "text", text: "stable", cache_control: { type: "ephemeral" } },
+      ])
+    }),
+  )
+
+  it.effect("emits top-level ttl 1h only for explicit opt-in", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+          prompt: "hi",
+          cache: { system: true, ttlSeconds: 3600 },
+        }),
+      )
+
+      expect(prepared.body.cache_control).toEqual({ type: "ephemeral", ttl: "1h" })
+      expect(prepared.body.system?.[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" })
+    }),
+  )
+
+  it.effect("preserves four explicit slots and omits automatic cache_control", () =>
+    Effect.gen(function* () {
+      const hint = new CacheHint({ type: "ephemeral" })
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          system: Array.from({ length: 4 }, (_, index) => ({
+            type: "text" as const,
+            text: `stable-${index}`,
+            cache: hint,
+            metadata: index === 0 ? { cache: { stable: true, version: 1 } } : undefined,
+          })),
+          prompt: "hi",
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body.cache_control).toBeUndefined()
+      expect(prepared.body.system?.filter((part) => part.cache_control !== undefined)).toHaveLength(4)
+    }),
+  )
+
+  it.effect("omits automatic cache_control when the final eligible block has a different ttl", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+          messages: [
+            Message.user([
+              { type: "text", text: "dynamic tail", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 3600 }) },
+            ]),
+          ],
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body.cache_control).toBeUndefined()
+      expect(prepared.body.system?.[0]?.cache_control).toEqual({ type: "ephemeral" })
+      expect(prepared.body.messages[0]?.content[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" })
+    }),
+  )
+
+  it.effect("finds a conflicting final cache target before trailing thinking", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+          messages: [
+            Message.assistant([
+              { type: "text", text: "cached tail", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 3600 }) },
+              { type: "reasoning", text: "thinking" },
+            ]),
+          ],
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body.cache_control).toBeUndefined()
+      expect(prepared.body.messages[0]?.content).toEqual([
+        { type: "text", text: "cached tail", cache_control: { type: "ephemeral", ttl: "1h" } },
+        { type: "thinking", thinking: "thinking" },
+      ])
+    }),
+  )
+
+  it.effect("finds a conflicting system cache target before empty system text", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          system: [
+            {
+              type: "text",
+              text: "stable",
+              cache: new CacheHint({ type: "ephemeral", ttlSeconds: 3600 }),
+              metadata: { cache: { stable: true, version: 1 } },
+            },
+            { type: "text", text: "" },
+          ],
+          messages: [Message.assistant([{ type: "reasoning", text: "thinking" }])],
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body.cache_control).toBeUndefined()
+      expect(prepared.body.system).toEqual([
+        { type: "text", text: "stable", cache_control: { type: "ephemeral", ttl: "1h" } },
+        { type: "text", text: "" },
+      ])
+    }),
+  )
+
+  it.effect("does not fall through an unmarked system target to a marked tool", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          tools: [
+            {
+              name: "lookup",
+              description: "lookup",
+              inputSchema: { type: "object", properties: {} },
+              cache: new CacheHint({ type: "ephemeral", ttlSeconds: 3600 }),
+            },
+          ],
+          system: "dynamic system",
+          messages: [Message.assistant([{ type: "reasoning", text: "thinking" }])],
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body.cache_control).toEqual({ type: "ephemeral" })
+      expect(prepared.body.tools?.[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" })
+      expect(prepared.body.system?.[0]?.cache_control).toBeUndefined()
+    }),
+  )
+
+  it.effect("omits automatic 1h caching after an explicit 5m breakpoint", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          tools: [
+            {
+              name: "lookup",
+              description: "lookup",
+              inputSchema: { type: "object", properties: {} },
+              cache: new CacheHint({ type: "ephemeral", ttlSeconds: 3600 }),
+            },
+          ],
+          system: [
+            {
+              type: "text",
+              text: "stable",
+              cache: new CacheHint({ type: "ephemeral", ttlSeconds: 300 }),
+              metadata: { cache: { stable: true, version: 1 } },
+            },
+          ],
+          prompt: "hi",
+          cache: { tools: true, system: true, ttlSeconds: 3600 },
+        }),
+      )
+
+      expect(prepared.body.cache_control).toBeUndefined()
+      expect(prepared.body.tools?.[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" })
+      expect(prepared.body.system?.[0]?.cache_control).toEqual({ type: "ephemeral" })
     }),
   )
 

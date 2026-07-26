@@ -12,6 +12,14 @@ const anthropicModel = AnthropicMessages.route
   .with({ endpoint: { baseURL: "https://api.anthropic.test/v1/" }, auth: Auth.header("x-api-key", "test") })
   .model({ id: "claude-sonnet-4-5" })
 
+const anthropicResponsesModel = OpenAIResponses.route
+  .with({
+    provider: "anthropic",
+    endpoint: { baseURL: "https://api.anthropic.test/v1/" },
+    auth: Auth.header("x-api-key", "test"),
+  })
+  .model({ id: "claude-sonnet-4-5" })
+
 describe("cache planner", () => {
   test("separates stable system and tools from dynamic user turn content", () => {
     const planned = planCache({
@@ -152,7 +160,7 @@ describe("cache planner", () => {
     expect(planned.plan.breakpoints).toEqual([{ component: "messages", contentType: "message", index: 0 }])
   })
 
-  test("plans inline breakpoints for explicit Anthropic cache policy", () => {
+  test("plans automatic request caching and inline breakpoints for Anthropic", () => {
     const planned = planCacheRequest(
       LLM.request({
         model: anthropicModel,
@@ -163,14 +171,110 @@ describe("cache planner", () => {
       }),
     )
 
-    expect(planned.plan.mode).toBe("explicit")
+    expect(planned.plan.mode).toBe("automatic_and_explicit")
     expect(planned.plan.duration).toBe("1h")
+    expect(planned.plan.requestCacheControl).toEqual({ type: "ephemeral", ttl: "1h" })
     expect(planned.plan.breakpoints).toEqual([
       { component: "tools", contentType: "tool", index: 0 },
       { component: "system", contentType: "system", index: 0 },
     ])
     expect(planned.stable.messages).toEqual([])
     expect(planned.dynamic.messages).toEqual([0])
+  })
+
+  test("defaults Anthropic request cache control to implicit 5m TTL", () => {
+    const planned = planCache({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      protocolID: "anthropic-messages",
+      cachePolicy: "auto",
+      system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+    })
+
+    expect(planned.plan).toMatchObject({
+      mode: "automatic_and_explicit",
+      duration: "5m",
+      requestCacheControl: { type: "ephemeral" },
+    })
+    expect(planned.plan.requestCacheControl).not.toHaveProperty("ttl")
+  })
+
+  test("keeps four explicit Anthropic slots and skips automatic request caching", () => {
+    const planned = planCache({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      protocolID: "anthropic-messages",
+      cachePolicy: "auto",
+      system: Array.from({ length: 4 }, (_, index) => ({
+        type: "text",
+        text: `stable-${index}`,
+        cache: { type: "ephemeral" },
+        metadata: { cache: { stable: true, version: 1 } },
+      })),
+    })
+
+    expect(planned.plan.mode).toBe("explicit")
+    expect(planned.plan.requestCacheControl).toBeUndefined()
+    expect(planned.plan.breakpoints).toEqual([{ component: "system", contentType: "system", index: 3 }])
+  })
+
+  test("accepts three distinct explicit slots plus automatic caching and deduplicates planned boundaries", () => {
+    const planned = planCache({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      protocolID: "anthropic-messages",
+      cachePolicy: { tools: true, system: true, messages: { tail: 1 } },
+      tools: [{ name: "read", description: "Read", inputSchema: {}, cache: { type: "ephemeral" } }],
+      system: [
+        {
+          type: "text",
+          text: "stable system",
+          cache: { type: "ephemeral" },
+          metadata: { cache: { stable: true, version: 1 } },
+        },
+      ],
+      messages: [
+        {
+          role: "system",
+          metadata: { cache: { stable: true, version: 1 } },
+          content: [{ type: "text", text: "stable message", cache: { type: "ephemeral" } }],
+        },
+      ],
+    })
+
+    expect(planned.plan.mode).toBe("automatic_and_explicit")
+    expect(planned.plan.requestCacheControl).toEqual({ type: "ephemeral" })
+    expect(planned.plan.breakpoints).toEqual([
+      { component: "tools", contentType: "tool", index: 0 },
+      { component: "system", contentType: "system", index: 0 },
+      { component: "messages", contentType: "message", index: 0 },
+    ])
+  })
+
+  test("does not plan automatic Anthropic caching on unsupported protocols", () => {
+    const planned = planCacheRequest(
+      LLM.request({
+        model: anthropicResponsesModel,
+        system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+        prompt: "hi",
+        cache: "auto",
+      }),
+    )
+
+    expect(planned.plan.mode).toBe("explicit")
+    expect(planned.plan.requestCacheControl).toBeUndefined()
+  })
+
+  test("does not plan Anthropic request cache control for non-Anthropic providers", () => {
+    const planned = planCache({
+      provider: "openai",
+      model: "gpt-5",
+      cachePolicy: "auto",
+      system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+    })
+
+    expect(planned.plan.mode).toBe("automatic")
+    expect(planned.plan.requestCacheControl).toBeUndefined()
   })
 
   test("unknown models are conservative but still get non-content fingerprints", () => {

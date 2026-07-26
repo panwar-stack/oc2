@@ -22,7 +22,7 @@ export const cacheClassifications = [
 ] as const satisfies ReadonlyArray<CacheClassification>
 
 export type CachePromptCaching = "unsupported" | "automatic" | "explicit" | "automatic_and_explicit"
-export type CacheMode = "disabled" | "automatic" | "implicit" | "explicit"
+export type CacheMode = "disabled" | "automatic" | "implicit" | "explicit" | "automatic_and_explicit"
 export type CacheSupportedMode = "automatic" | "implicit" | "explicit"
 export type CacheDuration = "5m" | "1h"
 
@@ -77,6 +77,7 @@ export interface CachePlan {
     readonly index: number
   }>
   readonly duration: CacheDuration | null
+  readonly requestCacheControl?: { readonly type: "ephemeral"; readonly ttl?: "1h" }
 }
 
 export interface CacheTelemetry {
@@ -189,7 +190,7 @@ export const cacheCapabilityRecords = [
     provider: "anthropic",
     modelPattern: "claude-*haiku*",
     status: "known",
-    promptCaching: "explicit",
+    promptCaching: "automatic_and_explicit",
     supportsCacheKey: false,
     supportsBreakpoints: true,
     supportsDuration: true,
@@ -206,7 +207,7 @@ export const cacheCapabilityRecords = [
     cacheReadReceivesDiscount: true,
     warmup: { policy: "first_request", requests: 1 },
     retention: { policy: "fixed", seconds: 300 },
-    supportedModes: ["explicit"],
+    supportedModes: ["automatic", "explicit"],
     supportedBreakpointContentTypes: ["system", "tool", "message"],
     supportedDurations: ["5m", "1h"],
     requestFields: ["cache_control"],
@@ -219,7 +220,7 @@ export const cacheCapabilityRecords = [
     provider: "anthropic",
     modelPattern: "claude-*",
     status: "known",
-    promptCaching: "explicit",
+    promptCaching: "automatic_and_explicit",
     supportsCacheKey: false,
     supportsBreakpoints: true,
     supportsDuration: true,
@@ -236,7 +237,7 @@ export const cacheCapabilityRecords = [
     cacheReadReceivesDiscount: true,
     warmup: { policy: "first_request", requests: 1 },
     retention: { policy: "fixed", seconds: 300 },
-    supportedModes: ["explicit"],
+    supportedModes: ["automatic", "explicit"],
     supportedBreakpointContentTypes: ["system", "tool", "message"],
     supportedDurations: ["5m", "1h"],
     requestFields: ["cache_control"],

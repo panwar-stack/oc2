@@ -116,18 +116,20 @@ export const checkBreakpointOverflow = (input: {
   readonly provider: string
   readonly model: string
   readonly breakpoints: CachePlan["breakpoints"]
+  readonly requestCacheControl?: CachePlan["requestCacheControl"]
   readonly capabilities?: CacheCapabilities
 }) => {
   const capabilities = input.capabilities ?? getCacheCapabilities(input.provider, input.model)
   const maximum = capabilities.maximumBreakpoints
-  if (maximum === null || input.breakpoints.length <= maximum) return result([])
+  const slots = input.breakpoints.length + (input.requestCacheControl ? 1 : 0)
+  if (maximum === null || slots <= maximum) return result([])
   return result([
     issue({
       code: "breakpoint_overflow",
       severity: "warning",
       provider: input.provider,
       model: input.model,
-      message: `Cache plan has ${input.breakpoints.length} breakpoints; provider ${input.provider} supports ${maximum}. Extra leading breakpoints should be dropped.`,
+      message: `Cache plan uses ${slots} cache slots; provider ${input.provider} supports ${maximum}. Extra leading breakpoints or automatic caching should be dropped.`,
     }),
   ])
 }

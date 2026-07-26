@@ -22,6 +22,7 @@ import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./share
 import { isContextOverflow } from "../provider-error"
 import * as Cache from "./utils/cache"
 import { CacheLowering } from "../cache/lowering"
+import { messageBreakpointPartIndex } from "../cache/planner"
 import { CacheTelemetry } from "../cache/telemetry"
 import type { CachePlan } from "../cache/capability"
 import { Lifecycle } from "./utils/lifecycle"
@@ -38,6 +39,7 @@ const AnthropicCacheControl = Schema.Struct({
   type: Schema.tag("ephemeral"),
   ttl: Schema.optional(Schema.Literals(["5m", "1h"])),
 })
+type AnthropicCacheControl = Schema.Schema.Type<typeof AnthropicCacheControl>
 
 const AnthropicTextBlock = Schema.Struct({
   type: Schema.tag("text"),
@@ -157,6 +159,7 @@ const AnthropicThinking = Schema.Struct({
 
 const AnthropicBodyFields = {
   model: Schema.String,
+  cache_control: Schema.optional(AnthropicCacheControl),
   system: optionalArray(AnthropicTextBlock),
   messages: Schema.Array(AnthropicMessage),
   tools: optionalArray(AnthropicTool),
@@ -354,14 +357,29 @@ const serverToolResultType = (name: string): AnthropicServerToolResultType | und
   return undefined
 }
 
-const lowerServerToolResult = Effect.fn("AnthropicMessages.lowerServerToolResult")(function* (part: ToolResultPart) {
+const lowerServerToolResult = Effect.fn("AnthropicMessages.lowerServerToolResult")(function* (
+  part: ToolResultPart,
+  breakpoints: Cache.Breakpoints,
+  plan: CachePlan | undefined,
+  breakpoint: { readonly component: string; readonly index: number } | undefined,
+) {
   const wireType = serverToolResultType(part.name)
   if (!wireType)
     return yield* invalid(`Anthropic Messages does not know how to round-trip server tool result for ${part.name}`)
-  return { type: wireType, tool_use_id: part.id, content: part.result.value } satisfies AnthropicServerToolResultBlock
+  return {
+    type: wireType,
+    tool_use_id: part.id,
+    content: part.result.value,
+    cache_control: cacheControl(breakpoints, part.cache, plan, breakpoint),
+  } satisfies AnthropicServerToolResultBlock
 })
 
-const lowerImage = Effect.fn("AnthropicMessages.lowerImage")(function* (part: MediaPart) {
+const lowerImage = Effect.fn("AnthropicMessages.lowerImage")(function* (
+  part: MediaPart,
+  breakpoints: Cache.Breakpoints,
+  plan: CachePlan | undefined,
+  breakpoint: { readonly component: string; readonly index: number } | undefined,
+) {
   const media = yield* ProviderShared.validateMedia(
     "Anthropic Messages",
     part,
@@ -374,6 +392,7 @@ const lowerImage = Effect.fn("AnthropicMessages.lowerImage")(function* (part: Me
       media_type: media.mime,
       data: media.base64,
     },
+    cache_control: cacheControl(breakpoints, undefined, plan, breakpoint),
   } satisfies AnthropicImageBlock
 })
 
@@ -493,7 +512,7 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
 
     if (message.role === "user") {
       const content: AnthropicUserBlock[] = []
-      const lastTextIndex = message.content.findLastIndex((part) => part.type === "text")
+      const targetIndex = messageBreakpointPartIndex(message)
       for (const [partIndex, part] of message.content.entries()) {
         if (part.type === "text") {
           content.push({
@@ -503,13 +522,20 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
               breakpoints,
               part.cache,
               plan,
-              partIndex === lastTextIndex ? { component: "messages", index } : undefined,
+              partIndex === targetIndex ? { component: "messages", index } : undefined,
             ),
           })
           continue
         }
         if (part.type === "media") {
-          content.push(yield* lowerImage(part))
+          content.push(
+            yield* lowerImage(
+              part,
+              breakpoints,
+              plan,
+              partIndex === targetIndex ? { component: "messages", index } : undefined,
+            ),
+          )
           continue
         }
         return yield* ProviderShared.unsupportedContent("Anthropic Messages", "user", ["text", "media"])
@@ -520,7 +546,7 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
 
     if (message.role === "assistant") {
       const content: AnthropicAssistantBlock[] = []
-      const lastTextIndex = message.content.findLastIndex((part) => part.type === "text")
+      const targetIndex = messageBreakpointPartIndex(message)
       for (const [partIndex, part] of message.content.entries()) {
         if (part.type === "text") {
           content.push({
@@ -530,7 +556,7 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
               breakpoints,
               part.cache,
               plan,
-              partIndex === lastTextIndex ? { component: "messages", index } : undefined,
+              partIndex === targetIndex ? { component: "messages", index } : undefined,
             ),
           })
           continue
@@ -540,15 +566,36 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
             type: "thinking",
             thinking: part.text,
             signature: part.encrypted ?? signatureFromMetadata(part.providerMetadata),
+            cache_control: cacheControl(
+              breakpoints,
+              undefined,
+              plan,
+              partIndex === targetIndex ? { component: "messages", index } : undefined,
+            ),
           })
           continue
         }
         if (part.type === "tool-call") {
-          content.push(part.providerExecuted ? lowerServerToolCall(part) : lowerToolCall(part))
+          content.push({
+            ...(part.providerExecuted ? lowerServerToolCall(part) : lowerToolCall(part)),
+            cache_control: cacheControl(
+              breakpoints,
+              undefined,
+              plan,
+              partIndex === targetIndex ? { component: "messages", index } : undefined,
+            ),
+          })
           continue
         }
         if (part.type === "tool-result" && part.providerExecuted) {
-          content.push(yield* lowerServerToolResult(part))
+          content.push(
+            yield* lowerServerToolResult(
+              part,
+              breakpoints,
+              plan,
+              partIndex === targetIndex ? { component: "messages", index } : undefined,
+            ),
+          )
           continue
         }
         return yield* invalid(
@@ -560,6 +607,7 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
     }
 
     const content: AnthropicToolResultBlock[] = []
+    const targetIndex = messageBreakpointPartIndex(message)
     for (const [partIndex, part] of message.content.entries()) {
       if (!ProviderShared.supportsContent(part, ["tool-result"]))
         return yield* ProviderShared.unsupportedContent("Anthropic Messages", "tool", ["tool-result"])
@@ -572,7 +620,7 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
           breakpoints,
           part.cache,
           plan,
-          partIndex === message.content.length - 1 ? { component: "messages", index } : undefined,
+          partIndex === targetIndex ? { component: "messages", index } : undefined,
         ),
       })
     }
@@ -583,6 +631,85 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
 })
 
 const anthropicOptions = (request: LLMRequest) => request.providerOptions?.anthropic
+
+const configuredCacheControl = (request: LLMRequest): AnthropicCacheControl | undefined => {
+  const options = anthropicOptions(request)
+  const value = options?.cache_control ?? options?.cacheControl
+  if (!ProviderShared.isRecord(value) || value.type !== "ephemeral") return undefined
+  if (value.ttl !== undefined && value.ttl !== "5m" && value.ttl !== "1h") return undefined
+  return value as AnthropicCacheControl
+}
+
+const automaticCacheControl = (request: LLMRequest, plan: CachePlan | undefined): AnthropicCacheControl | undefined => {
+  const configured = configuredCacheControl(request)
+  if (configured) return configured
+  if (!plan?.eligible || (plan.mode !== "automatic" && plan.mode !== "automatic_and_explicit")) return undefined
+  return plan.requestCacheControl
+}
+
+const finalEligibleCacheControl = (
+  tools: ReadonlyArray<AnthropicTool> | undefined,
+  system: ReadonlyArray<AnthropicTextBlock> | undefined,
+  messages: ReadonlyArray<AnthropicMessage>,
+): AnthropicCacheControl | undefined => {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const content = messages[index]?.content ?? []
+    for (let partIndex = content.length - 1; partIndex >= 0; partIndex--) {
+      const block = content[partIndex]
+      if (!block || block.type === "thinking" || (block.type === "text" && block.text.length === 0)) continue
+      return block.cache_control
+    }
+  }
+  for (let index = (system?.length ?? 0) - 1; index >= 0; index--) {
+    const block = system?.[index]
+    if (!block || block.text.length === 0) continue
+    return block.cache_control
+  }
+  return tools?.at(-1)?.cache_control
+}
+
+const hasFiveMinuteCacheControl = (
+  tools: ReadonlyArray<AnthropicTool> | undefined,
+  system: ReadonlyArray<AnthropicTextBlock> | undefined,
+  messages: ReadonlyArray<AnthropicMessage>,
+) => {
+  const isFiveMinutes = (block: { readonly cache_control?: AnthropicCacheControl }) =>
+    block.cache_control !== undefined && block.cache_control.ttl !== "1h"
+  if (tools?.some(isFiveMinutes) || system?.some(isFiveMinutes)) return true
+  return messages.some((message) => message.content.some(isFiveMinutes))
+}
+
+const conflictingFinalCacheControl = (
+  automatic: AnthropicCacheControl,
+  tools: ReadonlyArray<AnthropicTool> | undefined,
+  system: ReadonlyArray<AnthropicTextBlock> | undefined,
+  messages: ReadonlyArray<AnthropicMessage>,
+) => {
+  const explicit = finalEligibleCacheControl(tools, system, messages)
+  return explicit !== undefined && (explicit.ttl ?? "5m") !== (automatic.ttl ?? "5m")
+}
+
+const lowerRequestContent = Effect.fnUntraced(function* (
+  request: LLMRequest,
+  plan: CachePlan | undefined,
+  maximumBreakpoints: number,
+) {
+  const breakpoints = Cache.newBreakpoints(maximumBreakpoints)
+  const tools =
+    request.tools.length === 0 || request.toolChoice?.type === "none"
+      ? undefined
+      : request.tools.map((tool, index) => lowerTool(breakpoints, plan, tool, index))
+  const system =
+    request.system.length === 0
+      ? undefined
+      : request.system.map((part, index) => ({
+          type: "text" as const,
+          text: part.text,
+          cache_control: cacheControl(breakpoints, part.cache, plan, { component: "system", index }),
+        }))
+  const messages = yield* lowerMessages(request, breakpoints, plan)
+  return { breakpoints, tools, system, messages }
+})
 
 const lowerThinking = Effect.fn("AnthropicMessages.lowerThinking")(function* (request: LLMRequest) {
   const thinking = anthropicOptions(request)?.thinking
@@ -603,21 +730,20 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
   // Allocate the 4-breakpoint budget in invalidation order: tools → system →
   // messages. Tools live highest in the cache hierarchy, so when callers
   // over-mark we keep their tool hints and shed the message-tail ones first.
-  const breakpoints = Cache.newBreakpoints(ANTHROPIC_BREAKPOINT_CAP)
   const plan = CacheLowering.requestCachePlan(request)
-  const tools =
-    request.tools.length === 0 || request.toolChoice?.type === "none"
-      ? undefined
-      : request.tools.map((tool, index) => lowerTool(breakpoints, plan, tool, index))
-  const system =
-    request.system.length === 0
-      ? undefined
-      : request.system.map((part, index) => ({
-          type: "text" as const,
-          text: part.text,
-          cache_control: cacheControl(breakpoints, part.cache, plan, { component: "system", index }),
-        }))
-  const messages = yield* lowerMessages(request, breakpoints, plan)
+  const automatic = automaticCacheControl(request, plan)
+  let lowered = yield* lowerRequestContent(
+    request,
+    plan,
+    automatic ? ANTHROPIC_BREAKPOINT_CAP - 1 : ANTHROPIC_BREAKPOINT_CAP,
+  )
+  const useAutomatic =
+    automatic !== undefined &&
+    lowered.breakpoints.dropped === 0 &&
+    !conflictingFinalCacheControl(automatic, lowered.tools, lowered.system, lowered.messages) &&
+    !(automatic.ttl === "1h" && hasFiveMinuteCacheControl(lowered.tools, lowered.system, lowered.messages))
+  if (automatic && !useAutomatic) lowered = yield* lowerRequestContent(request, plan, ANTHROPIC_BREAKPOINT_CAP)
+  const { breakpoints, tools, system, messages } = lowered
   if (breakpoints.dropped > 0) {
     yield* Effect.logWarning(
       `Anthropic Messages: dropped ${breakpoints.dropped} cache breakpoint(s); the API allows at most ${ANTHROPIC_BREAKPOINT_CAP} per request.`,
@@ -625,6 +751,7 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
   }
   return {
     model: request.model.id,
+    cache_control: useAutomatic ? automatic : undefined,
     system,
     messages,
     tools,

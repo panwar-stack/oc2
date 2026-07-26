@@ -4216,7 +4216,10 @@ describe("session.llm.stream", () => {
           type: "text",
           text: "Can you check whether there are any PDF files in my home directory?",
         })
-        expect(messages.some((message) => message.content.some((part) => "cache_control" in part))).toBe(true)
+        expect(body.cache_control).toEqual({ type: "ephemeral" })
+        const cachedTools = (body.tools as Array<Record<string, unknown>>).filter((tool) => "cache_control" in tool)
+        expect(cachedTools).toEqual([expect.objectContaining({ name: "read", cache_control: { type: "ephemeral" } })])
+        expect(messages.some((message) => message.content.some((part) => "cache_control" in part))).toBe(false)
         const toolUseIndex = messages.findIndex((message) => message.content.some((part) => part.type === "tool_use"))
         expect(toolUseIndex).toBeGreaterThan(0)
         expect(messages[toolUseIndex].role).toBe("assistant")

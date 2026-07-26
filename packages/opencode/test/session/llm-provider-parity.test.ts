@@ -11,9 +11,11 @@ import { createOpenAI } from "@ai-sdk/openai"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { createXai } from "@ai-sdk/xai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 import type { Provider } from "@/provider/provider"
+import { ProviderTransform } from "@/provider/transform"
 import { LLMAISDK } from "@/session/llm/ai-sdk"
-import { streamText } from "ai"
+import { jsonSchema, streamText, tool } from "ai"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import {
@@ -173,11 +175,42 @@ const anthropicModel: Provider.Model = {
 
 const anthropicMessages = [
   {
-    role: "user" as const,
-    content: "hello",
-    providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+    role: "system" as const,
+    content: "stable system",
   },
+  { role: "user" as const, content: "hello" },
 ]
+
+const anthropicTools = {
+  lookup: tool({
+    description: "Look up cached data",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    }),
+    providerOptions: { anthropic: { eagerInputStreaming: false } },
+  }),
+}
+
+const anthropicAutomaticCachePlan: CachePlan = {
+  provider: "anthropic",
+  model: "claude-sonnet-4-6",
+  mode: "automatic_and_explicit",
+  cacheKey: null,
+  trafficPartition: null,
+  stablePrefixFingerprint: "sha256:anthropic-parity",
+  componentFingerprints: {},
+  prefixTokenCount: null,
+  minimumPrefixTokens: 1024,
+  eligible: true,
+  breakpoints: [
+    { component: "tools", contentType: "tool", index: 0 },
+    { component: "system", contentType: "system", index: 0 },
+  ],
+  duration: "5m",
+  requestCacheControl: { type: "ephemeral" },
+}
 
 const runtimeCassette = (): ProviderParityCassette => ({
   version: 1,
@@ -255,11 +288,26 @@ const anthropicRuntimeCassette = (): ProviderParityCassette => ({
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-6",
+          cache_control: { type: "ephemeral" },
+          system: [{ type: "text", text: "stable system", cache_control: { type: "ephemeral" } }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up cached data",
+              input_schema: {
+                type: "object",
+                properties: { query: { type: "string" } },
+                required: ["query"],
+              },
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+          tool_choice: { type: "auto" },
           max_tokens: 64,
           messages: [
             {
               role: "user",
-              content: [{ type: "text", text: "hello", cache_control: { type: "ephemeral" } }],
+              content: [{ type: "text", text: "hello" }],
             },
           ],
           stream: true,
@@ -546,7 +594,14 @@ describe("provider parity replay and comparison", () => {
           cassette: anthropicRuntimeCassette(),
           aiSdk: (replay) => ({
             model: createAnthropic({ apiKey: "test-anthropic-key", fetch: replay.fetch })("claude-sonnet-4-6"),
-            messages: anthropicMessages,
+            messages: ProviderTransform.message(
+              anthropicMessages.map((message) => ({ ...message })),
+              anthropicModel,
+              { cachePlan: anthropicAutomaticCachePlan, cacheControl: { type: "ephemeral" } },
+            ),
+            providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+            tools: ProviderTransform.tools(anthropicTools, anthropicModel, anthropicAutomaticCachePlan),
+            toolChoice: "auto",
             maxOutputTokens: 64,
             maxRetries: 0,
           }),
@@ -559,7 +614,10 @@ describe("provider parity replay and comparison", () => {
             auth: { type: "oauth", refresh: "fixture", access: "fixture", expires: 1 },
             llmClient,
             messages: anthropicMessages,
-            tools: {},
+            tools: ProviderTransform.tools(anthropicTools, anthropicModel, anthropicAutomaticCachePlan),
+            toolChoice: "auto",
+            providerOptions: { cacheControl: { type: "ephemeral" } },
+            cachePlan: anthropicAutomaticCachePlan,
             maxOutputTokens: 64,
             headers: {},
             abort: new AbortController().signal,
@@ -1047,7 +1105,7 @@ describe("provider parity replay and comparison", () => {
         providerID: "cloudflare",
         modelID: "gpt-5-mini",
         effectiveAPI: { package: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
-        reason: "provider is not openai or anthropic",
+        reason: "provider is not openai, OpenAI-compatible, or anthropic",
       })
     }),
   )

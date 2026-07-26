@@ -193,6 +193,9 @@ export const createPolicy = (options: CacheSelfHealingOptions = {}): CacheSelfHe
     if (disable && next.mode === "explicit" && next.eligible) {
       next = { ...next, mode: "disabled", eligible: false, cacheKey: null, breakpoints: [], duration: null }
     }
+    if (disable && next.mode === "automatic_and_explicit" && next.eligible) {
+      next = { ...next, mode: "automatic", breakpoints: [] }
+    }
     const rotation = interventions.get(stableInterventionKey("rotate_cache_partition", plan.provider, plan.model, plan.stablePrefixFingerprint))
     if (rotation?.partition && next.eligible && next.cacheKey) {
       next = {

@@ -33,7 +33,7 @@ export const planHasBreakpoint = (
   supportedContentTypes: ReadonlySet<string>,
   maximum: number,
 ) => {
-  if (!plan || plan.mode !== "explicit" || !plan.eligible) return false
+  if (!plan || (plan.mode !== "explicit" && plan.mode !== "automatic_and_explicit") || !plan.eligible) return false
   const supported = plan.breakpoints.filter((breakpoint) => supportedContentTypes.has(breakpoint.contentType))
   return supported
     .slice(Math.max(0, supported.length - maximum))

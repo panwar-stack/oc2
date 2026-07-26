@@ -460,7 +460,12 @@ const cacheGuardrails = (request: LLMRequest, body: unknown) => {
     CacheGuardrails.checkUnsupportedFields({ provider: plan.provider, model: plan.model, fields }),
     CacheGuardrails.checkProviderFieldLeakage({ provider: plan.provider, model: plan.model, fields }),
     CacheGuardrails.checkInvalidDuration({ provider: plan.provider, model: plan.model, duration: plan.duration }),
-    CacheGuardrails.checkBreakpointOverflow({ provider: plan.provider, model: plan.model, breakpoints: plan.breakpoints }),
+    CacheGuardrails.checkBreakpointOverflow({
+      provider: plan.provider,
+      model: plan.model,
+      breakpoints: plan.breakpoints,
+      requestCacheControl: plan.requestCacheControl,
+    }),
   )
 }
 

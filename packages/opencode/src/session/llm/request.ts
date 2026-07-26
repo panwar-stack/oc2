@@ -86,9 +86,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       ? input.model.variants[input.user.model.variant]
       : {}
   const tools = resolveTools(input)
-  const stablePrompt = [
-    ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-  ]
+  const stablePrompt = system
   const generation = {
     temperature: input.agent.temperature ?? ProviderTransform.temperature(input.model),
     topP: input.agent.topP ?? ProviderTransform.topP(input.model),
@@ -114,12 +112,20 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     })
   }
   const sortedTools: Record<string, Tool> = Object.fromEntries(
-    Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b)),
+    Object.entries(tools)
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .map(([name, tool]) => {
+        if (input.model.api.npm !== "@ai-sdk/anthropic" || input.model.providerID === "anthropic") return [name, tool]
+        return [name, { ...tool, providerOptions: scrubCacheControlOptions(tool.providerOptions, input.model) }]
+      }),
   )
+  const cacheRoute = cacheRouteForModel(input.model)
 
   const cacheBoundary = CachePlanner.planCache({
     provider: input.model.providerID,
     model: input.model.api.id,
+    routeID: cacheRoute?.routeID,
+    protocolID: cacheRoute?.protocolID,
     cachePolicy: "auto",
     system: stablePrompt.map((text) => ({
       type: "text",
@@ -130,26 +136,50 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       name,
       description: tool.description ?? "",
       inputSchema: schemaFromTool(tool),
+      cache: cacheHintFromProviderOptions(input.model, tool.providerOptions),
     })),
+    messages: cachePlannerMessages(
+      input.model,
+      input.messages.filter((message) => message.role !== "system"),
+    ),
     providerConfig: input.provider.options,
     modelConfig: {
       provider: input.model.providerID,
       model: input.model.api.id,
+      routeID: cacheRoute?.routeID,
+      protocolID: cacheRoute?.protocolID,
       generation,
       cachePolicy: "auto",
     },
   })
+  const explicitCacheControls = [
+    ...Object.values(sortedTools).flatMap((tool, index) => {
+      const control = cacheHintFromProviderOptions(input.model, tool.providerOptions)
+      return control ? [{ slot: `tools:${index}`, control }] : []
+    }),
+    ...cacheControlsFromMessages(input.model, input.messages),
+  ]
+  const configuredCacheControl = [input.model.options, input.agent.options, variant]
+    .map(requestCacheControlFromOptions)
+    .findLast((value) => value !== undefined)
+  const initialCachePlan = coordinateAnthropicCachePlan(
+    input.model,
+    cachePlanWithRequestControl(input.model, cacheBoundary.plan, configuredCacheControl),
+    explicitCacheControls,
+  )
   const base = input.small
     ? ProviderTransform.smallOptions(input.model)
     : ProviderTransform.options({
         model: input.model,
         sessionID: input.sessionID,
         providerOptions: input.provider.options,
-        cachePlan: cacheBoundary.plan,
+        cachePlan: initialCachePlan,
       })
   const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
+  if (configuredCacheControl) setRequestCacheControl(options, configuredCacheControl)
+  const cacheControlBeforePlugin = requestCacheControlFromOptions(options)
   const promptCacheKey = typeof base.promptCacheKey === "string" ? base.promptCacheKey : undefined
-  scrubPromptCacheKeys(options, promptCacheKey)
+  if (usesOpenAICacheKey(input.model)) scrubPromptCacheKeys(options, promptCacheKey)
   if (
     input.model.api.npm === "@ai-sdk/azure" &&
     (input.provider.options.useCompletionUrls || input.model.options.useCompletionUrls || options.useCompletionUrls)
@@ -189,12 +219,25 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       topK: ProviderTransform.topK(input.model),
       maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
       options,
-      cachePlan: cacheBoundary.plan,
+      cachePlan: initialCachePlan,
     },
   )
-  scrubPromptCacheKeys(options, promptCacheKey)
-  scrubPromptCacheKeys(params.options, promptCacheKey)
-  const cachePlan = isCachePlan(params.cachePlan) ? params.cachePlan : cacheBoundary.plan
+  if (usesOpenAICacheKey(input.model)) {
+    scrubPromptCacheKeys(options, promptCacheKey)
+    scrubPromptCacheKeys(params.options, promptCacheKey)
+  }
+  const configuredByPlugin = requestCacheControlFromOptions(params.options)
+  const pluginChangedCacheControl = !sameCacheControl(configuredByPlugin, cacheControlBeforePlugin)
+  const pluginCachePlan = CachePlanner.reconcileCachePlan(initialCachePlan, params.cachePlan, cacheBoundary.stable)
+  const cachePlan = coordinateAnthropicCachePlan(
+    input.model,
+    pluginChangedCacheControl
+      ? cachePlanWithRequestControl(input.model, pluginCachePlan, configuredByPlugin)
+      : pluginCachePlan,
+    explicitCacheControls,
+  )
+  syncRequestCacheControl(input.model, params.options, cachePlan)
+  const preparedTools = ProviderTransform.tools(sortedTools, input.model, cachePlan)
   const preparedParams = { ...params, cachePlan }
   const cacheGuardrails = CacheGuardrails.combine(
     CacheGuardrails.checkUnsupportedFields({
@@ -208,7 +251,12 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       fields: cacheRequestFields(input.model, preparedParams.options, cachePlan),
     }),
     CacheGuardrails.checkInvalidDuration({ provider: cachePlan.provider, model: cachePlan.model, duration: cachePlan.duration }),
-    CacheGuardrails.checkBreakpointOverflow({ provider: cachePlan.provider, model: cachePlan.model, breakpoints: cachePlan.breakpoints }),
+    CacheGuardrails.checkBreakpointOverflow({
+      provider: cachePlan.provider,
+      model: cachePlan.model,
+      breakpoints: cachePlan.breakpoints,
+      requestCacheControl: cachePlan.requestCacheControl,
+    }),
   )
   if (!cacheGuardrails.valid) {
     return yield* Effect.fail(
@@ -233,9 +281,15 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   return {
     system,
     messages,
-    tools: sortedTools,
+    tools: preparedTools,
     params: preparedParams,
-    messageTransformOptions: { ...options, cachePlan },
+    messageTransformOptions: {
+      ...preparedParams.options,
+      cachePlan,
+      oc2CacheToolHintCount: Object.values(preparedTools).filter((tool) =>
+        Boolean(cacheHintFromProviderOptions(input.model, tool.providerOptions)),
+      ).length,
+    },
     cacheGuardrails,
     headers: {
       "x-session-affinity": input.sessionID,
@@ -266,6 +320,185 @@ function schemaFromTool(tool: Tool) {
   return undefined
 }
 
+function cacheRouteForModel(model: Provider.Model) {
+  if (model.providerID === "anthropic" && model.api.npm === "@ai-sdk/anthropic") {
+    return { routeID: "anthropic-messages", protocolID: "anthropic-messages" }
+  }
+  if (model.api.npm === "@ai-sdk/amazon-bedrock") {
+    return { routeID: "bedrock-converse", protocolID: "bedrock-converse" }
+  }
+  return undefined
+}
+
+function cachePlannerMessages(model: Provider.Model, messages: ModelMessage[]) {
+  return messages.map((message) => {
+    const messageCache = cacheHintFromProviderOptions(model, message.providerOptions)
+    const content =
+      typeof message.content === "string"
+        ? [{ type: "text", text: message.content, cache: messageCache }]
+        : message.content.map((part) => ({
+            type: part.type,
+            cache: cacheHintFromMessagePart(model, part),
+          }))
+    const last = content.at(-1)
+    if (messageCache && last && !last.cache) {
+      content[content.length - 1] = { ...last, cache: messageCache }
+    }
+    return { role: message.role, content }
+  })
+}
+
+function cacheControlsFromMessages(model: Provider.Model, messages: ModelMessage[]) {
+  return messages.flatMap((message, messageIndex) => {
+    const messageControl = cacheHintFromProviderOptions(model, message.providerOptions)
+    if (typeof message.content === "string") {
+      return messageControl ? [{ slot: `messages:${messageIndex}:0`, control: messageControl }] : []
+    }
+    const controls = new Map<string, { type: "ephemeral"; ttl?: "5m" | "1h" }>()
+    message.content.forEach((part, partIndex) => {
+      const control = cacheHintFromMessagePart(model, part)
+      if (control) controls.set(`messages:${messageIndex}:${partIndex}`, control)
+    })
+    const lastIndex = message.content.length - 1
+    if (messageControl && lastIndex >= 0 && !controls.has(`messages:${messageIndex}:${lastIndex}`)) {
+      controls.set(`messages:${messageIndex}:${lastIndex}`, messageControl)
+    }
+    return [...controls].map(([slot, control]) => ({ slot, control }))
+  })
+}
+
+function cacheHintFromMessagePart(model: Provider.Model, part: Exclude<ModelMessage["content"], string>[number]) {
+  const direct = "providerOptions" in part ? cacheHintFromProviderOptions(model, part.providerOptions) : undefined
+  if (direct || part.type !== "tool-result" || !isRecord(part.output)) return direct
+  const output = part.output
+  let outputProviderOptions = "providerOptions" in output ? output.providerOptions : undefined
+  if (outputProviderOptions === undefined && output.type === "content" && Array.isArray(output.value)) {
+    for (const item of output.value) {
+      if (!isRecord(item) || !("providerOptions" in item) || item.providerOptions === undefined) continue
+      outputProviderOptions = item.providerOptions
+      break
+    }
+  }
+  return cacheHintFromProviderOptions(model, outputProviderOptions)
+}
+
+function cacheHintFromProviderOptions(model: Provider.Model, value: unknown) {
+  if (model.api.npm !== "@ai-sdk/anthropic" && model.api.npm !== "@ai-sdk/google-vertex/anthropic") return undefined
+  if (!isRecord(value)) return undefined
+  for (const key of new Set(["anthropic", String(model.providerID)])) {
+    const options = value[key]
+    if (!isRecord(options)) continue
+    const cache = options.cacheControl ?? options.cache_control
+    if (isCacheControl(cache)) return cache
+  }
+  return undefined
+}
+
+function cachePlanWithRequestControl(
+  model: Provider.Model,
+  plan: CachePlan,
+  cacheControl: { type: "ephemeral"; ttl?: "5m" | "1h" } | undefined,
+): CachePlan {
+  if (model.providerID !== "anthropic" || model.api.npm !== "@ai-sdk/anthropic" || !cacheControl) return plan
+  if (plan.mode === "explicit" && !plan.requestCacheControl) return plan
+  const requestCacheControl =
+    cacheControl.ttl === "1h" ? ({ type: "ephemeral", ttl: "1h" } as const) : ({ type: "ephemeral" } as const)
+  const mode = plan.breakpoints.length > 0 ? "automatic_and_explicit" : "automatic"
+  return {
+    ...plan,
+    mode,
+    eligible: true,
+    duration: cacheControl.ttl === "1h" ? "1h" : "5m",
+    requestCacheControl,
+  }
+}
+
+function coordinateAnthropicCachePlan(
+  model: Provider.Model,
+  plan: CachePlan,
+  explicit: ReadonlyArray<{
+    readonly slot: string
+    readonly control: { type: "ephemeral"; ttl?: "5m" | "1h" }
+  }>,
+): CachePlan {
+  if (model.api.npm !== "@ai-sdk/anthropic" || !plan.requestCacheControl) return plan
+  const requestTTL = plan.requestCacheControl.ttl ?? "5m"
+  const conflict = explicit.some(({ control }) => (control.ttl ?? "5m") !== requestTTL)
+  const occupied = new Set(explicit.map(({ slot }) => slot))
+  for (const breakpoint of plan.breakpoints) occupied.add(`${breakpoint.component}:${breakpoint.index}`)
+  const overflow = occupied.size + 1 > 4
+  if (!conflict && !overflow) return plan
+  return {
+    ...plan,
+    mode: "explicit",
+    breakpoints: conflict || explicit.length >= 4 ? [] : plan.breakpoints,
+    requestCacheControl: undefined,
+  }
+}
+
+function requestCacheControlFromOptions(value: unknown) {
+  if (!isRecord(value)) return undefined
+  if (isCacheControl(value.cache_control)) return value.cache_control
+  if (isCacheControl(value.cacheControl)) return value.cacheControl
+  return undefined
+}
+
+function sameCacheControl(
+  left: { type: "ephemeral"; ttl?: "5m" | "1h" } | undefined,
+  right: { type: "ephemeral"; ttl?: "5m" | "1h" } | undefined,
+) {
+  return left?.type === right?.type && (left?.ttl ?? "5m") === (right?.ttl ?? "5m")
+}
+
+function setRequestCacheControl(
+  options: Record<string, any>,
+  cacheControl: { type: "ephemeral"; ttl?: "5m" | "1h" },
+) {
+  options.cacheControl = cacheControl.ttl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" }
+  delete options.cache_control
+}
+
+function syncRequestCacheControl(model: Provider.Model, options: Record<string, any>, plan: CachePlan) {
+  if (model.api.npm !== "@ai-sdk/anthropic") return
+  if (model.providerID !== "anthropic") {
+    delete options.cacheControl
+    delete options.cache_control
+    return
+  }
+  if (
+    plan.eligible &&
+    (plan.mode === "automatic" || plan.mode === "automatic_and_explicit") &&
+    plan.requestCacheControl
+  ) {
+    setRequestCacheControl(options, plan.requestCacheControl)
+    return
+  }
+  delete options.cacheControl
+  delete options.cache_control
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isCacheControl(value: unknown): value is { type: "ephemeral"; ttl?: "5m" | "1h" } {
+  return isRecord(value) && value.type === "ephemeral" && (value.ttl === undefined || value.ttl === "5m" || value.ttl === "1h")
+}
+
+function scrubCacheControlOptions(value: unknown, model: Provider.Model) {
+  if (!isRecord(value)) return value
+  const result = { ...value }
+  for (const key of new Set(["anthropic", String(model.providerID)])) {
+    const provider = result[key]
+    if (!isRecord(provider)) continue
+    const { cacheControl, cache_control, ...rest } = provider
+    if (cacheControl === undefined && cache_control === undefined) continue
+    if (Object.keys(rest).length === 0) delete result[key]
+    else result[key] = rest
+  }
+  return Object.keys(result).length === 0 ? undefined : result
+}
+
 function scrubPromptCacheKeys(options: Record<string, any>, promptCacheKey: string | undefined) {
   delete options.promptCacheKey
   delete options.prompt_cache_key
@@ -276,7 +509,12 @@ function cacheRequestFields(model: Provider.Model, options: Record<string, any>,
   return [
     ...collectCacheFields(options),
     ...(promptCacheKeyFromOptions(options) ? ["prompt_cache_key"] : []),
-    ...(plan.eligible && plan.mode === "explicit" && plan.breakpoints.length > 0 ? explicitCacheFields(model) : []),
+    ...(plan.requestCacheControl ? ["cache_control"] : []),
+    ...(plan.eligible &&
+    (plan.mode === "explicit" || plan.mode === "automatic_and_explicit") &&
+    plan.breakpoints.length > 0
+      ? explicitCacheFields(model)
+      : []),
   ]
 }
 
@@ -297,6 +535,15 @@ function promptCacheKeyFromOptions(options: Record<string, any>) {
 function explicitCacheFields(model: Provider.Model) {
   if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") return ["cache_control"]
   return []
+}
+
+function usesOpenAICacheKey(model: Provider.Model) {
+  return (
+    model.providerID === "openai" ||
+    model.api.npm === "@ai-sdk/openai" ||
+    model.api.npm === "@ai-sdk/openai-compatible" ||
+    model.api.npm === "@ai-sdk/github-copilot"
+  )
 }
 
 const isCachePlan = (value: unknown): value is CachePlan =>

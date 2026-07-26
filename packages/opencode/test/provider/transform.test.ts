@@ -4,6 +4,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { LLMRequestPrep } from "@/session/llm/request"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 
 describe("ProviderTransform.options - promptCacheKey", () => {
   const sessionID = "test-session-123"
@@ -2572,6 +2573,21 @@ describe("ProviderTransform.message - cache control on gateway", () => {
       headers: {},
       ...overrides,
     }) as any
+  const automaticPlan: CachePlan = {
+    provider: "anthropic",
+    model: "claude-sonnet-4",
+    mode: "automatic_and_explicit",
+    cacheKey: null,
+    trafficPartition: null,
+    stablePrefixFingerprint: "sha256:stable-prefix",
+    componentFingerprints: {},
+    prefixTokenCount: null,
+    minimumPrefixTokens: 1024,
+    eligible: true,
+    breakpoints: [{ component: "system", contentType: "system", index: 0 }],
+    duration: "5m",
+    requestCacheControl: { type: "ephemeral" },
+  }
 
   test("gateway does not set cache control for anthropic models", () => {
     const model = createModel()
@@ -2621,6 +2637,210 @@ describe("ProviderTransform.message - cache control on gateway", () => {
         },
       },
     })
+  })
+
+  test("lowers only exact Anthropic message breakpoint targets", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    const result = ProviderTransform.message(
+      [
+        { role: "system", content: "Stable system one" },
+        { role: "system", content: "Stable system two" },
+        { role: "user", content: "Earlier turn" },
+        { role: "assistant", content: "Earlier answer" },
+        { role: "user", content: "Latest turn" },
+      ] as any[],
+      model,
+      { cachePlan: automaticPlan, cacheControl: { type: "ephemeral" } },
+    ) as any[]
+
+    const explicit = result.filter((message) => message.providerOptions?.anthropic?.cacheControl)
+    expect(explicit).toHaveLength(1)
+    expect(result[0].providerOptions?.anthropic?.cacheControl).toEqual({ type: "ephemeral" })
+    expect(result[4].providerOptions?.anthropic?.cacheControl).toBeUndefined()
+  })
+
+  test("includes manual tool hints in the shared Anthropic cache cap", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    const result = ProviderTransform.message(
+      [
+        { role: "system", content: "Stable system one" },
+        { role: "system", content: "Stable system two" },
+        { role: "user", content: "Latest turn" },
+      ] as any[],
+      model,
+      {
+        cachePlan: automaticPlan,
+        cacheControl: { type: "ephemeral" },
+        oc2CacheToolHintCount: 1,
+      },
+    ) as any[]
+
+    expect(result.filter((message) => message.providerOptions?.anthropic?.cacheControl)).toHaveLength(1)
+  })
+
+  test("includes tool-result output hints in the shared Anthropic cache cap", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    const result = ProviderTransform.message(
+      [
+        { role: "system", content: "Stable system one" },
+        { role: "system", content: "Stable system two" },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call-1",
+              toolName: "bash",
+              output: {
+                type: "text",
+                value: "done",
+                providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+              },
+            },
+          ],
+        },
+        { role: "user", content: "Latest turn" },
+      ] as any[],
+      model,
+      { cachePlan: automaticPlan, cacheControl: { type: "ephemeral" } },
+    ) as any[]
+
+    expect(result.filter((message) => message.providerOptions?.anthropic?.cacheControl)).toHaveLength(1)
+    expect(result[2].content[0].output.providerOptions.anthropic.cacheControl).toEqual({ type: "ephemeral" })
+  })
+
+  test("preserves manual Anthropic block cache settings within the shared cap", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    const manual = { type: "ephemeral", ttl: "1h" }
+    const result = ProviderTransform.message(
+      [
+        { role: "system", content: "Manual", providerOptions: { anthropic: { cacheControl: manual } } },
+        { role: "system", content: "Generated" },
+        { role: "user", content: "Latest turn" },
+      ] as any[],
+      model,
+      {
+        cachePlan: { ...automaticPlan, duration: "1h", requestCacheControl: manual },
+        cacheControl: manual,
+      },
+    ) as any[]
+
+    expect(result[0].providerOptions.anthropic.cacheControl).toEqual(manual)
+    expect(result.filter((message) => message.providerOptions?.anthropic?.cacheControl)).toHaveLength(1)
+  })
+
+  test("lowers exact tool, system, and message breakpoints without heuristic extras", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    const plan: CachePlan = {
+      ...automaticPlan,
+      breakpoints: [
+        { component: "tools", contentType: "tool", index: 1 },
+        { component: "system", contentType: "system", index: 0 },
+        { component: "messages", contentType: "message", index: 1 },
+      ],
+    }
+    const transformedTools = ProviderTransform.tools(
+      {
+        first: { description: "first", inputSchema: { type: "object" } } as any,
+        second: { description: "second", inputSchema: { type: "object" } } as any,
+      },
+      model,
+      plan,
+    ) as Record<string, any>
+    const messages = ProviderTransform.message(
+      [
+        { role: "system", content: "stable" },
+        { role: "system", content: "dynamic" },
+        { role: "user", content: "first" },
+        { role: "user", content: "second" },
+        { role: "user", content: "third" },
+      ] as any[],
+      model,
+      { cachePlan: plan, cacheControl: { type: "ephemeral" }, oc2CacheToolHintCount: 1 },
+    ) as any[]
+
+    expect(transformedTools.first.providerOptions).toBeUndefined()
+    expect(transformedTools.second.providerOptions.anthropic.cacheControl).toEqual({ type: "ephemeral" })
+    expect(messages.map((message) => Boolean(message.providerOptions?.anthropic?.cacheControl))).toEqual([
+      true,
+      false,
+      false,
+      true,
+      false,
+    ])
+  })
+
+  test("places a message breakpoint on the canonical last-text part", () => {
+    const model = createModel({
+      providerID: "anthropic",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://api.anthropic.com",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    const plan: CachePlan = {
+      ...automaticPlan,
+      breakpoints: [{ component: "messages", contentType: "message", index: 0 }],
+    }
+    const result = ProviderTransform.message(
+      [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Found it" },
+            {
+              type: "tool-result",
+              toolCallId: "srv-1",
+              toolName: "web_search",
+              output: { type: "json", value: { results: [] } },
+              providerExecuted: true,
+            },
+          ],
+        },
+      ] as any[],
+      model,
+      { cachePlan: plan, cacheControl: { type: "ephemeral" } },
+    ) as any[]
+
+    expect(result[0].content[0].providerOptions.anthropic.cacheControl).toEqual({ type: "ephemeral" })
+    expect(result[0].content[1].providerOptions).toBeUndefined()
+    expect(result[0].providerOptions).toBeUndefined()
   })
 
   test("google-vertex-anthropic applies only anthropic cache control", () => {
@@ -2730,6 +2950,35 @@ describe("ProviderTransform.message - cache control on gateway", () => {
       expect(JSON.stringify(result)).not.toContain("cache_control")
       expect(JSON.stringify(result)).not.toContain("cacheControl")
     }
+  })
+
+  test("removes manual Anthropic cache fields from unsupported compatible routes", () => {
+    const model = createModel({
+      providerID: "minimax",
+      api: {
+        id: "minimax-m2",
+        url: "https://api.minimax.test",
+        npm: "@ai-sdk/anthropic",
+      },
+      id: "minimax-m2",
+    })
+    const result = ProviderTransform.message(
+      [
+        {
+          role: "user",
+          content: "Hello",
+          providerOptions: {
+            minimax: { cacheControl: { type: "ephemeral" }, customOption: true },
+          },
+        },
+      ] as any[],
+      model,
+      {},
+    ) as any[]
+
+    expect(result[0].providerOptions).toEqual({ anthropic: { customOption: true } })
+    expect(JSON.stringify(result)).not.toContain("cacheControl")
+    expect(JSON.stringify(result)).not.toContain("cache_control")
   })
 })
 

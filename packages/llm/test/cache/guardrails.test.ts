@@ -84,6 +84,21 @@ describe("cache guardrails", () => {
     })
   })
 
+  test("counts automatic request caching against the Anthropic slot cap", () => {
+    const result = checkBreakpointOverflow({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      breakpoints: breakpoints(4),
+      requestCacheControl: { type: "ephemeral" },
+    })
+
+    expect(result).toMatchObject({
+      valid: true,
+      warnings: [{ code: "breakpoint_overflow", severity: "warning" }],
+      errors: [],
+    })
+  })
+
   test("fails provider field leakage across provider families", () => {
     const cases = [
       { provider: "deepseek", model: "deepseek-chat", fields: ["prompt_cache_key"], field: "prompt_cache_key" },
