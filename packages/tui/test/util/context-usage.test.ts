@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { AssistantMessage } from "@oc2-ai/sdk/v2"
-import { consumedTokens, currentContextMessage } from "../../src/util/context-usage"
+import { consumedTokens, currentContextMessage, formatCacheStatus } from "../../src/util/context-usage"
 
 const empty = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 
@@ -40,5 +40,22 @@ describe("current context usage", () => {
 
   test("rejects a provider-total-only turn", () => {
     expect(currentContextMessage([assistant("total", { ...empty, total: 999 })])).toBeUndefined()
+  })
+})
+
+describe("cache status formatting", () => {
+  test("labels cache-hit reads as cached tokens", () => {
+    expect(
+      formatCacheStatus(
+        { classification: "cache_hit", read: 114_200, write: 0 },
+        { ...empty, cache: { read: 114_200, write: 0 } },
+      ),
+    ).toBe("cache hit · 114.2K cached")
+  })
+
+  test("retains read and write wording without classified cache telemetry", () => {
+    expect(formatCacheStatus(undefined, { ...empty, cache: { read: 12_000, write: 3_000 } })).toBe(
+      "cache 12.0K read/3.0K write",
+    )
   })
 })

@@ -608,7 +608,7 @@ describe("run session data", () => {
     expect(out.footer?.patch).toEqual({
       status: "assistant responding",
       usage: "2",
-      cacheStatus: "cache hit 42.0K read",
+      cacheStatus: "cache hit · 42.0K cached",
     })
   })
 

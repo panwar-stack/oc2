@@ -180,11 +180,11 @@ function formatUsage(
 function formatCacheStatus(status: CacheStatus | undefined, tokens: Tokens | undefined) {
   const read = safeNumber(status?.read ?? tokens?.cache?.read)
   const write = safeNumber(status?.write ?? tokens?.cache?.write)
-  const suffix = formatCacheTokenSuffix(read, write)
+  const suffix = formatCacheTokenSuffix(read, write, status?.classification === "cache_hit" ? "cached" : "read")
 
   switch (status?.classification) {
     case "cache_hit":
-      return suffix ? `cache hit ${suffix}` : "cache hit"
+      return suffix ? `cache hit · ${suffix}` : "cache hit"
     case "cache_write":
       return suffix ? `cache write ${suffix}` : "cache write"
     case "expected_cache_miss":
@@ -206,9 +206,9 @@ function formatCacheStatus(status: CacheStatus | undefined, tokens: Tokens | und
   return ""
 }
 
-function formatCacheTokenSuffix(read: number, write: number) {
-  if (read > 0 && write > 0) return `${Locale.number(read)} read/${Locale.number(write)} write`
-  if (read > 0) return `${Locale.number(read)} read`
+function formatCacheTokenSuffix(read: number, write: number, readLabel: "cached" | "read") {
+  if (read > 0 && write > 0) return `${Locale.number(read)} ${readLabel}/${Locale.number(write)} write`
+  if (read > 0) return `${Locale.number(read)} ${readLabel}`
   if (write > 0) return `${Locale.number(write)} write`
   return ""
 }

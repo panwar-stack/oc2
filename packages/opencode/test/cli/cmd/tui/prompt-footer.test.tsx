@@ -105,11 +105,12 @@ const messagesPayload = [
       path: { cwd: directory, root: worktree },
       cost: 0.05,
       tokens: {
-        input: 1_000,
+        input: 200,
         output: 200,
-        reasoning: 30,
-        cache: { read: 400, write: 5 },
+        reasoning: 0,
+        cache: { read: 114_200, write: 0 },
       },
+      cacheStatus: { classification: "cache_hit", read: 114_200, write: 0 },
       time: { created, completed: created + 1_000 },
     },
     parts: [],
@@ -144,7 +145,7 @@ const fetchForPrompt = (async (input: RequestInfo | URL) => {
               model: {
                 id: "model",
                 name: "Model",
-                limit: { context: 10_000 },
+                limit: { context: 1_000_000 },
               },
             },
           },
@@ -404,9 +405,9 @@ describe("prompt footer", () => {
       await app.renderOnce()
       const frame = app.captureCharFrame()
 
-      expect(frame).toContain("1.6K (16%) · cache 400 read/5 write · $0.05")
+      expect(frame).toContain("114.6K (11%) · cache hit · 114.2K cached · $0.05")
       expect(frame).toContain("ctrl+p commands")
-      expect(frame.indexOf("1.6K (16%) · cache 400 read/5 write · $0.05")).toBeLessThan(
+      expect(frame.indexOf("114.6K (11%) · cache hit · 114.2K cached · $0.05")).toBeLessThan(
         frame.indexOf("ctrl+p commands"),
       )
     } finally {

@@ -33,11 +33,12 @@ export function formatCacheStatus(
 ): string | undefined {
   const read = status?.read ?? tokens?.cache.read ?? 0
   const write = status?.write ?? tokens?.cache.write ?? 0
+  const readLabel = status?.classification === "cache_hit" ? "cached" : "read"
   const tokenText =
     read > 0 && write > 0
-      ? `${Locale.number(read)} read/${Locale.number(write)} write`
+      ? `${Locale.number(read)} ${readLabel}/${Locale.number(write)} write`
       : read > 0
-        ? `${Locale.number(read)} read`
+        ? `${Locale.number(read)} ${readLabel}`
         : write > 0
           ? `${Locale.number(write)} write`
           : undefined
