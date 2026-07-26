@@ -51,7 +51,7 @@ describe("plugin.openai.ws", () => {
     ).rejects.toThrow("Expected 101 status code")
   })
 
-  test("enforces websocket send idle timeout", async () => {
+  test("enforces maximum response silence while sending", async () => {
     const socket = new (class extends EventEmitter {
       send(_data: string, _callback: (error?: Error) => void) {}
     })() as unknown as WebSocket
@@ -59,12 +59,45 @@ describe("plugin.openai.ws", () => {
     const response = OpenAIWebSocket.streamResponsesWebSocket({
       socket,
       body: { stream: true, input: "hi" },
-      idleTimeout: 20,
+      responseSilenceTimeout: 20,
       onConnectionInvalid: (error) => invalid.push(error.message),
     })
 
-    expect((await readTextError(response.text())).message).toContain("idle timeout sending websocket request")
-    expect(invalid).toEqual(["idle timeout sending websocket request"])
+    expect((await readTextError(response.text())).message).toContain(
+      "Maximum WebSocket response silence exceeded while sending request",
+    )
+    expect(invalid).toEqual(["Maximum WebSocket response silence exceeded while sending request"])
+  })
+
+  test("invalidates a websocket that stops answering heartbeat pings", async () => {
+    let pings = 0
+    const socket = new (class extends EventEmitter {
+      readyState = WebSocket.OPEN
+      send(_data: string, callback: (error?: Error) => void) {
+        callback()
+      }
+      ping(callback: (error?: Error) => void) {
+        pings += 1
+        callback()
+      }
+    })() as unknown as WebSocket
+    const invalid: string[] = []
+    const response = OpenAIWebSocket.streamResponsesWebSocket({
+      socket,
+      body: { stream: true, input: "hi" },
+      responseSilenceTimeout: 500,
+      heartbeatInterval: 5,
+      pongTimeout: 20,
+      onConnectionInvalid: (error) => invalid.push(error.message),
+    })
+    const messages = setInterval(() => {
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "response.output_text.delta", delta: "still alive" })), false)
+    }, 5)
+
+    const error = await readTextError(response.text()).finally(() => clearInterval(messages))
+    expect(error.message).toContain("WebSocket heartbeat timed out waiting for pong")
+    expect(pings).toBeGreaterThan(0)
+    expect(invalid).toEqual(["WebSocket heartbeat timed out waiting for pong"])
   })
 
   test("streams websocket events as SSE and handles response.done", async () => {
@@ -194,7 +227,9 @@ describe("plugin.openai.ws-pool", () => {
     const fetch = OpenAIWebSocketPool.createWebSocketFetch({
       url: server.url,
       connectTimeout: 100,
-      streamRetries: 1,
+      websocketFailureBudget: 1,
+      // The new option takes precedence over its deprecated alias.
+      streamRetries: 10,
     })
 
     const first = await fetch(server.url, streamRequest({ [TITLE_HEADER]: "false" }))
@@ -249,6 +284,24 @@ describe("plugin.openai.ws-pool", () => {
     expect(await second.text()).toBe("http")
     expect(websocketAttempts).toBe(2)
     expect(server.httpRequests).toHaveLength(2)
+    fetch.close()
+  })
+
+  test("cancels an in-flight websocket connection when its session is deleted", async () => {
+    await using server = await createHangingTcpServer()
+    await using fallback = await createHttpServer()
+    const fetch = OpenAIWebSocketPool.createWebSocketFetch({
+      url: server.url,
+      connectTimeout: 1_000,
+      websocketFailureBudget: 0,
+    })
+
+    const response = fetch(fallback.url, streamRequest())
+    await waitFor(() => server.connections() === 1, "websocket did not begin connecting")
+    fetch.remove("session-1")
+
+    await expect(response).rejects.toThrow("WebSocket pool entry removed")
+    expect(fallback.httpRequests).toHaveLength(0)
     fetch.close()
   })
 
@@ -509,7 +562,7 @@ describe("plugin.openai.ws-pool", () => {
     fetch.close()
   })
 
-  test("retries websocket idle failures before first event then falls back to HTTP", async () => {
+  test("counts response silence failures before the first event toward HTTP fallback", async () => {
     let connections = 0
     await using server = await createWebSocketServer((socket) => {
       connections += 1
@@ -517,12 +570,14 @@ describe("plugin.openai.ws-pool", () => {
     })
     const fetch = OpenAIWebSocketPool.createWebSocketFetch({
       url: server.url,
-      idleTimeout: 20,
-      streamRetries: 1,
+      responseSilenceTimeout: 20,
+      websocketFailureBudget: 1,
     })
 
     const first = await fetch(server.url, streamRequest())
-    expect((await readTextError(first.text())).message).toContain("idle timeout waiting for websocket")
+    expect((await readTextError(first.text())).message).toContain(
+      "Maximum WebSocket response silence exceeded while waiting for response",
+    )
     const second = await fetch(server.url, streamRequest())
     const third = await fetch(server.url, streamRequest())
 
@@ -533,32 +588,46 @@ describe("plugin.openai.ws-pool", () => {
     fetch.close()
   })
 
-  test("keeps websocket retry state until the failed stream becomes idle", async () => {
-    let connections = 0
-    await using server = await createWebSocketServer((socket) => {
-      connections += 1
-      socket.once("message", () => {})
+  test("keeps a healthy active response alive past the pool idle timeout", async () => {
+    const sockets = new Map<string, WebSocket>()
+    let closed = 0
+    let pings = 0
+    await using server = await createWebSocketServer((socket, request) => {
+      const sessionID = request.headers["session-id"]
+      if (typeof sessionID !== "string") return
+      sockets.set(sessionID, socket)
+      socket.on("ping", () => pings++)
+      socket.once("close", () => closed++)
+      socket.once("message", () => {
+        if (sessionID === "session-1") {
+          socket.send(JSON.stringify({ type: "response.output_text.delta", delta: "started" }))
+          return
+        }
+        socket.send(JSON.stringify({ type: "response.completed", response: { id: "resp_session_2" } }))
+      })
     })
     const fetch = OpenAIWebSocketPool.createWebSocketFetch({
       url: server.url,
-      idleTimeout: 500,
-      streamRetries: 1,
+      poolIdleTimeout: 20,
+      responseSilenceTimeout: 500,
+      heartbeatInterval: 5,
+      pongTimeout: 50,
     })
 
-    await new Promise((resolve) => setTimeout(resolve, 250))
     const first = await fetch(server.url, streamRequest())
-    expect((await readTextError(first.text())).message).toContain("idle timeout waiting for websocket")
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    const firstText = first.text()
+    const second = await fetch(server.url, streamRequest({ "session-id": "session-2" }))
+    expect(await second.text()).toContain("data: [DONE]")
+    await waitFor(() => closed === 1, "completed websocket was not idle-pruned")
+    await waitFor(() => pings > 0, "active websocket was not heartbeat-checked")
+    sockets.get("session-1")?.send(JSON.stringify({ type: "response.completed", response: { id: "resp_session_1" } }))
 
-    const second = await fetch(server.url, streamRequest())
-
-    expect(await second.text()).toBe("http")
-    expect(connections).toBe(2)
-    expect(server.httpRequests).toHaveLength(1)
+    expect(await firstText).toContain("data: [DONE]")
+    expect(server.httpRequests).toHaveLength(0)
     fetch.close()
   })
 
-  test("retries failed websocket streams before using HTTP fallback", async () => {
+  test("does not replay response silence failures after output before using HTTP fallback", async () => {
     await using server = await createWebSocketServer((socket) => {
       socket.once("message", () => {
         socket.send(JSON.stringify({ type: "response.output_text.delta", delta: "started" }))
@@ -566,14 +635,18 @@ describe("plugin.openai.ws-pool", () => {
     })
     const fetch = OpenAIWebSocketPool.createWebSocketFetch({
       url: server.url,
-      idleTimeout: 20,
-      streamRetries: 1,
+      responseSilenceTimeout: 20,
+      websocketFailureBudget: 1,
     })
 
     const first = await fetch(server.url, streamRequest())
-    expect((await readTextError(first.text())).message).toContain("idle timeout waiting for websocket")
+    expect((await readTextError(first.text())).message).toContain(
+      "Maximum WebSocket response silence exceeded while waiting for response",
+    )
     const second = await fetch(server.url, streamRequest())
-    expect((await readTextError(second.text())).message).toContain("idle timeout waiting for websocket")
+    expect((await readTextError(second.text())).message).toContain(
+      "Maximum WebSocket response silence exceeded while waiting for response",
+    )
     const third = await fetch(server.url, streamRequest())
 
     expect(await third.text()).toBe("http")

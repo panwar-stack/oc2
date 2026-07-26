@@ -20,6 +20,10 @@ export interface ConnectResponsesWebSocketOptions {
 export interface StreamResponsesWebSocketOptions {
   socket: WebSocket
   body: Record<string, unknown>
+  responseSilenceTimeout?: number
+  heartbeatInterval?: number
+  pongTimeout?: number
+  /** @deprecated Use responseSilenceTimeout. */
   idleTimeout?: number
   signal?: AbortSignal
   onFirstEvent?: (error?: WrappedError) => void
@@ -143,10 +147,12 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
   let cleanupSocket = () => {}
   let completed = false
   let emitted = false
-  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  let responseSilenceTimer: ReturnType<typeof setTimeout> | undefined
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  let pongTimer: ReturnType<typeof setTimeout> | undefined
 
   function cleanup() {
-    if (idleTimer) clearTimeout(idleTimer)
+    if (responseSilenceTimer) clearTimeout(responseSilenceTimer)
     cleanupSocket()
     options.signal?.removeEventListener("abort", onAbort)
   }
@@ -171,11 +177,41 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
     controller?.error(error)
   }
 
-  function resetIdleTimeout(message: string) {
+  function resetResponseSilenceTimeout(message: string) {
     if (completed) return
-    if (!options.idleTimeout) return
-    if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => invalidate(new ProviderError.ResponseStreamError(message)), options.idleTimeout)
+    const timeout = options.responseSilenceTimeout ?? options.idleTimeout
+    if (!timeout) return
+    if (responseSilenceTimer) clearTimeout(responseSilenceTimer)
+    responseSilenceTimer = setTimeout(() => invalidate(new ProviderError.ResponseStreamError(message)), timeout)
+  }
+
+  function acknowledgeHeartbeat() {
+    if (!pongTimer) return
+    clearTimeout(pongTimer)
+    pongTimer = undefined
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) clearInterval(heartbeatTimer)
+    heartbeatTimer = undefined
+    acknowledgeHeartbeat()
+  }
+
+  function startHeartbeat(target: WebSocket) {
+    if (!options.heartbeatInterval || !options.pongTimeout) return
+    heartbeatTimer = setInterval(() => {
+      if (completed || target !== socket || target.readyState !== WebSocket.OPEN) return
+      if (!pongTimer) {
+        pongTimer = setTimeout(() => {
+          if (target !== socket) return
+          invalidate(new ProviderError.ResponseStreamError("WebSocket heartbeat timed out waiting for pong"))
+        }, options.pongTimeout)
+      }
+      target.ping((error?: Error) => {
+        if (!error || completed || target !== socket) return
+        invalidate(new ProviderError.ResponseStreamError(error.message, { cause: error }))
+      })
+    }, options.heartbeatInterval)
   }
 
   async function onMessage(data: WebSocket.RawData, isBinary: boolean) {
@@ -194,11 +230,12 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
         return undefined
       }
     })()
+    if (event) resetResponseSilenceTimeout("Maximum WebSocket response silence exceeded while waiting for response")
 
     if (event?.type === "error" && options.onRetryableTerminal) {
       cleanupSocket()
-      if (idleTimer) clearTimeout(idleTimer)
-      idleTimer = undefined
+      if (responseSilenceTimer) clearTimeout(responseSilenceTimer)
+      responseSilenceTimer = undefined
       try {
         const next = await options.onRetryableTerminal(event)
         if (completed) {
@@ -248,7 +285,6 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
       ),
     )
     emitted = true
-    resetIdleTimeout("idle timeout waiting for websocket")
 
     if (!event) return
 
@@ -299,19 +335,24 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
   function attach(next: WebSocket) {
     cleanupSocket()
     socket = next
+    const target = next
     socket.on("message", onMessage)
+    socket.on("pong", acknowledgeHeartbeat)
     socket.once("error", onError)
     socket.once("close", onClose)
     cleanupSocket = () => {
-      socket.off("message", onMessage)
-      socket.off("error", onError)
-      socket.off("close", onClose)
+      target.off("message", onMessage)
+      target.off("pong", acknowledgeHeartbeat)
+      target.off("error", onError)
+      target.off("close", onClose)
+      stopHeartbeat()
     }
+    startHeartbeat(target)
     const { stream: _stream, background: _background, ...payload } = options.body
-    resetIdleTimeout("idle timeout sending websocket request")
+    resetResponseSilenceTimeout("Maximum WebSocket response silence exceeded while sending request")
     socket.send(JSON.stringify({ type: "response.create", ...payload }), (error) => {
-      if (completed) return
-      resetIdleTimeout("idle timeout waiting for websocket")
+      if (completed || target !== socket) return
+      if (!emitted) resetResponseSilenceTimeout("Maximum WebSocket response silence exceeded while waiting for response")
       if (error) invalidate(new ProviderError.ResponseStreamError(error.message, { cause: error }))
     })
   }

@@ -14,14 +14,16 @@ Enabled by default on `local`, `dev`, and `beta`. On `latest` and `prod`, set `O
 ## Lifetime
 
 - Connect timeout: 15 seconds.
-- Idle timeout: 5 minutes.
+- Completed, unused sockets are removed from the pool after 5 minutes.
+- Active responses are limited to 20 minutes without a provider event.
+- Active sockets are pinged every 30 seconds and invalidated if no pong arrives within 90 seconds.
 - After a completed response, keep the socket for reuse.
 - Reuse a socket for up to 55 minutes, then replace it on the next request.
 
 ## Retries
 
-- Retry WebSocket stream/setup failures up to 5 times, then use HTTP for that session until the pool entry is idle-pruned.
-- `websocket_connection_limit_reached` consumes the same retry budget and HTTP fallback.
+- After an initial WebSocket failure, allow a failure budget of 5 additional failures, then use HTTP for that session until it is removed or the pool closes.
+- `websocket_connection_limit_reached` consumes the same failure budget and HTTP fallback.
 - If a WebSocket fails after its first event, fail it as retryable rather than replaying partial output in transport.
 - Abort or cancel closes the socket.
 
