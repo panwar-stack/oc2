@@ -117,6 +117,25 @@ describe("cache self-healing policy", () => {
     expect(policy.applyPlan(plan({ mode: "automatic" }), 1_050).mode).toBe("automatic")
   })
 
+  test("preserves automatic request caching when disabling explicit cache on combined plans", () => {
+    const policy = createPolicy({ mode: "enforce", providerErrorThreshold: 2, actionTtlMs: 100, now: () => 1_000 })
+    const item = plan({
+      mode: "automatic_and_explicit",
+      cacheKey: null,
+      requestCacheControl: { type: "ephemeral" },
+    })
+    const providerError = result({ status: "inconclusive", cacheStatus: "provider_error" })
+
+    policy.observe({ result: providerError, plan: item, telemetry: telemetry("provider_error") })
+    policy.observe({ result: providerError, plan: item, telemetry: telemetry("provider_error") })
+
+    expect(policy.applyPlan(item, 1_050)).toEqual({
+      ...item,
+      mode: "automatic",
+      breakpoints: [],
+    })
+  })
+
   test("rotates cache-key partition for future plans after repeated stable-prefix mismatches", () => {
     const policy = createPolicy({ mode: "enforce", repeatedMissThreshold: 2, maxCacheKeyLength: 40 })
     const item = plan({ provider: "openai", model: "gpt-5", mode: "automatic", cacheKey: "oc2-v1-abcdefghijklmnopqrstuvwxyz" })

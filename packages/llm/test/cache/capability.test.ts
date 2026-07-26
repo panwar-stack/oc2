@@ -61,7 +61,7 @@ describe("cache capability registry", () => {
         model: "claude-sonnet-4-5",
         expected: {
           status: "known",
-          promptCaching: "explicit",
+          promptCaching: "automatic_and_explicit",
           requestFields: ["cache_control"],
           supportsPromptCacheOptions: false,
           supportsPromptCacheBreakpoints: false,
@@ -196,12 +196,12 @@ describe("cache capability registry", () => {
     })
   })
 
-  test("Anthropic supports explicit cache breakpoints and durations", () => {
+  test("Anthropic supports automatic request caching with explicit breakpoints and durations", () => {
     const capabilities = getCacheCapabilities("anthropic", "claude-sonnet-4-5")
 
     expect(capabilities).toMatchObject({
       status: "known",
-      promptCaching: "explicit",
+      promptCaching: "automatic_and_explicit",
       supportsCacheKey: false,
       supportsBreakpoints: true,
       supportsDuration: true,
@@ -210,6 +210,7 @@ describe("cache capability registry", () => {
       supportsPromptCacheRetention: false,
       minimumPrefixTokens: 1024,
       maximumBreakpoints: 4,
+      supportedModes: ["automatic", "explicit"],
       supportedDurations: ["5m", "1h"],
       requestFields: ["cache_control"],
       responseUsageFields: ["cache_creation_input_tokens", "cache_read_input_tokens"],
@@ -224,7 +225,7 @@ describe("cache capability registry", () => {
     expect(haiku).toMatchObject({
       status: "known",
       modelPattern: "claude-*haiku*",
-      promptCaching: "explicit",
+      promptCaching: "automatic_and_explicit",
       supportsBreakpoints: true,
       supportsPromptCacheOptions: false,
       supportsPromptCacheBreakpoints: false,

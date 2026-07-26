@@ -272,6 +272,56 @@ describe("applyCachePolicy", () => {
     expect(planned.messages).toEqual(request.messages)
     expect(planned.metadata?.cachePlan).toMatchObject({ mode: "disabled", eligible: false })
   })
+
+  test("plans default Anthropic request caching without an explicit 5m ttl field", () => {
+    const planned = applyCachePolicy(
+      LLM.request({
+        model: anthropicModel,
+        system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+        prompt: "hi",
+        cache: "auto",
+      }),
+    )
+
+    expect(planned.metadata?.cachePlan).toMatchObject({
+      mode: "automatic_and_explicit",
+      duration: "5m",
+      requestCacheControl: { type: "ephemeral" },
+    })
+    expect((planned.metadata?.cachePlan as { requestCacheControl?: object }).requestCacheControl).not.toHaveProperty("ttl")
+  })
+
+  test("preserves four explicit Anthropic slots by skipping automatic request caching", () => {
+    const planned = applyCachePolicy(
+      LLM.request({
+        model: anthropicModel,
+        system: Array.from({ length: 4 }, (_, index) => ({
+          type: "text" as const,
+          text: `stable-${index}`,
+          cache: new CacheHint({ type: "ephemeral" }),
+          metadata: { cache: { stable: true, version: 1 } },
+        })),
+        prompt: "hi",
+        cache: "auto",
+      }),
+    )
+
+    expect(planned.metadata?.cachePlan).toMatchObject({ mode: "explicit", requestCacheControl: undefined })
+  })
+
+  test("does not attach Anthropic request cache control to non-Anthropic plans", () => {
+    const planned = applyCachePolicy(
+      LLM.request({
+        model: openaiModel,
+        system: [{ type: "text", text: "stable", metadata: { cache: { stable: true, version: 1 } } }],
+        prompt: "hi",
+        cache: "auto",
+      }),
+    )
+
+    expect(planned.metadata?.cachePlan).toMatchObject({ mode: "automatic" })
+    expect((planned.metadata?.cachePlan as { requestCacheControl?: object }).requestCacheControl).toBeUndefined()
+  })
 })
 
 describe("local cache regression checker", () => {
