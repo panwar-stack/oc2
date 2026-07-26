@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
-import { CacheHint, LLM } from "../../src"
+import { LLM } from "../../src"
 import { LLMClient } from "../../src/route"
 import * as Anthropic from "../../src/providers/anthropic"
 import { LARGE_CACHEABLE_SYSTEM } from "../recorded-scenarios"
@@ -10,17 +10,21 @@ const model = Anthropic.configure({
   apiKey: process.env.ANTHROPIC_API_KEY ?? "fixture",
 }).model("claude-haiku-4-5-20251001")
 
-// Two identical generations in a row. The first call writes the prefix into
-// Anthropic's cache; the second should report a cache read against the same
-// prefix. Cassette captures both interactions in order.
+// Two identical planner-driven generations in a row. The first call writes the
+// prefix into Anthropic's cache; the second should report a cache read against
+// the same prefix. Cassette captures both interactions in order.
 const cacheRequest = LLM.request({
   id: "recorded_anthropic_cache",
   model,
-  system: [{ type: "text", text: LARGE_CACHEABLE_SYSTEM, cache: new CacheHint({ type: "ephemeral" }) }],
+  system: [
+    {
+      type: "text",
+      text: LARGE_CACHEABLE_SYSTEM,
+      metadata: { cache: { stable: true, version: 1 } },
+    },
+  ],
   prompt: "Say hi.",
-  // Manual hint on the system part is the only marker we want here — skip the
-  // auto-policy's latest-user-message breakpoint so the cassette body matches.
-  cache: "none",
+  cache: "auto",
   generation: { maxTokens: 16, temperature: 0 },
 })
 
@@ -28,6 +32,7 @@ const recorded = recordedTests({
   prefix: "anthropic-messages-cache",
   provider: "anthropic",
   protocol: "anthropic-messages",
+  // Live recording skips without a key; cassette replay stays credential-free.
   requires: ["ANTHROPIC_API_KEY"],
   // Two identical requests in one cassette — replay walks the cassette in
   // recording order so the second call replays the cached-hit interaction.

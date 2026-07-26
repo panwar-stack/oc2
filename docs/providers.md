@@ -140,18 +140,25 @@ OC2 plans prompt caching per provider and only sends request fields that the
 selected provider supports. See [Prompt Caching](prompt-caching.md) for the
 planner, telemetry, diagnostics, guardrails, lifecycle, and cost details.
 
-| Provider | Models | Cache mode | Request fields | Usage telemetry | Verification |
-| --- | --- | --- | --- | --- | --- |
-| OpenAI | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with OC2-derived routing key | `prompt_cache_key` | cached read and write tokens | conclusive |
-| Anthropic | `claude-*` | Explicit breakpoints | `cache_control` | cache creation and read tokens | conclusive |
-| Moonshot / Kimi | `kimi*`, `moonshot*` | Provider-managed automatic | none | unavailable | best effort |
-| DeepSeek | `deepseek-*` | Provider-managed automatic | none | hit and miss tokens | best effort |
-| Unknown providers or models | unmatched | disabled | none | unavailable | unavailable |
+| Provider                    | Models                                               | Cache mode                             | Request fields                            | Usage telemetry                | Verification |
+| --------------------------- | ---------------------------------------------------- | -------------------------------------- | ----------------------------------------- | ------------------------------ | ------------ |
+| OpenAI                      | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with OC2-derived routing key | `prompt_cache_key`                        | cached read and write tokens   | conclusive   |
+| Anthropic                   | `claude-*`                                           | Automatic plus explicit breakpoints    | top-level and block-level `cache_control` | cache creation and read tokens | conclusive   |
+| Moonshot / Kimi             | `kimi*`, `moonshot*`                                 | Provider-managed automatic             | none                                      | unavailable                    | best effort  |
+| DeepSeek                    | `deepseek-*`                                         | Provider-managed automatic             | none                                      | hit and miss tokens            | best effort  |
+| Unknown providers or models | unmatched                                            | disabled                               | none                                      | unavailable                    | unavailable  |
 
 Provider-specific cache fields are not portable. For example, OC2 will not send
 OpenAI `prompt_cache_key` to Kimi or DeepSeek OpenAI-compatible endpoints, and
-will not send Anthropic `cache_control` outside providers that accept explicit
-breakpoints.
+will not send Anthropic `cache_control` outside supported Anthropic routes.
+
+Anthropic caching defaults to the lower-write-cost `5m` ephemeral TTL and can
+combine automatic request caching with stable explicit breakpoints. The `1h`
+TTL is an explicit opt-in for latency-sensitive workloads or reuse across longer
+gaps: `5m` cache writes cost 1.25x base input, while `1h` writes cost 2x.
+Neither setting guarantees savings without enough cache reuse. Anthropic allows
+up to four cache controls per request; when all four slots are explicit
+breakpoints, OC2 preserves them and omits the automatic control.
 
 For first-party OpenAI, OC2 derives a deterministic `prompt_cache_key` from the
 stable prompt prefix when the selected model supports it. OC2 does not send
