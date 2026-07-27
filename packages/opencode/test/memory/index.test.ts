@@ -1,6 +1,8 @@
 import { $ } from "bun"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Cause, Effect, Exit, Layer } from "effect"
@@ -252,7 +254,9 @@ describe("Memory local git indexing", () => {
   it.live("rejects ambiguous commit hash prefixes in one repository", () =>
     Effect.gen(function* () {
       const memory = yield* Memory.Service
-      const repository = yield* memory.ensureRepository({ reference: "file:///tmp/opencode-memory-ambiguous-prefix" })
+      const repository = yield* memory.ensureRepository({
+        reference: pathToFileURL(path.join(os.tmpdir(), "opencode-memory-ambiguous-prefix")).href,
+      })
       yield* memory.upsertCommits(repository.id, [
         commitInput("abc111", "first ambiguous commit"),
         commitInput("abc222", "second ambiguous commit"),

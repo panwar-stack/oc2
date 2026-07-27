@@ -440,7 +440,7 @@ describe("tool.write", () => {
         yield* Effect.promise(() => fs.mkdir(path.dirname(filepath), { recursive: true }))
 
         const result = yield* run({ filePath: filepath, content: "export const Button = () => {}" })
-        expect(result.title).toEndWith(path.join("src", "components", "Button.tsx"))
+        expect(result.title).toEndWith("src/components/Button.tsx")
       }),
     )
   })

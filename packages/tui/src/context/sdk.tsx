@@ -31,6 +31,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     }
 
     let sdk = createSDK()
+    let unsubscribe: (() => void) | undefined
 
     const handlers = new Set<(event: GlobalEvent) => void>()
     const emitter = {
@@ -118,8 +119,12 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     onMount(async () => {
       if (props.events) {
-        const unsub = await props.events.subscribe(handleEvent)
-        onCleanup(unsub)
+        const stop = await props.events.subscribe(handleEvent)
+        if (abort.signal.aborted) {
+          stop()
+          return
+        }
+        unsubscribe = stop
 
         if (Flag.OC2_EXPERIMENTAL_WORKSPACES) {
           // Start syncing workspaces, it's important to do this after
@@ -133,6 +138,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     onCleanup(() => {
       abort.abort()
+      unsubscribe?.()
       sse?.abort()
       if (timer) clearTimeout(timer)
       handlers.clear()

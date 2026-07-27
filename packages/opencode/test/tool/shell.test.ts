@@ -358,7 +358,7 @@ describe("tool.shell", () => {
         primary,
         run(
           {
-            command: `${bin} -e "console.log(process.cwd())"`,
+            command: `${PS.has(sh()) ? "& " : ""}${bin} -e "console.log(process.cwd())"`,
             workdir: secondary,
             description: "print cwd",
           },
@@ -418,7 +418,7 @@ describe("tool.shell", () => {
   )
 })
 
-describe("tool.shell sandbox", () => {
+describe.skipIf(process.platform === "win32")("tool.shell sandbox", () => {
   it.live("keeps host execution when sandbox is missing or disabled", () =>
     Effect.gen(function* () {
       const missingRecords: RecordedCommand[] = []

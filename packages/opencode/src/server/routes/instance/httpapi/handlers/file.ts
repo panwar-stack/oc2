@@ -6,7 +6,8 @@ import { Search } from "@oc2-ai/core/filesystem/search"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Log } from "@oc2-ai/core/util/log"
 import { AbsolutePath, RelativePath } from "@oc2-ai/core/schema"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
+import fuzzysort from "fuzzysort"
 import path from "path"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -38,8 +39,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       const limit = ctx.query.limit ?? 10
       const kind = ctx.query.type ?? (ctx.query.dirs === "false" ? "file" : "all")
       const started = performance.now()
-      // Prefer fff (frecency + fuzzy ranking) and trust its ordering. Fall back
-      // to the ripgrep-backed FileSystem.find when fff is unavailable.
+      // Prefer fff (frecency + fuzzy ranking) and trust its ordering.
       const fff = yield* search.file({ cwd: directory, query: ctx.query.query, limit, kind }).pipe(Effect.orDie)
       if (fff !== undefined) {
         log.info("find file", {
@@ -53,15 +53,22 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
         })
         return fff
       }
-      const fallback = (yield* filesystem(
-        FileSystem.Service.use((fs) =>
-          fs.find({
-            query: ctx.query.query,
-            limit,
-            type: ctx.query.type ?? (ctx.query.dirs === "false" ? "file" : undefined),
-          }),
-        ),
-      )).map((item) => item.path)
+      const fallback =
+        kind === "file"
+          ? fuzzyFiles(
+              Array.from(yield* ripgrep.files({ cwd: directory }).pipe(Stream.runCollect, Effect.orDie)),
+              ctx.query.query,
+              limit,
+            )
+          : (yield* filesystem(
+              FileSystem.Service.use((fs) =>
+                fs.find({
+                  query: ctx.query.query,
+                  limit,
+                  type: ctx.query.type,
+                }),
+              ),
+            )).map((item) => item.path)
       log.info("find file", {
         engine: "ripgrep",
         query: ctx.query.query,
@@ -126,3 +133,10 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       .handle("status", status)
   }),
 ).pipe(Layer.provide(LocationServiceMap.layer), Layer.provide(Search.defaultLayer))
+
+function fuzzyFiles(files: string[], query: string, limit: number) {
+  const normalized = Array.from(new Set(files.map((file) => file.replaceAll("\\", "/"))))
+  const text = query.trim()
+  if (!text) return normalized.slice(0, limit)
+  return fuzzysort.go(text, normalized, { limit }).map((item) => item.target)
+}

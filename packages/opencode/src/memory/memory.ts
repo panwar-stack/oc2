@@ -415,7 +415,7 @@ export const layer = Layer.effect(
     })
 
     const currentRepository = Effect.fn("Memory.currentRepository")(function* (worktree = process.cwd()) {
-      const root = yield* git(worktree, ["rev-parse", "--show-toplevel"])
+      const root = path.normalize(yield* git(worktree, ["rev-parse", "--show-toplevel"]))
       const remote = yield* optionalGit(root, ["remote", "get-url", "origin"])
       return { ...identity(remote.trim() || pathToFileURL(root).href), worktree: root }
     })

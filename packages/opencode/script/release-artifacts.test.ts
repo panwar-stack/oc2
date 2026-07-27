@@ -1,5 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test"
-import { rmSync } from "fs"
+import { mkdirSync, mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
 import path from "path"
 import { nativePackages, validateNativePackages } from "./release-artifacts"
 
@@ -9,10 +10,10 @@ setDefaultTimeout(30_000)
 await import("../src/effect/app-runtime")
 
 async function fixture(version = "1.2.3") {
-  const dist = await Bun.$`mktemp -d`.text().then((value) => value.trim())
+  const dist = mkdtempSync(path.join(tmpdir(), "oc2-release-artifacts-"))
   for (const item of nativePackages) {
     const directory = path.join(dist, item.name)
-    await Bun.$`mkdir -p ${path.join(directory, "bin")}`
+    mkdirSync(path.join(directory, "bin"), { recursive: true })
     await Bun.write(path.join(directory, "bin", item.binary), item.name)
     await Bun.write(
       path.join(directory, "package.json"),
@@ -32,7 +33,7 @@ describe("release artifacts", () => {
   test("loads workflow validators from the dispatched commit", async () => {
     const workflow = await Bun.file(path.join(import.meta.dir, "../../../.github/workflows/publish.yml")).text()
     expect(workflow.match(/- name: Checkout release tooling/g) ?? []).toHaveLength(2)
-    expect(workflow.match(/ref: \$\{\{ github\.sha \}\}\n\s+path: \.release-tooling/g) ?? []).toHaveLength(2)
+    expect(workflow.match(/ref: \$\{\{ github\.sha \}\}\r?\n\s+path: \.release-tooling/g) ?? []).toHaveLength(2)
     expect(
       workflow.match(
         /from "\.\/\.release-tooling\/packages\/opencode\/script\/release-artifacts\.ts"/g,

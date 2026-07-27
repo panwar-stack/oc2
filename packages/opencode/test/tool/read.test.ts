@@ -215,7 +215,7 @@ describe("tool.read external_directory permission", () => {
 
       expect(result.output).toContain("secondary content")
       expect(items.find((item) => item.permission === "external_directory")).toBeUndefined()
-      expect(items.find((item) => item.permission === "read")?.patterns).toEqual([path.join("nested", "test.txt")])
+      expect(items.find((item) => item.permission === "read")?.patterns).toEqual(["nested/test.txt"])
     }),
   )
 
@@ -254,14 +254,14 @@ describe("tool.read external_directory permission", () => {
         const { items, next } = asks()
         const target = path.join(dir, "test.txt")
         const alt = target
-          .replace(/^[A-Za-z]:/, "")
+          .replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`)
           .replaceAll("\\", "/")
           .toLowerCase()
 
         yield* exec(dir, { filePath: alt }, next)
         const read = items.find((item) => item.permission === "read")
         expect(read).toBeDefined()
-        expect(read!.patterns).toEqual([path.relative(dir, full(target))])
+        expect(read!.patterns).toEqual([path.relative(dir, full(target)).replaceAll("\\", "/")])
       }),
     )
   }
@@ -275,7 +275,7 @@ describe("tool.read external_directory permission", () => {
       yield* exec(dir, { filePath: path.join(dir, "src", "secret.ts") }, next)
       const read = items.find((item) => item.permission === "read")
       expect(read).toBeDefined()
-      expect(read!.patterns).toEqual([path.join("src", "secret.ts")])
+      expect(read!.patterns).toEqual(["src/secret.ts"])
     }),
   )
 

@@ -43,7 +43,7 @@ async function manifest(filepath: string) {
 
 export async function validateNativePackages(dist: string) {
   const names = Array.from(new Bun.Glob("*/package.json").scanSync({ cwd: dist }))
-    .map((filepath) => filepath.split("/")[0])
+    .map((filepath) => filepath.split(/[\\/]/)[0])
     .sort()
   const expected = nativePackages.map((item) => item.name)
   if (JSON.stringify(names) !== JSON.stringify(expected)) {
