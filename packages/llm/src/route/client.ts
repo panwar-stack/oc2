@@ -473,9 +473,9 @@ const collectCacheFields = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.flatMap(collectCacheFields)
   if (typeof value !== "object" || value === null) return []
   return Object.entries(value).flatMap(([key, item]) => [
-    ...(key === "prompt_cache_key" ? ["prompt_cache_key"] : []),
-    ...(key === "cache_control" ? ["cache_control"] : []),
-    ...(key === "cachePoint" ? ["cachePoint"] : []),
+    ...(item !== undefined && key === "prompt_cache_key" ? ["prompt_cache_key"] : []),
+    ...(item !== undefined && key === "cache_control" ? ["cache_control"] : []),
+    ...(item !== undefined && key === "cachePoint" ? ["cachePoint"] : []),
     ...collectCacheFields(item),
   ])
 }

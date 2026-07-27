@@ -31,7 +31,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               type: "document",
               info: decode({
                 providers: {
-                  opencode: {
+                  oc2: {
                     api: { type: "aisdk", package: "@ai-sdk/openai", url: "https://opencode.test/v1" },
                     models: {
                       "alpha-gpt-next": {
@@ -90,7 +90,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               type: "document",
               info: decode({
                 providers: {
-                  opencode: {
+                  oc2: {
                     api: { type: "aisdk", package: "@ai-sdk/openai", url: "https://opencode.test/v1" },
                   },
                 },
@@ -100,7 +100,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               type: "document",
               info: decode({
                 providers: {
-                  opencode: {
+                  oc2: {
                     models: {
                       "alpha-gpt-next": {
                         variants: [{ id: "high", body: { reasoningEffort: "high" } }],

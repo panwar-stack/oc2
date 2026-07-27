@@ -41,7 +41,7 @@ for (const name of sqlMigrations) {
   )
 }
 
-await Bun.write(registry, renderRegistry(sqlMigrations))
+await Bun.write(registry, renderRegistry(await migrationNames(tsDir)))
 
 async function check() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-core-migration-check-"))
@@ -65,16 +65,17 @@ export default { ...config, out: ${JSON.stringify(output)} }
       )
     }
 
-    const migrations = before
+    const sqlMigrations = before
       .map((entry) => entry.path.split("/")[0])
       .filter((name, index, all) => name !== undefined && all.indexOf(name) === index)
       .sort()
-    for (const name of migrations) {
+    for (const name of sqlMigrations) {
       if (await Bun.file(path.join(tsDir, `${name}.ts`)).exists()) continue
       throw new Error(
         `Database migration TypeScript wrapper is missing for ${name}. Run \`bun script/migration.ts\` from packages/core.`,
       )
     }
+    const migrations = await migrationNames(tsDir)
     if ((await Bun.file(registry).text()) !== renderRegistry(migrations)) {
       throw new Error("Database migration registry is stale. Run `bun script/migration.ts` from packages/core.")
     }
@@ -88,6 +89,12 @@ async function snapshot(directory: string) {
   return Promise.all(
     files.sort().map(async (file) => ({ path: file, contents: await Bun.file(path.join(directory, file)).text() })),
   )
+}
+
+async function migrationNames(directory: string) {
+  return (await Array.fromAsync(new Bun.Glob("*.ts").scan({ cwd: directory })))
+    .map((file) => path.basename(file, ".ts"))
+    .sort()
 }
 
 function renderMigration(name: string, sql: string) {

@@ -149,10 +149,10 @@ describe("SessionRunnerModel", () => {
       expect(resolved.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
       expect(prepared.body).toMatchObject({
         store: false,
-        service_tier: "priority",
         temperature: 0.2,
         reasoning: { effort: "high" },
       })
+      expect(prepared.body).not.toHaveProperty("service_tier")
       expect(prepared.body).not.toHaveProperty("reasoningEffort")
     }),
   )
