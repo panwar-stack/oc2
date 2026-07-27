@@ -15,15 +15,12 @@ export const openAIPromptCacheKey = (request: LLMRequest): string | undefined =>
   if (EXPLICIT_OPENAI_CACHE_DENYLIST.has(provider) || model.includes("kimi")) return undefined
 
   const plan = requestCachePlan(request)
-  if (!plan) return undefined
-  if (
-    plan.mode !== "disabled" &&
-    plan.eligible &&
-    plan.cacheKey &&
-    getCacheCapabilities(plan.provider, plan.model).requestFields.includes("prompt_cache_key")
-  )
-    return plan.cacheKey
-  return undefined
+  const capabilities = getCacheCapabilities(plan?.provider ?? provider, plan?.model ?? model)
+  if (!capabilities.requestFields.includes("prompt_cache_key")) return undefined
+  if (plan?.mode !== "disabled" && plan?.eligible && plan.cacheKey) return plan.cacheKey
+
+  const explicit = request.providerOptions?.openai?.promptCacheKey
+  return typeof explicit === "string" ? explicit : undefined
 }
 
 export const planHasBreakpoint = (

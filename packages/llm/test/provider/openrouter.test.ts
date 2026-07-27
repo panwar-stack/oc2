@@ -38,7 +38,6 @@ describe("OpenRouter", () => {
               openrouter: {
                 usage: true,
                 reasoning: { effort: "high" },
-                promptCacheKey: "session_123",
               },
             },
           }).model("anthropic/claude-3.7-sonnet:thinking"),
@@ -49,8 +48,8 @@ describe("OpenRouter", () => {
       expect(prepared.body).toMatchObject({
         usage: { include: true },
         reasoning: { effort: "high" },
-        prompt_cache_key: "session_123",
       })
+      expect(prepared.body).not.toHaveProperty("prompt_cache_key")
     }),
   )
 })

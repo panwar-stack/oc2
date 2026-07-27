@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { ConfigProvider, Effect, Layer, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
-import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
+import { CacheTelemetry, LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
@@ -742,6 +742,18 @@ describe("OpenAI Responses route", () => {
             output_tokens_details: { reasoning_tokens: 0 },
           },
         },
+        cacheTelemetry: CacheTelemetry.normalize({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          inputTokens: 5,
+          cacheReadTokens: 1,
+          cacheWriteTokens: 2,
+          providerRawUsageFieldNames: [
+            "input_tokens",
+            "input_tokens_details.cached_tokens",
+            "input_tokens_details.cache_write_tokens",
+          ],
+        }),
       })
 
       expect(response.text).toBe("Hello!")
@@ -1331,10 +1343,15 @@ describe("OpenAI Responses route", () => {
         inputTokens: 5,
         outputTokens: 1,
         nonCachedInputTokens: 5,
-        cacheReadInputTokens: undefined,
-        reasoningTokens: undefined,
         totalTokens: 6,
+        providerTotalTokens: undefined,
         providerMetadata: { openai: { input_tokens: 5, output_tokens: 1 } },
+        cacheTelemetry: CacheTelemetry.normalize({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          inputTokens: 5,
+          providerRawUsageFieldNames: ["input_tokens"],
+        }),
       })
 
       expect(response.events).toEqual([
@@ -1626,6 +1643,7 @@ describe("OpenAI Responses route", () => {
         {
           type: "provider-error",
           message: "server_error: Upstream failed after inference",
+          classification: undefined,
           usage: new Usage({
             inputTokens: 13,
             outputTokens: 8,
@@ -1636,6 +1654,21 @@ describe("OpenAI Responses route", () => {
             totalTokens: 21,
             providerTotalTokens: 21,
             providerMetadata: { openai: usage },
+            cacheTelemetry: CacheTelemetry.forceClassification(
+              CacheTelemetry.normalize({
+                provider: "openai",
+                model: "gpt-4.1-mini",
+                inputTokens: 13,
+                cacheReadTokens: 3,
+                cacheWriteTokens: 2,
+                providerRawUsageFieldNames: [
+                  "input_tokens",
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                ],
+              }),
+              "provider_error",
+            ),
           }),
         },
       ])
