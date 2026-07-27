@@ -123,7 +123,7 @@ Usage:
 | `--dangerously-skip-permissions` | Auto-approve permission requests not explicitly denied. Default: `false`.                                     |
 | `--demo`                         | Enable direct-interactive demo slash commands. Default: `false`.                                              |
 
-Piped stdin becomes the message. When message arguments are also present, their text is followed by the piped content. For local runs, relative `--file` paths are resolved after changing to `--dir`. With `--attach`, they are resolved against the original local root while `--dir` is interpreted on the remote server.
+Piped stdin becomes the message. When message arguments are also present, the argument text is followed by the piped content. For local runs, relative `--file` paths are resolved after changing to `--dir`. With `--attach`, they are resolved against the original local root while `--dir` is interpreted on the remote server.
 
 Interactive mode requires a TTY on stdout. It cannot be combined with `--command` or `--format json`; `--replay-limit` and `--demo` require interactive mode. Only use `--dangerously-skip-permissions` in a trusted environment.
 
