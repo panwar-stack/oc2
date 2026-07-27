@@ -20,6 +20,13 @@ curl -fsSL https://panwar-stack.github.io/oc2/install | bash
 
 OC2 is an independent project based on and inspired by [opencode](https://github.com/anomalyco/opencode). It is not an official opencode distribution. The agent runtime, session orchestration, tools, and persistence run locally by default; model requests go to your configured provider and may leave your machine.
 
+## Release Highlights Since v0.0.7
+
+- **v0.0.7 — Smoother provider setup.** After the first provider connection, OC2 opens model selection automatically, while canceled provider dialogs no longer fire stale callbacks.
+- **v0.0.8 — Observable OpenAI prompt caching.** Provider-aware planning and guardrails add stable cache keys, cache-aware cost accounting, and cache status in the CLI and TUI. See [Prompt Caching](./docs/prompt-caching.md).
+- **v0.0.9 — Anthropic caching and regression diagnostics.** Automatic Anthropic cache controls join runtime cache-regression checks, durable status events, and bounded opt-in self-healing.
+- **v0.0.10 — More robust OpenAI WebSockets.** Separate connection, response-silence, heartbeat, pong, and pool-idle limits improve health detection and fallback behavior.
+
 ## From One Prompt To A Coordinated Job
 
 OC2 can handle a focused change in one session. When the work branches, its experimental agent teams give the lead agent a concrete coordination model:
