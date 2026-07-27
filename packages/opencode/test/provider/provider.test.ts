@@ -10,6 +10,7 @@ import {
   disposeAllInstances,
   disposeAllInstancesEffect,
   provideInstanceEffect,
+  testInstanceStoreLayer,
   tmpdirScoped,
   TestInstance,
 } from "../fixture/fixture"
@@ -21,7 +22,6 @@ import { Plugin } from "../../src/plugin/index"
 import { Provider } from "@/provider/provider"
 
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { InstanceLayer } from "@/project/instance-layer"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
@@ -1730,7 +1730,7 @@ it.instance(
 // scoped tmpdir + provideInstance pattern via it.effect.
 
 const provideMultiInstance = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
-  eff.pipe(Effect.provide(InstanceLayer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer))
+  eff.pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer))
 
 it.effect("plugin config providers persist after instance dispose", () =>
   Effect.gen(function* () {
