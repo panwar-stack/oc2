@@ -2164,8 +2164,9 @@ it.instance(
       const inputs = yield* llm.inputs
       const messages = JSON.stringify(inputs.at(-1)?.messages)
       expect(messages).toContain("`config`: `research-panel`")
-      expect(messages).toContain("`prompt`: `Review key=value behavior`")
-      expect(messages).toContain("Do not include `branches`, `judge`, or `synthesizer` when `config` is set.")
+      expect(messages).toContain("The current request provided in `Review key=value behavior`")
+      expect(messages).toContain("`prompt`: the combined conversation context and current request described above")
+      expect(messages).toContain("Do not pass `branches`, `judge`, or `synthesizer` when `config` is set.")
       expect(messages).not.toContain("```json")
     }),
   { git: true },

@@ -60,27 +60,21 @@ describe("command", () => {
           const template = yield* Effect.promise(() => Promise.resolve(implementSpecPr.template))
 
           expect(implementSpecPr.hints).toEqual(["$1", "$2"])
-          expect(template).toContain("Resolve and read $1 before creating any worktree.")
-          expect(template).toContain("Treat the checkout that invoked this command as read-only.")
-          expect(template).toContain("record its committed HEAD as base_sha")
-          expect(template).toContain("one unique implementation branch")
-          expect(template).toContain("one dedicated git worktree outside the invoking checkout")
-          expect(template).toContain("every edit, generation step, test, review, and commit from the isolated worktree")
+          expect(template).toContain("Read and resolve $1 first. MUST use agent teams.")
+          expect(template).toContain("Record the invoking worktree path, status, branch, and committed HEAD as base_sha.")
+          expect(template).toContain("Treat it as read only.")
+          expect(template).toContain("Create one external worktree from base_sha.")
+          expect(template).toContain("Perform all edits, tests, reviews, and commits there.")
           expect(template).toContain(
-            "Do not stash, reset, clean, switch, edit, merge into, or cherry-pick into the invoking checkout.",
+            "Do not modify, merge into, fast forward, rebase, cherry pick, clean, reset, stash, switch, or commit in the invoking worktree.",
           )
-          expect(template).toContain("If implementation depends on other uncommitted source changes, stop")
-          expect(template).toContain("If PR #$2 is provided, implement only that pull request from $1.")
-          expect(template).toContain("If PR #$2 is missing")
-          expect(template).toContain("one pull request at a time in the same isolated worktree")
-          expect(template).toContain("each committed slice becomes the base for the next")
-          expect(template).toContain(
-            "Cleanup, merge, cherry-pick, or other integration requires a separate explicit request.",
-          )
-          expect(template).toContain("verify that the invoking checkout's status still matches the recorded status")
-          expect(template).toContain(
-            "Report the isolated worktree path, branch, base_sha, created commits, verification results, and remaining worktree status.",
-          )
+          expect(template).toContain("Stop if implementation depends on uncommitted source changes there.")
+          expect(template).toContain("When PR number - $2 - is provided, implement only that pull request.")
+          expect(template).toContain("Otherwise, complete $1 one pull request at a time.")
+          expect(template).toContain("For each pull request, implement, test, review, verify, and commit before continuing.")
+          expect(template).toContain("Do not implement unrelated work. MUST Audit the full implementation when complete.")
+          expect(template).toContain("Before responding, verify the invoking worktree is unchanged.")
+          expect(template).toContain("Preserve both worktrees.")
           expect(yield* command.get("spec-implement")).toBeUndefined()
 
           const learn = yield* command.get("learn")
@@ -110,7 +104,12 @@ describe("command", () => {
           expect(localFusion.hints).toEqual(["$1", "$2"])
           expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("local_fusion")
           expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("`config`: `$1`")
-          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain("`prompt`: `$2`")
+          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain(
+            "The current request provided in `$2`",
+          )
+          expect(yield* Effect.promise(() => Promise.resolve(localFusion.template))).toContain(
+            "`prompt`: the combined conversation context and current request described above",
+          )
           expect(yield* command.get("local_fusion")).toBeUndefined()
           expect(yield* command.get("review")).toBeUndefined()
         }),

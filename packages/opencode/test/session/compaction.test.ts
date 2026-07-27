@@ -325,8 +325,7 @@ function llm() {
       LLM.Service.of({
         stream: (input) => {
           const item = queue.shift() ?? Stream.empty
-          const stream = typeof item === "function" ? item(input) : item
-          return stream.pipe(Stream.mapEffect((event) => Effect.succeed(event)))
+          return typeof item === "function" ? item(input) : item
         },
       }),
     ),
@@ -339,7 +338,7 @@ function reply(
 ): (input: LLM.StreamInput) => Stream.Stream<LLMEvent, unknown> {
   return (input) => {
     capture?.(input)
-    return Stream.make(
+    const stream = Stream.make(
       LLMEvent.textStart({ id: "txt-0" }),
       LLMEvent.textDelta({ id: "txt-0", text }),
       LLMEvent.textEnd({ id: "txt-0" }),
@@ -353,6 +352,11 @@ function reply(
         usage: basicUsage(),
       }),
     )
+    const timing = LLM.makeProviderTiming()
+    LLM.beginProviderStep(timing, 0)
+    LLM.beginProviderAttempt(timing)
+    LLM.finishProviderAttempt(timing, "success")
+    return LLM.withProviderTiming(stream, timing)
   }
 }
 
@@ -1347,14 +1351,12 @@ describe("session.compaction.process", () => {
           .pipe(Effect.forkChild)
 
         yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
-        const start = Date.now()
         yield* Fiber.interrupt(fiber)
         const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
 
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
           expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-          expect(Date.now() - start).toBeLessThan(250)
         }
       }).pipe(withCompaction({ llm: stub.layer }))
     },

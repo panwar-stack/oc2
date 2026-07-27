@@ -30,19 +30,21 @@ const it = testEffect(
 )
 
 describe("tool.team_shutdown", () => {
-  it.live("returns disabled message when agent teams are disabled", () =>
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const sessions = yield* Session.Service
-        const lead = yield* sessions.create({ title: "Lead" })
-        const tool = yield* TeamShutdownTool
-        const def = yield* tool.init()
+  it.live("returns disabled message when agent teams are explicitly disabled", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const tool = yield* TeamShutdownTool
+          const def = yield* tool.init()
 
-        const result = yield* def.execute({}, context(lead.id))
+          const result = yield* def.execute({}, context(lead.id))
 
-        expect(result.title).toBe("Team Shutdown")
-        expect(result.output).toBe("Agent teams disabled.")
-      }),
+          expect(result.title).toBe("Team Shutdown")
+          expect(result.output).toBe("Agent teams disabled.")
+        }),
+      { config: { experimental: { agent_teams: false } } },
     ),
   )
 

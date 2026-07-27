@@ -6,7 +6,13 @@ import { ModelsDev } from "@oc2-ai/core/models-dev"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Global } from "@oc2-ai/core/global"
-import { disposeAllInstances, provideInstanceEffect, tmpdirScoped, TestInstance } from "../fixture/fixture"
+import {
+  disposeAllInstances,
+  disposeAllInstancesEffect,
+  provideInstanceEffect,
+  tmpdirScoped,
+  TestInstance,
+} from "../fixture/fixture"
 import { markPluginDependenciesReady } from "../fixture/plugin"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
@@ -1774,7 +1780,7 @@ it.effect("plugin config providers persist after instance dispose", () =>
     expect(first[ProviderV2.ID.make("demo")]).toBeDefined()
     expect(first[ProviderV2.ID.make("demo")].models[ModelV2.ID.make("chat")]).toBeDefined()
 
-    yield* Effect.promise(() => disposeAllInstances())
+    yield* disposeAllInstancesEffect
 
     const second = yield* loadAndList
     expect(second[ProviderV2.ID.make("demo")]).toBeDefined()
