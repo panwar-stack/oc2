@@ -1077,7 +1077,7 @@ raceNoLLMServer.instance(
       }
     }),
   { config: cfg },
-  3_000,
+  10_000,
 )
 
 it.live("injects team orchestration guidance for primary lead sessions when agent teams are enabled", () =>

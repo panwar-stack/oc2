@@ -173,12 +173,11 @@ describe("compound judge", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({ title: "parent" })
-      yield* sessions.addRoot({
-        sessionID: parent.id,
-        directory: path.dirname(path.resolve(os.tmpdir())),
-        name: "temp parent",
-      })
-      yield* sessions.addRoot({ sessionID: parent.id, directory: os.tmpdir(), name: "system temp" })
+      const tempRoot = path.resolve(os.tmpdir())
+      const roots = [tempRoot, path.dirname(tempRoot)].filter((root) => path.dirname(root) !== root)
+      for (const [index, root] of roots.entries()) {
+        yield* sessions.addRoot({ sessionID: parent.id, directory: root, name: `temp root ${index}` })
+      }
       const prompts: SessionPrompt.PromptInput[] = []
       yield* SessionCompoundJudge.run({
         sessionID: parent.id,
@@ -194,8 +193,7 @@ describe("compound judge", () => {
       const tempDir = path.resolve(parent.directory, tempEditAllow?.pattern.replace(/\/\*$/, "") ?? ".")
 
       expect(prompts[0]?.tools).toMatchObject({ write: true, edit: true, apply_patch: false })
-      expect(containsPath(path.resolve(os.tmpdir()), tempDir)).toBe(false)
-      expect(containsPath(path.dirname(path.resolve(os.tmpdir())), tempDir)).toBe(false)
+      expect(roots.every((root) => !containsPath(root, tempDir))).toBe(true)
       expect(Permission.evaluate("edit", "package.json", childPermission).action).toBe("deny")
       expect(
         Permission.evaluate("edit", tempEditAllow?.pattern.replace(/\/\*$/, "/scratch.txt") ?? "", childPermission)
