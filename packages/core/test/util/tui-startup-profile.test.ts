@@ -134,6 +134,34 @@ describe("tui startup profile", () => {
     expect(out.lines).toHaveLength(1)
   })
 
+  test("rejects accessor-backed fields without reading or serializing them", () => {
+    const out = harness([10])
+    let reads = 0
+    const input = {
+      get event() {
+        reads++
+        return reads === 1 ? "cli.entry" : "secret"
+      },
+      role: "main",
+    }
+
+    expect(out.profile.emit(input)).toBe(false)
+    expect(reads).toBe(0)
+    expect(out.lines).toEqual([])
+    expect(out.clocks).toBe(1)
+    expect(out.profile.enabled).toBe(true)
+  })
+
+  test("fails closed when finite clock values produce an infinite elapsed delta", () => {
+    const out = harness([-Number.MAX_VALUE, Number.MAX_VALUE])
+
+    expect(out.profile.emit({ event: "cli.entry", role: "main" })).toBe(false)
+    expect(out.profile.enabled).toBe(false)
+    expect(out.lines).toEqual([])
+    expect(out.clocks).toBe(2)
+    expect(out.closes).toBe(1)
+  })
+
   test("fails closed after a sink error and closes once", () => {
     const out = harness([1, 2, 3], { failWrite: true })
 

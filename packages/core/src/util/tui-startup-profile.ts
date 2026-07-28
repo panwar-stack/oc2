@@ -97,16 +97,16 @@ function traceDescriptor(fd: number) {
   return stat.isFIFO() || stat.isSocket()
 }
 
-function validInput(input: unknown): input is TuiStartupTraceInput {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) return false
-  const keys = Object.keys(input)
-  return (
-    keys.length === 2 &&
-    keys.includes("event") &&
-    keys.includes("role") &&
-    Reflect.get(input, "event") === "cli.entry" &&
-    Reflect.get(input, "role") === "main"
-  )
+function snapshotInput(input: unknown): TuiStartupTraceInput | undefined {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return undefined
+  const descriptors = Object.getOwnPropertyDescriptors(input)
+  const keys = Reflect.ownKeys(descriptors)
+  if (keys.length !== 2 || !keys.includes("event") || !keys.includes("role")) return undefined
+  const event = descriptors.event
+  const role = descriptors.role
+  if (!event?.enumerable || !("value" in event) || event.value !== "cli.entry") return undefined
+  if (!role?.enumerable || !("value" in role) || role.value !== "main") return undefined
+  return { event: "cli.entry", role: "main" }
 }
 
 export function createTuiStartupProfile(options: TuiStartupProfileOptions = {}): TuiStartupProfile {
@@ -173,11 +173,13 @@ export function createTuiStartupProfile(options: TuiStartupProfileOptions = {}):
     },
     emit(input) {
       if (state !== "active") return false
+      let snapshot: TuiStartupTraceInput | undefined
       try {
-        if (!validInput(input)) return false
+        snapshot = snapshotInput(input)
       } catch {
         return false
       }
+      if (!snapshot) return false
       if (sequence >= maxRecords) {
         fail()
         return false
@@ -189,13 +191,18 @@ export function createTuiStartupProfile(options: TuiStartupProfileOptions = {}):
           fail()
           return false
         }
+        const elapsedMs = Math.max(0, now - origin)
+        if (!Number.isFinite(elapsedMs)) {
+          fail()
+          return false
+        }
         const record: TuiStartupTraceRecord = {
           version: TUI_STARTUP_TRACE_VERSION,
           runID,
           sequence,
-          elapsedMs: Math.max(0, now - origin),
-          event: input.event,
-          role: input.role,
+          elapsedMs,
+          event: snapshot.event,
+          role: snapshot.role,
         }
         const line = JSON.stringify(record) + "\n"
         if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
