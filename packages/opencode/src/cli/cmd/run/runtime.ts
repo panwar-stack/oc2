@@ -12,7 +12,7 @@
 //   3. starts the stream transport (SDK event subscription), lazily for fresh
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
-import { createOpencodeClient } from "@oc2-ai/sdk/v2"
+import { createOpencodeClient, setOc2ClientGeneration } from "@oc2-ai/sdk/v2"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
@@ -31,7 +31,7 @@ export { runPromptQueue } from "./runtime.queue"
 
 type BootContext = Pick<
   RunInput,
-  "sdk" | "directory" | "sessionID" | "sessionTitle" | "resume" | "agent" | "model" | "variant"
+  "sdk" | "directory" | "generation" | "sessionID" | "sessionTitle" | "resume" | "agent" | "model" | "variant"
 >
 
 type CreateSessionInput = {
@@ -60,6 +60,7 @@ type RunRuntimeInput = {
 
 type RunLocalInput = {
   directory: string
+  generation: number
   fetch: typeof globalThis.fetch
   resolveAgent: () => Promise<string | undefined>
   session: (sdk: RunInput["sdk"]) => Promise<{ id: string; title?: string } | undefined>
@@ -95,6 +96,27 @@ type ResolvedSession = {
   sessionID: string
   sessionTitle?: string
   agent?: string | undefined
+}
+
+async function resolveGeneration(ctx: BootContext): Promise<number> {
+  if (ctx.generation !== undefined) return ctx.generation
+
+  const events = await ctx.sdk.event.subscribe()
+  try {
+    for await (const event of events.stream) {
+      if (event.type !== "server.connected") continue
+      const generation = event.properties.generation
+      if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation <= 0) break
+      return generation
+    }
+  } finally {
+    await events.stream.return(undefined as never).catch(() => {})
+  }
+  throw new Error("Failed to establish instance generation")
+}
+
+function pinGeneration(ctx: BootContext, generation: number) {
+  setOc2ClientGeneration(ctx.sdk, generation)
 }
 
 function createSessionResolver(fn?: CreateSession) {
@@ -190,7 +212,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       const start = performance.now()
       const log = trace()
       const tuiConfigTask = resolveRunTuiConfig()
-      const ctx = await input.boot()
+      const boot = await input.boot()
+      const generation = await resolveGeneration(boot)
+      pinGeneration(boot, generation)
+      const ctx = { ...boot, generation }
       const modelTask = resolveModelInfo(ctx.sdk, ctx.directory, ctx.model)
       const sessionTask =
         ctx.resume === true
@@ -510,6 +535,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           const handle = await mod.createSessionTransport({
             sdk: ctx.sdk,
             directory: ctx.directory,
+            generation: ctx.generation,
             sessionID: state.sessionID,
             thinking: input.thinking,
             replay: input.replay,
@@ -846,6 +872,7 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
           return {
             sdk,
             directory: input.directory,
+            generation: input.generation,
             sessionID: "",
             sessionTitle: undefined,
             resume: false,
@@ -884,6 +911,7 @@ export async function runInteractiveMode(
           boot: async () => ({
             sdk: input.sdk,
             directory: input.directory,
+            generation: input.generation,
             sessionID: input.sessionID,
             sessionTitle: input.sessionTitle,
             resume: input.resume,

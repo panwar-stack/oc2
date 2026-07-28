@@ -130,10 +130,9 @@ export const contextLimitLoaderLayer = Layer.effect(
 
     return ContextLimitLoader.of({
       providers: Effect.fn("ACPUsageContextLimitLoader.providers")(function* (directory) {
-        const ctx = yield* store.load({ directory })
-        return yield* Effect.gen(function* () {
+        return yield* store.provide({ directory }, Effect.gen(function* () {
           return yield* provider.list()
-        }).pipe(Effect.provideService(InstanceRef, ctx))
+        }))
       }),
     })
   }),

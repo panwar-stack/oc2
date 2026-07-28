@@ -367,6 +367,7 @@ function child(id: string): SessionChild {
 function globalEvent(payload: GlobalEvent["payload"]): GlobalEvent {
   return {
     directory: "/tmp",
+    generation: 1,
     project: "project-1",
     payload,
   }
@@ -2274,6 +2275,7 @@ describe("run stream transport", () => {
     const ready = defer()
 
     const transport = await createSessionTransport({
+      generation: 1,
       sdk: sdk({
         globalEvent: () =>
           globalSse(
@@ -2284,6 +2286,7 @@ describe("run stream transport", () => {
                 type: "server.instance.disposed",
                 properties: {
                   directory: "/tmp",
+                  generation: 1,
                 },
               })
             })(),
@@ -2313,6 +2316,48 @@ describe("run stream transport", () => {
         }),
       ).rejects.toThrow("instance disposed")
     } finally {
+      await transport.close()
+    }
+  })
+
+  test("drops mismatched normal and disposal events while accepting the active generation", async () => {
+    const src = globalFeed()
+    const ui = footer()
+    const received: string[] = []
+    const transport = await createSessionTransport({
+      generation: 2,
+      sdk: sdk({ globalEvent: () => globalSse(src.stream) }),
+      directory: "/tmp",
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+      trace: {
+        write(type, data) {
+          if (type === "recv.event" && data && typeof data === "object" && "id" in data) {
+            received.push(String(data.id))
+          }
+        },
+      },
+    })
+
+    try {
+      src.push({ ...globalEvent(assistant("old")), generation: 1 })
+      src.push({
+        ...globalEvent({
+          id: "evt-old-disposed",
+          type: "server.instance.disposed",
+          properties: { directory: "/tmp", generation: 1 },
+        }),
+        generation: 1,
+      })
+      src.push({ ...globalEvent(assistant("new")), generation: 2 })
+
+      await waitFor(() => (received.includes("evt-new") ? true : undefined))
+      expect(received).not.toContain("evt-old")
+      expect(received).toContain("evt-new")
+    } finally {
+      src.close()
       await transport.close()
     }
   })

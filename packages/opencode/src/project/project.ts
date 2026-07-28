@@ -427,7 +427,11 @@ export const layer = Layer.effect(
     const initState = yield* InstanceState.make(
       Effect.fn("Project.initState")(function* (ctx) {
         const unsubscribe = yield* events.listen((event) => {
-          if (event.type !== Command.Event.Executed.type || event.location?.directory !== ctx.directory)
+          if (
+            event.type !== Command.Event.Executed.type ||
+            event.location?.directory !== ctx.directory ||
+            event.location.generation !== ctx.generation
+          )
             return Effect.void
           const data = event.data as EventV2.Data<typeof Command.Event.Executed>
           return data.name === Command.Default.INIT ? setInitialized(ctx.project.id) : Effect.void

@@ -75,9 +75,15 @@ export const rpc = {
     return { url: server.url.toString() }
   },
   async checkUpgrade(input: { directory: string }) {
-    const [{ InstanceRuntime }, { upgrade }] = await Promise.all([import("@/project/instance-runtime"), import("@/cli/upgrade")])
-    await InstanceRuntime.load({ directory: input.directory })
-    await upgrade().catch(() => {})
+    const [{ InstanceRuntime }, { upgrade }, { Effect }] = await Promise.all([
+      import("@/project/instance-runtime"),
+      import("@/cli/upgrade"),
+      import("effect"),
+    ])
+    await InstanceRuntime.provide(
+      { directory: input.directory },
+      Effect.promise(() => upgrade().catch(() => {})),
+    )
   },
   async reload() {
     const [{ AppRuntime }, { Config }, { Effect }, { disposeAllInstancesAndEmitGlobalDisposed }] = await Promise.all([

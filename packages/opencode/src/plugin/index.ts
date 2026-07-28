@@ -26,6 +26,7 @@ import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
 import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdapter } from "@/control-plane/adapters"
+import { key as instanceKey } from "@/project/instance-context"
 import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -144,7 +145,7 @@ export const layer = Layer.effect(
         const client = createOpencodeClient({
           baseUrl: "http://localhost:4096",
           directory: ctx.directory,
-          headers: ServerAuth.headers(),
+          headers: { ...ServerAuth.headers(), "x-oc2-generation": String(ctx.generation) },
           fetch: async (...args) => Server.Default().app.fetch(...args),
         })
         const cfg = yield* config.get()
@@ -155,7 +156,7 @@ export const layer = Layer.effect(
           directory: ctx.directory,
           experimental_workspace: {
             register(type: string, adapter: PluginWorkspaceAdapter) {
-              registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter)
+              registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter, instanceKey(ctx))
             },
           },
           get serverUrl(): URL {
@@ -259,7 +260,8 @@ export const layer = Layer.effect(
         }
 
         const unsubscribe = yield* events.listen((event) => {
-          if (event.location?.directory !== ctx.directory) return Effect.void
+          if (event.location?.directory !== ctx.directory || event.location.generation !== ctx.generation)
+            return Effect.void
           return Effect.sync(() => {
             for (const hook of hooks) {
               void hook["event"]?.({ event: { id: event.id, type: event.type, properties: event.data } as any })

@@ -57,6 +57,7 @@ export type RunResource = RunResourceMap[string]
 export type RunInput = {
   sdk: OpencodeClient
   directory: string
+  generation?: number
   sessionID: string
   sessionTitle?: string
   resume?: boolean

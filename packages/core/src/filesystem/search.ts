@@ -57,6 +57,7 @@ interface State {
   readonly pick: Map<string, Picker>
   readonly wait: Map<string, Deferred.Deferred<Picker, Error>>
   readonly recent: Query[]
+  readonly owners: Map<string, Set<string>>
 }
 
 export interface Interface {
@@ -66,11 +67,11 @@ export interface Interface {
   readonly file: (input: FileInput) => Effect.Effect<string[] | undefined, SearchError>
   readonly glob: (input: GlobInput) => Effect.Effect<{ files: string[]; truncated: boolean }, SearchError>
   readonly open: (input: { cwd?: string; file: string }) => Effect.Effect<void, SearchError>
-  readonly warm: (cwd: string) => Effect.Effect<void>
+  readonly warm: (cwd: string, owner?: string) => Effect.Effect<void>
   // Destroy the picker for a directory and drop its cached state. Called when a
   // directory's instance is disposed so fff's native watcher thread is torn
   // down instead of leaking until process exit.
-  readonly release: (cwd: string) => Effect.Effect<void>
+  readonly release: (cwd: string, owner?: string) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Search") {}
@@ -186,6 +187,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
       pick: new Map<string, Picker>(),
       wait: new Map<string, Deferred.Deferred<Picker, Error>>(),
       recent: [] as Query[],
+      owners: new Map(),
     }
 
     yield* fs.ensureDir(root).pipe(Effect.ignore)
@@ -313,7 +315,13 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
     // conduct a file search in this direcotry, it could be switched later but
     // mostly always we will need a file picker for cwd
     // so synchronously start FFF scan for a cwd so it is ready before first toolcall generated
-    const warm: Interface["warm"] = Effect.fn("Search.warm")(function* (cwd) {
+    const warm: Interface["warm"] = Effect.fn("Search.warm")(function* (cwd, owner) {
+      if (owner) {
+        const dir = FSUtil.resolve(cwd)
+        const owners = state.owners.get(dir) ?? new Set<string>()
+        owners.add(owner)
+        state.owners.set(dir, owners)
+      }
       yield* acquire(cwd).pipe(Effect.ignore)
     })
 
@@ -321,8 +329,14 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
     // watcher thread that otherwise lives until the runtime scope closes (i.e.
     // process exit), so disposing the instance that warmed it must destroy it
     // here or the thread leaks against a directory that may already be gone.
-    const release: Interface["release"] = Effect.fn("Search.release")(function* (cwd) {
+    const release: Interface["release"] = Effect.fn("Search.release")(function* (cwd, owner) {
       const dir = FSUtil.resolve(cwd)
+      if (owner) {
+        const owners = state.owners.get(dir)
+        owners?.delete(owner)
+        if (owners?.size) return
+        state.owners.delete(dir)
+      }
 
       const pending = state.wait.get(dir)
       if (pending) {

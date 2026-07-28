@@ -2,12 +2,12 @@ import { EventV2 } from "@oc2-ai/core/event"
 import { Schema } from "effect"
 
 export const Event = {
-  Connected: EventV2.define({ type: "server.connected", schema: {} }),
+  Connected: EventV2.define({ type: "server.connected", schema: { generation: Schema.optional(Schema.Finite) } }),
   Disposed: EventV2.define({ type: "global.disposed", schema: {} }),
 }
 
 export const InstanceDisposed = Schema.Struct({
   id: Schema.String,
   type: Schema.Literal("server.instance.disposed"),
-  properties: Schema.Struct({ directory: Schema.String }),
+  properties: Schema.Struct({ directory: Schema.String, generation: Schema.Finite }),
 }).annotate({ identifier: "Event.server.instance.disposed" })

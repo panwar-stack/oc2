@@ -69,6 +69,7 @@ const StreamClosed = undefined as never
 type StreamInput = {
   sdk: OpencodeClient
   directory?: string
+  generation?: number
   sessionID: string
   thinking: boolean
   replay?: boolean
@@ -181,12 +182,15 @@ function isGlobalEvent(value: unknown): value is GlobalEvent {
   return !!payload && typeof payload === "object"
 }
 
-function globalPayloadEvent(value: unknown): Event | undefined {
+function globalPayloadEvent(value: unknown, directory?: string, generation?: number): Event | undefined {
   if (!isGlobalEvent(value)) {
     return undefined
   }
 
   const payload = value.payload
+  if (directory && value.directory === directory && generation !== undefined && value.generation !== generation) {
+    return undefined
+  }
   if (payload.type === "sync") {
     return undefined
   }
@@ -194,8 +198,8 @@ function globalPayloadEvent(value: unknown): Event | undefined {
   return isEvent(payload) ? payload : undefined
 }
 
-function isMatchingDisposeEvent(value: unknown, directory: string | undefined): boolean {
-  if (!directory || !isGlobalEvent(value)) {
+function isMatchingDisposeEvent(value: unknown, directory: string | undefined, generation: number | undefined): boolean {
+  if (!directory || generation === undefined || !isGlobalEvent(value)) {
     return false
   }
 
@@ -203,7 +207,7 @@ function isMatchingDisposeEvent(value: unknown, directory: string | undefined): 
     return false
   }
 
-  return value.payload.type === "server.instance.disposed"
+  return value.generation === generation && value.payload.type === "server.instance.disposed"
 }
 
 function active(event: Event, sessionID: string): boolean {
@@ -1132,13 +1136,13 @@ function createLayer(input: StreamInput) {
                   return
                 }
 
-                if (isMatchingDisposeEvent(item, input.directory)) {
+                if (isMatchingDisposeEvent(item, input.directory, input.generation)) {
                   yield* fail(new Error("instance disposed"))
                   yield* closeScope()
                   return
                 }
 
-                const event = globalPayloadEvent(item)
+                const event = globalPayloadEvent(item, input.directory, input.generation)
                 if (!event) {
                   return
                 }

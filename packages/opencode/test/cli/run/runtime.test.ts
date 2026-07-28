@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { OpencodeClient } from "@oc2-ai/sdk/v2"
+import { createOpencodeClient, OpencodeClient } from "@oc2-ai/sdk/v2"
 import { runInteractiveMode } from "@/cli/cmd/run/runtime"
 import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
 
@@ -180,10 +180,12 @@ describe("run interactive runtime", () => {
     spyOn(sdk.experimental.resource, "list").mockImplementation(() => ok({}))
     spyOn(sdk.command, "list").mockImplementation(() => ok([]))
 
+    let transportGeneration: number | undefined
     const task = runInteractiveMode(
       {
         sdk,
         directory: "/tmp",
+        generation: 7,
         sessionID: "ses-1",
         sessionTitle: "Session",
         resume: true,
@@ -208,8 +210,13 @@ describe("run interactive runtime", () => {
           close: () => Promise.resolve(),
         }),
         streamTransport: Promise.resolve({
-          createSessionTransport: async (input: { providers?: () => RunProvider[]; footer: FooterApi }) => {
+          createSessionTransport: async (input: {
+            providers?: () => RunProvider[]
+            footer: FooterApi
+            generation?: number
+          }) => {
             transportProviders.push(input.providers?.() ?? [])
+            transportGeneration = input.generation
             setTimeout(() => {
               input.footer.close()
             }, 0)
@@ -234,5 +241,72 @@ describe("run interactive runtime", () => {
     await task
 
     expect(transportProviders).toEqual([[provider]])
+    expect(transportGeneration).toBe(7)
+  })
+
+  test("attach mode handshakes generation before pinning SDK requests", async () => {
+    let generationHeader: string | null = null
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      generationHeader = request.headers.get("x-oc2-generation")
+      return Response.json({ healthy: true, version: "test" })
+    }) as typeof fetch
+    const sdk = createOpencodeClient({
+      baseUrl: "https://opencode.test",
+      directory: "/tmp",
+      fetch: fetchFn,
+    })
+    spyOn(sdk.event, "subscribe").mockImplementation(async () => ({
+      stream: (async function* () {
+        yield { id: "connected", type: "server.connected", properties: { generation: 9 } } as const
+      })(),
+    }))
+    spyOn(sdk.config, "providers").mockImplementation(() => ok({ providers: [], default: {} }))
+    spyOn(sdk.app, "agents").mockImplementation(() => ok([]))
+    spyOn(sdk.experimental.resource, "list").mockImplementation(() => ok({}))
+    spyOn(sdk.command, "list").mockImplementation(() => ok([]))
+    spyOn(sdk.session, "get").mockRejectedValue(new Error("not needed"))
+    let transportGeneration: number | undefined
+
+    await runInteractiveMode(
+      {
+        sdk,
+        directory: "/tmp",
+        sessionID: "ses-1",
+        resume: false,
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        files: [],
+        thinking: true,
+        backgroundSubagents: false,
+      },
+      {
+        createRuntimeLifecycle: async () => ({
+          footer: footer(),
+          onResize: () => () => {},
+          refreshTheme: () => {},
+          resetForReplay: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+        }),
+        streamTransport: Promise.resolve({
+          createSessionTransport: async (input) => {
+            transportGeneration = input.generation
+            await sdk.global.health()
+            setTimeout(() => input.footer.close(), 0)
+            return {
+              runPromptTurn: async () => {},
+              selectSubagent: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    )
+
+    expect(transportGeneration).toBe(9)
+    expect(generationHeader as string | null).toBe("9")
   })
 })

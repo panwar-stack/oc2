@@ -32,7 +32,7 @@ type RemoteTarget = Extract<Target, { type: "remote" }>
 type RequestPlan = Data.TaggedEnum<{
   InvalidWorkspace: {}
   MissingWorkspace: { readonly workspaceID: WorkspaceV2.ID }
-  Local: { readonly directory: string; readonly workspaceID?: WorkspaceV2.ID }
+  Local: { readonly directory: string; readonly workspaceID?: WorkspaceV2.ID; readonly generation?: number }
   Remote: {
     readonly request: HttpServerRequest.HttpServerRequest
     readonly workspace: Workspace.Info
@@ -48,6 +48,7 @@ export class WorkspaceRouteContext extends Context.Service<
   {
     readonly directory: string
     readonly workspaceID?: WorkspaceV2.ID
+    readonly generation?: number
   }
 >()("@opencode/ExperimentalHttpApiWorkspaceRouteContext") {}
 
@@ -86,6 +87,13 @@ function selectedV2WorkspaceID(
 
 function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
   return url.searchParams.get("directory") || Naming.recordHeader(request.headers, Naming.headers.directory) || process.cwd()
+}
+
+function requestedGeneration(request: HttpServerRequest.HttpServerRequest): number | undefined {
+  const value = request.headers["x-oc2-generation"]
+  if (value === undefined) return undefined
+  const generation = Number(value)
+  return Number.isSafeInteger(generation) && generation > 0 ? generation : undefined
 }
 
 function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, url: URL): boolean {
@@ -154,7 +162,11 @@ function planWorkspaceRequest(
   return Effect.gen(function* () {
     const target = yield* resolveTarget(workspace)
     if (target.type === "remote") return RequestPlan.Remote({ request, workspace, target, url })
-    return RequestPlan.Local({ directory: target.directory, workspaceID: workspace.id })
+    return RequestPlan.Local({
+      directory: target.directory,
+      workspaceID: workspace.id,
+      generation: requestedGeneration(request),
+    })
   })
 }
 
@@ -182,6 +194,7 @@ function planRequest(
     return RequestPlan.Local({
       directory: session?.directory || defaultDirectory(request, url),
       workspaceID: envWorkspaceID ?? workspaceID,
+      generation: requestedGeneration(request),
     })
   })
 }
@@ -205,8 +218,10 @@ function routeWorkspace<E>(
       ),
     MissingWorkspace: ({ workspaceID }) => Effect.succeed(missingWorkspaceResponse(workspaceID)),
     Remote: ({ request, workspace, target, url }) => proxyRemote(client, request, workspace, target, url),
-    Local: ({ directory, workspaceID }) =>
-      effect.pipe(Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID }))),
+    Local: ({ directory, workspaceID, generation }) =>
+      effect.pipe(
+        Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID, generation })),
+      ),
   })
 }
 

@@ -34,14 +34,21 @@ export const layer = Layer.effect(
 
     const publish: EventV2.Interface["publish"] = (definition, data, options) =>
       Effect.gen(function* () {
-        if (options?.location) return yield* events.publish(definition, data, options)
         const ctx = yield* InstanceRef
+        if (options?.location) {
+          if (!ctx || options.location.generation !== undefined) return yield* events.publish(definition, data, options)
+          return yield* events.publish(definition, data, {
+            ...options,
+            location: { ...options.location, generation: ctx.generation },
+          })
+        }
         if (!ctx) return yield* events.publish(definition, data, options)
         const workspaceID = yield* WorkspaceRef
         return yield* events.publish(definition, data, {
           ...options,
           location: new Location.Info({
             directory: AbsolutePath.make(ctx.directory),
+            generation: ctx.generation,
             ...(workspaceID ? { workspaceID } : {}),
             project: { id: Project.ID.make(ctx.project.id), directory: AbsolutePath.make(ctx.worktree) },
           }),
@@ -56,6 +63,7 @@ export const layer = Layer.effect(
           directory: event.location?.directory ?? ctx?.directory,
           project: ctx?.project.id,
           workspace: workspaceID,
+          generation: event.location?.generation ?? ctx?.generation,
           payload: { id: event.id, type: event.type, properties: event.data },
         })
         const sync = EventV2.registry.get(event.type)?.sync
@@ -66,6 +74,7 @@ export const layer = Layer.effect(
           directory: event.location?.directory ?? ctx?.directory,
           project: ctx?.project.id,
           workspace: workspaceID,
+          generation: event.location?.generation ?? ctx?.generation,
           payload: {
             type: "sync",
             syncEvent: {

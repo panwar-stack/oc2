@@ -5,6 +5,7 @@ export type GlobalEvent = {
   directory?: string
   project?: string
   workspace?: string
+  generation?: number
   payload: any
 }
 

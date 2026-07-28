@@ -328,7 +328,11 @@ export const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Serv
         log.info("initialized", { branch: value.current, default_branch: value.root?.name })
 
         const unsubscribe = yield* events.listen((event) => {
-          if (event.type !== Watcher.Event.Updated.type || event.location?.directory !== ctx.directory)
+          if (
+            event.type !== Watcher.Event.Updated.type ||
+            event.location?.directory !== ctx.directory ||
+            event.location.generation !== ctx.generation
+          )
             return Effect.void
           const data = event.data as EventV2.Data<typeof Watcher.Event.Updated>
           if (!data.file.endsWith("HEAD")) return Effect.void

@@ -77,6 +77,8 @@ it.live("makeRuntime inherits InstanceRef from the current fiber", () =>
   }).pipe(
     Effect.provideService(InstanceRef, {
       directory: testDirectory,
+      generation: 1,
+      state: "active",
       worktree: testDirectory,
       project: {
         id: ProjectV2.ID.global,

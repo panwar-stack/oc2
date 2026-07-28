@@ -841,6 +841,7 @@ export type GlobalEvent = {
   directory: string
   project?: string
   workspace?: string
+  generation?: number
   payload:
     | {
         id: string
@@ -1177,7 +1178,7 @@ export type GlobalEvent = {
         id: string
         type: "server.connected"
         properties: {
-          [key: string]: unknown
+          generation?: number
         }
       }
     | {
@@ -4237,6 +4238,7 @@ export type QuestionV2Answer = Array<string>
 export type LocationRef = {
   directory: string
   workspaceID?: string
+  generation?: number
 }
 
 export type PromptSource = {
@@ -4333,6 +4335,7 @@ export type EventServerInstanceDisposed = {
   type: "server.instance.disposed"
   properties: {
     directory: string
+    generation: number
   }
 }
 
@@ -5028,6 +5031,7 @@ export type ProjectCopyCopy = {
 export type LocationInfo = {
   directory: string
   workspaceID?: string
+  generation?: number
   project: {
     id: string
     directory: string
@@ -5945,7 +5949,7 @@ export type EventServerConnected = {
   id: string
   type: "server.connected"
   properties: {
-    [key: string]: unknown
+    generation?: number
   }
 }
 

@@ -4,8 +4,21 @@ import type * as Project from "./project"
 
 export interface InstanceContext {
   directory: string
+  generation: number
+  state: "booting" | "active" | "draining" | "closed"
   worktree: string
   project: Project.Info
+}
+
+export function key(ctx: Pick<InstanceContext, "directory" | "generation">): string {
+  return `${ctx.directory}\0${ctx.generation}`
+}
+
+export function matches(
+  left: Pick<InstanceContext, "directory" | "generation">,
+  right: { directory?: string; generation?: number },
+): boolean {
+  return left.directory === right.directory && left.generation === right.generation
 }
 
 export const context = LocalContext.create<InstanceContext>("instance")

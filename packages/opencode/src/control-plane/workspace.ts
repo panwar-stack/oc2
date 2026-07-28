@@ -18,6 +18,7 @@ import { ProjectV2 } from "@oc2-ai/core/project"
 import { Slug } from "@oc2-ai/core/util/slug"
 import { WorkspaceTable } from "@oc2-ai/core/control-plane/workspace.sql"
 import { getAdapter, registeredAdapters } from "./adapters"
+import { InstanceState } from "@/effect/instance-state"
 import { type Target, type WorkspaceInfo, WorkspaceInfo as WorkspaceInfoSchema } from "./types"
 import { WorkspaceV2 } from "@oc2-ai/core/workspace"
 import { Session } from "@/session/session"
@@ -450,9 +451,10 @@ export const layer = Layer.effect(
               }
 
               try {
-                const event = evt as { directory?: string; project?: string; payload: unknown }
+                const event = evt as { directory?: string; generation?: number; project?: string; payload: unknown }
                 GlobalBus.emit("event", {
                   directory: event.directory,
+                  generation: event.generation,
                   project: event.project,
                   workspace: space.id,
                   payload: event.payload,
@@ -530,7 +532,7 @@ export const layer = Layer.effect(
 
     const create = Effect.fn("Workspace.create")(function* (input: CreateInput) {
       const id = WorkspaceV2.ID.ascending(input.id)
-      const adapter = getAdapter(input.projectID, input.type)
+      const adapter = getAdapter(input.projectID, input.type, yield* InstanceState.key)
       const config = yield* WorkspaceAdapterRuntime.configure(adapter, {
         ...input,
         id,
@@ -831,7 +833,7 @@ export const layer = Layer.effect(
     const syncList = Effect.fn("Workspace.syncList")(function* (project: Project.Info) {
       const names = new Set((yield* list(project)).map((workspace) => workspace.name))
       const discovered = yield* Effect.forEach(
-        registeredAdapters(project.id),
+        registeredAdapters(project.id, yield* InstanceState.key),
         ([type, adapter]) =>
           WorkspaceAdapterRuntime.list(adapter).pipe(
             Effect.catchCause((error) =>

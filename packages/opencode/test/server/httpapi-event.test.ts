@@ -2,6 +2,13 @@ import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer, Queue, Schema, Stream } from "effect"
 import * as Log from "@oc2-ai/core/util/log"
 import { EventPaths } from "../../src/server/routes/instance/httpapi/groups/event"
+import { EventV2Bridge } from "../../src/event-v2-bridge"
+import { InstanceStore } from "../../src/project/instance-store"
+import { EventV2 } from "@oc2-ai/core/event"
+import { Location } from "@oc2-ai/core/location"
+import { Project } from "@oc2-ai/core/project"
+import { AbsolutePath } from "@oc2-ai/core/schema"
+import { AppRuntime } from "../../src/effect/app-runtime"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -14,6 +21,8 @@ const EventData = Schema.Struct({
   type: Schema.String,
   properties: Schema.Record(Schema.String, Schema.Any),
 })
+
+const GenerationEvent = EventV2.define({ type: "test.generation", schema: { value: Schema.String } })
 
 const readEvent = (reader: Queue.Dequeue<Uint8Array>) =>
   Effect.gen(function* () {
@@ -57,7 +66,10 @@ describe("event HttpApi", () => {
         expect(response.headers["cache-control"]).toBe("no-cache, no-transform")
         expect(response.headers["x-accel-buffering"]).toBe("no")
         expect(response.headers["x-content-type-options"]).toBe("nosniff")
-        expect(yield* readEvent(reader)).toMatchObject({ type: "server.connected", properties: {} })
+        expect(yield* readEvent(reader)).toMatchObject({
+          type: "server.connected",
+          properties: { generation: expect.any(Number) },
+        })
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
@@ -87,6 +99,47 @@ describe("event HttpApi", () => {
         const { directory } = yield* TestInstance
         const { reader } = yield* openEventStream(directory)
         expect(yield* readEvent(reader)).toMatchObject({ type: "server.connected", properties: {} })
+
+        const created = yield* requestInDirectory("/session", directory, { method: "POST" })
+        expect(created.status).toBe(200)
+        expect(yield* readEvent(reader)).toMatchObject({ type: "session.created" })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "isolates normal events by instance generation",
+    () =>
+      Effect.gen(function* () {
+        const { directory } = yield* TestInstance
+        const store = yield* InstanceStore.Service
+        const instance = yield* store.load({ directory })
+        const { reader } = yield* openEventStream(directory)
+        expect(yield* readEvent(reader)).toMatchObject({ type: "server.connected" })
+        const location = (generation: number) =>
+          new Location.Info({
+            directory: AbsolutePath.make(directory),
+            generation,
+            project: {
+              id: Project.ID.make(instance.project.id),
+              directory: AbsolutePath.make(instance.worktree),
+            },
+          })
+
+        const publish = (value: string, generation: number) =>
+          Effect.promise(() =>
+            AppRuntime.runPromise(
+              Effect.flatMap(EventV2Bridge.Service, (events) =>
+                events.publish(GenerationEvent, { value }, { location: location(generation) }),
+              ),
+            ),
+          )
+        yield* publish("old", instance.generation - 1)
+        const stale = yield* Queue.take(reader).pipe(
+          Effect.as(true),
+          Effect.timeoutOrElse({ duration: "100 millis", orElse: () => Effect.succeed(false) }),
+        )
+        expect(stale).toBe(false)
 
         const created = yield* requestInDirectory("/session", directory, { method: "POST" })
         expect(created.status).toBe(200)

@@ -12,6 +12,7 @@ import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { Reference } from "@/reference/reference"
 import * as EffectLogger from "@oc2-ai/core/effect/logger"
+import { key as instanceKey } from "./instance-context"
 
 const log = EffectLogger.create({ service: "instance.bootstrap" })
 
@@ -35,7 +36,7 @@ export const layer = Layer.effect(
     const vcs = yield* Vcs.Service
 
     // once we dispose the service - also release all the internal fff resources
-    const off = registerDisposer((directory) => Effect.runPromise(search.release(directory)))
+    const off = registerDisposer((ctx) => Effect.runPromise(search.release(ctx.directory, instanceKey(ctx))))
     yield* Effect.addFinalizer(() => Effect.sync(off))
 
     const run = Effect.gen(function* () {
@@ -50,7 +51,7 @@ export const layer = Layer.effect(
       // mostly always we will need a file picker for cwd
       // so synchronously start FFF scan for a cwd so it is ready before first toolcall generated
       yield* log.info("startup stage", { directory: ctx.directory, stage: "search.warm", status: "started" })
-      yield* search.warm(ctx.directory).pipe(Effect.ignore)
+      yield* search.warm(ctx.directory, instanceKey(ctx)).pipe(Effect.ignore)
       yield* log.info("startup stage", { directory: ctx.directory, stage: "search.warm", status: "completed" })
       // Plugin can mutate config so it has to be initialized before anything else.
       yield* log.info("startup stage", { directory: ctx.directory, stage: "plugin.init", status: "started" })

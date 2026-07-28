@@ -1,71 +1,67 @@
-import { describe, expect, test } from "bun:test"
-import { getAdapter, registerAdapter } from "../../src/control-plane/adapters"
+import { expect, test } from "bun:test"
 import { ProjectV2 } from "@oc2-ai/core/project"
-import type { WorkspaceInfo } from "../../src/control-plane/types"
+import {
+  activateAdapters,
+  getAdapter,
+  listAdapters,
+  registerAdapter,
+  releaseAdapters,
+} from "../../src/control-plane/adapters"
+import type { WorkspaceAdapter } from "../../src/control-plane/types"
 
-function info(projectID: WorkspaceInfo["projectID"], type: string): WorkspaceInfo {
-  return {
-    id: "workspace-test" as WorkspaceInfo["id"],
-    type,
-    name: "workspace-test",
-    branch: null,
-    directory: null,
-    extra: null,
-    projectID,
-  }
-}
+const adapter = (name: string): WorkspaceAdapter => ({
+  name,
+  description: name,
+  configure: (info) => info,
+  create: async () => {},
+  remove: async () => {},
+  target: (info) => ({ type: "local", directory: info.directory ?? "/" }),
+})
 
-function adapter(dir: string) {
-  return {
-    name: dir,
-    description: dir,
-    configure(input: WorkspaceInfo) {
-      return input
-    },
-    async create() {},
-    async remove() {},
-    target() {
-      return {
-        type: "local" as const,
-        directory: dir,
-      }
-    },
-  }
-}
+test("active staged adapters overlay rather than hide project adapters", () => {
+  const projectID = ProjectV2.ID.make(`adapter-overlay-${crypto.randomUUID()}`)
+  const owner = `owner-${crypto.randomUUID()}`
+  registerAdapter(projectID, "baseline", adapter("baseline"))
+  registerAdapter(projectID, "candidate", adapter("candidate"), owner)
 
-describe("control-plane/adapters", () => {
-  test("isolates custom adapters by project", async () => {
-    const type = `demo-${Math.random().toString(36).slice(2)}`
-    const one = ProjectV2.ID.make(`project-${Math.random().toString(36).slice(2)}`)
-    const two = ProjectV2.ID.make(`project-${Math.random().toString(36).slice(2)}`)
-    registerAdapter(one, type, adapter("/one"))
-    registerAdapter(two, type, adapter("/two"))
+  activateAdapters(projectID, owner)
 
-    expect(await (await getAdapter(one, type)).target(info(one, type))).toEqual({
-      type: "local",
-      directory: "/one",
-    })
-    expect(await (await getAdapter(two, type)).target(info(two, type))).toEqual({
-      type: "local",
-      directory: "/two",
-    })
-  })
+  expect(getAdapter(projectID, "baseline").name).toBe("baseline")
+  expect(getAdapter(projectID, "candidate", owner).name).toBe("candidate")
+  expect(listAdapters(projectID, owner).map((item) => item.type)).toContainAllValues([
+    "worktree",
+    "baseline",
+    "candidate",
+  ])
+  releaseAdapters(projectID, owner)
+  expect(() => getAdapter(projectID, "candidate")).toThrow("Unknown workspace adapter")
+  expect(getAdapter(projectID, "baseline").name).toBe("baseline")
+})
 
-  test("latest install wins within a project", async () => {
-    const type = `demo-${Math.random().toString(36).slice(2)}`
-    const id = ProjectV2.ID.make(`project-${Math.random().toString(36).slice(2)}`)
-    registerAdapter(id, type, adapter("/one"))
+test("simultaneous owners select their own overlay and releasing the newer preserves the older", () => {
+  const projectID = ProjectV2.ID.make(`adapter-generations-${crypto.randomUUID()}`)
+  const owner1 = `/worktree:1:${crypto.randomUUID()}`
+  const owner2 = `/worktree:2:${crypto.randomUUID()}`
+  registerAdapter(projectID, "custom", adapter("one"), owner1)
+  registerAdapter(projectID, "custom", adapter("two"), owner2)
 
-    expect(await (await getAdapter(id, type)).target(info(id, type))).toEqual({
-      type: "local",
-      directory: "/one",
-    })
+  activateAdapters(projectID, owner1)
+  activateAdapters(projectID, owner2)
+  expect(getAdapter(projectID, "custom", owner1).name).toBe("one")
+  expect(getAdapter(projectID, "custom", owner2).name).toBe("two")
 
-    registerAdapter(id, type, adapter("/two"))
+  releaseAdapters(projectID, owner2)
+  expect(getAdapter(projectID, "custom", owner1).name).toBe("one")
+  expect(() => getAdapter(projectID, "custom", owner2)).toThrow("Unknown workspace adapter")
+  releaseAdapters(projectID, owner1)
+})
 
-    expect(await (await getAdapter(id, type)).target(info(id, type))).toEqual({
-      type: "local",
-      directory: "/two",
-    })
-  })
+test("failed candidate adapters remain invisible", () => {
+  const projectID = ProjectV2.ID.make(`adapter-failure-${crypto.randomUUID()}`)
+  const owner = `owner-${crypto.randomUUID()}`
+  registerAdapter(projectID, "candidate", adapter("candidate"), owner)
+
+  expect(() => getAdapter(projectID, "candidate")).toThrow("Unknown workspace adapter")
+  releaseAdapters(projectID, owner)
+  expect(() => getAdapter(projectID, "candidate")).toThrow("Unknown workspace adapter")
 })

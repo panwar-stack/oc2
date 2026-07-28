@@ -3,6 +3,8 @@ import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { $ } from "bun"
 import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
+import { InstanceStore } from "@/project/instance-store"
 import {
   disposeAllInstancesEffect,
   provideInstanceEffect,
@@ -54,6 +56,23 @@ it.live("InstanceState isolates directories", () =>
   }),
 )
 
+it.live("InstanceState isolates generations in the same directory", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const active = yield* store.load({ directory: dir })
+    const candidate = { ...active, generation: active.generation + 1, state: "booting" as const }
+    const state = yield* InstanceState.make((ctx) => Effect.succeed({ generation: ctx.generation }))
+
+    const first = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, active))
+    const second = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, candidate))
+
+    expect(first).not.toBe(second)
+    expect(first.generation).toBe(active.generation)
+    expect(second.generation).toBe(candidate.generation)
+  }),
+)
+
 it.live("InstanceState invalidates on reload", () =>
   Effect.gen(function* () {
     const dir = yield* tmpdirScoped()
@@ -69,9 +88,12 @@ it.live("InstanceState invalidates on reload", () =>
       ),
     )
 
+    const store = yield* InstanceStore.Service
+    const first = yield* store.load({ directory: dir })
     const a = yield* access(state, dir)
     yield* reloadInstance({ directory: dir })
     const b = yield* access(state, dir)
+    yield* store.dispose(first)
 
     expect(a).not.toBe(b)
     expect(seen).toEqual(["1"])

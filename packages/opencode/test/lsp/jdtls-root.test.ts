@@ -12,7 +12,7 @@ import type { InstanceContext } from "@/project/instance-context"
 const tmpBase = path.join(os.tmpdir(), "opencode-jdtls-test")
 
 function makeCtx(directory: string): InstanceContext {
-  return { directory, worktree: "/", project: {} as any }
+  return { directory, generation: 1, state: "active", worktree: "/", project: {} as any }
 }
 
 async function mkdirp(p: string) {

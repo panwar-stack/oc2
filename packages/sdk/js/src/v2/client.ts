@@ -11,6 +11,12 @@ import { Oc2Client } from "./gen/sdk.gen.js"
 import { wrapClientError } from "../error-interceptor.js"
 export { Oc2Client, Oc2Client as OpencodeClient, type Config as Oc2ClientConfig, type Config as OpencodeClientConfig }
 
+const generations = new WeakMap<Oc2Client, number>()
+
+export function setOc2ClientGeneration(client: Oc2Client, generation: number) {
+  generations.set(client, generation)
+}
+
 function pick(value: string | null, fallback?: string, encode?: (value: string) => string) {
   if (!value) return
   if (!fallback) return value
@@ -93,7 +99,13 @@ export function createOc2Client(config?: Config & { directory?: string; experime
     return response
   })
   client.interceptors.error.use(wrapClientError)
-  return new Oc2Client({ client })
+  const sdk = new Oc2Client({ client })
+  client.interceptors.request.use((request) => {
+    const generation = generations.get(sdk)
+    if (generation !== undefined) request.headers.set("x-oc2-generation", String(generation))
+    return request
+  })
+  return sdk
 }
 
 export const createOpencodeClient = createOc2Client

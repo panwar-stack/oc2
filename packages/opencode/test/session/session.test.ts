@@ -405,6 +405,8 @@ describe("Session", () => {
         const info = yield* session.create({ title: "restart roots" }).pipe(
           Effect.provideService(InstanceRef, {
             directory: primary,
+            generation: 1,
+            state: "active",
             worktree: primary,
             project,
           }),
@@ -427,6 +429,8 @@ describe("Session", () => {
         const listed = yield* session.list({ directory: secondary }).pipe(
           Effect.provideService(InstanceRef, {
             directory: secondary,
+            generation: 1,
+            state: "active",
             worktree: created.secondaryRoot.worktree,
             project: { ...project, id: created.secondaryRoot.projectID, worktree: created.secondaryRoot.worktree },
           }),
@@ -464,6 +468,8 @@ describe("Session", () => {
         const info = yield* session.create({ title: "restart promoted root" }).pipe(
           Effect.provideService(InstanceRef, {
             directory: primary,
+            generation: 1,
+            state: "active",
             worktree: primary,
             project,
           }),

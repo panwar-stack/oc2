@@ -15,7 +15,8 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
 
     const adapters = Effect.fn("WorkspaceHttpApi.adapters")(function* () {
       const instance = yield* InstanceState.context
-      return yield* Effect.sync(() => listAdapters(instance.project.id))
+      const owner = yield* InstanceState.key
+      return listAdapters(instance.project.id, owner)
     })
 
     const list = Effect.fn("WorkspaceHttpApi.list")(function* () {

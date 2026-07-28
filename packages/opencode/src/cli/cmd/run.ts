@@ -804,6 +804,7 @@ export const RunCommand = effectCmd({
       }
 
       if (args.interactive && !args.attach && !args.session && !args.continue) {
+        if (!localInstance) throw new Error("Local instance context is unavailable")
         const model = pick(args.model)
         const { runInteractiveLocalMode } = await import("./run/runtime")
         const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -815,6 +816,7 @@ export const RunCommand = effectCmd({
         try {
           return await runInteractiveLocalMode({
             directory: directory ?? root,
+            generation: localInstance.generation,
             fetch: fetchFn,
             resolveAgent: localAgent,
             session,

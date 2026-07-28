@@ -1,6 +1,7 @@
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
+import { matches as matchesInstance } from "@/project/instance-context"
 import { EventV2 } from "@oc2-ai/core/event"
 import * as Log from "@oc2-ai/core/util/log"
 import { Cause, Clock, Effect, Queue } from "effect"
@@ -48,6 +49,7 @@ function eventResponse(events: EventV2.Interface) {
       Stream.filter(
         (event) =>
           event.location?.directory === instance.directory &&
+          event.location.generation === instance.generation &&
           (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID),
       ),
       Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
@@ -55,9 +57,10 @@ function eventResponse(events: EventV2.Interface) {
     const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>((queue) => {
       const listener = (event: {
         directory?: string
+        generation?: number
         payload: { id?: string; type?: string; properties?: unknown }
       }) => {
-        if (event.directory !== instance.directory || event.payload.type !== "server.instance.disposed") return
+        if (!matchesInstance(instance, event) || event.payload.type !== "server.instance.disposed") return
         Queue.offerUnsafe(queue, {
           id: event.payload.id ?? eventID(),
           type: "server.instance.disposed",
@@ -82,7 +85,7 @@ function eventResponse(events: EventV2.Interface) {
     let status: "closed" | "error" = "closed"
     log.debug("event.connected", { status: "connected" })
     return HttpServerResponse.stream(
-      Stream.make({ id: eventID(), type: "server.connected", properties: {} }).pipe(
+      Stream.make({ id: eventID(), type: "server.connected", properties: { generation: instance.generation } }).pipe(
         Stream.concat(output.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),

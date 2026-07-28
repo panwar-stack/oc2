@@ -16612,6 +16612,9 @@
           "workspace": {
             "type": "string"
           },
+          "generation": {
+            "type": "number"
+          },
           "payload": {
             "anyOf": [
               {
@@ -18121,7 +18124,12 @@
                   },
                   "properties": {
                     "type": "object",
-                    "properties": {}
+                    "properties": {
+                      "generation": {
+                        "type": "number"
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -31127,6 +31135,9 @@
           "workspaceID": {
             "type": "string",
             "pattern": "^wrk"
+          },
+          "generation": {
+            "type": "number"
           }
         },
         "required": [
@@ -31461,10 +31472,14 @@
             "properties": {
               "directory": {
                 "type": "string"
+              },
+              "generation": {
+                "type": "number"
               }
             },
             "required": [
-              "directory"
+              "directory",
+              "generation"
             ],
             "additionalProperties": false
           }
@@ -34443,6 +34458,9 @@
           "workspaceID": {
             "type": "string",
             "pattern": "^wrk"
+          },
+          "generation": {
+            "type": "number"
           },
           "project": {
             "type": "object",
@@ -38213,7 +38231,12 @@
           },
           "properties": {
             "type": "object",
-            "properties": {}
+            "properties": {
+              "generation": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [

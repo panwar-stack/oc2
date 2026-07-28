@@ -1432,6 +1432,7 @@ describe("workspace sync state", () => {
                   { directory: "remote-dir", project: "remote-project", payload: { type: "server.heartbeat" } },
                   {
                     directory: "remote-dir",
+                    generation: 9,
                     project: "remote-project",
                     payload: { type: "custom.remote", properties: { ok: true } },
                   },
@@ -1478,6 +1479,7 @@ describe("workspace sync state", () => {
                 captured.events.find((event) => event.workspace === info.id && event.payload.type === "custom.remote"),
               ).toMatchObject({
                 directory: "remote-dir",
+                generation: 9,
                 project: "remote-project",
                 payload: { properties: { ok: true } },
               })

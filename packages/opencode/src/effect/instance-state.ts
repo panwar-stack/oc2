@@ -1,11 +1,16 @@
-import { Effect, ScopedCache, Scope } from "effect"
+import { Context, Effect, ScopedCache, Scope } from "effect"
 import * as EffectLogger from "@oc2-ai/core/effect/logger"
 import type { InstanceContext } from "@/project/instance-context"
 import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import { registerDisposer } from "./instance-registry"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
+import { key as instanceKey } from "@/project/instance-context"
 
 const TypeId = "~opencode/InstanceState"
+
+export const LeaseRef = Context.Reference<string | undefined>("~opencode/InstanceState/LeaseRef", {
+  defaultValue: () => undefined,
+})
 
 export interface InstanceState<A, E = never, R = never> {
   readonly [TypeId]: typeof TypeId
@@ -23,6 +28,7 @@ export const workspaceID = Effect.gen(function* () {
 })
 
 export const directory = Effect.map(context, (ctx) => ctx.directory)
+export const key = Effect.map(context, instanceKey)
 
 export const make = <A, E = never, R = never>(
   init: (ctx: InstanceContext) => Effect.Effect<A, E, R | Scope.Scope>,
@@ -36,8 +42,8 @@ export const make = <A, E = never, R = never>(
         }),
     })
 
-    const off = registerDisposer((directory) =>
-      Effect.runPromise(ScopedCache.invalidate(cache, directory).pipe(Effect.provide(EffectLogger.layer))),
+    const off = registerDisposer((ctx) =>
+      Effect.runPromise(ScopedCache.invalidate(cache, instanceKey(ctx)).pipe(Effect.provide(EffectLogger.layer))),
     )
     yield* Effect.addFinalizer(() => Effect.sync(off))
 
@@ -49,7 +55,12 @@ export const make = <A, E = never, R = never>(
 
 export const get = <A, E, R>(self: InstanceState<A, E, R>) =>
   Effect.gen(function* () {
-    return yield* ScopedCache.get(self.cache, yield* directory)
+    const ctx = yield* context
+    const lease = yield* LeaseRef
+    if ((ctx.state === "draining" && lease !== instanceKey(ctx)) || ctx.state === "closed") {
+      return yield* Effect.die(new Error(`instance generation is ${ctx.state}: ${instanceKey(ctx)}`))
+    }
+    return yield* ScopedCache.get(self.cache, instanceKey(ctx))
   })
 
 export const use = <A, E, R, B>(self: InstanceState<A, E, R>, select: (value: A) => B) => Effect.map(get(self), select)
@@ -61,12 +72,12 @@ export const useEffect = <A, E, R, B, E2, R2>(
 
 export const has = <A, E, R>(self: InstanceState<A, E, R>) =>
   Effect.gen(function* () {
-    return yield* ScopedCache.has(self.cache, yield* directory)
+    return yield* ScopedCache.has(self.cache, yield* key)
   })
 
 export const invalidate = <A, E, R>(self: InstanceState<A, E, R>) =>
   Effect.gen(function* () {
-    return yield* ScopedCache.invalidate(self.cache, yield* directory)
+    return yield* ScopedCache.invalidate(self.cache, yield* key)
   })
 
 export * as InstanceState from "./instance-state"

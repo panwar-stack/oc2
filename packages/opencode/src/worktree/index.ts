@@ -264,7 +264,7 @@ export const layer: Layer.Layer<
         return
       }
 
-      const booted = yield* store.load({ directory: info.directory }).pipe(
+      const booted = yield* store.provide({ directory: info.directory }, Effect.void).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.sync(() => {

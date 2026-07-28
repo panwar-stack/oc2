@@ -33,6 +33,7 @@ const GlobalEventSchema = Schema.Struct({
   directory: Schema.String,
   project: Schema.optional(Schema.String),
   workspace: Schema.optional(Schema.String),
+  generation: Schema.optional(Schema.Finite),
   payload: Schema.Union([
     ...EventV2.definitions()
       .map((definition) =>

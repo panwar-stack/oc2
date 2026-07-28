@@ -3,6 +3,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { getAdapter } from "./adapters"
 import type { WorkspaceAdapter, WorkspaceInfo } from "./types"
+import { key as instanceKey } from "@/project/instance-context"
 
 const context = Effect.gen(function* () {
   return {
@@ -13,8 +14,8 @@ const context = Effect.gen(function* () {
 
 export const target = (info: WorkspaceInfo) =>
   Effect.gen(function* () {
-    const adapter = getAdapter(info.projectID, info.type)
     const ctx = yield* context
+    const adapter = getAdapter(info.projectID, info.type, ctx.instance ? instanceKey(ctx.instance) : undefined)
     return yield* EffectBridge.fromPromise(() => adapter.target(info, ctx))
   })
 
@@ -43,8 +44,8 @@ export const list = (adapter: WorkspaceAdapter) =>
 
 export const remove = (info: WorkspaceInfo) =>
   Effect.gen(function* () {
-    const adapter = getAdapter(info.projectID, info.type)
     const ctx = yield* context
+    const adapter = getAdapter(info.projectID, info.type, ctx.instance ? instanceKey(ctx.instance) : undefined)
     return yield* EffectBridge.fromPromise(() => adapter.remove(info, ctx))
   })
 

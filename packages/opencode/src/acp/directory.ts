@@ -112,8 +112,7 @@ export const loaderLayer = Layer.effect(
 
     return Loader.of({
       load: Effect.fn("ACPDirectoryLoader.load")(function* (directory) {
-        const ctx = yield* store.load({ directory })
-        return yield* Effect.gen(function* () {
+        return yield* store.provide({ directory }, Effect.gen(function* () {
           const providers = yield* provider.list()
           const [agents, defaultAgent, commands, defaultModel] = yield* Effect.all(
             [agent.list(), agent.defaultInfo(), command.list(), provider.defaultModel().pipe(Effect.option)],
@@ -133,7 +132,7 @@ export const loaderLayer = Layer.effect(
             commands: commands.toSorted((a, b) => a.name.localeCompare(b.name)),
             ...(defaultModel._tag === "Some" ? { defaultModel: defaultModel.value } : {}),
           })
-        }).pipe(Effect.provideService(InstanceRef, ctx))
+        }))
       }),
     })
   }),
