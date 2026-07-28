@@ -1,0 +1,12 @@
+{"label":"compiled-no-theme-response","mode":"warm","seed":{"first_byte_ms":1266.580083,"ready_ms":3970.909166,"ttfd_ms":3824.0,"bytes_until_ready":6559,"timed_out":false}}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":994.117,"ready_ms":3628.368625,"ttfd_ms":3611.09,"bytes_until_ready":6559,"timed_out":false,"sample":1}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":841.229875,"ready_ms":3088.307667,"ttfd_ms":3074.94,"bytes_until_ready":6559,"timed_out":false,"sample":2}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":750.775208,"ready_ms":2870.163375,"ttfd_ms":2857.88,"bytes_until_ready":6559,"timed_out":false,"sample":3}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":730.934292,"ready_ms":2824.65525,"ttfd_ms":2810.98,"bytes_until_ready":6559,"timed_out":false,"sample":4}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":717.532083,"ready_ms":2821.220042,"ttfd_ms":2809.03,"bytes_until_ready":6559,"timed_out":false,"sample":5}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":787.503166,"ready_ms":2960.111125,"ttfd_ms":2946.61,"bytes_until_ready":6559,"timed_out":false,"sample":6}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":781.016417,"ready_ms":3025.528542,"ttfd_ms":3012.32,"bytes_until_ready":6559,"timed_out":false,"sample":7}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":763.35025,"ready_ms":3022.063459,"ttfd_ms":3008.51,"bytes_until_ready":6559,"timed_out":false,"sample":8}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":1341.085875,"ready_ms":4524.133333,"ttfd_ms":4505.89,"bytes_until_ready":6559,"timed_out":false,"sample":9}
+{"label":"compiled-no-theme-response","mode":"warm","first_byte_ms":950.088291,"ready_ms":5666.442166,"ttfd_ms":5630.03,"bytes_until_ready":6559,"timed_out":false,"sample":10}
+{"summary":{"label":"compiled-no-theme-response","mode":"warm","samples":10,"valid":10,"ready_ms":{"min":2821.220042,"median":3023.7960005,"mean":3443.0993584,"p90":4638.3642162999995,"p95":5152.403191149999,"max":5666.442166,"stdev":940.1221214484027},"ttfd_ms":{"min":2809.03,"median":3010.415,"mean":3426.728,"p90":4618.304,"p95":5124.166999999999,"max":5630.03,"stdev":933.2328824015768},"first_byte_ms":{"min":717.532083,"median":784.2597915,"mean":865.7632457,"p90":1028.8138874999997,"p95":1184.9498812499996,"max":1341.085875,"stdev":190.696835495871}}}

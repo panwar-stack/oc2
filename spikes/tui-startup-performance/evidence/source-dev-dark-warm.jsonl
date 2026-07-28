@@ -1,0 +1,12 @@
+{"label":"source-dev-dark-terminal","mode":"warm","seed":{"first_byte_ms":3160.957709,"ready_ms":7071.196084,"ttfd_ms":7056.62,"bytes_until_ready":6559,"timed_out":false}}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":4202.328375,"ready_ms":5561.730583,"ttfd_ms":5512.07,"bytes_until_ready":6559,"timed_out":false,"sample":1}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":2037.795417,"ready_ms":3150.674542,"ttfd_ms":3134.75,"bytes_until_ready":6559,"timed_out":false,"sample":2}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":1959.191542,"ready_ms":3105.531334,"ttfd_ms":3091.61,"bytes_until_ready":6559,"timed_out":false,"sample":3}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":1929.250166,"ready_ms":2943.92325,"ttfd_ms":2930.6,"bytes_until_ready":6559,"timed_out":false,"sample":4}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":1859.133917,"ready_ms":3030.225959,"ttfd_ms":3016.54,"bytes_until_ready":6559,"timed_out":false,"sample":5}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":1960.433709,"ready_ms":3224.851375,"ttfd_ms":3206.99,"bytes_until_ready":6559,"timed_out":false,"sample":6}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":1809.227666,"ready_ms":2882.062583,"ttfd_ms":2867.84,"bytes_until_ready":6559,"timed_out":false,"sample":7}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":1817.068291,"ready_ms":2876.385833,"ttfd_ms":2860.88,"bytes_until_ready":6559,"timed_out":false,"sample":8}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":3246.428542,"ready_ms":5432.442375,"ttfd_ms":5418.86,"bytes_until_ready":6559,"timed_out":false,"sample":9}
+{"label":"source-dev-dark-terminal","mode":"warm","first_byte_ms":4194.141625,"ready_ms":5563.8535,"ttfd_ms":5534.52,"bytes_until_ready":6559,"timed_out":false,"sample":10}
+{"summary":{"label":"source-dev-dark-terminal","mode":"warm","samples":10,"valid":10,"ready_ms":{"min":2876.385833,"median":3128.102938,"mean":3777.1681334,"p90":5561.942874699999,"p95":5562.89818735,"max":5563.8535,"stdev":1207.8597650993584},"ttfd_ms":{"min":2860.88,"median":3113.1800000000003,"mean":3757.466,"p90":5514.3150000000005,"p95":5524.4175,"max":5534.52,"stdev":1199.950415162597},"first_byte_ms":{"min":1809.227666,"median":1959.8126255,"mean":2501.499925,"p90":4194.960300000001,"p95":4198.6443375,"max":4202.328375,"stdev":988.9633352125328}}}

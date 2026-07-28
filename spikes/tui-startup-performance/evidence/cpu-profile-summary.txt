@@ -1,0 +1,98 @@
+TUI startup CPU profile summary
+================================
+
+Scope
+-----
+These are share-safe analyzer results derived from two source/dev Bun CPU
+profiles. Raw profiles and Bun Markdown reports are intentionally not tracked:
+they contain absolute user paths, are multi-megabyte artifacts, include shutdown
+after Ctrl-C, and are not production/compiled hotspot profiles.
+
+Metric
+------
+The repository analyzer reports leaf sample/hit counts, not Bun Markdown
+self-time. Percentages below are shares of selected leaf samples. Inclusive
+product frames count samples whose ancestor chain includes that product frame;
+they are not additive. Dependency names retain the versions recorded by the
+profile, but all paths have been reduced to repository-relative paths.
+
+Profile: controlled source/dev run
+Raw profile SHA-256: 8f33d4c1053cc0123ed5f530fe27afd775f394611a5d943825a13833737fed45
+Profile duration: 5265 ms
+Nominal interval: 1 ms
+Samples: 2233 selected, 0 omitted, 2233 total
+
+Leaf samples by dependency/product bucket:
+  1188  53.20%  [native]
+   343  15.36%  dependency:@babel+traverse@7.29.7+759ce506b1ed1a42
+   150   6.72%  dependency:@babel+parser@7.29.7
+   100   4.48%  dependency:@babel+types@7.29.7
+    71   3.18%  dependency:@babel+core@7.28.0+e33be1330ecc2599
+    58   2.60%  dependency:@babel+generator@7.29.7
+    54   2.42%  product:tui
+    41   1.84%  dependency:@opentui+core@0.3.4+2240c214a0f33214
+    36   1.61%  dependency:effect@4.0.0-beta.74
+    36   1.61%  dependency:solid-js@1.9.10
+
+Selected inclusive product frames:
+    86   3.85%  get children (packages/tui/src/context/helper.tsx:18)
+    43   1.93%  anonymous (packages/tui/src/context/sync.tsx:665)
+    43   1.93%  anonymous (packages/tui/src/context/sync.tsx:659)
+    41   1.84%  anonymous (packages/tui/src/app.tsx:375)
+    33   1.48%  get children (packages/tui/src/app.tsx:1064)
+    32   1.43%  get children (packages/tui/src/routes/home.tsx:75)
+    27   1.21%  anonymous (packages/tui/src/context/kv.tsx:25)
+    23   1.03%  anonymous (packages/opencode/src/cli/cmd/tui.ts:114)
+
+With --max-delta-ms 100: 2230 selected, 3 omitted. The leading bucket
+percentages are materially unchanged (native 53.18%; Babel traverse 15.38%;
+product:tui 2.42%).
+
+Profile: pure source/dev run
+Raw profile SHA-256: d14a909013144ac53e6d67e4b6b279c20298220b018bd7520386d797fa8b231d
+Profile duration: 27290 ms
+Nominal interval: 500 us
+Samples: 6339 selected, 0 omitted, 6339 total
+
+Leaf samples by dependency/product bucket:
+  3350  52.85%  [native]
+   876  13.82%  dependency:@babel+traverse@7.29.7+759ce506b1ed1a42
+   361   5.69%  dependency:@babel+parser@7.29.7
+   327   5.16%  dependency:@babel+types@7.29.7
+   238   3.75%  dependency:@babel+core@7.28.0+e33be1330ecc2599
+   208   3.28%  dependency:@babel+generator@7.29.7
+   142   2.24%  dependency:@opentui+core@0.3.4+2240c214a0f33214
+   132   2.08%  dependency:effect@4.0.0-beta.74
+   100   1.58%  dependency:solid-js@1.9.10
+    53   0.84%  product:tui
+    14   0.22%  product:opencode
+
+Selected inclusive product frames:
+   153   2.41%  get children (packages/tui/src/context/helper.tsx:18)
+   117   1.85%  anonymous (packages/tui/src/app.tsx:375)
+   115   1.81%  anonymous (packages/tui/src/context/sync.tsx:659)
+   114   1.80%  anonymous (packages/tui/src/context/sync.tsx:665)
+    98   1.55%  anonymous (packages/tui/src/app.tsx:1065)
+    94   1.48%  get children (packages/tui/src/routes/home.tsx:75)
+    53   0.84%  Prompt (packages/tui/src/component/prompt/index.tsx:97)
+    45   0.71%  anonymous (packages/opencode/src/cli/cmd/tui.ts:114)
+    31   0.49%  discoverThemes (packages/tui/src/context/theme.tsx:27)
+
+With --max-delta-ms 100: 6329 selected, 10 omitted. The leading bucket
+percentages are materially unchanged (native 52.85%; Babel traverse 13.84%;
+product:tui remains outside the top ten at 0.84%).
+
+Interpretation limits
+---------------------
+- The five listed Babel buckets total 32.33% of controlled leaf samples and
+  31.71% of pure leaf samples. This is development transform/loader work, not
+  evidence that production TUI code has the same distribution.
+- Bun Markdown attributed 1.08 s and 10.84 s self-time to single leaves in the
+  controlled and pure reports. The corresponding maximum async deltas were
+  1080.6 ms and 10841.1 ms, so those self-time values are not reliable causal
+  hotspot measurements.
+- The compiled executable ignored BUN_OPTIONS=--cpu-prof during the audit.
+  There is no compiled JavaScript/source profile. macOS native samples were
+  exploratory and mostly stripped/native frames, so they are not included.
+- Hit counts localize sampled activity but do not by themselves prove what
+  controls process-to-prompt wall time.

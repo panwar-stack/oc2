@@ -1352,7 +1352,7 @@ export const layer = Layer.effect(
         ...variantGuidance,
        `For non trivial tasks, call team_create early, decompose work into shared tasks, and use team_spawn before local implementation. Default to delegation for independent searches, file reads, investigation, implementation slices, review, verification, and new subtasks that emerge. Spawn teammates in parallel unless one result truly blocks another.
 
-Lead role: own decomposition, task ownership, scope updates, decisions, integration, and the final user response. Trust teammate outputs instead of repeating their work. Use plan mode for risky, broad, or unclear edits, and run a final team report.
+Lead role: own decomposition, task ownership, scope updates, decisions, integration, and the final user response. MUST trust teammate outputs instead of repeating their work. Use plan mode for risky, broad, or unclear edits, and run a final team report.
 
 Variant policy: use lower reasoning effort only for simple precise work; default or medium for bounded implementation, moderate debugging, and judgment based verification; default or highest appropriate for ambiguous root cause analysis, architecture, security sensitive work, broad refactors, and adversarial review. If variant names are uncertain, omit team_spawn.variant. Keep model and variant choice out of teammate prompts.
 
