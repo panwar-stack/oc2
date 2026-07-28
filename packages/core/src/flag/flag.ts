@@ -55,6 +55,12 @@ export const Flag = {
   get OC2_TUI_CONFIG() {
     return Naming.env("OC2_TUI_CONFIG")
   },
+  get OC2_TUI_STARTUP_PROFILE() {
+    return Naming.env("OC2_TUI_STARTUP_PROFILE")
+  },
+  get OC2_TUI_STARTUP_PROFILE_FD() {
+    return Naming.env("OC2_TUI_STARTUP_PROFILE_FD")
+  },
   get OC2_CONFIG() {
     return Naming.env("OC2_CONFIG")
   },

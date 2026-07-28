@@ -10,6 +10,7 @@ import { EOL } from "os"
 import { errorMessage } from "./util/error"
 import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@oc2-ai/core/util/opencode-process"
+import { initializeTuiStartupProfile } from "@oc2-ai/core/util/tui-startup-profile"
 import { isRecord } from "@/util/record"
 
 type CommandLoader = {
@@ -56,6 +57,9 @@ const optionsWithValues = new Set([
 const shortOptionsWithValues = new Set(["m", "s"])
 
 const processMetadata = ensureProcessMetadata("main")
+const startupProfile = initializeTuiStartupProfile()
+startupProfile.emit({ event: "cli.entry", role: "main" })
+if (startupProfile.enabled) process.once("exit", () => startupProfile.close())
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -240,6 +244,7 @@ try {
   }
   process.exitCode = 1
 } finally {
+  startupProfile.close()
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless
   // run using `docker run --init`.

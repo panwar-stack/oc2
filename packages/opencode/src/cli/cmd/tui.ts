@@ -12,14 +12,14 @@ import { Filesystem } from "@/util/filesystem"
 import type { GlobalEvent } from "@oc2-ai/sdk/v2"
 import type { EventSource } from "@oc2-ai/tui/context/sdk"
 import { writeHeapSnapshot } from "v8"
-import {
-  OC2_PROCESS_ROLE,
-  OC2_RUN_ID,
-  ensureRunID,
-  sanitizedProcessEnv,
-} from "@oc2-ai/core/util/opencode-process"
+import { OC2_PROCESS_ROLE, OC2_RUN_ID, ensureRunID, sanitizedProcessEnv } from "@oc2-ai/core/util/opencode-process"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@oc2-ai/tui/terminal-win32"
+import {
+  getTuiStartupProfile,
+  OC2_TUI_STARTUP_PROFILE,
+  OC2_TUI_STARTUP_PROFILE_FD,
+} from "@oc2-ai/core/util/tui-startup-profile"
 
 declare global {
   const OC2_WORKER_PATH: string
@@ -136,10 +136,13 @@ export const TuiThreadCommand = cmd({
         [OC2_PROCESS_ROLE]: "worker",
         [OC2_RUN_ID]: ensureRunID(),
       })
+      delete env[OC2_TUI_STARTUP_PROFILE]
+      delete env[OC2_TUI_STARTUP_PROFILE_FD]
 
       const worker = new Worker(file, {
         env,
       })
+      using startupProfile = getTuiStartupProfile().adopt()
       worker.onerror = (e) => {
         Log.Default.error("thread error", {
           message: e.message,
@@ -250,6 +253,7 @@ export const TuiThreadCommand = cmd({
         )
       } finally {
         await stop()
+        startupProfile.close()
       }
       process.exit(0)
     } finally {
@@ -261,4 +265,3 @@ export const TuiThreadCommand = cmd({
     }
   },
 })
-// scratch
