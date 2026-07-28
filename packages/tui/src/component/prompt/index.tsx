@@ -17,7 +17,7 @@ import { useLocal } from "../../context/local"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+import { useTuiPaths, useTuiStartup, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useSDK } from "../../context/sdk"
@@ -74,6 +74,7 @@ export type PromptProps = {
   hint?: JSX.Element
   right?: JSX.Element
   showPlaceholder?: boolean
+  startup?: boolean
   placeholders?: {
     normal?: string[]
     shell?: string[]
@@ -154,6 +155,7 @@ export function Prompt(props: PromptProps) {
   const local = useLocal()
   const args = useArgs()
   const paths = useTuiPaths()
+  const startup = useTuiStartup()
   const terminalEnvironment = useTuiTerminalEnvironment()
   const clipboard = useClipboard()
   const sdk = useSDK()
@@ -224,6 +226,8 @@ export function Prompt(props: PromptProps) {
   const workspace = usePromptWorkspace(props.sessionID)
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
   const [cursorVersion, setCursorVersion] = createSignal(0)
+  let mountedMarked = false
+  let inputMarked = false
   const hasRightContent = createMemo(() => Boolean(props.right))
 
   function promptModelWarning() {
@@ -680,6 +684,8 @@ export function Prompt(props: PromptProps) {
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
+    mountedMarked = false
+    inputMarked = false
   })
 
   createEffect(() => {
@@ -1433,6 +1439,15 @@ export function Prompt(props: PromptProps) {
                 auto()?.onInput(value)
                 syncExtmarksWithPromptParts()
                 setCursorVersion((value) => value + 1)
+                if (props.startup && !inputMarked) {
+                  inputMarked = true
+                  startup.trace?.({
+                    event: "input.accepted",
+                    role: "main",
+                    workspaceGeneration: 0,
+                    attemptGeneration: 0,
+                  })
+                }
               }}
               onCursorChange={() => setCursorVersion((value) => value + 1)}
               onKeyDown={(e: { preventDefault(): void }) => {
@@ -1481,6 +1496,15 @@ export function Prompt(props: PromptProps) {
                   promptPartTypeId = input.extmarks.registerType("prompt-part")
                 }
                 props.ref?.(ref)
+                if (props.startup && !mountedMarked) {
+                  mountedMarked = true
+                  startup.trace?.({
+                    event: "prompt.mounted",
+                    role: "main",
+                    workspaceGeneration: 0,
+                    attemptGeneration: 0,
+                  })
+                }
                 setTimeout(() => {
                   // setTimeout is a workaround and needs to be addressed properly
                   if (!input || input.isDestroyed) return

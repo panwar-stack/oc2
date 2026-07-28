@@ -5,6 +5,8 @@ import { GlobalBus } from "@/bus/global"
 import { writeHeapSnapshot } from "node:v8"
 import { Heap } from "@/cli/heap"
 import { ensureProcessMetadata } from "@oc2-ai/core/util/opencode-process"
+import { OC2_TUI_STARTUP_PROFILE_WORKER } from "@oc2-ai/core/util/tui-startup-profile"
+import { createWorkerRpcTrace } from "./startup-trace"
 
 type ServerHandle = {
   readonly url: URL
@@ -103,4 +105,8 @@ export const rpc = {
   },
 }
 
-Rpc.listen(rpc)
+const trace =
+  process.env[OC2_TUI_STARTUP_PROFILE_WORKER] === "1"
+    ? createWorkerRpcTrace((input) => Rpc.emit("startup.trace", input))
+    : undefined
+Rpc.listen(rpc, trace)

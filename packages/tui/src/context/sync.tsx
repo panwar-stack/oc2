@@ -775,9 +775,11 @@ export const {
 
     const renderer = useRenderer()
     const args = useArgs()
+    let criticalReadyMarked = false
 
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
+      const criticalStart = startup.trace ? performance.now() : 0
       const workspace = project.workspace.current()
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
@@ -837,6 +839,22 @@ export const {
         })
         .then(() => {
           if (store.status !== "complete") setStore("status", "partial")
+          startup.trace?.({
+            event: "phase",
+            role: "main",
+            phase: "bootstrap.critical",
+            outcome: "ok",
+            durationMs: Math.max(0, performance.now() - criticalStart),
+          })
+          if (!criticalReadyMarked) {
+            criticalReadyMarked = true
+            startup.trace?.({
+              event: "bootstrap.critical.ready",
+              role: "main",
+              workspaceGeneration: 0,
+              attemptGeneration: 0,
+            })
+          }
           // non-blocking
           void Promise.all([
             ...(args.continue
@@ -864,6 +882,13 @@ export const {
           })
         })
         .catch(async (e) => {
+          startup.trace?.({
+            event: "phase",
+            role: "main",
+            phase: "bootstrap.critical",
+            outcome: "error",
+            durationMs: Math.max(0, performance.now() - criticalStart),
+          })
           console.error("tui bootstrap failed", {
             error: e instanceof Error ? e.message : String(e),
             name: e instanceof Error ? e.name : undefined,

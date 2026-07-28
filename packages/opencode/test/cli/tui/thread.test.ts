@@ -3,13 +3,15 @@ import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../../fixture/fixture"
 import { resolveThreadDirectory } from "../../../src/cli/cmd/tui"
+import { Rpc, type RpcTrace } from "../../../src/util/rpc"
+import { startupRequestName } from "../../../src/cli/tui/startup-trace"
 
 describe("tui thread", () => {
   test("loads the TUI integration lazily", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui.ts", import.meta.url)).text()
 
-    expect(source).toContain('await import("../tui/layer")')
-    expect(source).toMatch(/await import\(["']@\/plugin\/tui\/runtime["']\)/)
+    expect(source).toMatch(/import\(["']\.\.\/tui\/layer["']\)/)
+    expect(source).toMatch(/import\(["']@\/plugin\/tui\/runtime["']\)/)
     expect(source).not.toContain('import("./app")')
   })
 
@@ -32,5 +34,88 @@ describe("tui thread", () => {
 
   test("uses the real cwd after resolving a relative project from PWD", async () => {
     await check(".")
+  })
+
+  test("maps RPC inputs to a closed startup request allowlist", () => {
+    expect(startupRequestName("fetch", { method: "GET", url: "http://opencode.internal/config/providers?secret=x" })).toBe(
+      "config.providers",
+    )
+    expect(startupRequestName("fetch", { method: "POST", url: "http://opencode.internal/private/user/123" })).toBe(
+      "other",
+    )
+    expect(startupRequestName("server", { hostname: "private.example" })).toBe("worker.server")
+    expect(startupRequestName("fetch", { method: "GET", url: "not a url" })).toBe("other")
+  })
+
+  test("counts exact UTF-8 RPC envelope bytes without changing envelopes", async () => {
+    const sent: string[] = []
+    const requests: Array<{ requestID: number; request: string; encodedBytes: number }> = []
+    const responses: Array<{ requestID: number; request: string; encodedBytes: number }> = []
+    const target = {
+      postMessage(data: string) {
+        sent.push(data)
+      },
+      onmessage: null as ((event: MessageEvent) => void) | null,
+    }
+    const trace: RpcTrace = {
+      requestName: () => "other",
+      onRequest: (input) => requests.push(input),
+      onResponse: (input) => responses.push(input),
+    }
+    const client = Rpc.client<{ echo(input: string): string }>(target, trace)
+    const result = client.call("echo", "雪")
+    const response = JSON.stringify({ type: "rpc.result", result: "é", id: 0 })
+    target.onmessage?.(new MessageEvent("message", { data: response }))
+
+    expect(await result).toBe("é")
+    expect(sent).toEqual([JSON.stringify({ type: "rpc.request", method: "echo", input: "雪", id: 0 })])
+    expect(requests).toEqual([{ requestID: 0, request: "other", encodedBytes: new TextEncoder().encode(sent[0]).byteLength }])
+    expect(responses).toEqual([
+      { requestID: 0, request: "other", encodedBytes: new TextEncoder().encode(response).byteLength },
+    ])
+  })
+
+  test.serial("times only worker handler dispatch and preserves result encoding", async () => {
+    const previousOnMessage = globalThis.onmessage
+    const previousPostMessage = globalThis.postMessage
+    const posted: string[] = []
+    const dispatches: Array<{ requestID: number; request: string; durationMs: number }> = []
+    const times = [100, 125]
+    try {
+      Object.defineProperty(globalThis, "postMessage", {
+        configurable: true,
+        value(data: string) {
+          posted.push(data)
+        },
+      })
+      Rpc.listen(
+        {
+          async echo(input: string) {
+            return input + "é"
+          },
+        },
+        {
+          requestName: () => "other",
+          clock: () => times.shift()!,
+          onDispatch: (input) => dispatches.push(input),
+        },
+      )
+      const handler = globalThis.onmessage
+      if (!handler) throw new Error("RPC listener not installed")
+      await Promise.resolve(
+        Reflect.apply(handler, globalThis, [
+          new MessageEvent("message", {
+            data: JSON.stringify({ type: "rpc.request", method: "echo", input: "雪", id: 3 }),
+          }),
+        ]),
+      )
+
+      expect(dispatches).toEqual([{ requestID: 3, request: "other", durationMs: 25 }])
+      expect(posted).toEqual([JSON.stringify({ type: "rpc.result", result: "雪é", id: 3 })])
+      expect(times).toEqual([])
+    } finally {
+      globalThis.onmessage = previousOnMessage
+      Object.defineProperty(globalThis, "postMessage", { configurable: true, value: previousPostMessage })
+    }
   })
 })

@@ -66,6 +66,7 @@ import { createTuiAttention } from "./attention"
 import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
+import type { TuiStartupPhase, TuiStartupTraceInput } from "@oc2-ai/core/util/tui-startup-profile"
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -124,6 +125,25 @@ export type TuiInput = {
   headers?: RequestInit["headers"]
   events?: EventSource
   pluginHost: TuiPluginHost
+  startupTrace?: (input: TuiStartupTraceInput) => boolean
+}
+
+async function tracePhase<T>(
+  trace: TuiInput["startupTrace"],
+  phase: TuiStartupPhase,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  if (!trace) return fn()
+  const start = performance.now()
+  let outcome: "ok" | "error" = "ok"
+  try {
+    return await fn()
+  } catch (error) {
+    outcome = "error"
+    throw error
+  } finally {
+    trace({ event: "phase", role: "main", phase, outcome, durationMs: Math.max(0, performance.now() - start) })
+  }
 }
 
 function errorMessage(error: unknown) {
@@ -165,19 +185,21 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     Effect.gen(function* () {
       const renderer = yield* Effect.acquireRelease(
         Effect.tryPromise(() =>
-          createCliRenderer({
-            externalOutputMode: "passthrough",
-            targetFps: 60,
-            gatherStats: false,
-            exitOnCtrlC: false,
-            useKittyKeyboard: {},
-            autoFocus: false,
-            openConsoleOnError: false,
-            useMouse: !Flag.OC2_DISABLE_MOUSE && input.config.mouse,
-            consoleOptions: {
-              keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
-            },
-          }),
+          tracePhase(input.startupTrace, "renderer.create", () =>
+            createCliRenderer({
+              externalOutputMode: "passthrough",
+              targetFps: 60,
+              gatherStats: false,
+              exitOnCtrlC: false,
+              useKittyKeyboard: {},
+              autoFocus: false,
+              openConsoleOnError: false,
+              useMouse: !Flag.OC2_DISABLE_MOUSE && input.config.mouse,
+              consoleOptions: {
+                keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
+              },
+            }),
+          ),
         ),
         (renderer) => Effect.sync(() => destroyRenderer(renderer)),
       )
@@ -209,11 +231,20 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       yield* Effect.tryPromise(async () => {
         // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
         void renderer.getPalette({ size: 16 }).catch(() => undefined)
-        const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+        const resolvedMode = await tracePhase(input.startupTrace, "theme.wait", () => renderer.waitForThemeMode(1000))
+        const mode = resolvedMode ?? "dark"
+        input.startupTrace?.({
+          event: "theme.settled",
+          role: "main",
+          workspaceGeneration: 0,
+          attemptGeneration: 0,
+          outcome: resolvedMode ? "resolved" : "fallback-final",
+        })
         if (renderer.isDestroyed) return
 
-        await render(() => {
-          return (
+        await tracePhase(input.startupTrace, "renderer.render", () =>
+          render(() => {
+            return (
             <ErrorBoundary fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}>
               <TuiPathsProvider
                 value={{
@@ -234,6 +265,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     value={{
                       initialRoute: process.env.OC2_ROUTE ? JSON.parse(process.env.OC2_ROUTE) : undefined,
                       skipInitialLoading: Boolean(process.env.OC2_FAST_BOOT),
+                      trace: input.startupTrace,
                     }}
                   >
                     <ClipboardProvider>
@@ -301,8 +333,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                 </TuiTerminalEnvironmentProvider>
               </TuiPathsProvider>
             </ErrorBoundary>
-          )
-        }, renderer)
+            )
+          }, renderer),
+        )
       })
       yield* Deferred.await(shutdown)
       return epilogue.value
@@ -372,6 +405,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     }),
   )
   const [ready, setReady] = createSignal(false)
+  const pluginStart = startup.trace ? performance.now() : 0
+  let pluginOutcome: "ok" | "error" = "ok"
   props.pluginHost
     .start({
       api,
@@ -380,9 +415,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       dispose: () => attention.dispose(),
     })
     .catch((error) => {
+      pluginOutcome = "error"
       console.error("Failed to load TUI plugins", error)
     })
     .finally(() => {
+      startup.trace?.({
+        event: "phase",
+        role: "main",
+        phase: "plugin.load",
+        outcome: pluginOutcome,
+        durationMs: Math.max(0, performance.now() - pluginStart),
+      })
       setReady(true)
     })
 

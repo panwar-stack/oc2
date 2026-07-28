@@ -1,4 +1,5 @@
 import { createComponent, createContext, type JSX, useContext } from "solid-js"
+import type { TuiStartupTraceInput } from "@oc2-ai/core/util/tui-startup-profile"
 
 export type TuiPaths = Readonly<{
   cwd: string
@@ -16,6 +17,7 @@ export type TuiTerminalEnvironment = Readonly<{
 export type TuiStartup = Readonly<{
   initialRoute?: unknown
   skipInitialLoading: boolean
+  trace?: (input: TuiStartupTraceInput) => boolean
 }>
 
 const PathsContext = createContext<TuiPaths>()

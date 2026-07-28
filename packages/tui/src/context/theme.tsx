@@ -28,6 +28,7 @@ import { Global } from "@oc2-ai/core/global"
 import { Glob } from "@oc2-ai/core/util/glob"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
+import { useTuiStartup } from "./runtime"
 
 export type ThemeSource = Readonly<{
   discover(): Promise<Record<string, unknown>>
@@ -105,6 +106,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const renderer = useRenderer()
     const config = useTuiConfig()
     const kv = useKV()
+    const startup = useTuiStartup()
     const themes = props.source ?? themeSource
     const pick = (value: unknown) => {
       if (value === "dark" || value === "light") return value
@@ -229,9 +231,18 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       refreshSystemTheme(renderer.themeMode ?? store.mode)
     }
 
+    let reconciled = false
     const handle = (mode: "dark" | "light") => {
       if (store.lock) return
       apply(mode)
+      if (reconciled) return
+      reconciled = true
+      startup.trace?.({
+        event: "theme.reconciled",
+        role: "main",
+        workspaceGeneration: 0,
+        attemptGeneration: 0,
+      })
     }
     renderer.on(CliRenderEvents.THEME_MODE, handle)
 

@@ -19,13 +19,31 @@ import {
   getTuiStartupProfile,
   OC2_TUI_STARTUP_PROFILE,
   OC2_TUI_STARTUP_PROFILE_FD,
+  OC2_TUI_STARTUP_PROFILE_WORKER,
+  type TuiStartupPhase,
+  type TuiStartupProfile,
 } from "@oc2-ai/core/util/tui-startup-profile"
+import { createParentRpcTrace } from "../tui/startup-trace"
 
 declare global {
   const OC2_WORKER_PATH: string
 }
 
 type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
+
+async function tracePhase<T>(profile: TuiStartupProfile, phase: TuiStartupPhase, fn: () => T | Promise<T>): Promise<T> {
+  if (!profile.enabled) return fn()
+  const start = performance.now()
+  let outcome: "ok" | "error" = "ok"
+  try {
+    return await fn()
+  } catch (error) {
+    outcome = "error"
+    throw error
+  } finally {
+    profile.emit({ event: "phase", role: "main", phase, outcome, durationMs: Math.max(0, performance.now() - start) })
+  }
+}
 
 function createWorkerFetch(client: RpcClient): typeof fetch {
   const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -138,11 +156,24 @@ export const TuiThreadCommand = cmd({
       })
       delete env[OC2_TUI_STARTUP_PROFILE]
       delete env[OC2_TUI_STARTUP_PROFILE_FD]
+      const currentProfile = getTuiStartupProfile()
+      if (currentProfile.enabled) env[OC2_TUI_STARTUP_PROFILE_WORKER] = "1"
+      else delete env[OC2_TUI_STARTUP_PROFILE_WORKER]
 
+      const workerStart = currentProfile.enabled ? performance.now() : 0
       const worker = new Worker(file, {
         env,
       })
-      using startupProfile = getTuiStartupProfile().adopt()
+      using startupProfile = currentProfile.adopt()
+      if (startupProfile.enabled) {
+        startupProfile.emit({
+          event: "phase",
+          role: "main",
+          phase: "worker.spawn",
+          outcome: "ok",
+          durationMs: Math.max(0, performance.now() - workerStart),
+        })
+      }
       worker.onerror = (e) => {
         Log.Default.error("thread error", {
           message: e.message,
@@ -153,7 +184,10 @@ export const TuiThreadCommand = cmd({
         })
       }
 
-      const client = Rpc.client<typeof rpc>(worker)
+      const client = Rpc.client<typeof rpc>(worker, createParentRpcTrace(startupProfile))
+      client.on("startup.trace", (input) => {
+        startupProfile.emit(input)
+      })
       const error = (e: unknown) => {
         Log.Default.error("process error", { error: errorMessage(e) })
       }
@@ -184,7 +218,7 @@ export const TuiThreadCommand = cmd({
       }
 
       const prompt = await input(args.prompt)
-      const config = await TuiConfig.get()
+      const config = await tracePhase(startupProfile, "tui.config", () => TuiConfig.get())
 
       const network = resolveNetworkOptionsNoConfig(args)
       const external =
@@ -195,25 +229,29 @@ export const TuiThreadCommand = cmd({
         network.port !== 0 ||
         network.hostname !== "127.0.0.1"
 
-      const transport = external
-        ? {
-            url: (await client.call("server", network)).url,
-            fetch: undefined,
-            events: undefined,
-          }
-        : {
-            url: "http://opencode.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
-          }
+      const transport = await tracePhase(startupProfile, "transport.ready", async () =>
+        external
+          ? {
+              url: (await client.call("server", network)).url,
+              fetch: undefined,
+              events: undefined,
+            }
+          : {
+              url: "http://opencode.internal",
+              fetch: createWorkerFetch(client),
+              events: createEventSource(client),
+            },
+      )
 
       try {
-        await validateSession({
-          url: transport.url,
-          sessionID: args.session,
-          directory: cwd,
-          fetch: transport.fetch,
-        })
+        await tracePhase(startupProfile, "session.validate", () =>
+          validateSession({
+            url: transport.url,
+            sessionID: args.session,
+            directory: cwd,
+            fetch: transport.fetch,
+          }),
+        )
       } catch (error) {
         UI.error(errorMessage(error))
         process.exitCode = 1
@@ -225,9 +263,11 @@ export const TuiThreadCommand = cmd({
       }, 1000).unref?.()
 
       try {
-        const { Effect } = await import("effect")
-        const { run } = await import("../tui/layer")
-        const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
+        const [{ Effect }, { run }, { createLegacyTuiPluginHost }] = await tracePhase(
+          startupProfile,
+          "tui.import",
+          () => Promise.all([import("effect"), import("../tui/layer"), import("@/plugin/tui/runtime")]),
+        )
         await Effect.runPromise(
           run({
             url: transport.url,
@@ -241,6 +281,7 @@ export const TuiThreadCommand = cmd({
             directory: cwd,
             fetch: transport.fetch,
             events: transport.events,
+            startupTrace: startupProfile.enabled ? (input) => startupProfile.emit(input) : undefined,
             args: {
               continue: args.continue,
               sessionID: args.session,

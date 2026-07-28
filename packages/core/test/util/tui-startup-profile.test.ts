@@ -134,6 +134,111 @@ describe("tui startup profile", () => {
     expect(out.lines).toHaveLength(1)
   })
 
+  test("accepts only bounded phase, RPC byte, and generation-zero marker records", () => {
+    const out = harness([0, 1, 2, 3, 4, 5, 6])
+
+    expect(
+      out.profile.emit({
+        event: "phase",
+        role: "main",
+        phase: "renderer.create",
+        outcome: "ok",
+        durationMs: 12.5,
+      }),
+    ).toBe(true)
+    expect(
+      out.profile.emit({
+        event: "rpc.request",
+        role: "main",
+        requestID: 7,
+        request: "config.providers",
+        encodedBytes: 123,
+      }),
+    ).toBe(true)
+    expect(
+      out.profile.emit({
+        event: "rpc.response",
+        role: "main",
+        requestID: 7,
+        request: "config.providers",
+        encodedBytes: 456,
+        removableDuplicateBytes: 0,
+      }),
+    ).toBe(true)
+    expect(
+      out.profile.emit({
+        event: "rpc.dispatch",
+        role: "worker",
+        requestID: 7,
+        request: "config.providers",
+        durationMs: 3.25,
+      }),
+    ).toBe(true)
+    expect(
+      out.profile.emit({
+        event: "prompt.mounted",
+        role: "main",
+        workspaceGeneration: 0,
+        attemptGeneration: 0,
+      }),
+    ).toBe(true)
+    expect(
+      out.profile.emit({
+        event: "theme.settled",
+        role: "main",
+        workspaceGeneration: 0,
+        attemptGeneration: 0,
+        outcome: "fallback-final",
+      }),
+    ).toBe(true)
+
+    expect(out.lines.map((line) => JSON.parse(line).event)).toEqual([
+      "phase",
+      "rpc.request",
+      "rpc.response",
+      "rpc.dispatch",
+      "prompt.mounted",
+      "theme.settled",
+    ])
+    expect(out.lines.map((line) => Buffer.byteLength(line)).every((bytes) => bytes <= 512)).toBe(true)
+  })
+
+  test("rejects arbitrary names, non-exact bytes, duplicate claims, and nonzero generations", () => {
+    const out = harness([0])
+    for (const input of [
+      { event: "phase", role: "main", phase: "private.path", outcome: "ok", durationMs: 1 },
+      { event: "rpc.request", role: "main", requestID: 1, request: "/secret", encodedBytes: 1 },
+      {
+        event: "rpc.response",
+        role: "main",
+        requestID: 1,
+        request: "other",
+        encodedBytes: 1.5,
+        removableDuplicateBytes: 0,
+      },
+      {
+        event: "rpc.response",
+        role: "main",
+        requestID: 1,
+        request: "other",
+        encodedBytes: 1,
+        removableDuplicateBytes: 1,
+      },
+      { event: "input.accepted", role: "main", workspaceGeneration: 1, attemptGeneration: 0 },
+      {
+        event: "theme.settled",
+        role: "main",
+        workspaceGeneration: 0,
+        attemptGeneration: 0,
+        outcome: "secret",
+      },
+    ]) {
+      expect(out.profile.emit(input)).toBe(false)
+    }
+    expect(out.lines).toEqual([])
+    expect(out.clocks).toBe(1)
+  })
+
   test("rejects accessor-backed fields without reading or serializing them", () => {
     const out = harness([10])
     let reads = 0

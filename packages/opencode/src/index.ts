@@ -122,7 +122,27 @@ function show(out: string) {
   process.stderr.write(out)
 }
 
-const commands = await loadCommands()
+let commands: Awaited<ReturnType<typeof loadCommands>>
+if (!startupProfile.enabled) {
+  commands = await loadCommands()
+} else {
+  const start = performance.now()
+  let outcome: "ok" | "error" = "ok"
+  try {
+    commands = await loadCommands()
+  } catch (error) {
+    outcome = "error"
+    throw error
+  } finally {
+    startupProfile.emit({
+      event: "phase",
+      role: "main",
+      phase: "cli.command.load",
+      outcome,
+      durationMs: Math.max(0, performance.now() - start),
+    })
+  }
+}
 
 const cli = yargs(args)
   .parserConfiguration({ "populate--": true })

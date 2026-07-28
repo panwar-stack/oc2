@@ -2,6 +2,7 @@ import { closeSync, fstatSync, writeSync } from "node:fs"
 
 export const OC2_TUI_STARTUP_PROFILE = "OC2_TUI_STARTUP_PROFILE"
 export const OC2_TUI_STARTUP_PROFILE_FD = "OC2_TUI_STARTUP_PROFILE_FD"
+export const OC2_TUI_STARTUP_PROFILE_WORKER = "OC2_TUI_STARTUP_PROFILE_WORKER"
 export const TUI_STARTUP_TRACE_VERSION = 1 as const
 
 const MAX_RECORDS = 512
@@ -10,10 +11,77 @@ const MAX_RUN_ID_BYTES = 128
 const MIN_TRACE_FD = 3
 const MAX_TRACE_FD = 0x7fffffff
 
-export type TuiStartupTraceInput = {
-  readonly event: "cli.entry"
-  readonly role: "main"
+export type TuiStartupPhase =
+  | "cli.command.load"
+  | "worker.spawn"
+  | "tui.config"
+  | "transport.ready"
+  | "session.validate"
+  | "tui.import"
+  | "renderer.create"
+  | "theme.wait"
+  | "renderer.render"
+  | "plugin.load"
+  | "bootstrap.critical"
+
+export type TuiStartupRequestName =
+  | "config.providers"
+  | "provider.list"
+  | "app.agents"
+  | "config.get"
+  | "project.path"
+  | "project.current"
+  | "session.list"
+  | "worker.server"
+  | "other"
+
+type GenerationZero = {
+  readonly workspaceGeneration: 0
+  readonly attemptGeneration: 0
 }
+
+export type TuiStartupTraceInput =
+  | {
+      readonly event: "cli.entry"
+      readonly role: "main"
+    }
+  | {
+      readonly event: "phase"
+      readonly role: "main" | "worker"
+      readonly phase: TuiStartupPhase
+      readonly outcome: "ok" | "error"
+      readonly durationMs: number
+    }
+  | {
+      readonly event: "rpc.request"
+      readonly role: "main"
+      readonly requestID: number
+      readonly request: TuiStartupRequestName
+      readonly encodedBytes: number
+    }
+  | {
+      readonly event: "rpc.response"
+      readonly role: "main"
+      readonly requestID: number
+      readonly request: TuiStartupRequestName
+      readonly encodedBytes: number
+      readonly removableDuplicateBytes: 0
+    }
+  | {
+      readonly event: "rpc.dispatch"
+      readonly role: "worker"
+      readonly requestID: number
+      readonly request: TuiStartupRequestName
+      readonly durationMs: number
+    }
+  | ({ readonly event: "prompt.mounted" | "bootstrap.critical.ready" | "input.accepted"; readonly role: "main" } &
+      GenerationZero)
+  | ({
+      readonly event: "theme.settled"
+      readonly role: "main"
+      readonly outcome: "locked" | "resolved" | "fallback-final"
+    } & GenerationZero)
+  | ({ readonly event: "theme.reconciled"; readonly role: "main" } & GenerationZero)
 
 export type TuiStartupTraceRecord = TuiStartupTraceInput & {
   readonly version: typeof TUI_STARTUP_TRACE_VERSION
@@ -97,16 +165,164 @@ function traceDescriptor(fd: number) {
   return stat.isFIFO() || stat.isSocket()
 }
 
+function isPhase(value: unknown): value is TuiStartupPhase {
+  if (typeof value !== "string") return false
+  switch (value) {
+    case "cli.command.load":
+    case "worker.spawn":
+    case "tui.config":
+    case "transport.ready":
+    case "session.validate":
+    case "tui.import":
+    case "renderer.create":
+    case "theme.wait":
+    case "renderer.render":
+    case "plugin.load":
+    case "bootstrap.critical":
+      return true
+    default:
+      return false
+  }
+}
+
+function isRequest(value: unknown): value is TuiStartupRequestName {
+  if (typeof value !== "string") return false
+  switch (value) {
+    case "config.providers":
+    case "provider.list":
+    case "app.agents":
+    case "config.get":
+    case "project.path":
+    case "project.current":
+    case "session.list":
+    case "worker.server":
+    case "other":
+      return true
+    default:
+      return false
+  }
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
 function snapshotInput(input: unknown): TuiStartupTraceInput | undefined {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return undefined
   const descriptors = Object.getOwnPropertyDescriptors(input)
   const keys = Reflect.ownKeys(descriptors)
-  if (keys.length !== 2 || !keys.includes("event") || !keys.includes("role")) return undefined
-  const event = descriptors.event
-  const role = descriptors.role
-  if (!event?.enumerable || !("value" in event) || event.value !== "cli.entry") return undefined
-  if (!role?.enumerable || !("value" in role) || role.value !== "main") return undefined
-  return { event: "cli.entry", role: "main" }
+  if (keys.some((key) => typeof key !== "string")) return undefined
+  const value = (key: string) => {
+    const descriptor = descriptors[key]
+    if (!descriptor?.enumerable || !("value" in descriptor)) return undefined
+    return descriptor.value as unknown
+  }
+  const exact = (...expected: string[]) => keys.length === expected.length && expected.every((key) => keys.includes(key))
+  const event = value("event")
+  const role = value("role")
+
+  if (event === "cli.entry" && role === "main" && exact("event", "role")) return { event, role }
+
+  if (event === "phase" && (role === "main" || role === "worker") && exact("event", "role", "phase", "outcome", "durationMs")) {
+    const phase = value("phase")
+    const outcome = value("outcome")
+    const durationMs = value("durationMs")
+    if (!isPhase(phase)) return undefined
+    if (outcome !== "ok" && outcome !== "error") return undefined
+    if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) return undefined
+    return { event, role, phase, outcome, durationMs }
+  }
+
+  if (
+    event === "rpc.request" &&
+    role === "main" &&
+    exact("event", "role", "requestID", "request", "encodedBytes")
+  ) {
+    const requestID = value("requestID")
+    const request = value("request")
+    const encodedBytes = value("encodedBytes")
+    if (!isNonNegativeSafeInteger(requestID)) return undefined
+    if (!isRequest(request)) return undefined
+    if (!isNonNegativeSafeInteger(encodedBytes)) return undefined
+    return {
+      event,
+      role,
+      requestID,
+      request,
+      encodedBytes,
+    }
+  }
+
+  if (
+    event === "rpc.response" &&
+    role === "main" &&
+    exact("event", "role", "requestID", "request", "encodedBytes", "removableDuplicateBytes")
+  ) {
+    const requestID = value("requestID")
+    const request = value("request")
+    const encodedBytes = value("encodedBytes")
+    if (!isNonNegativeSafeInteger(requestID)) return undefined
+    if (!isRequest(request)) return undefined
+    if (!isNonNegativeSafeInteger(encodedBytes)) return undefined
+    if (value("removableDuplicateBytes") !== 0) return undefined
+    return {
+      event,
+      role,
+      requestID,
+      request,
+      encodedBytes,
+      removableDuplicateBytes: 0,
+    }
+  }
+
+  if (
+    event === "rpc.dispatch" &&
+    role === "worker" &&
+    exact("event", "role", "requestID", "request", "durationMs")
+  ) {
+    const requestID = value("requestID")
+    const request = value("request")
+    const durationMs = value("durationMs")
+    if (!isNonNegativeSafeInteger(requestID)) return undefined
+    if (!isRequest(request)) return undefined
+    if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) return undefined
+    return {
+      event,
+      role,
+      requestID,
+      request,
+      durationMs,
+    }
+  }
+
+  const generationZero = () => value("workspaceGeneration") === 0 && value("attemptGeneration") === 0
+  if (
+    (event === "prompt.mounted" || event === "bootstrap.critical.ready" || event === "input.accepted") &&
+    role === "main" &&
+    exact("event", "role", "workspaceGeneration", "attemptGeneration") &&
+    generationZero()
+  ) {
+    return { event, role, workspaceGeneration: 0, attemptGeneration: 0 }
+  }
+  if (
+    event === "theme.settled" &&
+    role === "main" &&
+    exact("event", "role", "workspaceGeneration", "attemptGeneration", "outcome") &&
+    generationZero()
+  ) {
+    const outcome = value("outcome")
+    if (outcome !== "locked" && outcome !== "resolved" && outcome !== "fallback-final") return undefined
+    return { event, role, workspaceGeneration: 0, attemptGeneration: 0, outcome }
+  }
+  if (
+    event === "theme.reconciled" &&
+    role === "main" &&
+    exact("event", "role", "workspaceGeneration", "attemptGeneration") &&
+    generationZero()
+  ) {
+    return { event, role, workspaceGeneration: 0, attemptGeneration: 0 }
+  }
+  return undefined
 }
 
 export function createTuiStartupProfile(options: TuiStartupProfileOptions = {}): TuiStartupProfile {
@@ -201,8 +417,7 @@ export function createTuiStartupProfile(options: TuiStartupProfileOptions = {}):
           runID,
           sequence,
           elapsedMs,
-          event: snapshot.event,
-          role: snapshot.role,
+          ...snapshot,
         }
         const line = JSON.stringify(record) + "\n"
         if (Buffer.byteLength(line) > MAX_LINE_BYTES) {

@@ -59,12 +59,12 @@ describe("CLI startup trace", () => {
     expect(close).toBeLessThan(exit)
   })
 
-  test("emits cli.entry only to the inherited trace pipe and closes it on non-TUI exit", async () => {
+  test("emits allowlisted CLI phases only to the inherited trace pipe and closes it on non-TUI exit", async () => {
     const result = await run("3")
     const lines = result.trace.trim().split("\n")
 
     expect(result.code).toBe(0)
-    expect(lines).toHaveLength(1)
+    expect(lines).toHaveLength(2)
     expect(JSON.parse(lines[0])).toEqual({
       version: 1,
       runID: "run_test-1",
@@ -72,6 +72,17 @@ describe("CLI startup trace", () => {
       elapsedMs: expect.any(Number),
       event: "cli.entry",
       role: "main",
+    })
+    expect(JSON.parse(lines[1])).toEqual({
+      version: 1,
+      runID: "run_test-1",
+      sequence: 1,
+      elapsedMs: expect.any(Number),
+      event: "phase",
+      role: "main",
+      phase: "cli.command.load",
+      outcome: "ok",
+      durationMs: expect.any(Number),
     })
     expect(result.stdout).not.toContain("cli.entry")
     expect(result.stderr).not.toContain("cli.entry")
