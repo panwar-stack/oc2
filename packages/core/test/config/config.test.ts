@@ -52,6 +52,29 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.effect("exposes the location's committed revision", () =>
+    Effect.gen(function* () {
+      const config = yield* Config.Service
+      expect(config.revision).toBe(7)
+    }).pipe(
+      Effect.provide(
+        Config.locationLayer.pipe(
+          Layer.provide(FSUtil.defaultLayer),
+          Layer.provide(Global.layerWith({ config: "/tmp/oc2-config-revision-global" })),
+          Layer.provide(
+            Layer.succeed(
+              Location.Service,
+              Location.Service.of({
+                ...location({ directory: AbsolutePath.make("/tmp/oc2-config-revision") }),
+                revision: 7,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.effect("returns the latest defined scalar from priority-ordered documents", () =>
     Effect.sync(() => {
       const entries = [

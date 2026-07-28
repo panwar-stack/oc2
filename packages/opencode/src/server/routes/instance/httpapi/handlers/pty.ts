@@ -40,14 +40,28 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     const cors = yield* CorsConfig
     const locations = yield* LocationServiceMap
     const unregister = registerDisposer(
-      (ctx) => Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(ctx.directory) })),
+      (ctx) =>
+        Effect.runPromise(
+          locations.invalidate({
+            directory: AbsolutePath.make(ctx.directory),
+            generation: ctx.generation,
+            revision: ctx.revision,
+          }),
+        ),
       { activeOnly: true },
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
 
     const pty = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+      const instance = yield* InstanceState.context
       return yield* effect.pipe(
-        Effect.provide(locations.get({ directory: AbsolutePath.make((yield* InstanceState.context).directory) })),
+        Effect.provide(
+          locations.get({
+            directory: AbsolutePath.make(instance.directory),
+            generation: instance.generation,
+            revision: instance.revision,
+          }),
+        ),
       )
     })
 
@@ -158,14 +172,28 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
     const cors = yield* CorsConfig
     const locations = yield* LocationServiceMap
     const unregister = registerDisposer(
-      (ctx) => Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(ctx.directory) })),
+      (ctx) =>
+        Effect.runPromise(
+          locations.invalidate({
+            directory: AbsolutePath.make(ctx.directory),
+            generation: ctx.generation,
+            revision: ctx.revision,
+          }),
+        ),
       { activeOnly: true },
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
 
     const pty = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+      const instance = yield* InstanceState.context
       return yield* effect.pipe(
-        Effect.provide(locations.get({ directory: AbsolutePath.make((yield* InstanceState.context).directory) })),
+        Effect.provide(
+          locations.get({
+            directory: AbsolutePath.make(instance.directory),
+            generation: instance.generation,
+            revision: instance.revision,
+          }),
+        ),
       )
     })
 

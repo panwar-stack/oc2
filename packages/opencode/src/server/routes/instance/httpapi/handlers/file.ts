@@ -21,8 +21,15 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
     const locations = yield* LocationServiceMap
 
     const filesystem = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+      const instance = yield* InstanceState.context
       return yield* effect.pipe(
-        Effect.provide(locations.get({ directory: AbsolutePath.make((yield* InstanceState.context).directory) })),
+        Effect.provide(
+          locations.get({
+            directory: AbsolutePath.make(instance.directory),
+            generation: instance.generation,
+            revision: instance.revision,
+          }),
+        ),
       )
     })
 

@@ -5,6 +5,13 @@ import type * as Project from "./project"
 export interface InstanceContext {
   directory: string
   generation: number
+  globalEpoch?: number
+  revision?: number
+  fingerprint?: string
+  configDependencies?: readonly string[]
+  /** True only while evaluating a replacement; replacement failures must never use startup fallbacks. */
+  candidate?: boolean
+  coreConfigEntries?: readonly import("@oc2-ai/core/config").Config.Entry[]
   state: "booting" | "active" | "draining" | "closed"
   worktree: string
   project: Project.Info

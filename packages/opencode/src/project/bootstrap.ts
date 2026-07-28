@@ -7,14 +7,26 @@ import * as Vcs from "./vcs"
 import { InstanceState } from "@/effect/instance-state"
 import { registerDisposer } from "@/effect/instance-registry"
 import { Search } from "@oc2-ai/core/filesystem/search"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { Reference } from "@/reference/reference"
 import * as EffectLogger from "@oc2-ai/core/effect/logger"
 import { key as instanceKey } from "./instance-context"
+import { immutable } from "@/config/hot-reload"
+import { Config as CoreConfig } from "@oc2-ai/core/config"
+import { ConfigMigrateV1 } from "@oc2-ai/core/v1/config/migrate"
+import { AbsolutePath } from "@oc2-ai/core/schema"
 
 const log = EffectLogger.create({ service: "instance.bootstrap" })
+
+export function warmSearch(
+  ctx: Pick<import("./instance-context").InstanceContext, "directory" | "generation" | "candidate">,
+  search: Pick<Search.Interface, "warm">,
+) {
+  const effect = search.warm(ctx.directory, instanceKey(ctx))
+  return ctx.candidate ? effect : effect.pipe(Effect.ignore)
+}
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -51,7 +63,7 @@ export const layer = Layer.effect(
       // mostly always we will need a file picker for cwd
       // so synchronously start FFF scan for a cwd so it is ready before first toolcall generated
       yield* log.info("startup stage", { directory: ctx.directory, stage: "search.warm", status: "started" })
-      yield* search.warm(ctx.directory, instanceKey(ctx)).pipe(Effect.ignore)
+      yield* warmSearch(ctx, search)
       yield* log.info("startup stage", { directory: ctx.directory, stage: "search.warm", status: "completed" })
       // Plugin can mutate config so it has to be initialized before anything else.
       yield* log.info("startup stage", { directory: ctx.directory, stage: "plugin.init", status: "started" })
@@ -62,10 +74,29 @@ export const layer = Layer.effect(
       yield* log.info("startup stage", { directory: ctx.directory, stage: "service.init", status: "started" })
       yield* Effect.forEach(
         [reference, lsp, format, vcs, snapshot, project],
-        (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
+        (s) =>
+          ctx.candidate
+            ? s.init()
+            : s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
       yield* log.info("startup stage", { directory: ctx.directory, stage: "service.init", status: "completed" })
+      // Plugin initialization commits the post-hook snapshot before any dependent service can observe it.
+      const committed = yield* config.snapshot()
+      ctx.fingerprint = committed.fingerprint
+      ctx.configDependencies = committed.dependencies
+      ctx.coreConfigEntries = immutable([
+        new CoreConfig.Document({
+          type: "document",
+          info: Schema.decodeUnknownSync(CoreConfig.Info)(ConfigMigrateV1.migrate(committed.config as never), {
+            errors: "all",
+            onExcessProperty: "ignore",
+          }),
+        }),
+        ...committed.directories.map(
+          (directory) => new CoreConfig.Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+        ),
+      ])
       yield* log.info("startup stage", { directory: ctx.directory, stage: "bootstrap", status: "completed" })
     }).pipe(Effect.withSpan("InstanceBootstrap"))
 

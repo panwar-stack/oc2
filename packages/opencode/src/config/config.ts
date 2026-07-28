@@ -34,6 +34,7 @@ import { Npm } from "@oc2-ai/core/npm"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Naming } from "@oc2-ai/core/naming"
 import { randomUUID } from "crypto"
+import { fingerprint, immutable, type ConfigSnapshot } from "./hot-reload"
 
 const log = Log.create({ service: "config" })
 
@@ -189,9 +190,11 @@ export type Info = ConfigV1.Info & {
 
 type State = {
   config: Info
-  directories: string[]
+  directories: readonly string[]
+  dependencies: readonly string[]
   deps: Fiber.Fiber<void>[]
   consoleState: ConsoleState
+  snapshot?: ConfigSnapshot
 }
 
 export interface Interface {
@@ -203,6 +206,8 @@ export interface Interface {
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
+  readonly commit: () => Effect.Effect<ConfigSnapshot>
+  readonly snapshot: () => Effect.Effect<ConfigSnapshot>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Config") {}
@@ -332,7 +337,7 @@ export const layer = Layer.effect(
     const loadFile = Effect.fnUntraced(function* (filepath: string, env?: Record<string, string>) {
       log.info("loading", { path: filepath })
       const text = yield* readConfigFile(filepath)
-      if (!text) return {} as Info
+      if (text === undefined) return {} as Info
       return yield* loadConfig(text, { path: filepath }, env)
     })
 
@@ -345,7 +350,7 @@ export const layer = Layer.effect(
       return yield* loadConfig(text, { dir: path.dirname(file), source: file }, env)
     })
 
-    const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
+    const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>, strictLegacy = false) {
       let result: Info = {}
       for (const file of Naming.globalConfigLoadOrder) {
         result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, file), env))
@@ -360,7 +365,9 @@ export const layer = Layer.effect(
               if (provider && model) result.model = `${provider}/${model}`
               result = mergeConfig(result, rest)
             })
-            .catch(() => {}),
+            .catch((error) => {
+              if (strictLegacy) throw error
+            }),
         )
       }
 
@@ -370,7 +377,7 @@ export const layer = Layer.effect(
     const [cachedGlobal, invalidateGlobal] = yield* Effect.cachedInvalidateWithTTL(
       loadGlobal().pipe(
         Effect.tapError((error) =>
-          Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
+          Effect.sync(() => log.error("failed to load global config, using startup defaults", { error: String(error) })),
         ),
         Effect.orElseSucceed((): Info => ({})),
       ),
@@ -482,7 +489,11 @@ export const layer = Layer.effect(
           }
         }
 
-        const global = Object.keys(authEnv).length ? yield* loadGlobal(authEnv) : yield* getGlobal()
+        const global = ctx.candidate
+          ? yield* loadGlobal(authEnv, true)
+          : Object.keys(authEnv).length
+            ? yield* loadGlobal(authEnv)
+            : yield* getGlobal()
         yield* merge(Global.Path.config, global, "global")
 
         if (Flag.OC2_CONFIG) {
@@ -519,10 +530,14 @@ export const layer = Layer.effect(
             }
           }
 
-          yield* ensureGitignore(dir).pipe(Effect.orDie)
+          // Candidate evaluation must not modify the project before activation.
+          if (!ctx.candidate) yield* ensureGitignore(dir).pipe(Effect.orDie)
 
-          const dep = yield* npmSvc
-            .install(dir, {
+          // Auto-discovered plugins under `.oc2/plugin(s)` are already local files. Candidate dependency
+          // installation is needed only when those sources exist; ordinary config-only candidates must not
+          // rewrite every discovered config directory.
+          const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
+          const install = npmSvc.install(dir, {
               add: [
                 {
                   name: "@oc2-ai/plugin",
@@ -530,7 +545,10 @@ export const layer = Layer.effect(
                 },
               ],
             })
-            .pipe(
+          if (ctx.candidate && list.length) {
+            yield* install
+          } else if (!ctx.candidate) {
+            const dep = yield* install.pipe(
               Effect.exit,
               Effect.tap((exit) =>
                 Exit.isFailure(exit)
@@ -542,14 +560,12 @@ export const layer = Layer.effect(
               Effect.asVoid,
               Effect.forkDetach,
             )
-          deps.push(dep)
+            deps.push(dep)
+          }
 
           result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.loadMode(dir)))
-          // Auto-discovered plugins under `.oc2/plugin(s)` are already local files, so ConfigPlugin.load
-          // returns normalized Specs and we only need to attach origin metadata here.
-          const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
           yield* mergePluginOrigins(dir, list)
         }
 
@@ -632,6 +648,7 @@ export const layer = Layer.effect(
         return {
           config: result,
           directories,
+          dependencies: plan.candidates,
           deps,
           consoleState: {
             consoleManagedProviders: [],
@@ -653,7 +670,7 @@ export const layer = Layer.effect(
     })
 
     const directories = Effect.fn("Config.directories")(function* () {
-      return yield* InstanceState.use(state, (s) => s.directories)
+      return yield* InstanceState.use(state, (s) => [...s.directories])
     })
 
     const getConsoleState = Effect.fn("Config.getConsoleState")(function* () {
@@ -664,6 +681,34 @@ export const layer = Layer.effect(
       yield* InstanceState.useEffect(state, (s) =>
         Effect.forEach(s.deps, Fiber.join, { concurrency: "unbounded" }).pipe(Effect.asVoid),
       )
+    })
+
+    const commit = Effect.fn("Config.commit")(function* () {
+      const ctx = yield* InstanceState.context
+      return yield* InstanceState.use(state, (s) => {
+        if (s.snapshot) return s.snapshot
+        const effective = immutable(s.config)
+        const committedDirectories = immutable([...s.directories])
+        const committed = immutable<ConfigSnapshot>({
+          revision: ctx.revision ?? 0,
+          globalEpoch: ctx.globalEpoch ?? 0,
+          fingerprint: fingerprint(effective),
+          dependencies: immutable([...s.dependencies]),
+          config: effective,
+          directories: committedDirectories,
+        })
+        s.config = effective
+        s.directories = committedDirectories
+        s.snapshot = committed
+        return committed
+      })
+    })
+
+    const snapshot = Effect.fn("Config.snapshot")(function* () {
+      return yield* InstanceState.use(state, (s) => {
+        if (!s.snapshot) throw new Error("config snapshot requested before plugin hooks completed")
+        return s.snapshot
+      })
     })
 
     const update = Effect.fn("Config.update")(function* (config: Info) {
@@ -730,6 +775,8 @@ export const layer = Layer.effect(
       invalidate,
       directories,
       waitForDependencies,
+      commit,
+      snapshot,
     })
   }),
 )

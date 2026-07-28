@@ -1,5 +1,6 @@
 import { Database } from "@oc2-ai/core/database/database"
 import { LocationServiceMap } from "@oc2-ai/core/location-layer"
+import { LocationAdmission } from "@oc2-ai/core/location-admission"
 import { AbsolutePath } from "@oc2-ai/core/schema"
 import { SessionV2 } from "@oc2-ai/core/session"
 import { SessionTable } from "@oc2-ai/core/session/sql"
@@ -27,6 +28,7 @@ export const sessionLocationLayer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const locations = yield* LocationServiceMap
+    const admission = yield* LocationAdmission.Service
 
     return SessionLocationMiddleware.of((effect) =>
       Effect.gen(function* () {
@@ -52,13 +54,12 @@ export const sessionLocationLayer = Layer.effect(
             message: `Session not found: ${sessionID}`,
           })
 
-        return yield* effect.pipe(
-          Effect.provide(
-            locations.get({
+        return yield* admission.provide(
+          {
               directory: AbsolutePath.make(row.directory),
               workspaceID: row.workspaceID ? WorkspaceV2.ID.make(row.workspaceID) : undefined,
-            }),
-          ),
+          },
+          (committed) => effect.pipe(Effect.provide(locations.get(committed))),
         )
       }),
     )

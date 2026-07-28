@@ -7,6 +7,7 @@ import { registerDisposer } from "../../src/effect/instance-registry"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { matches as matchesInstance } from "../../src/project/instance-context"
+import { dependencyIndex } from "../../src/config/hot-reload"
 import { ProjectV2 } from "@oc2-ai/core/project"
 import { TestClock } from "effect/testing"
 import { tmpdirScoped } from "../fixture/fixture"
@@ -335,6 +336,177 @@ describe("InstanceStore", () => {
       expect(Exit.isFailure(olderExit)).toBe(true)
       expect((yield* store.load({ directory: dir })).generation).toBe(newest.generation)
       expect(newest.generation).toBe(3)
+    }),
+  )
+
+  it.live("uses target revision rather than later generation allocation for admission", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const newestStarted = yield* Deferred.make<void>()
+      const releaseNewest = yield* Deferred.make<void>()
+      yield* store.load({ directory: dir, revision: 1 })
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          const ctx = yield* InstanceRef
+          if (ctx?.revision !== 3) return
+          yield* Deferred.succeed(newestStarted, undefined)
+          yield* Deferred.await(releaseNewest)
+        }),
+      )
+
+      const newest = yield* store.reload({ directory: dir, revision: 3 }).pipe(Effect.forkScoped)
+      yield* Deferred.await(newestStarted)
+      const stale = yield* store.reload({ directory: dir, revision: 2 }).pipe(Effect.exit)
+      yield* Deferred.succeed(releaseNewest, undefined)
+      const committed = yield* Fiber.join(newest)
+
+      expect(Exit.isFailure(stale)).toBe(true)
+      expect(committed.revision).toBe(3)
+      expect(committed.generation).toBe(2)
+      expect((yield* store.load({ directory: dir })).revision).toBe(3)
+    }),
+  )
+
+  it.live("replaces dependency index membership atomically at cutover", () =>
+    Effect.gen(function* () {
+      dependencyIndex.clear()
+      yield* Effect.addFinalizer(() => Effect.sync(() => dependencyIndex.clear()))
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const oldPath = `${dir}/old/oc2.json`
+      const nextPath = `${dir}/next/oc2.json`
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          const ctx = yield* InstanceRef
+          if (!ctx) return
+          ctx.fingerprint = `revision-${ctx.revision}`
+          ctx.configDependencies = ctx.revision === 1 ? [oldPath] : [nextPath]
+        }),
+      )
+      const first = yield* store.load({ directory: dir, revision: 1 })
+      expect(dependencyIndex.consumers(oldPath)).toEqual([
+        { directory: dir, generation: first.generation },
+      ])
+
+      const second = yield* store.reload({ directory: dir, revision: 2 })
+      expect(first.state).toBe("draining")
+      expect(dependencyIndex.consumers(oldPath)).toEqual([])
+      expect(dependencyIndex.consumers(nextPath)).toEqual([
+        { directory: dir, generation: second.generation },
+      ])
+    }),
+  )
+
+  it.live("does not mutate dependencies for failed or effective no-op candidates", () =>
+    Effect.gen(function* () {
+      dependencyIndex.clear()
+      yield* Effect.addFinalizer(() => Effect.sync(() => dependencyIndex.clear()))
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const activePath = `${dir}/active/oc2.json`
+      const rejectedPath = `${dir}/rejected/oc2.json`
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          const ctx = yield* InstanceRef
+          if (!ctx) return
+          ctx.fingerprint = "same"
+          ctx.configDependencies = ctx.revision === 1 ? [activePath] : [rejectedPath]
+        }),
+      )
+      const first = yield* store.load({ directory: dir, revision: 1 })
+      expect(yield* store.reload({ directory: dir, revision: 2 })).toBe(first)
+      expect(dependencyIndex.consumers(activePath)).toEqual([
+        { directory: dir, generation: first.generation },
+      ])
+      expect(dependencyIndex.consumers(rejectedPath)).toEqual([])
+
+      yield* setBootstrap(Effect.die(new Error("rejected")))
+      expect(Exit.isFailure(yield* store.reload({ directory: dir, revision: 3 }).pipe(Effect.exit))).toBe(true)
+      expect(dependencyIndex.consumers(activePath)).toHaveLength(1)
+      expect(dependencyIndex.consumers(rejectedPath)).toEqual([])
+    }),
+  )
+
+  it.effect("commits a global epoch only after every project candidate is ready", () =>
+    Effect.gen(function* () {
+      const store = yield* InstanceStore.Service
+      const project = (directory: string) => ({
+        id: ProjectV2.ID.make(directory.slice(1)),
+        worktree: directory,
+        time: { created: 0, updated: 0 },
+        sandboxes: [directory],
+      })
+      const left = { directory: "/epoch-left", worktree: "/epoch-left", project: project("/epoch-left") }
+      const right = { directory: "/epoch-right", worktree: "/epoch-right", project: project("/epoch-right") }
+      const leftV0 = yield* store.load(left)
+      const rightV0 = yield* store.load(right)
+
+      const epoch = yield* store.beginGlobalEpoch([left.directory, right.directory])
+      const leftV1 = yield* store.reload({ ...left, globalEpoch: epoch })
+      const rightV1 = yield* store.reload({ ...right, globalEpoch: epoch })
+      const admitted = yield* store
+        .provide(left, Effect.map(InstanceRef, (ctx) => ctx?.globalEpoch))
+        .pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+
+      expect(yield* store.currentGlobalEpoch()).toBe(0)
+      expect((yield* store.load(left)).globalEpoch).toBe(0)
+      expect((yield* store.load(right)).globalEpoch).toBe(0)
+      expect(leftV1.state).toBe("booting")
+      expect(rightV1.state).toBe("booting")
+
+      yield* store.commitGlobalEpoch(epoch)
+
+      expect(yield* store.currentGlobalEpoch()).toBe(epoch)
+      expect(yield* Fiber.join(admitted)).toBe(epoch)
+      expect((yield* store.load(left)).generation).toBe(leftV1.generation)
+      expect((yield* store.load(right)).generation).toBe(rightV1.generation)
+      expect(leftV0.state).toBe("draining")
+      expect(rightV0.state).toBe("draining")
+    }),
+  )
+
+  it.effect("aborts a rejected global epoch without advancing the committed epoch", () =>
+    Effect.gen(function* () {
+      const store = yield* InstanceStore.Service
+      const directory = "/epoch-rollback"
+      const project = {
+        id: ProjectV2.ID.make("epoch-rollback"),
+        worktree: directory,
+        time: { created: 0, updated: 0 },
+        sandboxes: [directory],
+      }
+      const input = { directory, worktree: directory, project }
+      const active = yield* store.load(input)
+      const epoch = yield* store.beginGlobalEpoch([directory])
+      yield* setBootstrap(Effect.die(new Error("candidate rejected")))
+      expect(Exit.isFailure(yield* store.reload({ ...input, globalEpoch: epoch }).pipe(Effect.exit))).toBe(true)
+
+      yield* store.abortGlobalEpoch(epoch)
+
+      expect(yield* store.currentGlobalEpoch()).toBe(0)
+      expect((yield* store.load(input)).generation).toBe(active.generation)
+      expect(yield* store.provide(input, Effect.map(InstanceRef, (ctx) => ctx?.globalEpoch))).toBe(0)
+      expect(active.state).toBe("active")
+    }),
+  )
+
+  it.effect("rejects stale global epoch tokens and concurrent transactions", () =>
+    Effect.gen(function* () {
+      const store = yield* InstanceStore.Service
+      const stale = yield* store.beginGlobalEpoch([])
+      expect(Exit.isFailure(yield* store.beginGlobalEpoch([]).pipe(Effect.exit))).toBe(true)
+      yield* store.abortGlobalEpoch(stale)
+      const current = yield* store.beginGlobalEpoch([])
+
+      expect(current).toBeGreaterThan(stale)
+      expect(Exit.isFailure(yield* store.commitGlobalEpoch(stale).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isSuccess(yield* store.abortGlobalEpoch(stale).pipe(Effect.exit))).toBe(true)
+      expect(yield* store.currentGlobalEpoch()).toBe(0)
+
+      yield* store.abortGlobalEpoch(current)
+      expect(yield* store.currentGlobalEpoch()).toBe(0)
     }),
   )
 

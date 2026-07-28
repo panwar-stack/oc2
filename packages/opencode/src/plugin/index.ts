@@ -135,6 +135,19 @@ export const layer = Layer.effect(
       Effect.fn("Plugin.state")(function* (ctx) {
         const hooks: Hooks[] = []
         const bridge = yield* EffectBridge.make()
+        yield* Effect.addFinalizer(() =>
+          Effect.forEach(
+            hooks,
+            (hook) =>
+              Effect.tryPromise({
+                try: () => Promise.resolve(hook.dispose?.()),
+                catch: (error) => {
+                  log.error("plugin dispose hook failed", { error })
+                },
+              }).pipe(Effect.ignore),
+            { discard: true },
+          ),
+        )
 
         function publishPluginError(message: string) {
           bridge.fork(events.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() }))
@@ -168,13 +181,18 @@ export const layer = Layer.effect(
 
         for (const plugin of flags.disableDefaultPlugins ? [] : internalPlugins(flags)) {
           log.info("loading internal plugin", { name: plugin.name })
-          const init = yield* Effect.tryPromise({
+          const initialize = Effect.tryPromise({
             try: () => plugin(input),
             catch: (err) => {
               log.error("failed to load internal plugin", { name: plugin.name, error: err })
+              return err
             },
-          }).pipe(Effect.option)
-          if (init._tag === "Some") hooks.push(init.value)
+          })
+          if (ctx.candidate) hooks.push(yield* initialize.pipe(Effect.orDie))
+          else {
+            const init = yield* initialize.pipe(Effect.option)
+            if (init._tag === "Some") hooks.push(init.value)
+          }
         }
 
         const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
@@ -183,6 +201,7 @@ export const layer = Layer.effect(
         }
         if (plugins.length) yield* config.waitForDependencies()
 
+        const loadFailures: string[] = []
         const loaded = yield* Effect.promise(() =>
           PluginLoader.loadExternal({
             items: plugins,
@@ -193,11 +212,13 @@ export const layer = Layer.effect(
               },
               missing(candidate, _retry, message) {
                 log.warn("plugin has no server entrypoint", { path: candidate.plan.spec, message })
+                loadFailures.push(`plugin has no server entrypoint: ${candidate.plan.spec}`)
               },
               error(candidate, _retry, stage, error, resolved) {
                 const spec = candidate.plan.spec
                 const cause = error instanceof Error ? (error.cause ?? error) : error
                 const message = stage === "load" ? errorMessage(error) : errorMessage(cause)
+                loadFailures.push(`failed to ${stage} plugin: ${spec}`)
 
                 if (stage === "install") {
                   const parsed = parsePluginSpecifier(spec)
@@ -224,40 +245,38 @@ export const layer = Layer.effect(
             },
           }),
         )
+        if (ctx.candidate && loadFailures.length) yield* Effect.die(new Error(loadFailures.join("; ")))
         for (const load of loaded) {
           if (!load) continue
 
           // Keep plugin execution sequential so hook registration and execution
           // order remains deterministic across plugin runs.
-          yield* Effect.tryPromise({
+          const apply = Effect.tryPromise({
             try: () => applyPlugin(load, input, hooks),
             catch: (err) => {
               const message = errorMessage(err)
               log.error("failed to load plugin", { path: load.spec, error: message })
-              return message
+              return err
             },
-          }).pipe(
-            Effect.catch(() => {
-              // TODO: make proper events for this
-              // events.publish(Session.Event.Error, {
-              //   error: new NamedError.Unknown({
-              //     message: `Failed to load plugin ${load.spec}: ${message}`,
-              //   }).toObject(),
-              // })
-              return Effect.void
-            }),
-          )
+          })
+          yield* ctx.candidate ? apply.pipe(Effect.orDie) : apply.pipe(Effect.ignore)
         }
 
         // Notify plugins of current config
         for (const hook of hooks) {
-          yield* Effect.tryPromise({
+          const notify = Effect.tryPromise({
             try: () => Promise.resolve((hook as any).config?.(cfg)),
             catch: (err) => {
               log.error("plugin config hook failed", { error: err })
+              return err
             },
-          }).pipe(Effect.ignore)
+          })
+          yield* ctx.candidate ? notify.pipe(Effect.orDie) : notify.pipe(Effect.ignore)
         }
+
+        // Hooks receive the only mutable candidate view. Clone and freeze it immediately after the last
+        // successful hook so retained plugin references cannot alter the committed generation.
+        yield* config.commit()
 
         const unsubscribe = yield* events.listen((event) => {
           if (event.location?.directory !== ctx.directory || event.location.generation !== ctx.generation)
@@ -269,20 +288,6 @@ export const layer = Layer.effect(
           })
         })
         yield* Effect.addFinalizer(() => unsubscribe)
-
-        yield* Effect.addFinalizer(() =>
-          Effect.forEach(
-            hooks,
-            (hook) =>
-              Effect.tryPromise({
-                try: () => Promise.resolve(hook.dispose?.()),
-                catch: (error) => {
-                  log.error("plugin dispose hook failed", { error })
-                },
-              }).pipe(Effect.ignore),
-            { discard: true },
-          ),
-        )
 
         return { hooks }
       }),

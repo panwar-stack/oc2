@@ -7,11 +7,29 @@ import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import { bootstrap as cliBootstrap } from "../../src/cli/bootstrap"
 import { InstanceLayer } from "../../src/project/instance-layer"
 import { InstanceStore } from "../../src/project/instance-store"
+import { warmSearch } from "../../src/project/bootstrap"
+import { Config } from "../../src/config/config"
+import { fingerprint } from "../../src/config/hot-reload"
+import { InstanceRef } from "../../src/effect/instance-ref"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { waitGlobalBusEvent } from "../server/global-bus"
 
 const it = testEffect(Layer.mergeAll(InstanceLayer.layer, CrossSpawnSpawner.defaultLayer))
+const configIt = testEffect(
+  Layer.mergeAll(InstanceLayer.layer, CrossSpawnSpawner.defaultLayer, Config.defaultLayer),
+)
+
+it.effect("candidate search warm failures cross the readiness barrier", () =>
+  Effect.gen(function* () {
+    const search = { warm: () => Effect.die(new Error("warm failed")) }
+    const candidate = yield* warmSearch(
+      { directory: "/candidate", generation: 2, candidate: true },
+      search,
+    ).pipe(Effect.exit)
+    expect(Exit.isFailure(candidate)).toBe(true)
+  }),
+)
 
 // InstanceBootstrap must run before any code touches the instance —
 // originally tracked by PRs #25389 and #25449, now a permanent
@@ -107,5 +125,99 @@ it.live("InstanceStore.reload runs InstanceBootstrap", () =>
     yield* store.reload({ directory: tmp.directory })
 
     expect(existsSync(tmp.marker)).toBe(true)
+  }),
+)
+
+it.live("failed candidate plugin hooks dispose candidate resources exactly once", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({ git: true })
+    const disposed = path.join(dir, "disposed-count")
+    const pluginFile = path.join(dir, "cleanup-plugin.ts")
+    yield* Effect.promise(() =>
+      Bun.write(
+        pluginFile,
+        [
+          `const DISPOSED = ${JSON.stringify(disposed)}`,
+          "export default async () => ({",
+          '  config: async (config) => { if (config.username === "reject") throw new Error("reject hook") },',
+          "  dispose: async () => {",
+          '    const file = Bun.file(DISPOSED)',
+          '    const count = (await file.exists()) ? Number(await file.text()) : 0',
+          '    await Bun.write(DISPOSED, String(count + 1))',
+          "  },",
+          "})",
+          "",
+        ].join("\n"),
+      ),
+    )
+    const configFile = path.join(dir, "oc2.json")
+    yield* Effect.promise(() =>
+      Bun.write(configFile, JSON.stringify({ plugin: [pathToFileURL(pluginFile).href], username: "active" })),
+    )
+    const store = yield* InstanceStore.Service
+    const active = yield* store.load({ directory: dir, revision: 1 })
+
+    yield* Effect.promise(() =>
+      Bun.write(configFile, JSON.stringify({ plugin: [pathToFileURL(pluginFile).href], username: "reject" })),
+    )
+    const rejected = yield* store.reload({ directory: dir, revision: 2 }).pipe(Effect.exit)
+
+    expect(Exit.isFailure(rejected)).toBe(true)
+    expect(yield* store.load({ directory: dir })).toBe(active)
+    expect(yield* Effect.promise(() => Bun.file(disposed).text())).toBe("1")
+  }),
+)
+
+configIt.live("commits plugin-mutated config and retains the frozen LKG after hook failure", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({ git: true })
+    const pluginFile = path.join(dir, "mutating-plugin.ts")
+    const configFile = path.join(dir, "oc2.json")
+    yield* Effect.promise(() =>
+      Bun.write(
+        pluginFile,
+        [
+          "export default async () => ({",
+          "  config: async (config) => {",
+          '    config.model = `provider/${config.username}`',
+          '    config.provider = { mutated: { options: { source: config.username } } }',
+          '    if (config.username === "reject") throw new Error("reject after mutation")',
+          "  },",
+          "})",
+          "",
+        ].join("\n"),
+      ),
+    )
+    const write = (username: string) =>
+      Effect.promise(() =>
+        Bun.write(configFile, JSON.stringify({ plugin: [pathToFileURL(pluginFile).href], username })),
+      )
+    const store = yield* InstanceStore.Service
+    const config = yield* Config.Service
+
+    yield* write("active")
+    const active = yield* store.load({ directory: dir, revision: 1 })
+    yield* write("mutated")
+    const committed = yield* store.reload({ directory: dir, revision: 2 })
+    const info = yield* config.get().pipe(Effect.provideService(InstanceRef, committed))
+    const snapshot = yield* config.snapshot().pipe(Effect.provideService(InstanceRef, committed))
+
+    expect(info.model).toBe("provider/mutated")
+    expect(info.provider?.mutated?.options).toEqual({ source: "mutated" })
+    expect(committed.fingerprint).toBe(fingerprint(info))
+    expect(committed.fingerprint).not.toBe(active.fingerprint)
+    expect(JSON.stringify(committed.coreConfigEntries)).toContain("provider/mutated")
+    expect(Object.isFrozen(snapshot)).toBe(true)
+    expect(Object.isFrozen(snapshot.config)).toBe(true)
+    expect(Object.isFrozen((snapshot.config as Config.Info).provider?.mutated?.options)).toBe(true)
+    expect(Object.isFrozen(committed.coreConfigEntries)).toBe(true)
+    expect(Object.isFrozen(committed.coreConfigEntries?.[0])).toBe(true)
+
+    yield* write("reject")
+    expect(Exit.isFailure(yield* store.reload({ directory: dir, revision: 3 }).pipe(Effect.exit))).toBe(true)
+    expect(yield* store.load({ directory: dir })).toBe(committed)
+    const retained = yield* config.get().pipe(Effect.provideService(InstanceRef, committed))
+    expect(retained.model).toBe("provider/mutated")
+    expect(retained.provider?.mutated?.options).toEqual({ source: "mutated" })
   }),
 )

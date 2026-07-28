@@ -53,8 +53,30 @@ export const plan = Effect.fn("ConfigPaths.plan")(function* (directory: string, 
     direct,
     directories: directories.all,
     project: [...direct, ...directories.project.flatMap((dir) => fileInDirectory(dir, Naming.appSlug))],
+    candidates: candidateFiles(directory, worktree, directories.all),
   }
 })
+
+function candidateFiles(directory: string, worktree: string | undefined, configDirectories: readonly string[]) {
+  const stop = worktree ? path.resolve(worktree) : path.parse(path.resolve(directory)).root
+  const ancestors: string[] = []
+  let current = path.resolve(directory)
+  while (true) {
+    ancestors.push(current)
+    if (current === stop || current === path.dirname(current)) break
+    current = path.dirname(current)
+  }
+  return unique([
+    ...ancestors.toReversed().flatMap((dir) => Naming.configFiles.map((file) => path.join(dir, file))),
+    ...ancestors.toReversed().flatMap((dir) =>
+      Naming.configDirs.flatMap((name) => fileInDirectory(path.join(dir, name), Naming.appSlug)),
+    ),
+    ...configDirectories.flatMap((dir) => fileInDirectory(dir, Naming.appSlug)),
+    ...fileInDirectory(path.join(Global.Path.home, ".oc2"), Naming.appSlug),
+    ...Naming.globalConfigFiles.map((file) => path.join(Global.Path.config, file)),
+    ...(Flag.OC2_CONFIG ? [Flag.OC2_CONFIG] : []),
+  ])
+}
 
 export const directories = Effect.fn("ConfigPaths.directories")(function* (directory: string, worktree?: string) {
   return (yield* directoryPlan(directory, worktree)).all

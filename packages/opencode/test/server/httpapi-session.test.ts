@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { PermissionV2 } from "@oc2-ai/core/permission"
 import { LocationServiceMap } from "@oc2-ai/core/location-layer"
+import * as InstanceState from "../../src/effect/instance-state"
 import { AbsolutePath } from "@oc2-ai/core/schema"
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
@@ -698,10 +699,16 @@ describe("session HttpApi", () => {
           resources: [".env"],
         }
         const listed = { ...pending, save: null, metadata: null, source: null }
+        const instance = yield* InstanceState.context
         expect(
           yield* PermissionV2.Service.use((service) => service.ask(pending)).pipe(
             Effect.provide(
-              LocationServiceMap.get({ directory: AbsolutePath.make(test.directory), workspaceID: undefined }),
+              LocationServiceMap.get({
+                directory: AbsolutePath.make(test.directory),
+                workspaceID: undefined,
+                generation: instance.generation,
+                revision: instance.revision,
+              }),
             ),
           ),
         ).toEqual({ id: requestID, effect: "ask" })
@@ -715,6 +722,8 @@ describe("session HttpApi", () => {
           location: {
             directory: test.directory,
             workspaceID: null,
+            generation: instance.generation,
+            revision: instance.revision,
             project: { id: project.project.id, directory: test.directory },
           },
           data: [listed],
@@ -752,6 +761,8 @@ describe("session HttpApi", () => {
           location: {
             directory: test.directory,
             workspaceID: null,
+            generation: instance.generation,
+            revision: instance.revision,
             project: { id: project.project.id, directory: test.directory },
           },
           data: [],

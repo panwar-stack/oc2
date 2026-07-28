@@ -117,6 +117,29 @@ export class Directory extends Schema.Class<Directory>("Config.Directory")({
 
 export type Entry = Document | Directory
 
+const committed = new Map<string, readonly Entry[]>()
+const committedKey = (directory: string, generation: number, revision: number) =>
+  `${path.resolve(directory)}\0${generation}\0${revision}`
+
+function immutable<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value
+  const output: object = Array.isArray(value) ? [] : Object.create(Object.getPrototypeOf(value) as object)
+  for (const key of Reflect.ownKeys(value as object)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value as object, key)
+    if (descriptor && "value" in descriptor) descriptor.value = immutable(descriptor.value)
+    if (descriptor) Object.defineProperty(output, key, descriptor)
+  }
+  return Object.freeze(output) as T
+}
+
+export function commit(directory: string, generation: number, revision: number, entries: readonly Entry[]) {
+  committed.set(committedKey(directory, generation, revision), immutable([...entries]))
+}
+
+export function removeCommitted(directory: string, generation: number, revision: number) {
+  committed.delete(committedKey(directory, generation, revision))
+}
+
 export function latest<K extends keyof Info>(entries: readonly Entry[], key: K): Info[K] | undefined {
   return entries
     .filter((entry): entry is Document => entry.type === "document")
@@ -126,6 +149,7 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 export interface Interface {
   /** Returns location config documents and supplemental directories from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
+  readonly revision?: number
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Config") {}
@@ -141,6 +165,25 @@ export const layer = Layer.effect(
     const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
     const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
     const decodeV1Info = Schema.decodeUnknownOption(ConfigV1.Info, decodeOptions)
+    const committedEntries =
+      location.generation !== undefined && location.revision !== undefined
+        ? committed.get(committedKey(location.directory, location.generation, location.revision))
+        : undefined
+
+    if (committedEntries) {
+      yield* policy.load(
+        committedEntries
+          .filter((config): config is Document => config.type === "document")
+          .toReversed()
+          .flatMap((config) => config.info.experimental?.policies ?? []),
+      )
+      return Service.of({ revision: location.revision ?? 0, entries: () => Effect.succeed(immutable([...committedEntries])) })
+    }
+    if (location.generation !== undefined && location.revision !== undefined) {
+      return yield* Effect.die(
+        new Error(`committed config snapshot is unavailable: ${location.directory}@${location.generation}:${location.revision}`),
+      )
+    }
 
     const loadFile = Effect.fnUntraced(function* (filepath: string) {
       const text = yield* fs.readFileStringSafe(filepath)
@@ -211,6 +254,7 @@ export const layer = Layer.effect(
     )
 
     return Service.of({
+      revision: location.revision ?? 0,
       entries: Effect.fn("Config.entries")(function* () {
         return configs
       }),

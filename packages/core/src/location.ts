@@ -9,6 +9,7 @@ export const Ref = Schema.Struct({
   directory: AbsolutePath,
   workspaceID: Schema.optional(WorkspaceV2.ID),
   generation: Schema.optional(Schema.Finite),
+  revision: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "Location.Ref" })
 export type Ref = typeof Ref.Type
 
@@ -16,6 +17,7 @@ export class Info extends Schema.Class<Info>("Location.Info")({
   directory: AbsolutePath,
   workspaceID: WorkspaceV2.ID.pipe(Schema.optional),
   generation: Schema.Finite.pipe(Schema.optional),
+  revision: Schema.Finite.pipe(Schema.optional),
   project: Schema.Struct({
     id: Project.ID,
     directory: AbsolutePath,
@@ -42,6 +44,7 @@ export const layer = (ref: Ref) =>
         directory: ref.directory,
         workspaceID: ref.workspaceID,
         generation: ref.generation,
+        revision: ref.revision,
         project: { id: resolved.id, directory: resolved.directory },
         vcs: resolved.vcs,
       })

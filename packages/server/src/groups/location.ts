@@ -1,5 +1,6 @@
 import { Location } from "@oc2-ai/core/location"
 import { LocationServiceMap } from "@oc2-ai/core/location-layer"
+import { LocationAdmission } from "@oc2-ai/core/location-admission"
 import { FileSystem } from "@oc2-ai/core/filesystem"
 import { Naming } from "@oc2-ai/core/naming"
 import { AbsolutePath } from "@oc2-ai/core/schema"
@@ -39,6 +40,8 @@ export function response<A, E, R>(data: Effect.Effect<A, E, R>) {
       location: new Location.Info({
         directory: location.directory,
         workspaceID: location.workspaceID,
+        generation: location.generation,
+        revision: location.revision,
         project: location.project,
       }),
       data: yield* data,
@@ -72,10 +75,13 @@ export const layer = Layer.effect(
   LocationMiddleware,
   Effect.gen(function* () {
     const locations = yield* LocationServiceMap
+    const admission = yield* LocationAdmission.Service
     return LocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* effect.pipe(Effect.provide(locations.get(ref(request))))
+        return yield* admission.provide(ref(request), (committed) =>
+          effect.pipe(Effect.provide(locations.get(committed))),
+        )
       }),
     )
   }),

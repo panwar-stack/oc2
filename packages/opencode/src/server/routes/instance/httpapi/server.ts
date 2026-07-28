@@ -103,6 +103,13 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { LocationAdmission } from "@oc2-ai/core/location-admission"
+import { InstanceStore } from "@/project/instance-store"
+import * as InstanceState from "@/effect/instance-state"
+import { LocationServiceMap } from "@oc2-ai/core/location-layer"
+import { registerDisposer } from "@/effect/instance-registry"
+import { AbsolutePath } from "@oc2-ai/core/schema"
+import { key as instanceKey } from "@/project/instance-context"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -165,8 +172,48 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
 const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
 )
+const locationAdmissionLayer = Layer.effect(
+  LocationAdmission.Service,
+  Effect.gen(function* () {
+    const store = yield* InstanceStore.Service
+    const locations = yield* LocationServiceMap
+    const refs = new Map<string, Map<string, import("@oc2-ai/core/location").Location.Ref>>()
+    const unregister = registerDisposer((ctx) => {
+      const active = refs.get(instanceKey(ctx))
+      refs.delete(instanceKey(ctx))
+      return Effect.runPromise(
+        Effect.forEach(active?.values() ?? [], (ref) => locations.invalidate(ref), {
+          concurrency: "unbounded",
+          discard: true,
+        }),
+      )
+    })
+    yield* Effect.addFinalizer(() => Effect.sync(unregister))
+    return LocationAdmission.Service.of({
+      provide: (ref, use) =>
+        store.provide({ directory: ref.directory },
+          Effect.gen(function* () {
+            const instance = yield* InstanceState.context
+            const committed = {
+              ...ref,
+              directory: AbsolutePath.make(instance.directory),
+              generation: instance.generation,
+              revision: instance.revision,
+            }
+            const key = JSON.stringify(committed)
+            const active = refs.get(instanceKey(instance)) ?? new Map()
+            active.set(key, committed)
+            refs.set(instanceKey(instance), active)
+            return yield* use(committed)
+          }),
+        ),
+    })
+  }),
+).pipe(Layer.provide(LocationServiceMap.layer))
+
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
+  Layer.provide(locationAdmissionLayer),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
 )
 
