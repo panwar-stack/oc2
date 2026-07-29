@@ -35,7 +35,7 @@ export function isolateTuiStartupTrace(trace: TuiStartup["trace"]): TuiStartup["
 
 export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
   let mounted = false
-  let armed = false
+  let operations = 0
   let accepted = false
   return {
     mount() {
@@ -48,15 +48,18 @@ export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
         attemptGeneration: 0,
       })
     },
-    arm() {
-      if (!accepted) armed = true
-    },
-    disarm() {
-      armed = false
+    begin() {
+      if (accepted) return () => {}
+      operations++
+      let active = true
+      return () => {
+        if (!active) return
+        active = false
+        operations = Math.max(0, operations - 1)
+      }
     },
     changed() {
-      if (!mounted || !armed || accepted) return
-      armed = false
+      if (!mounted || operations === 0 || accepted) return
       accepted = true
       emitTuiStartupTrace(trace, {
         event: "input.accepted",
@@ -67,7 +70,7 @@ export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
     },
     cleanup() {
       mounted = false
-      armed = false
+      operations = 0
       accepted = false
     },
   }

@@ -82,6 +82,15 @@ function aggregateRefreshSessionID(event: Event) {
     return event.properties.sessionID
 }
 
+export function captureSynchronousStartup<T>(start: () => T, failed: (error: unknown) => void): T | undefined {
+  try {
+    return start()
+  } catch (error) {
+    failed(error)
+    return undefined
+  }
+}
+
 function preserveSessionAggregates(current: Session, incoming: Session): Session {
   return {
     ...incoming,
@@ -781,14 +790,52 @@ export const {
       const fatal = input.fatal ?? true
       const criticalStart = startup.trace ? performance.now() : 0
       const workspace = project.workspace.current()
-      const projectPromise = project.sync()
-      const sessionListPromise = projectPromise.then(() => listSessions())
+      const failBootstrap = (e: unknown) => {
+        startup.trace?.({
+          event: "phase",
+          role: "main",
+          phase: "bootstrap.critical",
+          outcome: "error",
+          durationMs: Math.max(0, performance.now() - criticalStart),
+        })
+        console.error("tui bootstrap failed", {
+          error: e instanceof Error ? e.message : String(e),
+          name: e instanceof Error ? e.name : undefined,
+          stack: e instanceof Error ? e.stack : undefined,
+        })
+        if (fatal) {
+          destroyRenderer(renderer)
+        } else {
+          throw e
+        }
+      }
+      const started = captureSynchronousStartup(() => {
+        const projectPromise = project.sync()
+        const sessionListPromise = projectPromise.then(() => listSessions())
 
-      // blocking - include session.list when continuing a session
-      const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
-      const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
-      const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
-      const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
+        // blocking - include session.list when continuing a session
+        const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
+        const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
+        const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
+        const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
+        return {
+          projectPromise,
+          sessionListPromise,
+          providersPromise,
+          providerListPromise,
+          agentsPromise,
+          configPromise,
+        }
+      }, failBootstrap)
+      if (!started) return
+      const {
+        projectPromise,
+        sessionListPromise,
+        providersPromise,
+        providerListPromise,
+        agentsPromise,
+        configPromise,
+      } = started
       const blockingRequests: { name: string; promise: Promise<unknown> }[] = [
         { name: "config.providers", promise: providersPromise },
         { name: "provider.list", promise: providerListPromise },
@@ -881,25 +928,7 @@ export const {
             setStore("status", "complete")
           })
         })
-        .catch(async (e) => {
-          startup.trace?.({
-            event: "phase",
-            role: "main",
-            phase: "bootstrap.critical",
-            outcome: "error",
-            durationMs: Math.max(0, performance.now() - criticalStart),
-          })
-          console.error("tui bootstrap failed", {
-            error: e instanceof Error ? e.message : String(e),
-            name: e instanceof Error ? e.name : undefined,
-            stack: e instanceof Error ? e.stack : undefined,
-          })
-          if (fatal) {
-            destroyRenderer(renderer)
-          } else {
-            throw e
-          }
-        })
+        .catch(failBootstrap)
     }
 
     onMount(() => {

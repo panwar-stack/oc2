@@ -233,10 +233,16 @@ export function Prompt(props: PromptProps) {
   const [cursorVersion, setCursorVersion] = createSignal(0)
   const startupInput = createTuiStartupInputTrace(props.startup ? startup.trace : undefined)
   let inputArmTimer: ReturnType<typeof setTimeout> | undefined
+  let endArmedInput: (() => void) | undefined
   const armInput = () => {
-    startupInput.arm()
     if (inputArmTimer) clearTimeout(inputArmTimer)
-    inputArmTimer = setTimeout(() => startupInput.disarm(), 0)
+    endArmedInput?.()
+    const end = startupInput.begin()
+    endArmedInput = end
+    inputArmTimer = setTimeout(() => {
+      end()
+      if (endArmedInput === end) endArmedInput = undefined
+    }, 0)
   }
   const hasRightContent = createMemo(() => Boolean(props.right))
 
@@ -435,6 +441,7 @@ export function Prompt(props: PromptProps) {
         run: async (ctx: CommandContext<Renderable, KeyEvent>) => {
           ctx.event.preventDefault()
           ctx.event.stopPropagation()
+          const endInput = startupInput.begin()
           setStore("clipboardPending", (pending) => pending + 1)
           try {
             const content = await clipboard.read?.()
@@ -450,6 +457,7 @@ export function Prompt(props: PromptProps) {
               await pasteInputText(content.data)
             }
           } finally {
+            endInput()
             setStore("clipboardPending", (pending) => pending - 1)
           }
         },
@@ -694,8 +702,9 @@ export function Prompt(props: PromptProps) {
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
-    if (inputArmTimer) clearTimeout(inputArmTimer)
-    startupInput.cleanup()
+      if (inputArmTimer) clearTimeout(inputArmTimer)
+      endArmedInput?.()
+      startupInput.cleanup()
   })
 
   createEffect(() => {
@@ -1487,11 +1496,11 @@ export function Prompt(props: PromptProps) {
                 // default paste unless we suppress it first and handle insertion ourselves.
                 event.preventDefault()
 
-                armInput()
+                const endInput = startupInput.begin()
                 try {
                   await pasteInputText(normalizedText)
                 } finally {
-                  startupInput.disarm()
+                  endInput()
                 }
               }}
               ref={(r: TextareaRenderable) => {

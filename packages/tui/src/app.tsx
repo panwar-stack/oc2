@@ -417,25 +417,38 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const [ready, setReady] = createSignal(false)
   const pluginStart = startup.trace ? performance.now() : 0
   let pluginOutcome: "ok" | "error" = "ok"
-  props.pluginHost
-    .start({
+  const reportPluginFailure = (error: unknown) => {
+    pluginOutcome = "error"
+    console.error("Failed to load TUI plugins", error)
+  }
+  const emitPluginPhase = () => {
+    startup.trace?.({
+      event: "phase",
+      role: "main",
+      phase: "plugin.load",
+      outcome: pluginOutcome,
+      durationMs: Math.max(0, performance.now() - pluginStart),
+    })
+  }
+  let pluginTask: Promise<void>
+  try {
+    pluginTask = props.pluginHost.start({
       api,
       config: tuiConfig,
       runtime: pluginRuntime,
       dispose: () => attention.dispose(),
     })
+  } catch (error) {
+    reportPluginFailure(error)
+    emitPluginPhase()
+    throw error
+  }
+  pluginTask
     .catch((error) => {
-      pluginOutcome = "error"
-      console.error("Failed to load TUI plugins", error)
+      reportPluginFailure(error)
     })
     .finally(() => {
-      startup.trace?.({
-        event: "phase",
-        role: "main",
-        phase: "plugin.load",
-        outcome: pluginOutcome,
-        durationMs: Math.max(0, performance.now() - pluginStart),
-      })
+      emitPluginPhase()
       setReady(true)
     })
 

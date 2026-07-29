@@ -7,6 +7,7 @@ import { createEventSource, createFetch, directory } from "./fixture/tui-sdk"
 import type { TuiStartupTraceInput } from "@oc2-ai/core/util/tui-startup-profile"
 import { createTuiStartupInputTrace, isolateTuiStartupTrace } from "../src/context/runtime"
 import { startupThemeSettlement } from "../src/context/theme"
+import { captureSynchronousStartup } from "../src/context/sync"
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
@@ -43,8 +44,9 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
         },
         args: {},
         pluginHost: {
-          async start() {
+          start() {
             started()
+            throw new Error("plugin start failed")
           },
           async dispose() {
             disposes++
@@ -62,7 +64,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
     expect(process.listeners("SIGHUP").every((listener) => listeners.has(listener))).toBe(true)
     expect(startup.filter((item) => item.event === "theme.settled")).toHaveLength(1)
     expect(
-      startup.some((item) => item.event === "phase" && item.phase === "plugin.load" && item.outcome === "ok"),
+      startup.some((item) => item.event === "phase" && item.phase === "plugin.load" && item.outcome === "error"),
     ).toBe(true)
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
@@ -81,14 +83,40 @@ test("startup markers use lock-aware and accepted-input boundaries", async () =>
   input.changed()
   input.mount()
   input.changed()
-  input.arm()
+  const end = input.begin()
+  await Promise.resolve()
   input.changed()
-  input.arm()
+  end()
+  input.begin()
   input.changed()
 
   expect(markers.map((item) => item.event)).toEqual(["prompt.mounted", "input.accepted"])
   expect(startupThemeSettlement("dark", "fallback-final")).toBe("locked")
   expect(startupThemeSettlement(undefined, "fallback-final")).toBe("fallback-final")
+
+  const startupFailure = new Error("critical startup failed")
+  let reported: unknown
+  expect(
+    captureSynchronousStartup(
+      () => {
+        throw startupFailure
+      },
+      (error) => {
+        reported = error
+      },
+    ),
+  ).toBeUndefined()
+  expect(reported).toBe(startupFailure)
+  expect(() =>
+    captureSynchronousStartup(
+      () => {
+        throw startupFailure
+      },
+      (error) => {
+        throw error
+      },
+    ),
+  ).toThrow(startupFailure)
 
   const source = await Bun.file(new URL("../src/component/prompt/index.tsx", import.meta.url)).text()
   const app = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
@@ -107,9 +135,34 @@ test("startup markers use lock-aware and accepted-input boundaries", async () =>
   expect(mounted).toBeGreaterThan(ref)
   expect(forwarded).toBeGreaterThan(mounted)
   expect(source).toContain("if (e.name.length === 1 && !e.ctrl && !e.meta) armInput()")
+  const pasteCommand = source.indexOf('name: "prompt.paste"')
+  const commandOperation = source.indexOf("const endInput = startupInput.begin()", pasteCommand)
+  const clipboardRead = source.indexOf("await clipboard.read?.()", commandOperation)
+  const commandEnd = source.indexOf("endInput()", clipboardRead)
+  expect(commandOperation).toBeGreaterThan(pasteCommand)
+  expect(clipboardRead).toBeGreaterThan(commandOperation)
+  expect(commandEnd).toBeGreaterThan(clipboardRead)
+  const bracketedPaste = source.indexOf("onPaste={async")
+  const emptyPaste = source.indexOf('keymap.dispatchCommand("prompt.paste")', bracketedPaste)
+  const asyncOperation = source.indexOf("const endInput = startupInput.begin()", bracketedPaste)
+  const asyncPaste = source.indexOf("await pasteInputText(normalizedText)", asyncOperation)
+  const asyncEnd = source.indexOf("endInput()", asyncPaste)
+  expect(emptyPaste).toBeGreaterThan(bracketedPaste)
+  expect(emptyPaste).toBeLessThan(asyncOperation)
+  expect(asyncOperation).toBeGreaterThan(bracketedPaste)
+  expect(asyncPaste).toBeGreaterThan(asyncOperation)
+  expect(asyncEnd).toBeGreaterThan(asyncPaste)
   const ready = sync.indexOf('setStore("status", "partial")')
   const critical = sync.indexOf('event: "bootstrap.critical.ready"', ready)
   expect(critical).toBeGreaterThan(ready)
+  const captured = sync.indexOf("const started = captureSynchronousStartup")
+  const projectStart = sync.indexOf("project.sync()", captured)
+  const sdkStart = sync.indexOf("sdk.client.config.providers", projectStart)
+  const failedStart = sync.indexOf("}, failBootstrap)", sdkStart)
+  expect(captured).toBeGreaterThan(-1)
+  expect(projectStart).toBeGreaterThan(captured)
+  expect(sdkStart).toBeGreaterThan(projectStart)
+  expect(failedStart).toBeGreaterThan(sdkStart)
   expect(app).not.toContain('event: "theme.settled"')
   const lock = theme.indexOf("draft.lock = lock")
   const settled = theme.indexOf('event: "theme.settled"', lock)
