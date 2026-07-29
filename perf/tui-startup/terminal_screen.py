@@ -25,6 +25,13 @@ from unicode_tables_17_0_0 import (
     EMOJI_VARIATION_BASE_RANGES as _U17_EMOJI_VARIATION_BASE_RANGES,
     EXTENDED_PICTOGRAPHIC_RANGES,
     GCB_CONTROL_RANGES,
+    GCB_L_RANGES,
+    GCB_LV_RANGES,
+    GCB_LVT_RANGES,
+    GCB_PREPEND_RANGES,
+    GCB_SPACING_MARK_RANGES,
+    GCB_T_RANGES,
+    GCB_V_RANGES,
     GRAPHEME_EXTEND_RANGES,
     UNASSIGNED_RANGES,
     WIDE_OR_FULLWIDTH_RANGES,
@@ -442,6 +449,11 @@ class _Surface:
     wrap_pending: bool = False
     last_lead: Optional[Tuple[int, int]] = None
     cursor_addressed: bool = False
+    last_lead_natural: bool = False
+    last_gcb: Optional[str] = None
+    orphaned_gcb: Optional[str] = None
+    ri_count: int = 0
+    orphaned_ri_count: int = 0
 
     @classmethod
     def blank(cls, width: int, height: int) -> "_Surface":
@@ -613,6 +625,20 @@ class TerminalScreen:
         active_lead_survived = False
         for surface in (self._main, self._alternate):
             saved_last_lead = surface.last_lead
+            saved_last_lead_natural = surface.last_lead_natural
+            saved_last_gcb = surface.last_gcb
+            saved_orphaned_gcb = surface.orphaned_gcb
+            saved_ri_count = surface.ri_count
+            saved_orphaned_ri_count = surface.orphaned_ri_count
+            saved_cursor_addressed = surface.cursor_addressed
+            saved_cursor_row = surface.cursor_row
+            saved_cursor_column = surface.cursor_column
+            saved_addressed_part = surface.parts[saved_cursor_row][saved_cursor_column]
+            saved_addressed_cell: Cell = None
+            if saved_cursor_addressed and saved_addressed_part is not None:
+                addressed_row = saved_cursor_row - saved_addressed_part.row_offset
+                addressed_column = saved_cursor_column - saved_addressed_part.column_offset
+                saved_addressed_cell = surface.rows[addressed_row][addressed_column]
             saved_last_cell: Cell = None
             saved_last_part: Optional[_CellPart] = None
             if saved_last_lead is not None:
@@ -646,11 +672,39 @@ class TerminalScreen:
             surface.wrap_pending = False
             surface.last_lead = None
             surface.cursor_addressed = False
+            surface.last_lead_natural = False
+            surface.last_gcb = None
+            surface.orphaned_gcb = saved_orphaned_gcb
+            surface.ri_count = 0
+            surface.orphaned_ri_count = saved_orphaned_ri_count
             self._repair_multicells(surface)
             if self._valid_last_lead(surface, saved_last_lead, saved_last_cell, saved_last_part):
                 surface.last_lead = saved_last_lead
+                surface.last_lead_natural = saved_last_lead_natural
+                surface.last_gcb = saved_last_gcb
+                surface.orphaned_gcb = None
+                surface.ri_count = saved_ri_count
+                surface.orphaned_ri_count = 0
+                self._restore_post_lead_cursor(surface)
                 if surface is active_surface:
                     active_lead_survived = True
+            elif saved_last_lead is not None and saved_last_gcb is not None:
+                surface.orphaned_gcb = saved_last_gcb
+                surface.orphaned_ri_count = saved_ri_count
+            elif (
+                saved_cursor_addressed
+                and saved_cursor_row < surface.height
+                and saved_cursor_column < surface.width
+                and saved_addressed_part is not None
+                and surface.parts[saved_cursor_row][saved_cursor_column] == saved_addressed_part
+            ):
+                surface.cursor_row = saved_cursor_row
+                surface.cursor_column = saved_cursor_column
+                surface.cursor_addressed = True
+            elif saved_cursor_addressed and saved_addressed_cell not in (None, _CONTINUATION):
+                assert isinstance(saved_addressed_cell, str)
+                surface.orphaned_gcb = _gcb_class(saved_addressed_cell[-1])
+                surface.orphaned_ri_count = _trailing_ri_count(saved_addressed_cell)
         self.width = width
         self.height = height
         if self._join_next and not active_lead_survived:
@@ -678,6 +732,22 @@ class TerminalScreen:
             return False
         part = surface.parts[row][column]
         return part == expected_part and (part is None or (part.row_offset == 0 and part.column_offset == 0))
+
+    def _restore_post_lead_cursor(self, surface: _Surface) -> None:
+        if surface.last_lead is None or not surface.last_lead_natural:
+            return
+        row, column = surface.last_lead
+        part = surface.parts[row][column]
+        width = part.width if part is not None else 1
+        final_column = column + width - 1
+        surface.cursor_row = row
+        surface.cursor_addressed = False
+        if final_column == surface.width - 1:
+            surface.cursor_column = final_column
+            surface.wrap_pending = self._autowrap
+        else:
+            surface.cursor_column = final_column + 1
+            surface.wrap_pending = False
 
     def _repair_multicells(self, surface: _Surface) -> None:
         owners: dict[Tuple[int, int, int, int], List[Tuple[int, int]]] = {}
@@ -909,7 +979,7 @@ class TerminalScreen:
             if parts[2] != b" ":
                 self._invalidate("unsupported scaled-text OSC payload")
                 return
-            self._write_glyph(" ", 2, 2)
+            self._write_explicit_glyph(" ", 2, 2)
             return
         if option not in (b"w=1", b"w=2"):
             self._invalidate("unsupported explicit-width OSC option")
@@ -923,7 +993,7 @@ class TerminalScreen:
         if not text or not all(_is_safe_osc66_scalar(character) for character in text):
             self._invalidate("unsupported explicit-width OSC geometry")
             return
-        self._write_glyph(text, width)
+        self._write_explicit_glyph(text, width)
 
     def _escape_single(self, value: str) -> None:
         surface = self._surface
@@ -1258,6 +1328,11 @@ class TerminalScreen:
         surface.wrap_pending = False
         surface.last_lead = None
         surface.cursor_addressed = True
+        surface.last_lead_natural = False
+        surface.last_gcb = None
+        surface.orphaned_gcb = None
+        surface.ri_count = 0
+        surface.orphaned_ri_count = 0
         self._join_next = False
 
     def _restore_cursor(self, surface: _Surface) -> None:
@@ -1289,6 +1364,9 @@ class TerminalScreen:
         surface.wrap_pending = False
         surface.last_lead = None
         surface.cursor_addressed = False
+        surface.last_lead_natural = False
+        surface.last_gcb = None
+        surface.orphaned_gcb = None
         self._join_next = False
         if surface.cursor_row == surface.scroll_bottom:
             self._scroll_up(surface, 1)
@@ -1299,6 +1377,9 @@ class TerminalScreen:
         surface.wrap_pending = False
         surface.last_lead = None
         surface.cursor_addressed = False
+        surface.last_lead_natural = False
+        surface.last_gcb = None
+        surface.orphaned_gcb = None
         self._join_next = False
         if surface.cursor_row == surface.scroll_top:
             self._scroll_down(surface, 1)
@@ -1325,6 +1406,9 @@ class TerminalScreen:
         self._repair_multicells(surface)
         surface.last_lead = None
         surface.cursor_addressed = False
+        surface.last_lead_natural = False
+        surface.last_gcb = None
+        surface.orphaned_gcb = None
         self._join_next = False
         self._dirty = True
 
@@ -1348,6 +1432,9 @@ class TerminalScreen:
         self._repair_multicells(surface)
         surface.last_lead = None
         surface.cursor_addressed = False
+        surface.last_lead_natural = False
+        surface.last_gcb = None
+        surface.orphaned_gcb = None
         self._join_next = False
         self._dirty = True
 
@@ -1387,6 +1474,9 @@ class TerminalScreen:
             self._clear_glyph(surface, row, column)
         surface.last_lead = None
         surface.cursor_addressed = False
+        surface.last_lead_natural = False
+        surface.last_gcb = None
+        surface.orphaned_gcb = None
         self._join_next = False
         self._dirty = True
 
@@ -1410,6 +1500,44 @@ class TerminalScreen:
 
     def _write_character(self, character: str) -> None:
         surface = self._surface
+        current_gcb = _gcb_class(character)
+        if current_gcb == "Control":
+            surface.last_lead = None
+            surface.last_lead_natural = False
+            surface.last_gcb = None
+            surface.orphaned_gcb = None
+            surface.cursor_addressed = False
+            surface.ri_count = 0
+            surface.orphaned_ri_count = 0
+            return
+        if surface.orphaned_gcb is not None:
+            if _gcb_no_break(surface.orphaned_gcb, current_gcb) or (
+                surface.orphaned_gcb == "RI"
+                and current_gcb == "RI"
+                and surface.orphaned_ri_count % 2 == 1
+            ):
+                self._invalidate("grapheme continuation after truncated resize lead")
+                return
+            surface.orphaned_gcb = None
+            surface.orphaned_ri_count = 0
+        if surface.last_lead is None and surface.cursor_addressed:
+            part = surface.parts[surface.cursor_row][surface.cursor_column]
+            if part is not None:
+                lead_row = surface.cursor_row - part.row_offset
+                lead_column = surface.cursor_column - part.column_offset
+                lead = surface.rows[lead_row][lead_column]
+                if lead not in (None, _CONTINUATION):
+                    assert isinstance(lead, str)
+                    previous_gcb = _gcb_class(lead[-1])
+                    if _gcb_no_break(previous_gcb, current_gcb) or (
+                        previous_gcb == "RI"
+                        and current_gcb == "RI"
+                        and _trailing_ri_count(lead) % 2 == 1
+                    ):
+                        self._bind_addressed_lead(surface)
+        if current_gcb not in ("Extend", "ZWJ") and _gcb_no_break(surface.last_gcb, current_gcb):
+            self._append_gcb_character(surface, character, current_gcb)
+            return
         try:
             width = _cell_width(character)
         except ValueError:
@@ -1430,33 +1558,81 @@ class TerminalScreen:
             if cell not in (" ", _CONTINUATION):
                 surface.rows[row][column] = cell + character
                 self._join_next = False
+                surface.last_gcb = current_gcb
+                surface.last_lead_natural = True
                 self._widen_last_glyph(surface, row, column)
+                self._restore_post_lead_cursor(surface)
                 self._dirty = True
                 return
         self._join_next = False
         if _is_regional_indicator(character) and surface.last_lead is not None:
             row, column = surface.last_lead
             cell = surface.rows[row][column]
-            if cell is not None and len(cell) == 1 and _is_regional_indicator(cell):
+            if cell is not None and surface.last_gcb == "RI" and surface.ri_count % 2 == 1:
                 surface.rows[row][column] = cell + character
+                surface.last_gcb = current_gcb
+                surface.ri_count += 1
+                surface.last_lead_natural = True
                 self._widen_last_glyph(surface, row, column)
+                self._restore_post_lead_cursor(surface)
                 self._dirty = True
                 return
         self._write_glyph(character, width)
 
+    def _bind_addressed_lead(self, surface: _Surface) -> bool:
+        part = surface.parts[surface.cursor_row][surface.cursor_column]
+        if part is None or not surface.cursor_addressed:
+            return False
+        row = surface.cursor_row - part.row_offset
+        column = surface.cursor_column - part.column_offset
+        cell = surface.rows[row][column]
+        if cell is _CONTINUATION:
+            return False
+        assert cell is not None
+        surface.last_lead = (row, column)
+        surface.cursor_addressed = False
+        surface.last_lead_natural = False
+        surface.last_gcb = _gcb_class(cell[-1]) if cell else None
+        surface.ri_count = _trailing_ri_count(cell)
+        return True
+
+    def _append_gcb_character(self, surface: _Surface, character: str, current_gcb: str) -> None:
+        if surface.last_lead is None:
+            self._invalidate("grapheme continuation without a surviving lead")
+            return
+        row, column = surface.last_lead
+        cell = surface.rows[row][column]
+        if cell is _CONTINUATION:
+            self._invalidate("grapheme continuation referenced a continuation cell")
+            return
+        assert cell is not None
+        part = surface.parts[row][column]
+        if part is not None and part.height > 1:
+            self._invalidate("unsupported grapheme transition on scaled owner")
+            return
+        surface.rows[row][column] = cell + character
+        surface.last_gcb = current_gcb
+        surface.last_lead_natural = True
+        if current_gcb == "RI":
+            surface.ri_count += 1
+        elif current_gcb not in ("Extend", "SpacingMark"):
+            surface.ri_count = 0
+        desired_width = _cluster_renderer_width(_trailing_grapheme(surface.rows[row][column]))
+        current_width = part.width if part is not None else 1
+        if desired_width > current_width:
+            self._widen_last_glyph(surface, row, column)
+        self._restore_post_lead_cursor(surface)
+        self._dirty = True
+
     def _extend_cluster(self, surface: _Surface, character: str) -> None:
         if surface.last_lead is None:
-            part = surface.parts[surface.cursor_row][surface.cursor_column]
-            if part is not None and surface.cursor_addressed:
-                surface.last_lead = (
-                    surface.cursor_row - part.row_offset,
-                    surface.cursor_column - part.column_offset,
-                )
-                surface.cursor_addressed = False
+            if self._bind_addressed_lead(surface):
+                pass
             elif _is_variation_selector(character) or character in ("\u200d", "\u20e3") or _is_emoji_modifier(character):
                 self._invalidate("cluster extension without a lead cell")
                 return
             else:
+                self._invalidate("unsupported degenerate grapheme extension")
                 return
         row, column = surface.last_lead
         cell = surface.rows[row][column]
@@ -1471,7 +1647,10 @@ class TerminalScreen:
                 self._invalidate("emoji modifier without a valid modifier base")
                 return
             surface.rows[row][column] = cell + character
+            surface.last_gcb = _gcb_class(character)
+            surface.last_lead_natural = True
             self._widen_last_glyph(surface, row, column)
+            self._restore_post_lead_cursor(surface)
             self._dirty = True
             return
 
@@ -1480,17 +1659,23 @@ class TerminalScreen:
                 self._invalidate("ZWJ without a modeled emoji source")
                 return
             surface.rows[row][column] = cell + character
+            surface.last_gcb = "ZWJ"
+            surface.last_lead_natural = True
             self._join_next = True
+            self._restore_post_lead_cursor(surface)
             self._dirty = True
             return
 
         surface.rows[row][column] = cell + character
+        surface.last_gcb = _gcb_class(character)
+        surface.last_lead_natural = True
         if character == "\ufe0f" and _is_emoji_variation_base(cell[-1]):
             self._widen_last_glyph(surface, row, column)
         elif character == "\ufe0e" and _is_emoji_variation_base(cell[-1]):
             self._narrow_last_glyph(surface, row, column)
-        elif character == "\u20e3" and _is_keycap_prefix(cell):
+        elif character == "\u20e3" and _is_keycap_tail_prefix(cell):
             self._widen_last_glyph(surface, row, column)
+        self._restore_post_lead_cursor(surface)
         self._dirty = True
 
     def _lead_is_wide(self, surface: _Surface, row: int, column: int) -> bool:
@@ -1500,21 +1685,45 @@ class TerminalScreen:
     def _widen_last_glyph(self, surface: _Surface, row: int, column: int) -> None:
         if self._lead_is_wide(surface, row, column):
             return
+        self._resize_last_glyph(surface, row, column, 2, 1)
+
+    def _resize_last_glyph(
+        self,
+        surface: _Surface,
+        row: int,
+        column: int,
+        width: int,
+        height: int,
+    ) -> None:
         glyph = surface.rows[row][column]
         if glyph is _CONTINUATION:
-            self._invalidate("Unicode grapheme widened without a lead")
+            self._invalidate("glyph resized without a lead")
             return
         visible = surface.visible[row][column]
+        last_gcb = surface.last_gcb
+        ri_count = surface.ri_count
         self._clear_glyph(surface, row, column)
         surface.cursor_row = row
         surface.cursor_column = column
         surface.wrap_pending = False
         surface.last_lead = None
-        self._write_glyph(glyph, 2, preserve_foreign_multicells=True)
+        self._write_glyph(glyph, width, height, preserve_foreign_multicells=True)
         if self._valid and surface.last_lead is not None:
+            surface.last_gcb = last_gcb
+            surface.ri_count = ri_count
             lead_row, lead_column = surface.last_lead
-            surface.visible[lead_row][lead_column] = visible
-            surface.visible[lead_row][lead_column + 1] = visible
+            for row_offset in range(height):
+                for column_offset in range(width):
+                    surface.visible[lead_row + row_offset][lead_column + column_offset] = visible
+
+    def _write_explicit_glyph(self, glyph: str, width: int, height: int = 1) -> None:
+        initial_width = _cell_width(glyph[0]) or width
+        self._write_glyph(glyph, initial_width)
+        surface = self._surface
+        if not self._valid or surface.last_lead is None or (initial_width == width and height == 1):
+            return
+        row, column = surface.last_lead
+        self._resize_last_glyph(surface, row, column, width, height)
 
     def _narrow_last_glyph(self, surface: _Surface, row: int, column: int) -> None:
         if not self._lead_is_wide(surface, row, column):
@@ -1525,7 +1734,7 @@ class TerminalScreen:
         self._clear_glyph(surface, row, column + 1)
         surface.rows[row][column] = glyph
         surface.visible[row][column] = visible
-        surface.parts[row][column] = None
+        surface.parts[row][column] = _CellPart(1, 1, 0, 0)
         surface.last_lead = (row, column)
         surface.cursor_column = column
         surface.wrap_pending = False
@@ -1542,6 +1751,22 @@ class TerminalScreen:
         preserve_foreign_multicells: bool = False,
     ) -> None:
         surface = self._surface
+        if glyph.endswith("\u200d") and not _is_emoji_cluster_tail(glyph[:-1]):
+            self._invalidate("ZWJ without a modeled emoji source")
+            return
+        replaceable_owner: Optional[Tuple[int, int, int, int]] = None
+        anchor_part = surface.parts[surface.cursor_row][surface.cursor_column]
+        if (
+            preserve_foreign_multicells
+            and anchor_part is not None
+            and anchor_part.row_offset == 0
+        ):
+            replaceable_owner = (
+                surface.cursor_row - anchor_part.row_offset,
+                surface.cursor_column - anchor_part.column_offset,
+                anchor_part.width,
+                anchor_part.height,
+            )
         placement_attempts = 0
         while self._valid:
             placement_attempts += 1
@@ -1568,8 +1793,21 @@ class TerminalScreen:
             for target_row in range(surface.cursor_row, surface.cursor_row + height):
                 for target_column in range(surface.cursor_column, surface.cursor_column + width):
                     part = surface.parts[target_row][target_column]
+                    owner = None
+                    if part is not None:
+                        owner = (
+                            target_row - part.row_offset,
+                            target_column - part.column_offset,
+                            part.width,
+                            part.height,
+                        )
                     if part is not None and (
-                        part.row_offset > 0 or (preserve_foreign_multicells and part.height > 1)
+                        (part.row_offset > 0 and owner != replaceable_owner)
+                        or (
+                            preserve_foreign_multicells
+                            and part.height > 1
+                            and owner != replaceable_owner
+                        )
                     ):
                         skipped_to = max(
                             skipped_to or 0,
@@ -1604,6 +1842,12 @@ class TerminalScreen:
                     surface.visible[target_row][target_column] = not self._concealed
         surface.last_lead = (row, column)
         surface.cursor_addressed = False
+        surface.last_lead_natural = True
+        surface.last_gcb = _gcb_class(glyph[-1]) if glyph else None
+        surface.orphaned_gcb = None
+        surface.ri_count = _trailing_ri_count(glyph)
+        surface.orphaned_ri_count = 0
+        self._join_next = glyph.endswith("\u200d")
         self._dirty = True
         final_column = column + width - 1
         if final_column == surface.width - 1:
@@ -1711,7 +1955,130 @@ def _is_emoji_cluster_tail(cluster: str) -> bool:
     return index >= 0 and _is_extended_pictographic(cluster[index])
 
 
-def _is_keycap_prefix(cluster: str) -> bool:
-    return (len(cluster) == 1 and cluster in _KEYCAP_BASES) or (
-        len(cluster) == 2 and cluster[0] in _KEYCAP_BASES and cluster[1] == "\ufe0f"
+def _is_keycap_tail_prefix(cluster: str) -> bool:
+    return bool(cluster) and (
+        cluster[-1] in _KEYCAP_BASES
+        or (len(cluster) >= 2 and cluster[-2] in _KEYCAP_BASES and cluster[-1] == "\ufe0f")
     )
+
+
+def _trailing_ri_count(cluster: str) -> int:
+    count = 0
+    for character in reversed(cluster):
+        if not _is_regional_indicator(character):
+            break
+        count += 1
+    return count
+
+
+def _gcb_class(character: str) -> str:
+    codepoint = ord(character)
+    if character == "\u200d":
+        return "ZWJ"
+    if _in_codepoint_ranges(codepoint, GCB_CONTROL_RANGES):
+        return "Control"
+    if _in_codepoint_ranges(codepoint, GRAPHEME_EXTEND_RANGES):
+        return "Extend"
+    if _in_codepoint_ranges(codepoint, GCB_SPACING_MARK_RANGES):
+        return "SpacingMark"
+    if _in_codepoint_ranges(codepoint, GCB_PREPEND_RANGES):
+        return "Prepend"
+    if _in_codepoint_ranges(codepoint, GCB_L_RANGES):
+        return "L"
+    if _in_codepoint_ranges(codepoint, GCB_V_RANGES):
+        return "V"
+    if _in_codepoint_ranges(codepoint, GCB_T_RANGES):
+        return "T"
+    if _in_codepoint_ranges(codepoint, GCB_LV_RANGES):
+        return "LV"
+    if _in_codepoint_ranges(codepoint, GCB_LVT_RANGES):
+        return "LVT"
+    if _is_regional_indicator(character):
+        return "RI"
+    return "Other"
+
+
+def _gcb_no_break(previous: Optional[str], current: str) -> bool:
+    if previous is None or previous == "Control" or current == "Control":
+        return False
+    if previous == "L" and current in ("L", "V", "LV", "LVT"):
+        return True
+    if previous in ("LV", "V") and current in ("V", "T"):
+        return True
+    if previous in ("LVT", "T") and current == "T":
+        return True
+    if current in ("Extend", "ZWJ", "SpacingMark"):
+        return True
+    return previous == "Prepend"
+
+
+def _trailing_grapheme(text: str) -> str:
+    start = 0
+    previous: Optional[str] = None
+    ri_count = 0
+    for index, character in enumerate(text):
+        current = _gcb_class(character)
+        no_break = _gcb_no_break(previous, current)
+        if previous == "RI" and current == "RI" and ri_count % 2 == 1:
+            no_break = True
+        if (
+            previous == "ZWJ"
+            and _is_extended_pictographic(character)
+            and _has_emoji_zwj_source(text, index - 1)
+        ):
+            no_break = True
+        if index > 0 and not no_break:
+            start = index
+        if current == "RI":
+            ri_count = ri_count + 1 if previous == "RI" and no_break else 1
+        elif current not in ("Extend", "SpacingMark"):
+            ri_count = 0
+        previous = current
+    return text[start:]
+
+
+def _has_emoji_zwj_source(text: str, zwj_index: int) -> bool:
+    index = zwj_index - 1
+    while index >= 0 and _gcb_class(text[index]) == "Extend":
+        index -= 1
+    return index >= 0 and _is_extended_pictographic(text[index])
+
+
+def _cluster_renderer_width(cluster: str) -> int:
+    if (
+        _has_valid_keycap_sequence(cluster)
+        or "\u200d" in cluster
+        or _has_valid_emoji_variation(cluster)
+        or sum(1 for character in cluster if _is_regional_indicator(character)) >= 2
+        or any(_is_emoji_modifier(character) for character in cluster)
+        or any(
+            _is_extended_pictographic(character) and _cell_width(character) == 2
+            for character in cluster
+        )
+    ):
+        return 2
+    for character in cluster:
+        width = _cell_width(character)
+        if width > 0:
+            return width
+    return 0
+
+
+def _has_valid_emoji_variation(cluster: str) -> bool:
+    return any(
+        index > 0 and _is_emoji_variation_base(cluster[index - 1])
+        for index, character in enumerate(cluster)
+        if character == "\ufe0f"
+    )
+
+
+def _has_valid_keycap_sequence(cluster: str) -> bool:
+    for index, character in enumerate(cluster):
+        if character != "\u20e3" or index == 0:
+            continue
+        base_index = index - 1
+        if cluster[base_index] == "\ufe0f":
+            base_index -= 1
+        if base_index >= 0 and cluster[base_index] in _KEYCAP_BASES:
+            return True
+    return False
