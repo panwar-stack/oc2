@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, mock, spyOn, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
-import type { TextareaRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { CliRenderEvents, type CliRenderer, type TextareaRenderable } from "@opentui/core"
+import { testRender, useRenderer } from "@opentui/solid"
 import { Effect } from "effect"
 import { Global } from "@oc2-ai/core/global"
 import { Flock } from "@oc2-ai/core/util/flock"
@@ -192,15 +192,12 @@ test("startup markers use lock-aware and accepted-input boundaries", async () =>
   expect(criticalReady).toBeGreaterThan(ready)
   expect(app).not.toContain('event: "theme.settled"')
   const kvReady = theme.indexOf("if (!kv.ready || startupSettled) return")
-  const authoritative = theme.indexOf("applyStartupTheme()", kvReady)
+  const authoritative = theme.indexOf("applyStartupTheme(", kvReady)
   const settled = theme.indexOf('event: "theme.settled"', authoritative)
   expect(kvReady).toBeGreaterThan(-1)
   expect(authoritative).toBeGreaterThan(kvReady)
   expect(settled).toBeGreaterThan(authoritative)
   expect(theme.indexOf('event: "theme.settled"', settled + 1)).toBe(-1)
-  const apply = theme.indexOf("apply(mode)")
-  const reconciled = theme.indexOf('event: "theme.reconciled"', apply)
-  expect(reconciled).toBeGreaterThan(apply)
 })
 
 test("OpenTUI editing keys emit input acceptance only after content changes", async () => {
@@ -254,6 +251,11 @@ test("OpenTUI editing keys emit input acceptance only after content changes", as
   expect(space.text).toBe("  ")
   expect(space.markers.map((event) => event.event)).toEqual(["prompt.mounted", "input.accepted"])
 
+  const printable = await scenario({ initial: "", press: (app) => app.mockInput.pressKey("a") })
+  expect(printable.names).toEqual(["a"])
+  expect(printable.text).toBe("a")
+  expect(printable.markers.map((event) => event.event)).toEqual(["prompt.mounted", "input.accepted"])
+
   const backspace = await scenario({ initial: "x", cursorEnd: true, press: (app) => app.mockInput.pressBackspace() })
   expect(backspace.names).toEqual(["backspace"])
   expect(backspace.text).toBe("")
@@ -267,8 +269,15 @@ test("OpenTUI editing keys emit input acceptance only after content changes", as
   expect(deleted.text).toBe("")
   expect(deleted.markers.map((event) => event.event)).toEqual(["prompt.mounted", "input.accepted"])
 
-  const navigation = await scenario({ initial: "x", cursorEnd: true, press: (app) => app.mockInput.pressArrow("left") })
-  expect(navigation.names).toEqual(["left"])
+  const navigation = await scenario({
+    initial: "x",
+    cursorEnd: true,
+    press: (app) => {
+      app.mockInput.pressArrow("up")
+      app.mockInput.pressArrow("left")
+    },
+  })
+  expect(navigation.names).toEqual(["up", "left"])
   expect(navigation.text).toBe("x")
   expect(navigation.markers.map((event) => event.event)).toEqual(["prompt.mounted"])
 
@@ -278,19 +287,55 @@ test("OpenTUI editing keys emit input acceptance only after content changes", as
   expect(noop.markers.map((event) => event.event)).toEqual(["prompt.mounted"])
 })
 
+test("input key tracking avoids timers for disabled, unmounted, accepted, and non-editing paths", () => {
+  const timer = spyOn(globalThis, "setTimeout")
+  const input = createTuiStartupInputTrace(() => false)
+  const editing = {
+    name: "space",
+    sequence: " ",
+    raw: " ",
+    ctrl: false,
+    meta: false,
+    option: false,
+  }
+  const navigation = { ...editing, name: "left", sequence: "\x1b[D", raw: "\x1b[D" }
+  try {
+    const initial = timer.mock.calls.length
+    input.key(editing)
+    expect(timer.mock.calls).toHaveLength(initial)
+
+    input.mount()
+    input.key(editing, true)
+    input.key(navigation)
+    expect(timer.mock.calls).toHaveLength(initial)
+
+    input.key(editing)
+    expect(timer.mock.calls).toHaveLength(initial + 1)
+    input.changed()
+    input.key(editing)
+    expect(timer.mock.calls).toHaveLength(initial + 1)
+  } finally {
+    input.cleanup()
+    timer.mockRestore()
+  }
+})
+
 test("theme settlement waits for persisted KV state", async () => {
   const originalWithLock = Flock.withLock.bind(Flock)
-  let blockedState: string | undefined
-  let readStarted!: () => void
-  let releaseRead!: () => void
-  const started = new Promise<void>((resolve) => (readStarted = resolve))
-  const released = new Promise<void>((resolve) => (releaseRead = resolve))
+  let blocked:
+    | {
+        state: string
+        started: ReturnType<typeof Promise.withResolvers<void>>
+        released: ReturnType<typeof Promise.withResolvers<void>>
+      }
+    | undefined
   const flock = spyOn(Flock, "withLock")
   flock.mockImplementation(
     (async (key, fn, options) => {
-      if (blockedState && key.includes(blockedState)) {
-        readStarted()
-        await released
+      const current = blocked
+      if (current && key.includes(current.state)) {
+        current.started.resolve()
+        await current.released.promise
       }
       return originalWithLock(key, fn, options)
     }) as typeof Flock.withLock,
@@ -300,35 +345,48 @@ test("theme settlement waits for persisted KV state", async () => {
     kv: Record<string, unknown>
     settled: "resolved" | "fallback-final"
     delayed?: boolean
+    preReady?: Array<"dark" | "light">
+    verify?: (renderer: CliRenderer, traces: TuiStartupTraceInput[]) => void | Promise<void>
   }) {
     const state = mkdtempSync(path.join(os.tmpdir(), "oc2-theme-settlement-"))
     writeFileSync(path.join(state, "kv.json"), JSON.stringify(input.kv))
     const traces: TuiStartupTraceInput[] = []
-
-    if (input.delayed) blockedState = state
-    const rendering = testRender(() => (
-      <TestTuiContexts
-        paths={{ state }}
-        startupTrace={(event) => {
-          traces.push(event)
-          return false
-        }}
-      >
-        <TuiConfigProvider config={createTuiResolvedConfig()}>
-          <KVProvider>
-            <ThemeProvider mode="dark" settled={input.settled}>
-              <box />
-            </ThemeProvider>
-          </KVProvider>
-        </TuiConfigProvider>
-      </TestTuiContexts>
-    ))
+    let renderer!: CliRenderer
 
     if (input.delayed) {
-      await started
+      blocked = { state, started: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() }
+    }
+    function Harness() {
+      renderer = useRenderer()
+      return (
+        <TestTuiContexts
+          paths={{ state }}
+          startupTrace={(event) => {
+            traces.push(event)
+            return false
+          }}
+        >
+          <TuiConfigProvider config={createTuiResolvedConfig()}>
+            <KVProvider>
+              <ThemeProvider mode="dark" settled={input.settled}>
+                <box />
+              </ThemeProvider>
+            </KVProvider>
+          </TuiConfigProvider>
+        </TestTuiContexts>
+      )
+    }
+    const rendering = testRender(() => <Harness />)
+
+    if (input.delayed) {
+      const current = blocked
+      if (!current) throw new Error("missing delayed KV blocker")
+      await current.started.promise
+      for (const mode of input.preReady ?? []) renderer.emit(CliRenderEvents.THEME_MODE, mode)
       expect(traces.filter((event) => event.event === "theme.settled")).toHaveLength(0)
-      releaseRead()
-      blockedState = undefined
+      expect(traces.filter((event) => event.event === "theme.reconciled")).toHaveLength(0)
+      current.released.resolve()
+      blocked = undefined
     }
     const app = await rendering
     try {
@@ -337,6 +395,7 @@ test("theme settlement waits for persisted KV state", async () => {
         if (performance.now() - before > 2000) throw new Error("timed out waiting for theme settlement")
         await Bun.sleep(10)
       }
+      await input.verify?.(app.renderer, traces)
       return { traces }
     } finally {
       app.renderer.destroy()
@@ -349,6 +408,13 @@ test("theme settlement waits for persisted KV state", async () => {
       kv: { theme: "dracula", theme_mode_lock: "light" },
       settled: "resolved",
       delayed: true,
+      preReady: ["dark"],
+      async verify(renderer, traces) {
+        expect(traces.filter((event) => event.event === "theme.reconciled")).toHaveLength(0)
+        renderer.emit(CliRenderEvents.THEME_MODE, "dark")
+        await Bun.sleep(1)
+        expect(traces.filter((event) => event.event === "theme.reconciled")).toHaveLength(0)
+      },
     })
     const lockedSettled = locked.traces.filter((event) => event.event === "theme.settled")
     expect(lockedSettled).toHaveLength(1)
@@ -365,10 +431,35 @@ test("theme settlement waits for persisted KV state", async () => {
       }),
     ).toMatchObject({ lock: "light", mode: "light", active: "dracula" })
 
-    const resolved = await scenario({ kv: {}, settled: "resolved" })
+    const resolved = await scenario({
+      kv: {},
+      settled: "resolved",
+      delayed: true,
+      preReady: ["dark", "light"],
+      async verify(renderer, traces) {
+        expect(traces.filter((event) => event.event === "theme.reconciled")).toHaveLength(0)
+        renderer.emit(CliRenderEvents.THEME_MODE, "dark")
+        await Bun.sleep(1)
+        renderer.emit(CliRenderEvents.THEME_MODE, "light")
+        await Bun.sleep(1)
+        expect(traces.filter((event) => event.event === "theme.reconciled")).toHaveLength(1)
+        expect(
+          traces.filter((event) => event.event === "theme.settled" || event.event === "theme.reconciled"),
+        ).toMatchObject([{ event: "theme.settled" }, { event: "theme.reconciled" }])
+      },
+    })
     const resolvedSettled = resolved.traces.filter((event) => event.event === "theme.settled")
     expect(resolvedSettled).toHaveLength(1)
     expect(resolvedSettled).toMatchObject([{ outcome: "resolved" }])
+    expect(
+      startupThemeState({
+        lock: undefined,
+        savedMode: undefined,
+        savedTheme: "opencode",
+        rendererMode: "light",
+        fallbackMode: "dark",
+      }),
+    ).toMatchObject({ lock: undefined, mode: "light", active: "opencode" })
 
     const fallback = await scenario({ kv: {}, settled: "fallback-final" })
     const fallbackSettled = fallback.traces.filter((event) => event.event === "theme.settled")

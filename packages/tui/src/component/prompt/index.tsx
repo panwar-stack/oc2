@@ -1448,11 +1448,11 @@ export function Prompt(props: PromptProps) {
               }}
               onCursorChange={() => setCursorVersion((value) => value + 1)}
               onKeyDown={(e: KeyEvent) => {
+                startupInput.key(e, props.disabled)
                 if (props.disabled) {
                   e.preventDefault()
                   return
                 }
-                startupInput.key(e)
               }}
               onSubmit={() => {
                 // IME: double-defer so the last composed character (e.g. Korean

@@ -33,6 +33,25 @@ export function isolateTuiStartupTrace(trace: TuiStartup["trace"]): TuiStartup["
   return (input) => emitTuiStartupTrace(trace, input)
 }
 
+type TuiStartupKeyEvent = Readonly<{
+  name: string
+  sequence: string
+  ctrl: boolean
+  meta: boolean
+  super?: boolean
+  hyper?: boolean
+}>
+
+const tuiStartupEditingKeys = new Set(["space", "backspace", "delete", "return", "kpenter", "linefeed"])
+
+export function isTuiStartupEditingKey(event: TuiStartupKeyEvent) {
+  if (event.ctrl || event.meta || event.super || event.hyper) return false
+  if (tuiStartupEditingKeys.has(event.name)) return true
+  if (!event.sequence) return false
+  const first = event.sequence.charCodeAt(0)
+  return first >= 32 && first !== 127
+}
+
 export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
   let mounted = false
   let operations = 0
@@ -61,8 +80,9 @@ export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
       })
     },
     begin,
-    key(event: { ctrl: boolean; meta: boolean }) {
-      if (event.ctrl || event.meta) return
+    key(event: TuiStartupKeyEvent, disabled = false) {
+      if (disabled || !mounted || accepted) return
+      if (!isTuiStartupEditingKey(event)) return
       if (keyTimer) clearTimeout(keyTimer)
       endKey?.()
       const end = begin()

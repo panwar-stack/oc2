@@ -141,13 +141,15 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const kv = useKV()
     const startup = useTuiStartup()
     const themes = props.source ?? themeSource
-    const applyStartupTheme = () => {
+    let startupSettled = false
+    let pendingRendererMode: "dark" | "light" | undefined
+    const applyStartupTheme = (rendererMode: unknown = renderer.themeMode) => {
       const next = startupThemeState({
         lock: kv.get("theme_mode_lock"),
         savedMode: kv.get("theme_mode"),
         savedTheme: kv.get("theme", "opencode"),
         configuredTheme: config.theme,
-        rendererMode: renderer.themeMode,
+        rendererMode,
         fallbackMode: props.mode,
       })
       if (next.clearSavedMode) kv.set("theme_mode", undefined)
@@ -162,10 +164,9 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     }
 
     applyStartupTheme()
-    let startupSettled = false
     createEffect(() => {
       if (!kv.ready || startupSettled) return
-      applyStartupTheme()
+      applyStartupTheme(pendingRendererMode ?? renderer.themeMode)
       startupSettled = true
       startup.trace?.({
         event: "theme.settled",
@@ -262,9 +263,10 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
 
     function apply(mode: "dark" | "light") {
       if (store.lock !== undefined) kv.set("theme_mode", mode)
-      if (store.mode === mode) return
+      if (store.mode === mode) return false
       setStore("mode", mode)
       refreshSystemTheme(mode)
+      return true
     }
 
     function pin(mode: "dark" | "light" = store.mode) {
@@ -282,8 +284,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
 
     let reconciled = false
     const handle = (mode: "dark" | "light") => {
+      if (mode !== "dark" && mode !== "light") return
+      if (!startupSettled) {
+        pendingRendererMode = mode
+        apply(mode)
+        return
+      }
       if (store.lock) return
-      apply(mode)
+      if (!apply(mode)) return
       if (reconciled) return
       reconciled = true
       startup.trace?.({
