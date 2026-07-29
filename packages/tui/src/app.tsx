@@ -23,7 +23,14 @@ import {
   on,
   type JSX,
 } from "solid-js"
-import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
+import {
+  emitTuiStartupTrace,
+  isolateTuiStartupTrace,
+  TuiPathsProvider,
+  TuiStartupProvider,
+  TuiTerminalEnvironmentProvider,
+  useTuiStartup,
+} from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
@@ -142,7 +149,13 @@ async function tracePhase<T>(
     outcome = "error"
     throw error
   } finally {
-    trace({ event: "phase", role: "main", phase, outcome, durationMs: Math.max(0, performance.now() - start) })
+    emitTuiStartupTrace(trace, {
+      event: "phase",
+      role: "main",
+      phase,
+      outcome,
+      durationMs: Math.max(0, performance.now() - start),
+    })
   }
 }
 
@@ -180,12 +193,13 @@ function isVersionGreater(left: string, right: string) {
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const global = yield* Global.Service
+  const startupTrace = isolateTuiStartupTrace(input.startupTrace)
   const epilogue = { value: undefined as string | undefined }
   const output = yield* Effect.scoped(
     Effect.gen(function* () {
       const renderer = yield* Effect.acquireRelease(
         Effect.tryPromise(() =>
-          tracePhase(input.startupTrace, "renderer.create", () =>
+          tracePhase(startupTrace, "renderer.create", () =>
             createCliRenderer({
               externalOutputMode: "passthrough",
               targetFps: 60,
@@ -231,18 +245,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       yield* Effect.tryPromise(async () => {
         // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
         void renderer.getPalette({ size: 16 }).catch(() => undefined)
-        const resolvedMode = await tracePhase(input.startupTrace, "theme.wait", () => renderer.waitForThemeMode(1000))
+        const resolvedMode = await tracePhase(startupTrace, "theme.wait", () => renderer.waitForThemeMode(1000))
         const mode = resolvedMode ?? "dark"
-        input.startupTrace?.({
-          event: "theme.settled",
-          role: "main",
-          workspaceGeneration: 0,
-          attemptGeneration: 0,
-          outcome: resolvedMode ? "resolved" : "fallback-final",
-        })
         if (renderer.isDestroyed) return
 
-        await tracePhase(input.startupTrace, "renderer.render", () =>
+        await tracePhase(startupTrace, "renderer.render", () =>
           render(() => {
             return (
             <ErrorBoundary fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}>
@@ -265,7 +272,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     value={{
                       initialRoute: process.env.OC2_ROUTE ? JSON.parse(process.env.OC2_ROUTE) : undefined,
                       skipInitialLoading: Boolean(process.env.OC2_FAST_BOOT),
-                      trace: input.startupTrace,
+                      trace: startupTrace,
                     }}
                   >
                     <ClipboardProvider>
@@ -296,7 +303,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                         <ProjectProvider>
                                           <SyncProvider>
                                             <SyncProviderV2>
-                                              <ThemeProvider mode={mode}>
+                                              <ThemeProvider
+                                                mode={mode}
+                                                settled={resolvedMode ? "resolved" : "fallback-final"}
+                                              >
                                                 <LocalProvider>
                                                   <PromptStashProvider>
                                                     <DialogProvider>

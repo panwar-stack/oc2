@@ -20,6 +20,59 @@ export type TuiStartup = Readonly<{
   trace?: (input: TuiStartupTraceInput) => boolean
 }>
 
+export function emitTuiStartupTrace(trace: TuiStartup["trace"], input: TuiStartupTraceInput) {
+  try {
+    return trace?.(input) ?? false
+  } catch {
+    return false
+  }
+}
+
+export function isolateTuiStartupTrace(trace: TuiStartup["trace"]): TuiStartup["trace"] {
+  if (!trace) return undefined
+  return (input) => emitTuiStartupTrace(trace, input)
+}
+
+export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
+  let mounted = false
+  let armed = false
+  let accepted = false
+  return {
+    mount() {
+      if (mounted) return
+      mounted = true
+      emitTuiStartupTrace(trace, {
+        event: "prompt.mounted",
+        role: "main",
+        workspaceGeneration: 0,
+        attemptGeneration: 0,
+      })
+    },
+    arm() {
+      if (!accepted) armed = true
+    },
+    disarm() {
+      armed = false
+    },
+    changed() {
+      if (!mounted || !armed || accepted) return
+      armed = false
+      accepted = true
+      emitTuiStartupTrace(trace, {
+        event: "input.accepted",
+        role: "main",
+        workspaceGeneration: 0,
+        attemptGeneration: 0,
+      })
+    },
+    cleanup() {
+      mounted = false
+      armed = false
+      accepted = false
+    },
+  }
+}
+
 const PathsContext = createContext<TuiPaths>()
 const TerminalEnvironmentContext = createContext<TuiTerminalEnvironment>()
 const StartupContext = createContext<TuiStartup>()
@@ -42,7 +95,7 @@ export function TuiTerminalEnvironmentProvider(props: { value: TuiTerminalEnviro
 }
 
 export function TuiStartupProvider(props: { value: TuiStartup; children: JSX.Element }) {
-  return provider(StartupContext, props.value, () => props.children)
+  return provider(StartupContext, { ...props.value, trace: isolateTuiStartupTrace(props.value.trace) }, () => props.children)
 }
 
 function required<T>(context: ReturnType<typeof createContext<T>>, name: string) {

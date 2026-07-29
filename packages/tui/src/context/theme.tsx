@@ -90,6 +90,13 @@ type State = {
   ready: boolean
 }
 
+export function startupThemeSettlement(
+  lock: "dark" | "light" | undefined,
+  settled: "resolved" | "fallback-final",
+): "locked" | "resolved" | "fallback-final" {
+  return lock ? "locked" : settled
+}
+
 const [store, setStore] = createStore<State>({
   themes: allThemes(),
   mode: "dark",
@@ -102,7 +109,11 @@ subscribeThemes((themes) => setStore("themes", themes))
 
 export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
   name: "Theme",
-  init: (props: { mode: "dark" | "light"; source?: ThemeSource }) => {
+  init: (props: {
+    mode: "dark" | "light"
+    settled?: "resolved" | "fallback-final"
+    source?: ThemeSource
+  }) => {
     const renderer = useRenderer()
     const config = useTuiConfig()
     const kv = useKV()
@@ -126,6 +137,13 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         draft.ready = hasTheme(nextActive)
       }),
     )
+    startup.trace?.({
+      event: "theme.settled",
+      role: "main",
+      workspaceGeneration: 0,
+      attemptGeneration: 0,
+      outcome: startupThemeSettlement(store.lock, props.settled ?? "resolved"),
+    })
 
     createEffect(() => {
       const theme = config.theme

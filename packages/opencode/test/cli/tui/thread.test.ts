@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../../fixture/fixture"
-import { resolveThreadDirectory } from "../../../src/cli/cmd/tui"
+import { constructTuiWorker, resolveThreadDirectory } from "../../../src/cli/cmd/tui"
 import { Rpc, type RpcTrace } from "../../../src/util/rpc"
 import { startupRequestName } from "../../../src/cli/tui/startup-trace"
 
@@ -34,6 +34,26 @@ describe("tui thread", () => {
 
   test("uses the real cwd after resolving a relative project from PWD", async () => {
     await check(".")
+  })
+
+  test("preserves synchronous worker constructor failure after tracing it", () => {
+    const failure = new Error("worker constructor failed")
+    let traced = 0
+
+    expect(() =>
+      constructTuiWorker(
+        new URL("file:///worker.ts"),
+        {},
+        () => {
+          traced++
+          throw new Error("trace failed")
+        },
+        () => {
+          throw failure
+        },
+      ),
+    ).toThrow(failure)
+    expect(traced).toBe(1)
   })
 
   test("maps RPC inputs to a closed startup request allowlist", () => {
@@ -73,6 +93,57 @@ describe("tui thread", () => {
     expect(responses).toEqual([
       { requestID: 0, request: "other", encodedBytes: new TextEncoder().encode(response).byteLength },
     ])
+  })
+
+  test("drops RPC trace correlation and telemetry when postMessage throws", async () => {
+    const requests: unknown[] = []
+    const responses: unknown[] = []
+    const target = {
+      postMessage() {
+        throw new Error("post failed")
+      },
+      onmessage: null as ((event: MessageEvent) => void) | null,
+    }
+    const client = Rpc.client<{ echo(input: string): string }>(target, {
+      requestName: () => "other",
+      onRequest: (input) => requests.push(input),
+      onResponse: (input) => responses.push(input),
+    })
+
+    const failure = await client.call("echo", "hello").then(
+      () => undefined,
+      (error) => error,
+    )
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure?.message).toBe("post failed")
+    target.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify({ type: "rpc.result", result: "late", id: 0 }) }),
+    )
+    expect(requests).toEqual([])
+    expect(responses).toEqual([])
+  })
+
+  test("orders trace request before a synchronous mock response", async () => {
+    const order: string[] = []
+    const target = {
+      postMessage(data: string) {
+        const request = JSON.parse(data)
+        target.onmessage?.(
+          new MessageEvent("message", {
+            data: JSON.stringify({ type: "rpc.result", result: request.input, id: request.id }),
+          }),
+        )
+      },
+      onmessage: null as ((event: MessageEvent) => void) | null,
+    }
+    const client = Rpc.client<{ echo(input: string): string }>(target, {
+      requestName: () => "other",
+      onRequest: () => order.push("request"),
+      onResponse: () => order.push("response"),
+    })
+
+    expect(await client.call("echo", "hello")).toBe("hello")
+    expect(order).toEqual(["request", "response"])
   })
 
   test.serial("times only worker handler dispatch and preserves result encoding", async () => {

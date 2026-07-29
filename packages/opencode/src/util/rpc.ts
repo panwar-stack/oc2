@@ -12,6 +12,12 @@ type TraceRequest = Readonly<{
 
 type TraceResponse = TraceRequest
 
+type TracePending = {
+  request: string
+  posted: boolean
+  responseBytes?: number
+}
+
 type TraceDispatch = Readonly<{
   requestID: number
   request: string
@@ -78,7 +84,7 @@ export function client<T extends Definition>(target: {
   onmessage: ((this: Worker, ev: MessageEvent<any>) => any) | null
 }, trace?: RpcTrace) {
   const pending = new Map<number, (result: any) => void>()
-  const tracePending = trace ? new Map<number, string>() : undefined
+  const tracePending = trace ? new Map<number, TracePending>() : undefined
   const listeners = new Map<string, Set<(data: any) => void>>()
   let id = 0
   target.onmessage = async (evt) => {
@@ -86,16 +92,21 @@ export function client<T extends Definition>(target: {
     if (parsed.type === "rpc.result") {
       const resolve = pending.get(parsed.id)
       if (resolve) {
-        const request = tracePending?.get(parsed.id)
-        tracePending?.delete(parsed.id)
-        if (request !== undefined) {
-          observe(() =>
-            trace?.onResponse?.({
-              requestID: parsed.id,
-              request,
-              encodedBytes: encodedBytes(evt.data),
-            }),
-          )
+        const traced = tracePending?.get(parsed.id)
+        if (traced) {
+          try {
+            const bytes = encodedBytes(evt.data)
+            if (traced.posted) {
+              tracePending?.delete(parsed.id)
+              observe(() =>
+                trace?.onResponse?.({ requestID: parsed.id, request: traced.request, encodedBytes: bytes }),
+              )
+            } else {
+              traced.responseBytes = bytes
+            }
+          } catch {
+            tracePending?.delete(parsed.id)
+          }
         }
         resolve(parsed.result)
         pending.delete(parsed.id)
@@ -117,11 +128,34 @@ export function client<T extends Definition>(target: {
         const request = traceName(trace, String(method), input)
         pending.set(requestId, resolve)
         const encoded = JSON.stringify({ type: "rpc.request", method, input, id: requestId })
-        if (request !== undefined && tracePending && tracePending.size < MAX_TRACE_PENDING) {
-          tracePending.set(requestId, request)
-          observe(() => trace?.onRequest?.({ requestID: requestId, request, encodedBytes: encodedBytes(encoded) }))
+        const traced: TracePending | undefined =
+          request !== undefined && tracePending && tracePending.size < MAX_TRACE_PENDING
+            ? { request, posted: false }
+            : undefined
+        if (traced && tracePending) tracePending.set(requestId, traced)
+        try {
+          target.postMessage(encoded)
+        } catch (error) {
+          if (traced) tracePending?.delete(requestId)
+          throw error
         }
-        target.postMessage(encoded)
+        if (traced) {
+          traced.posted = true
+          observe(() =>
+            trace?.onRequest?.({ requestID: requestId, request: traced.request, encodedBytes: encodedBytes(encoded) }),
+          )
+          if (traced.responseBytes !== undefined) {
+            const responseBytes = traced.responseBytes
+            tracePending?.delete(requestId)
+            observe(() =>
+              trace?.onResponse?.({
+                requestID: requestId,
+                request: traced.request,
+                encodedBytes: responseBytes,
+              }),
+            )
+          }
+        }
       })
     },
     on<Data>(event: string, handler: (data: Data) => void) {

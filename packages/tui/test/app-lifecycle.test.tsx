@@ -5,6 +5,8 @@ import { Global } from "@oc2-ai/core/global"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { createEventSource, createFetch, directory } from "./fixture/tui-sdk"
 import type { TuiStartupTraceInput } from "@oc2-ai/core/util/tui-startup-profile"
+import { createTuiStartupInputTrace, isolateTuiStartupTrace } from "../src/context/runtime"
+import { startupThemeSettlement } from "../src/context/theme"
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
@@ -37,7 +39,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
         events: events.source,
         startupTrace(input) {
           startup.push(input)
-          return true
+          throw new Error("trace sink failed")
         },
         args: {},
         pluginHost: {
@@ -68,27 +70,51 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   }
 })
 
-test("startup input markers stay content-free and latch once per prompt mount", async () => {
+test("startup markers use lock-aware and accepted-input boundaries", async () => {
+  const markers: TuiStartupTraceInput[] = []
+  const trace = isolateTuiStartupTrace((input) => {
+    markers.push(input)
+    return true
+  })
+  const input = createTuiStartupInputTrace(trace)
+
+  input.changed()
+  input.mount()
+  input.changed()
+  input.arm()
+  input.changed()
+  input.arm()
+  input.changed()
+
+  expect(markers.map((item) => item.event)).toEqual(["prompt.mounted", "input.accepted"])
+  expect(startupThemeSettlement("dark", "fallback-final")).toBe("locked")
+  expect(startupThemeSettlement(undefined, "fallback-final")).toBe("fallback-final")
+
   const source = await Bun.file(new URL("../src/component/prompt/index.tsx", import.meta.url)).text()
+  const app = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
   const sync = await Bun.file(new URL("../src/context/sync.tsx", import.meta.url)).text()
   const theme = await Bun.file(new URL("../src/context/theme.tsx", import.meta.url)).text()
   const change = source.indexOf("onContentChange")
   const store = source.indexOf('setStore("prompt", "input", value)', change)
-  const accepted = source.indexOf('event: "input.accepted"', store)
+  const accepted = source.indexOf("startupInput.changed()", store)
   const ref = source.indexOf("ref={(r: TextareaRenderable)", accepted)
-  const mounted = source.indexOf('event: "prompt.mounted"', ref)
+  const mounted = source.indexOf("startupInput.mount()", ref)
+  const forwarded = source.indexOf("props.ref?.(ref)", mounted)
 
   expect(change).toBeGreaterThan(-1)
   expect(store).toBeGreaterThan(change)
   expect(accepted).toBeGreaterThan(store)
   expect(mounted).toBeGreaterThan(ref)
-  expect(source.slice(accepted, accepted + 220)).not.toContain("value")
-  expect(source.slice(mounted, mounted + 220)).not.toContain("placeholder")
-  expect(source).toContain("if (props.startup && !inputMarked)")
-  expect(source).toContain("if (props.startup && !mountedMarked)")
+  expect(forwarded).toBeGreaterThan(mounted)
+  expect(source).toContain("if (e.name.length === 1 && !e.ctrl && !e.meta) armInput()")
   const ready = sync.indexOf('setStore("status", "partial")')
   const critical = sync.indexOf('event: "bootstrap.critical.ready"', ready)
   expect(critical).toBeGreaterThan(ready)
+  expect(app).not.toContain('event: "theme.settled"')
+  const lock = theme.indexOf("draft.lock = lock")
+  const settled = theme.indexOf('event: "theme.settled"', lock)
+  expect(settled).toBeGreaterThan(lock)
+  expect(theme.indexOf('event: "theme.settled"', settled + 1)).toBe(-1)
   const apply = theme.indexOf("apply(mode)")
   const reconciled = theme.indexOf('event: "theme.reconciled"', apply)
   expect(reconciled).toBeGreaterThan(apply)

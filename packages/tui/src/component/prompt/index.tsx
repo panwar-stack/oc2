@@ -17,7 +17,12 @@ import { useLocal } from "../../context/local"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiStartup, useTuiTerminalEnvironment } from "../../context/runtime"
+import {
+  createTuiStartupInputTrace,
+  useTuiPaths,
+  useTuiStartup,
+  useTuiTerminalEnvironment,
+} from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useSDK } from "../../context/sdk"
@@ -226,8 +231,13 @@ export function Prompt(props: PromptProps) {
   const workspace = usePromptWorkspace(props.sessionID)
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
   const [cursorVersion, setCursorVersion] = createSignal(0)
-  let mountedMarked = false
-  let inputMarked = false
+  const startupInput = createTuiStartupInputTrace(props.startup ? startup.trace : undefined)
+  let inputArmTimer: ReturnType<typeof setTimeout> | undefined
+  const armInput = () => {
+    startupInput.arm()
+    if (inputArmTimer) clearTimeout(inputArmTimer)
+    inputArmTimer = setTimeout(() => startupInput.disarm(), 0)
+  }
   const hasRightContent = createMemo(() => Boolean(props.right))
 
   function promptModelWarning() {
@@ -684,8 +694,8 @@ export function Prompt(props: PromptProps) {
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
-    mountedMarked = false
-    inputMarked = false
+    if (inputArmTimer) clearTimeout(inputArmTimer)
+    startupInput.cleanup()
   })
 
   createEffect(() => {
@@ -1439,22 +1449,15 @@ export function Prompt(props: PromptProps) {
                 auto()?.onInput(value)
                 syncExtmarksWithPromptParts()
                 setCursorVersion((value) => value + 1)
-                if (props.startup && !inputMarked) {
-                  inputMarked = true
-                  startup.trace?.({
-                    event: "input.accepted",
-                    role: "main",
-                    workspaceGeneration: 0,
-                    attemptGeneration: 0,
-                  })
-                }
+                startupInput.changed()
               }}
               onCursorChange={() => setCursorVersion((value) => value + 1)}
-              onKeyDown={(e: { preventDefault(): void }) => {
+              onKeyDown={(e: KeyEvent) => {
                 if (props.disabled) {
                   e.preventDefault()
                   return
                 }
+                if (e.name.length === 1 && !e.ctrl && !e.meta) armInput()
               }}
               onSubmit={() => {
                 // IME: double-defer so the last composed character (e.g. Korean
@@ -1484,7 +1487,12 @@ export function Prompt(props: PromptProps) {
                 // default paste unless we suppress it first and handle insertion ourselves.
                 event.preventDefault()
 
-                await pasteInputText(normalizedText)
+                armInput()
+                try {
+                  await pasteInputText(normalizedText)
+                } finally {
+                  startupInput.disarm()
+                }
               }}
               ref={(r: TextareaRenderable) => {
                 input = r
@@ -1495,16 +1503,8 @@ export function Prompt(props: PromptProps) {
                 if (promptPartTypeId === 0) {
                   promptPartTypeId = input.extmarks.registerType("prompt-part")
                 }
+                startupInput.mount()
                 props.ref?.(ref)
-                if (props.startup && !mountedMarked) {
-                  mountedMarked = true
-                  startup.trace?.({
-                    event: "prompt.mounted",
-                    role: "main",
-                    workspaceGeneration: 0,
-                    attemptGeneration: 0,
-                  })
-                }
                 setTimeout(() => {
                   // setTimeout is a workaround and needs to be addressed properly
                   if (!input || input.isDestroyed) return

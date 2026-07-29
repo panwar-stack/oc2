@@ -80,6 +80,23 @@ async function target() {
   return new URL("../tui/worker.ts", import.meta.url)
 }
 
+export function constructTuiWorker(
+  file: string | URL,
+  options: ConstructorParameters<typeof Worker>[1],
+  onError: () => void,
+  create: (file: string | URL, options: ConstructorParameters<typeof Worker>[1]) => Worker = (file, options) =>
+    new Worker(file, options),
+) {
+  try {
+    return create(file, options)
+  } catch (error) {
+    try {
+      onError()
+    } catch {}
+    throw error
+  }
+}
+
 async function input(value?: string) {
   const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
   if (!value) return piped
@@ -161,8 +178,16 @@ export const TuiThreadCommand = cmd({
       else delete env[OC2_TUI_STARTUP_PROFILE_WORKER]
 
       const workerStart = currentProfile.enabled ? performance.now() : 0
-      const worker = new Worker(file, {
-        env,
+      const worker = constructTuiWorker(file, { env }, () => {
+        if (currentProfile.enabled) {
+          currentProfile.emit({
+            event: "phase",
+            role: "main",
+            phase: "worker.spawn",
+            outcome: "error",
+            durationMs: Math.max(0, performance.now() - workerStart),
+          })
+        }
       })
       using startupProfile = currentProfile.adopt()
       if (startupProfile.enabled) {

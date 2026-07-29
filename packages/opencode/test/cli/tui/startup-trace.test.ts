@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 
 test("adopts the startup trace immediately after worker creation and closes the current path", async () => {
   const source = await Bun.file(new URL("../../../src/cli/cmd/tui.ts", import.meta.url)).text()
-  const spawn = source.indexOf("const worker = new Worker")
+  const spawn = source.indexOf("const worker = constructTuiWorker(file")
   const adopt = source.indexOf("currentProfile.adopt()", spawn)
   const handler = source.indexOf("worker.onerror", spawn)
   const rpc = source.indexOf("Rpc.client", spawn)
@@ -10,7 +10,8 @@ test("adopts the startup trace immediately after worker creation and closes the 
 
   expect(spawn).toBeGreaterThan(-1)
   expect(adopt).toBeGreaterThan(spawn)
-  expect(source.slice(spawn, adopt)).not.toContain("worker.")
+  expect(source.slice(spawn, adopt)).not.toContain("worker.onerror")
+  expect(source.slice(spawn, adopt)).not.toContain("worker.terminate")
   expect(source.slice(spawn, adopt)).not.toContain("Rpc.")
   expect(adopt).toBeLessThan(handler)
   expect(adopt).toBeLessThan(rpc)
@@ -49,4 +50,17 @@ test("worker reports durations through RPC without inheriting the trace descript
   expect(source).toContain('Rpc.emit("startup.trace", input)')
   expect(source).toContain("Rpc.listen(rpc, trace)")
   expect(source).not.toContain("OC2_TUI_STARTUP_PROFILE_FD")
+})
+
+test("reports synchronous worker construction failure before preserving the throw", async () => {
+  const source = await Bun.file(new URL("../../../src/cli/cmd/tui.ts", import.meta.url)).text()
+  const construct = source.indexOf("constructTuiWorker(file")
+  const failed = source.indexOf('outcome: "error"', construct)
+  const adopt = source.indexOf("currentProfile.adopt()", failed)
+  const succeeded = source.indexOf('outcome: "ok"', adopt)
+
+  expect(construct).toBeGreaterThan(-1)
+  expect(failed).toBeGreaterThan(construct)
+  expect(adopt).toBeGreaterThan(failed)
+  expect(succeeded).toBeGreaterThan(adopt)
 })
