@@ -144,6 +144,37 @@ def _spawn_descendant(pid_file: Path, escaped: bool = False) -> None:
     )
 
 
+def _spawn_signal_spawner(pid_file: Path, spawned_pid_file: Path) -> None:
+    leaf = (
+        "import signal,time;"
+        "signal.signal(signal.SIGINT,signal.SIG_IGN);"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+        "time.sleep(60)"
+    )
+    program = "\n".join(
+        (
+            "import os,signal,subprocess,sys,time",
+            f"path={str(spawned_pid_file)!r}",
+            f"leaf={leaf!r}",
+            "def term(*_):",
+            " child=subprocess.Popen([sys.executable,'-c',leaf],stdin=subprocess.DEVNULL,"
+            "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)",
+            " open(path,'w',encoding='ascii').write(f'{child.pid} {os.getpgid(child.pid)} {os.getsid(child.pid)}')",
+            " raise SystemExit(0)",
+            "signal.signal(signal.SIGTERM,term)",
+            "time.sleep(60)",
+        )
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", program],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pid_file.write_text(f"{child.pid} {os.getpgid(child.pid)} {os.getsid(child.pid)}", encoding="ascii")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -154,6 +185,7 @@ def main() -> int:
             "success-frame-first",
             "success-descendant",
             "success-escaped-descendant",
+            "success-signal-spawn-descendant",
             "early-exit-descendant",
             "early-exit-escaped-descendant",
             "timeout-escaped-descendant",
@@ -172,6 +204,7 @@ def main() -> int:
     )
     parser.add_argument("--pid-file", type=Path)
     parser.add_argument("--token-file", type=Path)
+    parser.add_argument("--spawned-pid-file", type=Path)
     parser.add_argument("--exit-delay-ms", type=int, default=120)
     args = parser.parse_args()
     if args.token_file is not None:
@@ -262,6 +295,10 @@ def main() -> int:
         if args.pid_file is None:
             return 65
         _spawn_descendant(args.pid_file, escaped=True)
+    if args.mode == "success-signal-spawn-descendant":
+        if args.pid_file is None or args.spawned_pid_file is None:
+            return 65
+        _spawn_signal_spawner(args.pid_file, args.spawned_pid_file)
     if args.mode == "exception-escaped-descendant":
         _write_pty(_frame(prompt=False))
         time.sleep(60)

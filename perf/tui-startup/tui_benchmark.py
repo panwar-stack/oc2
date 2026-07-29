@@ -794,11 +794,14 @@ class DescendantSupervisor:
             self._scan()
             self._stop.wait(self.interval)
 
+    def request_stop(self) -> None:
+        self._stop.set()
+
     def scan_now(self) -> None:
         self._scan()
 
     def finish(self) -> tuple[dict[int, ProcessIdentity], bool]:
-        self._stop.set()
+        self.request_stop()
         self._thread.join(0.75)
         if self._thread.is_alive():
             with self._lock:
@@ -892,21 +895,108 @@ def _cleanup_tracked_descendants(records: dict[int, ProcessIdentity]) -> bool:
     return _terminate_records(records)
 
 
+def _sanitize_process_identities(value: object) -> dict[int, ProcessIdentity]:
+    sanitized: dict[int, ProcessIdentity] = {}
+    if not isinstance(value, dict):
+        return sanitized
+    for pid, identity in value.items():
+        if (
+            not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 1
+            or pid == os.getpid()
+            or not isinstance(identity, (tuple, list))
+            or len(identity) != 2
+        ):
+            continue
+        group, session = identity
+        if (
+            not isinstance(group, int)
+            or isinstance(group, bool)
+            or group <= 1
+            or not isinstance(session, int)
+            or isinstance(session, bool)
+            or session < 0
+        ):
+            continue
+        sanitized[pid] = (group, session)
+    return sanitized
+
+
+def _records_live(records: dict[int, ProcessIdentity], reap_pid: Optional[int]) -> bool:
+    _reap_direct_child(reap_pid)
+    own_group = os.getpgrp()
+    if any(_pid_exists(pid) for pid in records):
+        return True
+    return any(
+        _group_exists(group)
+        for group, _ in records.values()
+        if group > 1 and group != own_group
+    )
+
+
+def _terminate_wave(
+    records: dict[int, ProcessIdentity],
+    reap_pid: int,
+    deadline: float,
+) -> bool:
+    if not records:
+        return True
+    ok = _signal_tracked(records, signal.SIGTERM)
+    term_deadline = min(deadline, time.monotonic() + 0.08)
+    while time.monotonic() < term_deadline:
+        if not _records_live(records, reap_pid):
+            return ok
+        time.sleep(0.005)
+    ok = _signal_tracked(records, signal.SIGKILL) and ok
+    kill_deadline = min(deadline, time.monotonic() + 0.25)
+    while time.monotonic() < kill_deadline:
+        if not _records_live(records, reap_pid):
+            return ok
+        time.sleep(0.005)
+    return not _records_live(records, reap_pid) and ok
+
+
 def _emergency_token_cleanup(
     token: str,
     root_pid: int,
     root_identity: ProcessIdentity,
-    known_records: Optional[dict[int, ProcessIdentity]] = None,
+    known_records: object = None,
 ) -> tuple[bool, bool]:
-    records = dict(known_records or {})
+    records = _sanitize_process_identities(known_records)
     enumeration_ok = True
-    try:
-        records.update(_token_processes(token))
-    except OSError:
-        enumeration_ok = False
-    if _pid_exists(root_pid):
-        records[root_pid] = root_identity
-    return enumeration_ok, _terminate_records(records, reap_pid=root_pid)
+    cleanup_ok = True
+    stable_zero = 0
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        enumerated = False
+        try:
+            observed = _sanitize_process_identities(_token_processes(token))
+            enumerated = True
+        except (OSError, subprocess.SubprocessError):
+            observed = {}
+            enumeration_ok = False
+        records.update(observed)
+        if _pid_exists(root_pid):
+            records[root_pid] = root_identity
+        if _records_live(records, root_pid):
+            stable_zero = 0
+            cleanup_ok = _terminate_wave(records, root_pid, deadline) and cleanup_ok
+            records = {
+                pid: identity
+                for pid, identity in records.items()
+                if _pid_exists(pid) or _group_exists(identity[0])
+            }
+            continue
+        records.clear()
+        if enumerated and not observed:
+            stable_zero += 1
+            if stable_zero >= 2:
+                return enumeration_ok, cleanup_ok
+        else:
+            stable_zero = 0
+        time.sleep(0.02)
+    return enumeration_ok, cleanup_ok and not _records_live(records, root_pid)
 
 
 def _terminal_failure(screen: TerminalScreen, eof: bool = False) -> str:
@@ -962,7 +1052,7 @@ def run_once(
     exit_observer = ChildExitObserver(pid)
     descendants = DescendantSupervisor(pid)
     descendants.start()
-    records: dict[int, ProcessIdentity] = {}
+    known_descendants: dict[int, ProcessIdentity] = {}
     try:
         os.close(trace_write_fd)
     except BaseException:
@@ -971,11 +1061,12 @@ def run_once(
         finally:
             try:
                 try:
-                    records, _ = descendants.finish()
-                    records.update(_token_processes(supervision_token))
-                    _cleanup_tracked_descendants(records)
+                    descendants.request_stop()
+                    known_descendants, _ = descendants.finish()
+                    known_descendants.update(_token_processes(supervision_token))
+                    _cleanup_tracked_descendants(known_descendants)
                 finally:
-                    _emergency_token_cleanup(supervision_token, pid, root_identity, records)
+                    _emergency_token_cleanup(supervision_token, pid, root_identity, known_descendants)
             finally:
                 try:
                     close_pty_fd(fd)
@@ -1064,11 +1155,11 @@ def run_once(
                             break
                         continue
                     try:
-                        records = trace.feed(data, now_ms)
+                        trace_batch = trace.feed(data, now_ms)
                     except TraceFailure as error:
                         failure = error.code
                         break
-                    for record, receipt_ms in records:
+                    for record, receipt_ms in trace_batch:
                         oracle.observe_trace(record, receipt_ms)
                         if oracle.failure is not None:
                             failure = oracle.failure
@@ -1144,22 +1235,31 @@ def run_once(
                     cleanup_error = error
             finally:
                 try:
-                    records, descendant_tracking_failed = descendants.finish()
-                    records.update(_token_processes(supervision_token))
-                    if cleanup_error is None:
-                        descendant_cleanup_ok = _cleanup_tracked_descendants(records)
-                    else:
+                    descendants.request_stop()
+                    try:
+                        known_descendants, descendant_tracking_failed = descendants.finish()
+                    except BaseException:
+                        descendant_tracking_failed = True
+                    try:
+                        known_descendants.update(_token_processes(supervision_token))
+                    except (OSError, subprocess.SubprocessError):
+                        descendant_tracking_failed = True
+                    if cleanup_error is None and known_descendants:
+                        try:
+                            descendant_cleanup_ok = _cleanup_tracked_descendants(known_descendants)
+                        except BaseException:
+                            descendant_cleanup_ok = False
+                    elif cleanup_error is not None:
                         descendant_cleanup_ok = False
-                except BaseException:
-                    descendant_tracking_failed = True
-                    descendant_cleanup_ok = False
+                    else:
+                        descendant_cleanup_ok = _cleanup_tracked_descendants(known_descendants)
                 finally:
                     try:
                         emergency_enumeration_ok, emergency_cleanup_ok = _emergency_token_cleanup(
                             supervision_token,
                             pid,
                             root_identity,
-                            records,
+                            known_descendants,
                         )
                     except BaseException:
                         emergency_enumeration_ok = False
@@ -1188,19 +1288,17 @@ def run_once(
         if close_error is not None:
             raise close_error
         raise body_error
+    cleanup_failed = not descendant_cleanup_ok or not emergency_cleanup_ok
+    tracking_failed = descendant_tracking_failed or not emergency_enumeration_ok
     if cleanup_error is not None:
         if isinstance(cleanup_error, PtyCleanupError):
             failure = "descendant_cleanup_failed"
         else:
             raise cleanup_error
-    if descendant_tracking_failed:
-        failure = "descendant_tracking_failed"
-    if not descendant_cleanup_ok:
+    if cleanup_failed:
         failure = "descendant_cleanup_failed"
-    if not emergency_enumeration_ok:
+    elif tracking_failed:
         failure = "descendant_tracking_failed"
-    if not emergency_cleanup_ok:
-        failure = "descendant_cleanup_failed"
     if close_error is not None:
         failure = "pty_cleanup_failed"
     if bytes_until_ready is None:

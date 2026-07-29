@@ -450,17 +450,17 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
 
     def test_named_early_exit_timeout_eof_unknown_desync_and_fatal_failures(self):
         cases = (
-            ("early-exit", "child_exited_early"),
-            ("timeout", "timeout_first_frame"),
-            ("pty-eof", "pty_eof_before_milestones"),
-            ("trace-eof", "trace_eof_before_milestones"),
-            ("unknown-sequence", "terminal_unknown_sequence"),
-            ("desynchronized", "terminal_desynchronized"),
-            ("fatal-frame", "terminal_fatal_diagnostic"),
+            ("early-exit", "child_exited_early", 0.6),
+            ("timeout", "timeout_first_frame", 0.25),
+            ("pty-eof", "pty_eof_before_milestones", 0.6),
+            ("trace-eof", "trace_eof_before_milestones", 0.6),
+            ("unknown-sequence", "terminal_unknown_sequence", 0.6),
+            ("desynchronized", "terminal_desynchronized", 0.25),
+            ("fatal-frame", "terminal_fatal_diagnostic", 0.6),
         )
-        for mode, failure in cases:
+        for mode, failure, timeout in cases:
             with self.subTest(mode=mode):
-                result = self.run_mode(mode, timeout=0.16)
+                result = self.run_mode(mode, timeout=timeout)
                 self.assertEqual(result["failure"], failure)
                 self.assertNotIn("private fixture detail", json.dumps(result))
 
@@ -658,6 +658,133 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
             self.assertEqual(result["failure"], "descendant_cleanup_failed")
             self.assertEqual(tui_benchmark._token_processes(token_file.read_text(encoding="ascii")), {})
             self.assert_pid_gone(self.descendant_identity(pid_file)[0])
+
+    def test_trace_batch_cannot_shadow_descendants_when_finish_raises(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            pid_file = root / "descendant.pid"
+            token_file = root / "token"
+            tui_benchmark.prepare_state(state)
+            with mock.patch.object(
+                tui_benchmark.DescendantSupervisor,
+                "finish",
+                side_effect=RuntimeError("injected finish failure after trace tuple"),
+            ):
+                result = tui_benchmark.run_once(
+                    [
+                        sys.executable,
+                        str(FAKE_TUI),
+                        "success-escaped-descendant",
+                        "--pid-file",
+                        str(pid_file),
+                        "--token-file",
+                        str(token_file),
+                    ],
+                    state,
+                    root,
+                    1,
+                    "none",
+                    b"Ask anything...",
+                )
+            self.assertEqual(result["failure"], "descendant_tracking_failed")
+            token = token_file.read_text(encoding="ascii")
+            self.assertEqual(tui_benchmark._token_processes(token), {})
+            self.assert_pid_gone(self.descendant_identity(pid_file)[0])
+
+    def test_snapshot_timeout_retries_independently_and_reports_tracking_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            pid_file = root / "descendant.pid"
+            token_file = root / "token"
+            tui_benchmark.prepare_state(state)
+            original = tui_benchmark._token_processes
+            calls = 0
+
+            def timeout_once(token):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise subprocess.TimeoutExpired(["ps"], 0.5)
+                return original(token)
+
+            with mock.patch.object(tui_benchmark.DescendantSupervisor, "_scan", return_value=None):
+                with mock.patch.object(tui_benchmark, "_token_processes", side_effect=timeout_once):
+                    result = tui_benchmark.run_once(
+                        [
+                            sys.executable,
+                            str(FAKE_TUI),
+                            "success-escaped-descendant",
+                            "--pid-file",
+                            str(pid_file),
+                            "--token-file",
+                            str(token_file),
+                        ],
+                        state,
+                        root,
+                        1,
+                        "none",
+                        b"Ask anything...",
+                    )
+            self.assertEqual(result["failure"], "descendant_tracking_failed")
+            self.assertGreaterEqual(calls, 3)
+            self.assertEqual(original(token_file.read_text(encoding="ascii")), {})
+            self.assert_pid_gone(self.descendant_identity(pid_file)[0])
+
+    def test_signal_spawned_detached_token_child_is_reenumerated_and_cleaned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            pid_file = root / "descendant.pid"
+            spawned_pid_file = root / "spawned.pid"
+            token_file = root / "token"
+            tui_benchmark.prepare_state(state)
+            result = tui_benchmark.run_once(
+                [
+                    sys.executable,
+                    str(FAKE_TUI),
+                    "success-signal-spawn-descendant",
+                    "--pid-file",
+                    str(pid_file),
+                    "--spawned-pid-file",
+                    str(spawned_pid_file),
+                    "--token-file",
+                    str(token_file),
+                ],
+                state,
+                root,
+                1,
+                "none",
+                b"Ask anything...",
+            )
+            self.assert_success(result)
+            self.assertTrue(spawned_pid_file.exists())
+            self.assert_pid_gone(self.descendant_identity(pid_file)[0])
+            self.assert_pid_gone(self.descendant_identity(spawned_pid_file)[0])
+            self.assertEqual(tui_benchmark._token_processes(token_file.read_text(encoding="ascii")), {})
+
+    def test_emergency_sanitizes_trace_tuple_and_still_kills_root(self):
+        token = "supervision_malformed_known"
+        env = os.environ.copy()
+        env[tui_benchmark.SUPERVISION_ENV] = token
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"],
+            env=env,
+            start_new_session=True,
+        )
+        malformed_trace_tuple = (({"event": "cli.entry"}, 1.25),)
+        enumerated, cleaned = tui_benchmark._emergency_token_cleanup(
+            token,
+            child.pid,
+            (child.pid, child.pid),
+            malformed_trace_tuple,
+        )
+        self.assertTrue(enumerated)
+        self.assertTrue(cleaned)
+        child.returncode = 0
+        self.assertEqual(tui_benchmark._token_processes(token), {})
+        self.assert_pid_gone(child.pid)
 
     def test_start_new_session_descendant_is_cleaned_after_read_exception(self):
         with tempfile.TemporaryDirectory() as directory:
