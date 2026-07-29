@@ -50,6 +50,8 @@ const CommunicationGuidance = [
   "- Check team_get_messages at natural handoff points, after sending updates, and whenever you may have been unblocked or redirected.",
   "- Do not wait until your final answer to share useful status, blockers, or intermediate results.",
   "- When you send a message via team_send_message or team_broadcast, recipients are automatically woken. Do not poll team_get_messages in a loop — check once and continue working.",
+  "- Do not claim that an issue is fixed, a feature is complete, or an action succeeded without supporting evidence.",
+  "- Only report to me in ASD-STE100 Simplified Technical English.",
 ].join("\n")
 
 const DaemonGuidance = [
@@ -62,6 +64,8 @@ const DaemonGuidance = [
   "- Use team_get_messages at natural boundaries, not in a polling loop.",
   "- If your assignment requires periodic or external triggers, explain what trigger you need instead of inventing an unbounded loop.",
   "- Never mark yourself done unless explicitly cancelled or told the daemon assignment is over.",
+  "- Do not claim that an issue is fixed, a feature is complete, or an action succeeded without supporting evidence.",
+  "- Only report to me in ASD-STE100 Simplified Technical English.",
 ].join("\n")
 
 const TaskCompletionGuidance =
