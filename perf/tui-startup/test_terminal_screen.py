@@ -223,6 +223,40 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertTrue(skipped.valid, skipped.invalid_reason)
         self.assertEqual(skipped.last_frame.cell(2, 0), "X")
 
+    def test_fragmented_dynamic_widening_preserves_foreign_scaled_owner(self):
+        clusters = ("❤️", "1\u20e3", "☝🏽", "🇺🇸", "©‍💻")
+        setup = b"\x1b[?2026h\x1b[1;2H\x1b]66;s=2; \x1b\\\x1b[2;1H"
+        for cluster in clusters:
+            with self.subTest(cluster=cluster):
+                natural = TerminalScreen(6, 3)
+                natural_frames = []
+                natural_stream = setup + (cluster + "X").encode("utf-8") + b"\x1b[?2026l"
+                for value in natural_stream:
+                    natural_frames.extend(natural.feed(bytes((value,))))
+
+                explicit = TerminalScreen(6, 3)
+                explicit_frames = []
+                explicit_stream = (
+                    setup
+                    + b"\x1b]66;w=2;"
+                    + cluster.encode("utf-8")
+                    + b"\x1b\\X\x1b[?2026l"
+                )
+                for value in explicit_stream:
+                    explicit_frames.extend(explicit.feed(bytes((value,))))
+
+                self.assertTrue(natural.valid, natural.invalid_reason)
+                self.assertTrue(explicit.valid, explicit.invalid_reason)
+                self.assertEqual(len(natural_frames), 1)
+                self.assertEqual(natural_frames[0].cells, explicit_frames[0].cells)
+                frame = natural_frames[0]
+                self.assertEqual(frame.cells[0][1:3], (" ", None))
+                self.assertEqual(frame.cells[1], (" ", None, None, cluster, None, "X"))
+
+                overwritten = natural.feed(b"\x1b[2;4HY")[0]
+                self.assertEqual(overwritten.cells[0][1:3], (" ", None))
+                self.assertEqual(overwritten.cells[1], (" ", None, None, "Y", " ", "X"))
+
     def test_resize_preserves_cells_and_removes_truncated_wide_glyph(self):
         screen = TerminalScreen(4, 2)
         screen.feed("ab界".encode("utf-8"))
@@ -434,23 +468,105 @@ class TerminalScreenTest(unittest.TestCase):
         disabled = TerminalScreen(4, 2)
         disabled.feed(b"\x1b[7labc")
         disabled.feed("1\u20e3".encode("utf-8"))
-        self.assertFalse(disabled.valid)
+        self.assertTrue(disabled.valid, disabled.invalid_reason)
+        self.assertEqual(disabled.last_frame.cells[0], ("a", "b", "1\u20e3", None))
 
         too_narrow = TerminalScreen(1, 2)
         too_narrow.feed("1\u20e3".encode("utf-8"))
         self.assertFalse(too_narrow.valid)
 
-    def test_dangling_zwj_invalidates_at_eof_and_resize(self):
+    def test_dangling_zwj_invalidates_at_eof(self):
         eof = TerminalScreen(4, 2)
         eof.feed("👩‍".encode("utf-8"))
         eof.finish()
         self.assertFalse(eof.valid)
 
-        resized = TerminalScreen(4, 2)
-        resized.feed(b"\x1b[?2026h" + "👩‍".encode("utf-8"))
-        self.assertEqual(resized.resize(5, 3), ())
-        self.assertFalse(resized.valid)
-        self.assertIsNone(resized.last_frame)
+    def test_resize_preserves_surviving_unicode_cluster_state_inside_and_outside_sync(self):
+        cases = (
+            ("a", "\U00011f00", "a\U00011f00", 1),
+            ("🇺", "🇸", "🇺🇸", 2),
+            ("❤", "️", "❤️", 2),
+            ("1", "\u20e3", "1\u20e3", 2),
+            ("☝", "🏽", "☝🏽", 2),
+            ("©‍", "💻", "©‍💻", 2),
+        )
+        for synchronized in (False, True):
+            for prefix, suffix, cluster, width in cases:
+                with self.subTest(synchronized=synchronized, cluster=cluster):
+                    screen = TerminalScreen(6, 2)
+                    if synchronized:
+                        screen.feed(b"\x1b[?2026h")
+                    for value in prefix.encode("utf-8"):
+                        screen.feed(bytes((value,)))
+                    resize_frames = screen.resize(7, 3)
+                    if synchronized:
+                        self.assertEqual(resize_frames, ())
+                    else:
+                        self.assertEqual(len(resize_frames), 1)
+                    for value in (suffix + "X").encode("utf-8"):
+                        screen.feed(bytes((value,)))
+                    if synchronized:
+                        frames = screen.feed(b"\x1b[?2026l")
+                        self.assertEqual(len(frames), 1)
+                    self.assertTrue(screen.valid, screen.invalid_reason)
+                    self.assertEqual(screen.last_frame.cell(0, 0), cluster)
+                    if width == 2:
+                        self.assertIsNone(screen.last_frame.cell(0, 1))
+                    self.assertEqual(screen.last_frame.cell(0, width), "X")
+
+        for synchronized in (False, True):
+            with self.subTest(truncated_zwj=synchronized):
+                screen = TerminalScreen(4, 2)
+                if synchronized:
+                    screen.feed(b"\x1b[?2026h")
+                screen.feed(b"\x1b[1;3H" + "👩‍".encode("utf-8"))
+                self.assertEqual(screen.resize(3, 2), ())
+                self.assertFalse(screen.valid)
+                if synchronized:
+                    self.assertIsNone(screen.last_frame)
+
+    def test_resize_dropped_lead_cannot_rebind_to_clamped_foreign_owner(self):
+        for synchronized in (False, True):
+            for suffix in ("\u0301", "️"):
+                with self.subTest(synchronized=synchronized, suffix=suffix):
+                    screen = TerminalScreen(6, 3)
+                    if synchronized:
+                        screen.feed(b"\x1b[?2026h")
+                    screen.feed(b"\x1b[1;3H\x1b]66;s=2; \x1b\\\x1b[1;6Ha")
+                    screen.resize(4, 3)
+                    for value in suffix.encode("utf-8"):
+                        screen.feed(bytes((value,)))
+                    if suffix == "️":
+                        self.assertFalse(screen.valid)
+                        if synchronized:
+                            self.assertIsNone(screen.last_frame)
+                        else:
+                            self.assertEqual(screen.last_frame.cell(0, 2), " ")
+                    else:
+                        if synchronized:
+                            screen.feed(b"\x1b[?2026l")
+                        self.assertTrue(screen.valid, screen.invalid_reason)
+                        self.assertEqual(screen.last_frame.cell(0, 2), " ")
+                        self.assertEqual(screen.last_frame.cells[1][2:4], (None, None))
+
+    def test_owner_aware_widening_wraps_or_fails_closed_without_cycles(self):
+        clusters = ("❤️", "1\u20e3", "☝🏽", "🇺🇸", "©‍💻")
+        for cluster in clusters:
+            with self.subTest(wrapped=cluster):
+                screen = TerminalScreen(4, 3)
+                screen.feed(b"\x1b[1;2H\x1b]66;s=2; \x1b\\\x1b[2;1H")
+                screen.feed((cluster + "X").encode("utf-8"))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(screen.last_frame.cells[0][1:3], (" ", None))
+                self.assertEqual(screen.last_frame.cells[1][1:3], (None, None))
+                self.assertEqual(screen.last_frame.cells[2][:3], (cluster, None, "X"))
+
+            with self.subTest(no_progress=cluster):
+                blocked = TerminalScreen(4, 3)
+                blocked.feed(b"\x1b[2;2H\x1b]66;s=2; \x1b\\\x1b[1;2r\x1b[3;1H")
+                blocked.feed(cluster.encode("utf-8"))
+                self.assertFalse(blocked.valid)
+                self.assertIn("owner-safe", blocked.invalid_reason)
 
     def test_fragmented_osc66_rejects_controls_and_noncharacters(self):
         rejected = ("\x00", "\t", "\n", "\x7f", "\x80", "\u0378", "\ufdd0", "\ufffe", "\U0001ffff")

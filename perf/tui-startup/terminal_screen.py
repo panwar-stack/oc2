@@ -441,6 +441,7 @@ class _Surface:
     scroll_bottom: int = 0
     wrap_pending: bool = False
     last_lead: Optional[Tuple[int, int]] = None
+    cursor_addressed: bool = False
 
     @classmethod
     def blank(cls, width: int, height: int) -> "_Surface":
@@ -608,10 +609,16 @@ class TerminalScreen:
             raise ValueError("terminal geometry must be positive")
         if not self._valid or (width, height) == (self.width, self.height):
             return ()
-        if self._join_next:
-            self._invalidate("resize during dangling Unicode ZWJ")
-            return ()
+        active_surface = self._surface
+        active_lead_survived = False
         for surface in (self._main, self._alternate):
+            saved_last_lead = surface.last_lead
+            saved_last_cell: Cell = None
+            saved_last_part: Optional[_CellPart] = None
+            if saved_last_lead is not None:
+                saved_row, saved_column = saved_last_lead
+                saved_last_cell = surface.rows[saved_row][saved_column]
+                saved_last_part = surface.parts[saved_row][saved_column]
             old_width = surface.width
             old_height = surface.height
             old_rows = surface.rows
@@ -638,14 +645,39 @@ class TerminalScreen:
             surface.scroll_bottom = height - 1
             surface.wrap_pending = False
             surface.last_lead = None
+            surface.cursor_addressed = False
             self._repair_multicells(surface)
+            if self._valid_last_lead(surface, saved_last_lead, saved_last_cell, saved_last_part):
+                surface.last_lead = saved_last_lead
+                if surface is active_surface:
+                    active_lead_survived = True
         self.width = width
         self.height = height
+        if self._join_next and not active_lead_survived:
+            self._invalidate("resize truncated the Unicode ZWJ source")
+            return ()
         self._dirty = True
         frames: List[TerminalFrame] = []
         if not self._synchronized:
             self._commit(frames)
         return tuple(frames)
+
+    def _valid_last_lead(
+        self,
+        surface: _Surface,
+        lead: Optional[Tuple[int, int]],
+        expected_cell: Cell,
+        expected_part: Optional[_CellPart],
+    ) -> bool:
+        if lead is None:
+            return False
+        row, column = lead
+        if not (0 <= row < surface.height and 0 <= column < surface.width):
+            return False
+        if surface.rows[row][column] is _CONTINUATION or surface.rows[row][column] != expected_cell:
+            return False
+        part = surface.parts[row][column]
+        return part == expected_part and (part is None or (part.row_offset == 0 and part.column_offset == 0))
 
     def _repair_multicells(self, surface: _Surface) -> None:
         owners: dict[Tuple[int, int, int, int], List[Tuple[int, int]]] = {}
@@ -1225,6 +1257,7 @@ class TerminalScreen:
         surface.cursor_column = min(max(column, 0), surface.width - 1)
         surface.wrap_pending = False
         surface.last_lead = None
+        surface.cursor_addressed = True
         self._join_next = False
 
     def _restore_cursor(self, surface: _Surface) -> None:
@@ -1255,6 +1288,7 @@ class TerminalScreen:
     def _line_feed(self, surface: _Surface) -> None:
         surface.wrap_pending = False
         surface.last_lead = None
+        surface.cursor_addressed = False
         self._join_next = False
         if surface.cursor_row == surface.scroll_bottom:
             self._scroll_up(surface, 1)
@@ -1264,6 +1298,7 @@ class TerminalScreen:
     def _reverse_index(self, surface: _Surface) -> None:
         surface.wrap_pending = False
         surface.last_lead = None
+        surface.cursor_addressed = False
         self._join_next = False
         if surface.cursor_row == surface.scroll_top:
             self._scroll_down(surface, 1)
@@ -1289,6 +1324,7 @@ class TerminalScreen:
         ]
         self._repair_multicells(surface)
         surface.last_lead = None
+        surface.cursor_addressed = False
         self._join_next = False
         self._dirty = True
 
@@ -1311,6 +1347,7 @@ class TerminalScreen:
         ] + retained_parts
         self._repair_multicells(surface)
         surface.last_lead = None
+        surface.cursor_addressed = False
         self._join_next = False
         self._dirty = True
 
@@ -1349,6 +1386,7 @@ class TerminalScreen:
         for column in range(start, end + 1):
             self._clear_glyph(surface, row, column)
         surface.last_lead = None
+        surface.cursor_addressed = False
         self._join_next = False
         self._dirty = True
 
@@ -1409,11 +1447,12 @@ class TerminalScreen:
     def _extend_cluster(self, surface: _Surface, character: str) -> None:
         if surface.last_lead is None:
             part = surface.parts[surface.cursor_row][surface.cursor_column]
-            if part is not None:
+            if part is not None and surface.cursor_addressed:
                 surface.last_lead = (
                     surface.cursor_row - part.row_offset,
                     surface.cursor_column - part.column_offset,
                 )
+                surface.cursor_addressed = False
             elif _is_variation_selector(character) or character in ("\u200d", "\u20e3") or _is_emoji_modifier(character):
                 self._invalidate("cluster extension without a lead cell")
                 return
@@ -1465,30 +1504,17 @@ class TerminalScreen:
         if glyph is _CONTINUATION:
             self._invalidate("Unicode grapheme widened without a lead")
             return
-        if surface.width < 2 or (column + 1 >= surface.width and not self._autowrap):
-            self._invalidate("Unicode grapheme cannot widen at right margin")
-            return
-        if column + 1 >= surface.width:
-            surface.rows[row][column] = " "
-            surface.visible[row][column] = True
-            surface.parts[row][column] = None
-            surface.wrap_pending = False
-            self._line_feed(surface)
-            surface.cursor_column = 0
-            self._write_glyph(glyph, 2)
-            return
-        self._clear_glyph(surface, row, column + 1)
-        surface.rows[row][column + 1] = _CONTINUATION
-        surface.visible[row][column + 1] = surface.visible[row][column]
-        surface.parts[row][column] = _CellPart(2, 1, 0, 0)
-        surface.parts[row][column + 1] = _CellPart(2, 1, 0, 1)
-        surface.last_lead = (row, column)
-        if column + 1 == surface.width - 1:
-            surface.cursor_column = column + 1
-            surface.wrap_pending = self._autowrap
-        else:
-            surface.cursor_column = column + 2
-            surface.wrap_pending = False
+        visible = surface.visible[row][column]
+        self._clear_glyph(surface, row, column)
+        surface.cursor_row = row
+        surface.cursor_column = column
+        surface.wrap_pending = False
+        surface.last_lead = None
+        self._write_glyph(glyph, 2, preserve_foreign_multicells=True)
+        if self._valid and surface.last_lead is not None:
+            lead_row, lead_column = surface.last_lead
+            surface.visible[lead_row][lead_column] = visible
+            surface.visible[lead_row][lead_column + 1] = visible
 
     def _narrow_last_glyph(self, surface: _Surface, row: int, column: int) -> None:
         if not self._lead_is_wide(surface, row, column):
@@ -1508,9 +1534,20 @@ class TerminalScreen:
         else:
             surface.cursor_column = column + 1
 
-    def _write_glyph(self, glyph: str, width: int, height: int = 1) -> None:
+    def _write_glyph(
+        self,
+        glyph: str,
+        width: int,
+        height: int = 1,
+        preserve_foreign_multicells: bool = False,
+    ) -> None:
         surface = self._surface
+        placement_attempts = 0
         while self._valid:
+            placement_attempts += 1
+            if placement_attempts > surface.width * surface.height + 1:
+                self._invalidate("no owner-safe position for multicell glyph")
+                return
             if surface.wrap_pending:
                 self._line_feed(surface)
                 surface.cursor_column = 0
@@ -1531,14 +1568,16 @@ class TerminalScreen:
             for target_row in range(surface.cursor_row, surface.cursor_row + height):
                 for target_column in range(surface.cursor_column, surface.cursor_column + width):
                     part = surface.parts[target_row][target_column]
-                    if part is not None and part.row_offset > 0:
+                    if part is not None and (
+                        part.row_offset > 0 or (preserve_foreign_multicells and part.height > 1)
+                    ):
                         skipped_to = max(
                             skipped_to or 0,
                             target_column - part.column_offset + part.width,
                         )
             if skipped_to is None:
                 break
-            if skipped_to >= surface.width:
+            if skipped_to >= surface.width or skipped_to + width > surface.width:
                 self._line_feed(surface)
                 surface.cursor_column = 0
             else:
@@ -1564,6 +1603,7 @@ class TerminalScreen:
                     surface.rows[target_row][target_column] = _CONTINUATION
                     surface.visible[target_row][target_column] = not self._concealed
         surface.last_lead = (row, column)
+        surface.cursor_addressed = False
         self._dirty = True
         final_column = column + width - 1
         if final_column == surface.width - 1:
