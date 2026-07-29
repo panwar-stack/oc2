@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -345,10 +346,20 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
                     "OC2_TUI_STARTUP_PROFILE_FD": "999",
                     "OC2_RUN_ID": "stale",
                     "OC2_TUI_STARTUP_PROFILE_WORKER": "1",
+                    "OC2_TUI_BENCHMARK_SUPERVISION_TOKEN": "stale",
                 },
             ):
                 env = tui_benchmark.child_environment(state)
-            self.assertFalse(any(key in env for key in (*tui_benchmark.TRACE_ENV_KEYS, "OC2_TUI_STARTUP_PROFILE_WORKER")))
+            self.assertFalse(
+                any(
+                    key in env
+                    for key in (
+                        *tui_benchmark.TRACE_ENV_KEYS,
+                        "OC2_TUI_STARTUP_PROFILE_WORKER",
+                        tui_benchmark.SUPERVISION_ENV,
+                    )
+                )
+            )
             read_fd, write_fd = tui_benchmark._open_trace_pipe(env, "run_test")
             try:
                 self.assertFalse(os.get_inheritable(read_fd))
@@ -359,6 +370,56 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
             finally:
                 os.close(read_fd)
                 os.close(write_fd)
+
+    def test_token_enumerator_matches_exact_same_uid_environment_value(self):
+        token = "supervision_test_exact"
+        exact_env = os.environ.copy()
+        exact_env[tui_benchmark.SUPERVISION_ENV] = token
+        near_env = os.environ.copy()
+        near_env[tui_benchmark.SUPERVISION_ENV] = token + "_other"
+        exact = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(5)"], env=exact_env, start_new_session=True)
+        near = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(5)"], env=near_env, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 1
+            while True:
+                matches = tui_benchmark._token_processes(token)
+                if exact.pid in matches:
+                    break
+                if time.monotonic() >= deadline:
+                    self.fail("exact supervision token was not discoverable")
+                time.sleep(0.01)
+            self.assertNotIn(near.pid, matches)
+        finally:
+            for process in (exact, near):
+                process.terminate()
+                process.wait()
+
+    def test_token_enumerator_fails_closed_on_unsupported_host(self):
+        with mock.patch.object(tui_benchmark.sys, "platform", "unsupported"):
+            with mock.patch.object(tui_benchmark, "_numeric_process_table", return_value={}):
+                with self.assertRaisesRegex(OSError, "unsupported"):
+                    tui_benchmark._token_processes("supervision_test")
+
+    def test_supervision_token_is_child_only_and_never_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            token_file = root / "token"
+            tui_benchmark.prepare_state(state)
+            with mock.patch.dict(os.environ, {tui_benchmark.SUPERVISION_ENV: "stale_parent_value"}):
+                result = tui_benchmark.run_once(
+                    [sys.executable, str(FAKE_TUI), "success-frame-first", "--token-file", str(token_file)],
+                    state,
+                    root,
+                    1,
+                    "none",
+                    b"Ask anything...",
+                )
+                self.assertEqual(os.environ[tui_benchmark.SUPERVISION_ENV], "stale_parent_value")
+            self.assert_success(result)
+            token = token_file.read_text(encoding="ascii")
+            self.assertRegex(token, r"^supervision_[0-9a-f]{48}$")
+            self.assertNotIn(token, json.dumps(result))
 
     def test_fragmented_trace_and_pty_reach_content_free_milestones(self):
         result = self.run_mode("success-fragmented", timeout=1)
@@ -504,6 +565,99 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
                 pid, group, session = self.descendant_identity(pid_file)
                 self.assertEqual((group, session), (pid, pid))
                 self.assert_pid_gone(pid)
+
+    def test_token_authority_cleans_60_to_90ms_reparent_stress_without_ancestry(self):
+        for delay in (60, 75, 90):
+            with self.subTest(delay=delay), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                state = root / "state"
+                pid_file = root / "descendant.pid"
+                tui_benchmark.prepare_state(state)
+                with mock.patch.object(tui_benchmark.DescendantSupervisor, "_scan", return_value=None):
+                    result = tui_benchmark.run_once(
+                        [
+                            sys.executable,
+                            str(FAKE_TUI),
+                            "early-exit-escaped-descendant",
+                            "--pid-file",
+                            str(pid_file),
+                            "--exit-delay-ms",
+                            str(delay),
+                        ],
+                        state,
+                        root,
+                        0.5,
+                        "none",
+                        b"Ask anything...",
+                    )
+                self.assertEqual(result["failure"], "child_exited_early")
+                pid, group, session = self.descendant_identity(pid_file)
+                self.assertEqual((group, session), (pid, pid))
+                self.assert_pid_gone(pid)
+
+    def test_emergency_token_cleanup_survives_true_pre_signal_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            pid_file = root / "descendant.pid"
+            token_file = root / "token"
+            tui_benchmark.prepare_state(state)
+            with mock.patch.object(
+                tui_benchmark,
+                "stop_pty_child",
+                side_effect=PtyCleanupError("injected before any signal"),
+            ):
+                result = tui_benchmark.run_once(
+                    [
+                        sys.executable,
+                        str(FAKE_TUI),
+                        "success-escaped-descendant",
+                        "--pid-file",
+                        str(pid_file),
+                        "--token-file",
+                        str(token_file),
+                    ],
+                    state,
+                    root,
+                    1,
+                    "none",
+                    b"Ask anything...",
+                )
+            self.assertEqual(result["failure"], "descendant_cleanup_failed")
+            self.assertEqual(tui_benchmark._token_processes(token_file.read_text(encoding="ascii")), {})
+            self.assert_pid_gone(self.descendant_identity(pid_file)[0])
+
+    def test_emergency_token_cleanup_survives_primary_cleanup_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            pid_file = root / "descendant.pid"
+            token_file = root / "token"
+            tui_benchmark.prepare_state(state)
+            with mock.patch.object(
+                tui_benchmark,
+                "_cleanup_tracked_descendants",
+                side_effect=RuntimeError("injected primary cleanup failure"),
+            ):
+                result = tui_benchmark.run_once(
+                    [
+                        sys.executable,
+                        str(FAKE_TUI),
+                        "success-escaped-descendant",
+                        "--pid-file",
+                        str(pid_file),
+                        "--token-file",
+                        str(token_file),
+                    ],
+                    state,
+                    root,
+                    1,
+                    "none",
+                    b"Ask anything...",
+                )
+            self.assertEqual(result["failure"], "descendant_cleanup_failed")
+            self.assertEqual(tui_benchmark._token_processes(token_file.read_text(encoding="ascii")), {})
+            self.assert_pid_gone(self.descendant_identity(pid_file)[0])
 
     def test_start_new_session_descendant_is_cleaned_after_read_exception(self):
         with tempfile.TemporaryDirectory() as directory:

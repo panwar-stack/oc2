@@ -18,6 +18,7 @@ HEIGHT = 30
 PROMPT = "Ask anything..."
 PROMPT_ROW = 15
 PROMPT_COLUMN = 16
+SUPERVISION_ENV = "OC2_TUI_BENCHMARK_SUPERVISION_TOKEN"
 
 
 class TraceWriter:
@@ -170,7 +171,11 @@ def main() -> int:
         ),
     )
     parser.add_argument("--pid-file", type=Path)
+    parser.add_argument("--token-file", type=Path)
+    parser.add_argument("--exit-delay-ms", type=int, default=120)
     args = parser.parse_args()
+    if args.token_file is not None:
+        args.token_file.write_text(os.environ[SUPERVISION_ENV], encoding="ascii")
     fragmented = args.mode == "success-fragmented"
     trace = TraceWriter(fragmented=fragmented)
     trace.emit("cli.entry", role="main")
@@ -193,7 +198,7 @@ def main() -> int:
         if args.pid_file is None:
             return 65
         _spawn_descendant(args.pid_file, escaped=True)
-        time.sleep(0.12)
+        time.sleep(args.exit_delay_ms / 1000)
         return 7
     if args.mode == "early-exit":
         return 7

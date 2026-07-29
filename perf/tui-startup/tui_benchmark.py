@@ -2,6 +2,7 @@
 """Measure OC2 TUI startup through a controlled pseudo-terminal."""
 
 import argparse
+import ctypes
 import errno
 import json
 import math
@@ -12,6 +13,7 @@ import select
 import signal
 import shutil
 import statistics
+import struct
 import subprocess
 import sys
 import tempfile
@@ -53,6 +55,7 @@ TRACE_ENV_KEYS = (
     "OC2_TUI_STARTUP_PROFILE_FD",
     "OC2_RUN_ID",
 )
+SUPERVISION_ENV = "OC2_TUI_BENCHMARK_SUPERVISION_TOKEN"
 TRACE_PHASES = frozenset(
     (
         "cli.command.load",
@@ -495,7 +498,12 @@ def prepare_state(root: Path) -> None:
 def child_environment(state: Path) -> dict[str, str]:
     env = os.environ.copy()
     for key in tuple(env):
-        if key in TERMINAL_ENV_KEYS or key in TRACE_ENV_KEYS or key == "OC2_TUI_STARTUP_PROFILE_WORKER" or key.startswith("ZELLIJ"):
+        if (
+            key in TERMINAL_ENV_KEYS
+            or key in TRACE_ENV_KEYS
+            or key in ("OC2_TUI_STARTUP_PROFILE_WORKER", SUPERVISION_ENV)
+            or key.startswith("ZELLIJ")
+        ):
             env.pop(key)
     env.update(CONTROLLED_ENV)
     env.update(
@@ -630,9 +638,9 @@ class ChildExitObserver:
 ProcessIdentity = tuple[int, int]
 
 
-def _numeric_process_table() -> dict[int, tuple[int, int, int]]:
+def _numeric_process_table() -> dict[int, tuple[int, int, int, int]]:
     result = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,pgid=,sess="],
+        ["ps", "-axo", "pid=,ppid=,pgid=,sess=,uid="],
         check=False,
         capture_output=True,
         text=True,
@@ -640,14 +648,106 @@ def _numeric_process_table() -> dict[int, tuple[int, int, int]]:
     )
     if result.returncode != 0:
         raise OSError("numeric process snapshot failed")
-    table: dict[int, tuple[int, int, int]] = {}
+    table: dict[int, tuple[int, int, int, int]] = {}
     for line in result.stdout.splitlines():
         parts = line.split()
-        if len(parts) != 4 or any(not part.isdigit() for part in parts):
+        if len(parts) != 5:
             raise OSError("numeric process snapshot was malformed")
-        pid, parent, group, session = (int(part) for part in parts)
-        table[pid] = (parent, group, session)
+        try:
+            pid, parent, group, session, uid = (int(part) for part in parts)
+        except ValueError:
+            raise OSError("numeric process snapshot was malformed") from None
+        if pid <= 0 or parent < 0 or group < 0 or session < 0:
+            raise OSError("numeric process snapshot was malformed")
+        table[pid] = (parent, group, session, uid)
     return table
+
+
+def _linux_process_environment(pid: int) -> tuple[bytes, ...]:
+    path = Path("/proc") / str(pid) / "environ"
+    try:
+        if path.stat().st_uid != os.getuid():
+            return ()
+        return tuple(item for item in path.read_bytes().split(b"\0") if item)
+    except FileNotFoundError:
+        return ()
+    except PermissionError as error:
+        raise OSError("same-UID process environment was unreadable") from error
+
+
+def _darwin_process_environment(pid: int) -> tuple[bytes, ...]:
+    # KERN_PROCARGS2 is the stdlib-accessible equivalent when Darwin ps hides env.
+    libc = ctypes.CDLL(None, use_errno=True)
+    sysctl = libc.sysctl
+    sysctl.argtypes = [
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    ]
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2, pid
+    size = ctypes.c_size_t()
+    if sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        error = ctypes.get_errno()
+        if error in (errno.ESRCH, errno.EINVAL):
+            return ()
+        raise OSError(error, "same-UID process environment size was unreadable")
+    data = ctypes.create_string_buffer(size.value)
+    if sysctl(mib, 3, data, ctypes.byref(size), None, 0) != 0:
+        error = ctypes.get_errno()
+        if error in (errno.ESRCH, errno.EINVAL):
+            return ()
+        raise OSError(error, "same-UID process environment was unreadable")
+    raw = data.raw[: size.value]
+    if len(raw) < struct.calcsize("i"):
+        raise OSError("Darwin process arguments were truncated")
+    argc = struct.unpack_from("i", raw)[0]
+    if argc < 0:
+        raise OSError("Darwin process argument count was invalid")
+    offset = struct.calcsize("i")
+    executable_end = raw.find(b"\0", offset)
+    if executable_end < 0:
+        raise OSError("Darwin process executable was unterminated")
+    offset = executable_end + 1
+    while offset < len(raw) and raw[offset] == 0:
+        offset += 1
+    for _ in range(argc):
+        end = raw.find(b"\0", offset)
+        if end < 0:
+            raise OSError("Darwin process argument was unterminated")
+        offset = end + 1
+    environment: list[bytes] = []
+    while offset < len(raw):
+        end = raw.find(b"\0", offset)
+        if end < 0:
+            raise OSError("Darwin process environment was unterminated")
+        if end == offset:
+            break
+        environment.append(raw[offset:end])
+        offset = end + 1
+    return tuple(environment)
+
+
+def _token_processes(token: str) -> dict[int, ProcessIdentity]:
+    expected = f"{SUPERVISION_ENV}={token}".encode("ascii")
+    table = _numeric_process_table()
+    matches: dict[int, ProcessIdentity] = {}
+    supported = sys.platform == "darwin" or sys.platform.startswith("linux")
+    if not supported:
+        raise OSError("supervision-token process enumeration is unsupported")
+    for pid, (_, group, session, uid) in table.items():
+        if uid != os.getuid() or pid == os.getpid():
+            continue
+        environment = (
+            _darwin_process_environment(pid)
+            if sys.platform == "darwin"
+            else _linux_process_environment(pid)
+        )
+        if expected in environment:
+            matches[pid] = (group, session)
+    return matches
 
 
 class DescendantSupervisor:
@@ -678,7 +778,7 @@ class DescendantSupervisor:
             changed = True
             while changed:
                 changed = False
-                for pid, (parent, group, session) in table.items():
+                for pid, (parent, group, session, _) in table.items():
                     if pid in known or parent not in known:
                         continue
                     known.add(pid)
@@ -752,7 +852,17 @@ def _signal_tracked(records: dict[int, ProcessIdentity], sig: signal.Signals) ->
     return ok
 
 
-def _tracked_gone(records: dict[int, ProcessIdentity]) -> bool:
+def _reap_direct_child(pid: Optional[int]) -> None:
+    if pid is None:
+        return
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+
+
+def _tracked_gone(records: dict[int, ProcessIdentity], reap_pid: Optional[int] = None) -> bool:
+    _reap_direct_child(reap_pid)
     own_group = os.getpgrp()
     if any(_pid_exists(pid) for pid in records):
         return False
@@ -760,22 +870,43 @@ def _tracked_gone(records: dict[int, ProcessIdentity]) -> bool:
     return not any(_group_exists(group) for group in groups)
 
 
-def _cleanup_tracked_descendants(records: dict[int, ProcessIdentity]) -> bool:
+def _terminate_records(records: dict[int, ProcessIdentity], reap_pid: Optional[int] = None) -> bool:
     if not records:
         return True
     ok = _signal_tracked(records, signal.SIGTERM)
     deadline = time.monotonic() + 0.35
     while time.monotonic() < deadline:
-        if _tracked_gone(records):
+        if _tracked_gone(records, reap_pid):
             return ok
         time.sleep(0.01)
     ok = _signal_tracked(records, signal.SIGKILL) and ok
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
-        if _tracked_gone(records):
+        if _tracked_gone(records, reap_pid):
             return ok
         time.sleep(0.01)
     return False
+
+
+def _cleanup_tracked_descendants(records: dict[int, ProcessIdentity]) -> bool:
+    return _terminate_records(records)
+
+
+def _emergency_token_cleanup(
+    token: str,
+    root_pid: int,
+    root_identity: ProcessIdentity,
+    known_records: Optional[dict[int, ProcessIdentity]] = None,
+) -> tuple[bool, bool]:
+    records = dict(known_records or {})
+    enumeration_ok = True
+    try:
+        records.update(_token_processes(token))
+    except OSError:
+        enumeration_ok = False
+    if _pid_exists(root_pid):
+        records[root_pid] = root_identity
+    return enumeration_ok, _terminate_records(records, reap_pid=root_pid)
 
 
 def _terminal_failure(screen: TerminalScreen, eof: bool = False) -> str:
@@ -799,6 +930,8 @@ def run_once(
 ) -> dict[str, Any]:
     env = child_environment(state)
     run_id = "run_" + secrets.token_hex(16)
+    supervision_token = "supervision_" + secrets.token_hex(24)
+    env[SUPERVISION_ENV] = supervision_token
     trace_read_fd: Optional[int] = None
     trace_write_fd: Optional[int] = None
     try:
@@ -824,10 +957,12 @@ def run_once(
     pid = child.pid
     fd = child.master_fd
     start_ns = child.start_ns
+    root_identity: ProcessIdentity = (pid, pid)
     assert trace_read_fd is not None and trace_write_fd is not None
     exit_observer = ChildExitObserver(pid)
     descendants = DescendantSupervisor(pid)
     descendants.start()
+    records: dict[int, ProcessIdentity] = {}
     try:
         os.close(trace_write_fd)
     except BaseException:
@@ -835,8 +970,12 @@ def run_once(
             stop_pty_child(pid, fd)
         finally:
             try:
-                records, _ = descendants.finish()
-                _cleanup_tracked_descendants(records)
+                try:
+                    records, _ = descendants.finish()
+                    records.update(_token_processes(supervision_token))
+                    _cleanup_tracked_descendants(records)
+                finally:
+                    _emergency_token_cleanup(supervision_token, pid, root_identity, records)
             finally:
                 try:
                     close_pty_fd(fd)
@@ -867,6 +1006,8 @@ def run_once(
     close_error: Optional[BaseException] = None
     descendant_tracking_failed = False
     descendant_cleanup_ok = True
+    emergency_enumeration_ok = True
+    emergency_cleanup_ok = True
     pty_open = True
     trace_open = True
     pty_eof_deadline: Optional[float] = None
@@ -1004,24 +1145,45 @@ def run_once(
             finally:
                 try:
                     records, descendant_tracking_failed = descendants.finish()
-                    descendant_cleanup_ok = _cleanup_tracked_descendants(records)
+                    records.update(_token_processes(supervision_token))
+                    if cleanup_error is None:
+                        descendant_cleanup_ok = _cleanup_tracked_descendants(records)
+                    else:
+                        descendant_cleanup_ok = False
                 except BaseException:
+                    descendant_tracking_failed = True
                     descendant_cleanup_ok = False
                 finally:
                     try:
-                        close_pty_fd(fd)
-                    except BaseException as error:
-                        close_error = error
-                    try:
-                        os.close(trace_read_fd)
-                    except OSError as error:
-                        if error.errno != errno.EBADF and close_error is None:
+                        emergency_enumeration_ok, emergency_cleanup_ok = _emergency_token_cleanup(
+                            supervision_token,
+                            pid,
+                            root_identity,
+                            records,
+                        )
+                    except BaseException:
+                        emergency_enumeration_ok = False
+                        emergency_cleanup_ok = False
+                    finally:
+                        try:
+                            close_pty_fd(fd)
+                        except BaseException as error:
                             close_error = error
+                        try:
+                            os.close(trace_read_fd)
+                        except OSError as error:
+                            if error.errno != errno.EBADF and close_error is None:
+                                close_error = error
 
     if body_error is not None:
         if cleanup_error is not None:
             raise cleanup_error
-        if descendant_tracking_failed or not descendant_cleanup_ok:
+        if (
+            descendant_tracking_failed
+            or not descendant_cleanup_ok
+            or not emergency_enumeration_ok
+            or not emergency_cleanup_ok
+        ):
             raise PtyCleanupError("tracked TUI descendant cleanup failed")
         if close_error is not None:
             raise close_error
@@ -1034,6 +1196,10 @@ def run_once(
     if descendant_tracking_failed:
         failure = "descendant_tracking_failed"
     if not descendant_cleanup_ok:
+        failure = "descendant_cleanup_failed"
+    if not emergency_enumeration_ok:
+        failure = "descendant_tracking_failed"
+    if not emergency_cleanup_ok:
         failure = "descendant_cleanup_failed"
     if close_error is not None:
         failure = "pty_cleanup_failed"
