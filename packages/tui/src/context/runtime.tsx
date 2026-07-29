@@ -52,7 +52,17 @@ export function isTuiStartupEditingKey(event: TuiStartupKeyEvent) {
   return first >= 32 && first !== 127
 }
 
+const noopTuiStartupInput = () => {}
+const inertTuiStartupInputTrace = Object.freeze({
+  mount: noopTuiStartupInput,
+  begin: () => noopTuiStartupInput,
+  key: noopTuiStartupInput,
+  changed: noopTuiStartupInput,
+  cleanup: noopTuiStartupInput,
+})
+
 export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
+  if (!trace) return inertTuiStartupInputTrace
   let mounted = false
   let operations = 0
   let accepted = false

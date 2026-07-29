@@ -43,7 +43,7 @@ import { SyncProvider, useSync } from "./context/sync"
 import { SyncProviderV2 } from "./context/sync-v2"
 import { LocalProvider, useLocal } from "./context/local"
 import { useConnected } from "./component/use-connected"
-import { ThemeProvider, useTheme } from "./context/theme"
+import { captureStartupTerminalResult, ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session, SessionRootsCommand } from "./routes/session"
 import { PromptHistoryProvider } from "./component/prompt/history"
@@ -248,6 +248,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         const resolvedMode = await tracePhase(startupTrace, "theme.wait", () => renderer.waitForThemeMode(1000))
         const mode = resolvedMode ?? "dark"
         if (renderer.isDestroyed) return
+        const terminalResult = captureStartupTerminalResult(renderer, resolvedMode)
 
         await tracePhase(startupTrace, "renderer.render", () =>
           render(() => {
@@ -306,6 +307,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                               <ThemeProvider
                                                 mode={mode}
                                                 settled={resolvedMode ? "resolved" : "fallback-final"}
+                                                terminalResult={terminalResult}
                                               >
                                                 <LocalProvider>
                                                   <PromptStashProvider>

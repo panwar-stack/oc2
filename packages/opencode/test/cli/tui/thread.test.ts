@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../../fixture/fixture"
-import { constructTuiWorker, resolveThreadDirectory } from "../../../src/cli/cmd/tui"
+import { constructTuiWorker, loadTuiRuntime, resolveThreadDirectory } from "../../../src/cli/cmd/tui"
 import { Rpc, type RpcTrace } from "../../../src/util/rpc"
 import { startupRequestName } from "../../../src/cli/tui/startup-trace"
 
@@ -13,6 +13,35 @@ describe("tui thread", () => {
     expect(source).toMatch(/import\(["']\.\.\/tui\/layer["']\)/)
     expect(source).toMatch(/import\(["']@\/plugin\/tui\/runtime["']\)/)
     expect(source).not.toContain('import("./app")')
+  })
+
+  test("loads TUI runtime modules in the legacy sequential order", async () => {
+    const effect = Promise.withResolvers<string>()
+    const layer = Promise.withResolvers<string>()
+    const calls: string[] = []
+    const loading = loadTuiRuntime({
+      effect: () => {
+        calls.push("effect")
+        return effect.promise
+      },
+      layer: () => {
+        calls.push("layer")
+        return layer.promise
+      },
+      plugin: async () => {
+        calls.push("plugin")
+        return "plugin"
+      },
+    })
+
+    await Promise.resolve()
+    expect(calls).toEqual(["effect"])
+    effect.resolve("effect")
+    await Promise.resolve()
+    expect(calls).toEqual(["effect", "layer"])
+    layer.resolve("layer")
+    expect(await loading).toEqual(["effect", "layer", "plugin"])
+    expect(calls).toEqual(["effect", "layer", "plugin"])
   })
 
   async function check(project?: string) {

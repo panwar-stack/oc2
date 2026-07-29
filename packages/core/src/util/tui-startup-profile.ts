@@ -23,6 +23,7 @@ export type TuiStartupPhase =
   | "renderer.render"
   | "plugin.load"
   | "bootstrap.critical"
+  | "bootstrap.optional"
 
 export type TuiStartupRequestName =
   | "config.providers"
@@ -179,6 +180,7 @@ function isPhase(value: unknown): value is TuiStartupPhase {
     case "renderer.render":
     case "plugin.load":
     case "bootstrap.critical":
+    case "bootstrap.optional":
       return true
     default:
       return false

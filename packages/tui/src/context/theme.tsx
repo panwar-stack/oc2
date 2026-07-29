@@ -1,4 +1,4 @@
-import { CliRenderEvents, SyntaxStyle, type TerminalColors } from "@opentui/core"
+import { CliRenderEvents, SyntaxStyle, type CliRenderer, type TerminalColors } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
   DEFAULT_THEMES,
@@ -119,6 +119,36 @@ export function startupThemeState(input: {
   }
 }
 
+export type StartupTerminalResult = {
+  resolved: boolean
+  mode: "dark" | "light" | undefined
+  stop: () => void
+}
+
+export function captureStartupTerminalResult(renderer: CliRenderer, initial?: unknown) {
+  const mode = initial === "dark" || initial === "light" ? initial : undefined
+  const result: StartupTerminalResult = {
+    resolved: mode !== undefined,
+    mode,
+    stop,
+  }
+  let stopped = false
+  const capture = (mode: "dark" | "light") => {
+    if (mode !== "dark" && mode !== "light") return
+    result.resolved = true
+    result.mode = mode
+  }
+  function stop() {
+    if (stopped) return
+    stopped = true
+    renderer.off(CliRenderEvents.THEME_MODE, capture)
+    renderer.off("destroy", stop)
+  }
+  renderer.on(CliRenderEvents.THEME_MODE, capture)
+  renderer.once("destroy", stop)
+  return result
+}
+
 const [store, setStore] = createStore<State>({
   themes: allThemes(),
   mode: "dark",
@@ -135,6 +165,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     mode: "dark" | "light"
     settled?: "resolved" | "fallback-final"
     source?: ThemeSource
+    terminalResult?: ReturnType<typeof captureStartupTerminalResult>
   }) => {
     const renderer = useRenderer()
     const config = useTuiConfig()
@@ -142,7 +173,8 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const startup = useTuiStartup()
     const themes = props.source ?? themeSource
     let startupSettled = false
-    let pendingRendererMode: "dark" | "light" | undefined
+    let terminalResultResolved = props.terminalResult?.resolved ?? props.settled !== "fallback-final"
+    let pendingRendererMode: "dark" | "light" | undefined = props.terminalResult?.mode
     const applyStartupTheme = (rendererMode: unknown = renderer.themeMode) => {
       const next = startupThemeState({
         lock: kv.get("theme_mode_lock"),
@@ -166,14 +198,15 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     applyStartupTheme()
     createEffect(() => {
       if (!kv.ready || startupSettled) return
-      applyStartupTheme(pendingRendererMode ?? renderer.themeMode)
+      const rendererMode = pendingRendererMode ?? renderer.themeMode
+      applyStartupTheme(rendererMode)
       startupSettled = true
       startup.trace?.({
         event: "theme.settled",
         role: "main",
         workspaceGeneration: 0,
         attemptGeneration: 0,
-        outcome: startupThemeSettlement(store.lock, props.settled ?? "resolved"),
+        outcome: startupThemeSettlement(store.lock, terminalResultResolved ? "resolved" : "fallback-final"),
       })
     })
 
@@ -287,11 +320,15 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       if (mode !== "dark" && mode !== "light") return
       if (!startupSettled) {
         pendingRendererMode = mode
+        terminalResultResolved = true
         apply(mode)
         return
       }
       if (store.lock) return
-      if (!apply(mode)) return
+      const establishesAuthority = !terminalResultResolved
+      terminalResultResolved = true
+      const changed = apply(mode)
+      if (!changed && !establishesAuthority) return
       if (reconciled) return
       reconciled = true
       startup.trace?.({
@@ -302,6 +339,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       })
     }
     renderer.on(CliRenderEvents.THEME_MODE, handle)
+    props.terminalResult?.stop()
 
     const handleThemeNotification = (sequence: string) => {
       if (sequence !== "\x1b[?997;1n" && sequence !== "\x1b[?997;2n") return false
@@ -325,6 +363,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
 
     onCleanup(() => {
       renderer.off(CliRenderEvents.THEME_MODE, handle)
+      props.terminalResult?.stop()
       renderer.removeInputHandler(handleThemeNotification)
       unsubscribeRefresh?.()
       for (const timeout of themeRefreshTimeouts) clearTimeout(timeout)

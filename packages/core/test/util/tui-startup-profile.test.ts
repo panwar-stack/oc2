@@ -203,6 +203,21 @@ describe("tui startup profile", () => {
     expect(out.lines.map((line) => Buffer.byteLength(line)).every((bytes) => bytes <= 512)).toBe(true)
   })
 
+  test("accepts the noncritical optional bootstrap phase", () => {
+    const out = harness([0, 1])
+
+    expect(
+      out.profile.emit({
+        event: "phase",
+        role: "main",
+        phase: "bootstrap.optional",
+        outcome: "error",
+        durationMs: 1,
+      }),
+    ).toBe(true)
+    expect(JSON.parse(out.lines[0])).toMatchObject({ phase: "bootstrap.optional", outcome: "error" })
+  })
+
   test("rejects arbitrary names, non-exact bytes, duplicate claims, and nonzero generations", () => {
     const out = harness([0])
     for (const input of [

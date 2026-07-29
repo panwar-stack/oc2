@@ -45,6 +45,17 @@ async function tracePhase<T>(profile: TuiStartupProfile, phase: TuiStartupPhase,
   }
 }
 
+export async function loadTuiRuntime<EffectModule, LayerModule, PluginModule>(input: {
+  effect: () => Promise<EffectModule>
+  layer: () => Promise<LayerModule>
+  plugin: () => Promise<PluginModule>
+}) {
+  const effect = await input.effect()
+  const layer = await input.layer()
+  const plugin = await input.plugin()
+  return [effect, layer, plugin] as const
+}
+
 function createWorkerFetch(client: RpcClient): typeof fetch {
   const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
@@ -288,10 +299,12 @@ export const TuiThreadCommand = cmd({
       }, 1000).unref?.()
 
       try {
-        const [{ Effect }, { run }, { createLegacyTuiPluginHost }] = await tracePhase(
-          startupProfile,
-          "tui.import",
-          () => Promise.all([import("effect"), import("../tui/layer"), import("@/plugin/tui/runtime")]),
+        const [{ Effect }, { run }, { createLegacyTuiPluginHost }] = await tracePhase(startupProfile, "tui.import", () =>
+          loadTuiRuntime({
+            effect: () => import("effect"),
+            layer: () => import("../tui/layer"),
+            plugin: () => import("@/plugin/tui/runtime"),
+          }),
         )
         await Effect.runPromise(
           run({

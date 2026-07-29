@@ -129,6 +129,36 @@ export function reportCriticalBootstrapFailure(input: {
   }
 }
 
+export function captureOptionalBootstrapStartup(start: () => void, failed: (error: unknown) => void) {
+  return captureSynchronousStartup(start, failed)
+}
+
+export function reportOptionalBootstrapFailure(input: {
+  error: unknown
+  fatal: boolean
+  startedAt: number
+  trace?: (input: TuiStartupTraceInput) => unknown
+  destroy: () => void
+  report?: (message: string, detail: Record<string, unknown>) => void
+}) {
+  input.trace?.({
+    event: "phase",
+    role: "main",
+    phase: "bootstrap.optional",
+    outcome: "error",
+    durationMs: Math.max(0, performance.now() - input.startedAt),
+  })
+  const detail = {
+    error: input.error instanceof Error ? input.error.message : String(input.error),
+    name: input.error instanceof Error ? input.error.name : undefined,
+    stack: input.error instanceof Error ? input.error.stack : undefined,
+  }
+  if (input.report) input.report("tui optional bootstrap failed", detail)
+  else console.error("tui optional bootstrap failed", detail)
+  if (input.fatal) input.destroy()
+  else throw input.error
+}
+
 function preserveSessionAggregates(current: Session, incoming: Session): Session {
   return {
     ...incoming,
@@ -876,6 +906,7 @@ export const {
         { name: "project.sync", promise: projectPromise },
         ...(args.continue ? [{ name: "session.list", promise: sessionListPromise }] : []),
       ]
+      let criticalSucceeded = false
 
       await Promise.allSettled(blockingRequests.map((r) => r.promise))
         .then((settled) => {
@@ -934,6 +965,14 @@ export const {
               attemptGeneration: 0,
             })
           }
+          criticalSucceeded = true
+        })
+        .catch(failBootstrap)
+      if (!criticalSucceeded) return
+
+      const optionalStart = startup.trace ? performance.now() : 0
+      captureOptionalBootstrapStartup(
+        () => {
           // non-blocking
           void Promise.all([
             ...(args.continue
@@ -959,8 +998,16 @@ export const {
           ]).then(() => {
             setStore("status", "complete")
           })
-        })
-        .catch(failBootstrap)
+        },
+        (error) =>
+          reportOptionalBootstrapFailure({
+            error,
+            fatal,
+            startedAt: optionalStart,
+            trace: startup.trace,
+            destroy: () => destroyRenderer(renderer),
+          }),
+      )
     }
 
     onMount(() => {

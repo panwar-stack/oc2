@@ -14,8 +14,18 @@ import { createEventSource, createFetch, directory } from "./fixture/tui-sdk"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import type { TuiStartupTraceInput } from "@oc2-ai/core/util/tui-startup-profile"
 import { createTuiStartupInputTrace, isolateTuiStartupTrace } from "../src/context/runtime"
-import { ThemeProvider, startupThemeSettlement, startupThemeState } from "../src/context/theme"
-import { captureCriticalBootstrapStartup, reportCriticalBootstrapFailure } from "../src/context/sync"
+import {
+  captureStartupTerminalResult,
+  ThemeProvider,
+  startupThemeSettlement,
+  startupThemeState,
+} from "../src/context/theme"
+import {
+  captureCriticalBootstrapStartup,
+  captureOptionalBootstrapStartup,
+  reportCriticalBootstrapFailure,
+  reportOptionalBootstrapFailure,
+} from "../src/context/sync"
 import { KVProvider } from "../src/context/kv"
 import { TuiConfigProvider } from "../src/config"
 
@@ -301,6 +311,15 @@ test("input key tracking avoids timers for disabled, unmounted, accepted, and no
   const navigation = { ...editing, name: "left", sequence: "\x1b[D", raw: "\x1b[D" }
   try {
     const initial = timer.mock.calls.length
+    const inert = createTuiStartupInputTrace(undefined)
+    expect(createTuiStartupInputTrace(undefined)).toBe(inert)
+    inert.mount()
+    inert.key(editing)
+    inert.begin()()
+    inert.changed()
+    inert.cleanup()
+    expect(timer.mock.calls).toHaveLength(initial)
+
     input.key(editing)
     expect(timer.mock.calls).toHaveLength(initial)
 
@@ -318,6 +337,53 @@ test("input key tracking avoids timers for disabled, unmounted, accepted, and no
     input.cleanup()
     timer.mockRestore()
   }
+})
+
+test("optional construction failure cannot contradict critical readiness", () => {
+  const failure = new Error("optional construction failed")
+  const traces: TuiStartupTraceInput[] = [
+    { event: "phase", role: "main", phase: "bootstrap.critical", outcome: "ok", durationMs: 1 },
+    { event: "bootstrap.critical.ready", role: "main", workspaceGeneration: 0, attemptGeneration: 0 },
+  ]
+  let destroyed = 0
+  captureOptionalBootstrapStartup(
+    () => {
+      throw failure
+    },
+    (error) =>
+      reportOptionalBootstrapFailure({
+        error,
+        fatal: true,
+        startedAt: performance.now(),
+        trace: (event) => traces.push(event),
+        destroy: () => destroyed++,
+        report: () => {},
+      }),
+  )
+  expect(destroyed).toBe(1)
+  expect(traces.filter((event) => event.event === "phase" && event.phase === "bootstrap.critical")).toMatchObject([
+    { outcome: "ok" },
+  ])
+  expect(traces.filter((event) => event.event === "phase" && event.phase === "bootstrap.optional")).toMatchObject([
+    { outcome: "error" },
+  ])
+
+  expect(() =>
+    captureOptionalBootstrapStartup(
+      () => {
+        throw failure
+      },
+      (error) =>
+        reportOptionalBootstrapFailure({
+          error,
+          fatal: false,
+          startedAt: performance.now(),
+          destroy: () => destroyed++,
+          report: () => {},
+        }),
+    ),
+  ).toThrow(failure)
+  expect(destroyed).toBe(1)
 })
 
 test("theme settlement waits for persisted KV state", async () => {
@@ -352,12 +418,14 @@ test("theme settlement waits for persisted KV state", async () => {
     writeFileSync(path.join(state, "kv.json"), JSON.stringify(input.kv))
     const traces: TuiStartupTraceInput[] = []
     let renderer!: CliRenderer
+    let terminalResult: ReturnType<typeof captureStartupTerminalResult> | undefined
 
     if (input.delayed) {
       blocked = { state, started: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() }
     }
     function Harness() {
       renderer = useRenderer()
+      terminalResult ??= captureStartupTerminalResult(renderer, input.settled === "resolved" ? "dark" : undefined)
       return (
         <TestTuiContexts
           paths={{ state }}
@@ -368,7 +436,7 @@ test("theme settlement waits for persisted KV state", async () => {
         >
           <TuiConfigProvider config={createTuiResolvedConfig()}>
             <KVProvider>
-              <ThemeProvider mode="dark" settled={input.settled}>
+              <ThemeProvider mode="dark" settled={input.settled} terminalResult={terminalResult}>
                 <box />
               </ThemeProvider>
             </KVProvider>
@@ -433,7 +501,7 @@ test("theme settlement waits for persisted KV state", async () => {
 
     const resolved = await scenario({
       kv: {},
-      settled: "resolved",
+      settled: "fallback-final",
       delayed: true,
       preReady: ["dark", "light"],
       async verify(renderer, traces) {
@@ -461,7 +529,25 @@ test("theme settlement waits for persisted KV state", async () => {
       }),
     ).toMatchObject({ lock: undefined, mode: "light", active: "opencode" })
 
-    const fallback = await scenario({ kv: {}, settled: "fallback-final" })
+    const fallback = await scenario({
+      kv: {},
+      settled: "fallback-final",
+      async verify(renderer, traces) {
+        const clear = spyOn(renderer, "clearPaletteCache")
+        try {
+          const before = clear.mock.calls.length
+          renderer.emit(CliRenderEvents.THEME_MODE, "dark")
+          await Bun.sleep(1)
+          expect(traces.filter((event) => event.event === "theme.reconciled")).toHaveLength(1)
+          expect(clear.mock.calls).toHaveLength(before)
+          expect(
+            traces.filter((event) => event.event === "theme.settled" || event.event === "theme.reconciled"),
+          ).toMatchObject([{ event: "theme.settled" }, { event: "theme.reconciled" }])
+        } finally {
+          clear.mockRestore()
+        }
+      },
+    })
     const fallbackSettled = fallback.traces.filter((event) => event.event === "theme.settled")
     expect(fallbackSettled).toHaveLength(1)
     expect(fallbackSettled).toMatchObject([{ outcome: "fallback-final" }])
