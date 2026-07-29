@@ -9,10 +9,13 @@ import os
 import re
 import secrets
 import select
+import signal
 import shutil
 import statistics
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TextIO
@@ -34,6 +37,13 @@ from terminal_screen import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TTFD = re.compile(rb"Time to first draw:\s*([0-9.]+)ms")
 DEFAULT_READY_TEXT = "Ask anything..."
+PROMPT_ROW = 15
+PROMPT_COLUMN = 16
+HOME_PLACEHOLDERS = (
+    'Ask anything... "Fix a TODO in the codebase"',
+    'Ask anything... "What is the tech stack of this project?"',
+    'Ask anything... "Fix broken tests"',
+)
 TRACE_VERSION = 1
 TRACE_MAX_LINE_BYTES = 512
 TRACE_MAX_RECORDS = 512
@@ -290,11 +300,14 @@ FrameMatcher = Callable[[TerminalFrame], bool]
 
 
 def _frame_has_fatal(frame: TerminalFrame) -> bool:
-    visible = [line.strip() for line in frame.lines if line.strip() and _TTFD_LINE.fullmatch(line.strip()) is None]
-    if not visible:
-        return False
-    folded = visible[0].casefold()
-    return any(folded.startswith(prefix) for prefix in _FATAL_PREFIXES)
+    for line in frame.lines:
+        visible = line.strip()
+        if not visible or _TTFD_LINE.fullmatch(visible) is not None:
+            continue
+        folded = visible.casefold()
+        if any(folded.startswith(prefix) for prefix in _FATAL_PREFIXES):
+            return True
+    return False
 
 
 def _valid_first_frame(frame: TerminalFrame) -> bool:
@@ -304,8 +317,25 @@ def _valid_first_frame(frame: TerminalFrame) -> bool:
     return any(_TTFD_LINE.fullmatch(line) is None for line in visible)
 
 
-def _text_matcher(text: str) -> FrameMatcher:
-    return lambda frame: any(text in line for line in frame.lines)
+def _prompt_matcher(frame: TerminalFrame) -> bool:
+    """Match the pinned compiled pure-home 100x30 textarea cell span.
+
+    A compiled local pure-mode capture at the accepted Slice 2B base committed
+    screen sequence 4 with row 15 equal to
+    ``"             ┃  Ask anything... ..."``. The border is column 13,
+    textarea padding is columns 14-15, and the placeholder starts at column 16.
+    Coordinates are zero-based; bytes at any other cells do not qualify.
+    """
+
+    if (frame.width, frame.height) != (PTY_WIDTH, PTY_HEIGHT):
+        return False
+    row = frame.cells[PROMPT_ROW]
+    for placeholder in HOME_PLACEHOLDERS:
+        expected = tuple(placeholder)
+        end = PROMPT_COLUMN + len(expected)
+        if row[PROMPT_COLUMN:end] == expected and (end == frame.width or row[end] == " "):
+            return True
+    return False
 
 
 class StartupMilestoneOracle:
@@ -597,6 +627,157 @@ class ChildExitObserver:
         self._kqueue = None
 
 
+ProcessIdentity = tuple[int, int]
+
+
+def _numeric_process_table() -> dict[int, tuple[int, int, int]]:
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,pgid=,sess="],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=0.5,
+    )
+    if result.returncode != 0:
+        raise OSError("numeric process snapshot failed")
+    table: dict[int, tuple[int, int, int]] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 4 or any(not part.isdigit() for part in parts):
+            raise OSError("numeric process snapshot was malformed")
+        pid, parent, group, session = (int(part) for part in parts)
+        table[pid] = (parent, group, session)
+    return table
+
+
+class DescendantSupervisor:
+    """Track descendants even when they escape the PTY process group/session."""
+
+    def __init__(self, root_pid: int, interval: float = 0.05):
+        self.root_pid = root_pid
+        self.interval = interval
+        self._records: dict[int, ProcessIdentity] = {}
+        self._failed = False
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="tui-descendants", daemon=True)
+
+    def start(self) -> None:
+        # Process-table work stays off the receipt-clock milestone loop.
+        self._thread.start()
+
+    def _scan(self) -> None:
+        try:
+            table = _numeric_process_table()
+        except (OSError, subprocess.SubprocessError):
+            with self._lock:
+                self._failed = True
+            return
+        with self._lock:
+            known = {self.root_pid, *self._records}
+            changed = True
+            while changed:
+                changed = False
+                for pid, (parent, group, session) in table.items():
+                    if pid in known or parent not in known:
+                        continue
+                    known.add(pid)
+                    self._records[pid] = (group, session)
+                    changed = True
+            for pid in tuple(self._records):
+                current = table.get(pid)
+                if current is not None:
+                    self._records[pid] = (current[1], current[2])
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._scan()
+            self._stop.wait(self.interval)
+
+    def scan_now(self) -> None:
+        self._scan()
+
+    def finish(self) -> tuple[dict[int, ProcessIdentity], bool]:
+        self._stop.set()
+        self._thread.join(0.75)
+        if self._thread.is_alive():
+            with self._lock:
+                self._failed = True
+        self._scan()
+        with self._lock:
+            return dict(self._records), self._failed
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _group_exists(group: int) -> bool:
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _signal_tracked(records: dict[int, ProcessIdentity], sig: signal.Signals) -> bool:
+    ok = True
+    own_group = os.getpgrp()
+    groups = {group for group, _ in records.values() if group > 1 and group != own_group}
+    for group in groups:
+        try:
+            os.killpg(group, sig)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            ok = False
+    for pid in records:
+        if pid <= 1 or pid == os.getpid():
+            ok = False
+            continue
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            ok = False
+    return ok
+
+
+def _tracked_gone(records: dict[int, ProcessIdentity]) -> bool:
+    own_group = os.getpgrp()
+    if any(_pid_exists(pid) for pid in records):
+        return False
+    groups = {group for group, _ in records.values() if group > 1 and group != own_group}
+    return not any(_group_exists(group) for group in groups)
+
+
+def _cleanup_tracked_descendants(records: dict[int, ProcessIdentity]) -> bool:
+    if not records:
+        return True
+    ok = _signal_tracked(records, signal.SIGTERM)
+    deadline = time.monotonic() + 0.35
+    while time.monotonic() < deadline:
+        if _tracked_gone(records):
+            return ok
+        time.sleep(0.01)
+    ok = _signal_tracked(records, signal.SIGKILL) and ok
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if _tracked_gone(records):
+            return ok
+        time.sleep(0.01)
+    return False
+
+
 def _terminal_failure(screen: TerminalScreen, eof: bool = False) -> str:
     reason = screen.invalid_reason or ""
     if "synchronized" in reason:
@@ -618,10 +799,6 @@ def run_once(
 ) -> dict[str, Any]:
     env = child_environment(state)
     run_id = "run_" + secrets.token_hex(16)
-    try:
-        prompt_text = ready_text.decode("utf-8", errors="strict")
-    except UnicodeDecodeError:
-        return _empty_result("prompt_oracle_invalid", False, run_id)
     trace_read_fd: Optional[int] = None
     trace_write_fd: Optional[int] = None
     try:
@@ -649,6 +826,8 @@ def run_once(
     start_ns = child.start_ns
     assert trace_read_fd is not None and trace_write_fd is not None
     exit_observer = ChildExitObserver(pid)
+    descendants = DescendantSupervisor(pid)
+    descendants.start()
     try:
         os.close(trace_write_fd)
     except BaseException:
@@ -656,18 +835,22 @@ def run_once(
             stop_pty_child(pid, fd)
         finally:
             try:
-                close_pty_fd(fd)
+                records, _ = descendants.finish()
+                _cleanup_tracked_descendants(records)
             finally:
                 try:
-                    os.close(trace_read_fd)
+                    close_pty_fd(fd)
                 finally:
-                    exit_observer.close()
+                    try:
+                        os.close(trace_read_fd)
+                    finally:
+                        exit_observer.close()
         raise
     trace_write_fd = None
 
     screen = TerminalScreen(PTY_WIDTH, PTY_HEIGHT)
     trace = TraceJsonlParser(run_id)
-    oracle = StartupMilestoneOracle(_text_matcher(prompt_text))
+    oracle = StartupMilestoneOracle(_prompt_matcher)
     legacy_output = bytearray()
     total_pty_bytes = 0
     bytes_until_ready: Optional[int] = None
@@ -682,6 +865,8 @@ def run_once(
     body_error: Optional[BaseException] = None
     cleanup_error: Optional[BaseException] = None
     close_error: Optional[BaseException] = None
+    descendant_tracking_failed = False
+    descendant_cleanup_ok = True
     pty_open = True
     trace_open = True
     pty_eof_deadline: Optional[float] = None
@@ -811,24 +996,33 @@ def run_once(
             exit_observer.close()
         finally:
             try:
+                descendants.scan_now()
                 try:
                     stop_pty_child(pid, fd)
                 except BaseException as error:
                     cleanup_error = error
             finally:
                 try:
-                    close_pty_fd(fd)
-                except BaseException as error:
-                    close_error = error
-                try:
-                    os.close(trace_read_fd)
-                except OSError as error:
-                    if error.errno != errno.EBADF and close_error is None:
+                    records, descendant_tracking_failed = descendants.finish()
+                    descendant_cleanup_ok = _cleanup_tracked_descendants(records)
+                except BaseException:
+                    descendant_cleanup_ok = False
+                finally:
+                    try:
+                        close_pty_fd(fd)
+                    except BaseException as error:
                         close_error = error
+                    try:
+                        os.close(trace_read_fd)
+                    except OSError as error:
+                        if error.errno != errno.EBADF and close_error is None:
+                            close_error = error
 
     if body_error is not None:
         if cleanup_error is not None:
             raise cleanup_error
+        if descendant_tracking_failed or not descendant_cleanup_ok:
+            raise PtyCleanupError("tracked TUI descendant cleanup failed")
         if close_error is not None:
             raise close_error
         raise body_error
@@ -837,6 +1031,10 @@ def run_once(
             failure = "descendant_cleanup_failed"
         else:
             raise cleanup_error
+    if descendant_tracking_failed:
+        failure = "descendant_tracking_failed"
+    if not descendant_cleanup_ok:
+        failure = "descendant_cleanup_failed"
     if close_error is not None:
         failure = "pty_cleanup_failed"
     if bytes_until_ready is None:

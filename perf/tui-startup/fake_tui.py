@@ -16,6 +16,8 @@ from pathlib import Path
 WIDTH = 100
 HEIGHT = 30
 PROMPT = "Ask anything..."
+PROMPT_ROW = 15
+PROMPT_COLUMN = 16
 
 
 class TraceWriter:
@@ -80,12 +82,16 @@ def _write_pty(data: bytes, fragmented: bool = False) -> None:
         _write_all(1, data[offset:])
 
 
-def _frame(prompt: bool = True) -> bytes:
+def _position(row: int, column: int) -> bytes:
+    return f"\x1b[{row + 1};{column + 1}H".encode("ascii")
+
+
+def _frame(prompt: bool = True, prompt_column: int = PROMPT_COLUMN) -> bytes:
     body = bytearray(b"\x1b[?1049h\x1b[?2026h\x1b[2J\x1b[H")
     body.extend(b"Time to first draw: 12.5ms")
     body.extend(b"\x1b[10;47HOC2")
     if prompt:
-        body.extend(b"\x1b[16;14H" + PROMPT.encode("ascii") + b' "Fix a TODO in the codebase"')
+        body.extend(_position(PROMPT_ROW, prompt_column) + PROMPT.encode("ascii") + b' "Fix a TODO in the codebase"')
     body.extend(b"\x1b[?2026l")
     return bytes(body)
 
@@ -94,7 +100,7 @@ def _erased_before_commit() -> bytes:
     return (
         b"\x1b[?1049h\x1b[?2026h\x1b[2J\x1b[H"
         b"Time to first draw: 12.5ms"
-        b"\x1b[16;14H"
+        + _position(PROMPT_ROW, PROMPT_COLUMN)
         + PROMPT.encode("ascii")
         + b"\x1b[2J\x1b[HOC2 loading\x1b[?2026l"
     )
@@ -117,7 +123,7 @@ def _geometry_ok() -> bool:
     return (columns, rows) == (WIDTH, HEIGHT)
 
 
-def _spawn_descendant(pid_file: Path) -> None:
+def _spawn_descendant(pid_file: Path, escaped: bool = False) -> None:
     program = (
         "import signal,time;"
         "signal.signal(signal.SIGINT,signal.SIG_IGN);"
@@ -129,8 +135,12 @@ def _spawn_descendant(pid_file: Path) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=escaped,
     )
-    pid_file.write_text(str(child.pid), encoding="ascii")
+    pid_file.write_text(
+        f"{child.pid} {os.getpgid(child.pid)} {os.getsid(child.pid)}",
+        encoding="ascii",
+    )
 
 
 def main() -> int:
@@ -142,7 +152,11 @@ def main() -> int:
             "success-marker-first",
             "success-frame-first",
             "success-descendant",
+            "success-escaped-descendant",
             "early-exit-descendant",
+            "early-exit-escaped-descendant",
+            "timeout-escaped-descendant",
+            "exception-escaped-descendant",
             "paint-erase",
             "raw-only",
             "early-exit",
@@ -152,6 +166,7 @@ def main() -> int:
             "unknown-sequence",
             "desynchronized",
             "fatal-frame",
+            "misaligned-prompt",
         ),
     )
     parser.add_argument("--pid-file", type=Path)
@@ -174,9 +189,21 @@ def main() -> int:
         child = subprocess.Popen([sys.executable, "-c", program], close_fds=False)
         args.pid_file.write_text(str(child.pid), encoding="ascii")
         return 7
+    if args.mode == "early-exit-escaped-descendant":
+        if args.pid_file is None:
+            return 65
+        _spawn_descendant(args.pid_file, escaped=True)
+        time.sleep(0.12)
+        return 7
     if args.mode == "early-exit":
         return 7
     if args.mode == "timeout":
+        time.sleep(60)
+        return 0
+    if args.mode == "timeout-escaped-descendant":
+        if args.pid_file is None:
+            return 65
+        _spawn_descendant(args.pid_file, escaped=True)
         time.sleep(60)
         return 0
     if args.mode == "pty-eof":
@@ -204,6 +231,11 @@ def main() -> int:
         _write_pty(_fatal_frame())
         time.sleep(60)
         return 0
+    if args.mode == "misaligned-prompt":
+        _markers(trace)
+        _write_pty(_frame(prompt_column=PROMPT_COLUMN + 1))
+        time.sleep(60)
+        return 0
     if args.mode == "paint-erase":
         _write_pty(_frame())
         _write_pty(b"\x1b[?2026h\x1b[2J\x1b[HOC2 loading\x1b[?2026l")
@@ -221,6 +253,14 @@ def main() -> int:
         if args.pid_file is None:
             return 65
         _spawn_descendant(args.pid_file)
+    if args.mode in ("success-escaped-descendant", "exception-escaped-descendant"):
+        if args.pid_file is None:
+            return 65
+        _spawn_descendant(args.pid_file, escaped=True)
+    if args.mode == "exception-escaped-descendant":
+        _write_pty(_frame(prompt=False))
+        time.sleep(60)
+        return 0
     if args.mode in ("success-marker-first", "success-fragmented"):
         _markers(trace)
         time.sleep(0.025)

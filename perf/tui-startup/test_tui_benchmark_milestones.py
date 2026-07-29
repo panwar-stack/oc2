@@ -37,6 +37,16 @@ def committed(text):
     return frames[-1]
 
 
+def committed_cells(*placements):
+    screen = TerminalScreen(100, 30)
+    body = bytearray(b"\x1b[?2026h\x1b[2J\x1b[H")
+    for row, column, text in placements:
+        body.extend(f"\x1b[{row + 1};{column + 1}H".encode("ascii"))
+        body.extend(text.encode("utf-8"))
+    body.extend(b"\x1b[?2026l")
+    return screen.feed(bytes(body))[-1]
+
+
 class TraceJsonlParserTest(unittest.TestCase):
     def test_independent_arbitrary_fragments_use_final_fragment_receipt_clock(self):
         parser = tui_benchmark.TraceJsonlParser("run_test")
@@ -160,17 +170,29 @@ class StartupMilestoneOracleTest(unittest.TestCase):
     generation = {"role": "main", "workspaceGeneration": 0, "attemptGeneration": 0}
 
     def test_marker_after_current_frame_uses_later_marker_receipt(self):
-        oracle = tui_benchmark.StartupMilestoneOracle(lambda frame: frame.contains("Ask anything..."))
-        oracle.observe_frame(committed("OC2 Ask anything..."), 10)
+        oracle = tui_benchmark.StartupMilestoneOracle(tui_benchmark._prompt_matcher)
+        oracle.observe_frame(
+            committed_cells(
+                (0, 0, "OC2"),
+                (tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN, tui_benchmark.HOME_PLACEHOLDERS[0]),
+            ),
+            10,
+        )
         oracle.observe_trace({"event": "prompt.mounted", **self.generation}, 30)
 
         self.assertEqual(oracle.first_frame_ms, 10)
         self.assertEqual(oracle.prompt_ms, 30)
 
     def test_frame_after_marker_uses_later_committed_frame_receipt(self):
-        oracle = tui_benchmark.StartupMilestoneOracle(lambda frame: frame.contains("Ask anything..."))
+        oracle = tui_benchmark.StartupMilestoneOracle(tui_benchmark._prompt_matcher)
         oracle.observe_trace({"event": "prompt.mounted", **self.generation}, 10)
-        oracle.observe_frame(committed("OC2 Ask anything..."), 30)
+        oracle.observe_frame(
+            committed_cells(
+                (0, 0, "OC2"),
+                (tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN, tui_benchmark.HOME_PLACEHOLDERS[1]),
+            ),
+            30,
+        )
 
         self.assertEqual(oracle.prompt_ms, 30)
 
@@ -190,13 +212,46 @@ class StartupMilestoneOracleTest(unittest.TestCase):
                 self.assertEqual(oracle.shell_ms, 29)
 
     def test_paint_erased_before_marker_never_counts(self):
-        oracle = tui_benchmark.StartupMilestoneOracle(lambda frame: frame.contains("Ask anything..."))
-        oracle.observe_frame(committed("OC2 Ask anything..."), 10)
+        oracle = tui_benchmark.StartupMilestoneOracle(tui_benchmark._prompt_matcher)
+        oracle.observe_frame(
+            committed_cells(
+                (0, 0, "OC2"),
+                (tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN, tui_benchmark.HOME_PLACEHOLDERS[2]),
+            ),
+            10,
+        )
         oracle.observe_frame(committed("OC2 loading"), 20)
         oracle.observe_trace({"event": "prompt.mounted", **self.generation}, 30)
 
         self.assertIsNone(oracle.prompt_ms)
         self.assertEqual(oracle.timeout_failure(TerminalScreen(100, 30)), "timeout_prompt_frame")
+
+    def test_prompt_oracle_uses_compiled_home_fixture_cells_only(self):
+        aligned = committed_cells(
+            (tui_benchmark.PROMPT_ROW, 13, "┃"),
+            (tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN, tui_benchmark.HOME_PLACEHOLDERS[0]),
+        )
+        self.assertEqual((tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN), (15, 16))
+        self.assertEqual(
+            aligned.cells[15][13:31],
+            ("┃", " ", " ", "A", "s", "k", " ", "a", "n", "y", "t", "h", "i", "n", "g", ".", ".", "."),
+        )
+        self.assertTrue(tui_benchmark._prompt_matcher(aligned))
+        self.assertFalse(
+            tui_benchmark._prompt_matcher(
+                committed_cells((tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN, "Ask anything..."))
+            )
+        )
+        for row, column in ((15, 15), (15, 17), (14, 16), (16, 16), (0, 0)):
+            with self.subTest(position=(row, column)):
+                self.assertFalse(
+                    tui_benchmark._prompt_matcher(committed_cells((row, column, tui_benchmark.HOME_PLACEHOLDERS[0])))
+                )
+        erased = committed_cells(
+            (tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN, tui_benchmark.HOME_PLACEHOLDERS[0]),
+            (tui_benchmark.PROMPT_ROW, tui_benchmark.PROMPT_COLUMN, " " * len(tui_benchmark.HOME_PLACEHOLDERS[0])),
+        )
+        self.assertFalse(tui_benchmark._prompt_matcher(erased))
 
     def test_first_frame_rejects_blank_diagnostic_only_and_fatal_cells(self):
         oracle = tui_benchmark.StartupMilestoneOracle(lambda frame: False)
@@ -206,9 +261,14 @@ class StartupMilestoneOracleTest(unittest.TestCase):
         self.assertEqual(oracle.first_frame_ms, 2)
 
         fatal = tui_benchmark.StartupMilestoneOracle(lambda frame: False)
-        fatal.observe_frame(committed("Error: fixture-private-detail"), 3)
+        fatal.observe_frame(committed_cells((0, 0, "OC2 normal UI"), (20, 5, "Error: fixture-private-detail")), 3)
         self.assertEqual(fatal.failure, "terminal_fatal_diagnostic")
         self.assertNotIn("fixture-private-detail", fatal.failure)
+        self.assertFalse(
+            tui_benchmark._frame_has_fatal(
+                committed_cells((0, 0, "Time to first draw: 1ms"), (20, 5, "OC2 normal UI text"))
+            )
+        )
 
     def test_generation_mismatch_and_duplicate_marker_fail_closed(self):
         oracle = tui_benchmark.StartupMilestoneOracle(lambda frame: True)
@@ -259,6 +319,21 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
         self.assertEqual((result["workspace_generation"], result["attempt_generation"]), (0, 0))
         self.assertEqual(result["trace_records"], 4)
 
+    def descendant_identity(self, pid_file):
+        values = tuple(int(value) for value in pid_file.read_text(encoding="ascii").split())
+        return values + (values[0],) * (3 - len(values))
+
+    def assert_pid_gone(self, pid):
+        deadline = time.monotonic() + 1
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            if time.monotonic() >= deadline:
+                self.fail("fake TUI descendant survived benchmark cleanup")
+            time.sleep(0.01)
+
     def test_only_trace_writer_is_inheritable_and_environment_is_replaced(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
@@ -305,7 +380,7 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
         self.assertNotEqual(marker_first["run_id"], frame_first["run_id"])
 
     def test_raw_prompt_bytes_and_paint_then_erase_do_not_count(self):
-        for mode in ("raw-only", "paint-erase"):
+        for mode in ("raw-only", "paint-erase", "misaligned-prompt"):
             with self.subTest(mode=mode):
                 result = self.run_mode(mode, timeout=0.18)
                 self.assertEqual(result["failure"], "timeout_prompt_frame")
@@ -339,6 +414,36 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
             result = self.run_mode("success-frame-first")
         self.assertEqual(result["failure"], "descendant_cleanup_failed")
 
+    def test_escaped_descendant_cleanup_failure_is_named_without_leaking(self):
+        original = tui_benchmark._cleanup_tracked_descendants
+
+        def cleanup_then_report(records):
+            self.assertTrue(original(records))
+            return False
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            pid_file = root / "descendant.pid"
+            tui_benchmark.prepare_state(state)
+            with mock.patch.object(tui_benchmark, "_cleanup_tracked_descendants", side_effect=cleanup_then_report):
+                result = tui_benchmark.run_once(
+                    [
+                        sys.executable,
+                        str(FAKE_TUI),
+                        "success-escaped-descendant",
+                        "--pid-file",
+                        str(pid_file),
+                    ],
+                    state,
+                    root,
+                    1,
+                    "none",
+                    b"Ask anything...",
+                )
+            self.assertEqual(result["failure"], "descendant_cleanup_failed")
+            self.assert_pid_gone(self.descendant_identity(pid_file)[0])
+
     def test_process_group_cleanup_removes_stubborn_descendant(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -354,16 +459,8 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
                 b"Ask anything...",
             )
             self.assert_success(result)
-            descendant = int(pid_file.read_text(encoding="ascii"))
-            deadline = time.monotonic() + 1
-            while True:
-                try:
-                    os.kill(descendant, 0)
-                except ProcessLookupError:
-                    break
-                if time.monotonic() >= deadline:
-                    self.fail("fake TUI descendant survived benchmark cleanup")
-                time.sleep(0.01)
+            descendant = self.descendant_identity(pid_file)[0]
+            self.assert_pid_gone(descendant)
 
     def test_leader_exit_is_detected_while_descendant_holds_both_streams(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -381,15 +478,65 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(result["failure"], "child_exited_early")
             descendant = int(pid_file.read_text(encoding="ascii"))
-            deadline = time.monotonic() + 1
-            while True:
-                try:
-                    os.kill(descendant, 0)
-                except ProcessLookupError:
-                    break
-                if time.monotonic() >= deadline:
-                    self.fail("early-exit descendant survived benchmark cleanup")
-                time.sleep(0.01)
+            self.assert_pid_gone(descendant)
+
+    def test_start_new_session_descendant_is_cleaned_after_success_timeout_and_early_exit(self):
+        cases = (
+            ("success-escaped-descendant", None, 1),
+            ("timeout-escaped-descendant", "timeout_first_frame", 0.18),
+            ("early-exit-escaped-descendant", "child_exited_early", 0.5),
+        )
+        for mode, failure, timeout in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                state = root / "state"
+                pid_file = root / "descendant.pid"
+                tui_benchmark.prepare_state(state)
+                result = tui_benchmark.run_once(
+                    [sys.executable, str(FAKE_TUI), mode, "--pid-file", str(pid_file)],
+                    state,
+                    root,
+                    timeout,
+                    "none",
+                    b"Ask anything...",
+                )
+                self.assertEqual(result["failure"], failure)
+                pid, group, session = self.descendant_identity(pid_file)
+                self.assertEqual((group, session), (pid, pid))
+                self.assert_pid_gone(pid)
+
+    def test_start_new_session_descendant_is_cleaned_after_read_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            pid_file = root / "descendant.pid"
+            tui_benchmark.prepare_state(state)
+            original = tui_benchmark.read_pty
+
+            def fail_after_descendant(fd):
+                if pid_file.exists():
+                    raise RuntimeError("injected PTY read failure")
+                return original(fd)
+
+            with mock.patch.object(tui_benchmark, "read_pty", side_effect=fail_after_descendant):
+                with self.assertRaisesRegex(RuntimeError, "injected PTY read failure"):
+                    tui_benchmark.run_once(
+                        [
+                            sys.executable,
+                            str(FAKE_TUI),
+                            "exception-escaped-descendant",
+                            "--pid-file",
+                            str(pid_file),
+                        ],
+                        state,
+                        root,
+                        1,
+                        "none",
+                        b"Ask anything...",
+                    )
+            pid, group, session = self.descendant_identity(pid_file)
+            self.assertEqual((group, session), (pid, pid))
+            self.assert_pid_gone(pid)
 
     def test_legacy_cli_shape_and_fields_remain_available(self):
         parser = tui_benchmark.build_parser()
