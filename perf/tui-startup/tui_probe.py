@@ -2,21 +2,19 @@
 """Capture timestamped raw startup output from a command running in a PTY."""
 
 import argparse
-import fcntl
 import json
 import os
-import pty
 import re
 import select
 import shutil
 import signal
-import struct
 import sys
 import tempfile
-import termios
 import time
 from pathlib import Path
 from typing import Optional, Sequence, Union
+
+from terminal_screen import PtyHandshakeError, spawn_pty
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -165,18 +163,15 @@ def main() -> int:
         for name in ("home", "data", "cache", "config"):
             (state / name).mkdir()
 
-        start_ns = time.perf_counter_ns()
-        pid, fd = pty.fork()
-        if pid == 0:
-            try:
-                os.chdir(cwd)
-                os.execvpe(command[0], list(command), child_environment(state))
-            except Exception as error:
-                os.write(2, f"failed to launch command: {error}\n".encode())
-                os._exit(127)
-
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-        deadline = time.monotonic() + args.timeout
+        try:
+            child = spawn_pty(command, cwd, child_environment(state), args.timeout)
+        except PtyHandshakeError as error:
+            print(f"PTY startup invalid: {error}", file=sys.stderr)
+            return 1
+        pid = child.pid
+        fd = child.master_fd
+        start_ns = child.start_ns
+        deadline = child.deadline
         while time.monotonic() < deadline:
             remaining = max(0.0, deadline - time.monotonic())
             readable, _, _ = select.select([fd], [], [], min(0.05, remaining))

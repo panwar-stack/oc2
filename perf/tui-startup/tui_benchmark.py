@@ -2,22 +2,20 @@
 """Measure OC2 TUI startup through a controlled pseudo-terminal."""
 
 import argparse
-import fcntl
 import json
 import os
-import pty
 import re
 import select
 import shutil
 import signal
 import statistics
-import struct
 import sys
 import tempfile
-import termios
 import time
 from pathlib import Path
 from typing import Any, Optional, Sequence, TextIO
+
+from terminal_screen import PtyHandshakeError, spawn_pty
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -144,24 +142,28 @@ def run_once(
     ready_text: bytes,
 ) -> dict[str, Any]:
     env = child_environment(state)
-    start_ns = time.perf_counter_ns()
-    pid, fd = pty.fork()
-    if pid == 0:
-        try:
-            os.chdir(cwd)
-            os.execvpe(command[0], list(command), env)
-        except Exception as error:
-            os.write(2, f"failed to launch command: {error}\n".encode())
-            os._exit(127)
+    try:
+        child = spawn_pty(command, cwd, env, timeout)
+    except PtyHandshakeError:
+        return {
+            "first_byte_ms": None,
+            "ready_ms": None,
+            "ttfd_ms": None,
+            "bytes_until_ready": 0,
+            "timed_out": True,
+            "pty_handshake_ok": False,
+        }
+    pid = child.pid
+    fd = child.master_fd
+    start_ns = child.start_ns
 
     output = bytearray()
     first_byte_ms: Optional[float] = None
     ready_ms: Optional[float] = None
     foreground_sent = False
     background_sent = False
-    deadline = time.monotonic() + timeout
+    deadline = child.deadline
     try:
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         while time.monotonic() < deadline:
             remaining = max(0.0, deadline - time.monotonic())
             readable, _, _ = select.select([fd], [], [], min(0.05, remaining))
@@ -199,6 +201,7 @@ def run_once(
         "ttfd_ms": float(match.group(1)) if match else None,
         "bytes_until_ready": len(output),
         "timed_out": ready_ms is None,
+        "pty_handshake_ok": True,
     }
 
 
