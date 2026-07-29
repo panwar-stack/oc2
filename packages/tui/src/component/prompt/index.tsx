@@ -232,18 +232,6 @@ export function Prompt(props: PromptProps) {
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
   const [cursorVersion, setCursorVersion] = createSignal(0)
   const startupInput = createTuiStartupInputTrace(props.startup ? startup.trace : undefined)
-  let inputArmTimer: ReturnType<typeof setTimeout> | undefined
-  let endArmedInput: (() => void) | undefined
-  const armInput = () => {
-    if (inputArmTimer) clearTimeout(inputArmTimer)
-    endArmedInput?.()
-    const end = startupInput.begin()
-    endArmedInput = end
-    inputArmTimer = setTimeout(() => {
-      end()
-      if (endArmedInput === end) endArmedInput = undefined
-    }, 0)
-  }
   const hasRightContent = createMemo(() => Boolean(props.right))
 
   function promptModelWarning() {
@@ -702,9 +690,7 @@ export function Prompt(props: PromptProps) {
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
-      if (inputArmTimer) clearTimeout(inputArmTimer)
-      endArmedInput?.()
-      startupInput.cleanup()
+    startupInput.cleanup()
   })
 
   createEffect(() => {
@@ -1466,7 +1452,7 @@ export function Prompt(props: PromptProps) {
                   e.preventDefault()
                   return
                 }
-                if (e.name.length === 1 && !e.ctrl && !e.meta) armInput()
+                startupInput.key(e)
               }}
               onSubmit={() => {
                 // IME: double-defer so the last composed character (e.g. Korean

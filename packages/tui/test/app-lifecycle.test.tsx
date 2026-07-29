@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, mock, spyOn, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
+import type { TextareaRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { Effect } from "effect"
 import { Global } from "@oc2-ai/core/global"
@@ -169,7 +170,6 @@ test("startup markers use lock-aware and accepted-input boundaries", async () =>
   expect(accepted).toBeGreaterThan(store)
   expect(mounted).toBeGreaterThan(ref)
   expect(forwarded).toBeGreaterThan(mounted)
-  expect(source).toContain("if (e.name.length === 1 && !e.ctrl && !e.meta) armInput()")
   const pasteCommand = source.indexOf('name: "prompt.paste"')
   const commandOperation = source.indexOf("const endInput = startupInput.begin()", pasteCommand)
   const clipboardRead = source.indexOf("await clipboard.read?.()", commandOperation)
@@ -201,6 +201,81 @@ test("startup markers use lock-aware and accepted-input boundaries", async () =>
   const apply = theme.indexOf("apply(mode)")
   const reconciled = theme.indexOf('event: "theme.reconciled"', apply)
   expect(reconciled).toBeGreaterThan(apply)
+})
+
+test("OpenTUI editing keys emit input acceptance only after content changes", async () => {
+  async function scenario(input: {
+    initial: string
+    press: (app: Awaited<ReturnType<typeof testRender>>) => void
+    cursorEnd?: boolean
+    repeat?: boolean
+  }) {
+    const markers: TuiStartupTraceInput[] = []
+    const startupInput = createTuiStartupInputTrace((event) => {
+      markers.push(event)
+      return false
+    })
+    const names: string[] = []
+    let textarea!: TextareaRenderable
+    const app = await testRender(() => (
+      <textarea
+        focused
+        onKeyDown={(event) => {
+          names.push(event.name)
+          startupInput.key(event)
+          if (event.name === "backspace") textarea.deleteCharBackward()
+          if (event.name === "delete") textarea.deleteChar()
+        }}
+        onContentChange={() => startupInput.changed()}
+        ref={(value) => {
+          textarea = value
+          startupInput.mount()
+        }}
+      />
+    ))
+    try {
+      await app.renderOnce()
+      textarea.setText(input.initial)
+      await Bun.sleep(1)
+      if (input.cursorEnd) textarea.gotoBufferEnd()
+      expect(markers.map((event) => event.event)).toEqual(["prompt.mounted"])
+      input.press(app)
+      if (input.repeat) input.press(app)
+      await Bun.sleep(1)
+      return { markers, names, text: textarea.plainText }
+    } finally {
+      startupInput.cleanup()
+      app.renderer.destroy()
+    }
+  }
+
+  const space = await scenario({ initial: "", press: (app) => app.mockInput.pressKey(" "), repeat: true })
+  expect(space.names).toEqual(["space", "space"])
+  expect(space.text).toBe("  ")
+  expect(space.markers.map((event) => event.event)).toEqual(["prompt.mounted", "input.accepted"])
+
+  const backspace = await scenario({ initial: "x", cursorEnd: true, press: (app) => app.mockInput.pressBackspace() })
+  expect(backspace.names).toEqual(["backspace"])
+  expect(backspace.text).toBe("")
+  expect(backspace.markers.map((event) => event.event)).toEqual(["prompt.mounted", "input.accepted"])
+
+  const deleted = await scenario({
+    initial: "x",
+    press: (app) => app.mockInput.pressKey("DELETE"),
+  })
+  expect(deleted.names).toEqual(["delete"])
+  expect(deleted.text).toBe("")
+  expect(deleted.markers.map((event) => event.event)).toEqual(["prompt.mounted", "input.accepted"])
+
+  const navigation = await scenario({ initial: "x", cursorEnd: true, press: (app) => app.mockInput.pressArrow("left") })
+  expect(navigation.names).toEqual(["left"])
+  expect(navigation.text).toBe("x")
+  expect(navigation.markers.map((event) => event.event)).toEqual(["prompt.mounted"])
+
+  const noop = await scenario({ initial: "x", cursorEnd: true, press: (app) => app.mockInput.pressKey("DELETE") })
+  expect(noop.names).toEqual(["delete"])
+  expect(noop.text).toBe("x")
+  expect(noop.markers.map((event) => event.event)).toEqual(["prompt.mounted"])
 })
 
 test("theme settlement waits for persisted KV state", async () => {

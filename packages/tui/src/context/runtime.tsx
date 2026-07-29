@@ -37,6 +37,18 @@ export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
   let mounted = false
   let operations = 0
   let accepted = false
+  let keyTimer: ReturnType<typeof setTimeout> | undefined
+  let endKey: (() => void) | undefined
+  const begin = () => {
+    if (accepted) return () => {}
+    operations++
+    let active = true
+    return () => {
+      if (!active) return
+      active = false
+      operations = Math.max(0, operations - 1)
+    }
+  }
   return {
     mount() {
       if (mounted) return
@@ -48,15 +60,18 @@ export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
         attemptGeneration: 0,
       })
     },
-    begin() {
-      if (accepted) return () => {}
-      operations++
-      let active = true
-      return () => {
-        if (!active) return
-        active = false
-        operations = Math.max(0, operations - 1)
-      }
+    begin,
+    key(event: { ctrl: boolean; meta: boolean }) {
+      if (event.ctrl || event.meta) return
+      if (keyTimer) clearTimeout(keyTimer)
+      endKey?.()
+      const end = begin()
+      endKey = end
+      keyTimer = setTimeout(() => {
+        keyTimer = undefined
+        end()
+        if (endKey === end) endKey = undefined
+      }, 0)
     },
     changed() {
       if (!mounted || operations === 0 || accepted) return
@@ -69,6 +84,10 @@ export function createTuiStartupInputTrace(trace: TuiStartup["trace"]) {
       })
     },
     cleanup() {
+      if (keyTimer) clearTimeout(keyTimer)
+      endKey?.()
+      keyTimer = undefined
+      endKey = undefined
       mounted = false
       operations = 0
       accepted = false
