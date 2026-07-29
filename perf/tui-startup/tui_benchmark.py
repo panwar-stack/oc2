@@ -23,6 +23,7 @@ DEFAULT_READY_TEXT = "Ask anything..."
 CONTROLLED_ENV = {
     "TERM": "xterm-256color",
     "COLORTERM": "truecolor",
+    "OPENTUI_FORCE_UNICODE": "1",
     "OC2_PURE": "1",
     "OC2_SHOW_TTFD": "1",
     "OC2_DISABLE_MODELS_FETCH": "1",
@@ -31,6 +32,20 @@ CONTROLLED_ENV = {
     "OC2_DISABLE_TERMINAL_TITLE": "1",
     "OC2_DISABLE_PROJECT_CONFIG": "1",
 }
+TERMINAL_ENV_KEYS = frozenset(
+    (
+        "ALACRITTY_LOG", "ALACRITTY_SOCKET", "COLORTERM", "MOSH_CONNECTION",
+        "OPENTUI_FORCE_EXPLICIT_WIDTH", "OPENTUI_FORCE_NOZWJ", "OPENTUI_FORCE_UNICODE",
+        "OPENTUI_FORCE_WCWIDTH", "OPENTUI_GRAPHICS", "OPENTUI_NOTIFICATIONS",
+        "OPENTUI_NOTIFICATION_PROTOCOL", "OTUI_DUMP_CAPTURES", "OTUI_NO_NATIVE_RENDER",
+        "OTUI_DEBUG", "OTUI_OVERRIDE_STDOUT", "OTUI_SHOW_STATS", "OTUI_TREE_SITTER_WORKER_PATH",
+        "OTUI_USE_ALTERNATE_SCREEN", "OTUI_USE_CONSOLE", "SHOW_CONSOLE", "SSH_CLIENT",
+        "SSH_CONNECTION", "SSH_TTY",
+        "STY", "TERM", "TERM_FEATURES", "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
+        "TERMUX_VERSION", "TMUX", "TMUX_PANE", "VHS_RECORD", "WSL_DISTRO_NAME",
+        "WSL_INTEROP", "WT_SESSION",
+    )
+)
 
 
 def percentile(values: Sequence[float], fraction: float) -> float:
@@ -49,6 +64,9 @@ def prepare_state(root: Path) -> None:
 
 def child_environment(state: Path) -> dict[str, str]:
     env = os.environ.copy()
+    for key in tuple(env):
+        if key in TERMINAL_ENV_KEYS or key.startswith("ZELLIJ"):
+            env.pop(key)
     env.update(CONTROLLED_ENV)
     env.update(
         {

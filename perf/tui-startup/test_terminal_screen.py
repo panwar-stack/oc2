@@ -13,7 +13,7 @@ from unittest import mock
 import terminal_screen
 import tui_benchmark
 import tui_probe
-import unicode_tables_17_0_0 as unicode_tables
+import unicode_tables_opentui_0_3_4 as unicode_tables
 from terminal_screen import (
     PTY_HEIGHT,
     PTY_WIDTH,
@@ -619,6 +619,119 @@ class TerminalScreenTest(unittest.TestCase):
                         self.assertTrue(explicit.valid, explicit.invalid_reason)
                         self.assertEqual(explicit.last_frame.cells, natural.last_frame.cells)
 
+    def test_pinned_unicode16_native_parity_vectors(self):
+        cases = (
+            ("\U0001faefX", ("\U0001faef", "X")),
+            ("A\U0001e6e3X", ("A", "\U0001e6e3", "X")),
+            ("A\U00011b60X", ("A", "\U00011b60", "X")),
+            ("A\U00011b61X", ("A", "\U00011b61", "X")),
+            ("\U00011a3aAX", ("\U00011a3aA", "X")),
+            ("★‍💻X", ("★‍💻", "X")),
+            ("क्‍षX", ("क्‍ष", None, "X")),
+            ("क्क़X", ("क्क़", None, "X")),
+            ("क्‍ष्‍सX", ("क्‍ष्‍स", None, None, "X")),
+            ("क️्कX", ("क️्क", None, None, "X")),
+            ("AःX", ("Aः", "X")),
+            ("🂡X", ("🂡", None, "X")),
+            ("☢X", ("☢", None, "X")),
+            ("❠X", ("❠", None, "X")),
+            ("🢐X", ("🢐", None, "X")),
+        )
+        for synchronized in (False, True):
+            for text, expected in cases:
+                with self.subTest(synchronized=synchronized, text=text):
+                    screen = TerminalScreen(16, 2)
+                    if synchronized:
+                        screen.feed(b"\x1b[?2026h")
+                    for value in text.encode("utf-8"):
+                        screen.feed(bytes((value,)))
+                    if synchronized:
+                        screen.feed(b"\x1b[?2026l")
+                    self.assertTrue(screen.valid, screen.invalid_reason)
+                    self.assertEqual(screen.last_frame.cells[0][: len(expected)], expected)
+
+        indic = "क्‍ष्‍स"
+        explicit = TerminalScreen(6, 1)
+        explicit.feed(b"\x1b]66;w=3;" + indic.encode("utf-8") + b"\x1b\\X")
+        self.assertTrue(explicit.valid, explicit.invalid_reason)
+        self.assertEqual(explicit.last_frame.cells[0][:4], (indic, None, None, "X"))
+
+    def test_repeated_zwj_matches_pinned_native_osc66_across_state_changes(self):
+        cases = (
+            (
+                "👩‍‍💻",
+                b"\x1b]66;w=2;" + "👩‍‍".encode("utf-8") + b"\x1b\\"
+                + b"\x1b]66;w=2;" + "💻".encode("utf-8") + b"\x1b\\X",
+            ),
+            (
+                "©‍‍©",
+                b"\x1b]66;w=1;" + "©‍‍".encode("utf-8") + b"\x1b\\"
+                + b"\x1b]66;w=1;" + "©".encode("utf-8") + b"\x1b\\X",
+            ),
+        )
+        setups = (b"", b"\x1b[1;2H\x1b]66;s=2; \x1b\\\x1b[2;1H")
+        for synchronized in (False, True):
+            sync_start = b"\x1b[?2026h" if synchronized else b""
+            sync_end = b"\x1b[?2026l" if synchronized else b""
+            for text, explicit_body in cases:
+                for setup in setups:
+                    with self.subTest(synchronized=synchronized, text=text, owner=bool(setup)):
+                        natural = TerminalScreen(8, 3)
+                        explicit = TerminalScreen(8, 3)
+                        for value in sync_start + setup + (text + "X").encode("utf-8") + sync_end:
+                            natural.feed(bytes((value,)))
+                        for value in sync_start + setup + explicit_body + sync_end:
+                            explicit.feed(bytes((value,)))
+                        self.assertTrue(natural.valid, natural.invalid_reason)
+                        self.assertTrue(explicit.valid, explicit.invalid_reason)
+                        self.assertEqual(natural.last_frame.cells, explicit.last_frame.cells)
+
+                first, second = text[:-1], text[-1] + "X"
+                natural = TerminalScreen(8, 2)
+                explicit = TerminalScreen(8, 2)
+                natural.feed(sync_start + first.encode("utf-8"))
+                width = 2 if text.startswith("👩") else 1
+                explicit.feed(
+                    sync_start
+                    + "\x1b]66;w={};".format(width).encode("ascii")
+                    + first.encode("utf-8")
+                    + b"\x1b\\"
+                )
+                natural.resize(9, 2)
+                explicit.resize(9, 2)
+                natural.feed(second.encode("utf-8") + sync_end)
+                explicit.feed(
+                    "\x1b]66;w={};".format(width).encode("ascii")
+                    + text[-1].encode("utf-8")
+                    + b"\x1b\\X"
+                    + sync_end
+                )
+                self.assertEqual(natural.last_frame.cells, explicit.last_frame.cells)
+
+                column = 3 if width == 2 else 4
+                natural = TerminalScreen(4, 2)
+                explicit = TerminalScreen(4, 2)
+                position = "\x1b[1;{}H".format(column).encode("ascii")
+                natural.feed(sync_start + position + first.encode("utf-8"))
+                explicit.feed(
+                    sync_start
+                    + position
+                    + "\x1b]66;w={};".format(width).encode("ascii")
+                    + first.encode("utf-8")
+                    + b"\x1b\\"
+                )
+                natural.resize(column - 1, 2)
+                explicit.resize(column - 1, 2)
+                natural.feed(second.encode("utf-8") + sync_end)
+                explicit.feed(
+                    "\x1b]66;w={};".format(width).encode("ascii")
+                    + text[-1].encode("utf-8")
+                    + b"\x1b\\X"
+                    + sync_end
+                )
+                self.assertTrue(natural.valid, natural.invalid_reason)
+                self.assertEqual(natural.last_frame.cells, explicit.last_frame.cells)
+
     def test_fragmented_invalid_cluster_bases_do_not_shift_or_fail_open(self):
         for mark in ("️", "\u20e3"):
             with self.subTest(mark=mark):
@@ -644,9 +757,9 @@ class TerminalScreenTest(unittest.TestCase):
                 self.assertTrue(screen.valid, screen.invalid_reason)
                 self.assertEqual(len(frames), 1)
 
-    def test_unicode_17_properties_and_gb11_do_not_depend_on_host_ucd(self):
+    def test_pinned_opentui_unicode_properties_do_not_depend_on_host_ucd(self):
         self.assertEqual(terminal_screen._cell_width("\U00011f00"), 0)
-        self.assertEqual(terminal_screen._cell_width("\U0001faef"), 2)
+        self.assertEqual(terminal_screen._cell_width("\U0001faef"), 1)
         self.assertTrue(terminal_screen._is_extended_pictographic("\U0001faef"))
         self.assertFalse(terminal_screen._is_extended_pictographic("\U0001f200"))
 
@@ -674,15 +787,24 @@ class TerminalScreenTest(unittest.TestCase):
                 self.assertTrue(screen.valid, screen.invalid_reason)
                 self.assertIsNotNone(screen.last_frame)
 
-    def test_vendored_unicode_17_gcb_tables_cover_required_properties(self):
+    def test_vendored_pinned_opentui_gcb_tables_cover_required_properties(self):
         expected = (
-            (unicode_tables.GCB_PREPEND_RANGES, 15, 27),
-            (unicode_tables.GCB_SPACING_MARK_RANGES, 158, 381),
+            (unicode_tables.GRAPHEME_EXTEND_RANGES, 376, 2198),
+            (unicode_tables.GCB_CONTROL_RANGES, 19, 3893),
+            (unicode_tables.GCB_PREPEND_RANGES, 16, 28),
+            (unicode_tables.GCB_SPACING_MARK_RANGES, 155, 378),
             (unicode_tables.GCB_L_RANGES, 2, 125),
             (unicode_tables.GCB_V_RANGES, 4, 100),
             (unicode_tables.GCB_T_RANGES, 2, 137),
             (unicode_tables.GCB_LV_RANGES, 399, 399),
             (unicode_tables.GCB_LVT_RANGES, 399, 10773),
+            (unicode_tables.EXTENDED_PICTOGRAPHIC_RANGES, 78, 3537),
+            (unicode_tables.EMOJI_MODIFIER_BASE_RANGES, 40, 134),
+            (unicode_tables.INCB_LINKER_RANGES, 6, 6),
+            (unicode_tables.INCB_CONSONANT_RANGES, 26, 240),
+            (unicode_tables.ZERO_WIDTH_MARK_RANGES, 321, 2501),
+            (unicode_tables.NONSPACING_MARK_RANGES, 357, 2020),
+            (unicode_tables.OPENTUI_WIDE_RANGES, 134, 183615),
         )
         for ranges, range_count, codepoint_count in expected:
             self.assertEqual(len(ranges), range_count)
@@ -695,6 +817,20 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual(terminal_screen._gcb_class("\u11a8"), "T")
         self.assertEqual(terminal_screen._gcb_class("\uac00"), "LV")
         self.assertEqual(terminal_screen._gcb_class("\uac01"), "LVT")
+        self.assertEqual(unicode_tables.UNICODE_VERSION, "16.0.0")
+        self.assertEqual(unicode_tables.OPENTUI_VERSION, "0.3.4")
+        self.assertEqual(
+            unicode_tables.OPENTUI_COMMIT,
+            "9b216a58d974704ae638b3043aece2eb70b5ff19",
+        )
+        self.assertEqual(
+            unicode_tables.UUCODE_COMMIT,
+            "84ceda8561a17ba4a9b96ac5c583f779660bbd4e",
+        )
+        self.assertEqual(
+            unicode_tables.OPENTUI_NATIVE_DARWIN_ARM64_SHA256,
+            "ad66eb9a12f5137aa0468380f6fbfe6284cc3f80a175992b02316fd7973a5665",
+        )
 
     def test_fragmented_gb6_through_gb9b_clusters_match_renderer_cells(self):
         cases = (
@@ -710,7 +846,7 @@ class TerminalScreenTest(unittest.TestCase):
             ("\u0600界", 1),
             ("1️⃣\u0903", 2),
             ("🇺🇸\u0903", 2),
-            ("\u0600🇺🇸", 2),
+            ("\u0600🇺🇸", 1),
             ("\u06001\u20e3", 1),
             ("A️\u0903", 2),
             ("A\u20e3\u0903", 1),
@@ -1133,8 +1269,8 @@ class TerminalScreenTest(unittest.TestCase):
                 self.assertFalse(blocked.valid)
                 self.assertIn("owner-safe", blocked.invalid_reason)
 
-    def test_fragmented_osc66_rejects_controls_and_noncharacters(self):
-        rejected = ("\x00", "\t", "\n", "\x7f", "\x80", "\u0378", "\ufdd0", "\ufffe", "\U0001ffff")
+    def test_fragmented_osc66_rejects_terminal_controls_not_unassigned_scalars(self):
+        rejected = ("\x00", "\t", "\n", "\x7f", "\x80")
         for character in rejected:
             with self.subTest(character=repr(character)):
                 screen = TerminalScreen(8, 2)
@@ -1143,6 +1279,15 @@ class TerminalScreenTest(unittest.TestCase):
                     screen.feed(bytes((value,)))
                 self.assertFalse(screen.valid)
                 self.assertIsNone(screen.last_frame)
+
+        for character in ("\u0378", "\ufdd0", "\ufffe", "\U0001ffff", "\U0010ffff"):
+            with self.subTest(assigned_or_noncharacter=repr(character)):
+                screen = TerminalScreen(3, 1)
+                stream = b"\x1b]66;w=1;" + character.encode("utf-8") + b"\x1b\\X"
+                for value in stream:
+                    screen.feed(bytes((value,)))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(screen.last_frame.cells[0][:2], (character, "X"))
 
         malformed = TerminalScreen(8, 2)
         malformed.feed(b"\x1b[?2026h\x1b]66;w=1;\xff\x1b\\")
@@ -1182,6 +1327,27 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual(frames, [])
         self.assertEqual(screen.commit_count, sequence)
         self.assertEqual(screen.last_frame.cells, original.cells)
+
+    def test_child_environments_pin_opentui_profile_against_host_contamination(self):
+        selectors = tui_benchmark.TERMINAL_ENV_KEYS | tui_probe.TERMINAL_ENV_KEYS
+        hostile = {key: "host-value" for key in selectors}
+        hostile.update({"PATH": "/controlled/path", "ZELLIJ_PANE_ID": "9", "ZELLIJ_EXTRA": "1"})
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, hostile, clear=True
+        ):
+            state = Path(directory)
+            environments = (
+                tui_benchmark.child_environment(state),
+                tui_probe.child_environment(state),
+            )
+        for environment in environments:
+            self.assertEqual(environment["PATH"], "/controlled/path")
+            self.assertEqual(environment["TERM"], "xterm-256color")
+            self.assertEqual(environment["COLORTERM"], "truecolor")
+            self.assertEqual(environment["OPENTUI_FORCE_UNICODE"], "1")
+            for key in selectors - {"TERM", "COLORTERM", "OPENTUI_FORCE_UNICODE"}:
+                self.assertNotIn(key, environment)
+            self.assertFalse(any(key.startswith("ZELLIJ") for key in environment))
 
     def test_opentui_startup_capability_surface_is_supported(self):
         screen = TerminalScreen(12, 2)

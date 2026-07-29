@@ -97,6 +97,6 @@ Stop the TUI with Ctrl-C after it reaches the prompt. The analyzer reports leaf 
 ## Caveats
 
 - Results are machine-, build-, load-, filesystem-cache-, and terminal-path-specific; compare interleaved repeated runs on the same system.
-- The harness inherits non-overridden environment variables. Its network-prone OC2 features are disabled, but use a sanitized shell for shareable measurements.
+- The harness inherits unrelated environment variables, but removes terminal, multiplexer, remote-session, and OpenTUI capability selectors before pinning the Unicode `xterm-256color` profile. Its network-prone OC2 features are disabled.
 - `--keep-state` deliberately preserves application databases and logs under `--state-root`; inspect them for sensitive content and remove them manually.
 - TTFD may appear before the prompt. Do not treat TTFD alone as readiness.
