@@ -429,12 +429,24 @@ class TerminalScreen:
         if not self._valid or (width, height) == (self.width, self.height):
             return ()
         for surface in (self._main, self._alternate):
+            old_width = surface.width
+            old_height = surface.height
+            old_rows = surface.rows
+            old_visible = surface.visible
             resized = [[" " for _ in range(width)] for _ in range(height)]
             resized_visible = [[True for _ in range(width)] for _ in range(height)]
-            for row in range(min(height, surface.height)):
-                for column in range(min(width, surface.width)):
-                    resized[row][column] = surface.rows[row][column]
-                    resized_visible[row][column] = surface.visible[row][column]
+            truncated_wide_leads: List[Tuple[int, int]] = []
+            for row in range(min(height, old_height)):
+                for column in range(min(width, old_width)):
+                    resized[row][column] = old_rows[row][column]
+                    resized_visible[row][column] = old_visible[row][column]
+                    if (
+                        old_rows[row][column] not in (" ", _CONTINUATION)
+                        and column + 1 < old_width
+                        and old_rows[row][column + 1] is _CONTINUATION
+                        and column + 1 >= width
+                    ):
+                        truncated_wide_leads.append((row, column))
             surface.width = width
             surface.height = height
             surface.rows = resized
@@ -445,7 +457,7 @@ class TerminalScreen:
             surface.scroll_bottom = height - 1
             surface.wrap_pending = False
             surface.last_lead = None
-            self._repair_wide_cells(surface)
+            self._repair_wide_cells(surface, truncated_wide_leads)
         self.width = width
         self.height = height
         self._join_next = False
@@ -455,17 +467,15 @@ class TerminalScreen:
             self._commit(frames)
         return tuple(frames)
 
-    def _repair_wide_cells(self, surface: _Surface) -> None:
+    def _repair_wide_cells(self, surface: _Surface, truncated_wide_leads: Sequence[Tuple[int, int]]) -> None:
+        for row, column in truncated_wide_leads:
+            surface.rows[row][column] = " "
+            surface.visible[row][column] = True
         for row in range(surface.height):
             for column in range(surface.width):
                 cell = surface.rows[row][column]
                 if cell is _CONTINUATION:
                     if column == 0 or surface.rows[row][column - 1] in (" ", _CONTINUATION):
-                        surface.rows[row][column] = " "
-                        surface.visible[row][column] = True
-                    continue
-                if cell != " " and _cell_width(cell[0]) == 2:
-                    if column + 1 >= surface.width or surface.rows[row][column + 1] is not _CONTINUATION:
                         surface.rows[row][column] = " "
                         surface.visible[row][column] = True
 
@@ -959,27 +969,35 @@ class TerminalScreen:
             surface.cursor_row = max(surface.cursor_row - 1, 0)
 
     def _scroll_up(self, surface: _Surface, count: int) -> None:
-        count = min(max(count, 0), surface.scroll_bottom - surface.scroll_top + 1)
+        region_height = surface.scroll_bottom - surface.scroll_top + 1
+        count = min(max(count, 0), region_height)
         if count == 0:
             return
-        del surface.rows[surface.scroll_top : surface.scroll_top + count]
-        del surface.visible[surface.scroll_top : surface.scroll_top + count]
-        for _ in range(count):
-            surface.rows.insert(surface.scroll_bottom, [" " for _ in range(surface.width)])
-            surface.visible.insert(surface.scroll_bottom, [True for _ in range(surface.width)])
+        retained_rows = surface.rows[surface.scroll_top + count : surface.scroll_bottom + 1]
+        retained_visible = surface.visible[surface.scroll_top + count : surface.scroll_bottom + 1]
+        surface.rows[surface.scroll_top : surface.scroll_bottom + 1] = retained_rows + [
+            [" " for _ in range(surface.width)] for _ in range(count)
+        ]
+        surface.visible[surface.scroll_top : surface.scroll_bottom + 1] = retained_visible + [
+            [True for _ in range(surface.width)] for _ in range(count)
+        ]
         surface.last_lead = None
         self._join_next = False
         self._dirty = True
 
     def _scroll_down(self, surface: _Surface, count: int) -> None:
-        count = min(max(count, 0), surface.scroll_bottom - surface.scroll_top + 1)
+        region_height = surface.scroll_bottom - surface.scroll_top + 1
+        count = min(max(count, 0), region_height)
         if count == 0:
             return
-        del surface.rows[surface.scroll_bottom - count + 1 : surface.scroll_bottom + 1]
-        del surface.visible[surface.scroll_bottom - count + 1 : surface.scroll_bottom + 1]
-        for _ in range(count):
-            surface.rows.insert(surface.scroll_top, [" " for _ in range(surface.width)])
-            surface.visible.insert(surface.scroll_top, [True for _ in range(surface.width)])
+        retained_rows = surface.rows[surface.scroll_top : surface.scroll_bottom - count + 1]
+        retained_visible = surface.visible[surface.scroll_top : surface.scroll_bottom - count + 1]
+        surface.rows[surface.scroll_top : surface.scroll_bottom + 1] = [
+            [" " for _ in range(surface.width)] for _ in range(count)
+        ] + retained_rows
+        surface.visible[surface.scroll_top : surface.scroll_bottom + 1] = [
+            [True for _ in range(surface.width)] for _ in range(count)
+        ] + retained_visible
         surface.last_lead = None
         self._join_next = False
         self._dirty = True
@@ -1053,7 +1071,7 @@ class TerminalScreen:
                 cell = surface.rows[row][column]
                 if cell not in (" ", _CONTINUATION):
                     surface.rows[row][column] = cell + character
-                    if character == "\ufe0f":
+                    if character in ("\ufe0f", "\u20e3"):
                         self._widen_last_glyph(surface, row, column)
                         if not self._valid:
                             return
@@ -1135,13 +1153,13 @@ class TerminalScreen:
 
 def _cell_width(character: str) -> int:
     codepoint = ord(character)
-    if character == "\u200d" or unicodedata.combining(character):
+    category = unicodedata.category(character)
+    if character == "\u200d" or category in ("Mn", "Me"):
         return 0
     if 0xFE00 <= codepoint <= 0xFE0F or 0xE0100 <= codepoint <= 0xE01EF:
         return 0
     if 0x1F3FB <= codepoint <= 0x1F3FF:
         return 0
-    category = unicodedata.category(character)
     if category in ("Cc", "Cs"):
         raise ValueError("control or surrogate is not printable")
     if category == "Cf":

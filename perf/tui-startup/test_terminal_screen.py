@@ -130,6 +130,27 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual((grown.width, grown.height), (6, 4))
         self.assertEqual(grown.line(0), "ab    ")
 
+    def test_resize_clears_truncated_original_emoji_cluster_width(self):
+        clusters = ("❤️", "🇺🇸", "1\u20e3", "1️\u20e3", "👩‍💻", "👍🏽")
+        for cluster in clusters:
+            with self.subTest(cluster=cluster):
+                screen = TerminalScreen(4, 1)
+                original = screen.feed((cluster + "X").encode("utf-8"))[0]
+                self.assertEqual(original.cell(0, 0), cluster)
+                self.assertIsNone(original.cell(0, 1))
+                self.assertEqual(original.cell(0, 2), "X")
+
+                retained = screen.resize(2, 1)[0]
+                self.assertEqual(retained.cell(0, 0), cluster)
+                self.assertIsNone(retained.cell(0, 1))
+                shrunk = screen.resize(1, 1)[0]
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(shrunk.cells[0], (" ",))
+
+        explicit = TerminalScreen(3, 1)
+        explicit.feed(b"\x1b]66;w=2;A\x1b\\X")
+        self.assertEqual(explicit.resize(1, 1)[0].cells[0], (" ",))
+
     def test_resize_waits_for_synchronized_commit(self):
         screen = TerminalScreen(4, 2)
         screen.feed(b"\x1b[?2026hab")
@@ -150,6 +171,59 @@ class TerminalScreenTest(unittest.TestCase):
         region.feed(b"aaaa\x1b[2;1Hbbbb\x1b[3;1Hcccc\x1b[4;1Hdddd")
         region.feed(b"\x1b[2;3r\x1b[3;1H\n")
         self.assertEqual(region.last_frame.lines, ("aaaa", "cccc", "    ", "dddd"))
+
+    def test_fragmented_bounded_scroll_counts_preserve_every_outside_row(self):
+        original = ("AAAA", "BBBB", "CCCC", "DDDD", "EEEE", "FFFF")
+        region = original[1:5]
+        for final in ("S", "T"):
+            for count in range(1, len(region) + 1):
+                with self.subTest(final=final, count=count):
+                    screen = TerminalScreen(4, len(original))
+                    setup = "".join(
+                        "\x1b[{};1H{}".format(row, value) for row, value in enumerate(original, 1)
+                    ).encode("ascii")
+                    screen.feed(setup + b"\x1b[2;5r")
+                    frames = []
+                    for value in "\x1b[{}{}".format(count, final).encode("ascii"):
+                        frames.extend(screen.feed(bytes((value,))))
+
+                    if final == "S":
+                        expected_region = region[count:] + ("    ",) * count
+                    else:
+                        expected_region = ("    ",) * count + region[: len(region) - count]
+                    self.assertTrue(screen.valid, screen.invalid_reason)
+                    self.assertEqual(len(frames), 1)
+                    self.assertEqual(frames[0].lines, original[:1] + expected_region + original[5:])
+
+    def test_fragmented_zero_width_marks_and_emoji_clusters_place_following_cells(self):
+        screen = TerminalScreen(20, 1)
+        text = "a\u034fb\u20ddc1\u20e3X1️\u20e3Y👩‍💻Z👍🏽Q🇺🇸R"
+        stream = b"\x1b[?2026h" + text.encode("utf-8") + b"\x1b[?2026l"
+        frames = []
+        for value in stream:
+            frames.extend(screen.feed(bytes((value,))))
+
+        self.assertTrue(screen.valid, screen.invalid_reason)
+        self.assertEqual(len(frames), 1)
+        cells = frames[0].cells[0]
+        self.assertEqual(cells[0], "a\u034f")
+        self.assertEqual(cells[1], "b\u20dd")
+        self.assertEqual(cells[2], "c")
+        self.assertEqual(cells[3], "1\u20e3")
+        self.assertIsNone(cells[4])
+        self.assertEqual(cells[5], "X")
+        self.assertEqual(cells[6], "1️\u20e3")
+        self.assertIsNone(cells[7])
+        self.assertEqual(cells[8], "Y")
+        self.assertEqual(cells[9], "👩‍💻")
+        self.assertIsNone(cells[10])
+        self.assertEqual(cells[11], "Z")
+        self.assertEqual(cells[12], "👍🏽")
+        self.assertIsNone(cells[13])
+        self.assertEqual(cells[14], "Q")
+        self.assertEqual(cells[15], "🇺🇸")
+        self.assertIsNone(cells[16])
+        self.assertEqual(cells[17], "R")
 
     def test_known_renderer_styles_modes_and_queries_are_non_mutating(self):
         screen = TerminalScreen(8, 2)
