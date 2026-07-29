@@ -146,6 +146,20 @@ export function reportOptionalBootstrapFailure(input: {
   else if (input.fatal === false) throw input.error
 }
 
+export function ownStartupPromise<T>(promise: Promise<T>) {
+  // Observe immediately, but retain the rejecting original for the terminal aggregate.
+  void promise.catch(() => {})
+  return promise
+}
+
+export function mapStartupPromise<Input, Output>(
+  promise: Promise<Input>,
+  map: (value: Input) => Output | PromiseLike<Output>,
+) {
+  void ownStartupPromise(promise)
+  return ownStartupPromise(promise.then(map))
+}
+
 export function runOptionalBootstrap(input: {
   start: () => Promise<unknown>
   completed: () => void
@@ -908,14 +922,18 @@ export const {
       const started = captureCriticalBootstrapStartup({
         workspace: () => project.workspace.current(),
         start: (workspace) => {
-          const projectPromise = project.sync()
-          const sessionListPromise = projectPromise.then(() => listSessions())
+          const projectPromise = ownStartupPromise(project.sync())
+          const sessionListPromise = mapStartupPromise(projectPromise, () => listSessions())
 
           // blocking - include session.list when continuing a session
-          const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
-          const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
-          const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
-          const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
+          const providersPromise = ownStartupPromise(
+            sdk.client.config.providers({ workspace }, { throwOnError: true }),
+          )
+          const providerListPromise = ownStartupPromise(
+            sdk.client.provider.list({ workspace }, { throwOnError: true }),
+          )
+          const agentsPromise = ownStartupPromise(sdk.client.app.agents({ workspace }, { throwOnError: true }))
+          const configPromise = ownStartupPromise(sdk.client.config.get({ workspace }, { throwOnError: true }))
           return {
             workspace,
             projectPromise,
@@ -957,10 +975,10 @@ export const {
           if (failure) throw failure
         })
         .then(async () => {
-          const providersResponse = providersPromise.then((x) => x.data!)
-          const providerListResponse = providerListPromise.then((x) => x.data!)
-          const agentsResponse = agentsPromise.then((x) => x.data ?? [])
-          const configResponse = configPromise.then((x) => x.data!)
+          const providersResponse = mapStartupPromise(providersPromise, (x) => x.data!)
+          const providerListResponse = mapStartupPromise(providerListPromise, (x) => x.data!)
+          const agentsResponse = mapStartupPromise(agentsPromise, (x) => x.data ?? [])
+          const configResponse = mapStartupPromise(configPromise, (x) => x.data!)
           const sessionListResponse = args.continue ? sessionListPromise : undefined
 
           return Promise.all([
@@ -1012,28 +1030,36 @@ export const {
 
       runOptionalBootstrap({
         start: () =>
-          Promise.all([
-            ...(args.continue
-              ? []
-              : [
-                  sessionListPromise.then((sessions) => {
-                    applySessionList(sessions)
-                  }),
-                ]),
-            sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
-            sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
-            sdk.client.mcp.status({ workspace }).then((x) => setStore("mcp", reconcile(x.data ?? {}))),
-            sdk.client.experimental.resource
-              .list({ workspace })
-              .then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
-            sdk.client.formatter.status({ workspace }).then((x) => setStore("formatter", reconcile(x.data ?? []))),
-            sdk.client.session.status({ workspace }).then((x) => {
-              setStore("session_status", reconcile(x.data ?? {}))
-            }),
-            sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
-            sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
-            project.workspace.sync(),
-          ]),
+          ownStartupPromise(
+            Promise.all([
+              ...(args.continue
+                ? []
+                : [
+                    mapStartupPromise(sessionListPromise, (sessions) => {
+                      applySessionList(sessions)
+                    }),
+                  ]),
+              mapStartupPromise(sdk.client.command.list({ workspace }), (x) =>
+                setStore("command", reconcile(x.data ?? [])),
+              ),
+              mapStartupPromise(sdk.client.lsp.status({ workspace }), (x) => setStore("lsp", reconcile(x.data ?? []))),
+              mapStartupPromise(sdk.client.mcp.status({ workspace }), (x) => setStore("mcp", reconcile(x.data ?? {}))),
+              mapStartupPromise(sdk.client.experimental.resource.list({ workspace }), (x) =>
+                setStore("mcp_resource", reconcile(x.data ?? {})),
+              ),
+              mapStartupPromise(sdk.client.formatter.status({ workspace }), (x) =>
+                setStore("formatter", reconcile(x.data ?? [])),
+              ),
+              mapStartupPromise(sdk.client.session.status({ workspace }), (x) =>
+                setStore("session_status", reconcile(x.data ?? {})),
+              ),
+              mapStartupPromise(sdk.client.provider.auth({ workspace }), (x) =>
+                setStore("provider_auth", reconcile(x.data ?? {})),
+              ),
+              mapStartupPromise(sdk.client.vcs.get({ workspace }), (x) => setStore("vcs", reconcile(x.data))),
+              ownStartupPromise(project.workspace.sync()),
+            ]),
+          ),
         completed: () => setStore("status", "complete"),
         failed: (error, synchronous) =>
           reportOptionalBootstrapFailure({

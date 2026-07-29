@@ -22,6 +22,8 @@ import {
 } from "../src/context/theme"
 import {
   captureCriticalBootstrapStartup,
+  mapStartupPromise,
+  ownStartupPromise,
   reportCriticalBootstrapFailure,
   reportOptionalBootstrapFailure,
   runOptionalBootstrap,
@@ -438,6 +440,87 @@ test("optional bootstrap emits one terminal result for construction, fulfillment
   )
   expect(rejectionTerminal).toHaveLength(1)
   expect(rejectionTerminal).toMatchObject([{ outcome: "error" }])
+})
+
+test.serial("startup promises are rejection-owned through partial construction and derived work", async () => {
+  const unhandled: unknown[] = []
+  const onUnhandled = (error: unknown) => unhandled.push(error)
+  process.on("unhandledRejection", onUnhandled)
+  const phase = (traces: TuiStartupTraceInput[], name: "bootstrap.critical" | "bootstrap.optional") =>
+    traces.filter((event) => event.event === "phase" && event.phase === name)
+  const criticalFailure = (error: unknown, traces: TuiStartupTraceInput[]) =>
+    reportCriticalBootstrapFailure({
+      error,
+      fatal: true,
+      startedAt: performance.now(),
+      trace: (event) => traces.push(event),
+      destroy: () => {},
+      report: () => {},
+    })
+
+  try {
+    const identity = Promise.resolve("same")
+    expect(ownStartupPromise(identity)).toBe(identity)
+
+    const normalTraces: TuiStartupTraceInput[] = []
+    const projectFailure = new Error("project failed")
+    const project = ownStartupPromise(Promise.reject(projectFailure))
+    void mapStartupPromise(project, async () => ["session"])
+    const projectResult = await Promise.allSettled([project])
+    if (projectResult[0]?.status === "rejected") criticalFailure(projectResult[0].reason, normalTraces)
+
+    const partialCriticalTraces: TuiStartupTraceInput[] = []
+    const constructionFailure = new Error("critical construction failed")
+    captureCriticalBootstrapStartup({
+      workspace: () => "workspace",
+      start: () => {
+        const first = ownStartupPromise(Promise.reject(new Error("first critical request failed")))
+        void mapStartupPromise(first, async () => "derived")
+        void ownStartupPromise(Promise.reject(new Error("second critical request failed")))
+        throw constructionFailure
+      },
+      failed: (error) => criticalFailure(error, partialCriticalTraces),
+    })
+
+    const partialOptionalTraces: TuiStartupTraceInput[] = []
+    runOptionalBootstrap({
+      start: () => {
+        void mapStartupPromise(Promise.reject(new Error("optional request failed")), async () => "derived")
+        throw new Error("optional construction failed")
+      },
+      completed: () => {},
+      failed: () => {},
+      trace: (event) => partialOptionalTraces.push(event),
+    })
+
+    const completionTraces: TuiStartupTraceInput[] = []
+    let completionFailures = 0
+    runOptionalBootstrap({
+      start: () => ownStartupPromise(Promise.resolve()),
+      completed: () => {
+        throw new Error("optional completion failed")
+      },
+      failed: (_error, synchronous) => {
+        expect(synchronous).toBe(false)
+        completionFailures++
+      },
+      trace: (event) => completionTraces.push(event),
+    })
+
+    await Bun.sleep(10)
+    expect(unhandled).toEqual([])
+    expect(phase(normalTraces, "bootstrap.critical")).toHaveLength(1)
+    expect(phase(partialCriticalTraces, "bootstrap.critical")).toHaveLength(1)
+    const partialOptional = phase(partialOptionalTraces, "bootstrap.optional")
+    const completion = phase(completionTraces, "bootstrap.optional")
+    expect(partialOptional).toHaveLength(1)
+    expect(partialOptional).toMatchObject([{ outcome: "error" }])
+    expect(completion).toHaveLength(1)
+    expect(completion).toMatchObject([{ outcome: "error" }])
+    expect(completionFailures).toBe(1)
+  } finally {
+    process.off("unhandledRejection", onUnhandled)
+  }
 })
 
 test("theme settlement waits for persisted KV state", async () => {
