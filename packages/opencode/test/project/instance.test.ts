@@ -467,6 +467,83 @@ describe("InstanceStore", () => {
     }),
   )
 
+  it.effect("restarts an already-admitted initial load inside the global epoch fence", () =>
+    Effect.gen(function* () {
+      const store = yield* InstanceStore.Service
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let boots = 0
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          boots++
+          if (boots !== 1) return
+          yield* Deferred.succeed(started, undefined)
+          yield* Deferred.await(release)
+        }),
+      )
+      const directory = "/initial-global-fence"
+      const input = {
+        directory,
+        worktree: directory,
+        project: {
+          id: ProjectV2.ID.make("initial-global-fence"),
+          worktree: directory,
+          time: { created: 0, updated: 0 },
+          sandboxes: [directory],
+        },
+      }
+      const initial = yield* store.load(input).pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const revision = yield* store.allocateGlobalRevision()
+      const epoch = yield* store.beginGlobalEpoch()
+      expect(yield* store.activeDirectories()).toEqual([directory])
+      const candidate = yield* store.reload({ ...input, revision, globalEpoch: epoch })
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Effect.yieldNow
+      expect(yield* store.currentGlobalEpoch()).toBe(0)
+      yield* store.commitGlobalEpoch(epoch, revision)
+
+      const admitted = yield* Fiber.join(initial)
+      expect(admitted).toBe(candidate)
+      expect(admitted).toMatchObject({ state: "active", globalEpoch: epoch, revision })
+    }),
+  )
+
+  it.effect("allocates the first global revision above every active project revision", () =>
+    Effect.gen(function* () {
+      const store = yield* InstanceStore.Service
+      const project = (directory: string) => ({
+        id: ProjectV2.ID.make(directory.slice(1)),
+        worktree: directory,
+        time: { created: 0, updated: 0 },
+        sandboxes: [directory],
+      })
+      const left = { directory: "/global-after-left", worktree: "/global-after-left", project: project("/global-after-left") }
+      const right = {
+        directory: "/global-after-right",
+        worktree: "/global-after-right",
+        project: project("/global-after-right"),
+      }
+      yield* store.load(left)
+      yield* store.load(right)
+      yield* store.reload({ ...left, revision: 7 })
+      yield* store.reload({ ...right, revision: 11 })
+
+      const revision = yield* store.allocateGlobalRevision()
+      expect(revision).toBeGreaterThan(11)
+      const epoch = yield* store.beginGlobalEpoch()
+      const leftGlobal = yield* store.reload({ ...left, revision, globalEpoch: epoch })
+      const rightGlobal = yield* store.reload({ ...right, revision, globalEpoch: epoch })
+      yield* store.commitGlobalEpoch(epoch, revision)
+
+      expect(leftGlobal.revision).toBe(revision)
+      expect(rightGlobal.revision).toBe(revision)
+      expect((yield* store.load(left)).revision).toBe(revision)
+      expect((yield* store.load(right)).revision).toBe(revision)
+    }),
+  )
+
   it.effect("aborts a rejected global epoch without advancing the committed epoch", () =>
     Effect.gen(function* () {
       const store = yield* InstanceStore.Service
@@ -509,6 +586,79 @@ describe("InstanceStore", () => {
       expect(yield* store.currentGlobalEpoch()).toBe(0)
     }),
   )
+
+  it.effect("rejects a global epoch whose revision lost the atomic commit race", () =>
+    Effect.gen(function* () {
+      const store = yield* InstanceStore.Service
+      const revisionA = yield* store.allocateGlobalRevision()
+      const epochA = yield* store.beginGlobalEpoch([])
+      const revisionB = yield* store.allocateGlobalRevision()
+
+      expect(Exit.isFailure(yield* store.commitGlobalEpoch(epochA, revisionA).pipe(Effect.exit))).toBe(true)
+      expect(yield* store.currentGlobalEpoch()).toBe(0)
+
+      const epochB = yield* store.beginGlobalEpoch([])
+      yield* store.commitGlobalEpoch(epochB, revisionB)
+      expect(yield* store.currentGlobalEpoch()).toBe(epochB)
+    }),
+  )
+
+  for (const mode of ["directory", "all"] as const) {
+    it.effect(`does not resurrect after dispose ${mode} waits for a committing global epoch`, () =>
+      Effect.gen(function* () {
+        const store = yield* InstanceStore.Service
+        yield* setBootstrap(
+          Effect.gen(function* () {
+            const ctx = yield* InstanceRef
+            if (!ctx) return yield* Effect.die(new Error("InstanceRef unavailable during bootstrap"))
+            ctx.fingerprint = "same"
+          }),
+        )
+        const directory = `/dispose-committing-${mode}`
+        const input = {
+          directory,
+          worktree: directory,
+          project: {
+            id: ProjectV2.ID.make(`dispose-committing-${mode}`),
+            worktree: directory,
+            time: { created: 0, updated: 0 },
+            sandboxes: [directory],
+          },
+        }
+        const active = yield* store.load(input)
+        const revision = yield* store.allocateGlobalRevision()
+        const epoch = yield* store.beginGlobalEpoch()
+        const candidate = yield* store.reload({ ...input, revision, globalEpoch: epoch })
+        const commitBlocked = yield* Deferred.make<void>()
+        const releaseCommit = yield* Deferred.make<void>()
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            registerDisposer(async (ctx) => {
+              if (ctx.generation !== candidate.generation) return
+              Effect.runSync(Deferred.succeed(commitBlocked, undefined))
+              await Effect.runPromise(Deferred.await(releaseCommit))
+            }),
+          ),
+          (off) => Effect.sync(off),
+        )
+        const commit = yield* store.commitGlobalEpoch(epoch, revision).pipe(Effect.forkChild)
+        yield* Deferred.await(commitBlocked)
+        const disposal = yield* (mode === "directory" ? store.disposeDirectory(directory) : store.disposeAll()).pipe(
+          Effect.forkChild,
+        )
+        yield* Effect.yieldNow
+        yield* Deferred.succeed(releaseCommit, undefined)
+        yield* Fiber.join(commit)
+        yield* Fiber.join(disposal)
+
+        expect(active.state).toBe("closed")
+        expect(candidate.state).toBe("closed")
+        const fresh = yield* store.load(input)
+        expect(fresh.state).toBe("active")
+        expect(fresh.generation).toBeGreaterThan(candidate.generation)
+      }),
+    )
+  }
 
   it.live("disposeDirectory cancels a booting candidate and prevents resurrection", () =>
     Effect.gen(function* () {

@@ -1,6 +1,5 @@
 import { Config } from "@/config/config"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
-import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
@@ -9,10 +8,12 @@ import * as Log from "@oc2-ai/core/util/log"
 import { Effect, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { MutationCoordinator } from "@/config/mutation-coordinator"
+import { ConfigActivationError } from "../errors"
 
 const log = Log.create({ service: "server" })
 
@@ -70,7 +71,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
   Effect.gen(function* () {
     const config = yield* Config.Service
     const installation = yield* Installation.Service
-    const bridge = yield* EffectBridge.make()
+    const mutations = yield* MutationCoordinator.Service
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion }
@@ -85,9 +86,19 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
-      const result = yield* config.updateGlobal(ctx.payload)
-      if (result.changed) bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
-      return result.info
+      const path = yield* config.updateGlobalPath()
+      const result = yield* mutations.global({
+        path,
+        write: config.updateAt(path, ctx.payload, true).pipe(
+          Effect.tap((result) => (result.fileChanged ? config.invalidate() : Effect.void)),
+        ),
+      })
+      if (result.status === "rejected") {
+        return yield* result.reason === "bootstrap"
+          ? new ConfigActivationError({ message: result.message ?? "Configuration could not be activated." })
+          : new HttpApiError.BadRequest({})
+      }
+      return yield* config.getGlobal()
     })
 
     const dispose = Effect.fn("GlobalHttpApi.dispose")(function* () {

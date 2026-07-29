@@ -85,6 +85,7 @@ export const layer = Layer.effect(
       const committed = yield* config.snapshot()
       ctx.fingerprint = committed.fingerprint
       ctx.configDependencies = committed.dependencies
+      ctx.effectiveConfig = immutable(committed.config as Config.Info)
       ctx.coreConfigEntries = immutable([
         new CoreConfig.Document({
           type: "document",

@@ -6,6 +6,7 @@ import {
   listAdapters,
   registerAdapter,
   releaseAdapters,
+  retainRemovedAdapters,
 } from "../../src/control-plane/adapters"
 import type { WorkspaceAdapter } from "../../src/control-plane/types"
 
@@ -64,4 +65,54 @@ test("failed candidate adapters remain invisible", () => {
   expect(() => getAdapter(projectID, "candidate")).toThrow("Unknown workspace adapter")
   releaseAdapters(projectID, owner)
   expect(() => getAdapter(projectID, "candidate")).toThrow("Unknown workspace adapter")
+})
+
+test("removed adapters transfer to the new owner and survive old-owner retirement", () => {
+  const projectID = ProjectV2.ID.make(`adapter-retained-${crypto.randomUUID()}`)
+  const oldOwner = `old-${crypto.randomUUID()}`
+  const newOwner = `new-${crypto.randomUUID()}`
+  const implementation = adapter("retained")
+  registerAdapter(projectID, "custom", implementation, oldOwner)
+  activateAdapters(projectID, oldOwner)
+
+  expect(retainRemovedAdapters(projectID, oldOwner, newOwner)).toEqual(["custom"])
+  activateAdapters(projectID, newOwner)
+  expect(getAdapter(projectID, "custom", oldOwner)).toBe(implementation)
+  expect(getAdapter(projectID, "custom", newOwner)).toBe(implementation)
+
+  releaseAdapters(projectID, oldOwner)
+  expect(getAdapter(projectID, "custom", newOwner)).toBe(implementation)
+  releaseAdapters(projectID, newOwner)
+})
+
+test("candidate adapter updates win and are not replaced by retention", () => {
+  const projectID = ProjectV2.ID.make(`adapter-updated-${crypto.randomUUID()}`)
+  const oldOwner = `old-${crypto.randomUUID()}`
+  const newOwner = `new-${crypto.randomUUID()}`
+  registerAdapter(projectID, "custom", adapter("old"), oldOwner)
+  registerAdapter(projectID, "custom", adapter("new"), newOwner)
+  activateAdapters(projectID, oldOwner)
+
+  expect(retainRemovedAdapters(projectID, oldOwner, newOwner)).toEqual([])
+  activateAdapters(projectID, newOwner)
+  expect(getAdapter(projectID, "custom", newOwner).name).toBe("new")
+
+  releaseAdapters(projectID, oldOwner)
+  expect(getAdapter(projectID, "custom", newOwner).name).toBe("new")
+  releaseAdapters(projectID, newOwner)
+})
+
+test("candidate adapter additions do not look like removals", () => {
+  const projectID = ProjectV2.ID.make(`adapter-added-${crypto.randomUUID()}`)
+  const oldOwner = `old-${crypto.randomUUID()}`
+  const newOwner = `new-${crypto.randomUUID()}`
+  registerAdapter(projectID, "added", adapter("added"), newOwner)
+  activateAdapters(projectID, oldOwner)
+
+  expect(retainRemovedAdapters(projectID, oldOwner, newOwner)).toEqual([])
+  activateAdapters(projectID, newOwner)
+  expect(getAdapter(projectID, "added", newOwner).name).toBe("added")
+
+  releaseAdapters(projectID, oldOwner)
+  releaseAdapters(projectID, newOwner)
 })

@@ -458,6 +458,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "ConfigActivationError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigActivationError"
+                }
+              }
+            }
           }
         },
         "description": "Update global OC2 configuration settings and preferences.",
@@ -768,6 +778,16 @@
                       "$ref": "#/components/schemas/InvalidRequestError"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "ConfigActivationError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigActivationError"
                 }
               }
             }
@@ -13619,6 +13639,12 @@
             "$ref": "#/components/schemas/EventCommandExecuted"
           },
           {
+            "$ref": "#/components/schemas/EventConfigReloadCommitted"
+          },
+          {
+            "$ref": "#/components/schemas/EventConfigReloadRejected"
+          },
+          {
             "$ref": "#/components/schemas/EventFileEdited"
           },
           {
@@ -16791,6 +16817,116 @@
                       "sessionID",
                       "arguments",
                       "messageID"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "properties"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "config.reload.committed"
+                    ]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "revision": {
+                        "type": "number"
+                      },
+                      "generation": {
+                        "type": "number"
+                      },
+                      "scope": {
+                        "type": "string",
+                        "enum": [
+                          "project",
+                          "global"
+                        ]
+                      },
+                      "directories": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "restartRequired": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "revision",
+                      "generation",
+                      "scope",
+                      "directories",
+                      "restartRequired"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "properties"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "config.reload.rejected"
+                    ]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "revision": {
+                        "type": "number"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "parse",
+                          "schema",
+                          "bootstrap",
+                          "unsupported"
+                        ]
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "revision",
+                      "reason",
+                      "message"
                     ],
                     "additionalProperties": false
                   }
@@ -22431,6 +22567,25 @@
             "additionalProperties": false
           }
         },
+        "additionalProperties": false
+      },
+      "ConfigActivationError": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "ConfigActivationError"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "message"
+        ],
         "additionalProperties": false
       },
       "Model": {
@@ -31138,6 +31293,9 @@
           },
           "generation": {
             "type": "number"
+          },
+          "revision": {
+            "type": "number"
           }
         },
         "required": [
@@ -34462,6 +34620,9 @@
           "generation": {
             "type": "number"
           },
+          "revision": {
+            "type": "number"
+          },
           "project": {
             "type": "object",
             "properties": {
@@ -36898,6 +37059,116 @@
               "sessionID",
               "arguments",
               "messageID"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "EventConfigReloadCommitted": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "config.reload.committed"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "revision": {
+                "type": "number"
+              },
+              "generation": {
+                "type": "number"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "global"
+                ]
+              },
+              "directories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "restartRequired": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "revision",
+              "generation",
+              "scope",
+              "directories",
+              "restartRequired"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "EventConfigReloadRejected": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "config.reload.rejected"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "number"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "parse",
+                  "schema",
+                  "bootstrap",
+                  "unsupported"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "revision",
+              "reason",
+              "message"
             ],
             "additionalProperties": false
           }

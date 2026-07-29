@@ -212,6 +212,7 @@ configIt.live("commits plugin-mutated config and retains the frozen LKG after ho
     expect(Object.isFrozen((snapshot.config as Config.Info).provider?.mutated?.options)).toBe(true)
     expect(Object.isFrozen(committed.coreConfigEntries)).toBe(true)
     expect(Object.isFrozen(committed.coreConfigEntries?.[0])).toBe(true)
+    expect(Object.isFrozen(committed.effectiveConfig)).toBe(true)
 
     yield* write("reject")
     expect(Exit.isFailure(yield* store.reload({ directory: dir, revision: 3 }).pipe(Effect.exit))).toBe(true)

@@ -12,6 +12,9 @@ export interface InstanceContext {
   /** True only while evaluating a replacement; replacement failures must never use startup fallbacks. */
   candidate?: boolean
   coreConfigEntries?: readonly import("@oc2-ai/core/config").Config.Entry[]
+  /** Immutable effective V1 config after plugin hooks, retained for reload comparisons. */
+  effectiveConfig?: import("@/config/config").Config.Info
+  restartRequired?: readonly string[]
   state: "booting" | "active" | "draining" | "closed"
   worktree: string
   project: Project.Info

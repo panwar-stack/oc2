@@ -5,7 +5,7 @@ import { Server } from "../../src/server/server"
 import * as Log from "@oc2-ai/core/util/log"
 import { Effect, Fiber, Option } from "effect"
 import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { disposeAllInstances, tmpdir, withTestInstance } from "../fixture/fixture"
 import { it } from "../lib/effect"
 import { waitGlobalBusEvent } from "./global-bus"
 import { Global } from "@oc2-ai/core/global"
@@ -176,6 +176,17 @@ describe("config HttpApi", () => {
           yield* Effect.promise(() =>
             Promise.resolve(app().request("/config", { headers: { "x-oc2-directory": tmp.path } })),
           )
+          const active = yield* Effect.promise(() =>
+            withTestInstance({ directory: tmp.path, fn: (ctx) => ctx }),
+          )
+          const v2Before = yield* Effect.promise(() =>
+            Promise.resolve(app().request("/api/command", { headers: { "x-oc2-directory": tmp.path } })),
+          )
+          expect(v2Before.status).toBe(200)
+          const v2Snapshot = (yield* Effect.promise(() => v2Before.json())) as {
+            location: { generation: number; revision: number }
+            data: unknown
+          }
           const disposed = yield* waitDisposed(tmp.path).pipe(
             Effect.exit,
             Effect.forkScoped({ startImmediately: true }),
@@ -193,8 +204,74 @@ describe("config HttpApi", () => {
 
           expect(response.status).toBe(200)
           expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(before)
+          const retained = yield* Effect.promise(() =>
+            withTestInstance({ directory: tmp.path, fn: (ctx) => ctx }),
+          )
+          expect(retained).toMatchObject({ generation: active.generation, revision: active.revision })
+          const v2After = yield* Effect.promise(() =>
+            Promise.resolve(app().request("/api/command", { headers: { "x-oc2-directory": tmp.path } })),
+          )
+          expect(v2After.status).toBe(200)
+          expect((yield* Effect.promise(() => v2After.json())) as unknown).toMatchObject(v2Snapshot)
           expect(Option.isNone(yield* Fiber.join(disposed).pipe(Effect.timeoutOption("100 millis")))).toBe(true)
           yield* Fiber.interrupt(disposed)
+        }),
+      )
+    }),
+  )
+
+  it.live(
+    "rejects schema and bootstrap failures without replacing the last-known-good instance",
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirEffect({ git: true, config: { formatter: false, lsp: false, username: "lkg" } })
+      const global = yield* tmpdirEffect(undefined)
+
+      yield* withGlobalConfigDir(
+        global.path,
+        Effect.gen(function* () {
+          const initial = yield* Effect.promise(() =>
+            Promise.resolve(app().request("/config", { headers: { "x-oc2-directory": tmp.path } })),
+          )
+          expect(initial.status).toBe(200)
+
+          const projectSchema = yield* Effect.promise(() =>
+            Promise.resolve(
+              app().request("/config", {
+                method: "PATCH",
+                headers: { "content-type": "application/json", "x-oc2-directory": tmp.path },
+                body: JSON.stringify({ username: 42 }),
+              }),
+            ),
+          )
+          expect(projectSchema.status).toBe(400)
+
+          const project = yield* Effect.promise(() =>
+            Promise.resolve(
+              app().request("/config", {
+                method: "PATCH",
+                headers: { "content-type": "application/json", "x-oc2-directory": tmp.path },
+                body: JSON.stringify({ plugin: ["file:///does-not-exist/oc2-plugin.js"] }),
+              }),
+            ),
+          )
+          expect(project.status).toBe(500)
+
+          const globalResponse = yield* Effect.promise(() =>
+            Promise.resolve(
+              app().request("/global/config", {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ plugin: ["file:///does-not-exist/oc2-plugin.js"] }),
+              }),
+            ),
+          )
+          expect(globalResponse.status).toBe(500)
+
+          const lkg = yield* Effect.promise(() =>
+            Promise.resolve(app().request("/config", { headers: { "x-oc2-directory": tmp.path } })),
+          )
+          expect(lkg.status).toBe(200)
+          expect(yield* Effect.promise(() => lkg.json())).toMatchObject({ username: "lkg" })
         }),
       )
     }),

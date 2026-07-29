@@ -14,8 +14,10 @@ import { AuthTest } from "../fake/auth"
 import { ProjectV2 } from "@oc2-ai/core/project"
 import {
   DependencyIndex,
+  InternalWriteAttribution,
   canonicalConfigPath,
   fingerprint,
+  restartRequired,
 } from "../../src/config/hot-reload"
 
 describe("config hot reload primitives", () => {
@@ -47,6 +49,63 @@ describe("config hot reload primitives", () => {
     expect(fingerprint({ nested: { plugin_origins: ["one"] } })).not.toBe(
       fingerprint({ nested: { plugin_origins: ["two"] } }),
     )
+  })
+
+  test("internal write attribution is canonical, digest-bound, and consumed once", () => {
+    const writes = new InternalWriteAttribution()
+    const file = path.join("/repo", "nested", "..", "oc2.json")
+    writes.record(file, "expected")
+
+    expect(writes.consume("/repo/oc2.json", "native replacement")).toBe(false)
+    expect(writes.consume("/repo/oc2.json", "expected")).toBe(true)
+    expect(writes.consume("/repo/oc2.json", "expected")).toBe(false)
+  })
+
+  test("restart requirements contain only changed process-owned field names", () => {
+    const before = {
+      server: { port: 1, hostname: "a", mdns: false, mdnsDomain: "a.local", cors: ["a"] },
+      host: "a",
+      keybinds: { quit: "q" },
+      theme: "dark",
+      autoupdate: false,
+      model: "old",
+    }
+    const after = {
+      server: { port: 2, hostname: "b", mdns: true, mdnsDomain: "b.local", cors: ["b"] },
+      host: "b",
+      keybinds: { quit: "x" },
+      theme: "light",
+      autoupdate: "notify",
+      model: "new",
+    }
+    expect(restartRequired(before, after)).toEqual([
+      "port",
+      "hostname",
+      "mdns",
+      "mdnsDomain",
+      "cors",
+      "host",
+      "keybinds",
+      "theme",
+      "autoupdate",
+    ])
+  })
+
+  test("restart requirements detect each process-owned field directly and ignore unchanged snapshots", () => {
+    const cases = [
+      [{ server: { port: 1 } }, { server: { port: 2 } }, "port"],
+      [{ server: { hostname: "a" } }, { server: { hostname: "b" } }, "hostname"],
+      [{ server: { mdns: false } }, { server: { mdns: true } }, "mdns"],
+      [{ server: { mdnsDomain: "a.local" } }, { server: { mdnsDomain: "b.local" } }, "mdnsDomain"],
+      [{ server: { cors: ["a"] } }, { server: { cors: ["b"] } }, "cors"],
+      [{ theme: "dark" }, { theme: "light" }, "theme"],
+      [{ keybinds: { quit: "q" } }, { keybinds: { quit: "x" } }, "keybinds"],
+      [{ host: "a" }, { host: "b" }, "host"],
+      [{ autoupdate: false }, { autoupdate: "notify" }, "autoupdate"],
+    ] as const
+    for (const [before, after, field] of cases) expect(restartRequired(before, after)).toEqual([field])
+    const unchanged = { server: { port: 1, cors: ["a"] }, theme: "dark", plugin: ["one"] }
+    expect(restartRequired(unchanged, structuredClone(unchanged))).toEqual([])
   })
 
   test("dependency commits atomically replace a generation's candidates", () => {

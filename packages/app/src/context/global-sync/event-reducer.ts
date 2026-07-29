@@ -40,7 +40,12 @@ export function applyGlobalEvent(input: {
   setGlobalProject: (next: Project[] | ((draft: Project[]) => Project[])) => void
   refresh: () => void
 }) {
-  if (input.event.type === "global.disposed" || input.event.type === "server.connected") {
+  if (
+    input.event.type === "global.disposed" ||
+    input.event.type === "server.connected" ||
+    (input.event.type === "config.reload.committed" &&
+      (input.event.properties as { scope?: string } | undefined)?.scope === "global")
+  ) {
     input.refresh()
     return
   }
@@ -123,6 +128,10 @@ export function applyDirectoryEvent(input: {
   const limit = Math.max(input.store.limit, input.retainedLimit ?? 0)
   switch (event.type) {
     case "server.instance.disposed": {
+      input.push(input.directory)
+      return
+    }
+    case "config.reload.committed": {
       input.push(input.directory)
       return
     }

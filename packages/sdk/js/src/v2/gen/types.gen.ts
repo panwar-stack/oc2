@@ -10,6 +10,8 @@ export type Event =
   | EventAccountSwitched
   | EventCatalogModelUpdated
   | EventCommandExecuted
+  | EventConfigReloadCommitted
+  | EventConfigReloadRejected
   | EventFileEdited
   | EventFileWatcherUpdated
   | EventGlobalDisposed
@@ -881,6 +883,27 @@ export type GlobalEvent = {
           sessionID: string
           arguments: string
           messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "config.reload.committed"
+        properties: {
+          revision: number
+          generation: number
+          scope: "project" | "global"
+          directories: Array<string>
+          restartRequired: Array<string>
+        }
+      }
+    | {
+        id: string
+        type: "config.reload.rejected"
+        properties: {
+          path: string
+          revision: number
+          reason: "parse" | "schema" | "bootstrap" | "unsupported"
+          message: string
         }
       }
     | {
@@ -2322,6 +2345,11 @@ export type Config = {
     policies?: Array<ConfigV2ExperimentalPolicy>
     agent_teams?: boolean
   }
+}
+
+export type ConfigActivationError = {
+  _tag: "ConfigActivationError"
+  message: string
 }
 
 export type Model = {
@@ -4239,6 +4267,7 @@ export type LocationRef = {
   directory: string
   workspaceID?: string
   generation?: number
+  revision?: number
 }
 
 export type PromptSource = {
@@ -5032,6 +5061,7 @@ export type LocationInfo = {
   directory: string
   workspaceID?: string
   generation?: number
+  revision?: number
   project: {
     id: string
     directory: string
@@ -5620,6 +5650,29 @@ export type EventCommandExecuted = {
     sessionID: string
     arguments: string
     messageID: string
+  }
+}
+
+export type EventConfigReloadCommitted = {
+  id: string
+  type: "config.reload.committed"
+  properties: {
+    revision: number
+    generation: number
+    scope: "project" | "global"
+    directories: Array<string>
+    restartRequired: Array<string>
+  }
+}
+
+export type EventConfigReloadRejected = {
+  id: string
+  type: "config.reload.rejected"
+  properties: {
+    path: string
+    revision: number
+    reason: "parse" | "schema" | "bootstrap" | "unsupported"
+    message: string
   }
 }
 
@@ -6846,6 +6899,10 @@ export type GlobalConfigUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ConfigActivationError
+   */
+  500: ConfigActivationError
 }
 
 export type GlobalConfigUpdateError = GlobalConfigUpdateErrors[keyof GlobalConfigUpdateErrors]
@@ -6981,6 +7038,10 @@ export type ConfigUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ConfigActivationError
+   */
+  500: ConfigActivationError
 }
 
 export type ConfigUpdateError = ConfigUpdateErrors[keyof ConfigUpdateErrors]

@@ -68,6 +68,12 @@ export class UnknownError extends Schema.TaggedErrorClass<UnknownError>()(
   { httpApiStatus: 500 },
 ) {}
 
+export class ConfigActivationError extends Schema.TaggedErrorClass<ConfigActivationError>()(
+  "ConfigActivationError",
+  { message: Schema.String },
+  { httpApiStatus: 500, identifier: "ConfigActivationError" },
+) {}
+
 export class ProviderNotFoundError extends Schema.TaggedErrorClass<ProviderNotFoundError>()(
   "ProviderNotFoundError",
   {

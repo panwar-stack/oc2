@@ -1,6 +1,7 @@
 import path from "path"
 import { createHash } from "crypto"
 import { FSUtil } from "@oc2-ai/core/fs-util"
+import { isDeepStrictEqual } from "node:util"
 
 export interface ConfigSnapshot {
   readonly revision: number
@@ -46,8 +47,72 @@ export function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex")
 }
 
+export function contentDigest(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex")
+}
+
 export function canonicalConfigPath(input: string): string {
   return FSUtil.resolve(path.normalize(input))
+}
+
+/**
+ * Attributes atomic writes by their final canonical path and exact expected bytes. A future filesystem
+ * watcher can consume the attribution once; unrelated native replacements at the same path are not hidden.
+ */
+export class InternalWriteAttribution {
+  private readonly expected = new Map<string, string[]>()
+
+  record(input: string, content: string | Uint8Array) {
+    const file = canonicalConfigPath(input)
+    const digests = this.expected.get(file) ?? []
+    digests.push(contentDigest(content))
+    this.expected.set(file, digests)
+  }
+
+  consume(input: string, content: string | Uint8Array): boolean {
+    const file = canonicalConfigPath(input)
+    const digests = this.expected.get(file)
+    if (!digests) return false
+    const digest = contentDigest(content)
+    const index = digests.indexOf(digest)
+    if (index === -1) return false
+    digests.splice(index, 1)
+    if (digests.length === 0) this.expected.delete(file)
+    return true
+  }
+
+  clear() {
+    this.expected.clear()
+  }
+}
+
+export const internalWrites = new InternalWriteAttribution()
+
+function valueAt(value: unknown, keys: readonly string[]): unknown {
+  let current = value
+  for (const key of keys) {
+    if (current === null || typeof current !== "object") return undefined
+    current = Reflect.get(current, key)
+  }
+  return current
+}
+
+const restartFields = [
+  { path: ["server", "port"], name: "port" },
+  { path: ["server", "hostname"], name: "hostname" },
+  { path: ["server", "mdns"], name: "mdns" },
+  { path: ["server", "mdnsDomain"], name: "mdnsDomain" },
+  { path: ["server", "cors"], name: "cors" },
+  { path: ["host"], name: "host" },
+  { path: ["keybinds"], name: "keybinds" },
+  { path: ["theme"], name: "theme" },
+  { path: ["autoupdate"], name: "autoupdate" },
+] as const
+
+export function restartRequired(before: unknown, after: unknown): string[] {
+  return restartFields
+    .filter((field) => !isDeepStrictEqual(valueAt(before, field.path), valueAt(after, field.path)))
+    .map((field) => field.name)
 }
 
 /**

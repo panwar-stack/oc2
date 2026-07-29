@@ -1,10 +1,12 @@
 import { ConfigV1 } from "@oc2-ai/core/v1/config/config"
 import { EventV2 } from "@oc2-ai/core/event"
+import "@/config/event"
 import { InstanceDisposed } from "@/server/event"
 import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { ConfigActivationError } from "../errors"
 
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
@@ -100,7 +102,7 @@ export const GlobalApi = HttpApi.make("global").add(
       HttpApiEndpoint.patch("configUpdate", GlobalPaths.config, {
         payload: ConfigV1.Info,
         success: described(ConfigV1.Info, "Successfully updated global config"),
-        error: HttpApiError.BadRequest,
+        error: [HttpApiError.BadRequest, ConfigActivationError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.config.update",

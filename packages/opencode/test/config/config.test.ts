@@ -3,13 +3,14 @@ import { ConfigV1 } from "@oc2-ai/core/v1/config/config"
 import { Config as CoreConfig } from "@oc2-ai/core/config"
 import { Naming } from "@oc2-ai/core/naming"
 import { ConfigMigrateV1 } from "@oc2-ai/core/v1/config/migrate"
-import { Effect, Exit, Layer, Option } from "effect"
+import { Cause, Effect, Exit, Layer, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Config } from "@/config/config"
 import { ConfigMemory } from "@/config/memory"
 import { ConfigManaged } from "@/config/managed"
 import { ConfigParse } from "../../src/config/parse"
+import { ConfigWriteRejected } from "../../src/config/write-error"
 import { EffectFlock } from "@oc2-ai/core/util/effect-flock"
 
 import { InstanceRef } from "../../src/effect/instance-ref"
@@ -690,6 +691,85 @@ it.instance("updates config and preserves empty shell sentinel", () =>
   }),
 )
 
+it.instance("updates and attributes the exact selected root or .oc2 config path", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const root = path.join(test.directory, "oc2.json")
+    const nested = path.join(test.directory, ".oc2", "oc2.json")
+    yield* FSUtil.use.writeFileString(root, JSON.stringify({ username: "root" }))
+    yield* FSUtil.use.writeWithDirs(nested, JSON.stringify({ username: "nested" }))
+    const config = yield* Config.Service
+
+    const nestedWrite = yield* config.updateAt(nested, { model: "test/nested" })
+    expect(yield* FSUtil.use.readJson(root)).toEqual({ username: "root" })
+    expect(yield* FSUtil.use.readJson(nested)).toEqual({ username: "nested", model: "test/nested" })
+    expect(nestedWrite.path).toBe(nested)
+
+    const rootWrite = yield* config.updateAt(root, { model: "test/root" })
+    expect(yield* FSUtil.use.readJson(root)).toEqual({ username: "root", model: "test/root" })
+    expect(rootWrite.path).toBe(root)
+  }),
+)
+
+it.instance("keeps compact JSON bytes for a semantic no-op and formats a changed value", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const file = path.join(test.directory, "oc2.json")
+    const compact = '{"username":"same","model":"test/model"}'
+    yield* FSUtil.use.writeFileString(file, compact)
+    const config = yield* Config.Service
+
+    const same = yield* config.updateAt(file, { username: "same" })
+    expect(same.fileChanged).toBe(false)
+    expect(same.content).toBe(compact)
+    expect(yield* FSUtil.use.readFileString(file)).toBe(compact)
+
+    const changed = yield* config.updateAt(file, { username: "different" })
+    expect(changed.fileChanged).toBe(true)
+    expect(yield* FSUtil.use.readFileString(file)).toBe(
+      JSON.stringify({ username: "different", model: "test/model" }, null, 2),
+    )
+  }),
+)
+
+it.instance("identifies pre-write parse and schema rejection by canonical path and private candidate digest", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const file = path.join(test.directory, "nested", "..", "oc2.json")
+    const target = path.join(test.directory, "oc2.json")
+    const config = yield* Config.Service
+    const reject = (raw: string) =>
+      Effect.gen(function* () {
+        yield* FSUtil.use.writeFileString(target, raw)
+        const exit = yield* config.updateAt(file, { username: "patch-secret" }).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) throw new Error("expected config write rejection")
+        const error = Cause.squash(exit.cause)
+        expect(error).toBeInstanceOf(ConfigWriteRejected)
+        return error as ConfigWriteRejected
+      })
+
+    const a = yield* reject('{ "token": "raw-secret-a" ')
+    const again = yield* reject('{ "token": "raw-secret-a" ')
+    const b = yield* reject('{ "token": "raw-secret-b" ')
+
+    expect(a.path).toBe(target)
+    expect(a.reason).toBe("parse")
+    expect(a.digest).toBe(again.digest)
+    expect(b.digest).not.toBe(a.digest)
+    expect(a.message).not.toContain("raw-secret-a")
+    expect(a.message).not.toContain(a.digest)
+
+    const schemaA = yield* reject('{ "raw_secret_a": true }')
+    const schemaAgain = yield* reject('{ "raw_secret_a": true }')
+    const schemaB = yield* reject('{ "raw_secret_b": true }')
+    expect(schemaA.reason).toBe("schema")
+    expect(schemaA.digest).toBe(schemaAgain.digest)
+    expect(schemaB.digest).not.toBe(schemaA.digest)
+    expect(schemaA.message).not.toContain("raw_secret_a")
+  }),
+)
+
 it.effect("updates global config and omits empty shell key in json", () =>
   withGlobalConfig({ config: { shell: "bash" } }, ({ dir }) =>
     Effect.gen(function* () {
@@ -742,7 +822,7 @@ for (const updateCase of globalUpdateCases) {
         Config.use.updateGlobal({ $schema: "request-schema", username: "patched-user" }),
       )
 
-      expect(result.changed).toBe(true)
+      expect(result.fileChanged).toBe(true)
       const target = path.join(dir, updateCase.target)
       const written = yield* FSUtil.use.readFileString(target)
       const parsed = ConfigParse.jsonc(written, target) as Record<string, unknown>
@@ -760,6 +840,46 @@ for (const updateCase of globalUpdateCases) {
     }),
   )
 }
+
+it.effect("derives restart requirements from merged global precedence", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    yield* FSUtil.use.writeFileString(path.join(dir, "oc2.json"), JSON.stringify({ server: { port: 4100 } }))
+    yield* FSUtil.use.writeFileString(path.join(dir, "oc2.jsonc"), JSON.stringify({ username: "before" }))
+
+    const result = yield* withGlobalConfigDir(dir, Config.use.updateGlobal({ username: "after" }))
+
+    expect(result.fileChanged).toBe(true)
+    expect(result.info.server?.port).toBeUndefined()
+  }),
+)
+
+it.effect("does not reload when a global patch leaves the effective merged value unchanged", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    yield* FSUtil.use.writeFileString(path.join(dir, "oc2.json"), JSON.stringify({ server: { port: 4100 } }))
+    yield* FSUtil.use.writeFileString(path.join(dir, "oc2.jsonc"), JSON.stringify({ server: { port: 4200 } }))
+
+    const result = yield* withGlobalConfigDir(dir, Config.use.updateGlobal({ server: { port: 4200 } }))
+
+    expect(result.fileChanged).toBe(false)
+  }),
+)
+
+it.effect("reports precedence fallback when removing a higher-priority global value", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    yield* FSUtil.use.writeFileString(path.join(dir, "oc2.json"), JSON.stringify({ server: { port: 4100 } }))
+    yield* FSUtil.use.writeFileString(path.join(dir, "oc2.jsonc"), JSON.stringify({ server: { port: 4200 } }))
+
+    const result = yield* withGlobalConfigDir(
+      dir,
+      Config.use.updateGlobal({ server: { port: undefined } }),
+    )
+
+    expect(result.fileChanged).toBe(true)
+  }),
+)
 
 it.effect("validates a global update before replacing the source", () =>
   Effect.gen(function* () {
@@ -1319,9 +1439,24 @@ unixIt("rejects a read-only selected project source without changing it", () =>
     yield* FSUtil.use.chmod(file, 0o400)
     yield* Effect.addFinalizer(() => FSUtil.use.chmod(file, 0o600).pipe(Effect.ignore))
 
-    const exit = yield* withInstanceDir(root, Config.use.update({ username: "after" })).pipe(Effect.exit)
-
-    expect(Exit.isFailure(exit)).toBe(true)
+    const reject = (username: string) =>
+      withInstanceDir(root, Config.use.update({ username })).pipe(
+        Effect.exit,
+        Effect.map((exit) => {
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isSuccess(exit)) throw new Error("expected read-only rejection")
+          const error = Cause.squash(exit.cause)
+          expect(error).toBeInstanceOf(ConfigWriteRejected)
+          return error as ConfigWriteRejected
+        }),
+      )
+    const a = yield* reject("after-a")
+    const again = yield* reject("after-a")
+    const b = yield* reject("after-b")
+    expect(a.reason).toBe("bootstrap")
+    expect(a.digest).toBe(again.digest)
+    expect(b.digest).not.toBe(a.digest)
+    expect(a.message).not.toContain(a.digest)
     expect(yield* FSUtil.use.readFileString(file)).toBe(before)
     expect((yield* FSUtil.use.readDirectory(root)).some((name) => name.endsWith(".tmp"))).toBe(false)
   }),
@@ -1357,6 +1492,10 @@ unixIt("rejects a hard-linked selected project source without changing link iden
     const exit = yield* withInstanceDir(root, Config.use.update({ username: "after" })).pipe(Effect.exit)
 
     expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) throw new Error("expected hard-link rejection")
+    const error = Cause.squash(exit.cause)
+    expect(error).toBeInstanceOf(ConfigWriteRejected)
+    expect((error as ConfigWriteRejected).reason).toBe("unsupported")
     expect(yield* FSUtil.use.readFileString(file)).toBe(before)
     expect(yield* FSUtil.use.readFileString(linked)).toBe(before)
     const current = yield* Effect.promise(() => Promise.all([fs.stat(file), fs.stat(linked)]))

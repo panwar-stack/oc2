@@ -16,12 +16,12 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { InstallationVersion } from "@oc2-ai/core/installation/version"
 import path from "path"
 import { Global } from "@oc2-ai/core/global"
-import { modify, applyEdits } from "jsonc-parser"
 import { Filesystem } from "@/util/filesystem"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Effect } from "effect"
 import { Naming } from "@oc2-ai/core/naming"
+import { MutationCoordinator } from "@/config/mutation-coordinator"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -420,21 +420,29 @@ async function resolveConfigPath(baseDir: string, global = false) {
   return path.join(baseDir, "oc2.jsonc")
 }
 
-async function addMcpToConfig(name: string, mcpConfig: ConfigMCPV1.Info, configPath: string) {
-  let text = "{}"
-  if (await Filesystem.exists(configPath)) {
-    text = await Filesystem.readText(configPath)
-  }
+async function addMcpToConfig(
+  name: string,
+  mcpConfig: ConfigMCPV1.Info,
+  configPath: string,
+  directory: string,
+  scope: "project" | "global",
+) {
+  return MutationCoordinator.write(mcpMutationInput(name, mcpConfig, configPath, directory, scope))
+}
 
-  // Use jsonc-parser to modify while preserving comments
-  const edits = modify(text, ["mcp", name], mcpConfig, {
-    formattingOptions: { tabSize: 2, insertSpaces: true },
-  })
-  const result = applyEdits(text, edits)
-
-  await Filesystem.write(configPath, result)
-
-  return configPath
+export function mcpMutationInput(
+  name: string,
+  mcpConfig: ConfigMCPV1.Info,
+  configPath: string,
+  directory: string,
+  scope: "project" | "global",
+) {
+  return {
+    scope,
+    directory,
+    path: configPath,
+    config: { mcp: { [name]: mcpConfig } },
+  } as const
 }
 
 export const McpAddCommand = effectCmd({
@@ -506,7 +514,7 @@ export const McpAddCommand = effectCmd({
             }
 
         const configPath = await resolveConfigPath(Global.Path.config, true)
-        await addMcpToConfig(args.name, mcpConfig, configPath)
+        await addMcpToConfig(args.name, mcpConfig, configPath, ctx.directory, "global")
         prompts.log.success(`MCP server "${args.name}" added to ${configPath}`)
         return
       }
@@ -524,24 +532,26 @@ export const McpAddCommand = effectCmd({
 
       // Determine scope
       let configPath = globalConfigPath
+      let configScope: "project" | "global" = "global"
       if (project.vcs === "git") {
         const scopeResult = await prompts.select({
           message: "Location",
           options: [
             {
               label: "Current project",
-              value: projectConfigPath,
+              value: "project",
               hint: projectConfigPath,
             },
             {
               label: "Global",
-              value: globalConfigPath,
+              value: "global",
               hint: globalConfigPath,
             },
           ],
         })
         if (prompts.isCancel(scopeResult)) throw new UI.CancelledError()
-        configPath = scopeResult
+        configScope = scopeResult
+        configPath = configScope === "project" ? projectConfigPath : globalConfigPath
       }
 
       const name = await prompts.text({
@@ -580,7 +590,7 @@ export const McpAddCommand = effectCmd({
           command: command.split(" "),
         }
 
-        await addMcpToConfig(name, mcpConfig, configPath)
+        await addMcpToConfig(name, mcpConfig, configPath, ctx.directory, configScope)
         prompts.log.success(`MCP server "${name}" added to ${configPath}`)
         prompts.outro("MCP server added successfully")
         return
@@ -658,7 +668,7 @@ export const McpAddCommand = effectCmd({
           }
         }
 
-        await addMcpToConfig(name, mcpConfig, configPath)
+        await addMcpToConfig(name, mcpConfig, configPath, ctx.directory, configScope)
         prompts.log.success(`MCP server "${name}" added to ${configPath}`)
       }
 

@@ -37,6 +37,20 @@ export function registeredAdapters(projectID: ProjectV2.ID, owner?: string): [st
   return [...adapters.entries()]
 }
 
+/** Retains active adapters omitted by a candidate under the candidate owner until process restart. */
+export function retainRemovedAdapters(projectID: ProjectV2.ID, activeOwner: string, candidateOwner: string): string[] {
+  const candidate = staged.get(candidateOwner) ?? new Map<string, WorkspaceAdapter>()
+  const removed: string[] = []
+  if (!owners.get(projectID)?.includes(activeOwner)) return removed
+  for (const [type, adapter] of staged.get(activeOwner)?.entries() ?? []) {
+    if (candidate.has(type)) continue
+    candidate.set(type, adapter)
+    removed.push(type)
+  }
+  if (removed.length) staged.set(candidateOwner, candidate)
+  return removed
+}
+
 // Plugins can be loaded per-project so we need to scope them. If you
 // want to install a global one pass `ProjectV2.ID.global`
 export function registerAdapter(projectID: ProjectV2.ID, type: string, adapter: WorkspaceAdapter, owner?: string) {

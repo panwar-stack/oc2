@@ -1,13 +1,13 @@
 import { GlobalBus } from "@/bus/global"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
-import { activateAdapters, releaseAdapters } from "@/control-plane/adapters"
+import { activateAdapters, releaseAdapters, retainRemovedAdapters } from "@/control-plane/adapters"
 import { InstanceRef } from "@/effect/instance-ref"
 import { LeaseRef } from "@/effect/instance-state"
 import { disposeInstance as runDisposers } from "@/effect/instance-registry"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { serviceUse } from "@oc2-ai/core/effect/service-use"
 import * as EffectLogger from "@oc2-ai/core/effect/logger"
-import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Semaphore } from "effect"
 import { key as instanceKey, type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
@@ -16,6 +16,7 @@ import { Config as CoreConfig } from "@oc2-ai/core/config"
 
 const log = EffectLogger.create({ service: "instance.store" })
 export const retirementGrace = Duration.seconds(5)
+class InstanceAdmissionSuperseded extends Error {}
 
 export interface LoadInput {
   directory: string
@@ -36,10 +37,15 @@ export interface Interface {
   readonly disposeAll: () => Effect.Effect<void>
   readonly provide: <A, E, R>(input: LoadInput, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   readonly run: <A, E, R>(input: LoadInput, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
-  readonly beginGlobalEpoch: (directories: readonly string[]) => Effect.Effect<number>
-  readonly commitGlobalEpoch: (epoch: number) => Effect.Effect<void>
+  readonly beginGlobalEpoch: (directories?: readonly string[]) => Effect.Effect<number>
+  readonly commitGlobalEpoch: (epoch: number, revision?: number) => Effect.Effect<void>
   readonly abortGlobalEpoch: (epoch: number) => Effect.Effect<void>
   readonly currentGlobalEpoch: () => Effect.Effect<number>
+  readonly activeDirectories: () => Effect.Effect<readonly string[]>
+  readonly reserveRevision: (directory: string, revision: number) => Effect.Effect<void>
+  readonly allocateGlobalRevision: () => Effect.Effect<number>
+  readonly allocateRevision: (directories: readonly string[]) => Effect.Effect<number>
+  readonly activeContext: (directory: string) => Effect.Effect<InstanceContext | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/InstanceStore") {}
@@ -83,6 +89,8 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
     const retiring = new Set<Entry>()
     const entriesByKey = new Map<string, Entry>()
     let globalEpoch = 0
+    let newestGlobalRevision = 0
+    const activationLock = Semaphore.makeUnsafe(1)
     let nextGlobalEpoch = 0
     let globalDisposal: Deferred.Deferred<void> | undefined
     let globalTransaction:
@@ -103,6 +111,8 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
     }
 
     const makeEntry = Effect.fnUntraced(function* (directory: string, input: LoadInput, candidate: boolean) {
+      const transaction = globalTransaction
+      if (transaction && input.globalEpoch !== transaction.epoch) yield* Deferred.await(transaction.admission)
       if (globalDisposal || directoryDisposals.has(directory)) {
         return yield* Effect.die(new Error(`instance admission fenced during disposal: ${directory}`))
       }
@@ -245,6 +255,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
 
     const canActivate = (directory: string, entry: Entry) =>
       !entry.closing &&
+      !globalTransaction &&
       !globalDisposal &&
       !directoryDisposals.has(directory) &&
       entry.admission.global === globalEpoch &&
@@ -334,12 +345,17 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
             } else {
               yield* close(entry)
               if (Exit.isFailure(exit)) yield* Deferred.done(entry.deferred, exit).pipe(Effect.asVoid)
-              else yield* Deferred.die(entry.deferred, new Error("instance candidate superseded"))
+              else yield* Deferred.die(entry.deferred, new InstanceAdmissionSuperseded())
             }
           }).pipe(Effect.forkIn(storeScope, { startImmediately: true }))
           return yield* restore(Deferred.await(entry.deferred))
         }),
-      ).pipe(Effect.withSpan("InstanceStore.load"))
+      ).pipe(
+        Effect.catchDefect((error) =>
+          error instanceof InstanceAdmissionSuperseded ? load(input) : Effect.die(error),
+        ),
+        Effect.withSpan("InstanceStore.load"),
+      )
     }
 
     const reload = (input: LoadInput): Effect.Effect<InstanceContext> => {
@@ -383,6 +399,14 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
             exit.value.state = "active"
             active.set(directory, entry)
             yield* commitDependencies(previous?.ctx, exit.value)
+            if (previous?.ctx) {
+              const removed = retainRemovedAdapters(
+                exit.value.project.id,
+                instanceKey(previous.ctx),
+                instanceKey(exit.value),
+              )
+              if (removed.length) exit.value.restartRequired = [...new Set([...(exit.value.restartRequired ?? []), "plugin"])]
+            }
             activateAdapters(exit.value.project.id, instanceKey(exit.value))
             if (previous) {
               // Complete the admission transition before publishing readiness;
@@ -448,7 +472,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
         }),
       )
 
-    const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")(function* (input: string) {
+    const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")((input: string) => activationLock.withPermit(Effect.gen(function* () {
       const directory = FSUtil.resolve(input)
       const existing = directoryDisposals.get(directory)
       if (existing) return yield* Deferred.await(existing)
@@ -479,7 +503,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
         ),
       )
       return yield* Deferred.await(fence)
-    })
+    })))
 
     const disposeAllOnce = Effect.fnUntraced(function* () {
       const callerLease = yield* LeaseRef
@@ -532,14 +556,15 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       return yield* Deferred.await(fence)
     })
     const disposeAll = Effect.fn("InstanceStore.disposeAll")(function* () {
-      yield* disposeAllOnce()
+      yield* activationLock.withPermit(disposeAllOnce())
     })
 
-    const beginGlobalEpoch = Effect.fn("InstanceStore.beginGlobalEpoch")(function* (inputs: readonly string[]) {
+    const beginGlobalEpoch = Effect.fn("InstanceStore.beginGlobalEpoch")((inputs?: readonly string[]) => activationLock.withPermit(Effect.gen(function* () {
       if (globalTransaction) return yield* Effect.die(new Error("global config epoch is already fenced"))
       if (globalDisposal) return yield* Effect.die(new Error("global config epoch is fenced during disposal"))
-      const expected = new Set(inputs.map(FSUtil.resolve))
-      if (expected.size !== inputs.length) return yield* Effect.die(new Error("global config epoch contains duplicate participants"))
+      const participants = inputs ?? [...new Set([...active.keys(), ...initial.keys(), ...candidates.keys()])]
+      const expected = new Set(participants.map(FSUtil.resolve))
+      if (expected.size !== participants.length) return yield* Effect.die(new Error("global config epoch contains duplicate participants"))
       const epoch = Math.max(nextGlobalEpoch, globalEpoch) + 1
       nextGlobalEpoch = epoch
       globalTransaction = {
@@ -550,7 +575,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
         state: "open",
       }
       return epoch
-    })
+    })))
 
     const transactionFor = (epoch: number) => {
       const transaction = globalTransaction
@@ -560,7 +585,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       return Effect.succeed(transaction)
     }
 
-    const commitGlobalEpoch = Effect.fn("InstanceStore.commitGlobalEpoch")((epoch: number) => Effect.uninterruptible(Effect.gen(function* () {
+    const commitGlobalEpoch = Effect.fn("InstanceStore.commitGlobalEpoch")((epoch: number, revision?: number) => activationLock.withPermit(Effect.uninterruptible(Effect.gen(function* () {
       const terminal = closedGlobalTransactions.get(epoch)
       if (terminal === "committed") return
       if (terminal === "aborted") return yield* Effect.die(new Error(`global config epoch was aborted: ${epoch}`))
@@ -579,6 +604,17 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
           return yield* Effect.die(new Error(`global config epoch participant is stale: ${directory}`))
         }
       }
+      if (revision !== undefined && revision !== newestGlobalRevision) {
+        transaction.state = "aborting"
+        yield* Effect.forEach(transaction.participants.values(), (item) => close(item.entry), {
+          concurrency: "unbounded",
+          discard: true,
+        })
+        globalTransaction = undefined
+        closedGlobalTransactions.set(epoch, "aborted")
+        yield* Deferred.succeed(transaction.admission, undefined).pipe(Effect.ignore)
+        return yield* Effect.die(new Error(`global config revision is stale: ${revision}`))
+      }
       globalEpoch = epoch
       for (const [directory, participant] of transaction.participants) {
         const entry = participant.entry
@@ -595,6 +631,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
           previous.ctx.revision = entry.revision
           previous.ctx.configDependencies = entry.ctx.configDependencies
           previous.ctx.coreConfigEntries = entry.ctx.coreConfigEntries
+          previous.ctx.effectiveConfig = entry.ctx.effectiveConfig
           yield* close(entry)
           continue
         }
@@ -603,6 +640,14 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
         active.set(directory, entry)
         if (entry.ctx) {
           yield* commitDependencies(previous?.ctx, entry.ctx)
+          if (previous?.ctx) {
+            const removed = retainRemovedAdapters(
+              entry.ctx.project.id,
+              instanceKey(previous.ctx),
+              instanceKey(entry.ctx),
+            )
+            if (removed.length) entry.ctx.restartRequired = [...new Set([...(entry.ctx.restartRequired ?? []), "plugin"])]
+          }
           activateAdapters(entry.ctx.project.id, instanceKey(entry.ctx))
         }
         if (previous) {
@@ -613,7 +658,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       globalTransaction = undefined
       closedGlobalTransactions.set(epoch, "committed")
       yield* Deferred.succeed(transaction.admission, undefined).pipe(Effect.ignore)
-    })))
+    }))))
 
     const abortGlobalEpoch = Effect.fn("InstanceStore.abortGlobalEpoch")((epoch: number) => Effect.uninterruptible(Effect.gen(function* () {
       const terminal = closedGlobalTransactions.get(epoch)
@@ -635,6 +680,36 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       return globalEpoch
     })
 
+    const activeDirectories = Effect.fn("InstanceStore.activeDirectories")(function* () {
+      return [...(globalTransaction?.expected ?? active.keys())].sort()
+    })
+
+    const reserveRevision = Effect.fn("InstanceStore.reserveRevision")(function* (input: string, revision: number) {
+      const directory = FSUtil.resolve(input)
+      if (revision > (newestRevision.get(directory) ?? 0)) newestRevision.set(directory, revision)
+    })
+
+    const allocateGlobalRevision = Effect.fn("InstanceStore.allocateGlobalRevision")(function* () {
+      const directories = [...new Set([...active.keys(), ...initial.keys(), ...candidates.keys()])]
+      newestGlobalRevision = Math.max(
+        newestGlobalRevision,
+        ...directories.map((directory) => newestRevision.get(directory) ?? active.get(directory)?.ctx?.revision ?? 0),
+      ) + 1
+      for (const directory of directories) newestRevision.set(directory, newestGlobalRevision)
+      return newestGlobalRevision
+    })
+
+    const allocateRevision = Effect.fn("InstanceStore.allocateRevision")(function* (inputs: readonly string[]) {
+      const directories = inputs.map(FSUtil.resolve)
+      const revision = Math.max(0, ...directories.map((directory) => newestRevision.get(directory) ?? 0)) + 1
+      for (const directory of directories) newestRevision.set(directory, revision)
+      return revision
+    })
+
+    const activeContext = Effect.fn("InstanceStore.activeContext")(function* (input: string) {
+      return active.get(FSUtil.resolve(input))?.ctx
+    })
+
     yield* Effect.addFinalizer(() => disposeAll().pipe(Effect.ignore))
     return Service.of({
       load,
@@ -648,6 +723,11 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       commitGlobalEpoch,
       abortGlobalEpoch,
       currentGlobalEpoch,
+      activeDirectories,
+      reserveRevision,
+      allocateGlobalRevision,
+      allocateRevision,
+      activeContext,
     })
   }),
 )

@@ -159,6 +159,20 @@ describe("applyGlobalEvent", () => {
 
     expect(refreshCount).toBe(1)
   })
+
+  test("handles a committed global config epoch by triggering refresh", () => {
+    let refreshCount = 0
+    applyGlobalEvent({
+      event: { type: "config.reload.committed", properties: { scope: "global" } },
+      project: [],
+      refresh: () => {
+        refreshCount += 1
+      },
+      setGlobalProject() {},
+    })
+
+    expect(refreshCount).toBe(1)
+  })
 })
 
 describe("aggregateRefreshSessionID", () => {

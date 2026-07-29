@@ -14,7 +14,7 @@ import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@oc2-ai/core/v1/config/console-state"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EffectFlock } from "@oc2-ai/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -34,7 +34,9 @@ import { Npm } from "@oc2-ai/core/npm"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Naming } from "@oc2-ai/core/naming"
 import { randomUUID } from "crypto"
-import { fingerprint, immutable, type ConfigSnapshot } from "./hot-reload"
+import { isDeepStrictEqual } from "node:util"
+import { canonicalConfigPath, contentDigest, fingerprint, immutable, internalWrites, type ConfigSnapshot } from "./hot-reload"
+import { ConfigWriteRejected } from "./write-error"
 
 const log = Log.create({ service: "config" })
 
@@ -201,13 +203,23 @@ export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
-  readonly update: (config: Info) => Effect.Effect<void>
-  readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly update: (config: Info) => Effect.Effect<WriteResult>
+  readonly updateAt: (file: string, config: Info, global?: boolean) => Effect.Effect<WriteResult>
+  readonly updatePath: () => Effect.Effect<string>
+  readonly updateGlobalPath: () => Effect.Effect<string>
+  readonly updateGlobal: (config: Info) => Effect.Effect<WriteResult & { info: Info }>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
   readonly commit: () => Effect.Effect<ConfigSnapshot>
   readonly snapshot: () => Effect.Effect<ConfigSnapshot>
+}
+
+export interface WriteResult {
+  readonly fileChanged: boolean
+  readonly path: string
+  readonly content: string
+  readonly digest: string
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Config") {}
@@ -293,6 +305,7 @@ export const layer = Layer.effect(
           fs.remove(temporary, { force: true }).pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
         ),
       )
+      return target
     })
 
     const fetchRemoteJson = Effect.fnUntraced(function* <S extends Schema.Top>(
@@ -711,7 +724,63 @@ export const layer = Layer.effect(
       })
     })
 
-    const update = Effect.fn("Config.update")(function* (config: Info) {
+    const updateAt = Effect.fn("Config.updateAt")(function* (file: string, config: Info, global = false) {
+      file = canonicalConfigPath(file)
+      const before = (yield* readConfigFile(file)) ?? "{}"
+      const patch = global ? writableGlobal(config) : writable(config)
+      let candidate = `${before}\0${JSON.stringify(patch)}`
+      let next: string
+      let semanticNoOp = false
+      try {
+        const updated = patchJsonc(before, patch)
+        candidate = updated
+        const parsed = ConfigParse.jsonc(before, file)
+        if (!isRecord(parsed))
+          throw new InvalidError({ path: file, issues: [{ path: [], message: "Expected an object" }] })
+        const merged = mergeDeep(parsed, patch)
+        semanticNoOp = !file.endsWith(".jsonc") && isDeepStrictEqual(parsed, merged)
+        next = file.endsWith(".jsonc") ? updated : JSON.stringify(merged, null, 2)
+        candidate = next
+      } catch (error) {
+        const rejected = ConfigWriteRejected.fromCandidate(file, candidate, error)
+        if (rejected) throw rejected
+        throw error
+      }
+      yield* validateWrite(next, file).pipe(
+        Effect.catchCause((cause) => {
+          const rejected = ConfigWriteRejected.fromCandidate(file, candidate, Cause.squash(cause))
+          return rejected ? Effect.die(rejected) : Effect.failCause(cause)
+        }),
+      )
+      if (semanticNoOp || next === before)
+        return { fileChanged: false, path: file, content: before, digest: contentDigest(before) }
+      const writtenPath = yield* writeAtomic(file, next).pipe(
+        Effect.catchCause((cause) => {
+          if (cause.reasons.length > 0 && cause.reasons.every(Cause.isInterruptReason)) return Effect.interrupt
+          const error = Cause.squash(cause)
+          const unsupported = error instanceof Error && error.message.includes("multiple hard links")
+          return Effect.die(
+            new ConfigWriteRejected({
+              path: file,
+              digest: contentDigest(next),
+              reason: unsupported ? "unsupported" : "bootstrap",
+              message: unsupported
+                ? "This configuration file cannot be replaced safely."
+                : "The configuration file could not be written.",
+            }),
+          )
+        }),
+      )
+      internalWrites.record(writtenPath, next)
+      return {
+        fileChanged: true,
+        path: writtenPath,
+        content: next,
+        digest: contentDigest(next),
+      }
+    })
+
+    const updatePath = Effect.fn("Config.updatePath")(function* () {
       const ctx = yield* InstanceState.context
       const plan = yield* ConfigPaths.plan(ctx.directory, ctx.worktree).pipe(
         Effect.provideService(FSUtil.Service, fs),
@@ -721,17 +790,15 @@ export const layer = Layer.effect(
       for (const source of plan.project) {
         if (yield* fs.existsSafe(source)) file = source
       }
-      const before = (yield* readConfigFile(file)) ?? "{}"
-      const patch = writable(config)
-      const updated = patchJsonc(before, patch)
-      if (updated === before) return
+      return file
+    })
 
-      const parsed = ConfigParse.jsonc(before, file)
-      if (!isRecord(parsed))
-        throw new InvalidError({ path: file, issues: [{ path: [], message: "Expected an object" }] })
-      const next = file.endsWith(".jsonc") ? updated : JSON.stringify(mergeDeep(parsed, patch), null, 2)
-      yield* validateWrite(next, file)
-      yield* writeAtomic(file, next).pipe(Effect.orDie)
+    const update = Effect.fn("Config.update")(function* (config: Info) {
+      return yield* updateAt(yield* updatePath(), config)
+    })
+
+    const updateGlobalPath = Effect.fn("Config.updateGlobalPath")(function* () {
+      return globalConfigFile()
     })
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
@@ -740,30 +807,10 @@ export const layer = Layer.effect(
 
     const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
       const file = globalConfigFile()
-      const before = (yield* readConfigFile(file)) ?? "{}"
-      const patch = writableGlobal(config)
-
-      let next: Info
-      let changed: boolean
-      if (!file.endsWith(".jsonc")) {
-        const existing = ConfigParse.jsonc(before, file)
-        if (!isRecord(existing)) {
-          throw new InvalidError({ path: file, issues: [{ path: [], message: "Expected an object" }] })
-        }
-        const merged = mergeDeep(existing, patch)
-        const serialized = JSON.stringify(merged, null, 2)
-        changed = patchJsonc(before, patch) !== before
-        next = yield* validateWrite(serialized, file)
-        if (changed) yield* writeAtomic(file, serialized).pipe(Effect.orDie)
-      } else {
-        const updated = patchJsonc(before, patch)
-        next = yield* validateWrite(updated, file)
-        changed = updated !== before
-        if (changed) yield* writeAtomic(file, updated).pipe(Effect.orDie)
-      }
-
-      if (changed) yield* invalidate()
-      return { info: next, changed }
+      const result = yield* updateAt(file, config, true)
+      if (result.fileChanged) yield* invalidate()
+      const info = yield* validateWrite(result.content, result.path)
+      return { ...result, info }
     })
 
     return Service.of({
@@ -771,6 +818,9 @@ export const layer = Layer.effect(
       getGlobal,
       getConsoleState,
       update,
+      updateAt,
+      updatePath,
+      updateGlobalPath,
       updateGlobal,
       invalidate,
       directories,

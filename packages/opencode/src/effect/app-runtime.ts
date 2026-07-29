@@ -53,6 +53,7 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Memory } from "@/memory/memory"
+import { MutationCoordinator } from "@/config/mutation-coordinator"
 
 const CoreLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -61,6 +62,7 @@ const CoreLayer = Layer.mergeAll(
   Auth.defaultLayer,
   Account.defaultLayer,
   Config.defaultLayer,
+  MutationCoordinator.layer,
   Git.defaultLayer,
   Ripgrep.defaultLayer,
   Search.defaultLayer,

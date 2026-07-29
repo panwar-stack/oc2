@@ -110,6 +110,7 @@ import { LocationServiceMap } from "@oc2-ai/core/location-layer"
 import { registerDisposer } from "@/effect/instance-registry"
 import { AbsolutePath } from "@oc2-ai/core/schema"
 import { key as instanceKey } from "@/project/instance-context"
+import { MutationCoordinator } from "@/config/mutation-coordinator"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -270,6 +271,7 @@ export function createRoutes(
       BackgroundJob.defaultLayer,
       Command.defaultLayer,
       Config.defaultLayer,
+      MutationCoordinator.layer,
       Format.defaultLayer,
       LSP.defaultLayer,
       LLM.defaultLayer,

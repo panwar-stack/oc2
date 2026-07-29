@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { HttpApi } from "effect/unstable/httpapi"
 import { EventV2 } from "@oc2-ai/core/event"
+import "@/config/event"
 import { InstanceDisposed } from "@/server/event"
 import { Question } from "@/question"
 import { ConfigApi } from "./groups/config"
