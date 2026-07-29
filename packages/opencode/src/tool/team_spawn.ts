@@ -52,6 +52,7 @@ const CommunicationGuidance = [
   "- When you send a message via team_send_message or team_broadcast, recipients are automatically woken. Do not poll team_get_messages in a loop — check once and continue working.",
   "- Do not claim that an issue is fixed, a feature is complete, or an action succeeded without supporting evidence.",
   "- Only report to me in ASD-STE100 Simplified Technical English.",
+  "- Let perfect not be the enemy of good.",
 ].join("\n")
 
 const DaemonGuidance = [
@@ -66,6 +67,7 @@ const DaemonGuidance = [
   "- Never mark yourself done unless explicitly cancelled or told the daemon assignment is over.",
   "- Do not claim that an issue is fixed, a feature is complete, or an action succeeded without supporting evidence.",
   "- Only report to me in ASD-STE100 Simplified Technical English.",
+  "- Let perfect not be the enemy of good.",
 ].join("\n")
 
 const TaskCompletionGuidance =
