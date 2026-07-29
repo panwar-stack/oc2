@@ -2,9 +2,12 @@
 """Measure OC2 TUI startup through a controlled pseudo-terminal."""
 
 import argparse
+import errno
 import json
+import math
 import os
 import re
+import secrets
 import select
 import shutil
 import statistics
@@ -12,14 +15,80 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional, Sequence, TextIO
+from typing import Any, Callable, Optional, Sequence, TextIO
 
-from terminal_screen import PtyHandshakeError, close_pty_fd, read_pty, spawn_pty, stop_pty_child
+from terminal_screen import (
+    PTY_HEIGHT,
+    PTY_WIDTH,
+    PtyCleanupError,
+    PtyHandshakeError,
+    TerminalFrame,
+    TerminalScreen,
+    close_pty_fd,
+    read_pty,
+    spawn_pty,
+    stop_pty_child,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TTFD = re.compile(rb"Time to first draw:\s*([0-9.]+)ms")
 DEFAULT_READY_TEXT = "Ask anything..."
+TRACE_VERSION = 1
+TRACE_MAX_LINE_BYTES = 512
+TRACE_MAX_RECORDS = 512
+LEGACY_SCAN_LIMIT = 4 * 1024 * 1024
+TRACE_ENV_KEYS = (
+    "OC2_TUI_STARTUP_PROFILE",
+    "OC2_TUI_STARTUP_PROFILE_FD",
+    "OC2_RUN_ID",
+)
+TRACE_PHASES = frozenset(
+    (
+        "cli.command.load",
+        "worker.spawn",
+        "tui.config",
+        "transport.ready",
+        "session.validate",
+        "tui.import",
+        "renderer.create",
+        "theme.wait",
+        "renderer.render",
+        "plugin.load",
+        "bootstrap.critical",
+        "bootstrap.optional",
+    )
+)
+TRACE_REQUESTS = frozenset(
+    (
+        "config.providers",
+        "provider.list",
+        "app.agents",
+        "config.get",
+        "project.path",
+        "project.current",
+        "session.list",
+        "worker.server",
+        "other",
+    )
+)
+TRACE_MARKERS = frozenset(
+    (
+        "prompt.mounted",
+        "bootstrap.critical.ready",
+        "input.accepted",
+        "theme.settled",
+        "theme.reconciled",
+    )
+)
+_TTFD_LINE = re.compile(r"^Time to first draw:\s*[0-9.]+ms$")
+_FATAL_PREFIXES = (
+    "error:",
+    "fatal:",
+    "panic:",
+    "traceback (most recent call last):",
+    "failed to launch command:",
+)
 CONTROLLED_ENV = {
     "TERM": "xterm-256color",
     "COLORTERM": "truecolor",
@@ -32,6 +101,337 @@ CONTROLLED_ENV = {
     "OC2_DISABLE_TERMINAL_TITLE": "1",
     "OC2_DISABLE_PROJECT_CONFIG": "1",
 }
+
+
+class TraceFailure(ValueError):
+    """A content-free, stable trace validation failure."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _safe_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= (1 << 53) - 1
+
+
+def _finite_nonnegative(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _exact_keys(record: dict[str, object], *event_keys: str) -> bool:
+    common = {"version", "runID", "sequence", "elapsedMs"}
+    return set(record) == common.union(event_keys)
+
+
+def _valid_trace_record(record: object) -> bool:
+    """Validate the exact accepted Slice 1 trace schema without retaining content."""
+
+    if not isinstance(record, dict) or any(not isinstance(key, str) for key in record):
+        return False
+    if record.get("version") != TRACE_VERSION:
+        return False
+    run_id = record.get("runID")
+    if (
+        not isinstance(run_id, str)
+        or not run_id
+        or len(run_id.encode("utf-8")) > 128
+        or re.fullmatch(r"[0-9A-Za-z_-]+", run_id) is None
+    ):
+        return False
+    if not _safe_integer(record.get("sequence")) or not _finite_nonnegative(record.get("elapsedMs")):
+        return False
+    event = record.get("event")
+    role = record.get("role")
+    if event == "cli.entry":
+        return role == "main" and _exact_keys(record, "event", "role")
+    if event == "phase":
+        return (
+            role in ("main", "worker")
+            and _exact_keys(record, "event", "role", "phase", "outcome", "durationMs")
+            and isinstance(record.get("phase"), str)
+            and record.get("phase") in TRACE_PHASES
+            and record.get("outcome") in ("ok", "error")
+            and _finite_nonnegative(record.get("durationMs"))
+        )
+    if event == "rpc.request":
+        return (
+            role == "main"
+            and _exact_keys(record, "event", "role", "requestID", "request", "encodedBytes")
+            and _safe_integer(record.get("requestID"))
+            and isinstance(record.get("request"), str)
+            and record.get("request") in TRACE_REQUESTS
+            and _safe_integer(record.get("encodedBytes"))
+        )
+    if event == "rpc.response":
+        return (
+            role == "main"
+            and _exact_keys(
+                record,
+                "event",
+                "role",
+                "requestID",
+                "request",
+                "encodedBytes",
+                "removableDuplicateBytes",
+            )
+            and _safe_integer(record.get("requestID"))
+            and isinstance(record.get("request"), str)
+            and record.get("request") in TRACE_REQUESTS
+            and _safe_integer(record.get("encodedBytes"))
+            and record.get("removableDuplicateBytes") == 0
+        )
+    if event == "rpc.dispatch":
+        return (
+            role == "worker"
+            and _exact_keys(record, "event", "role", "requestID", "request", "durationMs")
+            and _safe_integer(record.get("requestID"))
+            and isinstance(record.get("request"), str)
+            and record.get("request") in TRACE_REQUESTS
+            and _finite_nonnegative(record.get("durationMs"))
+        )
+    if event in ("prompt.mounted", "bootstrap.critical.ready", "input.accepted", "theme.reconciled"):
+        return (
+            role == "main"
+            and _exact_keys(record, "event", "role", "workspaceGeneration", "attemptGeneration")
+            and record.get("workspaceGeneration") == 0
+            and record.get("attemptGeneration") == 0
+        )
+    if event == "theme.settled":
+        return (
+            role == "main"
+            and _exact_keys(
+                record,
+                "event",
+                "role",
+                "workspaceGeneration",
+                "attemptGeneration",
+                "outcome",
+            )
+            and record.get("workspaceGeneration") == 0
+            and record.get("attemptGeneration") == 0
+            and record.get("outcome") in ("locked", "resolved", "fallback-final")
+        )
+    return False
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise TraceFailure("trace_invalid_json")
+        result[key] = value
+    return result
+
+
+class TraceJsonlParser:
+    """Incrementally validate independent, arbitrarily fragmented trace JSONL."""
+
+    def __init__(self, run_id: str):
+        self.run_id = run_id
+        self._pending = bytearray()
+        self._sequence = 0
+        self.records = 0
+
+    def feed(self, data: bytes, receipt_ms: float) -> tuple[tuple[dict[str, object], float], ...]:
+        if not isinstance(data, bytes):
+            raise TypeError("trace input must be bytes")
+        if not _finite_nonnegative(receipt_ms):
+            raise ValueError("trace receipt clock must be finite and nonnegative")
+        self._pending.extend(data)
+        parsed: list[tuple[dict[str, object], float]] = []
+        while True:
+            newline = self._pending.find(b"\n")
+            if newline < 0:
+                if len(self._pending) >= TRACE_MAX_LINE_BYTES:
+                    raise TraceFailure("trace_line_too_large")
+                break
+            line = bytes(self._pending[:newline])
+            del self._pending[: newline + 1]
+            if not line or line.endswith(b"\r") or len(line) + 1 > TRACE_MAX_LINE_BYTES:
+                raise TraceFailure("trace_invalid_json")
+            try:
+                record = json.loads(
+                    line.decode("utf-8", errors="strict"),
+                    object_pairs_hook=_unique_json_object,
+                    parse_constant=lambda _: (_ for _ in ()).throw(TraceFailure("trace_invalid_json")),
+                )
+            except TraceFailure:
+                raise
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                raise TraceFailure("trace_invalid_json") from None
+            if not _valid_trace_record(record):
+                raise TraceFailure("trace_invalid_schema")
+            assert isinstance(record, dict)
+            if record["runID"] != self.run_id:
+                raise TraceFailure("trace_run_id_mismatch")
+            if record["sequence"] != self._sequence:
+                raise TraceFailure("trace_sequence_mismatch")
+            if (self._sequence == 0) != (record["event"] == "cli.entry"):
+                raise TraceFailure("trace_event_order")
+            self._sequence += 1
+            self.records += 1
+            if self.records > TRACE_MAX_RECORDS:
+                raise TraceFailure("trace_record_limit")
+            parsed.append((record, receipt_ms))
+        return tuple(parsed)
+
+    def finish(self) -> None:
+        if self._pending:
+            raise TraceFailure("trace_eof_truncated")
+
+
+FrameMatcher = Callable[[TerminalFrame], bool]
+
+
+def _frame_has_fatal(frame: TerminalFrame) -> bool:
+    visible = [line.strip() for line in frame.lines if line.strip() and _TTFD_LINE.fullmatch(line.strip()) is None]
+    if not visible:
+        return False
+    folded = visible[0].casefold()
+    return any(folded.startswith(prefix) for prefix in _FATAL_PREFIXES)
+
+
+def _valid_first_frame(frame: TerminalFrame) -> bool:
+    if (frame.width, frame.height) != (PTY_WIDTH, PTY_HEIGHT) or frame.is_blank or _frame_has_fatal(frame):
+        return False
+    visible = [line.strip() for line in frame.lines if line.strip()]
+    return any(_TTFD_LINE.fullmatch(line) is None for line in visible)
+
+
+def _text_matcher(text: str) -> FrameMatcher:
+    return lambda frame: any(text in line for line in frame.lines)
+
+
+class StartupMilestoneOracle:
+    """Correlate receipt-clock markers with current committed terminal cells."""
+
+    def __init__(self, prompt_matcher: FrameMatcher, shell_matcher: Optional[FrameMatcher] = None):
+        self.prompt_matcher = prompt_matcher
+        self.shell_matcher = shell_matcher
+        self.first_frame_ms: Optional[float] = None
+        self.shell_ms: Optional[float] = None
+        self.prompt_ms: Optional[float] = None
+        self.critical_ready_ms: Optional[float] = None
+        self.theme_settled_ms: Optional[float] = None
+        self.workspace_generation: Optional[int] = None
+        self.attempt_generation: Optional[int] = None
+        self.failure: Optional[str] = None
+        self._current_frame: Optional[TerminalFrame] = None
+        self._current_frame_ms: Optional[float] = None
+        self._shell_marker_ms: Optional[float] = None
+        self._prompt_marker_ms: Optional[float] = None
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.failure is None
+            and self.first_frame_ms is not None
+            and self.prompt_ms is not None
+            and self.critical_ready_ms is not None
+            and self.theme_settled_ms is not None
+        )
+
+    def _generation(self, workspace: object, attempt: object) -> bool:
+        if not _safe_integer(workspace) or not _safe_integer(attempt):
+            self.failure = "trace_generation_mismatch"
+            return False
+        assert isinstance(workspace, int) and isinstance(attempt, int)
+        if self.workspace_generation is None:
+            self.workspace_generation = workspace
+            self.attempt_generation = attempt
+            return True
+        if (workspace, attempt) != (self.workspace_generation, self.attempt_generation):
+            self.failure = "trace_generation_mismatch"
+            return False
+        return True
+
+    def observe_frame(self, frame: TerminalFrame, receipt_ms: float) -> None:
+        if self.failure is not None:
+            return
+        self._current_frame = frame
+        self._current_frame_ms = receipt_ms
+        if _frame_has_fatal(frame):
+            self.failure = "terminal_fatal_diagnostic"
+            return
+        if self.first_frame_ms is None and _valid_first_frame(frame):
+            self.first_frame_ms = receipt_ms
+        if self.shell_ms is None and self._shell_marker_ms is not None and self.shell_matcher is not None:
+            if self.shell_matcher(frame):
+                self.shell_ms = max(self._shell_marker_ms, receipt_ms)
+        if self.prompt_ms is None and self._prompt_marker_ms is not None and self.prompt_matcher(frame):
+            self.prompt_ms = max(self._prompt_marker_ms, receipt_ms)
+
+    def observe_shell_drawn(self, workspace: int, attempt: int, receipt_ms: float) -> None:
+        """Pair the future shell marker without accepting it in the Slice 1 parser."""
+
+        if self.failure is not None or not self._generation(workspace, attempt):
+            return
+        if self._shell_marker_ms is not None:
+            self.failure = "trace_duplicate_marker"
+            return
+        self._shell_marker_ms = receipt_ms
+        if (
+            self.shell_matcher is not None
+            and self._current_frame is not None
+            and self._current_frame_ms is not None
+            and self.shell_matcher(self._current_frame)
+        ):
+            self.shell_ms = max(receipt_ms, self._current_frame_ms)
+
+    def observe_trace(self, record: dict[str, object], receipt_ms: float) -> None:
+        if self.failure is not None:
+            return
+        event = record["event"]
+        if event not in TRACE_MARKERS:
+            return
+        workspace = record["workspaceGeneration"]
+        attempt = record["attemptGeneration"]
+        if not self._generation(workspace, attempt):
+            return
+        if event == "prompt.mounted":
+            if self._prompt_marker_ms is not None:
+                self.failure = "trace_duplicate_marker"
+                return
+            self._prompt_marker_ms = receipt_ms
+            if (
+                self._current_frame is not None
+                and self._current_frame_ms is not None
+                and self.prompt_matcher(self._current_frame)
+            ):
+                self.prompt_ms = max(receipt_ms, self._current_frame_ms)
+        elif event == "bootstrap.critical.ready":
+            if self.critical_ready_ms is not None:
+                self.failure = "trace_duplicate_marker"
+                return
+            self.critical_ready_ms = receipt_ms
+        elif event == "theme.settled":
+            if self.theme_settled_ms is not None:
+                self.failure = "trace_duplicate_marker"
+                return
+            self.theme_settled_ms = receipt_ms
+
+    def timeout_failure(self, screen: TerminalScreen) -> str:
+        if screen.synchronized:
+            return "terminal_desynchronized"
+        if self.first_frame_ms is None:
+            return "timeout_first_frame"
+        if self._prompt_marker_ms is None:
+            return "timeout_prompt_marker"
+        if self.prompt_ms is None:
+            return "timeout_prompt_frame"
+        if self.critical_ready_ms is None:
+            return "timeout_critical_ready"
+        if self.theme_settled_ms is None:
+            return "timeout_theme_settled"
+        return "startup_timeout"
+
+
 TERMINAL_ENV_KEYS = frozenset(
     (
         "ALACRITTY_LOG", "ALACRITTY_SOCKET", "COLORTERM", "MOSH_CONNECTION",
@@ -65,7 +465,7 @@ def prepare_state(root: Path) -> None:
 def child_environment(state: Path) -> dict[str, str]:
     env = os.environ.copy()
     for key in tuple(env):
-        if key in TERMINAL_ENV_KEYS or key.startswith("ZELLIJ"):
+        if key in TERMINAL_ENV_KEYS or key in TRACE_ENV_KEYS or key == "OC2_TUI_STARTUP_PROFILE_WORKER" or key.startswith("ZELLIJ"):
             env.pop(key)
     env.update(CONTROLLED_ENV)
     env.update(
@@ -79,6 +479,135 @@ def child_environment(state: Path) -> dict[str, str]:
     return env
 
 
+def _empty_result(failure: str, pty_handshake_ok: bool, run_id: str) -> dict[str, Any]:
+    return {
+        "first_byte_ms": None,
+        "ready_ms": None,
+        "ttfd_ms": None,
+        "bytes_until_ready": 0,
+        "timed_out": True,
+        "pty_handshake_ok": pty_handshake_ok,
+        "first_frame_ms": None,
+        "shell_ms": None,
+        "prompt_ms": None,
+        "critical_ready_ms": None,
+        "theme_settled_ms": None,
+        "interactive_ms": None,
+        "run_id": run_id,
+        "workspace_generation": None,
+        "attempt_generation": None,
+        "trace_records": 0,
+        "failure": failure,
+    }
+
+
+def _open_trace_pipe(env: dict[str, str], run_id: str) -> tuple[int, int]:
+    read_fd, write_fd = os.pipe()
+    try:
+        if read_fd < 3 or write_fd < 3 or read_fd == write_fd:
+            raise OSError(errno.EBADF, "trace pipe descriptors are not isolated")
+        os.set_inheritable(read_fd, False)
+        os.set_inheritable(write_fd, True)
+        if os.get_inheritable(read_fd) or not os.get_inheritable(write_fd):
+            raise OSError(errno.EBADF, "trace pipe inheritance is invalid")
+        env["OC2_TUI_STARTUP_PROFILE"] = "1"
+        env["OC2_TUI_STARTUP_PROFILE_FD"] = str(write_fd)
+        env["OC2_RUN_ID"] = run_id
+        return read_fd, write_fd
+    except BaseException:
+        try:
+            os.close(read_fd)
+        finally:
+            os.close(write_fd)
+        raise
+
+
+def _read_trace(fd: int) -> bytes:
+    while True:
+        try:
+            return os.read(fd, 65536)
+        except InterruptedError:
+            continue
+
+
+class ChildExitObserver:
+    """Observe leader exit without reaping it before process-group cleanup."""
+
+    def __init__(self, pid: int):
+        self.pid = pid
+        self._exited = False
+        self._kqueue: Any = None
+        self.available = hasattr(os, "waitid") and hasattr(os, "WNOWAIT")
+        if not self.available and hasattr(select, "kqueue"):
+            queue = None
+            try:
+                queue = select.kqueue()
+                event = select.kevent(
+                    pid,
+                    filter=select.KQ_FILTER_PROC,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE | select.KQ_EV_CLEAR,
+                    fflags=select.KQ_NOTE_EXIT,
+                )
+                queue.control([event], 0, 0)
+                self._kqueue = queue
+                self.available = True
+            except OSError as error:
+                if error.errno == errno.ESRCH:
+                    self._exited = True
+                    self.available = True
+                try:
+                    if queue is not None:
+                        queue.close()
+                except OSError:
+                    pass
+            except ValueError:
+                try:
+                    if queue is not None:
+                        queue.close()
+                except OSError:
+                    pass
+
+    def exited(self) -> bool:
+        if self._exited:
+            return True
+        waitid = getattr(os, "waitid", None)
+        wnowait = getattr(os, "WNOWAIT", None)
+        if waitid is not None and wnowait is not None:
+            try:
+                self._exited = waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | wnowait) is not None
+            except ChildProcessError:
+                self._exited = True
+            except (PermissionError, ProcessLookupError):
+                pass
+            return self._exited
+        if self._kqueue is not None:
+            try:
+                self._exited = bool(self._kqueue.control(None, 1, 0))
+            except OSError:
+                pass
+        return self._exited
+
+    def close(self) -> None:
+        if self._kqueue is None:
+            return
+        try:
+            self._kqueue.close()
+        except OSError:
+            pass
+        self._kqueue = None
+
+
+def _terminal_failure(screen: TerminalScreen, eof: bool = False) -> str:
+    reason = screen.invalid_reason or ""
+    if "synchronized" in reason:
+        return "terminal_desynchronized"
+    if eof and ("truncated" in reason or "EOF" in reason):
+        return "terminal_eof_truncated"
+    if reason.startswith("unsupported") or "unsupported" in reason:
+        return "terminal_unknown_sequence"
+    return "terminal_invalid_sequence"
+
+
 def run_once(
     command: Sequence[str],
     state: Path,
@@ -88,65 +617,248 @@ def run_once(
     ready_text: bytes,
 ) -> dict[str, Any]:
     env = child_environment(state)
+    run_id = "run_" + secrets.token_hex(16)
+    try:
+        prompt_text = ready_text.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return _empty_result("prompt_oracle_invalid", False, run_id)
+    trace_read_fd: Optional[int] = None
+    trace_write_fd: Optional[int] = None
+    try:
+        trace_read_fd, trace_write_fd = _open_trace_pipe(env, run_id)
+    except OSError:
+        return _empty_result("trace_pipe_failed", False, run_id)
     try:
         child = spawn_pty(command, cwd, env, timeout)
     except PtyHandshakeError:
-        return {
-            "first_byte_ms": None,
-            "ready_ms": None,
-            "ttfd_ms": None,
-            "bytes_until_ready": 0,
-            "timed_out": True,
-            "pty_handshake_ok": False,
-        }
+        assert trace_read_fd is not None and trace_write_fd is not None
+        try:
+            os.close(trace_read_fd)
+        finally:
+            os.close(trace_write_fd)
+        return _empty_result("pty_handshake_failed", False, run_id)
+    except BaseException:
+        assert trace_read_fd is not None and trace_write_fd is not None
+        try:
+            os.close(trace_read_fd)
+        finally:
+            os.close(trace_write_fd)
+        raise
     pid = child.pid
     fd = child.master_fd
     start_ns = child.start_ns
-
-    output = bytearray()
-    first_byte_ms: Optional[float] = None
-    ready_ms: Optional[float] = None
-    foreground_sent = False
-    background_sent = False
-    deadline = child.deadline
+    assert trace_read_fd is not None and trace_write_fd is not None
+    exit_observer = ChildExitObserver(pid)
     try:
-        while time.monotonic() < deadline:
-            remaining = max(0.0, deadline - time.monotonic())
-            readable, _, _ = select.select([fd], [], [], min(0.05, remaining))
-            if not readable:
-                continue
-            data = read_pty(fd)
-            if not data:
-                break
-            now_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
-            if first_byte_ms is None:
-                first_byte_ms = now_ms
-            output.extend(data)
-            if theme_response != "none" and not foreground_sent and b"\x1b]10;?\x07" in output:
-                foreground = b"ffff/ffff/ffff" if theme_response == "dark" else b"0000/0000/0000"
-                os.write(fd, b"\x1b]10;rgb:" + foreground + b"\x07")
-                foreground_sent = True
-            if theme_response != "none" and not background_sent and b"\x1b]11;?\x07" in output:
-                background = b"0000/0000/0000" if theme_response == "dark" else b"ffff/ffff/ffff"
-                os.write(fd, b"\x1b]11;rgb:" + background + b"\x07")
-                background_sent = True
-            if TTFD.search(output) and ready_text in output:
-                ready_ms = now_ms
-                break
-    finally:
+        os.close(trace_write_fd)
+    except BaseException:
         try:
             stop_pty_child(pid, fd)
         finally:
-            close_pty_fd(fd)
+            try:
+                close_pty_fd(fd)
+            finally:
+                try:
+                    os.close(trace_read_fd)
+                finally:
+                    exit_observer.close()
+        raise
+    trace_write_fd = None
 
-    match = TTFD.search(output)
+    screen = TerminalScreen(PTY_WIDTH, PTY_HEIGHT)
+    trace = TraceJsonlParser(run_id)
+    oracle = StartupMilestoneOracle(_text_matcher(prompt_text))
+    legacy_output = bytearray()
+    total_pty_bytes = 0
+    bytes_until_ready: Optional[int] = None
+    first_byte_ms: Optional[float] = None
+    ready_ms: Optional[float] = None
+    ttfd_ms: Optional[float] = None
+    theme_scan = bytearray()
+    foreground_sent = False
+    background_sent = False
+    deadline = child.deadline
+    failure: Optional[str] = None if exit_observer.available else "child_exit_observer_failed"
+    body_error: Optional[BaseException] = None
+    cleanup_error: Optional[BaseException] = None
+    close_error: Optional[BaseException] = None
+    pty_open = True
+    trace_open = True
+    pty_eof_deadline: Optional[float] = None
+    trace_eof_deadline: Optional[float] = None
+    try:
+        while failure is None and not oracle.complete:
+            if pty_eof_deadline is not None and trace_eof_deadline is not None:
+                failure = "child_exited_early"
+                break
+            now = time.monotonic()
+            if pty_eof_deadline is not None and now >= pty_eof_deadline:
+                failure = "pty_eof_before_milestones"
+                break
+            if trace_eof_deadline is not None and now >= trace_eof_deadline:
+                failure = "trace_eof_before_milestones"
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = oracle.timeout_failure(screen)
+                break
+            watched = []
+            if pty_open:
+                watched.append(fd)
+            if trace_open:
+                watched.append(trace_read_fd)
+            eof_remaining = [
+                value - time.monotonic()
+                for value in (pty_eof_deadline, trace_eof_deadline)
+                if value is not None
+            ]
+            wait = min([0.05, remaining, *eof_remaining])
+            readable, _, _ = select.select(watched, [], [], max(0.0, wait))
+            if not readable:
+                if exit_observer.exited():
+                    failure = "child_exited_early"
+                continue
+            for readable_fd in readable:
+                if readable_fd == trace_read_fd:
+                    try:
+                        data = _read_trace(trace_read_fd)
+                    except OSError:
+                        failure = "trace_read_failed"
+                        break
+                    now_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
+                    if not data:
+                        try:
+                            trace.finish()
+                        except TraceFailure as error:
+                            failure = error.code
+                        else:
+                            trace_open = False
+                            trace_eof_deadline = time.monotonic() + 0.03
+                        if failure is not None:
+                            break
+                        continue
+                    try:
+                        records = trace.feed(data, now_ms)
+                    except TraceFailure as error:
+                        failure = error.code
+                        break
+                    for record, receipt_ms in records:
+                        oracle.observe_trace(record, receipt_ms)
+                        if oracle.failure is not None:
+                            failure = oracle.failure
+                            break
+                    if failure is not None:
+                        break
+                    continue
+
+                data = read_pty(fd)
+                now_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
+                if not data:
+                    screen.finish()
+                    if not screen.valid:
+                        failure = _terminal_failure(screen, eof=True)
+                    else:
+                        pty_open = False
+                        pty_eof_deadline = time.monotonic() + 0.03
+                    if failure is not None:
+                        break
+                    continue
+                if first_byte_ms is None:
+                    first_byte_ms = now_ms
+                total_pty_bytes += len(data)
+                theme_scan.extend(data)
+                if ready_ms is None:
+                    legacy_output.extend(data)
+                    if len(legacy_output) > LEGACY_SCAN_LIMIT:
+                        failure = "pty_output_limit"
+                        break
+                    match = TTFD.search(legacy_output)
+                    if match is not None and ttfd_ms is None:
+                        ttfd_ms = float(match.group(1))
+                    if match is not None and ready_text in legacy_output:
+                        ready_ms = now_ms
+                        bytes_until_ready = total_pty_bytes
+                        legacy_output.clear()
+                frames = screen.feed(data)
+                if not screen.valid:
+                    failure = _terminal_failure(screen)
+                    break
+                for frame in frames:
+                    oracle.observe_frame(frame, now_ms)
+                    if oracle.failure is not None:
+                        failure = oracle.failure
+                        break
+                if failure is not None:
+                    break
+                if theme_response != "none" and not foreground_sent and b"\x1b]10;?\x07" in theme_scan:
+                    foreground = b"ffff/ffff/ffff" if theme_response == "dark" else b"0000/0000/0000"
+                    os.write(fd, b"\x1b]10;rgb:" + foreground + b"\x07")
+                    foreground_sent = True
+                if theme_response != "none" and not background_sent and b"\x1b]11;?\x07" in theme_scan:
+                    background = b"0000/0000/0000" if theme_response == "dark" else b"ffff/ffff/ffff"
+                    os.write(fd, b"\x1b]11;rgb:" + background + b"\x07")
+                    background_sent = True
+                if len(theme_scan) > 64:
+                    del theme_scan[:-64]
+            if failure is None and exit_observer.exited():
+                failure = "child_exited_early"
+        if failure is None and oracle.failure is not None:
+            failure = oracle.failure
+    except BaseException as error:
+        body_error = error
+    finally:
+        try:
+            exit_observer.close()
+        finally:
+            try:
+                try:
+                    stop_pty_child(pid, fd)
+                except BaseException as error:
+                    cleanup_error = error
+            finally:
+                try:
+                    close_pty_fd(fd)
+                except BaseException as error:
+                    close_error = error
+                try:
+                    os.close(trace_read_fd)
+                except OSError as error:
+                    if error.errno != errno.EBADF and close_error is None:
+                        close_error = error
+
+    if body_error is not None:
+        if cleanup_error is not None:
+            raise cleanup_error
+        if close_error is not None:
+            raise close_error
+        raise body_error
+    if cleanup_error is not None:
+        if isinstance(cleanup_error, PtyCleanupError):
+            failure = "descendant_cleanup_failed"
+        else:
+            raise cleanup_error
+    if close_error is not None:
+        failure = "pty_cleanup_failed"
+    if bytes_until_ready is None:
+        bytes_until_ready = total_pty_bytes
     return {
         "first_byte_ms": first_byte_ms,
         "ready_ms": ready_ms,
-        "ttfd_ms": float(match.group(1)) if match else None,
-        "bytes_until_ready": len(output),
+        "ttfd_ms": ttfd_ms,
+        "bytes_until_ready": bytes_until_ready,
         "timed_out": ready_ms is None,
         "pty_handshake_ok": True,
+        "first_frame_ms": oracle.first_frame_ms,
+        "shell_ms": oracle.shell_ms,
+        "prompt_ms": oracle.prompt_ms,
+        "critical_ready_ms": oracle.critical_ready_ms,
+        "theme_settled_ms": oracle.theme_settled_ms,
+        "interactive_ms": None,
+        "run_id": run_id,
+        "workspace_generation": oracle.workspace_generation,
+        "attempt_generation": oracle.attempt_generation,
+        "trace_records": trace.records,
+        "failure": failure,
     }
 
 
@@ -222,14 +934,24 @@ def main() -> int:
             results.append(result)
             write_record(stream, {"label": args.label, "mode": args.mode, **result})
 
-        valid = [item for item in results if not item["timed_out"]]
+        valid = [item for item in results if item["failure"] is None]
         summary: dict[str, Any] = {
             "label": args.label,
             "mode": args.mode,
             "samples": len(results),
             "valid": len(valid),
         }
-        for field in ("ready_ms", "ttfd_ms", "first_byte_ms"):
+        for field in (
+            "ready_ms",
+            "ttfd_ms",
+            "first_byte_ms",
+            "first_frame_ms",
+            "shell_ms",
+            "prompt_ms",
+            "critical_ready_ms",
+            "theme_settled_ms",
+            "interactive_ms",
+        ):
             values = [item[field] for item in valid if item[field] is not None]
             if not values:
                 summary[field] = None
