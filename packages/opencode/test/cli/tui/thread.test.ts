@@ -124,6 +124,62 @@ describe("tui thread", () => {
     ])
   })
 
+  test("classifies the finalized RPC envelope without rereading live accessors", async () => {
+    let methodReads = 0
+    let urlReads = 0
+    let proxyMethodReads = 0
+    let proxyUrlReads = 0
+    const input = new Proxy(
+      {
+        get method() {
+          methodReads++
+          return "GET"
+        },
+        get url() {
+          urlReads++
+          return "http://opencode.internal/config/providers?secret=x"
+        },
+      },
+      {
+        get(target, property, receiver) {
+          if (property === "method") proxyMethodReads++
+          if (property === "url") proxyUrlReads++
+          return Reflect.get(target, property, receiver)
+        },
+      },
+    )
+    const sent: string[] = []
+    const requests: Array<{ requestID: number; request: string; encodedBytes: number }> = []
+    const target = {
+      postMessage(data: string) {
+        sent.push(data)
+      },
+      onmessage: null as ((event: MessageEvent) => void) | null,
+    }
+    const client = Rpc.client<{ fetch(value: { method: string; url: string }): string }>(target, {
+      requestName: startupRequestName,
+      onRequest: (request) => requests.push(request),
+    })
+
+    const result = client.call("fetch", input)
+    const expected =
+      '{"type":"rpc.request","method":"fetch","input":{"method":"GET","url":"http://opencode.internal/config/providers?secret=x"},"id":0}'
+    expect(sent).toEqual([expected])
+    expect({ methodReads, urlReads, proxyMethodReads, proxyUrlReads }).toEqual({
+      methodReads: 1,
+      urlReads: 1,
+      proxyMethodReads: 1,
+      proxyUrlReads: 1,
+    })
+    expect(requests).toEqual([
+      { requestID: 0, request: "config.providers", encodedBytes: new TextEncoder().encode(expected).byteLength },
+    ])
+    target.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify({ type: "rpc.result", result: "ok", id: 0 }) }),
+    )
+    expect(await result).toBe("ok")
+  })
+
   test("drops RPC trace correlation and telemetry when postMessage throws", async () => {
     const requests: unknown[] = []
     const responses: unknown[] = []

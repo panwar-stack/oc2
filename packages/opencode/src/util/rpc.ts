@@ -46,6 +46,18 @@ function traceName(trace: RpcTrace | undefined, method: string, input: unknown) 
   }
 }
 
+function traceNameFromEnvelope(trace: RpcTrace | undefined, encoded: string) {
+  if (!trace) return undefined
+  try {
+    const envelope = JSON.parse(encoded)
+    if (envelope === null || typeof envelope !== "object") return undefined
+    const method = Reflect.get(envelope, "method")
+    return traceName(trace, typeof method === "string" ? method : "", Reflect.get(envelope, "input"))
+  } catch {
+    return undefined
+  }
+}
+
 function encodedBytes(value: string) {
   return new TextEncoder().encode(value).byteLength
 }
@@ -125,9 +137,9 @@ export function client<T extends Definition>(target: {
     call<Method extends keyof T>(method: Method, input: Parameters<T[Method]>[0]): Promise<ReturnType<T[Method]>> {
       const requestId = id++
       return new Promise((resolve) => {
-        const request = traceName(trace, String(method), input)
-        pending.set(requestId, resolve)
         const encoded = JSON.stringify({ type: "rpc.request", method, input, id: requestId })
+        const request = traceNameFromEnvelope(trace, encoded)
+        pending.set(requestId, resolve)
         const traced: TracePending | undefined =
           request !== undefined && tracePending && tracePending.size < MAX_TRACE_PENDING
             ? { request, posted: false }

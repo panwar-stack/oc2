@@ -22,9 +22,9 @@ import {
 } from "../src/context/theme"
 import {
   captureCriticalBootstrapStartup,
-  captureOptionalBootstrapStartup,
   reportCriticalBootstrapFailure,
   reportOptionalBootstrapFailure,
+  runOptionalBootstrap,
 } from "../src/context/sync"
 import { KVProvider } from "../src/context/kv"
 import { TuiConfigProvider } from "../src/config"
@@ -339,51 +339,105 @@ test("input key tracking avoids timers for disabled, unmounted, accepted, and no
   }
 })
 
-test("optional construction failure cannot contradict critical readiness", () => {
+test("optional bootstrap emits one terminal result for construction, fulfillment, and rejection", async () => {
   const failure = new Error("optional construction failed")
   const traces: TuiStartupTraceInput[] = [
     { event: "phase", role: "main", phase: "bootstrap.critical", outcome: "ok", durationMs: 1 },
     { event: "bootstrap.critical.ready", role: "main", workspaceGeneration: 0, attemptGeneration: 0 },
   ]
   let destroyed = 0
-  captureOptionalBootstrapStartup(
-    () => {
+  runOptionalBootstrap({
+    start() {
       throw failure
     },
-    (error) =>
+    completed: () => {},
+    failed: (error) =>
       reportOptionalBootstrapFailure({
         error,
         fatal: true,
-        startedAt: performance.now(),
-        trace: (event) => traces.push(event),
         destroy: () => destroyed++,
         report: () => {},
       }),
-  )
+    trace: (event) => traces.push(event),
+  })
   expect(destroyed).toBe(1)
   expect(traces.filter((event) => event.event === "phase" && event.phase === "bootstrap.critical")).toMatchObject([
     { outcome: "ok" },
   ])
-  expect(traces.filter((event) => event.event === "phase" && event.phase === "bootstrap.optional")).toMatchObject([
-    { outcome: "error" },
-  ])
+  const constructionTerminal = traces.filter(
+    (event) => event.event === "phase" && event.phase === "bootstrap.optional",
+  )
+  expect(constructionTerminal).toHaveLength(1)
+  expect(constructionTerminal).toMatchObject([{ outcome: "error" }])
 
   expect(() =>
-    captureOptionalBootstrapStartup(
-      () => {
+    runOptionalBootstrap({
+      start() {
         throw failure
       },
-      (error) =>
+      completed: () => {},
+      failed: (error) =>
         reportOptionalBootstrapFailure({
           error,
           fatal: false,
-          startedAt: performance.now(),
           destroy: () => destroyed++,
           report: () => {},
         }),
-    ),
+    }),
   ).toThrow(failure)
   expect(destroyed).toBe(1)
+
+  const fulfilled = Promise.withResolvers<void>()
+  const fulfilledTraces: TuiStartupTraceInput[] = []
+  let completed = 0
+  let fulfillmentStatus = "partial"
+  runOptionalBootstrap({
+    start: () => fulfilled.promise,
+    completed: () => {
+      completed++
+      fulfillmentStatus = "complete"
+    },
+    failed: () => {
+      throw new Error("unexpected optional failure")
+    },
+    trace: (event) => fulfilledTraces.push(event),
+  })
+  expect(fulfilledTraces).toHaveLength(0)
+  fulfilled.resolve()
+  await Bun.sleep(0)
+  expect(completed).toBe(1)
+  expect(fulfillmentStatus).toBe("complete")
+  const fulfillmentTerminal = fulfilledTraces.filter(
+    (event) => event.event === "phase" && event.phase === "bootstrap.optional",
+  )
+  expect(fulfillmentTerminal).toHaveLength(1)
+  expect(fulfillmentTerminal).toMatchObject([{ outcome: "ok" }])
+
+  const rejected = Promise.withResolvers<void>()
+  const rejectedTraces: TuiStartupTraceInput[] = []
+  let degraded = 0
+  let rejectionStatus = "partial"
+  runOptionalBootstrap({
+    start: () => rejected.promise,
+    completed: () => {
+      rejectionStatus = "complete"
+    },
+    failed: (error, synchronous) => {
+      expect(error).toBe(failure)
+      expect(synchronous).toBe(false)
+      degraded++
+    },
+    trace: (event) => rejectedTraces.push(event),
+  })
+  rejected.reject(failure)
+  await Bun.sleep(0)
+  expect(degraded).toBe(1)
+  expect(rejectionStatus).toBe("partial")
+  const rejectionTerminal = rejectedTraces.filter(
+    (event) => event.event === "phase" && event.phase === "bootstrap.optional",
+  )
+  expect(rejectionTerminal).toHaveLength(1)
+  expect(rejectionTerminal).toMatchObject([{ outcome: "error" }])
 })
 
 test("theme settlement waits for persisted KV state", async () => {

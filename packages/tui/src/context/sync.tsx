@@ -129,25 +129,12 @@ export function reportCriticalBootstrapFailure(input: {
   }
 }
 
-export function captureOptionalBootstrapStartup(start: () => void, failed: (error: unknown) => void) {
-  return captureSynchronousStartup(start, failed)
-}
-
 export function reportOptionalBootstrapFailure(input: {
   error: unknown
-  fatal: boolean
-  startedAt: number
-  trace?: (input: TuiStartupTraceInput) => unknown
+  fatal?: boolean
   destroy: () => void
   report?: (message: string, detail: Record<string, unknown>) => void
 }) {
-  input.trace?.({
-    event: "phase",
-    role: "main",
-    phase: "bootstrap.optional",
-    outcome: "error",
-    durationMs: Math.max(0, performance.now() - input.startedAt),
-  })
   const detail = {
     error: input.error instanceof Error ? input.error.message : String(input.error),
     name: input.error instanceof Error ? input.error.name : undefined,
@@ -156,7 +143,60 @@ export function reportOptionalBootstrapFailure(input: {
   if (input.report) input.report("tui optional bootstrap failed", detail)
   else console.error("tui optional bootstrap failed", detail)
   if (input.fatal) input.destroy()
-  else throw input.error
+  else if (input.fatal === false) throw input.error
+}
+
+export function runOptionalBootstrap(input: {
+  start: () => Promise<unknown>
+  completed: () => void
+  failed: (error: unknown, synchronous: boolean) => void
+  trace?: (input: TuiStartupTraceInput) => unknown
+  clock?: () => number
+}) {
+  const clock = input.trace ? (input.clock ?? performance.now.bind(performance)) : undefined
+  let startedAt = 0
+  try {
+    if (clock) startedAt = clock()
+  } catch {}
+  let settled = false
+  const settle = (outcome: "ok" | "error") => {
+    if (settled) return
+    settled = true
+    let durationMs = 0
+    try {
+      if (clock) durationMs = Math.max(0, clock() - startedAt)
+    } catch {}
+    try {
+      input.trace?.({ event: "phase", role: "main", phase: "bootstrap.optional", outcome, durationMs })
+    } catch {}
+  }
+  let optional: Promise<unknown>
+  try {
+    optional = input.start()
+  } catch (error) {
+    settle("error")
+    input.failed(error, true)
+    return
+  }
+  void optional.then(
+    () => {
+      try {
+        input.completed()
+        settle("ok")
+      } catch (error) {
+        settle("error")
+        try {
+          input.failed(error, false)
+        } catch {}
+      }
+    },
+    (error) => {
+      settle("error")
+      try {
+        input.failed(error, false)
+      } catch {}
+    },
+  )
 }
 
 function preserveSessionAggregates(current: Session, incoming: Session): Session {
@@ -970,11 +1010,9 @@ export const {
         .catch(failBootstrap)
       if (!criticalSucceeded) return
 
-      const optionalStart = startup.trace ? performance.now() : 0
-      captureOptionalBootstrapStartup(
-        () => {
-          // non-blocking
-          void Promise.all([
+      runOptionalBootstrap({
+        start: () =>
+          Promise.all([
             ...(args.continue
               ? []
               : [
@@ -995,19 +1033,16 @@ export const {
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
-          ]).then(() => {
-            setStore("status", "complete")
-          })
-        },
-        (error) =>
+          ]),
+        completed: () => setStore("status", "complete"),
+        failed: (error, synchronous) =>
           reportOptionalBootstrapFailure({
             error,
-            fatal,
-            startedAt: optionalStart,
-            trace: startup.trace,
+            fatal: synchronous ? fatal : undefined,
             destroy: () => destroyRenderer(renderer),
           }),
-      )
+        trace: startup.trace,
+      })
     }
 
     onMount(() => {
