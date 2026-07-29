@@ -118,6 +118,23 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual(frame.cell(0, 2), "X")
         self.assertEqual(frame.line(0, trim=True), "a Xz")
 
+    def test_wide_blank_uses_continuation_sentinel_for_overwrite_and_resize(self):
+        lead = TerminalScreen(4, 1)
+        initial = lead.feed(b"\x1b]66;w=2; \x1b\\X")[0]
+        self.assertEqual(initial.cells[0], (" ", None, "X", " "))
+        overwritten = lead.feed(b"\rY")[0]
+        self.assertEqual(overwritten.cells[0], ("Y", " ", "X", " "))
+
+        continuation = TerminalScreen(4, 1)
+        continuation.feed(b"\x1b]66;w=2; \x1b\\X")
+        overwritten = continuation.feed(b"\x1b[1;2HY")[0]
+        self.assertEqual(overwritten.cells[0], (" ", "Y", "X", " "))
+
+        resized = TerminalScreen(3, 1)
+        resized.feed(b"\x1b]66;w=2; \x1b\\X")
+        self.assertEqual(resized.resize(2, 1)[0].cells[0], (" ", None))
+        self.assertEqual(resized.resize(1, 1)[0].cells[0], (" ",))
+
     def test_resize_preserves_cells_and_removes_truncated_wide_glyph(self):
         screen = TerminalScreen(4, 2)
         screen.feed("ab界".encode("utf-8"))
@@ -131,7 +148,7 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual(grown.line(0), "ab    ")
 
     def test_resize_clears_truncated_original_emoji_cluster_width(self):
-        clusters = ("❤️", "🇺🇸", "1\u20e3", "1️\u20e3", "👩‍💻", "👍🏽")
+        clusters = ("❤️", "🇺🇸", "1\u20e3", "1️\u20e3", "👩‍💻", "👍🏽", "☝🏽")
         for cluster in clusters:
             with self.subTest(cluster=cluster):
                 screen = TerminalScreen(4, 1)
@@ -225,6 +242,67 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertIsNone(cells[16])
         self.assertEqual(cells[17], "R")
 
+    def test_fragmented_base_aware_variation_keycap_and_modifier_sequences(self):
+        screen = TerminalScreen(12, 1)
+        text = "☝🏽X☝️🏽Y👍🏽Z"
+        stream = b"\x1b[?2026h" + text.encode("utf-8") + b"\x1b[?2026l"
+        frames = []
+        for value in stream:
+            frames.extend(screen.feed(bytes((value,))))
+
+        self.assertTrue(screen.valid, screen.invalid_reason)
+        self.assertEqual(len(frames), 1)
+        cells = frames[0].cells[0]
+        self.assertEqual(cells[:9], ("☝🏽", None, "X", "☝️🏽", None, "Y", "👍🏽", None, "Z"))
+
+        for cluster in ("💏🏽", "💑🏽"):
+            with self.subTest(cluster=cluster):
+                modified = TerminalScreen(4, 1)
+                for value in (cluster + "X").encode("utf-8"):
+                    modified.feed(bytes((value,)))
+                self.assertTrue(modified.valid, modified.invalid_reason)
+                self.assertEqual(modified.last_frame.cells[0], (cluster, None, "X", " "))
+
+        unicode_17_cluster = "👨🏻‍\U0001faef‍👨🏼"
+        unicode_17 = TerminalScreen(4, 1)
+        for value in (unicode_17_cluster + "X").encode("utf-8"):
+            unicode_17.feed(bytes((value,)))
+        self.assertTrue(unicode_17.valid, unicode_17.invalid_reason)
+        self.assertEqual(unicode_17.last_frame.cells[0], (unicode_17_cluster, None, "X", " "))
+
+        for base in "#*0123456789":
+            for variation in ("", "️"):
+                cluster = base + variation + "\u20e3"
+                with self.subTest(cluster=cluster):
+                    keycap = TerminalScreen(4, 1)
+                    frames = []
+                    data = b"\x1b[?2026h" + (cluster + "X").encode("utf-8") + b"\x1b[?2026l"
+                    for value in data:
+                        frames.extend(keycap.feed(bytes((value,))))
+                    self.assertTrue(keycap.valid, keycap.invalid_reason)
+                    self.assertEqual(frames[0].cells[0], (cluster, None, "X", " "))
+
+    def test_fragmented_invalid_cluster_bases_do_not_shift_or_fail_open(self):
+        for mark in ("️", "\u20e3"):
+            with self.subTest(mark=mark):
+                screen = TerminalScreen(3, 1)
+                for value in ("A" + mark + "B").encode("utf-8"):
+                    screen.feed(bytes((value,)))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(screen.last_frame.cells[0], ("A" + mark, "B", " "))
+                self.assertEqual(screen.resize(1, 1)[0].cells[0], ("A" + mark,))
+                self.assertEqual(screen.feed(b"\rC")[0].cells[0], ("C",))
+
+        for text in ("A🏽B", "A‍B", "🏽A", "🇺🇸‍💻X", "👩‍️💻X", "👩‍#X", "#️‍💻X"):
+            with self.subTest(text=text):
+                screen = TerminalScreen(4, 1)
+                frames = []
+                data = b"\x1b[?2026h" + text.encode("utf-8") + b"\x1b[?2026l"
+                for value in data:
+                    frames.extend(screen.feed(bytes((value,))))
+                self.assertFalse(screen.valid)
+                self.assertEqual(frames, [])
+
     def test_known_renderer_styles_modes_and_queries_are_non_mutating(self):
         screen = TerminalScreen(8, 2)
         known = (
@@ -261,12 +339,100 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertIsNotNone(screen.last_frame)
         self.assertTrue(screen.last_frame.is_blank)
 
+    def test_fragmented_osc_allowlist_accepts_only_proven_payload_shapes(self):
+        proven = (
+            b"4;0;?",
+            b"4;255;?",
+            b"10;?",
+            b"11;?",
+            b"12;?",
+            b"13;?",
+            b"14;?",
+            b"15;?",
+            b"16;?",
+            b"17;?",
+            b"19;?",
+            b"99;i=opentui-notifications:p=?;",
+            b"1337;Capabilities",
+        )
+        for payload in proven:
+            with self.subTest(proven=payload):
+                screen = TerminalScreen(8, 1)
+                for value in b"\x1b]" + payload + b"\x1b\\":
+                    screen.feed(bytes((value,)))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+
+        rejected = (
+            b"0;mutating-title",
+            b"2;mutating-title",
+            b"4;0;#ffffff",
+            b"4;00;?",
+            b"4;256;?",
+            b"10;rgb:ff/ff/ff",
+            b"11;rgb:00/00/00",
+            b"12;#00aAfF",
+            b"12;default",
+            b"12;not-a-color",
+            b"22;pointer",
+            b"22;",
+            b"52;c;AAAA",
+            b"8;;",
+            b"8;id=17;https://example.invalid/path",
+            b"66;s=1; ",
+            b"66;s=2;X",
+            b"66;w=01;A",
+            b"99;i=opentui-1:p=body:e=1:d=1;AAAA",
+            b"777;notify;title;body",
+            b"112",
+            b"112;extra",
+            b"1337;Capabilities=No",
+            b"1337;File=inline=1:AAAA",
+            b"1337;File=name=dGVzdA==:AAAA",
+        )
+        for payload in rejected:
+            with self.subTest(rejected=payload):
+                screen = TerminalScreen(8, 1)
+                for value in b"\x1b]" + payload + b"\x1b\\":
+                    screen.feed(bytes((value,)))
+                self.assertFalse(screen.valid)
+
+    def test_fragmented_passthrough_cannot_bypass_osc_allowlist(self):
+        def wrapped(prefix, inner):
+            return b"\x1bP" + prefix + inner.replace(b"\x1b", b"\x1b\x1b") + b"\x1b\\"
+
+        proven = (
+            wrapped(b"tmux;", b"\x1b]4;0;?\x07"),
+            wrapped(b"tmux;", b"\x1b[?1016$p\x1b[?2026$p"),
+            wrapped(b"", b"\x1b]4;255;?\x07"),
+        )
+        for stream in proven:
+            with self.subTest(proven=stream):
+                screen = TerminalScreen(8, 1)
+                for value in stream:
+                    screen.feed(bytes((value,)))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertIsNone(screen.last_frame)
+
+        rejected = (
+            b"\x1b]1337;File=inline=1:AAAA\x1b\\",
+            b"\x1b]999;unknown\x1b\\",
+            b"\x1b]66;w=2;X\x1b\\",
+        )
+        for prefix in (b"tmux;", b""):
+            for inner in rejected:
+                stream = wrapped(prefix, inner)
+                with self.subTest(prefix=prefix, rejected=inner):
+                    screen = TerminalScreen(8, 1)
+                    for value in stream:
+                        screen.feed(bytes((value,)))
+                    self.assertFalse(screen.valid)
+
     def test_explicit_width_osc_and_emoji_clusters_occupy_truthful_cells(self):
         screen = TerminalScreen(12, 1)
         stream = (
             b"\x1b[?2026h\x1b]66;w=2;\xe2\x9d\xa4\x1b\\"
             + "🇺🇸❤️".encode("utf-8")
-            + b"\x1b]8;id=1;https://example.invalid\x1b\\x\x1b]8;;\x1b\\\x1b[?2026l"
+            + b"x\x1b[?2026l"
         )
         frames = screen.feed(stream)
 
