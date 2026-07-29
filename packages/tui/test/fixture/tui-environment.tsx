@@ -7,6 +7,7 @@ import {
   TuiStartupProvider,
   TuiTerminalEnvironmentProvider,
   type TuiPaths,
+  type TuiStartup,
 } from "../../src/context/runtime"
 import { onCleanup, type ParentProps } from "solid-js"
 
@@ -16,6 +17,7 @@ export function TestTuiContexts(
     directory?: string
     paths?: Partial<TuiPaths>
     skipInitialLoading?: boolean
+    startupTrace?: TuiStartup["trace"]
   }>,
 ) {
   const state = props.paths?.state ?? createTestState()
@@ -32,7 +34,9 @@ export function TestTuiContexts(
       }}
     >
       <TuiTerminalEnvironmentProvider value={{ platform: "linux" }}>
-        <TuiStartupProvider value={{ skipInitialLoading: props.skipInitialLoading ?? false }}>
+        <TuiStartupProvider
+          value={{ skipInitialLoading: props.skipInitialLoading ?? false, trace: props.startupTrace }}
+        >
           {props.children}
         </TuiStartupProvider>
       </TuiTerminalEnvironmentProvider>

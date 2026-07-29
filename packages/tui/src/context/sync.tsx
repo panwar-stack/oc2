@@ -35,6 +35,7 @@ import path from "path"
 import { aggregateFailures } from "./aggregate-failures"
 import { useKV } from "./kv"
 import { destroyRenderer } from "../util/renderer"
+import type { TuiStartupTraceInput } from "@oc2-ai/core/util/tui-startup-profile"
 
 type ConsoleState = {
   consoleManagedProviders: string[]
@@ -88,6 +89,43 @@ export function captureSynchronousStartup<T>(start: () => T, failed: (error: unk
   } catch (error) {
     failed(error)
     return undefined
+  }
+}
+
+export function captureCriticalBootstrapStartup<Workspace, Result>(input: {
+  workspace: () => Workspace
+  start: (workspace: Workspace) => Result
+  failed: (error: unknown) => void
+}): Result | undefined {
+  return captureSynchronousStartup(() => input.start(input.workspace()), input.failed)
+}
+
+export function reportCriticalBootstrapFailure(input: {
+  error: unknown
+  fatal: boolean
+  startedAt: number
+  trace?: (input: TuiStartupTraceInput) => unknown
+  destroy: () => void
+  report?: (message: string, detail: Record<string, unknown>) => void
+}) {
+  input.trace?.({
+    event: "phase",
+    role: "main",
+    phase: "bootstrap.critical",
+    outcome: "error",
+    durationMs: Math.max(0, performance.now() - input.startedAt),
+  })
+  const detail = {
+    error: input.error instanceof Error ? input.error.message : String(input.error),
+    name: input.error instanceof Error ? input.error.name : undefined,
+    stack: input.error instanceof Error ? input.error.stack : undefined,
+  }
+  if (input.report) input.report("tui bootstrap failed", detail)
+  else console.error("tui bootstrap failed", detail)
+  if (input.fatal) {
+    input.destroy()
+  } else {
+    throw input.error
   }
 }
 
@@ -789,46 +827,40 @@ export const {
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
       const criticalStart = startup.trace ? performance.now() : 0
-      const workspace = project.workspace.current()
-      const failBootstrap = (e: unknown) => {
-        startup.trace?.({
-          event: "phase",
-          role: "main",
-          phase: "bootstrap.critical",
-          outcome: "error",
-          durationMs: Math.max(0, performance.now() - criticalStart),
+      const failBootstrap = (error: unknown) =>
+        reportCriticalBootstrapFailure({
+          error,
+          fatal,
+          startedAt: criticalStart,
+          trace: startup.trace,
+          destroy: () => destroyRenderer(renderer),
         })
-        console.error("tui bootstrap failed", {
-          error: e instanceof Error ? e.message : String(e),
-          name: e instanceof Error ? e.name : undefined,
-          stack: e instanceof Error ? e.stack : undefined,
-        })
-        if (fatal) {
-          destroyRenderer(renderer)
-        } else {
-          throw e
-        }
-      }
-      const started = captureSynchronousStartup(() => {
-        const projectPromise = project.sync()
-        const sessionListPromise = projectPromise.then(() => listSessions())
+      const started = captureCriticalBootstrapStartup({
+        workspace: () => project.workspace.current(),
+        start: (workspace) => {
+          const projectPromise = project.sync()
+          const sessionListPromise = projectPromise.then(() => listSessions())
 
-        // blocking - include session.list when continuing a session
-        const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
-        const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
-        const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
-        const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
-        return {
-          projectPromise,
-          sessionListPromise,
-          providersPromise,
-          providerListPromise,
-          agentsPromise,
-          configPromise,
-        }
-      }, failBootstrap)
+          // blocking - include session.list when continuing a session
+          const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
+          const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
+          const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
+          const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
+          return {
+            workspace,
+            projectPromise,
+            sessionListPromise,
+            providersPromise,
+            providerListPromise,
+            agentsPromise,
+            configPromise,
+          }
+        },
+        failed: failBootstrap,
+      })
       if (!started) return
       const {
+        workspace,
         projectPromise,
         sessionListPromise,
         providersPromise,

@@ -1,13 +1,22 @@
-import { expect, mock, test } from "bun:test"
+/** @jsxImportSource @opentui/solid */
+import { expect, mock, spyOn, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
+import { testRender } from "@opentui/solid"
 import { Effect } from "effect"
 import { Global } from "@oc2-ai/core/global"
+import { Flock } from "@oc2-ai/core/util/flock"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { createEventSource, createFetch, directory } from "./fixture/tui-sdk"
+import { TestTuiContexts } from "./fixture/tui-environment"
 import type { TuiStartupTraceInput } from "@oc2-ai/core/util/tui-startup-profile"
 import { createTuiStartupInputTrace, isolateTuiStartupTrace } from "../src/context/runtime"
-import { startupThemeSettlement } from "../src/context/theme"
-import { captureSynchronousStartup } from "../src/context/sync"
+import { ThemeProvider, startupThemeSettlement, startupThemeState } from "../src/context/theme"
+import { captureCriticalBootstrapStartup, reportCriticalBootstrapFailure } from "../src/context/sync"
+import { KVProvider } from "../src/context/kv"
+import { TuiConfigProvider } from "../src/config"
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
@@ -95,27 +104,53 @@ test("startup markers use lock-aware and accepted-input boundaries", async () =>
   expect(startupThemeSettlement(undefined, "fallback-final")).toBe("fallback-final")
 
   const startupFailure = new Error("critical startup failed")
+  const critical: TuiStartupTraceInput[] = []
+  let destroyed = 0
   let reported: unknown
-  expect(
-    captureSynchronousStartup(
-      () => {
-        throw startupFailure
-      },
-      (error) => {
-        reported = error
-      },
-    ),
-  ).toBeUndefined()
+  const fatalResult = captureCriticalBootstrapStartup({
+    workspace: () => {
+      throw startupFailure
+    },
+    start: () => {
+      throw new Error("critical requests must not start")
+    },
+    failed: (error) => {
+      reported = error
+      reportCriticalBootstrapFailure({
+        error,
+        fatal: true,
+        startedAt: performance.now(),
+        trace: (input) => {
+          critical.push(input)
+          return false
+        },
+        destroy: () => destroyed++,
+        report: () => {},
+      })
+    },
+  })
+  expect(fatalResult).toBeUndefined()
   expect(reported).toBe(startupFailure)
+  expect(destroyed).toBe(1)
+  expect(critical).toMatchObject([{ event: "phase", phase: "bootstrap.critical", outcome: "error" }])
   expect(() =>
-    captureSynchronousStartup(
-      () => {
+    captureCriticalBootstrapStartup({
+      workspace: () => {
         throw startupFailure
       },
-      (error) => {
-        throw error
+      start: () => {
+        throw new Error("critical requests must not start")
       },
-    ),
+      failed: (error) => {
+        reportCriticalBootstrapFailure({
+          error,
+          fatal: false,
+          startedAt: performance.now(),
+          destroy: () => destroyed++,
+          report: () => {},
+        })
+      },
+    }),
   ).toThrow(startupFailure)
 
   const source = await Bun.file(new URL("../src/component/prompt/index.tsx", import.meta.url)).text()
@@ -153,22 +188,118 @@ test("startup markers use lock-aware and accepted-input boundaries", async () =>
   expect(asyncPaste).toBeGreaterThan(asyncOperation)
   expect(asyncEnd).toBeGreaterThan(asyncPaste)
   const ready = sync.indexOf('setStore("status", "partial")')
-  const critical = sync.indexOf('event: "bootstrap.critical.ready"', ready)
-  expect(critical).toBeGreaterThan(ready)
-  const captured = sync.indexOf("const started = captureSynchronousStartup")
-  const projectStart = sync.indexOf("project.sync()", captured)
-  const sdkStart = sync.indexOf("sdk.client.config.providers", projectStart)
-  const failedStart = sync.indexOf("}, failBootstrap)", sdkStart)
-  expect(captured).toBeGreaterThan(-1)
-  expect(projectStart).toBeGreaterThan(captured)
-  expect(sdkStart).toBeGreaterThan(projectStart)
-  expect(failedStart).toBeGreaterThan(sdkStart)
+  const criticalReady = sync.indexOf('event: "bootstrap.critical.ready"', ready)
+  expect(criticalReady).toBeGreaterThan(ready)
   expect(app).not.toContain('event: "theme.settled"')
-  const lock = theme.indexOf("draft.lock = lock")
-  const settled = theme.indexOf('event: "theme.settled"', lock)
-  expect(settled).toBeGreaterThan(lock)
+  const kvReady = theme.indexOf("if (!kv.ready || startupSettled) return")
+  const authoritative = theme.indexOf("applyStartupTheme()", kvReady)
+  const settled = theme.indexOf('event: "theme.settled"', authoritative)
+  expect(kvReady).toBeGreaterThan(-1)
+  expect(authoritative).toBeGreaterThan(kvReady)
+  expect(settled).toBeGreaterThan(authoritative)
   expect(theme.indexOf('event: "theme.settled"', settled + 1)).toBe(-1)
   const apply = theme.indexOf("apply(mode)")
   const reconciled = theme.indexOf('event: "theme.reconciled"', apply)
   expect(reconciled).toBeGreaterThan(apply)
+})
+
+test("theme settlement waits for persisted KV state", async () => {
+  const originalWithLock = Flock.withLock.bind(Flock)
+  let blockedState: string | undefined
+  let readStarted!: () => void
+  let releaseRead!: () => void
+  const started = new Promise<void>((resolve) => (readStarted = resolve))
+  const released = new Promise<void>((resolve) => (releaseRead = resolve))
+  const flock = spyOn(Flock, "withLock")
+  flock.mockImplementation(
+    (async (key, fn, options) => {
+      if (blockedState && key.includes(blockedState)) {
+        readStarted()
+        await released
+      }
+      return originalWithLock(key, fn, options)
+    }) as typeof Flock.withLock,
+  )
+
+  async function scenario(input: {
+    kv: Record<string, unknown>
+    settled: "resolved" | "fallback-final"
+    delayed?: boolean
+  }) {
+    const state = mkdtempSync(path.join(os.tmpdir(), "oc2-theme-settlement-"))
+    writeFileSync(path.join(state, "kv.json"), JSON.stringify(input.kv))
+    const traces: TuiStartupTraceInput[] = []
+
+    if (input.delayed) blockedState = state
+    const rendering = testRender(() => (
+      <TestTuiContexts
+        paths={{ state }}
+        startupTrace={(event) => {
+          traces.push(event)
+          return false
+        }}
+      >
+        <TuiConfigProvider config={createTuiResolvedConfig()}>
+          <KVProvider>
+            <ThemeProvider mode="dark" settled={input.settled}>
+              <box />
+            </ThemeProvider>
+          </KVProvider>
+        </TuiConfigProvider>
+      </TestTuiContexts>
+    ))
+
+    if (input.delayed) {
+      await started
+      expect(traces.filter((event) => event.event === "theme.settled")).toHaveLength(0)
+      releaseRead()
+      blockedState = undefined
+    }
+    const app = await rendering
+    try {
+      const before = performance.now()
+      while (!traces.some((event) => event.event === "theme.settled")) {
+        if (performance.now() - before > 2000) throw new Error("timed out waiting for theme settlement")
+        await Bun.sleep(10)
+      }
+      return { traces }
+    } finally {
+      app.renderer.destroy()
+      rmSync(state, { recursive: true, force: true })
+    }
+  }
+
+  try {
+    const locked = await scenario({
+      kv: { theme: "dracula", theme_mode_lock: "light" },
+      settled: "resolved",
+      delayed: true,
+    })
+    const lockedSettled = locked.traces.filter((event) => event.event === "theme.settled")
+    expect(lockedSettled).toHaveLength(1)
+    expect(lockedSettled).toMatchObject([
+      { outcome: "locked", workspaceGeneration: 0, attemptGeneration: 0 },
+    ])
+    expect(
+      startupThemeState({
+        lock: "light",
+        savedMode: undefined,
+        savedTheme: "dracula",
+        rendererMode: "dark",
+        fallbackMode: "dark",
+      }),
+    ).toMatchObject({ lock: "light", mode: "light", active: "dracula" })
+
+    const resolved = await scenario({ kv: {}, settled: "resolved" })
+    const resolvedSettled = resolved.traces.filter((event) => event.event === "theme.settled")
+    expect(resolvedSettled).toHaveLength(1)
+    expect(resolvedSettled).toMatchObject([{ outcome: "resolved" }])
+
+    const fallback = await scenario({ kv: {}, settled: "fallback-final" })
+    const fallbackSettled = fallback.traces.filter((event) => event.event === "theme.settled")
+    expect(fallbackSettled).toHaveLength(1)
+    expect(fallbackSettled).toMatchObject([{ outcome: "fallback-final" }])
+  } finally {
+    flock.mockRestore()
+  }
 })

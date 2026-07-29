@@ -97,6 +97,28 @@ export function startupThemeSettlement(
   return lock ? "locked" : settled
 }
 
+export function startupThemeState(input: {
+  lock: unknown
+  savedMode: unknown
+  savedTheme: unknown
+  configuredTheme?: string
+  rendererMode?: unknown
+  fallbackMode: "dark" | "light"
+}) {
+  const pick = (value: unknown): "dark" | "light" | undefined => {
+    if (value === "dark" || value === "light") return value
+    return undefined
+  }
+  const lock = pick(input.lock)
+  const active = input.configuredTheme ?? input.savedTheme ?? "opencode"
+  return {
+    lock,
+    mode: lock ?? pick(input.rendererMode) ?? input.fallbackMode,
+    active: typeof active === "string" ? active : "opencode",
+    clearSavedMode: !lock && pick(input.savedMode) !== undefined,
+  }
+}
+
 const [store, setStore] = createStore<State>({
   themes: allThemes(),
   mode: "dark",
@@ -119,30 +141,39 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const kv = useKV()
     const startup = useTuiStartup()
     const themes = props.source ?? themeSource
-    const pick = (value: unknown) => {
-      if (value === "dark" || value === "light") return value
-      return
+    const applyStartupTheme = () => {
+      const next = startupThemeState({
+        lock: kv.get("theme_mode_lock"),
+        savedMode: kv.get("theme_mode"),
+        savedTheme: kv.get("theme", "opencode"),
+        configuredTheme: config.theme,
+        rendererMode: renderer.themeMode,
+        fallbackMode: props.mode,
+      })
+      if (next.clearSavedMode) kv.set("theme_mode", undefined)
+      setStore(
+        produce((draft) => {
+          draft.mode = next.mode
+          draft.lock = next.lock
+          draft.active = next.active
+          draft.ready = hasTheme(next.active)
+        }),
+      )
     }
 
-    setStore(
-      produce((draft) => {
-        const lock = pick(kv.get("theme_mode_lock"))
-        const mode = lock ?? pick(renderer.themeMode) ?? props.mode
-        if (!lock && pick(kv.get("theme_mode")) !== undefined) kv.set("theme_mode", undefined)
-        draft.mode = mode
-        draft.lock = lock
-        const active = config.theme ?? kv.get("theme", "opencode")
-        const nextActive = typeof active === "string" ? active : "opencode"
-        draft.active = nextActive
-        draft.ready = hasTheme(nextActive)
-      }),
-    )
-    startup.trace?.({
-      event: "theme.settled",
-      role: "main",
-      workspaceGeneration: 0,
-      attemptGeneration: 0,
-      outcome: startupThemeSettlement(store.lock, props.settled ?? "resolved"),
+    applyStartupTheme()
+    let startupSettled = false
+    createEffect(() => {
+      if (!kv.ready || startupSettled) return
+      applyStartupTheme()
+      startupSettled = true
+      startup.trace?.({
+        event: "theme.settled",
+        role: "main",
+        workspaceGeneration: 0,
+        attemptGeneration: 0,
+        outcome: startupThemeSettlement(store.lock, props.settled ?? "resolved"),
+      })
     })
 
     createEffect(() => {
