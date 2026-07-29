@@ -7,18 +7,23 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import terminal_screen
 import tui_benchmark
+import tui_probe
 from terminal_screen import (
     PTY_HEIGHT,
     PTY_WIDTH,
+    PtyCleanupError,
     PtyHandshakeError,
     TerminalScreen,
     await_exec_handshake,
     create_exec_handshake,
+    read_pty,
     spawn_pty,
+    stop_pty_child,
 )
 
 
@@ -134,6 +139,89 @@ class TerminalScreenTest(unittest.TestCase):
         resized.feed(b"\x1b]66;w=2; \x1b\\X")
         self.assertEqual(resized.resize(2, 1)[0].cells[0], (" ", None))
         self.assertEqual(resized.resize(1, 1)[0].cells[0], (" ",))
+
+    def test_fragmented_scaled_text_owns_a_truthful_two_by_two_footprint(self):
+        stream = b"\x1b[?2026h\x1b]66;s=2; \x1b\\X\x1b[?2026l"
+        screen = TerminalScreen(5, 3)
+        frames = []
+        for value in stream:
+            frames.extend(screen.feed(bytes((value,))))
+        self.assertTrue(screen.valid, screen.invalid_reason)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].cells[:2], ((" ", None, "X", " ", " "), (None, None, " ", " ", " ")))
+
+        for row, column in ((0, 0), (0, 1)):
+            with self.subTest(overwrite=(row, column)):
+                overwritten = TerminalScreen(5, 3)
+                overwritten.feed(b"\x1b]66;s=2; \x1b\\X")
+                frame = overwritten.feed("\x1b[{};{}HY".format(row + 1, column + 1).encode("ascii"))[0]
+                self.assertEqual(frame.cell(0, 0), " " if column else "Y")
+                self.assertEqual(frame.cell(0, 1), "Y" if column else " ")
+                self.assertEqual(frame.cells[1][:2], (" ", " "))
+
+        for column in (0, 1):
+            with self.subTest(lower_write=column):
+                lower = TerminalScreen(5, 3)
+                lower.feed(b"\x1b]66;s=2; \x1b\\X")
+                frame = lower.feed("\x1b[2;{}HY".format(column + 1).encode("ascii"))[0]
+                self.assertEqual(frame.cells[0][:3], (" ", None, "X"))
+                self.assertEqual(frame.cells[1][:3], (None, None, "Y"))
+
+    def test_scaled_text_erase_scroll_and_resize_keep_or_clear_whole_owners(self):
+        for row, column in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            with self.subTest(erase=(row, column)):
+                screen = TerminalScreen(4, 3)
+                screen.feed(b"\x1b]66;s=2; \x1b\\X")
+                frame = screen.feed("\x1b[{};{}H\x1b[X".format(row + 1, column + 1).encode("ascii"))[0]
+                self.assertEqual(frame.cells[0][:2], (" ", " "))
+                self.assertEqual(frame.cells[1][:2], (" ", " "))
+
+        retained = TerminalScreen(4, 3)
+        retained.feed(b"\x1b]66;s=2; \x1b\\X")
+        self.assertEqual(retained.resize(2, 2)[0].cells, ((" ", None), (None, None)))
+        for width, height in ((1, 2), (2, 1)):
+            with self.subTest(clipped=(width, height)):
+                clipped = TerminalScreen(4, 3)
+                clipped.feed(b"\x1b]66;s=2; \x1b\\X")
+                frame = clipped.resize(width, height)[0]
+                self.assertTrue(all(cell == " " for row in frame.cells for cell in row))
+
+        moved = TerminalScreen(4, 4)
+        moved.feed(b"\x1b[2;1H\x1b]66;s=2; \x1b\\X\x1b[1S")
+        self.assertEqual(moved.last_frame.cells[0][:3], (" ", None, "X"))
+        self.assertEqual(moved.last_frame.cells[1][:2], (None, None))
+
+        split = TerminalScreen(4, 4)
+        split.feed(b"\x1b[2;1H\x1b]66;s=2; \x1b\\X\x1b[3;4r\x1b[1S")
+        self.assertEqual(split.last_frame.cells[1][:2], (" ", " "))
+        self.assertEqual(split.last_frame.cells[2][:2], (" ", " "))
+
+        alternate = TerminalScreen(4, 3)
+        alternate.feed(b"\x1b[?1049h\x1b]66;s=2; \x1b\\X")
+        self.assertTrue(alternate.last_frame.alternate)
+        self.assertEqual(alternate.last_frame.cells[1][:2], (None, None))
+
+    def test_scaled_text_addressing_and_decaWM_disabled_positioning(self):
+        for row, column in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            with self.subTest(combining_at=(row, column)):
+                screen = TerminalScreen(4, 3)
+                screen.feed(b"\x1b]66;s=2; \x1b\\")
+                for value in ("\x1b[{};{}H".format(row + 1, column + 1) + "\u0301").encode("utf-8"):
+                    screen.feed(bytes((value,)))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(screen.last_frame.cell(0, 0), " \u0301")
+                self.assertEqual(screen.last_frame.cells[1][:2], (None, None))
+
+        shifted = TerminalScreen(4, 3)
+        shifted.feed(b"\x1b[7l\x1b[1;4H\x1b]66;s=2; \x1b\\")
+        self.assertTrue(shifted.valid, shifted.invalid_reason)
+        self.assertEqual(shifted.last_frame.cells[0], (" ", " ", " ", None))
+        self.assertEqual(shifted.last_frame.cells[1][2:], (None, None))
+
+        skipped = TerminalScreen(4, 3)
+        skipped.feed(b"\x1b[7l\x1b[1;4H\x1b]66;s=2; \x1b\\\x1b[2;3HX")
+        self.assertTrue(skipped.valid, skipped.invalid_reason)
+        self.assertEqual(skipped.last_frame.cell(2, 0), "X")
 
     def test_resize_preserves_cells_and_removes_truncated_wide_glyph(self):
         screen = TerminalScreen(4, 2)
@@ -303,6 +391,82 @@ class TerminalScreenTest(unittest.TestCase):
                 self.assertFalse(screen.valid)
                 self.assertEqual(frames, [])
 
+    def test_unicode_17_properties_and_gb11_do_not_depend_on_host_ucd(self):
+        self.assertEqual(terminal_screen._cell_width("\U00011f00"), 0)
+        self.assertEqual(terminal_screen._cell_width("\U0001faef"), 2)
+        self.assertTrue(terminal_screen._is_extended_pictographic("\U0001faef"))
+        self.assertFalse(terminal_screen._is_extended_pictographic("\U0001f200"))
+
+        valid = ("👩\u0301\U00011f00‍💻", "©‍💻", "👨🏻‍\U0001faef‍👨🏼")
+        for cluster in valid:
+            with self.subTest(valid=cluster):
+                screen = TerminalScreen(5, 2)
+                frames = []
+                stream = b"\x1b[?2026h" + (cluster + "X").encode("utf-8") + b"\x1b[?2026l"
+                for value in stream:
+                    frames.extend(screen.feed(bytes((value,))))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(frames[0].cells[0][:3], (cluster, None, "X"))
+
+        for cluster in ("👩‍\U0001f200", "\U0001f200‍💻", "🇺🇸‍💻", "#️‍💻"):
+            with self.subTest(invalid=cluster):
+                screen = TerminalScreen(5, 2)
+                for value in (b"\x1b[?2026h" + cluster.encode("utf-8") + b"\x1b[?2026l"):
+                    screen.feed(bytes((value,)))
+                self.assertFalse(screen.valid)
+                self.assertIsNone(screen.last_frame)
+
+    def test_variation_narrowing_and_right_margin_widening_wrap_truthfully(self):
+        narrowed = TerminalScreen(4, 1)
+        narrowed.feed("⌚︎X".encode("utf-8"))
+        self.assertEqual(narrowed.last_frame.cells[0], ("⌚︎", "X", " ", " "))
+
+        clusters = ("1\u20e3", "☝🏽", "🇺🇸", "❤️", "©‍💻")
+        for cluster in clusters:
+            with self.subTest(cluster=cluster):
+                screen = TerminalScreen(4, 2)
+                for value in ("abc" + cluster + "X").encode("utf-8"):
+                    screen.feed(bytes((value,)))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(screen.last_frame.cells[0], ("a", "b", "c", " "))
+                self.assertEqual(screen.last_frame.cells[1][:3], (cluster, None, "X"))
+
+        disabled = TerminalScreen(4, 2)
+        disabled.feed(b"\x1b[7labc")
+        disabled.feed("1\u20e3".encode("utf-8"))
+        self.assertFalse(disabled.valid)
+
+        too_narrow = TerminalScreen(1, 2)
+        too_narrow.feed("1\u20e3".encode("utf-8"))
+        self.assertFalse(too_narrow.valid)
+
+    def test_dangling_zwj_invalidates_at_eof_and_resize(self):
+        eof = TerminalScreen(4, 2)
+        eof.feed("👩‍".encode("utf-8"))
+        eof.finish()
+        self.assertFalse(eof.valid)
+
+        resized = TerminalScreen(4, 2)
+        resized.feed(b"\x1b[?2026h" + "👩‍".encode("utf-8"))
+        self.assertEqual(resized.resize(5, 3), ())
+        self.assertFalse(resized.valid)
+        self.assertIsNone(resized.last_frame)
+
+    def test_fragmented_osc66_rejects_controls_and_noncharacters(self):
+        rejected = ("\x00", "\t", "\n", "\x7f", "\x80", "\u0378", "\ufdd0", "\ufffe", "\U0001ffff")
+        for character in rejected:
+            with self.subTest(character=repr(character)):
+                screen = TerminalScreen(8, 2)
+                stream = b"\x1b[?2026h\x1b]66;w=1;" + character.encode("utf-8") + b"\x1b\\\x1b[?2026l"
+                for value in stream:
+                    screen.feed(bytes((value,)))
+                self.assertFalse(screen.valid)
+                self.assertIsNone(screen.last_frame)
+
+        malformed = TerminalScreen(8, 2)
+        malformed.feed(b"\x1b[?2026h\x1b]66;w=1;\xff\x1b\\")
+        self.assertFalse(malformed.valid)
+
     def test_known_renderer_styles_modes_and_queries_are_non_mutating(self):
         screen = TerminalScreen(8, 2)
         known = (
@@ -404,6 +568,7 @@ class TerminalScreenTest(unittest.TestCase):
             wrapped(b"tmux;", b"\x1b]4;0;?\x07"),
             wrapped(b"tmux;", b"\x1b[?1016$p\x1b[?2026$p"),
             wrapped(b"", b"\x1b]4;255;?\x07"),
+            b"\x1bP\x1b]4;255;?\x07\x1b\\",
         )
         for stream in proven:
             with self.subTest(proven=stream):
@@ -416,7 +581,6 @@ class TerminalScreenTest(unittest.TestCase):
         rejected = (
             b"\x1b]1337;File=inline=1:AAAA\x1b\\",
             b"\x1b]999;unknown\x1b\\",
-            b"\x1b]66;w=2;X\x1b\\",
         )
         for prefix in (b"tmux;", b""):
             for inner in rejected:
@@ -426,6 +590,77 @@ class TerminalScreenTest(unittest.TestCase):
                     for value in stream:
                         screen.feed(bytes((value,)))
                     self.assertFalse(screen.valid)
+
+    def test_fragmented_passthrough_applies_inner_mutations_to_same_state(self):
+        def wrapped(prefix, inner):
+            return b"\x1bP" + prefix + inner.replace(b"\x1b", b"\x1b\x1b") + b"\x1b\\"
+
+        for prefix in (b"tmux;", b""):
+            with self.subTest(prefix=prefix):
+                cursor = TerminalScreen(5, 2)
+                cursor.feed(b"AB")
+                for value in wrapped(prefix, b"\x1b[1D"):
+                    cursor.feed(bytes((value,)))
+                cursor.feed(b"X")
+                self.assertEqual(cursor.last_frame.line(0), "AX   ")
+
+                paint = TerminalScreen(5, 2)
+                for value in wrapped(prefix, b"\x1b[HOK"):
+                    paint.feed(bytes((value,)))
+                self.assertTrue(paint.valid, paint.invalid_reason)
+                self.assertEqual(paint.last_frame.line(0), "OK   ")
+
+                scaled = TerminalScreen(5, 3)
+                for value in wrapped(prefix, b"\x1b]66;s=2; \x1b\\X"):
+                    scaled.feed(bytes((value,)))
+                self.assertEqual(scaled.last_frame.cells[1][:2], (None, None))
+                self.assertEqual(scaled.last_frame.cell(0, 2), "X")
+
+                synchronized = TerminalScreen(5, 2)
+                synchronized.feed(b"\x1b[?2026h")
+                frames = []
+                for value in wrapped(prefix, b"\x1b[HOK\x1b[?2026l"):
+                    frames.extend(synchronized.feed(bytes((value,))))
+                self.assertEqual(len(frames), 1)
+                self.assertEqual(frames[0].line(0), "OK   ")
+
+        raw_screen = TerminalScreen(5, 2)
+        raw_screen.feed(b"AB")
+        for value in b"\x1bP\x1b[1D\x1b\\":
+            raw_screen.feed(bytes((value,)))
+        raw_screen.feed(b"X")
+        self.assertTrue(raw_screen.valid, raw_screen.invalid_reason)
+        self.assertEqual(raw_screen.last_frame.line(0), "AX   ")
+
+    def test_passthrough_rejects_nested_malformed_and_unproven_wrappers(self):
+        def wrapped(prefix, inner):
+            return b"\x1bP" + prefix + inner.replace(b"\x1b", b"\x1b\x1b") + b"\x1b\\"
+
+        inner = wrapped(b"tmux;", b"\x1b]4;0;?\x07")
+        streams = (
+            wrapped(b"tmux;", inner),
+            wrapped(b"", inner),
+            b"\x1bPtmux;\x07\x1b\\",
+            b"\x1bPtmux;\x1b[H\x1b\\",
+            b"\x1bP\x07\x1b\\",
+            b"\x1bP\x1b]52;c;AAAA\x07\x1b\\",
+            b"\x1bP\x1b]1337;File=inline=1:AAAA\x07\x1b\\",
+            b"\x1bP\x1bP\x1b[H\x1b\\\x1b\\",
+        )
+        for stream in streams:
+            with self.subTest(stream=stream):
+                screen = TerminalScreen(5, 2)
+                for value in stream:
+                    screen.feed(bytes((value,)))
+                self.assertFalse(screen.valid)
+
+        for prefix in (b"tmux;", b""):
+            rollback = TerminalScreen(8, 2)
+            rollback.feed(b"\x1b[?2026hREADY")
+            frames = rollback.feed(wrapped(prefix, b"\x1b[?2026l" + inner))
+            self.assertFalse(rollback.valid)
+            self.assertEqual(frames, ())
+            self.assertIsNone(rollback.last_frame)
 
     def test_explicit_width_osc_and_emoji_clusters_occupy_truthful_cells(self):
         screen = TerminalScreen(12, 1)
@@ -559,6 +794,141 @@ class PtyHandshakeTest(unittest.TestCase):
         self.assert_closed(read_fd)
         self.assert_closed(write_fd)
 
+    def test_parent_cleanup_faults_still_attempt_every_descriptor_and_reap(self):
+        def transient_closer(calls):
+            attempts = {}
+
+            def close(fd):
+                calls.append(fd)
+                attempts[fd] = attempts.get(fd, 0) + 1
+                if attempts[fd] == 1:
+                    raise KeyboardInterrupt()
+
+            return close
+
+        close_calls = []
+        with mock.patch.object(terminal_screen.os, "pipe", return_value=(3, 4)):
+            with mock.patch.object(terminal_screen.fcntl, "fcntl", side_effect=RuntimeError("flags")):
+                with mock.patch.object(terminal_screen, "_close", side_effect=transient_closer(close_calls)):
+                    with self.assertRaises(RuntimeError):
+                        create_exec_handshake()
+                    self.assertEqual(close_calls, [3, 3, 4, 4])
+
+        close_calls = []
+        with mock.patch.object(terminal_screen, "create_exec_handshake", return_value=(3, 4)):
+            with mock.patch.object(terminal_screen.pty, "fork", side_effect=RuntimeError("fork")):
+                with mock.patch.object(terminal_screen, "_close", side_effect=transient_closer(close_calls)):
+                    with self.assertRaises(RuntimeError):
+                        spawn_pty(["cmd"], Path.cwd(), {}, 1)
+                    self.assertEqual(close_calls, [3, 3, 4, 4])
+
+        close_calls = []
+
+        def fail_parent_writer(fd):
+            close_calls.append(fd)
+            if fd == 4 and close_calls.count(4) == 1:
+                raise KeyboardInterrupt()
+
+        with mock.patch.object(terminal_screen, "create_exec_handshake", return_value=(3, 4)):
+            with mock.patch.object(terminal_screen.pty, "fork", return_value=(42, 7)):
+                with mock.patch.object(terminal_screen, "_close", side_effect=fail_parent_writer):
+                    with mock.patch.object(terminal_screen, "_reap_after_failed_spawn") as reaped:
+                        with self.assertRaises(KeyboardInterrupt):
+                            spawn_pty(["cmd"], Path.cwd(), {}, 1)
+                        self.assertEqual(close_calls, [4, 3, 4])
+                        reaped.assert_called_once_with(42, 7)
+
+        with mock.patch.object(terminal_screen, "_close", side_effect=KeyboardInterrupt):
+            with mock.patch.object(terminal_screen, "stop_pty_child") as stopped:
+                with self.assertRaises(KeyboardInterrupt):
+                    terminal_screen._reap_after_failed_spawn(42, 7)
+                stopped.assert_called_once_with(42, None)
+
+    def test_child_exec_faults_always_report_and_exit_without_returning(self):
+        fault_points = ("close", "configure", "chdir", "exec", "exec-return")
+        for fault in fault_points:
+            with self.subTest(fault=fault):
+                patches = [
+                    mock.patch.object(terminal_screen.os, "_exit", return_value=None),
+                    mock.patch.object(terminal_screen.os, "write", return_value=1),
+                    mock.patch.object(terminal_screen, "report_exec_failure"),
+                    mock.patch.object(terminal_screen, "_close"),
+                    mock.patch.object(terminal_screen, "configure_pty_slave"),
+                    mock.patch.object(terminal_screen.os, "chdir"),
+                    mock.patch.object(terminal_screen.os, "execvpe", return_value=None),
+                ]
+                entered = [patch.start() for patch in patches]
+                try:
+                    target = {
+                        "close": entered[3],
+                        "configure": entered[4],
+                        "chdir": entered[5],
+                        "exec": entered[6],
+                    }.get(fault)
+                    if target is not None:
+                        target.side_effect = RuntimeError(fault)
+                    with self.assertRaises(SystemExit):
+                        terminal_screen._exec_pty_child(3, 4, ["cmd"], Path.cwd(), {}, 80, 24)
+                    entered[2].assert_called_once_with(4)
+                    entered[0].assert_called_once_with(127)
+                finally:
+                    for patch in reversed(patches):
+                        patch.stop()
+
+        with mock.patch.object(terminal_screen, "report_exec_failure", side_effect=KeyboardInterrupt):
+            with mock.patch.object(terminal_screen, "_close"):
+                with mock.patch.object(terminal_screen, "configure_pty_slave"):
+                    with mock.patch.object(terminal_screen.os, "chdir"):
+                        with mock.patch.object(terminal_screen.os, "execvpe", side_effect=OSError("exec")):
+                            with mock.patch.object(terminal_screen.os, "write", side_effect=KeyboardInterrupt):
+                                with mock.patch.object(terminal_screen.os, "_exit", return_value=None) as child_exit:
+                                    with self.assertRaises(SystemExit):
+                                        terminal_screen._exec_pty_child(3, 4, ["cmd"], Path.cwd(), {}, 80, 24)
+                                    child_exit.assert_called_once_with(127)
+
+    def test_pty_read_retries_interrupt_and_only_eio_is_eof(self):
+        with mock.patch.object(terminal_screen.os, "read", side_effect=[InterruptedError(), b"data"]):
+            self.assertEqual(read_pty(3), b"data")
+        with mock.patch.object(terminal_screen.os, "read", side_effect=OSError(errno.EIO, "pty eof")):
+            self.assertEqual(read_pty(3), b"")
+        with mock.patch.object(terminal_screen.os, "read", side_effect=OSError(errno.EBADF, "bad fd")):
+            with self.assertRaises(OSError) as caught:
+                read_pty(3)
+            self.assertEqual(caught.exception.errno, errno.EBADF)
+
+        with mock.patch.object(terminal_screen.os, "close", side_effect=[InterruptedError(), None]) as closed:
+            terminal_screen.close_pty_fd(3)
+            self.assertEqual(closed.call_count, 2)
+        with mock.patch.object(terminal_screen.os, "close", side_effect=InterruptedError()) as closed:
+            with self.assertRaises(InterruptedError):
+                terminal_screen.close_pty_fd(3)
+            self.assertEqual(closed.call_count, 2)
+
+    def test_stop_child_verifies_group_after_sigkill_and_fails_closed(self):
+        with mock.patch.object(terminal_screen, "_child_process_group", return_value=42):
+            with mock.patch.object(terminal_screen, "_wait_for_child", side_effect=[None, None, 9]):
+                with mock.patch.object(terminal_screen, "_process_group_exists", return_value=True):
+                    with mock.patch.object(terminal_screen, "_wait_for_process_group", side_effect=[False, True]):
+                        with mock.patch.object(terminal_screen, "_signal_child") as signaled:
+                            with mock.patch.object(terminal_screen.os, "write"):
+                                self.assertEqual(stop_pty_child(42, 7), 9)
+        self.assertEqual(
+            [call.args[1] for call in signaled.call_args_list],
+            [terminal_screen.signal.SIGTERM, terminal_screen.signal.SIGKILL],
+        )
+
+        with mock.patch.object(terminal_screen, "_child_process_group", return_value=42):
+            with mock.patch.object(terminal_screen, "_wait_for_child", side_effect=[None, None, None]):
+                with mock.patch.object(terminal_screen, "_process_group_exists", return_value=True):
+                    with mock.patch.object(terminal_screen, "_wait_for_process_group", return_value=False):
+                        with mock.patch.object(terminal_screen, "_signal_child"):
+                            with self.assertRaises(PtyCleanupError):
+                                stop_pty_child(42, None)
+
+        with mock.patch.object(terminal_screen.os, "killpg", side_effect=PermissionError()):
+            with self.assertRaises(PtyCleanupError):
+                terminal_screen._process_group_exists(42)
+
     def test_entry_fixture_observes_exact_pre_exec_geometry(self):
         fixture = (
             "import fcntl,struct,termios;"
@@ -661,6 +1031,55 @@ class PtyHandshakeTest(unittest.TestCase):
 
 
 class BenchmarkHandshakeIntegrationTest(unittest.TestCase):
+    def test_benchmark_propagates_non_eio_and_closes_fd_when_stop_fails(self):
+        child = terminal_screen.PtyProcess(42, 7, time.perf_counter_ns(), time.monotonic() + 1)
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            tui_benchmark.prepare_state(state)
+            with mock.patch.object(tui_benchmark, "spawn_pty", return_value=child):
+                with mock.patch.object(tui_benchmark.select, "select", return_value=([7], [], [])):
+                    with mock.patch.object(tui_benchmark, "read_pty", side_effect=OSError(errno.EBADF, "bad fd")):
+                        with mock.patch.object(tui_benchmark, "stop_pty_child"):
+                            with mock.patch.object(tui_benchmark, "close_pty_fd") as closed:
+                                with self.assertRaises(OSError) as caught:
+                                    tui_benchmark.run_once(["cmd"], state, Path.cwd(), 1, "none", b"ready")
+                                self.assertEqual(caught.exception.errno, errno.EBADF)
+                                closed.assert_called_once_with(7)
+
+            with mock.patch.object(tui_benchmark, "spawn_pty", return_value=child):
+                with mock.patch.object(tui_benchmark.select, "select", side_effect=RuntimeError("read")):
+                    with mock.patch.object(tui_benchmark, "stop_pty_child", side_effect=PtyCleanupError("stop")):
+                        with mock.patch.object(tui_benchmark, "close_pty_fd") as closed:
+                            with self.assertRaises(PtyCleanupError):
+                                tui_benchmark.run_once(["cmd"], state, Path.cwd(), 1, "none", b"ready")
+                            closed.assert_called_once_with(7)
+
+    def test_probe_cleanup_closes_fd_and_removes_state_when_stop_fails(self):
+        child = terminal_screen.PtyProcess(42, 7, time.perf_counter_ns(), time.monotonic() + 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(
+                command=["cmd"],
+                timeout=1.0,
+                cwd=Path.cwd(),
+                raw=root / "output.raw",
+                force=True,
+                state_root=root,
+                keep_state=False,
+            )
+            parser = mock.Mock()
+            parser.parse_args.return_value = args
+            with mock.patch.object(tui_probe, "build_parser", return_value=parser):
+                with mock.patch.object(tui_probe, "spawn_pty", return_value=child):
+                    with mock.patch.object(tui_probe.select, "select", side_effect=RuntimeError("read")):
+                        with mock.patch.object(tui_probe, "stop_pty_child", side_effect=PtyCleanupError("stop")):
+                            with mock.patch.object(tui_probe, "close_pty_fd") as closed:
+                                with mock.patch.object(tui_probe.shutil, "rmtree") as removed:
+                                    with self.assertRaises(PtyCleanupError):
+                                        tui_probe.main()
+                                    closed.assert_called_once_with(7)
+                                    removed.assert_called_once()
+
     def test_run_once_preserves_legacy_diagnostics_after_truthful_handshake(self):
         fixture = (
             "import time;"

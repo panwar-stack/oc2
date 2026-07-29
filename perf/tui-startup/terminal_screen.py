@@ -16,10 +16,19 @@ import signal
 import struct
 import termios
 import time
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Mapping, Optional, Sequence, Tuple
+from typing import List, Mapping, NoReturn, Optional, Sequence, Tuple
+
+from unicode_tables_17_0_0 import (
+    EMOJI_MODIFIER_BASE_RANGES as _U17_EMOJI_MODIFIER_BASE_RANGES,
+    EMOJI_VARIATION_BASE_RANGES as _U17_EMOJI_VARIATION_BASE_RANGES,
+    EXTENDED_PICTOGRAPHIC_RANGES,
+    GCB_CONTROL_RANGES,
+    GRAPHEME_EXTEND_RANGES,
+    UNASSIGNED_RANGES,
+    WIDE_OR_FULLWIDTH_RANGES,
+)
 
 
 PTY_WIDTH = 100
@@ -28,233 +37,6 @@ _HANDSHAKE_READY = b"R"
 _HANDSHAKE_ERROR = b"E"
 _CONTINUATION = None
 _KEYCAP_BASES = frozenset("#*0123456789")
-_EMOJI_VARIATION_BASE_RANGES = (
-    (0x0023, 0x0023),
-    (0x002A, 0x002A),
-    (0x0030, 0x0039),
-    (0x00A9, 0x00A9),
-    (0x00AE, 0x00AE),
-    (0x203C, 0x203C),
-    (0x2049, 0x2049),
-    (0x2122, 0x2122),
-    (0x2139, 0x2139),
-    (0x2194, 0x2199),
-    (0x21A9, 0x21AA),
-    (0x231A, 0x231B),
-    (0x2328, 0x2328),
-    (0x23CF, 0x23CF),
-    (0x23E9, 0x23F3),
-    (0x23F8, 0x23FA),
-    (0x24C2, 0x24C2),
-    (0x25AA, 0x25AB),
-    (0x25B6, 0x25B6),
-    (0x25C0, 0x25C0),
-    (0x25FB, 0x25FE),
-    (0x2600, 0x2604),
-    (0x260E, 0x260E),
-    (0x2611, 0x2611),
-    (0x2614, 0x2615),
-    (0x2618, 0x2618),
-    (0x261D, 0x261D),
-    (0x2620, 0x2620),
-    (0x2622, 0x2623),
-    (0x2626, 0x2626),
-    (0x262A, 0x262A),
-    (0x262E, 0x262F),
-    (0x2638, 0x263A),
-    (0x2640, 0x2640),
-    (0x2642, 0x2642),
-    (0x2648, 0x2653),
-    (0x265F, 0x2660),
-    (0x2663, 0x2663),
-    (0x2665, 0x2666),
-    (0x2668, 0x2668),
-    (0x267B, 0x267B),
-    (0x267E, 0x267F),
-    (0x2692, 0x2697),
-    (0x2699, 0x2699),
-    (0x269B, 0x269C),
-    (0x26A0, 0x26A1),
-    (0x26A7, 0x26A7),
-    (0x26AA, 0x26AB),
-    (0x26B0, 0x26B1),
-    (0x26BD, 0x26BE),
-    (0x26C4, 0x26C5),
-    (0x26C8, 0x26C8),
-    (0x26CE, 0x26CF),
-    (0x26D1, 0x26D1),
-    (0x26D3, 0x26D4),
-    (0x26E9, 0x26EA),
-    (0x26F0, 0x26F5),
-    (0x26F7, 0x26FA),
-    (0x26FD, 0x26FD),
-    (0x2702, 0x2702),
-    (0x2705, 0x2705),
-    (0x2708, 0x270D),
-    (0x270F, 0x270F),
-    (0x2712, 0x2712),
-    (0x2714, 0x2714),
-    (0x2716, 0x2716),
-    (0x271D, 0x271D),
-    (0x2721, 0x2721),
-    (0x2728, 0x2728),
-    (0x2733, 0x2734),
-    (0x2744, 0x2744),
-    (0x2747, 0x2747),
-    (0x274C, 0x274C),
-    (0x274E, 0x274E),
-    (0x2753, 0x2755),
-    (0x2757, 0x2757),
-    (0x2763, 0x2764),
-    (0x2795, 0x2797),
-    (0x27A1, 0x27A1),
-    (0x27B0, 0x27B0),
-    (0x27BF, 0x27BF),
-    (0x2934, 0x2935),
-    (0x2B05, 0x2B07),
-    (0x2B1B, 0x2B1C),
-    (0x2B50, 0x2B50),
-    (0x2B55, 0x2B55),
-    (0x3030, 0x3030),
-    (0x303D, 0x303D),
-    (0x3297, 0x3297),
-    (0x3299, 0x3299),
-    (0x1F004, 0x1F004),
-    (0x1F170, 0x1F171),
-    (0x1F17E, 0x1F17F),
-    (0x1F202, 0x1F202),
-    (0x1F21A, 0x1F21A),
-    (0x1F22F, 0x1F22F),
-    (0x1F237, 0x1F237),
-    (0x1F30D, 0x1F30F),
-    (0x1F315, 0x1F315),
-    (0x1F31C, 0x1F31C),
-    (0x1F321, 0x1F321),
-    (0x1F324, 0x1F32C),
-    (0x1F336, 0x1F336),
-    (0x1F378, 0x1F378),
-    (0x1F37D, 0x1F37D),
-    (0x1F393, 0x1F393),
-    (0x1F396, 0x1F397),
-    (0x1F399, 0x1F39B),
-    (0x1F39E, 0x1F39F),
-    (0x1F3A7, 0x1F3A7),
-    (0x1F3AC, 0x1F3AE),
-    (0x1F3C2, 0x1F3C2),
-    (0x1F3C4, 0x1F3C4),
-    (0x1F3C6, 0x1F3C6),
-    (0x1F3CA, 0x1F3CE),
-    (0x1F3D4, 0x1F3E0),
-    (0x1F3ED, 0x1F3ED),
-    (0x1F3F3, 0x1F3F3),
-    (0x1F3F5, 0x1F3F5),
-    (0x1F3F7, 0x1F3F7),
-    (0x1F408, 0x1F408),
-    (0x1F415, 0x1F415),
-    (0x1F41F, 0x1F41F),
-    (0x1F426, 0x1F426),
-    (0x1F43F, 0x1F43F),
-    (0x1F441, 0x1F442),
-    (0x1F446, 0x1F449),
-    (0x1F44D, 0x1F44E),
-    (0x1F453, 0x1F453),
-    (0x1F46A, 0x1F46A),
-    (0x1F47D, 0x1F47D),
-    (0x1F4A3, 0x1F4A3),
-    (0x1F4B0, 0x1F4B0),
-    (0x1F4B3, 0x1F4B3),
-    (0x1F4BB, 0x1F4BB),
-    (0x1F4BF, 0x1F4BF),
-    (0x1F4CB, 0x1F4CB),
-    (0x1F4DA, 0x1F4DA),
-    (0x1F4DF, 0x1F4DF),
-    (0x1F4E4, 0x1F4E6),
-    (0x1F4EA, 0x1F4ED),
-    (0x1F4F7, 0x1F4F7),
-    (0x1F4F9, 0x1F4FB),
-    (0x1F4FD, 0x1F4FD),
-    (0x1F508, 0x1F508),
-    (0x1F50D, 0x1F50D),
-    (0x1F512, 0x1F513),
-    (0x1F549, 0x1F54A),
-    (0x1F550, 0x1F567),
-    (0x1F56F, 0x1F570),
-    (0x1F573, 0x1F579),
-    (0x1F587, 0x1F587),
-    (0x1F58A, 0x1F58D),
-    (0x1F590, 0x1F590),
-    (0x1F5A5, 0x1F5A5),
-    (0x1F5A8, 0x1F5A8),
-    (0x1F5B1, 0x1F5B2),
-    (0x1F5BC, 0x1F5BC),
-    (0x1F5C2, 0x1F5C4),
-    (0x1F5D1, 0x1F5D3),
-    (0x1F5DC, 0x1F5DE),
-    (0x1F5E1, 0x1F5E1),
-    (0x1F5E3, 0x1F5E3),
-    (0x1F5E8, 0x1F5E8),
-    (0x1F5EF, 0x1F5EF),
-    (0x1F5F3, 0x1F5F3),
-    (0x1F5FA, 0x1F5FA),
-    (0x1F610, 0x1F610),
-    (0x1F687, 0x1F687),
-    (0x1F68D, 0x1F68D),
-    (0x1F691, 0x1F691),
-    (0x1F694, 0x1F694),
-    (0x1F698, 0x1F698),
-    (0x1F6AD, 0x1F6AD),
-    (0x1F6B2, 0x1F6B2),
-    (0x1F6B9, 0x1F6BA),
-    (0x1F6BC, 0x1F6BC),
-    (0x1F6CB, 0x1F6CB),
-    (0x1F6CD, 0x1F6CF),
-    (0x1F6E0, 0x1F6E5),
-    (0x1F6E9, 0x1F6E9),
-    (0x1F6F0, 0x1F6F0),
-    (0x1F6F3, 0x1F6F3),
-)
-_EMOJI_MODIFIER_BASE_RANGES = (
-    (0x261D, 0x261D),
-    (0x26F9, 0x26F9),
-    (0x270A, 0x270D),
-    (0x1F385, 0x1F385),
-    (0x1F3C2, 0x1F3C4),
-    (0x1F3C7, 0x1F3C7),
-    (0x1F3CA, 0x1F3CC),
-    (0x1F442, 0x1F443),
-    (0x1F446, 0x1F450),
-    (0x1F466, 0x1F478),
-    (0x1F47C, 0x1F47C),
-    (0x1F481, 0x1F483),
-    (0x1F485, 0x1F487),
-    (0x1F48F, 0x1F48F),
-    (0x1F491, 0x1F491),
-    (0x1F4AA, 0x1F4AA),
-    (0x1F574, 0x1F575),
-    (0x1F57A, 0x1F57A),
-    (0x1F590, 0x1F590),
-    (0x1F595, 0x1F596),
-    (0x1F645, 0x1F647),
-    (0x1F64B, 0x1F64F),
-    (0x1F6A3, 0x1F6A3),
-    (0x1F6B4, 0x1F6B6),
-    (0x1F6C0, 0x1F6C0),
-    (0x1F6CC, 0x1F6CC),
-    (0x1F90C, 0x1F90C),
-    (0x1F90F, 0x1F90F),
-    (0x1F918, 0x1F91F),
-    (0x1F926, 0x1F926),
-    (0x1F930, 0x1F939),
-    (0x1F93C, 0x1F93E),
-    (0x1F977, 0x1F977),
-    (0x1F9B5, 0x1F9B6),
-    (0x1F9B8, 0x1F9B9),
-    (0x1F9BB, 0x1F9BB),
-    (0x1F9CD, 0x1F9CF),
-    (0x1F9D1, 0x1F9DD),
-    (0x1FAC3, 0x1FAC5),
-    (0x1FAF0, 0x1FAF8),
-)
 
 
 class PtyHandshakeError(RuntimeError):
@@ -266,6 +48,10 @@ class PtyHandshakeError(RuntimeError):
         self.master_fd = master_fd
 
 
+class PtyCleanupError(RuntimeError):
+    """Raised when a PTY child or its process group cannot be proven gone."""
+
+
 @dataclass(frozen=True)
 class PtyProcess:
     pid: int
@@ -274,13 +60,149 @@ class PtyProcess:
     deadline: float
 
 
+def read_pty(fd: int, size: int = 65536) -> bytes:
+    """Read a PTY, treating only EIO and a zero-byte read as EOF."""
+
+    while True:
+        try:
+            return os.read(fd, size)
+        except InterruptedError:
+            continue
+        except OSError as error:
+            if error.errno == errno.EIO:
+                return b""
+            raise
+
+
+def _wait_for_child(pid: int, timeout: float) -> Optional[int]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return 0
+        if waited:
+            return status
+        time.sleep(0.01)
+    while True:
+        try:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return 0
+        if waited:
+            return status
+        break
+    return None
+
+
+def _child_process_group(pid: int) -> Optional[int]:
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return None
+    except PermissionError as error:
+        raise PtyCleanupError("permission denied while identifying PTY process group") from error
+    return pgid if pgid == pid else None
+
+
+def _process_group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise PtyCleanupError("permission denied while probing PTY process group") from error
+    return True
+
+
+def _wait_for_process_group(pgid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_group_exists(pgid):
+            return True
+        time.sleep(0.01)
+    return not _process_group_exists(pgid)
+
+
+def _signal_child(pid: int, sig: signal.Signals, pgid: Optional[int]) -> None:
+    try:
+        if pgid is not None:
+            os.killpg(pgid, sig)
+        else:
+            os.kill(pid, sig)
+    except ProcessLookupError:
+        return
+    except PermissionError as error:
+        raise PtyCleanupError("permission denied while signaling PTY child") from error
+
+
+def stop_pty_child(pid: int, fd: Optional[int]) -> int:
+    """Stop and reap a PTY child, proving its process group disappeared."""
+
+    pgid = _child_process_group(pid)
+    if fd is not None:
+        try:
+            os.write(fd, b"\x03")
+        except OSError:
+            pass
+    status = _wait_for_child(pid, 1.0)
+    group_gone = pgid is None or not _process_group_exists(pgid)
+    if status is not None and group_gone:
+        return status
+
+    _signal_child(pid, signal.SIGTERM, pgid)
+    if status is None:
+        status = _wait_for_child(pid, 1.0)
+    group_gone = pgid is None or _wait_for_process_group(pgid, 0.5)
+    if status is not None and group_gone:
+        return status
+
+    _signal_child(pid, signal.SIGKILL, pgid)
+    if status is None:
+        status = _wait_for_child(pid, 1.0)
+    group_gone = pgid is None or _wait_for_process_group(pgid, 1.0)
+    if status is None or not group_gone:
+        raise PtyCleanupError("PTY child or process group survived SIGKILL")
+    return status
+
+
 def _close(fd: Optional[int]) -> None:
     if fd is None:
         return
     try:
         os.close(fd)
+    except InterruptedError:
+        raise
     except OSError:
         pass
+
+
+def _close_descriptors(*fds: Optional[int]) -> None:
+    first_error: Optional[BaseException] = None
+    for fd in fds:
+        closed = False
+        error: Optional[BaseException] = None
+        for _ in range(2):
+            try:
+                _close(fd)
+                closed = True
+                break
+            except BaseException as caught:
+                error = caught
+        if not closed and first_error is None:
+            first_error = error
+    if first_error is not None:
+        raise first_error
+
+
+def close_pty_fd(fd: int) -> None:
+    """Close a PTY descriptor with bounded outer fault retries."""
+
+    _close_descriptors(fd)
 
 
 def _write_all(fd: int, value: bytes) -> None:
@@ -306,8 +228,7 @@ def create_exec_handshake() -> Tuple[int, int]:
             raise PtyHandshakeError("exec handshake writer is inheritable")
         return read_fd, write_fd
     except BaseException:
-        _close(read_fd)
-        _close(write_fd)
+        _close_descriptors(read_fd, write_fd)
         raise
 
 
@@ -334,15 +255,49 @@ def report_exec_failure(write_fd: int) -> None:
 
     try:
         _write_all(write_fd, _HANDSHAKE_ERROR)
-    except OSError:
+    except BaseException:
         pass
+
+
+def _exec_pty_child(
+    read_fd: int,
+    write_fd: int,
+    command: Sequence[str],
+    cwd: Path,
+    env: Mapping[str, str],
+    width: int,
+    height: int,
+) -> NoReturn:
+    error: BaseException
+    try:
+        _close(read_fd)
+        configure_pty_slave(write_fd, width, height)
+        os.chdir(cwd)
+        os.execvpe(command[0], list(command), dict(env))
+        error = RuntimeError("execvpe returned without replacing the PTY child")
+    except BaseException as caught:
+        error = caught
+    try:
+        report_exec_failure(write_fd)
+    except BaseException:
+        pass
+    try:
+        message = "failed to launch command: {}\n".format(error).encode("utf-8", errors="replace")
+        os.write(2, message[:1024])
+    except BaseException:
+        pass
+    try:
+        os._exit(127)
+    except BaseException:
+        raise SystemExit(127)
+    raise SystemExit(127)
 
 
 def await_exec_handshake(read_fd: int, timeout: float) -> None:
     """Require ready followed by CLOEXEC EOF, closing ``read_fd`` on every path."""
 
     if timeout <= 0:
-        _close(read_fd)
+        _close_descriptors(read_fd)
         raise PtyHandshakeError("timed out before PTY exec handshake")
     deadline = time.monotonic() + timeout
     ready = False
@@ -374,30 +329,14 @@ def await_exec_handshake(read_fd: int, timeout: float) -> None:
                     raise PtyHandshakeError("PTY child failed before exec")
                 raise PtyHandshakeError("invalid PTY exec handshake protocol")
     finally:
-        _close(read_fd)
+        _close_descriptors(read_fd)
 
 
 def _reap_after_failed_spawn(pid: int, master_fd: int) -> None:
-    _close(master_fd)
     try:
-        pgid = os.getpgid(pid)
-    except ProcessLookupError:
-        pgid = None
-    try:
-        if pgid == pid:
-            os.killpg(pgid, signal.SIGKILL)
-        else:
-            os.kill(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    while True:
-        try:
-            os.waitpid(pid, 0)
-            return
-        except InterruptedError:
-            continue
-        except ChildProcessError:
-            return
+        _close_descriptors(master_fd)
+    finally:
+        stop_pty_child(pid, None)
 
 
 def spawn_pty(
@@ -423,34 +362,23 @@ def spawn_pty(
     try:
         pid, master_fd = pty.fork()
     except BaseException:
-        _close(read_fd)
-        _close(write_fd)
+        _close_descriptors(read_fd, write_fd)
         raise
 
     if pid == 0:
-        _close(read_fd)
-        try:
-            configure_pty_slave(write_fd, width, height)
-            os.chdir(cwd)
-            os.execvpe(command[0], list(command), dict(env))
-        except BaseException as error:
-            report_exec_failure(write_fd)
-            try:
-                message = "failed to launch command: {}\n".format(error).encode("utf-8", errors="replace")
-                os.write(2, message[:1024])
-            except BaseException:
-                pass
-            os._exit(127)
+        _exec_pty_child(read_fd, write_fd, command, cwd, env, width, height)
 
-    _close(write_fd)
     deadline = start_monotonic + timeout
     try:
+        _close(write_fd)
         await_exec_handshake(read_fd, max(0.0, deadline - time.monotonic()))
-    except PtyHandshakeError as error:
-        _reap_after_failed_spawn(pid, master_fd)
-        raise PtyHandshakeError(str(error), pid=pid, master_fd=master_fd) from error
-    except BaseException:
-        _reap_after_failed_spawn(pid, master_fd)
+    except BaseException as error:
+        try:
+            _close_descriptors(read_fd, write_fd)
+        finally:
+            _reap_after_failed_spawn(pid, master_fd)
+        if isinstance(error, PtyHandshakeError):
+            raise PtyHandshakeError(str(error), pid=pid, master_fd=master_fd) from error
         raise
     return PtyProcess(pid=pid, master_fd=master_fd, start_ns=start_ns, deadline=deadline)
 
@@ -491,12 +419,21 @@ class TerminalFrame:
         return any(value in self.line(row) for row in range(self.height))
 
 
+@dataclass(frozen=True)
+class _CellPart:
+    width: int
+    height: int
+    row_offset: int
+    column_offset: int
+
+
 @dataclass
 class _Surface:
     width: int
     height: int
     rows: List[List[Cell]]
     visible: List[List[bool]]
+    parts: List[List[Optional[_CellPart]]]
     cursor_row: int = 0
     cursor_column: int = 0
     saved_cursor: Optional[Tuple[int, int]] = None
@@ -512,6 +449,7 @@ class _Surface:
             height=height,
             rows=[[" " for _ in range(width)] for _ in range(height)],
             visible=[[True for _ in range(width)] for _ in range(height)],
+            parts=[[None for _ in range(width)] for _ in range(height)],
             scroll_bottom=height - 1,
         )
 
@@ -608,12 +546,27 @@ class TerminalScreen:
             raise TypeError("terminal input must be bytes")
         if not self._valid or not data:
             return ()
+        starting_sequence = self._commit_sequence
+        starting_frame = self._last_frame
         self._pending.extend(data)
         frames: List[TerminalFrame] = []
+        self._drain(frames, allow_passthrough=True)
+        if not self._valid:
+            self._commit_sequence = starting_sequence
+            self._last_frame = starting_frame
+            return ()
+        if self._valid and self._dirty and not self._synchronized:
+            self._commit(frames)
+        return tuple(frames)
+
+    def _drain(self, frames: List[TerminalFrame], allow_passthrough: bool) -> None:
         while self._valid and self._pending:
             first = self._pending[0]
+            if self._join_next and (first == 0x1B or first < 0x20 or first == 0x7F):
+                self._invalidate("Unicode ZWJ was not followed by an extended pictographic")
+                break
             if first == 0x1B:
-                consumed = self._consume_escape(frames)
+                consumed = self._consume_escape(frames, allow_passthrough)
                 if consumed == 0:
                     break
                 if consumed < 0:
@@ -631,9 +584,6 @@ class TerminalScreen:
                 break
             del self._pending[:consumed]
             self._write_character(character)
-        if self._valid and self._dirty and not self._synchronized:
-            self._commit(frames)
-        return tuple(frames)
 
     def finish(self) -> Tuple[TerminalFrame, ...]:
         """Declare EOF; incomplete input or an open sync transaction invalidates."""
@@ -642,6 +592,9 @@ class TerminalScreen:
             return ()
         if self._pending:
             self._invalidate("truncated terminal sequence or UTF-8 at EOF")
+            return ()
+        if self._join_next:
+            self._invalidate("dangling Unicode ZWJ at EOF")
             return ()
         if self._synchronized:
             self._invalidate("synchronized output was not committed before EOF")
@@ -655,56 +608,91 @@ class TerminalScreen:
             raise ValueError("terminal geometry must be positive")
         if not self._valid or (width, height) == (self.width, self.height):
             return ()
+        if self._join_next:
+            self._invalidate("resize during dangling Unicode ZWJ")
+            return ()
         for surface in (self._main, self._alternate):
             old_width = surface.width
             old_height = surface.height
             old_rows = surface.rows
             old_visible = surface.visible
+            old_parts = surface.parts
             resized = [[" " for _ in range(width)] for _ in range(height)]
             resized_visible = [[True for _ in range(width)] for _ in range(height)]
-            truncated_wide_leads: List[Tuple[int, int]] = []
+            resized_parts: List[List[Optional[_CellPart]]] = [
+                [None for _ in range(width)] for _ in range(height)
+            ]
             for row in range(min(height, old_height)):
                 for column in range(min(width, old_width)):
                     resized[row][column] = old_rows[row][column]
                     resized_visible[row][column] = old_visible[row][column]
-                    if (
-                        old_rows[row][column] is not _CONTINUATION
-                        and column + 1 < old_width
-                        and old_rows[row][column + 1] is _CONTINUATION
-                        and column + 1 >= width
-                    ):
-                        truncated_wide_leads.append((row, column))
+                    resized_parts[row][column] = old_parts[row][column]
             surface.width = width
             surface.height = height
             surface.rows = resized
             surface.visible = resized_visible
+            surface.parts = resized_parts
             surface.cursor_row = min(surface.cursor_row, height - 1)
             surface.cursor_column = min(surface.cursor_column, width - 1)
             surface.scroll_top = 0
             surface.scroll_bottom = height - 1
             surface.wrap_pending = False
             surface.last_lead = None
-            self._repair_wide_cells(surface, truncated_wide_leads)
+            self._repair_multicells(surface)
         self.width = width
         self.height = height
-        self._join_next = False
         self._dirty = True
         frames: List[TerminalFrame] = []
         if not self._synchronized:
             self._commit(frames)
         return tuple(frames)
 
-    def _repair_wide_cells(self, surface: _Surface, truncated_wide_leads: Sequence[Tuple[int, int]]) -> None:
-        for row, column in truncated_wide_leads:
-            surface.rows[row][column] = " "
-            surface.visible[row][column] = True
+    def _repair_multicells(self, surface: _Surface) -> None:
+        owners: dict[Tuple[int, int, int, int], List[Tuple[int, int]]] = {}
         for row in range(surface.height):
             for column in range(surface.width):
-                cell = surface.rows[row][column]
-                if cell is _CONTINUATION:
-                    if column == 0 or surface.rows[row][column - 1] is _CONTINUATION:
-                        surface.rows[row][column] = " "
-                        surface.visible[row][column] = True
+                part = surface.parts[row][column]
+                if part is not None:
+                    key = (
+                        row - part.row_offset,
+                        column - part.column_offset,
+                        part.width,
+                        part.height,
+                    )
+                    owners.setdefault(key, []).append((row, column))
+                elif surface.rows[row][column] is _CONTINUATION:
+                    surface.rows[row][column] = " "
+                    surface.visible[row][column] = True
+        for (lead_row, lead_column, width, height), actual in owners.items():
+            expected = {
+                (lead_row + row_offset, lead_column + column_offset)
+                for row_offset in range(height)
+                for column_offset in range(width)
+            }
+            valid = (
+                lead_row >= 0
+                and lead_column >= 0
+                and lead_row + height <= surface.height
+                and lead_column + width <= surface.width
+                and set(actual) == expected
+            )
+            if valid:
+                for row, column in expected:
+                    part = surface.parts[row][column]
+                    if part is None or (
+                        row - part.row_offset,
+                        column - part.column_offset,
+                        part.width,
+                        part.height,
+                    ) != (lead_row, lead_column, width, height):
+                        valid = False
+                        break
+            if valid:
+                continue
+            for row, column in actual:
+                surface.rows[row][column] = " "
+                surface.visible[row][column] = True
+                surface.parts[row][column] = None
 
     def _decode_character(self) -> Tuple[int, Optional[str]]:
         first = self._pending[0]
@@ -728,7 +716,7 @@ class TerminalScreen:
             self._invalidate("invalid UTF-8 sequence")
             return -1, None
 
-    def _consume_escape(self, frames: List[TerminalFrame]) -> int:
+    def _consume_escape(self, frames: List[TerminalFrame], allow_passthrough: bool) -> int:
         if len(self._pending) < 2:
             return 0
         kind = self._pending[1]
@@ -751,7 +739,7 @@ class TerminalScreen:
                 value = self._pending[index]
                 if allow_bel and value == 0x07:
                     payload = bytes(self._pending[2:index])
-                    self._string_escape(kind, payload)
+                    self._string_escape(kind, payload, frames, allow_passthrough)
                     return index + 1
                 if value == 0x1B:
                     if index + 1 >= len(self._pending):
@@ -759,11 +747,18 @@ class TerminalScreen:
                     if kind == ord("P") and self._pending[index + 1] == 0x1B:
                         index += 2
                         continue
+                    if (
+                        kind == ord("P")
+                        and self._pending[index + 1] != ord("\\")
+                        and not bytes(self._pending[2:index]).startswith(b"tmux;")
+                    ):
+                        index += 1
+                        continue
                     if self._pending[index + 1] != ord("\\"):
                         self._invalidate("malformed terminal string escape")
                         return -1
                     payload = bytes(self._pending[2:index])
-                    self._string_escape(kind, payload)
+                    self._string_escape(kind, payload, frames, allow_passthrough)
                     return index + 2
                 index += 1
             return 0
@@ -779,7 +774,13 @@ class TerminalScreen:
         self._invalidate("unsupported ESC sequence")
         return -1
 
-    def _string_escape(self, kind: int, payload: bytes) -> None:
+    def _string_escape(
+        self,
+        kind: int,
+        payload: bytes,
+        frames: List[TerminalFrame],
+        allow_passthrough: bool,
+    ) -> None:
         if kind == ord("]"):
             self._osc(payload)
             return
@@ -787,37 +788,55 @@ class TerminalScreen:
             if payload.startswith((b"+q", b"$q", b">q")):
                 return
             if payload.startswith(b"tmux;"):
-                self._passthrough(payload[5:])
+                self._passthrough(payload[5:], frames, allow_passthrough, require_doubled=True)
                 return
             if payload.startswith(b"\x1b"):
-                self._passthrough(payload)
+                self._passthrough(payload, frames, allow_passthrough, require_doubled=False)
                 return
         if kind == ord("_") and payload == b"Gi=31337,s=1,v=1,a=q,t=d,f=24;AAAA":
             return
         self._invalidate("unsupported terminal string command")
 
-    def _passthrough(self, payload: bytes) -> None:
-        inner = bytearray()
-        index = 0
-        while index < len(payload):
-            value = payload[index]
-            if value == 0x1B:
-                if index + 1 >= len(payload) or payload[index + 1] != 0x1B:
-                    self._invalidate("malformed terminal passthrough escaping")
-                    return
-                inner.append(value)
-                index += 2
-                continue
-            inner.append(value)
-            index += 1
-        if not inner:
-            self._invalidate("empty terminal passthrough")
+    def _passthrough(
+        self,
+        payload: bytes,
+        frames: List[TerminalFrame],
+        allowed: bool,
+        require_doubled: bool,
+    ) -> None:
+        if not allowed:
+            self._invalidate("nested terminal passthrough")
             return
-        probe = TerminalScreen(self.width, self.height)
-        frames = probe.feed(bytes(inner))
-        probe.finish()
-        if frames or not probe.valid or probe.last_frame is not None:
-            self._invalidate("unsupported or mutating terminal passthrough")
+        doubled = require_doubled or payload.startswith(b"\x1b\x1b")
+        inner = bytearray()
+        if doubled:
+            index = 0
+            while index < len(payload):
+                value = payload[index]
+                if value == 0x1B:
+                    if index + 1 >= len(payload) or payload[index + 1] != 0x1B:
+                        self._invalidate("malformed terminal passthrough escaping")
+                        return
+                    inner.append(value)
+                    index += 2
+                    continue
+                inner.append(value)
+                index += 1
+        else:
+            inner.extend(payload)
+        if not inner or inner[0] != 0x1B:
+            self._invalidate("unproven terminal passthrough payload")
+            return
+        outer_pending = self._pending
+        self._pending = inner
+        try:
+            self._drain(frames, allow_passthrough=False)
+            if self._valid and self._pending:
+                self._invalidate("truncated terminal passthrough payload")
+        finally:
+            if not self._valid:
+                outer_pending.clear()
+            self._pending = outer_pending
 
     def _osc(self, payload: bytes) -> None:
         if payload.startswith(b"66;"):
@@ -858,7 +877,7 @@ class TerminalScreen:
             if parts[2] != b" ":
                 self._invalidate("unsupported scaled-text OSC payload")
                 return
-            self._write_glyph(" ", 2)
+            self._write_glyph(" ", 2, 2)
             return
         if option not in (b"w=1", b"w=2"):
             self._invalidate("unsupported explicit-width OSC option")
@@ -869,7 +888,7 @@ class TerminalScreen:
         except (UnicodeDecodeError, ValueError):
             self._invalidate("malformed explicit-width OSC payload")
             return
-        if not text:
+        if not text or not all(_is_safe_osc66_scalar(character) for character in text):
             self._invalidate("unsupported explicit-width OSC geometry")
             return
         self._write_glyph(text, width)
@@ -1258,12 +1277,17 @@ class TerminalScreen:
             return
         retained_rows = surface.rows[surface.scroll_top + count : surface.scroll_bottom + 1]
         retained_visible = surface.visible[surface.scroll_top + count : surface.scroll_bottom + 1]
+        retained_parts = surface.parts[surface.scroll_top + count : surface.scroll_bottom + 1]
         surface.rows[surface.scroll_top : surface.scroll_bottom + 1] = retained_rows + [
             [" " for _ in range(surface.width)] for _ in range(count)
         ]
         surface.visible[surface.scroll_top : surface.scroll_bottom + 1] = retained_visible + [
             [True for _ in range(surface.width)] for _ in range(count)
         ]
+        surface.parts[surface.scroll_top : surface.scroll_bottom + 1] = retained_parts + [
+            [None for _ in range(surface.width)] for _ in range(count)
+        ]
+        self._repair_multicells(surface)
         surface.last_lead = None
         self._join_next = False
         self._dirty = True
@@ -1275,12 +1299,17 @@ class TerminalScreen:
             return
         retained_rows = surface.rows[surface.scroll_top : surface.scroll_bottom - count + 1]
         retained_visible = surface.visible[surface.scroll_top : surface.scroll_bottom - count + 1]
+        retained_parts = surface.parts[surface.scroll_top : surface.scroll_bottom - count + 1]
         surface.rows[surface.scroll_top : surface.scroll_bottom + 1] = [
             [" " for _ in range(surface.width)] for _ in range(count)
         ] + retained_rows
         surface.visible[surface.scroll_top : surface.scroll_bottom + 1] = [
             [True for _ in range(surface.width)] for _ in range(count)
         ] + retained_visible
+        surface.parts[surface.scroll_top : surface.scroll_bottom + 1] = [
+            [None for _ in range(surface.width)] for _ in range(count)
+        ] + retained_parts
+        self._repair_multicells(surface)
         surface.last_lead = None
         self._join_next = False
         self._dirty = True
@@ -1324,22 +1353,22 @@ class TerminalScreen:
         self._dirty = True
 
     def _clear_glyph(self, surface: _Surface, row: int, column: int) -> None:
-        cell = surface.rows[row][column]
-        if cell is _CONTINUATION:
-            lead = column - 1
-            while lead >= 0 and surface.rows[row][lead] is _CONTINUATION:
-                lead -= 1
-            if lead >= 0:
-                surface.rows[row][lead] = " "
-                surface.visible[row][lead] = True
-            surface.rows[row][column] = " "
-            surface.visible[row][column] = True
+        part = surface.parts[row][column]
+        if part is not None:
+            lead_row = row - part.row_offset
+            lead_column = column - part.column_offset
+            for row_offset in range(part.height):
+                for column_offset in range(part.width):
+                    target_row = lead_row + row_offset
+                    target_column = lead_column + column_offset
+                    if 0 <= target_row < surface.height and 0 <= target_column < surface.width:
+                        surface.rows[target_row][target_column] = " "
+                        surface.visible[target_row][target_column] = True
+                        surface.parts[target_row][target_column] = None
             return
-        if column + 1 < surface.width and surface.rows[row][column + 1] is _CONTINUATION:
-            surface.rows[row][column + 1] = " "
-            surface.visible[row][column + 1] = True
         surface.rows[row][column] = " "
         surface.visible[row][column] = True
+        surface.parts[row][column] = None
 
     def _write_character(self, character: str) -> None:
         surface = self._surface
@@ -1355,7 +1384,7 @@ class TerminalScreen:
             self._extend_cluster(surface, character)
             return
         if self._join_next and surface.last_lead is not None:
-            if not _is_emoji_codepoint(character):
+            if not _is_extended_pictographic(character):
                 self._invalidate("unsupported non-emoji ZWJ target")
                 return
             row, column = surface.last_lead
@@ -1363,6 +1392,7 @@ class TerminalScreen:
             if cell not in (" ", _CONTINUATION):
                 surface.rows[row][column] = cell + character
                 self._join_next = False
+                self._widen_last_glyph(surface, row, column)
                 self._dirty = True
                 return
         self._join_next = False
@@ -1378,9 +1408,17 @@ class TerminalScreen:
 
     def _extend_cluster(self, surface: _Surface, character: str) -> None:
         if surface.last_lead is None:
-            if character in ("\ufe0f", "\u200d", "\u20e3") or _is_emoji_modifier(character):
+            part = surface.parts[surface.cursor_row][surface.cursor_column]
+            if part is not None:
+                surface.last_lead = (
+                    surface.cursor_row - part.row_offset,
+                    surface.cursor_column - part.column_offset,
+                )
+            elif _is_variation_selector(character) or character in ("\u200d", "\u20e3") or _is_emoji_modifier(character):
                 self._invalidate("cluster extension without a lead cell")
-            return
+                return
+            else:
+                return
         row, column = surface.last_lead
         cell = surface.rows[row][column]
         if cell is _CONTINUATION:
@@ -1399,7 +1437,7 @@ class TerminalScreen:
             return
 
         if character == "\u200d":
-            if not self._lead_is_wide(surface, row, column) or not _is_emoji_cluster_tail(cell):
+            if not _is_emoji_cluster_tail(cell):
                 self._invalidate("ZWJ without a modeled emoji source")
                 return
             surface.rows[row][column] = cell + character
@@ -1410,22 +1448,40 @@ class TerminalScreen:
         surface.rows[row][column] = cell + character
         if character == "\ufe0f" and _is_emoji_variation_base(cell[-1]):
             self._widen_last_glyph(surface, row, column)
+        elif character == "\ufe0e" and _is_emoji_variation_base(cell[-1]):
+            self._narrow_last_glyph(surface, row, column)
         elif character == "\u20e3" and _is_keycap_prefix(cell):
             self._widen_last_glyph(surface, row, column)
         self._dirty = True
 
     def _lead_is_wide(self, surface: _Surface, row: int, column: int) -> bool:
-        return column + 1 < surface.width and surface.rows[row][column + 1] is _CONTINUATION
+        part = surface.parts[row][column]
+        return part is not None and part.row_offset == 0 and part.column_offset == 0 and part.width == 2
 
     def _widen_last_glyph(self, surface: _Surface, row: int, column: int) -> None:
-        if column + 1 >= surface.width:
-            self._invalidate("Unicode grapheme widened past right margin")
+        if self._lead_is_wide(surface, row, column):
             return
-        if surface.rows[row][column + 1] is _CONTINUATION:
+        glyph = surface.rows[row][column]
+        if glyph is _CONTINUATION:
+            self._invalidate("Unicode grapheme widened without a lead")
+            return
+        if surface.width < 2 or (column + 1 >= surface.width and not self._autowrap):
+            self._invalidate("Unicode grapheme cannot widen at right margin")
+            return
+        if column + 1 >= surface.width:
+            surface.rows[row][column] = " "
+            surface.visible[row][column] = True
+            surface.parts[row][column] = None
+            surface.wrap_pending = False
+            self._line_feed(surface)
+            surface.cursor_column = 0
+            self._write_glyph(glyph, 2)
             return
         self._clear_glyph(surface, row, column + 1)
         surface.rows[row][column + 1] = _CONTINUATION
         surface.visible[row][column + 1] = surface.visible[row][column]
+        surface.parts[row][column] = _CellPart(2, 1, 0, 0)
+        surface.parts[row][column + 1] = _CellPart(2, 1, 0, 1)
         surface.last_lead = (row, column)
         if column + 1 == surface.width - 1:
             surface.cursor_column = column + 1
@@ -1434,30 +1490,79 @@ class TerminalScreen:
             surface.cursor_column = column + 2
             surface.wrap_pending = False
 
-    def _write_glyph(self, glyph: str, width: int) -> None:
-        surface = self._surface
-        if surface.wrap_pending:
-            self._line_feed(surface)
-            surface.cursor_column = 0
-        if width == 2 and surface.width == 1:
-            self._invalidate("wide character cannot fit terminal width")
+    def _narrow_last_glyph(self, surface: _Surface, row: int, column: int) -> None:
+        if not self._lead_is_wide(surface, row, column):
             return
-        if width == 2 and surface.cursor_column == surface.width - 1:
-            if not self._autowrap:
-                self._invalidate("wide character clipped with autowrap disabled")
+        glyph = surface.rows[row][column]
+        visible = surface.visible[row][column]
+        assert glyph is not None
+        self._clear_glyph(surface, row, column + 1)
+        surface.rows[row][column] = glyph
+        surface.visible[row][column] = visible
+        surface.parts[row][column] = None
+        surface.last_lead = (row, column)
+        surface.cursor_column = column
+        surface.wrap_pending = False
+        if column == surface.width - 1:
+            surface.wrap_pending = self._autowrap
+        else:
+            surface.cursor_column = column + 1
+
+    def _write_glyph(self, glyph: str, width: int, height: int = 1) -> None:
+        surface = self._surface
+        while self._valid:
+            if surface.wrap_pending:
+                self._line_feed(surface)
+                surface.cursor_column = 0
+            if width > surface.width:
+                self._invalidate("multicell glyph cannot fit terminal width")
                 return
-            self._line_feed(surface)
-            surface.cursor_column = 0
+            if surface.cursor_column + width > surface.width:
+                if not self._autowrap:
+                    surface.cursor_column = surface.width - width
+                else:
+                    self._line_feed(surface)
+                    surface.cursor_column = 0
+                    continue
+            if surface.cursor_row + height > surface.height:
+                self._invalidate("multicell glyph cannot fit terminal height")
+                return
+            skipped_to: Optional[int] = None
+            for target_row in range(surface.cursor_row, surface.cursor_row + height):
+                for target_column in range(surface.cursor_column, surface.cursor_column + width):
+                    part = surface.parts[target_row][target_column]
+                    if part is not None and part.row_offset > 0:
+                        skipped_to = max(
+                            skipped_to or 0,
+                            target_column - part.column_offset + part.width,
+                        )
+            if skipped_to is None:
+                break
+            if skipped_to >= surface.width:
+                self._line_feed(surface)
+                surface.cursor_column = 0
+            else:
+                surface.cursor_column = skipped_to
         row = surface.cursor_row
         column = surface.cursor_column
-        self._clear_glyph(surface, row, column)
-        if width == 2:
-            self._clear_glyph(surface, row, column + 1)
+        for target_row in range(row, row + height):
+            for target_column in range(column, column + width):
+                self._clear_glyph(surface, target_row, target_column)
         surface.rows[row][column] = glyph
         surface.visible[row][column] = not self._concealed
-        if width == 2:
-            surface.rows[row][column + 1] = _CONTINUATION
-            surface.visible[row][column + 1] = not self._concealed
+        for row_offset in range(height):
+            for column_offset in range(width):
+                target_row = row + row_offset
+                target_column = column + column_offset
+                surface.parts[target_row][target_column] = _CellPart(
+                    width,
+                    height,
+                    row_offset,
+                    column_offset,
+                )
+                if row_offset != 0 or column_offset != 0:
+                    surface.rows[target_row][target_column] = _CONTINUATION
+                    surface.visible[target_row][target_column] = not self._concealed
         surface.last_lead = (row, column)
         self._dirty = True
         final_column = column + width - 1
@@ -1471,31 +1576,69 @@ class TerminalScreen:
 
 def _cell_width(character: str) -> int:
     codepoint = ord(character)
-    category = unicodedata.category(character)
-    if character == "\u200d" or category in ("Mn", "Me"):
+    if _is_invalid_scalar(codepoint):
+        raise ValueError("control, surrogate, or noncharacter is not printable")
+    if (
+        character == "\u200d"
+        or _is_variation_selector(character)
+        or _is_emoji_modifier(character)
+        or _in_codepoint_ranges(codepoint, GRAPHEME_EXTEND_RANGES)
+        or _in_codepoint_ranges(codepoint, GCB_CONTROL_RANGES)
+    ):
         return 0
-    if 0xFE00 <= codepoint <= 0xFE0F or 0xE0100 <= codepoint <= 0xE01EF:
-        return 0
-    if 0x1F3FB <= codepoint <= 0x1F3FF:
-        return 0
-    if category in ("Cc", "Cs"):
-        raise ValueError("control or surrogate is not printable")
-    if category == "Cf":
-        return 0
-    return 2 if unicodedata.east_asian_width(character) in ("W", "F") else 1
+    return 2 if _in_codepoint_ranges(codepoint, WIDE_OR_FULLWIDTH_RANGES) else 1
 
 
 def _is_regional_indicator(character: str) -> bool:
     return len(character) == 1 and 0x1F1E6 <= ord(character) <= 0x1F1FF
 
 
-def _in_codepoint_ranges(character: str, ranges: Sequence[Tuple[int, int]]) -> bool:
+def _in_codepoint_ranges(codepoint: int, ranges: Sequence[Tuple[int, int]]) -> bool:
+    low = 0
+    high = len(ranges)
+    while low < high:
+        middle = (low + high) // 2
+        start, end = ranges[middle]
+        if codepoint < start:
+            high = middle
+        elif codepoint > end:
+            low = middle + 1
+        else:
+            return True
+    return False
+
+
+def _is_noncharacter(codepoint: int) -> bool:
+    return 0xFDD0 <= codepoint <= 0xFDEF or codepoint & 0xFFFE == 0xFFFE
+
+
+def _is_invalid_scalar(codepoint: int) -> bool:
+    return (
+        codepoint < 0x20
+        or 0x7F <= codepoint <= 0x9F
+        or 0xD800 <= codepoint <= 0xDFFF
+        or codepoint > 0x10FFFF
+        or _is_noncharacter(codepoint)
+        or _in_codepoint_ranges(codepoint, UNASSIGNED_RANGES)
+    )
+
+
+def _is_safe_osc66_scalar(character: str) -> bool:
     codepoint = ord(character)
-    return any(start <= codepoint <= end for start, end in ranges)
+    return not _is_invalid_scalar(codepoint) and not _in_codepoint_ranges(codepoint, GCB_CONTROL_RANGES)
+
+
+def _is_variation_selector(character: str) -> bool:
+    codepoint = ord(character)
+    return 0xFE00 <= codepoint <= 0xFE0F or 0xE0100 <= codepoint <= 0xE01EF
+
+
+def _is_grapheme_extend(character: str) -> bool:
+    return _in_codepoint_ranges(ord(character), GRAPHEME_EXTEND_RANGES)
 
 
 def _is_emoji_variation_base(character: str) -> bool:
-    return len(character) == 1 and _in_codepoint_ranges(character, _EMOJI_VARIATION_BASE_RANGES)
+    return len(character) == 1 and _in_codepoint_ranges(ord(character), _U17_EMOJI_VARIATION_BASE_RANGES)
 
 
 def _is_emoji_modifier(character: str) -> bool:
@@ -1503,26 +1646,11 @@ def _is_emoji_modifier(character: str) -> bool:
 
 
 def _is_emoji_modifier_base(character: str) -> bool:
-    return len(character) == 1 and _in_codepoint_ranges(character, _EMOJI_MODIFIER_BASE_RANGES)
+    return len(character) == 1 and _in_codepoint_ranges(ord(character), _U17_EMOJI_MODIFIER_BASE_RANGES)
 
 
-def _is_emoji_codepoint(character: str) -> bool:
-    if len(character) != 1:
-        return False
-    if character in _KEYCAP_BASES:
-        return False
-    codepoint = ord(character)
-    return (
-        codepoint == 0x1FAEF
-        or _is_emoji_variation_base(character)
-        or _is_emoji_modifier_base(character)
-        or (
-            0x1F000 <= codepoint <= 0x1FAFF
-            and not _is_regional_indicator(character)
-            and unicodedata.category(character) == "So"
-            and unicodedata.east_asian_width(character) in ("W", "F")
-        )
-    )
+def _is_extended_pictographic(character: str) -> bool:
+    return len(character) == 1 and _in_codepoint_ranges(ord(character), EXTENDED_PICTOGRAPHIC_RANGES)
 
 
 def _cluster_modifier_base(cluster: str) -> Optional[str]:
@@ -1537,18 +1665,10 @@ def _cluster_modifier_base(cluster: str) -> Optional[str]:
 def _is_emoji_cluster_tail(cluster: str) -> bool:
     if not cluster:
         return False
-    if _is_regional_indicator(cluster[-1]):
-        return False
-    if _is_emoji_modifier(cluster[-1]):
-        base = _cluster_modifier_base(cluster[:-1])
-        return base is not None and _is_emoji_modifier_base(base)
-    if cluster[-1] == "\ufe0f":
-        return (
-            len(cluster) >= 2
-            and cluster[-2] not in _KEYCAP_BASES
-            and _is_emoji_variation_base(cluster[-2])
-        )
-    return _is_emoji_codepoint(cluster[-1])
+    index = len(cluster) - 1
+    while index >= 0 and _is_grapheme_extend(cluster[index]):
+        index -= 1
+    return index >= 0 and _is_extended_pictographic(cluster[index])
 
 
 def _is_keycap_prefix(cluster: str) -> bool:

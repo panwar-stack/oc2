@@ -7,7 +7,6 @@ import os
 import re
 import select
 import shutil
-import signal
 import statistics
 import sys
 import tempfile
@@ -15,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional, Sequence, TextIO
 
-from terminal_screen import PtyHandshakeError, spawn_pty
+from terminal_screen import PtyHandshakeError, close_pty_fd, read_pty, spawn_pty, stop_pty_child
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -62,77 +61,6 @@ def child_environment(state: Path) -> dict[str, str]:
     return env
 
 
-def wait_for_child(pid: int, timeout: float) -> Optional[int]:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            waited, status = os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
-            return 0
-        if waited:
-            return status
-        time.sleep(0.01)
-    return None
-
-
-def child_process_group(pid: int) -> Optional[int]:
-    try:
-        pgid = os.getpgid(pid)
-    except ProcessLookupError:
-        return None
-    return pgid if pgid == pid else None
-
-
-def process_group_exists(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return False
-    return True
-
-
-def wait_for_process_group(pgid: int, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not process_group_exists(pgid):
-            return True
-        time.sleep(0.01)
-    return not process_group_exists(pgid)
-
-
-def signal_child(pid: int, sig: signal.Signals, pgid: Optional[int]) -> None:
-    try:
-        if pgid is not None:
-            os.killpg(pgid, sig)
-        else:
-            os.kill(pid, sig)
-    except (ProcessLookupError, PermissionError):
-        pass
-
-
-def stop_child(pid: int, fd: int) -> None:
-    pgid = child_process_group(pid)
-    try:
-        os.write(fd, b"\x03")
-    except OSError:
-        pass
-    status = wait_for_child(pid, 0.5)
-    if status is not None and (pgid is None or not process_group_exists(pgid)):
-        return
-    signal_child(pid, signal.SIGTERM, pgid)
-    if status is None:
-        status = wait_for_child(pid, 0.5)
-    if pgid is not None:
-        wait_for_process_group(pgid, 0.5)
-    if status is not None and (pgid is None or not process_group_exists(pgid)):
-        return
-    signal_child(pid, signal.SIGKILL, pgid)
-    if status is None:
-        wait_for_child(pid, 1.0)
-
-
 def run_once(
     command: Sequence[str],
     state: Path,
@@ -169,10 +97,7 @@ def run_once(
             readable, _, _ = select.select([fd], [], [], min(0.05, remaining))
             if not readable:
                 continue
-            try:
-                data = os.read(fd, 65536)
-            except OSError:
-                break
+            data = read_pty(fd)
             if not data:
                 break
             now_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
@@ -191,8 +116,10 @@ def run_once(
                 ready_ms = now_ms
                 break
     finally:
-        stop_child(pid, fd)
-        os.close(fd)
+        try:
+            stop_pty_child(pid, fd)
+        finally:
+            close_pty_fd(fd)
 
     match = TTFD.search(output)
     return {
@@ -301,12 +228,14 @@ def main() -> int:
         write_record(stream, {"summary": summary})
         return 0 if len(valid) == len(results) else 1
     finally:
-        if close_stream and stream is not None:
-            stream.close()
-        if args.keep_state:
-            print(f"preserved state: {run_root}", file=sys.stderr)
-        else:
-            shutil.rmtree(run_root, ignore_errors=True)
+        try:
+            if close_stream and stream is not None:
+                stream.close()
+        finally:
+            if args.keep_state:
+                print(f"preserved state: {run_root}", file=sys.stderr)
+            else:
+                shutil.rmtree(run_root, ignore_errors=True)
 
 
 if __name__ == "__main__":
