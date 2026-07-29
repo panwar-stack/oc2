@@ -225,7 +225,7 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual(skipped.last_frame.cell(2, 0), "X")
 
     def test_fragmented_dynamic_widening_preserves_foreign_scaled_owner(self):
-        clusters = ("❤️", "1\u20e3", "☝🏽", "🇺🇸", "©‍💻")
+        clusters = ("❤️", "1️\u20e3", "🇺🇸", "👩‍💻", "👍🏽")
         setup = b"\x1b[?2026h\x1b[1;2H\x1b]66;s=2; \x1b\\\x1b[2;1H"
         for cluster in clusters:
             with self.subTest(cluster=cluster):
@@ -395,7 +395,7 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual(grown.line(0), "ab    ")
 
     def test_resize_clears_truncated_original_emoji_cluster_width(self):
-        clusters = ("❤️", "🇺🇸", "1\u20e3", "1️\u20e3", "👩‍💻", "👍🏽", "☝🏽")
+        clusters = ("❤️", "🇺🇸", "1️\u20e3", "👩‍💻", "👍🏽")
         for cluster in clusters:
             with self.subTest(cluster=cluster):
                 screen = TerminalScreen(4, 1)
@@ -474,20 +474,19 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertEqual(cells[1], "b\u20dd")
         self.assertEqual(cells[2], "c")
         self.assertEqual(cells[3], "1\u20e3")
-        self.assertIsNone(cells[4])
-        self.assertEqual(cells[5], "X")
-        self.assertEqual(cells[6], "1️\u20e3")
-        self.assertIsNone(cells[7])
-        self.assertEqual(cells[8], "Y")
-        self.assertEqual(cells[9], "👩‍💻")
-        self.assertIsNone(cells[10])
-        self.assertEqual(cells[11], "Z")
-        self.assertEqual(cells[12], "👍🏽")
-        self.assertIsNone(cells[13])
-        self.assertEqual(cells[14], "Q")
-        self.assertEqual(cells[15], "🇺🇸")
-        self.assertIsNone(cells[16])
-        self.assertEqual(cells[17], "R")
+        self.assertEqual(cells[4], "X")
+        self.assertEqual(cells[5], "1️\u20e3")
+        self.assertIsNone(cells[6])
+        self.assertEqual(cells[7], "Y")
+        self.assertEqual(cells[8], "👩‍💻")
+        self.assertIsNone(cells[9])
+        self.assertEqual(cells[10], "Z")
+        self.assertEqual(cells[11], "👍🏽")
+        self.assertIsNone(cells[12])
+        self.assertEqual(cells[13], "Q")
+        self.assertEqual(cells[14], "🇺🇸")
+        self.assertIsNone(cells[15])
+        self.assertEqual(cells[16], "R")
 
     def test_fragmented_base_aware_variation_keycap_and_modifier_sequences(self):
         screen = TerminalScreen(12, 1)
@@ -500,7 +499,10 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertTrue(screen.valid, screen.invalid_reason)
         self.assertEqual(len(frames), 1)
         cells = frames[0].cells[0]
-        self.assertEqual(cells[:9], ("☝🏽", None, "X", "☝️🏽", None, "Y", "👍🏽", None, "Z"))
+        self.assertEqual(
+            cells[:10],
+            ("☝🏽", "X", "☝️", None, "🏽", None, "Y", "👍🏽", None, "Z"),
+        )
 
         for cluster in ("💏🏽", "💑🏽"):
             with self.subTest(cluster=cluster):
@@ -527,7 +529,95 @@ class TerminalScreenTest(unittest.TestCase):
                     for value in data:
                         frames.extend(keycap.feed(bytes((value,))))
                     self.assertTrue(keycap.valid, keycap.invalid_reason)
-                    self.assertEqual(frames[0].cells[0], (cluster, None, "X", " "))
+                    if variation:
+                        self.assertEqual(frames[0].cells[0], (cluster, None, "X", " "))
+                    else:
+                        self.assertEqual(frames[0].cells[0], (cluster, "X", " ", " "))
+
+    def test_pinned_opentui_modifier_and_gb11_tailoring(self):
+        cases = (
+            ("🏽X", ("🏽", None, "X")),
+            ("A🏽X", ("A", "🏽", None, "X")),
+            ("🧪🏽X", ("🧪", None, "🏽", None, "X")),
+            ("👩🏽X", ("👩🏽", None, "X")),
+            ("☝🏽X", ("☝🏽", "X")),
+            ("☝️🏽X", ("☝️", None, "🏽", None, "X")),
+            ("A‍BX", ("A‍", "B", "X")),
+            ("A‍💻X", ("A‍", "💻", None, "X")),
+            ("👩‍💻X", ("👩‍💻", None, "X")),
+            ("👩́‍💻X", ("👩́‍💻", None, "X")),
+            ("👩‍́💻X", ("👩‍́", None, "💻", None, "X")),
+            ("👩‍ः💻X", ("👩‍ः", None, "💻", None, "X")),
+            ("👩ः‍💻X", ("👩ः‍", None, "💻", None, "X")),
+            ("©‍💻X", ("©‍💻", "X")),
+        )
+        for synchronized in (False, True):
+            for text, expected in cases:
+                with self.subTest(synchronized=synchronized, text=text):
+                    screen = TerminalScreen(12, 2)
+                    if synchronized:
+                        screen.feed(b"\x1b[?2026h")
+                    for value in text.encode("utf-8"):
+                        screen.feed(bytes((value,)))
+                    if synchronized:
+                        frames = screen.feed(b"\x1b[?2026l")
+                        self.assertEqual(len(frames), 1)
+                    self.assertTrue(screen.valid, screen.invalid_reason)
+                    self.assertEqual(screen.last_frame.cells[0][: len(expected)], expected)
+
+        explicit_cases = (
+            (b"\x1b]66;w=2;" + "🏽".encode("utf-8") + b"\x1b\\X", ("🏽", None, "X")),
+            (
+                b"\x1b]66;w=1;" + "A‍".encode("utf-8") + b"\x1b\\" + "💻X".encode("utf-8"),
+                ("A‍", "💻", None, "X"),
+            ),
+            (
+                b"\x1b]66;w=2;" + "👩‍".encode("utf-8") + b"\x1b\\" + "💻X".encode("utf-8"),
+                ("👩‍💻", None, "X"),
+            ),
+        )
+        for stream, expected in explicit_cases:
+            with self.subTest(explicit=stream):
+                screen = TerminalScreen(8, 1)
+                for value in stream:
+                    screen.feed(bytes((value,)))
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(screen.last_frame.cells[0][: len(expected)], expected)
+
+    def test_pinned_opentui_widths_match_osc66_around_wrap_and_owners(self):
+        cases = (("⌚︎", 2), ("A️", 2), ("1\u20e3", 1), ("1️\u20e3", 2))
+        setups = (
+            (4, 2, b"ab" + "界".encode("utf-8")),
+            (6, 3, b"\x1b[1;2H\x1b]66;s=2; \x1b\\\x1b[2;1H"),
+        )
+        for synchronized in (False, True):
+            for cluster, width in cases:
+                for columns, rows, setup in setups:
+                    with self.subTest(
+                        synchronized=synchronized,
+                        cluster=cluster,
+                        geometry=(columns, rows),
+                    ):
+                        prefix = b"\x1b[?2026h" if synchronized else b""
+                        suffix = b"\x1b[?2026l" if synchronized else b""
+                        natural = TerminalScreen(columns, rows)
+                        explicit = TerminalScreen(columns, rows)
+                        natural_stream = prefix + setup + (cluster + "X").encode("utf-8") + suffix
+                        explicit_stream = (
+                            prefix
+                            + setup
+                            + "\x1b]66;w={};".format(width).encode("ascii")
+                            + cluster.encode("utf-8")
+                            + b"\x1b\\X"
+                            + suffix
+                        )
+                        for value in natural_stream:
+                            natural.feed(bytes((value,)))
+                        for value in explicit_stream:
+                            explicit.feed(bytes((value,)))
+                        self.assertTrue(natural.valid, natural.invalid_reason)
+                        self.assertTrue(explicit.valid, explicit.invalid_reason)
+                        self.assertEqual(explicit.last_frame.cells, natural.last_frame.cells)
 
     def test_fragmented_invalid_cluster_bases_do_not_shift_or_fail_open(self):
         for mark in ("️", "\u20e3"):
@@ -536,19 +626,23 @@ class TerminalScreenTest(unittest.TestCase):
                 for value in ("A" + mark + "B").encode("utf-8"):
                     screen.feed(bytes((value,)))
                 self.assertTrue(screen.valid, screen.invalid_reason)
-                self.assertEqual(screen.last_frame.cells[0], ("A" + mark, "B", " "))
-                self.assertEqual(screen.resize(1, 1)[0].cells[0], ("A" + mark,))
+                if mark == "️":
+                    self.assertEqual(screen.last_frame.cells[0], ("A" + mark, None, "B"))
+                    self.assertEqual(screen.resize(1, 1)[0].cells[0], (" ",))
+                else:
+                    self.assertEqual(screen.last_frame.cells[0], ("A" + mark, "B", " "))
+                    self.assertEqual(screen.resize(1, 1)[0].cells[0], ("A" + mark,))
                 self.assertEqual(screen.feed(b"\rC")[0].cells[0], ("C",))
 
         for text in ("A🏽B", "A‍B", "🏽A", "🇺🇸‍💻X", "👩‍️💻X", "👩‍#X", "#️‍💻X"):
             with self.subTest(text=text):
-                screen = TerminalScreen(4, 1)
+                screen = TerminalScreen(12, 1)
                 frames = []
                 data = b"\x1b[?2026h" + text.encode("utf-8") + b"\x1b[?2026l"
                 for value in data:
                     frames.extend(screen.feed(bytes((value,))))
-                self.assertFalse(screen.valid)
-                self.assertEqual(frames, [])
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertEqual(len(frames), 1)
 
     def test_unicode_17_properties_and_gb11_do_not_depend_on_host_ucd(self):
         self.assertEqual(terminal_screen._cell_width("\U00011f00"), 0)
@@ -556,8 +650,12 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertTrue(terminal_screen._is_extended_pictographic("\U0001faef"))
         self.assertFalse(terminal_screen._is_extended_pictographic("\U0001f200"))
 
-        valid = ("👩\u0301\U00011f00‍💻", "©‍💻", "👨🏻‍\U0001faef‍👨🏼")
-        for cluster in valid:
+        valid = (
+            ("👩\u0301\U00011f00‍💻", 2),
+            ("©‍💻", 1),
+            ("👨🏻‍\U0001faef‍👨🏼", 2),
+        )
+        for cluster, width in valid:
             with self.subTest(valid=cluster):
                 screen = TerminalScreen(5, 2)
                 frames = []
@@ -565,15 +663,16 @@ class TerminalScreenTest(unittest.TestCase):
                 for value in stream:
                     frames.extend(screen.feed(bytes((value,))))
                 self.assertTrue(screen.valid, screen.invalid_reason)
-                self.assertEqual(frames[0].cells[0][:3], (cluster, None, "X"))
+                self.assertEqual(frames[0].cell(0, 0), cluster)
+                self.assertEqual(frames[0].cell(0, width), "X")
 
         for cluster in ("👩‍\U0001f200", "\U0001f200‍💻", "🇺🇸‍💻", "#️‍💻"):
-            with self.subTest(invalid=cluster):
+            with self.subTest(generic_zwj=cluster):
                 screen = TerminalScreen(5, 2)
                 for value in (b"\x1b[?2026h" + cluster.encode("utf-8") + b"\x1b[?2026l"):
                     screen.feed(bytes((value,)))
-                self.assertFalse(screen.valid)
-                self.assertIsNone(screen.last_frame)
+                self.assertTrue(screen.valid, screen.invalid_reason)
+                self.assertIsNotNone(screen.last_frame)
 
     def test_vendored_unicode_17_gcb_tables_cover_required_properties(self):
         expected = (
@@ -612,8 +711,8 @@ class TerminalScreenTest(unittest.TestCase):
             ("1️⃣\u0903", 2),
             ("🇺🇸\u0903", 2),
             ("\u0600🇺🇸", 2),
-            ("\u06001\u20e3", 2),
-            ("A️\u0903", 1),
+            ("\u06001\u20e3", 1),
+            ("A️\u0903", 2),
             ("A\u20e3\u0903", 1),
         )
         for synchronized in (False, True):
@@ -637,7 +736,7 @@ class TerminalScreenTest(unittest.TestCase):
             ("\u1100\u11a8X", ("\u1100", None, "\u11a8", "X")),
             ("\u1161\u1100X", ("\u1161", "\u1100", None, "X")),
             ("\u1100\u0301\u1161X", ("\u1100\u0301", None, "\u1161", "X")),
-            ("\u0600\u00adAX", ("\u0600", "A", "X")),
+            ("\u0600\u00adAX", ("\u0600", "\u00ad", "A", "X")),
         )
         for text, expected_cells in boundaries:
             with self.subTest(boundary=text):
@@ -706,6 +805,8 @@ class TerminalScreenTest(unittest.TestCase):
             b"\x1b[1;2H\x1b]66;w=2;" + "👩‍".encode("utf-8") + b"\x1b\\"
         )
         explicit_dangling_zwj.resize(2, 1)
+        self.assertTrue(explicit_dangling_zwj.valid, explicit_dangling_zwj.invalid_reason)
+        explicit_dangling_zwj.feed("💻".encode("utf-8"))
         self.assertFalse(explicit_dangling_zwj.valid)
 
         clipped_blank = TerminalScreen(2, 1)
@@ -728,11 +829,12 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertTrue(compound_keycap.valid, compound_keycap.invalid_reason)
         self.assertEqual(compound_keycap.last_frame.cells[0][:2], ("1⃣A⃣", "X"))
 
-        invalid_zwj_source = TerminalScreen(4, 1)
-        invalid_zwj_source.feed(
+        generic_zwj_source = TerminalScreen(4, 1)
+        generic_zwj_source.feed(
             b"\x1b]66;w=1;A" + "\u200d".encode("utf-8") + b"\x1b\\"
         )
-        self.assertFalse(invalid_zwj_source.valid)
+        generic_zwj_source.finish()
+        self.assertTrue(generic_zwj_source.valid, generic_zwj_source.invalid_reason)
 
     def test_gcb_prefixes_survive_eof_and_resize_or_fail_closed_when_clipped(self):
         for prefix in ("\u0600", "\u1100", "\u1100\u1161", "क\u093e"):
@@ -776,12 +878,80 @@ class TerminalScreenTest(unittest.TestCase):
                     if synchronized:
                         self.assertIsNone(screen.last_frame)
 
-    def test_variation_narrowing_and_right_margin_widening_wrap_truthfully(self):
-        narrowed = TerminalScreen(4, 1)
-        narrowed.feed("⌚︎X".encode("utf-8"))
-        self.assertEqual(narrowed.last_frame.cells[0], ("⌚︎", "X", " ", " "))
+    def test_pinned_positive_width_gcb_controls_match_exact_osc66(self):
+        for synchronized in (False, True):
+            for character in ("\u00ad", "\u2028"):
+                with self.subTest(synchronized=synchronized, character=character):
+                    prefix = b"\x1b[?2026h" if synchronized else b""
+                    suffix = b"\x1b[?2026l" if synchronized else b""
+                    natural = TerminalScreen(4, 1)
+                    explicit = TerminalScreen(4, 1)
+                    natural_stream = prefix + (character + "X").encode("utf-8") + suffix
+                    explicit_stream = (
+                        prefix
+                        + b"\x1b]66;w=1;"
+                        + character.encode("utf-8")
+                        + b"\x1b\\X"
+                        + suffix
+                    )
+                    for value in natural_stream:
+                        natural.feed(bytes((value,)))
+                    for value in explicit_stream:
+                        explicit.feed(bytes((value,)))
+                    self.assertTrue(natural.valid, natural.invalid_reason)
+                    self.assertTrue(explicit.valid, explicit.invalid_reason)
+                    self.assertEqual(natural.last_frame.cells, explicit.last_frame.cells)
+                    self.assertEqual(natural.last_frame.cells[0][:2], (character, "X"))
 
-        clusters = ("1\u20e3", "☝🏽", "🇺🇸", "❤️", "©‍💻")
+    def test_pinned_gb11_and_modifier_state_survives_or_fails_closed_after_resize(self):
+        for synchronized in (False, True):
+            prefix = b"\x1b[?2026h" if synchronized else b""
+            suffix = b"\x1b[?2026l" if synchronized else b""
+            surviving = (
+                ("👩‍", "💻X", ("👩‍💻", None, "X")),
+                ("A‍", "💻X", ("A‍", "💻", None, "X")),
+                ("👩‍́", "💻X", ("👩‍́", None, "💻", None, "X")),
+                ("👩‍ः", "💻X", ("👩‍ः", None, "💻", None, "X")),
+            )
+            for first, second, expected in surviving:
+                with self.subTest(synchronized=synchronized, surviving=first):
+                    screen = TerminalScreen(6, 2)
+                    screen.feed(prefix + first.encode("utf-8"))
+                    resize_frames = screen.resize(7, 2)
+                    if synchronized:
+                        self.assertEqual(resize_frames, ())
+                    else:
+                        self.assertEqual(len(resize_frames), 1)
+                    screen.feed(second.encode("utf-8") + suffix)
+                    self.assertTrue(screen.valid, screen.invalid_reason)
+                    self.assertEqual(screen.last_frame.cells[0][: len(expected)], expected)
+
+            clipped = (
+                (3, "👩‍", "💻", False),
+                (4, "☝", "🏽", False),
+                (4, "A‍", "💻", True),
+                (4, "A", "🏽", True),
+            )
+            for column, first, second, valid in clipped:
+                with self.subTest(synchronized=synchronized, clipped=first):
+                    screen = TerminalScreen(4, 2)
+                    screen.feed(
+                        prefix
+                        + "\x1b[1;{}H".format(column).encode("ascii")
+                        + first.encode("utf-8")
+                    )
+                    screen.resize(3, 2)
+                    screen.feed(second.encode("utf-8"))
+                    if valid and synchronized:
+                        screen.feed(suffix)
+                    self.assertEqual(screen.valid, valid)
+
+    def test_pinned_width_tailoring_and_right_margin_widening_wrap_truthfully(self):
+        watch = TerminalScreen(4, 1)
+        watch.feed("⌚︎X".encode("utf-8"))
+        self.assertEqual(watch.last_frame.cells[0], ("⌚︎", None, "X", " "))
+
+        clusters = ("1️\u20e3", "🇺🇸", "❤️", "👩‍💻", "👍🏽")
         for cluster in clusters:
             with self.subTest(cluster=cluster):
                 screen = TerminalScreen(4, 2)
@@ -795,26 +965,30 @@ class TerminalScreenTest(unittest.TestCase):
         disabled.feed(b"\x1b[7labc")
         disabled.feed("1\u20e3".encode("utf-8"))
         self.assertTrue(disabled.valid, disabled.invalid_reason)
-        self.assertEqual(disabled.last_frame.cells[0], ("a", "b", "1\u20e3", None))
+        self.assertEqual(disabled.last_frame.cells[0], ("a", "b", "c", "1\u20e3"))
 
         too_narrow = TerminalScreen(1, 2)
         too_narrow.feed("1\u20e3".encode("utf-8"))
-        self.assertFalse(too_narrow.valid)
+        self.assertTrue(too_narrow.valid, too_narrow.invalid_reason)
 
-    def test_dangling_zwj_invalidates_at_eof(self):
+        wide_keycap = TerminalScreen(1, 2)
+        wide_keycap.feed("1️\u20e3".encode("utf-8"))
+        self.assertFalse(wide_keycap.valid)
+
+    def test_trailing_zwj_is_complete_at_eof(self):
         eof = TerminalScreen(4, 2)
         eof.feed("👩‍".encode("utf-8"))
         eof.finish()
-        self.assertFalse(eof.valid)
+        self.assertTrue(eof.valid, eof.invalid_reason)
 
     def test_resize_preserves_surviving_unicode_cluster_state_inside_and_outside_sync(self):
         cases = (
             ("a", "\U00011f00", "a\U00011f00", 1),
             ("🇺", "🇸", "🇺🇸", 2),
             ("❤", "️", "❤️", 2),
-            ("1", "\u20e3", "1\u20e3", 2),
-            ("☝", "🏽", "☝🏽", 2),
-            ("©‍", "💻", "©‍💻", 2),
+            ("1️", "\u20e3", "1️\u20e3", 2),
+            ("☝", "🏽", "☝🏽", 1),
+            ("©‍", "💻", "©‍💻", 1),
         )
         for synchronized in (False, True):
             for prefix, suffix, cluster, width in cases:
@@ -846,10 +1020,14 @@ class TerminalScreenTest(unittest.TestCase):
                 if synchronized:
                     screen.feed(b"\x1b[?2026h")
                 screen.feed(b"\x1b[1;3H" + "👩‍".encode("utf-8"))
-                self.assertEqual(screen.resize(3, 2), ())
-                self.assertFalse(screen.valid)
+                resize_frames = screen.resize(3, 2)
+                self.assertTrue(screen.valid, screen.invalid_reason)
                 if synchronized:
-                    self.assertIsNone(screen.last_frame)
+                    self.assertEqual(resize_frames, ())
+                else:
+                    self.assertEqual(len(resize_frames), 1)
+                screen.feed("💻".encode("utf-8"))
+                self.assertFalse(screen.valid)
 
     def test_resize_restores_post_cluster_cursor_for_every_continuation(self):
         ri_prefix = b"\x1b]66;w=2;" + "🇺".encode("utf-8") + b"\x1b\\"
@@ -895,7 +1073,7 @@ class TerminalScreenTest(unittest.TestCase):
     def test_resize_preserves_explicitly_addressed_cluster_provenance(self):
         cases = (
             ("a", "\u0301", "a\u0301", 1),
-            ("☝", "🏽", "☝🏽", 2),
+            ("☝", "🏽", "☝🏽", 1),
             ("1", "️\u20e3", "1️\u20e3", 2),
             ("🇺", "🇸", "🇺🇸", 2),
             ("👩", "‍💻", "👩‍💻", 2),
@@ -937,7 +1115,7 @@ class TerminalScreenTest(unittest.TestCase):
                         self.assertEqual(screen.last_frame.cells[1][2:4], (None, None))
 
     def test_owner_aware_widening_wraps_or_fails_closed_without_cycles(self):
-        clusters = ("❤️", "1\u20e3", "☝🏽", "🇺🇸", "©‍💻")
+        clusters = ("❤️", "1️\u20e3", "👩‍💻", "🇺🇸", "👍🏽")
         for cluster in clusters:
             with self.subTest(wrapped=cluster):
                 screen = TerminalScreen(4, 3)
@@ -976,7 +1154,8 @@ class TerminalScreenTest(unittest.TestCase):
             b"\x1b[0;1;38;2;1;2;3;48:2::4:5:6m"
             b"\x1b[?25l\x1b[?1004h\x1b[?1006h\x1b[?2004h"
             b"\x1b[?2026$p\x1b[>q\x1b[6n\x1b[14t"
-            b"\x1b]10;?\x07\x1b]11;?\x1b\\"
+            b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x07"
+            b"\x1b]12;#00aaff\x07\x1b]12;default\x07\x1b]112\x07"
             b"\x1bP+q544e\x1b\\"
         )
         for value in known:
@@ -985,6 +1164,24 @@ class TerminalScreenTest(unittest.TestCase):
         self.assertIsNone(screen.last_frame)
         frame = screen.feed(b"ok")[0]
         self.assertEqual(frame.line(0, trim=True), "ok")
+
+    def test_pinned_cursor_color_osc_shapes_are_exact_and_non_mutating(self):
+        screen = TerminalScreen(8, 1)
+        original = screen.feed(b"cells")[0]
+        sequence = screen.commit_count
+        stream = (
+            b"\x1b]12;?\x07"
+            b"\x1b]12;#00aaff\x07"
+            b"\x1b]12;default\x07"
+            b"\x1b]112\x07"
+        )
+        frames = []
+        for value in stream:
+            frames.extend(screen.feed(bytes((value,))))
+        self.assertTrue(screen.valid, screen.invalid_reason)
+        self.assertEqual(frames, [])
+        self.assertEqual(screen.commit_count, sequence)
+        self.assertEqual(screen.last_frame.cells, original.cells)
 
     def test_opentui_startup_capability_surface_is_supported(self):
         screen = TerminalScreen(12, 2)
@@ -1013,6 +1210,11 @@ class TerminalScreenTest(unittest.TestCase):
             b"10;?",
             b"11;?",
             b"12;?",
+            b"12;#000000",
+            b"12;#00aaff",
+            b"12;#ffffff",
+            b"12;default",
+            b"112",
             b"13;?",
             b"14;?",
             b"15;?",
@@ -1037,8 +1239,12 @@ class TerminalScreenTest(unittest.TestCase):
             b"4;256;?",
             b"10;rgb:ff/ff/ff",
             b"11;rgb:00/00/00",
+            b"12;#00aaf",
             b"12;#00aAfF",
-            b"12;default",
+            b"12;#00aaff0",
+            b"12;#00aagf",
+            b"12;rgb:00/aa/ff",
+            b"12;default;",
             b"12;not-a-color",
             b"22;pointer",
             b"22;",
@@ -1050,7 +1256,7 @@ class TerminalScreenTest(unittest.TestCase):
             b"66;w=01;A",
             b"99;i=opentui-1:p=body:e=1:d=1;AAAA",
             b"777;notify;title;body",
-            b"112",
+            b"112;",
             b"112;extra",
             b"1337;Capabilities=No",
             b"1337;File=inline=1:AAAA",
