@@ -47,6 +47,7 @@ HOME_PLACEHOLDERS = (
     'Ask anything... "Fix broken tests"',
 )
 TRACE_VERSION = 1
+MAX_SAFE_INTEGER = (1 << 53) - 1
 TRACE_MAX_LINE_BYTES = 512
 TRACE_MAX_RECORDS = 512
 LEGACY_SCAN_LIMIT = 4 * 1024 * 1024
@@ -125,12 +126,30 @@ class TraceFailure(ValueError):
 
 
 def _safe_integer(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= (1 << 53) - 1
+    return type(value) is int and 0 <= value <= MAX_SAFE_INTEGER
+
+
+def _exact_integer(value: object, expected: int) -> bool:
+    return type(value) is int and value == expected
 
 
 def _finite_nonnegative(value: object) -> bool:
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+    return (
+        type(value) in (int, float)
+        and 0 <= value <= MAX_SAFE_INTEGER
+        and math.isfinite(value)
+    )
+
+
+def _schema_nonnegative_number(value: object) -> bool:
+    if type(value) not in (int, float) or value < 0 or value > MAX_SAFE_INTEGER:
         return False
+    if type(value) is float:
+        if value == 0 and math.copysign(1, value) < 0:
+            return False
+        # JSON.stringify emits integral Number values without a decimal point.
+        if value.is_integer():
+            return False
     try:
         return math.isfinite(value)
     except OverflowError:
@@ -147,7 +166,7 @@ def _valid_trace_record(record: object) -> bool:
 
     if not isinstance(record, dict) or any(not isinstance(key, str) for key in record):
         return False
-    if record.get("version") != TRACE_VERSION:
+    if not _exact_integer(record.get("version"), TRACE_VERSION):
         return False
     run_id = record.get("runID")
     if (
@@ -157,7 +176,7 @@ def _valid_trace_record(record: object) -> bool:
         or re.fullmatch(r"[0-9A-Za-z_-]+", run_id) is None
     ):
         return False
-    if not _safe_integer(record.get("sequence")) or not _finite_nonnegative(record.get("elapsedMs")):
+    if not _safe_integer(record.get("sequence")) or not _schema_nonnegative_number(record.get("elapsedMs")):
         return False
     event = record.get("event")
     role = record.get("role")
@@ -170,7 +189,7 @@ def _valid_trace_record(record: object) -> bool:
             and isinstance(record.get("phase"), str)
             and record.get("phase") in TRACE_PHASES
             and record.get("outcome") in ("ok", "error")
-            and _finite_nonnegative(record.get("durationMs"))
+            and _schema_nonnegative_number(record.get("durationMs"))
         )
     if event == "rpc.request":
         return (
@@ -197,7 +216,7 @@ def _valid_trace_record(record: object) -> bool:
             and isinstance(record.get("request"), str)
             and record.get("request") in TRACE_REQUESTS
             and _safe_integer(record.get("encodedBytes"))
-            and record.get("removableDuplicateBytes") == 0
+            and _exact_integer(record.get("removableDuplicateBytes"), 0)
         )
     if event == "rpc.dispatch":
         return (
@@ -206,14 +225,14 @@ def _valid_trace_record(record: object) -> bool:
             and _safe_integer(record.get("requestID"))
             and isinstance(record.get("request"), str)
             and record.get("request") in TRACE_REQUESTS
-            and _finite_nonnegative(record.get("durationMs"))
+            and _schema_nonnegative_number(record.get("durationMs"))
         )
     if event in ("prompt.mounted", "bootstrap.critical.ready", "input.accepted", "theme.reconciled"):
         return (
             role == "main"
             and _exact_keys(record, "event", "role", "workspaceGeneration", "attemptGeneration")
-            and record.get("workspaceGeneration") == 0
-            and record.get("attemptGeneration") == 0
+            and _exact_integer(record.get("workspaceGeneration"), 0)
+            and _exact_integer(record.get("attemptGeneration"), 0)
         )
     if event == "theme.settled":
         return (
@@ -226,8 +245,8 @@ def _valid_trace_record(record: object) -> bool:
                 "attemptGeneration",
                 "outcome",
             )
-            and record.get("workspaceGeneration") == 0
-            and record.get("attemptGeneration") == 0
+            and _exact_integer(record.get("workspaceGeneration"), 0)
+            and _exact_integer(record.get("attemptGeneration"), 0)
             and record.get("outcome") in ("locked", "resolved", "fallback-final")
         )
     return False
@@ -977,7 +996,7 @@ def _emergency_token_cleanup(
             observed = {}
             enumeration_ok = False
         records.update(observed)
-        if _pid_exists(root_pid):
+        if root_pid in observed or (not enumerated and _pid_exists(root_pid)):
             records[root_pid] = root_identity
         if _records_live(records, root_pid):
             stable_zero = 0
@@ -1063,7 +1082,6 @@ def run_once(
                 try:
                     descendants.request_stop()
                     known_descendants, _ = descendants.finish()
-                    known_descendants.update(_token_processes(supervision_token))
                     _cleanup_tracked_descendants(known_descendants)
                 finally:
                     _emergency_token_cleanup(supervision_token, pid, root_identity, known_descendants)
@@ -1239,10 +1257,6 @@ def run_once(
                     try:
                         known_descendants, descendant_tracking_failed = descendants.finish()
                     except BaseException:
-                        descendant_tracking_failed = True
-                    try:
-                        known_descendants.update(_token_processes(supervision_token))
-                    except (OSError, subprocess.SubprocessError):
                         descendant_tracking_failed = True
                     if cleanup_error is None and known_descendants:
                         try:

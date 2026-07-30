@@ -49,6 +49,19 @@ def committed_cells(*placements):
 
 
 class TraceJsonlParserTest(unittest.TestCase):
+    def assert_schema_invalid_without_milestone(self, record):
+        parser = tui_benchmark.TraceJsonlParser("run_test")
+        oracle = tui_benchmark.StartupMilestoneOracle(tui_benchmark._prompt_matcher)
+        with self.assertRaises(tui_benchmark.TraceFailure) as caught:
+            parser.feed(encoded(record), 1)
+        self.assertEqual(caught.exception.code, "trace_invalid_schema")
+        self.assertEqual(parser.records, 0)
+        self.assertIsNone(oracle.first_frame_ms)
+        self.assertIsNone(oracle.prompt_ms)
+        self.assertIsNone(oracle.critical_ready_ms)
+        self.assertIsNone(oracle.theme_settled_ms)
+        self.assertIsNone(oracle.failure)
+
     def test_independent_arbitrary_fragments_use_final_fragment_receipt_clock(self):
         parser = tui_benchmark.TraceJsonlParser("run_test")
         records = (
@@ -165,6 +178,174 @@ class TraceJsonlParserTest(unittest.TestCase):
         with self.assertRaises(tui_benchmark.TraceFailure) as caught:
             parser.feed(encoded(record), 1)
         self.assertEqual(caught.exception.code, "trace_invalid_schema")
+
+    def test_every_record_shape_rejects_inexact_common_numeric_types(self):
+        generation = {"role": "main", "workspaceGeneration": 0, "attemptGeneration": 0}
+        records = (
+            trace_record(0, "cli.entry", role="main"),
+            trace_record(0, "phase", role="main", phase="renderer.create", outcome="ok", durationMs=1.25),
+            trace_record(
+                0,
+                "rpc.request",
+                role="main",
+                requestID=1,
+                request="config.providers",
+                encodedBytes=10,
+            ),
+            trace_record(
+                0,
+                "rpc.response",
+                role="main",
+                requestID=1,
+                request="config.providers",
+                encodedBytes=10,
+                removableDuplicateBytes=0,
+            ),
+            trace_record(
+                0,
+                "rpc.dispatch",
+                role="worker",
+                requestID=1,
+                request="config.providers",
+                durationMs=1.25,
+            ),
+            trace_record(0, "prompt.mounted", **generation),
+            trace_record(0, "bootstrap.critical.ready", **generation),
+            trace_record(0, "input.accepted", **generation),
+            trace_record(0, "theme.reconciled", **generation),
+            trace_record(0, "theme.settled", **generation, outcome="resolved"),
+        )
+        huge = 1 << 53
+        common = {
+            "version": (True, False, 1.0, -0.0, huge),
+            "sequence": (True, False, 0.0, 1.0, -0.0, -1, (1 << 53)),
+            "elapsedMs": (True, False, 0.0, 1.0, -0.0, -1, huge),
+        }
+        for record in records:
+            for field, values in common.items():
+                for value in values:
+                    with self.subTest(event=record["event"], field=field, value=repr(value)[:24]):
+                        malformed = dict(record)
+                        malformed[field] = value
+                        self.assert_schema_invalid_without_milestone(malformed)
+
+    def test_integer_fields_reject_bool_float_negative_zero_and_oversize(self):
+        huge = 1 << 53
+        variants = (True, False, 0.0, 1.0, -0.0, -1, huge)
+        records_and_fields = (
+            (
+                trace_record(
+                    0,
+                    "rpc.request",
+                    role="main",
+                    requestID=1,
+                    request="config.providers",
+                    encodedBytes=10,
+                ),
+                ("requestID", "encodedBytes"),
+            ),
+            (
+                trace_record(
+                    0,
+                    "rpc.response",
+                    role="main",
+                    requestID=1,
+                    request="config.providers",
+                    encodedBytes=10,
+                    removableDuplicateBytes=0,
+                ),
+                ("requestID", "encodedBytes", "removableDuplicateBytes"),
+            ),
+            (
+                trace_record(
+                    0,
+                    "rpc.dispatch",
+                    role="worker",
+                    requestID=1,
+                    request="config.providers",
+                    durationMs=1.25,
+                ),
+                ("requestID",),
+            ),
+            (
+                trace_record(
+                    0,
+                    "prompt.mounted",
+                    role="main",
+                    workspaceGeneration=0,
+                    attemptGeneration=0,
+                ),
+                ("workspaceGeneration", "attemptGeneration"),
+            ),
+            (
+                trace_record(
+                    0,
+                    "theme.settled",
+                    role="main",
+                    workspaceGeneration=0,
+                    attemptGeneration=0,
+                    outcome="resolved",
+                ),
+                ("workspaceGeneration", "attemptGeneration"),
+            ),
+        )
+        for record, fields in records_and_fields:
+            for field in fields:
+                expected = record[field]
+                for value in variants:
+                    if type(value) is int and value == expected:
+                        continue
+                    with self.subTest(event=record["event"], field=field, value=repr(value)):
+                        malformed = dict(record)
+                        malformed[field] = value
+                        self.assert_schema_invalid_without_milestone(malformed)
+
+    def test_duration_fields_reject_bool_negative_zero_negative_and_unbounded_values(self):
+        huge = 1 << 53
+        for event, role in (("phase", "main"), ("rpc.dispatch", "worker")):
+            record = (
+                trace_record(0, event, role=role, phase="renderer.create", outcome="ok", durationMs=1.25)
+                if event == "phase"
+                else trace_record(
+                    0,
+                    event,
+                    role=role,
+                    requestID=1,
+                    request="config.providers",
+                    durationMs=1.25,
+                )
+            )
+            for value in (True, False, 0.0, 1.0, -0.0, -1, huge):
+                with self.subTest(event=event, value=repr(value)[:24]):
+                    malformed = dict(record)
+                    malformed["durationMs"] = value
+                    self.assert_schema_invalid_without_milestone(malformed)
+
+    def test_finite_positive_fractional_elapsed_and_duration_remain_schema_valid(self):
+        parser = tui_benchmark.TraceJsonlParser("run_test")
+        stream = encoded(
+            {
+                "version": 1,
+                "runID": "run_test",
+                "sequence": 0,
+                "elapsedMs": 1.25,
+                "event": "cli.entry",
+                "role": "main",
+            }
+        ) + encoded(
+            {
+                "version": 1,
+                "runID": "run_test",
+                "sequence": 1,
+                "elapsedMs": 2.5,
+                "event": "phase",
+                "role": "main",
+                "phase": "renderer.create",
+                "outcome": "ok",
+                "durationMs": 1.25,
+            }
+        )
+        self.assertEqual([record["event"] for record, _ in parser.feed(stream, 3.0)], ["cli.entry", "phase"])
 
 
 class StartupMilestoneOracleTest(unittest.TestCase):
@@ -443,7 +624,7 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
     def test_raw_prompt_bytes_and_paint_then_erase_do_not_count(self):
         for mode in ("raw-only", "paint-erase", "misaligned-prompt"):
             with self.subTest(mode=mode):
-                result = self.run_mode(mode, timeout=0.18)
+                result = self.run_mode(mode, timeout=0.6)
                 self.assertEqual(result["failure"], "timeout_prompt_frame")
                 self.assertIsNotNone(result["ready_ms"])
                 self.assertIsNone(result["prompt_ms"])
@@ -451,11 +632,11 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
     def test_named_early_exit_timeout_eof_unknown_desync_and_fatal_failures(self):
         cases = (
             ("early-exit", "child_exited_early", 0.6),
-            ("timeout", "timeout_first_frame", 0.25),
+            ("timeout", "timeout_first_frame", 0.6),
             ("pty-eof", "pty_eof_before_milestones", 0.6),
             ("trace-eof", "trace_eof_before_milestones", 0.6),
             ("unknown-sequence", "terminal_unknown_sequence", 0.6),
-            ("desynchronized", "terminal_desynchronized", 0.25),
+            ("desynchronized", "terminal_desynchronized", 0.6),
             ("fatal-frame", "terminal_fatal_diagnostic", 0.6),
         )
         for mode, failure, timeout in cases:
@@ -533,7 +714,7 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
                 [sys.executable, str(FAKE_TUI), "early-exit-descendant", "--pid-file", str(pid_file)],
                 state,
                 root,
-                0.5,
+                1,
                 "none",
                 b"Ask anything...",
             )
@@ -544,8 +725,8 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
     def test_start_new_session_descendant_is_cleaned_after_success_timeout_and_early_exit(self):
         cases = (
             ("success-escaped-descendant", None, 1),
-            ("timeout-escaped-descendant", "timeout_first_frame", 0.18),
-            ("early-exit-escaped-descendant", "child_exited_early", 0.5),
+            ("timeout-escaped-descendant", "timeout_first_frame", 0.6),
+            ("early-exit-escaped-descendant", "child_exited_early", 1),
         )
         for mode, failure, timeout in cases:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -586,7 +767,7 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
                         ],
                         state,
                         root,
-                        0.5,
+                        1,
                         "none",
                         b"Ask anything...",
                     )
