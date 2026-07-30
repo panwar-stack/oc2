@@ -114,8 +114,8 @@ describe("tui startup profile", () => {
     expect(adopted.emit({ event: "cli.entry", role: "main" })).toBe(true)
 
     expect(out.lines).toEqual([
-      '{"version":1,"runID":"run_test-1","sequence":0,"elapsedMs":12,"event":"cli.entry","role":"main"}\n',
-      '{"version":1,"runID":"run_test-1","sequence":1,"elapsedMs":30,"event":"cli.entry","role":"main"}\n',
+      '{"version":2,"runID":"run_test-1","sequence":0,"elapsedMs":12,"event":"cli.entry","role":"main"}\n',
+      '{"version":2,"runID":"run_test-1","sequence":1,"elapsedMs":30,"event":"cli.entry","role":"main"}\n',
     ])
     expect(out.clocks).toBe(3)
   })
@@ -216,6 +216,50 @@ describe("tui startup profile", () => {
       }),
     ).toBe(true)
     expect(JSON.parse(out.lines[0])).toMatchObject({ phase: "bootstrap.optional", outcome: "error" })
+  })
+
+  test("reserves core.bootstrap for version 2 RPC records", () => {
+    const out = harness([0, 1, 2, 3])
+
+    expect(
+      out.profile.emit({
+        event: "rpc.request",
+        role: "main",
+        requestID: 9,
+        request: "core.bootstrap",
+        encodedBytes: 10,
+      }),
+    ).toBe(true)
+    expect(
+      out.profile.emit({
+        event: "rpc.response",
+        role: "main",
+        requestID: 9,
+        request: "core.bootstrap",
+        encodedBytes: 20,
+        removableDuplicateBytes: 0,
+      }),
+    ).toBe(true)
+    expect(
+      out.profile.emit({
+        event: "rpc.dispatch",
+        role: "worker",
+        requestID: 9,
+        request: "core.bootstrap",
+        durationMs: 1.5,
+      }),
+    ).toBe(true)
+
+    expect(
+      out.lines.map((line) => {
+        const record = JSON.parse(line)
+        return { version: record.version, event: record.event, request: record.request }
+      }),
+    ).toEqual([
+      { version: 2, event: "rpc.request", request: "core.bootstrap" },
+      { version: 2, event: "rpc.response", request: "core.bootstrap" },
+      { version: 2, event: "rpc.dispatch", request: "core.bootstrap" },
+    ])
   })
 
   test("rejects arbitrary names, non-exact bytes, duplicate claims, and nonzero generations", () => {

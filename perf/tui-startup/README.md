@@ -13,7 +13,7 @@ These scripts preserve the PTY benchmark, raw-output probe, and CPU-profile anal
 bun run dev:build
 OC2_BIN="${OC2_BIN:-$(printf '%s\n' packages/opencode/dist/oc2-*/bin/oc2)}"
 test -x "$OC2_BIN"
-mkdir -p tmp/tui-startup-results
+mkdir -p tmp/tui-startup-artifacts tmp/tui-startup-results
 ```
 
 `tmp/` is gitignored. No captured output, state directory, log, cast, or CPU profile belongs in this tooling folder.
@@ -51,6 +51,32 @@ python3 perf/tui-startup/tui_benchmark.py \
 ```
 
 Run scenarios serially, on an otherwise idle machine. `warm` reuses isolated app state after one unmeasured seed; `cold-like` creates fresh app state but cannot flush OS filesystem caches. Responsive `dark` and `light` emulate replies to OSC 10/11 foreground/background queries. `none` measures the unsupported/non-responsive terminal path.
+
+## Immutable artifact comparisons
+
+`preserve` copies one executable while the worktree is clean into a fixed, hash-checked artifact. It refuses dirty worktrees, links, non-executable binaries, identity changes, and existing outputs. The output contains only `artifact.json`, `artifact.sha256`, and `bin/oc2`. Run the recorded build command immediately before preservation; preservation records that command but cannot prove the supplied binary came from it.
+
+```sh
+python3 perf/tui-startup/tui_benchmark.py preserve \
+  --name baseline-pre-behavior --binary "$OC2_BIN" \
+  --build-command 'bun run dev:build' --shell-capability unavailable \
+  --output tmp/tui-startup-artifacts/baseline
+```
+
+`compare` validates both artifacts, stores and syncs its complete balanced schedule before launch, and executes each embedded `bin/oc2` directly. Warm comparisons use one separate seed and state tree per arm. Cold-like comparisons use a new state tree for every sample. The result contains descriptive data only; policy gates are separate tooling.
+
+```sh
+python3 perf/tui-startup/tui_benchmark.py compare \
+  --label compiled-dark-warm --samples-per-arm 20 --mode warm \
+  --theme-response dark --metric-set full --schedule-seed 20260728 \
+  --interaction-probe \
+  --baseline-artifact tmp/tui-startup-artifacts/baseline \
+  --candidate-artifact tmp/tui-startup-artifacts/candidate \
+  --output tmp/tui-startup-results/compiled-dark-warm.jsonl \
+  -- --pure "$PWD"
+```
+
+Both commands create outputs exclusively and do not have a force option. A comparison returns nonzero for invalid seeds or samples, artifact changes, incomplete schedules, or cleanup failures.
 
 ### Readiness and output
 

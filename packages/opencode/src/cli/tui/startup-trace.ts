@@ -38,6 +38,7 @@ function requestName(value: string): TuiStartupRequestName | undefined {
     case "config.get":
     case "project.path":
     case "project.current":
+    case "core.bootstrap":
     case "session.list":
     case "worker.server":
     case "other":

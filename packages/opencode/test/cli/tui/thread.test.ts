@@ -4,7 +4,7 @@ import path from "path"
 import { tmpdir } from "../../fixture/fixture"
 import { constructTuiWorker, loadTuiRuntime, resolveThreadDirectory } from "../../../src/cli/cmd/tui"
 import { Rpc, type RpcTrace } from "../../../src/util/rpc"
-import { startupRequestName } from "../../../src/cli/tui/startup-trace"
+import { createWorkerRpcTrace, startupRequestName } from "../../../src/cli/tui/startup-trace"
 
 describe("tui thread", () => {
   test("loads the TUI integration lazily", async () => {
@@ -94,6 +94,21 @@ describe("tui thread", () => {
     )
     expect(startupRequestName("server", { hostname: "private.example" })).toBe("worker.server")
     expect(startupRequestName("fetch", { method: "GET", url: "not a url" })).toBe("other")
+  })
+
+  test("reserves core.bootstrap only for worker dispatch tracing", () => {
+    const dispatches: unknown[] = []
+    const trace = createWorkerRpcTrace((input) => dispatches.push(input))
+
+    trace.onDispatch?.({ requestID: 4, request: "core.bootstrap", durationMs: 2.5 })
+    trace.onDispatch?.({ requestID: 5, request: "private.request", durationMs: 3.5 })
+
+    expect(dispatches).toEqual([
+      { event: "rpc.dispatch", role: "worker", requestID: 4, request: "core.bootstrap", durationMs: 2.5 },
+    ])
+    expect(startupRequestName("fetch", { method: "GET", url: "http://opencode.internal/core/bootstrap" })).toBe(
+      "other",
+    )
   })
 
   test("counts exact UTF-8 RPC envelope bytes without changing envelopes", async () => {

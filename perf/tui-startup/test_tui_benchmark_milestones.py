@@ -20,7 +20,7 @@ FAKE_TUI = HERE / "fake_tui.py"
 
 def trace_record(sequence, event, **fields):
     return {
-        "version": 1,
+        "version": 2,
         "runID": "run_test",
         "sequence": sequence,
         "elapsedMs": sequence + 0.25,
@@ -131,7 +131,7 @@ class TraceJsonlParserTest(unittest.TestCase):
                 "trace_invalid_schema",
             )
         )
-        cases.append((b'{"version":1,"version":1}\n', "trace_invalid_json"))
+        cases.append((b'{"version":2,"version":2}\n', "trace_invalid_json"))
         cases.append(
             (
                 encoded(
@@ -227,7 +227,7 @@ class TraceJsonlParserTest(unittest.TestCase):
         )
         huge = 1 << 53
         common = {
-            "version": (True, False, 1.0, -0.0, huge),
+            "version": (True, False, 2.0, -0.0, huge),
             "sequence": (True, False, 0.0, 1.0, -0.0, -1, (1 << 53)),
             "elapsedMs": (True, False, 0.0, 1.0, -0.0, -1, huge),
         }
@@ -335,7 +335,7 @@ class TraceJsonlParserTest(unittest.TestCase):
         parser = tui_benchmark.TraceJsonlParser("run_test")
         stream = encoded(
             {
-                "version": 1,
+                "version": 2,
                 "runID": "run_test",
                 "sequence": 0,
                 "elapsedMs": 1.25,
@@ -344,7 +344,7 @@ class TraceJsonlParserTest(unittest.TestCase):
             }
         ) + encoded(
             {
-                "version": 1,
+                "version": 2,
                 "runID": "run_test",
                 "sequence": 1,
                 "elapsedMs": 2.5,
@@ -394,7 +394,7 @@ class TraceJsonlParserTest(unittest.TestCase):
             trace_record(0, "theme.settled", **generation, outcome="resolved"),
         )
         common = {
-            "version": ("1.0", "1e0", "-0"),
+            "version": ("2.0", "2e0", "-0"),
             "sequence": ("0.0", "0e0", "-0"),
             "elapsedMs": ("0.250", "2.50", "1e0", "-0", "-0.0", "1E-7", "1e-07", "1.0e-7"),
         }

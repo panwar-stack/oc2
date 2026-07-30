@@ -3,7 +3,7 @@ import { closeSync, fstatSync, writeSync } from "node:fs"
 export const OC2_TUI_STARTUP_PROFILE = "OC2_TUI_STARTUP_PROFILE"
 export const OC2_TUI_STARTUP_PROFILE_FD = "OC2_TUI_STARTUP_PROFILE_FD"
 export const OC2_TUI_STARTUP_PROFILE_WORKER = "OC2_TUI_STARTUP_PROFILE_WORKER"
-export const TUI_STARTUP_TRACE_VERSION = 1 as const
+export const TUI_STARTUP_TRACE_VERSION = 2 as const
 
 const MAX_RECORDS = 512
 const MAX_LINE_BYTES = 512
@@ -32,6 +32,7 @@ export type TuiStartupRequestName =
   | "config.get"
   | "project.path"
   | "project.current"
+  | "core.bootstrap"
   | "session.list"
   | "worker.server"
   | "other"
@@ -196,6 +197,7 @@ function isRequest(value: unknown): value is TuiStartupRequestName {
     case "config.get":
     case "project.path":
     case "project.current":
+    case "core.bootstrap":
     case "session.list":
     case "worker.server":
     case "other":
