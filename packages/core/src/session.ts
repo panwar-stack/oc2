@@ -29,6 +29,7 @@ import { logFailure } from "./session/logging"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { pausedSessionIDs } from "./session/control"
 
 // get project -> project.locations
 //
@@ -72,6 +73,7 @@ export type ListInput = typeof ListInput.Type
 
 type CreateInput = {
   id?: SessionSchema.ID
+  parentID?: SessionSchema.ID
   agent?: AgentV2.ID
   model?: ModelV2.Ref
   location: Location.Ref
@@ -214,6 +216,7 @@ export const layer = Layer.effect(
           slug: Slug.create(),
           version: InstallationVersion,
           projectID: project.id,
+          parentID: input.parentID,
           directory: input.location.directory,
           path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
           workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
@@ -291,7 +294,13 @@ export const layer = Layer.effect(
         const rows = yield* (input.limit === undefined ? query.all() : query.limit(input.limit).all()).pipe(
           Effect.orDie,
         )
-        return (direction === "previous" ? rows.toReversed() : rows).map((row) => fromRow(row))
+        const paused = yield* pausedSessionIDs(
+          db,
+          rows.map((row) => SessionSchema.ID.make(row.id)),
+        )
+        return (direction === "previous" ? rows.toReversed() : rows).map((row) =>
+          fromRow(row, paused.has(SessionSchema.ID.make(row.id))),
+        )
       }),
       messages: Effect.fn("V2Session.messages")(function* (input) {
         yield* result.get(input.sessionID)

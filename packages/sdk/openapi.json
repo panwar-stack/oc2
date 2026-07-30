@@ -13751,6 +13751,9 @@
             "$ref": "#/components/schemas/EventSessionNextContextUpdated"
           },
           {
+            "$ref": "#/components/schemas/EventSessionNextControlChanged"
+          },
+          {
             "$ref": "#/components/schemas/EventSessionNextFuguStatus"
           },
           {
@@ -18721,6 +18724,44 @@
                   "type": {
                     "type": "string",
                     "enum": [
+                      "session.next.control.changed"
+                    ]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "timestamp": {
+                        "type": "number"
+                      },
+                      "sessionID": {
+                        "type": "string",
+                        "pattern": "^ses"
+                      }
+                    },
+                    "required": [
+                      "timestamp",
+                      "sessionID"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "properties"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
                       "session.next.fugu.status"
                     ]
                   },
@@ -21003,6 +21044,9 @@
               },
               {
                 "$ref": "#/components/schemas/SyncEventSessionNextContextUpdated"
+              },
+              {
+                "$ref": "#/components/schemas/SyncEventSessionNextControlChanged"
               },
               {
                 "$ref": "#/components/schemas/SyncEventSessionNextInterruptRequested"
@@ -32326,6 +32370,73 @@
         ],
         "additionalProperties": false
       },
+      "SyncEventSessionNextControlChanged": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "sync"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "syncEvent": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "session.next.control.changed.1"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^evt_"
+              },
+              "seq": {
+                "type": "number"
+              },
+              "aggregateID": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "timestamp": {
+                    "type": "number"
+                  },
+                  "sessionID": {
+                    "type": "string",
+                    "pattern": "^ses"
+                  }
+                },
+                "required": [
+                  "timestamp",
+                  "sessionID"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "seq",
+              "aggregateID",
+              "data"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "syncEvent"
+        ],
+        "additionalProperties": false
+      },
       "SyncEventSessionNextInterruptRequested": {
         "type": "object",
         "properties": {
@@ -34610,6 +34721,9 @@
             "type": "string",
             "pattern": "^ses"
           },
+          "paused": {
+            "type": "boolean"
+          },
           "projectID": {
             "type": "string"
           },
@@ -34710,6 +34824,7 @@
         },
         "required": [
           "id",
+          "paused",
           "projectID",
           "cost",
           "tokens",
@@ -38792,6 +38907,44 @@
               "sessionID",
               "messageID",
               "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "EventSessionNextControlChanged": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "session.next.control.changed"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "timestamp": {
+                "type": "number"
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              }
+            },
+            "required": [
+              "timestamp",
+              "sessionID"
             ],
             "additionalProperties": false
           }

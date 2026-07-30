@@ -40,5 +40,6 @@ export const migrations = (
     import("./migration/20260605042240_add_context_epoch_agent"),
     import("./migration/20260612000000_add_team_member_daemon_lifecycle"),
     import("./migration/20260727045732_yielding_preak"),
+    import("./migration/20260730222055_persistent_session_pause"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

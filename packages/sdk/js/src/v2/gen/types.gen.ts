@@ -54,6 +54,7 @@ export type Event =
   | EventSessionNextCompactionEnded
   | EventSessionNextCompactionStarted
   | EventSessionNextContextUpdated
+  | EventSessionNextControlChanged
   | EventSessionNextFuguStatus
   | EventSessionNextInterruptRequested
   | EventSessionNextModelSwitched
@@ -1307,6 +1308,14 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.control.changed"
+        properties: {
+          timestamp: number
+          sessionID: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.fugu.status"
         properties: {
           timestamp: number
@@ -1832,6 +1841,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextCompactionEnded
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextContextUpdated
+    | SyncEventSessionNextControlChanged
     | SyncEventSessionNextInterruptRequested
     | SyncEventSessionNextModelSwitched
     | SyncEventSessionNextMoved
@@ -4525,6 +4535,21 @@ export type SyncEventSessionNextContextUpdated = {
   }
 }
 
+export type SyncEventSessionNextControlChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.control.changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+    }
+  }
+}
+
 export type SyncEventSessionNextInterruptRequested = {
   type: "sync"
   id: string
@@ -5071,6 +5096,7 @@ export type AgentV2Info = {
 export type SessionV2Info = {
   id: string
   parentID?: string
+  paused: boolean
   projectID: string
   agent?: string
   model?: {
@@ -6083,6 +6109,15 @@ export type EventSessionNextContextUpdated = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type EventSessionNextControlChanged = {
+  id: string
+  type: "session.next.control.changed"
+  properties: {
+    timestamp: number
+    sessionID: string
   }
 }
 

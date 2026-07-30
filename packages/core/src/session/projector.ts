@@ -14,6 +14,7 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
+import { inheritActiveBlockers } from "./control"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -306,6 +307,7 @@ export const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+        yield* inheritActiveBlockers(db, stored.sessionID, event.data.info.parentID)
         if (event.data.info.workspaceID) {
           yield* db
             .update(WorkspaceTable)
@@ -512,6 +514,7 @@ export const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.InterruptRequested, () => Effect.void)
+    yield* events.project(SessionEvent.ControlChanged, () => Effect.void)
     yield* events.project(SessionEvent.ContextUpdated, (event) => {
       if (!event.replay || event.seq === undefined) return run(db, event)
       return run(db, event).pipe(

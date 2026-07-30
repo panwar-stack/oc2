@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sql } from "drizzle-orm"
 import { directoryColumn, pathColumn } from "../database/path"
 import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
@@ -64,6 +65,52 @@ export const SessionTable = sqliteTable(
     index("session_parent_idx").on(table.parent_id),
   ],
 )
+
+export const SessionPauseCascadeTable = sqliteTable(
+  "session_pause_cascade",
+  {
+    id: text().primaryKey(),
+    root_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    generation: integer().notNull(),
+    time_created: integer().notNull(),
+    time_released: integer(),
+  },
+  (table) => [
+    uniqueIndex("session_pause_cascade_root_generation_idx").on(table.root_session_id, table.generation),
+    uniqueIndex("session_pause_cascade_active_root_idx")
+      .on(table.root_session_id)
+      .where(sql`${table.time_released} IS NULL`),
+  ],
+)
+
+export const SessionPauseBlockerTable = sqliteTable(
+  "session_pause_blocker",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    cascade_id: text()
+      .notNull()
+      .references(() => SessionPauseCascadeTable.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.session_id, table.cascade_id] }),
+    index("session_pause_blocker_cascade_idx").on(table.cascade_id),
+  ],
+)
+
+export const SessionResumeIntentTable = sqliteTable("session_resume_intent", {
+  session_id: text()
+    .$type<SessionSchema.ID>()
+    .primaryKey()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  generation: integer().notNull(),
+  reason: text().$type<"running" | "queued-input" | "team-wake" | "background-result">().notNull(),
+})
 
 export const SessionRootTable = sqliteTable(
   "session_root",
