@@ -125,12 +125,30 @@ class TraceFailure(ValueError):
         self.code = code
 
 
+class _JsonNumber:
+    __slots__ = ("raw", "value", "integer")
+
+    def __init__(self, raw: str, value: object, integer: bool):
+        self.raw = raw
+        self.value = value
+        self.integer = integer
+
+
 def _safe_integer(value: object) -> bool:
     return type(value) is int and 0 <= value <= MAX_SAFE_INTEGER
 
 
-def _exact_integer(value: object, expected: int) -> bool:
-    return type(value) is int and value == expected
+def _schema_safe_integer(value: object) -> bool:
+    return (
+        isinstance(value, _JsonNumber)
+        and value.integer
+        and re.fullmatch(r"(?:0|[1-9][0-9]*)", value.raw) is not None
+        and _safe_integer(value.value)
+    )
+
+
+def _schema_exact_integer(value: object, expected: int) -> bool:
+    return _schema_safe_integer(value) and value.value == expected
 
 
 def _finite_nonnegative(value: object) -> bool:
@@ -142,18 +160,27 @@ def _finite_nonnegative(value: object) -> bool:
 
 
 def _schema_nonnegative_number(value: object) -> bool:
-    if type(value) not in (int, float) or value < 0 or value > MAX_SAFE_INTEGER:
+    if not isinstance(value, _JsonNumber):
         return False
-    if type(value) is float:
-        if value == 0 and math.copysign(1, value) < 0:
-            return False
-        # JSON.stringify emits integral Number values without a decimal point.
-        if value.is_integer():
-            return False
+    number = value.value
+    if type(number) not in (int, float) or number < 0 or number > MAX_SAFE_INTEGER:
+        return False
     try:
-        return math.isfinite(value)
+        if not math.isfinite(number):
+            return False
     except OverflowError:
         return False
+    if value.integer:
+        return re.fullmatch(r"(?:0|[1-9][0-9]*)", value.raw) is not None
+    decimal = re.fullmatch(r"(?:0|[1-9][0-9]*)\.[0-9]*[1-9]", value.raw)
+    if decimal is not None:
+        return True
+    exponent = re.fullmatch(r"[1-9](?:\.[0-9]*[1-9])?e-[1-9][0-9]*", value.raw)
+    return exponent is not None and 0 < number < 0.000001
+
+
+def _normalize_json_number(value: object) -> object:
+    return value.value if isinstance(value, _JsonNumber) else value
 
 
 def _exact_keys(record: dict[str, object], *event_keys: str) -> bool:
@@ -166,7 +193,7 @@ def _valid_trace_record(record: object) -> bool:
 
     if not isinstance(record, dict) or any(not isinstance(key, str) for key in record):
         return False
-    if not _exact_integer(record.get("version"), TRACE_VERSION):
+    if not _schema_exact_integer(record.get("version"), TRACE_VERSION):
         return False
     run_id = record.get("runID")
     if (
@@ -176,7 +203,7 @@ def _valid_trace_record(record: object) -> bool:
         or re.fullmatch(r"[0-9A-Za-z_-]+", run_id) is None
     ):
         return False
-    if not _safe_integer(record.get("sequence")) or not _schema_nonnegative_number(record.get("elapsedMs")):
+    if not _schema_safe_integer(record.get("sequence")) or not _schema_nonnegative_number(record.get("elapsedMs")):
         return False
     event = record.get("event")
     role = record.get("role")
@@ -195,10 +222,10 @@ def _valid_trace_record(record: object) -> bool:
         return (
             role == "main"
             and _exact_keys(record, "event", "role", "requestID", "request", "encodedBytes")
-            and _safe_integer(record.get("requestID"))
+            and _schema_safe_integer(record.get("requestID"))
             and isinstance(record.get("request"), str)
             and record.get("request") in TRACE_REQUESTS
-            and _safe_integer(record.get("encodedBytes"))
+            and _schema_safe_integer(record.get("encodedBytes"))
         )
     if event == "rpc.response":
         return (
@@ -212,17 +239,17 @@ def _valid_trace_record(record: object) -> bool:
                 "encodedBytes",
                 "removableDuplicateBytes",
             )
-            and _safe_integer(record.get("requestID"))
+            and _schema_safe_integer(record.get("requestID"))
             and isinstance(record.get("request"), str)
             and record.get("request") in TRACE_REQUESTS
-            and _safe_integer(record.get("encodedBytes"))
-            and _exact_integer(record.get("removableDuplicateBytes"), 0)
+            and _schema_safe_integer(record.get("encodedBytes"))
+            and _schema_exact_integer(record.get("removableDuplicateBytes"), 0)
         )
     if event == "rpc.dispatch":
         return (
             role == "worker"
             and _exact_keys(record, "event", "role", "requestID", "request", "durationMs")
-            and _safe_integer(record.get("requestID"))
+            and _schema_safe_integer(record.get("requestID"))
             and isinstance(record.get("request"), str)
             and record.get("request") in TRACE_REQUESTS
             and _schema_nonnegative_number(record.get("durationMs"))
@@ -231,8 +258,8 @@ def _valid_trace_record(record: object) -> bool:
         return (
             role == "main"
             and _exact_keys(record, "event", "role", "workspaceGeneration", "attemptGeneration")
-            and _exact_integer(record.get("workspaceGeneration"), 0)
-            and _exact_integer(record.get("attemptGeneration"), 0)
+            and _schema_exact_integer(record.get("workspaceGeneration"), 0)
+            and _schema_exact_integer(record.get("attemptGeneration"), 0)
         )
     if event == "theme.settled":
         return (
@@ -245,8 +272,8 @@ def _valid_trace_record(record: object) -> bool:
                 "attemptGeneration",
                 "outcome",
             )
-            and _exact_integer(record.get("workspaceGeneration"), 0)
-            and _exact_integer(record.get("attemptGeneration"), 0)
+            and _schema_exact_integer(record.get("workspaceGeneration"), 0)
+            and _schema_exact_integer(record.get("attemptGeneration"), 0)
             and record.get("outcome") in ("locked", "resolved", "fallback-final")
         )
     return False
@@ -291,6 +318,8 @@ class TraceJsonlParser:
                 record = json.loads(
                     line.decode("utf-8", errors="strict"),
                     object_pairs_hook=_unique_json_object,
+                    parse_int=lambda raw: _JsonNumber(raw, int(raw), True),
+                    parse_float=lambda raw: _JsonNumber(raw, float(raw), False),
                     parse_constant=lambda _: (_ for _ in ()).throw(TraceFailure("trace_invalid_json")),
                 )
             except TraceFailure:
@@ -300,17 +329,18 @@ class TraceJsonlParser:
             if not _valid_trace_record(record):
                 raise TraceFailure("trace_invalid_schema")
             assert isinstance(record, dict)
-            if record["runID"] != self.run_id:
+            normalized = {key: _normalize_json_number(value) for key, value in record.items()}
+            if normalized["runID"] != self.run_id:
                 raise TraceFailure("trace_run_id_mismatch")
-            if record["sequence"] != self._sequence:
+            if normalized["sequence"] != self._sequence:
                 raise TraceFailure("trace_sequence_mismatch")
-            if (self._sequence == 0) != (record["event"] == "cli.entry"):
+            if (self._sequence == 0) != (normalized["event"] == "cli.entry"):
                 raise TraceFailure("trace_event_order")
+            if self.records >= TRACE_MAX_RECORDS:
+                raise TraceFailure("trace_record_limit")
             self._sequence += 1
             self.records += 1
-            if self.records > TRACE_MAX_RECORDS:
-                raise TraceFailure("trace_record_limit")
-            parsed.append((record, receipt_ms))
+            parsed.append((normalized, receipt_ms))
         return tuple(parsed)
 
     def finish(self) -> None:
@@ -657,9 +687,9 @@ class ChildExitObserver:
 ProcessIdentity = tuple[int, int]
 
 
-def _numeric_process_table() -> dict[int, tuple[int, int, int, int]]:
+def _numeric_process_table() -> dict[int, tuple[int, int, int, int, str]]:
     result = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,pgid=,sess=,uid="],
+        ["ps", "-axo", "pid=,ppid=,pgid=,sess=,uid=,state="],
         check=False,
         capture_output=True,
         text=True,
@@ -667,18 +697,18 @@ def _numeric_process_table() -> dict[int, tuple[int, int, int, int]]:
     )
     if result.returncode != 0:
         raise OSError("numeric process snapshot failed")
-    table: dict[int, tuple[int, int, int, int]] = {}
+    table: dict[int, tuple[int, int, int, int, str]] = {}
     for line in result.stdout.splitlines():
         parts = line.split()
-        if len(parts) != 5:
+        if len(parts) != 6:
             raise OSError("numeric process snapshot was malformed")
         try:
-            pid, parent, group, session, uid = (int(part) for part in parts)
+            pid, parent, group, session, uid = (int(part) for part in parts[:5])
         except ValueError:
             raise OSError("numeric process snapshot was malformed") from None
         if pid <= 0 or parent < 0 or group < 0 or session < 0:
             raise OSError("numeric process snapshot was malformed")
-        table[pid] = (parent, group, session, uid)
+        table[pid] = (parent, group, session, uid, parts[5])
     return table
 
 
@@ -756,8 +786,8 @@ def _token_processes(token: str) -> dict[int, ProcessIdentity]:
     supported = sys.platform == "darwin" or sys.platform.startswith("linux")
     if not supported:
         raise OSError("supervision-token process enumeration is unsupported")
-    for pid, (_, group, session, uid) in table.items():
-        if uid != os.getuid() or pid == os.getpid():
+    for pid, (_, group, session, uid, state) in table.items():
+        if uid != os.getuid() or pid == os.getpid() or state.startswith("Z"):
             continue
         environment = (
             _darwin_process_environment(pid)
@@ -797,7 +827,9 @@ class DescendantSupervisor:
             changed = True
             while changed:
                 changed = False
-                for pid, (parent, group, session, _) in table.items():
+                for pid, (parent, group, session, _, state) in table.items():
+                    if state.startswith("Z"):
+                        continue
                     if pid in known or parent not in known:
                         continue
                     known.add(pid)
@@ -832,10 +864,36 @@ class DescendantSupervisor:
 
 def _pid_exists(pid: int) -> bool:
     try:
+        waited, _ = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            return False
+    except ChildProcessError:
+        pass
+    try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
+        return True
+    try:
+        if sys.platform.startswith("linux"):
+            stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="ascii")
+            closing = stat.rfind(")")
+            if closing < 0:
+                return True
+            return stat[closing + 2 : closing + 3] != "Z"
+        if sys.platform == "darwin":
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "state="],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=0.2,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return False
+            return not result.stdout.strip().startswith("Z")
+    except (OSError, subprocess.SubprocessError):
         return True
     return True
 
@@ -847,7 +905,13 @@ def _group_exists(group: int) -> bool:
         return False
     except PermissionError:
         return True
-    return True
+    try:
+        return any(
+            process_group == group and not state.startswith("Z")
+            for _, process_group, _, _, state in _numeric_process_table().values()
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
 
 
 def _signal_tracked(records: dict[int, ProcessIdentity], sig: signal.Signals) -> bool:
@@ -1068,37 +1132,12 @@ def run_once(
     start_ns = child.start_ns
     root_identity: ProcessIdentity = (pid, pid)
     assert trace_read_fd is not None and trace_write_fd is not None
-    exit_observer = ChildExitObserver(pid)
-    descendants = DescendantSupervisor(pid)
-    descendants.start()
+    exit_observer: Optional[ChildExitObserver] = None
+    descendants: Optional[DescendantSupervisor] = None
+    screen: Optional[TerminalScreen] = None
+    trace: Optional[TraceJsonlParser] = None
+    oracle: Optional[StartupMilestoneOracle] = None
     known_descendants: dict[int, ProcessIdentity] = {}
-    try:
-        os.close(trace_write_fd)
-    except BaseException:
-        try:
-            stop_pty_child(pid, fd)
-        finally:
-            try:
-                try:
-                    descendants.request_stop()
-                    known_descendants, _ = descendants.finish()
-                    _cleanup_tracked_descendants(known_descendants)
-                finally:
-                    _emergency_token_cleanup(supervision_token, pid, root_identity, known_descendants)
-            finally:
-                try:
-                    close_pty_fd(fd)
-                finally:
-                    try:
-                        os.close(trace_read_fd)
-                    finally:
-                        exit_observer.close()
-        raise
-    trace_write_fd = None
-
-    screen = TerminalScreen(PTY_WIDTH, PTY_HEIGHT)
-    trace = TraceJsonlParser(run_id)
-    oracle = StartupMilestoneOracle(_prompt_matcher)
     legacy_output = bytearray()
     total_pty_bytes = 0
     bytes_until_ready: Optional[int] = None
@@ -1109,7 +1148,8 @@ def run_once(
     foreground_sent = False
     background_sent = False
     deadline = child.deadline
-    failure: Optional[str] = None if exit_observer.available else "child_exit_observer_failed"
+    failure: Optional[str] = None
+    setup_complete = False
     body_error: Optional[BaseException] = None
     cleanup_error: Optional[BaseException] = None
     close_error: Optional[BaseException] = None
@@ -1122,6 +1162,18 @@ def run_once(
     pty_eof_deadline: Optional[float] = None
     trace_eof_deadline: Optional[float] = None
     try:
+        screen = TerminalScreen(PTY_WIDTH, PTY_HEIGHT)
+        trace = TraceJsonlParser(run_id)
+        oracle = StartupMilestoneOracle(_prompt_matcher)
+        exit_observer = ChildExitObserver(pid)
+        descendants = DescendantSupervisor(pid)
+        descendants.start()
+        os.close(trace_write_fd)
+        trace_write_fd = None
+        setup_complete = True
+        if not exit_observer.available:
+            failure = "child_exit_observer_failed"
+        assert screen is not None and trace is not None and oracle is not None
         while failure is None and not oracle.complete:
             if pty_eof_deadline is not None and trace_eof_deadline is not None:
                 failure = "child_exited_early"
@@ -1240,81 +1292,77 @@ def run_once(
         if failure is None and oracle.failure is not None:
             failure = oracle.failure
     except BaseException as error:
-        body_error = error
+        if setup_complete:
+            body_error = error
+        else:
+            failure = "supervision_setup_failed"
     finally:
-        try:
-            exit_observer.close()
-        finally:
+        if exit_observer is not None:
+            try:
+                exit_observer.close()
+            except BaseException as error:
+                close_error = error
+        if descendants is not None:
             try:
                 descendants.scan_now()
-                try:
-                    stop_pty_child(pid, fd)
-                except BaseException as error:
-                    cleanup_error = error
-            finally:
-                try:
-                    descendants.request_stop()
-                    try:
-                        known_descendants, descendant_tracking_failed = descendants.finish()
-                    except BaseException:
-                        descendant_tracking_failed = True
-                    if cleanup_error is None and known_descendants:
-                        try:
-                            descendant_cleanup_ok = _cleanup_tracked_descendants(known_descendants)
-                        except BaseException:
-                            descendant_cleanup_ok = False
-                    elif cleanup_error is not None:
-                        descendant_cleanup_ok = False
-                    else:
-                        descendant_cleanup_ok = _cleanup_tracked_descendants(known_descendants)
-                finally:
-                    try:
-                        emergency_enumeration_ok, emergency_cleanup_ok = _emergency_token_cleanup(
-                            supervision_token,
-                            pid,
-                            root_identity,
-                            known_descendants,
-                        )
-                    except BaseException:
-                        emergency_enumeration_ok = False
-                        emergency_cleanup_ok = False
-                    finally:
-                        try:
-                            close_pty_fd(fd)
-                        except BaseException as error:
-                            close_error = error
-                        try:
-                            os.close(trace_read_fd)
-                        except OSError as error:
-                            if error.errno != errno.EBADF and close_error is None:
-                                close_error = error
+            except BaseException:
+                descendant_tracking_failed = True
+            try:
+                descendants.request_stop()
+            except BaseException:
+                descendant_tracking_failed = True
+        try:
+            stop_pty_child(pid, fd)
+        except BaseException as error:
+            cleanup_error = error
+        if descendants is not None:
+            try:
+                known_descendants, finish_failed = descendants.finish()
+                descendant_tracking_failed = descendant_tracking_failed or finish_failed
+            except BaseException:
+                descendant_tracking_failed = True
+        if cleanup_error is None and known_descendants:
+            try:
+                descendant_cleanup_ok = _cleanup_tracked_descendants(known_descendants)
+            except BaseException:
+                descendant_cleanup_ok = False
+        elif cleanup_error is not None:
+            descendant_cleanup_ok = False
+        try:
+            emergency_enumeration_ok, emergency_cleanup_ok = _emergency_token_cleanup(
+                supervision_token,
+                pid,
+                root_identity,
+                known_descendants,
+            )
+        except BaseException:
+            emergency_enumeration_ok = False
+            emergency_cleanup_ok = False
+        try:
+            close_pty_fd(fd)
+        except BaseException as error:
+            if close_error is None:
+                close_error = error
+        for pipe_fd in (trace_read_fd, trace_write_fd):
+            if pipe_fd is None:
+                continue
+            try:
+                os.close(pipe_fd)
+            except OSError as error:
+                if error.errno != errno.EBADF and close_error is None:
+                    close_error = error
 
     if body_error is not None:
-        if cleanup_error is not None:
-            raise cleanup_error
-        if (
-            descendant_tracking_failed
-            or not descendant_cleanup_ok
-            or not emergency_enumeration_ok
-            or not emergency_cleanup_ok
-        ):
-            raise PtyCleanupError("tracked TUI descendant cleanup failed")
-        if close_error is not None:
-            raise close_error
         raise body_error
     cleanup_failed = not descendant_cleanup_ok or not emergency_cleanup_ok
     tracking_failed = descendant_tracking_failed or not emergency_enumeration_ok
-    if cleanup_error is not None:
-        if isinstance(cleanup_error, PtyCleanupError):
+    if failure is None:
+        if cleanup_error is not None or cleanup_failed:
             failure = "descendant_cleanup_failed"
-        else:
-            raise cleanup_error
-    if cleanup_failed:
-        failure = "descendant_cleanup_failed"
-    elif tracking_failed:
-        failure = "descendant_tracking_failed"
-    if close_error is not None:
-        failure = "pty_cleanup_failed"
+        elif tracking_failed:
+            failure = "descendant_tracking_failed"
+        elif close_error is not None:
+            failure = "pty_cleanup_failed"
     if bytes_until_ready is None:
         bytes_until_ready = total_pty_bytes
     return {
@@ -1324,16 +1372,16 @@ def run_once(
         "bytes_until_ready": bytes_until_ready,
         "timed_out": ready_ms is None,
         "pty_handshake_ok": True,
-        "first_frame_ms": oracle.first_frame_ms,
-        "shell_ms": oracle.shell_ms,
-        "prompt_ms": oracle.prompt_ms,
-        "critical_ready_ms": oracle.critical_ready_ms,
-        "theme_settled_ms": oracle.theme_settled_ms,
+        "first_frame_ms": oracle.first_frame_ms if oracle is not None else None,
+        "shell_ms": oracle.shell_ms if oracle is not None else None,
+        "prompt_ms": oracle.prompt_ms if oracle is not None else None,
+        "critical_ready_ms": oracle.critical_ready_ms if oracle is not None else None,
+        "theme_settled_ms": oracle.theme_settled_ms if oracle is not None else None,
         "interactive_ms": None,
         "run_id": run_id,
-        "workspace_generation": oracle.workspace_generation,
-        "attempt_generation": oracle.attempt_generation,
-        "trace_records": trace.records,
+        "workspace_generation": oracle.workspace_generation if oracle is not None else None,
+        "attempt_generation": oracle.attempt_generation if oracle is not None else None,
+        "trace_records": trace.records if trace is not None else 0,
         "failure": failure,
     }
 

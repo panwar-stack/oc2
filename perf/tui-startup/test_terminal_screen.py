@@ -1925,7 +1925,7 @@ class BenchmarkHandshakeIntegrationTest(unittest.TestCase):
                 with mock.patch.object(tui_benchmark.select, "select", side_effect=RuntimeError("read")):
                     with mock.patch.object(tui_benchmark, "stop_pty_child", side_effect=PtyCleanupError("stop")):
                         with mock.patch.object(tui_benchmark, "close_pty_fd") as closed:
-                            with self.assertRaises(PtyCleanupError):
+                            with self.assertRaisesRegex(RuntimeError, "read"):
                                 tui_benchmark.run_once(["cmd"], state, Path.cwd(), 1, "none", b"ready")
                             closed.assert_called_once_with(7)
 

@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import subprocess
@@ -30,6 +31,15 @@ def trace_record(sequence, event, **fields):
 
 def encoded(record):
     return (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def encoded_raw_number(record, field, raw):
+    text = json.dumps(record, separators=(",", ":"))
+    original = f'"{field}":{json.dumps(record[field], separators=(",", ":"))}'
+    replacement = f'"{field}":{raw}'
+    if text.count(original) != 1:
+        raise AssertionError(f"field replacement was ambiguous: {field}")
+    return (text.replace(original, replacement) + "\n").encode("utf-8")
 
 
 def committed(text):
@@ -347,6 +357,145 @@ class TraceJsonlParserTest(unittest.TestCase):
         )
         self.assertEqual([record["event"] for record, _ in parser.feed(stream, 3.0)], ["cli.entry", "phase"])
 
+    def test_every_record_shape_rejects_noncanonical_numeric_lexemes(self):
+        generation = {"role": "main", "workspaceGeneration": 0, "attemptGeneration": 0}
+        records = (
+            trace_record(0, "cli.entry", role="main"),
+            trace_record(0, "phase", role="main", phase="renderer.create", outcome="ok", durationMs=1.25),
+            trace_record(
+                0,
+                "rpc.request",
+                role="main",
+                requestID=1,
+                request="config.providers",
+                encodedBytes=10,
+            ),
+            trace_record(
+                0,
+                "rpc.response",
+                role="main",
+                requestID=1,
+                request="config.providers",
+                encodedBytes=10,
+                removableDuplicateBytes=0,
+            ),
+            trace_record(
+                0,
+                "rpc.dispatch",
+                role="worker",
+                requestID=1,
+                request="config.providers",
+                durationMs=1.25,
+            ),
+            trace_record(0, "prompt.mounted", **generation),
+            trace_record(0, "bootstrap.critical.ready", **generation),
+            trace_record(0, "input.accepted", **generation),
+            trace_record(0, "theme.reconciled", **generation),
+            trace_record(0, "theme.settled", **generation, outcome="resolved"),
+        )
+        common = {
+            "version": ("1.0", "1e0", "-0"),
+            "sequence": ("0.0", "0e0", "-0"),
+            "elapsedMs": ("0.250", "2.50", "1e0", "-0", "-0.0", "1E-7", "1e-07", "1.0e-7"),
+        }
+        for record in records:
+            for field, raw_values in common.items():
+                for raw in raw_values:
+                    with self.subTest(event=record["event"], field=field, raw=raw):
+                        parser = tui_benchmark.TraceJsonlParser("run_test")
+                        with self.assertRaises(tui_benchmark.TraceFailure) as caught:
+                            parser.feed(encoded_raw_number(record, field, raw), 1)
+                        self.assertEqual(caught.exception.code, "trace_invalid_schema")
+                        self.assertEqual(parser.records, 0)
+
+    def test_integer_semantic_fields_reject_decimal_exponent_and_negative_zero_lexemes(self):
+        records_and_fields = (
+            (
+                trace_record(
+                    0,
+                    "rpc.request",
+                    role="main",
+                    requestID=1,
+                    request="config.providers",
+                    encodedBytes=10,
+                ),
+                ("requestID", "encodedBytes"),
+            ),
+            (
+                trace_record(
+                    0,
+                    "rpc.response",
+                    role="main",
+                    requestID=1,
+                    request="config.providers",
+                    encodedBytes=10,
+                    removableDuplicateBytes=0,
+                ),
+                ("requestID", "encodedBytes", "removableDuplicateBytes"),
+            ),
+            (
+                trace_record(
+                    0,
+                    "prompt.mounted",
+                    role="main",
+                    workspaceGeneration=0,
+                    attemptGeneration=0,
+                ),
+                ("workspaceGeneration", "attemptGeneration"),
+            ),
+        )
+        for record, fields in records_and_fields:
+            for field in fields:
+                for raw in ("0.0", "1.0", "0e0", "1e0", "-0"):
+                    with self.subTest(event=record["event"], field=field, raw=raw):
+                        parser = tui_benchmark.TraceJsonlParser("run_test")
+                        with self.assertRaises(tui_benchmark.TraceFailure) as caught:
+                            parser.feed(encoded_raw_number(record, field, raw), 1)
+                        self.assertEqual(caught.exception.code, "trace_invalid_schema")
+                        self.assertEqual(parser.records, 0)
+
+    def test_canonical_timing_integer_decimal_and_small_exponent_lexemes_are_valid(self):
+        records = (
+            trace_record(0, "cli.entry", role="main"),
+            trace_record(0, "cli.entry", role="main"),
+            trace_record(0, "cli.entry", role="main"),
+        )
+        raw_values = ("1", "0.25", "1e-7")
+        for record, raw in zip(records, raw_values):
+            with self.subTest(raw=raw):
+                parser = tui_benchmark.TraceJsonlParser("run_test")
+                parsed = parser.feed(encoded_raw_number(record, "elapsedMs", raw), 1)
+                self.assertEqual(parsed[0][0]["event"], "cli.entry")
+
+    def test_513th_record_limit_rejects_before_any_state_or_milestone_mutation(self):
+        parser = tui_benchmark.TraceJsonlParser("run_test")
+        oracle = tui_benchmark.StartupMilestoneOracle(tui_benchmark._prompt_matcher)
+        parser.feed(encoded(trace_record(0, "cli.entry", role="main")), 1)
+        for sequence in range(1, tui_benchmark.TRACE_MAX_RECORDS):
+            record = trace_record(
+                sequence,
+                "phase",
+                role="main",
+                phase="renderer.create",
+                outcome="ok",
+                durationMs=1.25,
+            )
+            parser.feed(encoded(record), 1)
+        rejected = trace_record(
+            tui_benchmark.TRACE_MAX_RECORDS,
+            "prompt.mounted",
+            role="main",
+            workspaceGeneration=0,
+            attemptGeneration=0,
+        )
+        with self.assertRaises(tui_benchmark.TraceFailure) as caught:
+            parser.feed(encoded(rejected), 1)
+        self.assertEqual(caught.exception.code, "trace_record_limit")
+        self.assertEqual(parser.records, tui_benchmark.TRACE_MAX_RECORDS)
+        self.assertEqual(parser._sequence, tui_benchmark.TRACE_MAX_RECORDS)
+        self.assertIsNone(oracle.prompt_ms)
+        self.assertIsNone(oracle.failure)
+
 
 class StartupMilestoneOracleTest(unittest.TestCase):
     generation = {"role": "main", "workspaceGeneration": 0, "attemptGeneration": 0}
@@ -515,6 +664,57 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
             if time.monotonic() >= deadline:
                 self.fail("fake TUI descendant survived benchmark cleanup")
             time.sleep(0.01)
+
+    def run_supervision_setup_failure(self, target, side_effect):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            tui_benchmark.prepare_state(state)
+            read_fd, write_fd = os.pipe()
+
+            def fixed_pipe(env, run_id):
+                os.set_inheritable(read_fd, False)
+                os.set_inheritable(write_fd, True)
+                env["OC2_TUI_STARTUP_PROFILE"] = "1"
+                env["OC2_TUI_STARTUP_PROFILE_FD"] = str(write_fd)
+                env["OC2_RUN_ID"] = run_id
+                return read_fd, write_fd
+
+            with mock.patch.object(tui_benchmark, "_open_trace_pipe", side_effect=fixed_pipe):
+                with mock.patch.object(
+                    tui_benchmark.secrets,
+                    "token_hex",
+                    side_effect=("a" * 32, "b" * 48),
+                ):
+                    with mock.patch.object(target[0], target[1], side_effect=side_effect):
+                        result = tui_benchmark.run_once(
+                            [sys.executable, str(FAKE_TUI), "timeout"],
+                            state,
+                            root,
+                            1,
+                            "none",
+                            b"Ask anything...",
+                        )
+            self.assertEqual(result["failure"], "supervision_setup_failed")
+            self.assertEqual(tui_benchmark._token_processes("supervision_" + "b" * 48), {})
+            for descriptor in (read_fd, write_fd):
+                with self.assertRaises(OSError) as caught:
+                    os.fstat(descriptor)
+                self.assertEqual(caught.exception.errno, errno.EBADF)
+
+    def test_supervision_constructor_and_start_failures_are_named_and_clean(self):
+        self.run_supervision_setup_failure(
+            (tui_benchmark, "ChildExitObserver"),
+            RuntimeError("injected exit observer constructor failure"),
+        )
+        self.run_supervision_setup_failure(
+            (tui_benchmark, "DescendantSupervisor"),
+            RuntimeError("injected descendant supervisor constructor failure"),
+        )
+        self.run_supervision_setup_failure(
+            (tui_benchmark.DescendantSupervisor, "start"),
+            RuntimeError("injected descendant supervisor start failure"),
+        )
 
     def test_only_trace_writer_is_inheritable_and_environment_is_replaced(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -999,6 +1199,44 @@ class BenchmarkMilestoneIntegrationTest(unittest.TestCase):
             pid, group, session = self.descendant_identity(pid_file)
             self.assertEqual((group, session), (pid, pid))
             self.assert_pid_gone(pid)
+
+    def test_read_failure_remains_primary_when_cleanup_also_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            token_file = root / "token"
+            tui_benchmark.prepare_state(state)
+            original = tui_benchmark.read_pty
+
+            def fail_after_start(fd):
+                if token_file.exists():
+                    raise RuntimeError("primary PTY read failure")
+                return original(fd)
+
+            with mock.patch.object(tui_benchmark, "read_pty", side_effect=fail_after_start):
+                with mock.patch.object(
+                    tui_benchmark,
+                    "stop_pty_child",
+                    side_effect=PtyCleanupError("secondary cleanup failure"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "primary PTY read failure"):
+                        tui_benchmark.run_once(
+                            [
+                                sys.executable,
+                                str(FAKE_TUI),
+                                "exception-escaped-descendant",
+                                "--pid-file",
+                                str(root / "descendant.pid"),
+                                "--token-file",
+                                str(token_file),
+                            ],
+                            state,
+                            root,
+                            1,
+                            "none",
+                            b"Ask anything...",
+                        )
+            self.assertEqual(tui_benchmark._token_processes(token_file.read_text(encoding="ascii")), {})
 
     def test_legacy_cli_shape_and_fields_remain_available(self):
         parser = tui_benchmark.build_parser()
