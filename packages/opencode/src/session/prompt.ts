@@ -1311,6 +1311,14 @@ export const layer = Layer.effect(
           if (sender === context.value.team.lead_session_id) return "lead"
           return members.find((member) => member.session_id === sender)?.name ?? sender
         }
+        // The delivery marker is persisted BEFORE the synthetic message write. If this delivery is
+        // suspended in between, the ensuring below cannot revert the claim (only "read" rows are
+        // reverted), so a resumed loop never claims these messages again and never injects a
+        // duplicate synthetic message.
+        yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, input.session.id), {
+          concurrency: "unbounded",
+          discard: true,
+        })
         const userMsg: SessionV1.User = {
           id: MessageID.ascending(),
           sessionID: input.session.id,
@@ -1339,10 +1347,6 @@ export const layer = Layer.effect(
             "</team-messages>",
           ].join("\n"),
         } satisfies SessionV1.TextPart)
-        yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, input.session.id), {
-          concurrency: "unbounded",
-          discard: true,
-        })
         acknowledged = true
         yield* sessions.touch(input.session.id)
         return true

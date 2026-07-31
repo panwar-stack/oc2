@@ -8,7 +8,7 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { SessionV2 } from "@oc2-ai/core/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { Cause, Config, Effect, Exit, Fiber, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
@@ -39,7 +39,7 @@ import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
-import { testEffect } from "../lib/effect"
+import { testEffect, pollWithTimeout } from "../lib/effect"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 
 void Log.init({ print: false })
@@ -487,6 +487,88 @@ describe("session HttpApi", () => {
         root: sessionDirectory,
       })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  )
+
+  it.live(
+    "start clears the resume ticket so a later pause/start cycle schedules no no-op wake",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        // First dispatch hangs (mid-turn), the resumed turn consumes "second".
+        yield* llm.hang
+        yield* llm.text("second")
+
+        const config = testProviderConfig(llm.url)
+        const sessionDirectory = yield* tmpdirScoped({ git: true, config })
+        const session = yield* createSession({ title: "Pinned" }).pipe(provideInstanceEffect(sessionDirectory))
+        const headers = { "content-type": "application/json" }
+        const directory = `?directory=${encodeURIComponent(sessionDirectory)}`
+
+        const promptRequest = yield* request(
+          `${pathFor(SessionPaths.prompt, { sessionID: session.id })}${directory}`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              agent: "build",
+              model: { providerID: "test", modelID: "test-model" },
+              parts: [{ type: "text", text: "hello" }],
+            }),
+          },
+        ).pipe(Effect.forkChild)
+
+        // A titled session skips the title request, so this hit is the turn's own dispatch.
+        yield* llm.wait(1).pipe(Effect.timeout("5 seconds"))
+
+        // Pause mid-turn: the durable "running" intent is persisted for the signalled session.
+        const paused = yield* requestJson<{
+          interruptionSignalledSessionIDs: string[]
+        }>(pathFor(SessionPaths.pause, { sessionID: session.id }), { method: "POST", headers })
+        expect(paused.interruptionSignalledSessionIDs).toContain(session.id)
+
+        // The interrupted prompt request surfaces the typed paused error, not a crash.
+        const responseExit = yield* Fiber.await(promptRequest).pipe(Effect.timeout("15 seconds"))
+        expect(Exit.isSuccess(responseExit)).toBe(true)
+        if (Exit.isSuccess(responseExit)) expect(responseExit.value.status).toBe(409)
+
+        // Start schedules the resumed iteration and must clear the ticket it consumed.
+        const started = yield* requestJson<{
+          scheduledSessionIDs: string[]
+        }>(pathFor(SessionPaths.start, { sessionID: session.id }), { method: "POST", headers })
+        expect(started.scheduledSessionIDs).toContain(session.id)
+
+        // The resumed turn completes in the background with the queued reply.
+        yield* pollWithTimeout(
+          Session.use
+            .messages({ sessionID: session.id })
+            .pipe(provideInstanceEffect(sessionDirectory), Effect.orDie)
+            .pipe(
+              Effect.map((msgs) =>
+                msgs.some(
+                  (msg) =>
+                    msg.info.role === "assistant" &&
+                    msg.parts.some((p) => p.type === "text" && p.text === "second"),
+                )
+                  ? true
+                  : undefined,
+              ),
+            ),
+          "timed out waiting for the resumed turn",
+        )
+        // Let the runner settle to idle before the next pause so it cannot be signalled again.
+        yield* Effect.sleep("1 second")
+
+        // A later pause/start cycle must not revive the consumed ticket into a no-op wake.
+        const pausedAgain = yield* requestJson<{
+          interruptionSignalledSessionIDs: string[]
+        }>(pathFor(SessionPaths.pause, { sessionID: session.id }), { method: "POST", headers })
+        expect(pausedAgain.interruptionSignalledSessionIDs).toEqual([])
+        const startedAgain = yield* requestJson<{
+          scheduledSessionIDs: string[]
+        }>(pathFor(SessionPaths.start, { sessionID: session.id }), { method: "POST", headers })
+        expect(startedAgain.scheduledSessionIDs).toEqual([])
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+      30_000,
   )
 
   it.instance(

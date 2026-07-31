@@ -195,10 +195,24 @@ export const layer = Layer.effect(
 
     // Direct pause -> interruption path. SessionControl.pause calls this immediately after the
     // durable barrier commits, so interruption never depends on an observer of ControlChanged.
+    // Sessions with live work get a durable "running" resume intent so a later start wakes the
+    // interrupted turn; idle sessions get none.
     const unregisterInterrupter = yield* control.registerInterrupter((sessionIDs) =>
       Effect.forEach(
         sessionIDs,
-        (sessionID) => suspend(sessionID).pipe(Effect.map((hit) => (hit ? [sessionID] : []))),
+        (sessionID) =>
+          suspend(sessionID).pipe(
+            Effect.flatMap((hit) =>
+              hit
+                ? control.setResumeIntent({ sessionID, reason: "running" }).pipe(
+                    // The interrupter must stay infallible so a best-effort intent write can never
+                    // hide which sessions were signalled.
+                    Effect.catchCause(() => Effect.succeed(0)),
+                    Effect.as([sessionID]),
+                  )
+                : Effect.succeed([]),
+            ),
+          ),
         {
           concurrency: 1,
         },

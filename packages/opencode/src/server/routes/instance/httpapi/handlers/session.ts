@@ -307,7 +307,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           // A pause that won the race leaves the durable intent in place for the next start.
           Effect.catchTag("RunnerSuspended", () => Effect.succeed(false)),
         )
-        if (woken) scheduled.push(ticket.sessionID)
+        if (woken) {
+          scheduled.push(ticket.sessionID)
+          // The intent has served its purpose: it scheduled this iteration. Clearing it here
+          // (same as wakeWithIntent / the V2 drain finish) keeps a stale ticket from scheduling
+          // a no-op loop iteration on a later pause/start cycle.
+          yield* control.finishResume(ticket).pipe(Effect.ignore)
+        }
       }
       return scheduled
     })

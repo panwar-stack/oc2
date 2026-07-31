@@ -118,7 +118,7 @@ export interface Handle {
       attachments?: SessionV1.FilePart[]
     },
   ) => Effect.Effect<void>
-  readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
+  readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result, Runner.Suspended>
 }
 
 type Input = {
@@ -128,7 +128,7 @@ type Input = {
 }
 
 export interface Interface {
-  readonly create: (input: Input) => Effect.Effect<Handle>
+  readonly create: (input: Input) => Effect.Effect<Handle, Runner.Suspended>
 }
 
 type ToolCall = {
@@ -197,7 +197,9 @@ export const layer = Layer.effect(
     const { db } = database
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
-      yield* SessionRunState.assertNotSuspended(db, input.sessionID).pipe(Effect.catch(Effect.die))
+      // A pause that lands between the run-loop admission check and here surfaces as the typed
+      // suspended error instead of a defect, so callers treat it as paused work, never as a crash.
+      yield* SessionRunState.assertNotSuspended(db, input.sessionID)
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
@@ -1296,7 +1298,7 @@ export const layer = Layer.effect(
       })
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
-        yield* SessionRunState.assertNotSuspended(db, ctx.sessionID).pipe(Effect.catch(Effect.die))
+        yield* SessionRunState.assertNotSuspended(db, ctx.sessionID)
         slog.info("process")
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
@@ -1310,7 +1312,7 @@ export const layer = Layer.effect(
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
-            yield* SessionRunState.assertNotSuspended(db, ctx.sessionID).pipe(Effect.catch(Effect.die))
+            yield* SessionRunState.assertNotSuspended(db, ctx.sessionID)
             ctx.currentText = undefined
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
@@ -1390,7 +1392,11 @@ export const layer = Layer.effect(
                 },
               }),
             ),
-            Effect.catch(halt),
+            // Suspension must stay in the typed error channel: the halt path would mark the turn
+            // as failed, while the runner and its callers treat Suspended as paused, not terminal.
+            Effect.catch((error) =>
+              error instanceof Runner.Suspended ? Effect.fail(error) : halt(error),
+            ),
             Effect.ensuring(cleanup()),
           )
 
