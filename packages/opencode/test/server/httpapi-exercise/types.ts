@@ -65,7 +65,13 @@ export type ScenarioContext = {
   worktreeRemove: (directory: string) => Effect.Effect<void>
   llmText: (value: string) => Effect.Effect<void>
   llmWait: (count: number) => Effect.Effect<void>
+  /** Queues a provider reply that never completes, keeping the run provably live. */
+  llmHang: () => Effect.Effect<void>
   tuiRequest: (request: { path: string; body: unknown }) => Effect.Effect<void>
+  /** Effective durable pause state, used to assert what the pause routes actually persisted. */
+  pauseState: (sessionID: SessionID) => Effect.Effect<{ paused: boolean; owned: boolean }>
+  /** Records durable resume intent so a start scenario has something eligible to schedule. */
+  resumeIntent: (sessionID: SessionID, reason: "running" | "queued-input" | "team-wake") => Effect.Effect<void>
 }
 
 /** Scenario context after `.seeded(...)`; `state` preserves the seed return type in the DSL. */

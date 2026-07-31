@@ -182,7 +182,22 @@ function withContext<A, E>(
             run(modules.Worktree.Service.use((svc) => svc.remove({ directory })).pipe(Effect.ignore)),
           llmText: (value) => Effect.suspend(() => llm().text(value)),
           llmWait: (count) => Effect.suspend(() => llm().wait(count)),
+          llmHang: () => Effect.suspend(() => llm().hang),
           tuiRequest: (request) => Effect.sync(() => modules.Tui.submitTuiRequest(request)),
+          pauseState: (sessionID) =>
+            run(
+              modules.SessionControl.Service.use((svc) => svc.state(sessionID)).pipe(
+                Effect.map((state) => ({ paused: state.paused, owned: state.owned })),
+                Effect.catchCause(() => Effect.succeed({ paused: false, owned: false })),
+              ),
+            ),
+          resumeIntent: (sessionID, reason) =>
+            run(
+              modules.SessionControl.Service.use((svc) => svc.setResumeIntent({ sessionID, reason })).pipe(
+                Effect.asVoid,
+                Effect.catchCause(() => Effect.void),
+              ),
+            ),
         }
         yield* trace(options, scenario, `${label} seed start`)
         const state = yield* scenario.seed(base)

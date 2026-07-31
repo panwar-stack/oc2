@@ -7399,6 +7399,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "SessionPausedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPausedError"
+                }
+              }
+            }
           }
         },
         "description": "Create and send a new message to a session, streaming the AI response.",
@@ -7865,6 +7875,170 @@
         ]
       }
     },
+    "/session/{sessionID}/pause": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "operationId": "session.pause",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pause result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionControlResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Pause a session and its descendant subtree. Commits durable pause blockers, signals interruption to running sessions, and returns without waiting for interrupted work to unwind.",
+        "summary": "Pause session",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.session.pause({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/start": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "operationId": "session.start",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Start result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionControlResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Release the pause cascade owned by this session and schedule sessions that have durable resume intent and no remaining blockers. Sessions blocked by an ancestor pause stay paused.",
+        "summary": "Start session",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOc2Client } from \"@oc2-ai/sdk\"\n\nconst client = createOc2Client()\nawait client.session.start({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/session/{sessionID}/init": {
       "post": {
         "tags": [
@@ -7933,6 +8107,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SessionPausedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPausedError"
                 }
               }
             }
@@ -8043,6 +8227,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SessionPausedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPausedError"
                 }
               }
             }
@@ -8318,6 +8512,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "SessionPausedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPausedError"
+                }
+              }
+            }
           }
         },
         "description": "Send a new command to a session for execution by the AI assistant.",
@@ -8490,11 +8694,18 @@
             }
           },
           "409": {
-            "description": "SessionBusyError",
+            "description": "SessionBusyError | SessionPausedError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionBusyError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionBusyError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionPausedError"
+                    }
+                  ]
                 }
               }
             }
@@ -25899,6 +26110,81 @@
           "title",
           "version",
           "time"
+        ],
+        "additionalProperties": false
+      },
+      "SessionControlResult": {
+        "type": "object",
+        "properties": {
+          "rootSessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "cascadeID": {
+            "type": "string"
+          },
+          "affectedSessionIDs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ses"
+            }
+          },
+          "interruptionSignalledSessionIDs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ses"
+            }
+          },
+          "stillBlockedSessionIDs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ses"
+            }
+          },
+          "scheduledSessionIDs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ses"
+            }
+          },
+          "unchanged": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rootSessionID",
+          "affectedSessionIDs",
+          "interruptionSignalledSessionIDs",
+          "stillBlockedSessionIDs",
+          "scheduledSessionIDs",
+          "unchanged"
+        ],
+        "additionalProperties": false
+      },
+      "SessionPausedError": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "SessionPausedError"
+            ]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "sessionID",
+          "message"
         ],
         "additionalProperties": false
       },

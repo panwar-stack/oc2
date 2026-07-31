@@ -3,7 +3,7 @@ import { Naming } from "@oc2-ai/core/naming"
 import { HttpRouter } from "effect/unstable/http"
 import { parse } from "./assertions"
 import { runtime, type Runtime } from "./runtime"
-import type { ActiveScenario, BackendApp, CallResult, CaptureMode, SeededContext } from "./types"
+import type { ActiveScenario, BackendApp, CallResult, CaptureMode, Method, SeededContext } from "./types"
 
 type CallOptions = {
   auth?: {
@@ -15,6 +15,25 @@ type CallOptions = {
 export function call(scenario: ActiveScenario, ctx: SeededContext<unknown>, options: CallOptions = {}) {
   return Effect.promise(async () =>
     capture(await app(await runtime(), options).request(toRequest(scenario, ctx)), scenario.capture),
+  )
+}
+
+/**
+ * Issues an extra request against the same backend a scenario is exercising. Scenarios that must
+ * prove idempotency, overlap, or concurrency need more than the single scripted call.
+ */
+export function callPath(spec: { method: Method; path: string; headers?: Record<string, string>; body?: unknown }) {
+  return Effect.promise(async () =>
+    capture(
+      await app(await runtime(), {}).request(
+        new Request(new URL(spec.path, "http://localhost"), {
+          method: spec.method,
+          headers: spec.body === undefined ? spec.headers : { "content-type": "application/json", ...spec.headers },
+          body: spec.body === undefined ? undefined : JSON.stringify(spec.body),
+        }),
+      ),
+      "full",
+    ),
   )
 }
 

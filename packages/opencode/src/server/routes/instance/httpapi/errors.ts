@@ -122,6 +122,19 @@ export class SessionBusyError extends Schema.TaggedErrorClass<SessionBusyError>(
   { httpApiStatus: 409 },
 ) {}
 
+/**
+ * A durable pause blocker stopped the action before it produced side effects. This is distinct
+ * from `SessionBusyError`: the session is not running, it is barred from running until `/start`.
+ */
+export class SessionPausedError extends Schema.TaggedErrorClass<SessionPausedError>()(
+  "SessionPausedError",
+  {
+    sessionID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
 export class QuestionNotFoundError extends Schema.TaggedErrorClass<QuestionNotFoundError>()(
   "QuestionNotFoundError",
   {
