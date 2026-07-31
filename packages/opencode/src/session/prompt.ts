@@ -1358,7 +1358,9 @@ Variant policy: use lower reasoning effort only for simple precise work; default
 
 Use daemon teammates only for monitoring, sentinels, rolling checklists, or other long lived tasks. Give them specific reporting criteria and shut down the team when monitoring ends.
 
-Do not create a team for trivial one step requests or when the user explicitly asks you to work alone.`
+Do not create a team for trivial one step requests or when the user explicitly asks you to work alone.
+Be patient while your teammates complete their tasks. Ask for periodic updates.`
+
       ]
 
       if (Option.isNone(context)) return guidance.join("\n")
