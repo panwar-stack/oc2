@@ -120,6 +120,7 @@ const execution = Layer.effect(
         resume: coordinator.run,
         wake: coordinator.wake,
         interrupt: coordinator.interrupt,
+        suspend: coordinator.suspend,
       }),
     ),
   ),

@@ -8,6 +8,7 @@ import { GrepTool } from "./grep"
 import { OpengrepTool } from "./opengrep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { LocalFusionTool } from "./local_fusion"
 import { Database } from "@oc2-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
@@ -139,6 +140,7 @@ export const layer: Layer.Layer<
   | Database.Service
   | Team.Service
   | Memory.Service
+  | LifecycleReconciler.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {

@@ -85,6 +85,11 @@ export const TeamGetMessagesTool = Tool.define(
             return members.find((member) => member.session_id === sender)?.name ?? sender
           }
 
+          yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, ctx.sessionID), {
+            concurrency: "unbounded",
+            discard: true,
+          })
+
           return {
             title: "Team Messages",
             output: messages

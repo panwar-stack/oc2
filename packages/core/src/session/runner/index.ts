@@ -8,6 +8,7 @@ import { SessionRunnerModel } from "./model"
 import type { SystemContext } from "../../system-context/index"
 import type { SessionContextEpoch } from "../context-epoch"
 import type { ToolOutputStore } from "../../tool-output-store"
+import type { SessionControl } from "../control"
 
 export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExceededError>()(
   "SessionRunner.StepLimitExceededError",
@@ -26,6 +27,7 @@ export type RunError =
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked
   | ToolOutputStore.Error
+  | SessionControl.SessionPausedError
 
 /** Runs one local continuation from already-recorded Session history. */
 export interface Interface {
@@ -33,6 +35,8 @@ export interface Interface {
   readonly run: (input: {
     readonly sessionID: SessionSchema.ID
     readonly force?: boolean
+    readonly ticket?: SessionControl.ResumeTicket
+    readonly isSuspended?: () => boolean
   }) => Effect.Effect<void, RunError>
 }
 

@@ -4,23 +4,31 @@ import { ToolJsonSchema } from "./json-schema"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
-import { SessionID, MessageID } from "../session/schema"
+import { SessionID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Effect, Exit, Schema } from "effect"
 import { EffectBridge } from "@/effect/bridge"
+import { Runner } from "@/effect/runner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@oc2-ai/core/database/database"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { Permission } from "@/permission"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
   resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
-  prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts>
-  wake(sessionID: SessionID): Effect.Effect<SessionV1.WithParts>
+  prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts, Runner.Suspended>
+  /**
+   * Non-blocking nudge. Attaches to the live run or schedules a new one and returns as soon as the
+   * work is scheduled. It never reports the session's final result.
+   */
+  wake(sessionID: SessionID): Effect.Effect<void, Runner.Suspended>
+  /** Runs the session loop to completion and answers with its final assistant message. */
+  run(sessionID: SessionID): Effect.Effect<SessionV1.WithParts, Runner.Suspended>
 }
 
 const id = "task"
@@ -91,9 +99,9 @@ export const TaskTool = Tool.define(
     const background = yield* BackgroundJob.Service
     const config = yield* Config.Service
     const sessions = yield* Session.Service
-    const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const lifecycle = yield* LifecycleReconciler.Service
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -103,9 +111,7 @@ export const TaskTool = Tool.define(
       const runInBackground = params.background === true || ctx.extra?.background === true
       const notifyParent = ctx.extra?.notify !== false
       if (params.background === true && !flags.experimentalBackgroundSubagents) {
-        return yield* Effect.fail(
-          new Error("Background subagents require OC2_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
-        )
+        return yield* Effect.fail(new Error("Background subagents require OC2_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"))
       }
 
       if (!ctx.extra?.bypassAgentCheck) {
@@ -147,7 +153,8 @@ export const TaskTool = Tool.define(
             ...childPermission,
             ...(cfg.experimental?.primary_tools
               ?.filter(
-                (item) => item !== "question" || Permission.evaluate("question", "*", childPermission).action !== "deny",
+                (item) =>
+                  item !== "question" || Permission.evaluate("question", "*", childPermission).action !== "deny",
               )
               .map((item) => ({
                 pattern: "*",
@@ -182,11 +189,23 @@ export const TaskTool = Tool.define(
 
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
+      yield* lifecycle.attach(ops)
+
+      const registration = yield* lifecycle.registerBackground({
+        sessionID: nextSession.id,
+        parentSessionID: ctx.sessionID,
+        description: params.description,
+        agent: parent.agent ?? ctx.agent,
+        model: { providerID: msg.info.providerID, modelID: msg.info.modelID },
+        ...(variant && variant !== "default" ? { variant } : {}),
+        notifyParent: runInBackground && notifyParent,
+        ops,
+      })
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
         const result = yield* ops.prompt({
-          messageID: MessageID.ascending(),
+          messageID: registration.promptMessageID,
           sessionID: nextSession.id,
           model: {
             modelID: model.modelID,
@@ -207,47 +226,13 @@ export const TaskTool = Tool.define(
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 
-      const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
-        state: "completed" | "error",
-        text: string,
-      ) {
-        const currentParent = yield* sessions.get(ctx.sessionID)
-        yield* ops
-          .prompt({
-            sessionID: ctx.sessionID,
-            agent: currentParent.agent ?? ctx.agent,
-            variant,
-            parts: [
-              {
-                type: "text",
-                synthetic: true,
-                text: renderOutput({
-                  sessionID: nextSession.id,
-                  state,
-                  summary:
-                    state === "completed"
-                      ? `Background task completed: ${params.description}`
-                      : `Background task failed: ${params.description}`,
-                  text,
-                }),
-              },
-            ],
-          })
-          .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
-      })
-
-      const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
-        yield* background.wait({ id: jobID }).pipe(
-          Effect.flatMap((result) => {
-            if (result.info?.status === "completed") return inject("completed", result.info.output ?? "")
-            if (result.info?.status === "error") return inject("error", result.info.error ?? "")
-            return Effect.void
-          }),
-          Effect.forkIn(scope, { startImmediately: true }),
-        )
-      })
-
       if (yield* background.extend({ id: nextSession.id, run: runTask() })) {
+        yield* lifecycle.watchBackground(
+          nextSession.id,
+          registration.generation,
+          background.wait({ id: nextSession.id }),
+          ops,
+        )
         return {
           title: params.description,
           metadata: {
@@ -275,14 +260,20 @@ export const TaskTool = Tool.define(
                 title: params.description,
                 metadata: { ...metadata, background: true, jobId: nextSession.id },
               }),
-              notify(nextSession.id),
+              lifecycle.promoteBackground(nextSession.id, registration.generation, ops),
             ])
           : ctx.metadata({
               title: params.description,
               metadata: { ...metadata, background: true, jobId: nextSession.id },
             }),
-        run: runTask().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id))),
+        run: runTask(),
       })
+      yield* lifecycle.watchBackground(
+        nextSession.id,
+        registration.generation,
+        background.wait({ id: nextSession.id }),
+        ops,
+      )
 
       function backgroundResult() {
         return {
@@ -302,12 +293,13 @@ export const TaskTool = Tool.define(
       }
 
       if (runInBackground) {
-        if (notifyParent) yield* notify(info.id)
         return backgroundResult()
       }
 
       const runCancel = yield* EffectBridge.make()
-      const cancel = ops.cancel(nextSession.id)
+      const cancel = lifecycle
+        .isPaused([ctx.sessionID, nextSession.id])
+        .pipe(Effect.flatMap((paused) => (paused ? Effect.void : ops.cancel(nextSession.id))))
 
       function onAbort() {
         runCancel.fork(cancel)
@@ -334,8 +326,9 @@ export const TaskTool = Tool.define(
           }),
         (_, exit) =>
           Effect.gen(function* () {
-            if (Exit.hasInterrupts(exit))
-              yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
+            if (!Exit.hasInterrupts(exit)) return
+            if (yield* lifecycle.isPaused([ctx.sessionID, nextSession.id])) return
+            yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
           }).pipe(
             Effect.ensuring(
               Effect.sync(() => {

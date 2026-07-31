@@ -281,14 +281,14 @@ describe("SessionControl", () => {
       yield* control.release(root.id)
 
       expect(updates).toEqual([
-        { sessionID: root.id, paused: true, seq: expect.any(Number) },
         { sessionID: child.id, paused: true, seq: expect.any(Number) },
         { sessionID: root.id, paused: true, seq: expect.any(Number) },
         { sessionID: child.id, paused: true, seq: expect.any(Number) },
-        { sessionID: root.id, paused: false, seq: expect.any(Number) },
+        { sessionID: root.id, paused: true, seq: expect.any(Number) },
         { sessionID: child.id, paused: false, seq: expect.any(Number) },
         { sessionID: root.id, paused: false, seq: expect.any(Number) },
         { sessionID: child.id, paused: false, seq: expect.any(Number) },
+        { sessionID: root.id, paused: false, seq: expect.any(Number) },
       ])
       for (const sessionID of [root.id, child.id]) {
         const seqs = updates.filter((update) => update.sessionID === sessionID).map((update) => update.seq ?? -1)
@@ -354,7 +354,76 @@ describe("SessionControl", () => {
       expect(intent2).toBe(intent1 + 1)
       expect(yield* control.isResumeIntentCurrent({ sessionID: root.id, generation: intent1 })).toBeFalse()
       expect(yield* control.clearResumeIntent({ sessionID: root.id, generation: intent1 })).toBeFalse()
+      expect(yield* control.clearResumeIntent({ sessionID: root.id, generation: intent2 })).toBeFalse()
+      yield* control.release(root.id)
       expect(yield* control.clearResumeIntent({ sessionID: root.id, generation: intent2 })).toBeTrue()
+    }),
+  )
+
+  it.effect("issues blocker-aware resume tickets with running reason dominance", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const control = yield* SessionControl.Service
+      const root = yield* sessions.create({ location })
+      yield* control.pause({ rootSessionID: root.id })
+
+      const queued = yield* control.requestResume({ sessionID: root.id, reason: "queued-input" })
+      expect(queued).toMatchObject({ paused: true, ticket: { sessionID: root.id, reason: "queued-input" } })
+      expect(yield* control.runnableResumeTickets([root.id])).toEqual([])
+      expect(yield* control.finishResume(queued.ticket)).toBeFalse()
+
+      const running = yield* control.requestResume({ sessionID: root.id, reason: "running" })
+      const advisory = yield* control.requestResume({ sessionID: root.id, reason: "background-result" })
+      expect(running.ticket.generation).toBe(queued.ticket.generation + 1)
+      expect(advisory.ticket).toMatchObject({
+        sessionID: root.id,
+        generation: running.ticket.generation + 1,
+        reason: "running",
+      })
+
+      const released = yield* control.release(root.id)
+      expect(released.resumeTickets).toEqual([advisory.ticket])
+      expect(released.resumableSessionIDs).toEqual([root.id])
+      expect(yield* control.isResumeTicketRunnable(running.ticket)).toBeFalse()
+      expect(yield* control.isResumeTicketRunnable(advisory.ticket)).toBeTrue()
+      expect(yield* control.finishResume(running.ticket)).toBeFalse()
+      expect(yield* control.finishResume(advisory.ticket)).toBeTrue()
+      expect(yield* control.runnableResumeTickets([root.id])).toEqual([])
+    }),
+  )
+
+  it.live("pause signals the registered interrupter directly and reports the signalled sessions", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const control = yield* SessionControl.Service
+      const root = yield* sessions.create({ location })
+      const child = yield* sessions.create({ location, parentID: root.id })
+      const grandchild = yield* sessions.create({ location, parentID: child.id })
+      const observed: (readonly SessionV2.ID[])[] = []
+      const barrierCommitted: boolean[] = []
+
+      const unregister = yield* control.registerInterrupter((sessionIDs) =>
+        Effect.gen(function* () {
+          observed.push(sessionIDs)
+          // The durable barrier must already be visible when interruption is signalled.
+          barrierCommitted.push((yield* control.state(root.id).pipe(Effect.orDie)).paused)
+          return sessionIDs.filter((sessionID) => sessionID !== grandchild.id)
+        }),
+      )
+
+      const paused = yield* control.pause({ rootSessionID: root.id })
+
+      expect(observed).toHaveLength(1)
+      expect(barrierCommitted).toEqual([true])
+      // Descendants are signalled before their root.
+      expect(observed[0]?.indexOf(grandchild.id)).toBeLessThan(observed[0]!.indexOf(root.id))
+      expect(observed[0]?.indexOf(child.id)).toBeLessThan(observed[0]!.indexOf(root.id))
+      expect([...paused.interruptionSignalledSessionIDs].sort()).toEqual([child.id, root.id].sort())
+
+      yield* unregister
+      yield* control.release(root.id)
+      yield* control.pause({ rootSessionID: root.id })
+      expect(observed).toHaveLength(1)
     }),
   )
 

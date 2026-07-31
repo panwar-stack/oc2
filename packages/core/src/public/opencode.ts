@@ -11,6 +11,7 @@ import { SessionV2 } from "../session"
 import * as SessionExecutionLocal from "../session/execution/local"
 import { SessionProjector } from "../session/projector"
 import { SessionStore } from "../session/store"
+import { SessionControl } from "../session/control"
 import { ApplicationTools } from "../tool/application-tools"
 import { Session } from "./session"
 import { Tool } from "./tool"
@@ -70,6 +71,7 @@ const SessionsLayer = Layer.merge(
   SessionV2.layer.pipe(
     Layer.provide(SessionProjector.layer),
     Layer.provide(SessionExecutionLocal.layer),
+    Layer.provide(SessionControl.layer),
     Layer.provide(SessionStore.layer),
     Layer.provide(EventV2.layer),
     Layer.provide(Database.defaultLayer),

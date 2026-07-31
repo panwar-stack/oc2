@@ -29,7 +29,7 @@ import { logFailure } from "./session/logging"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
-import { pausedSessionIDs } from "./session/control"
+import { pausedSessionIDs, requestResume as persistResumeRequest, SessionControl } from "./session/control"
 
 // get project -> project.locations
 //
@@ -173,18 +173,20 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
-    const scope = yield* Effect.scope
+    const requestResume = (intent: SessionControl.ResumeIntent) =>
+      persistResumeRequest(db, intent).pipe(
+        Effect.mapError((error) => new NotFoundError({ sessionID: error.sessionID })),
+      )
 
-    const enqueueWake = (admitted: SessionInput.Admitted) =>
-      execution.wake(admitted.sessionID, admitted.admittedSeq).pipe(
+    const enqueueWake = (admitted: SessionInput.Admitted, ticket: SessionControl.ResumeTicket) =>
+      execution.wake(admitted.sessionID, admitted.admittedSeq, ticket).pipe(
         Effect.tapCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.void
             : logFailure("Failed to wake Session", admitted.sessionID, cause),
         ),
         Effect.ignore,
-        Effect.forkIn(scope, { startImmediately: true }),
-        Effect.asVoid,
+        Effect.andThen(Effect.yieldNow),
       )
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -359,7 +361,10 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             yield* result.get(input.sessionID)
             const returnPrompt = Effect.fnUntraced(function* (admitted: SessionInput.Admitted) {
-              if (input.resume !== false) yield* enqueueWake(admitted)
+              if (input.resume !== false) {
+                const request = yield* requestResume({ sessionID: admitted.sessionID, reason: "queued-input" })
+                if (!request.paused) yield* enqueueWake(admitted, request.ticket)
+              }
               return admitted
             }, Effect.uninterruptible)
             const messageID = input.id ?? SessionMessage.ID.create()

@@ -45,6 +45,7 @@ import {
   SessionTable,
 } from "@oc2-ai/core/session/sql"
 import { SessionStore } from "@oc2-ai/core/session/store"
+import { SessionControl } from "@oc2-ai/core/session/control"
 import { SystemContext } from "@oc2-ai/core/system-context"
 import { SystemContextRegistry } from "@oc2-ai/core/system-context/registry"
 import { SkillGuidance } from "@oc2-ai/core/skill/guidance"
@@ -60,6 +61,7 @@ const events = EventV2.layer.pipe(Layer.provide(database))
 const questions = QuestionV2.layer.pipe(Layer.provide(events))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
+const control = SessionControl.layer.pipe(Layer.provide(events), Layer.provide(database))
 const requests: LLMRequest[] = []
 const successfulResponse = [
   LLMEvent.stepStart({ index: 0 }),
@@ -287,6 +289,7 @@ const execution = Layer.effect(
         resume: coordinator.run,
         wake: coordinator.wake,
         interrupt: coordinator.interrupt,
+        suspend: coordinator.suspend,
       }),
     ),
   ),
@@ -305,6 +308,7 @@ const it = testEffect(
     questions,
     projector,
     store,
+    control,
     client,
     permission,
     applications,
@@ -412,6 +416,11 @@ const resetRequestCapture = () => {
   streamStarted = undefined
   response = successfulResponse
 }
+
+const waitForRequests = (count: number) =>
+  Effect.gen(function* () {
+    while (requests.length < count) yield* Effect.yieldNow
+  })
 
 const capturedRequest = () => {
   const request = requests[0]
@@ -657,6 +666,36 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("suspends a provider turn on pause without terminal cleanup", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const id = SessionV2.ID.make("ses_runner_pause_gate")
+      yield* insertSession(id)
+      const session = yield* SessionV2.Service
+      const control = yield* SessionControl.Service
+      const coordinator = yield* SessionRunCoordinator.Service
+      yield* session.prompt({ sessionID: id, prompt: new Prompt({ text: "Pause this turn" }), resume: false })
+      const request = yield* control.requestResume({ sessionID: id, reason: "running" })
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      requests.length = 0
+
+      const running = yield* coordinator.run(id).pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* control.pause({ rootSessionID: id })
+      yield* coordinator.suspend(id)
+      const exit = yield* Fiber.join(running)
+
+      expect(Exit.isFailure(exit)).toBeTrue()
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionControl.SessionPausedError)
+      expect(requests).toHaveLength(1)
+      expect(yield* terminalTypes(id)).toEqual([])
+      expect(yield* control.finishResume(request.ticket)).toBeFalse()
+      expect(yield* control.release(id)).toMatchObject({ resumeTickets: [request.ticket] })
+      requests.length = 0
+    }),
+  )
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup
@@ -2726,7 +2765,7 @@ describe("SessionRunnerLLM", () => {
       yield* Fiber.join(first)
       streamGate = undefined
       streamStarted = undefined
-      yield* Effect.yieldNow
+      yield* waitForRequests(2)
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[0]!)).toEqual(["Start working"])
@@ -3077,7 +3116,7 @@ describe("SessionRunnerLLM", () => {
       streamFailure = undefined
       streamGate = undefined
       streamStarted = undefined
-      yield* Effect.yieldNow
+      yield* waitForRequests(2)
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Recover with this"])
@@ -3355,7 +3394,7 @@ describe("SessionRunnerLLM", () => {
       const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
       const second = yield* session.resume(otherSessionID).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
+      yield* waitForRequests(2)
 
       expect(requests).toHaveLength(2)
       expect(requests.map((request) => request.providerOptions?.openai?.promptCacheKey)).toEqual([
@@ -3421,8 +3460,7 @@ describe("SessionRunnerLLM", () => {
 
       const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
-      const second = yield* session.resume(sessionID).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
+      const second = yield* session.resume(sessionID).pipe(Effect.forkChild({ startImmediately: true }))
 
       expect(requests).toHaveLength(1)
       yield* Deferred.succeed(streamGate, undefined)

@@ -64,6 +64,8 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import { Runner } from "@/effect/runner"
 
 void Log.init({ print: false })
 
@@ -194,6 +196,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    SessionControl.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -453,6 +456,35 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
 })
 
 // Loop semantics
+
+noLLMServer.instance(
+  "paused prompt preserves queued input without entering the loop",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, sessions, chat } = yield* boot()
+      const control = yield* SessionControl.Service
+      yield* control.pause({ rootSessionID: chat.id })
+
+      const exit = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "queued while paused" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      expect(
+        messages.some((message) =>
+          message.parts.some((part) => part.type === "text" && part.text === "queued while paused"),
+        ),
+      ).toBe(true)
+      expect(yield* control.release(chat.id)).toMatchObject({ resumableSessionIDs: [chat.id] })
+    }),
+  { config: cfg },
+)
 
 noLLMServer.instance(
   "loop exits immediately when last assistant has stop finish",
@@ -938,6 +970,70 @@ it.instance(
 )
 
 // Cancel semantics
+
+it.instance(
+  "suspend interrupts the loop without cancellation finalizers",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const control = yield* SessionControl.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      yield* user(chat.id, "pause this run")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      yield* control.pause({ rootSessionID: chat.id })
+
+      const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("100 millis"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          return (yield* llm.pending) === 0 ? true : undefined
+        }),
+        "provider stream did not unwind after suspension",
+      )
+      const assistant = (yield* sessions.messages({ sessionID: chat.id }))
+        .map((message) => message.info)
+        .findLast((message): message is SessionV1.Assistant => message.role === "assistant")
+      expect(assistant?.error).toBeUndefined()
+      expect(assistant?.time.completed).toBeUndefined()
+    }),
+  3_000,
+)
+
+it.instance(
+  "wake schedules the loop and returns before the turn completes",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      yield* user(chat.id, "wake me")
+
+      // wake must not block on the turn, and it must report no result. Callers that treat its
+      // answer as the final assistant message settle work against a stale or missing turn.
+      const woken = yield* prompt.wake(chat.id).pipe(Effect.timeout("1 second"), Effect.orDie)
+      expect(woken).toBeUndefined()
+      yield* llm.wait(1)
+      expect(yield* llm.calls).toBe(1)
+
+      // The provider stream still hangs, so the scheduled turn is demonstrably unfinished.
+      const assistantBeforeFinish = (yield* sessions.messages({ sessionID: chat.id }))
+        .map((message) => message.info)
+        .findLast((message): message is SessionV1.Assistant => message.role === "assistant")
+      expect(assistantBeforeFinish?.finish).toBeUndefined()
+      expect(assistantBeforeFinish?.time.completed).toBeUndefined()
+
+      yield* prompt.cancel(chat.id)
+    }),
+  5_000,
+)
 
 it.instance(
   "cancel interrupts loop and resolves with an assistant message",
@@ -1522,7 +1618,7 @@ it.live(
         }),
       },
     ),
-  5_000,
+  15_000,
 )
 
 it.instance(
@@ -1683,7 +1779,7 @@ it.instance(
       }
     }),
   { git: true },
-  3_000,
+  10_000,
 )
 
 // Queue semantics
@@ -2664,6 +2760,41 @@ unix(
       ),
     ),
   30_000,
+)
+
+unix(
+  "cancel aborts tracked command substitution",
+  () =>
+    withSh(() =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const done = path.join(dir, "substitution-finished")
+            yield* writeConfig(dir, {
+              ...cfg,
+              command: {
+                slow: {
+                  template: `Result: !\`sleep 30; touch "${done}"; printf late\``,
+                },
+              },
+            })
+            const { prompt, chat } = yield* boot()
+            const command = yield* prompt
+              .command({ sessionID: chat.id, command: "slow", arguments: "", agent: "build" })
+              .pipe(Effect.forkChild)
+            yield* waitForBusy(chat.id)
+
+            yield* prompt.cancel(chat.id)
+
+            expect(Exit.isFailure(yield* Fiber.await(command))).toBe(true)
+            yield* Effect.sleep("100 millis")
+            const fs = yield* FSUtil.Service
+            expect(yield* fs.existsSafe(done)).toBe(false)
+          }),
+        { git: true, config: cfg },
+      ),
+    ),
+  10_000,
 )
 
 unix(

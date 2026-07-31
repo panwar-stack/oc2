@@ -87,6 +87,7 @@ function stubOps(input: {
         return input.output(prompt)
       }),
     wake: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
+    run: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
   }
 }
 

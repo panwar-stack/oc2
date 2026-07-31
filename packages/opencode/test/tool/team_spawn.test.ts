@@ -5,7 +5,7 @@ import { Config } from "@/config/config"
 import { MessageV2 } from "@/session/message-v2"
 import type { SessionPrompt } from "@/session/prompt"
 import { Provider } from "@/provider/provider"
-import { MessageID, PartID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
 import { TeamSpawnTool } from "@/tool/team_spawn"
@@ -17,6 +17,11 @@ import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { ProviderTest } from "../fake/provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { BackgroundJob } from "@/background/job"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import { SessionTable } from "@oc2-ai/core/session/sql"
+import { eq } from "drizzle-orm"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -56,6 +61,8 @@ const it = testEffect(
     CrossSpawnSpawner.defaultLayer,
     Session.defaultLayer,
     Team.defaultLayer,
+    BackgroundJob.defaultLayer,
+    SessionControl.defaultLayer,
     Truncate.defaultLayer,
     Database.defaultLayer,
     provider.layer,
@@ -161,6 +168,7 @@ describe("tool.team_spawn", () => {
                 return reply(input, "work complete")
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const team = yield* Team.Service
           const sessions = yield* Session.Service
@@ -203,6 +211,7 @@ describe("tool.team_spawn", () => {
                 return reply(input, "work complete")
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const team = yield* Team.Service
           const sessions = yield* Session.Service
@@ -254,6 +263,7 @@ describe("tool.team_spawn", () => {
                 return reply(input, "work complete")
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const team = yield* Team.Service
           const sessions = yield* Session.Service
@@ -295,6 +305,7 @@ describe("tool.team_spawn", () => {
             resolvePromptParts: () => Effect.die(new Error("should not resolve prompt parts")),
             prompt: () => Effect.die(new Error("should not prompt")),
             wake: () => Effect.die(new Error("should not wake")),
+            run: () => Effect.die(new Error("should not wake")),
           }
           const tool = yield* TeamSpawnTool
           const def = yield* tool.init()
@@ -336,6 +347,7 @@ describe("tool.team_spawn", () => {
                 return reply(input, "work complete")
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const team = yield* Team.Service
           const sessions = yield* Session.Service
@@ -388,6 +400,7 @@ describe("tool.team_spawn", () => {
                 return reply(input, "initialized")
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const team = yield* Team.Service
           const { lead, assistant, info } = yield* seed()
@@ -438,6 +451,7 @@ describe("tool.team_spawn", () => {
                 throw new Error("boom")
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const team = yield* Team.Service
           const { lead, assistant, info } = yield* seed()
@@ -480,6 +494,7 @@ describe("tool.team_spawn", () => {
                 return reply(input, "initialized")
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const team = yield* Team.Service
           const { lead, assistant, info } = yield* seed()
@@ -563,6 +578,7 @@ describe("tool.team_spawn", () => {
             resolvePromptParts: () => Effect.die(new Error("should not resolve prompt parts")),
             prompt: () => Effect.die(new Error("should not prompt")),
             wake: () => Effect.die(new Error("should not wake")),
+            run: () => Effect.die(new Error("should not wake")),
           }
           const tool = yield* TeamSpawnTool
           const def = yield* tool.init()
@@ -613,6 +629,7 @@ describe("tool.team_spawn", () => {
             resolvePromptParts: () => Effect.die(new Error("should not resolve prompt parts")),
             prompt: () => Effect.die(new Error("should not prompt")),
             wake: () => Effect.die(new Error("should not wake")),
+            run: () => Effect.die(new Error("should not wake")),
           }
           const tool = yield* TeamSpawnTool
           const def = yield* tool.init()
@@ -657,6 +674,7 @@ describe("tool.team_spawn", () => {
             resolvePromptParts: () => Effect.die(new Error("should not resolve prompt parts")),
             prompt: () => Effect.die(new Error("should not prompt")),
             wake: () => Effect.die(new Error("should not wake")),
+            run: () => Effect.die(new Error("should not wake")),
           }
           const tool = yield* TeamSpawnTool
           const def = yield* tool.init()
@@ -713,11 +731,15 @@ describe("tool.team_spawn", () => {
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { lead, assistant, info } = yield* seed()
           let releaseArchitect = () => {}
           const architectReleased = new Promise<void>((resolve) => {
             releaseArchitect = resolve
           })
           const calls: SessionPrompt.PromptInput[] = []
+          const completionWakeDependentStatuses: string[] = []
           const promptOps: TaskPromptOps = {
             cancel: () => Effect.void,
             resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
@@ -728,10 +750,29 @@ describe("tool.team_spawn", () => {
                 if (index === 0) await architectReleased
                 return reply(input, index === 0 ? "architecture ready" : "implementation done")
               }),
-            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            wake: (sessionID) =>
+              Effect.gen(function* () {
+                const pending = yield* team.getPendingMessages(lead.id, info.id)
+                if (pending.some((message) => message.body.includes("architecture ready"))) {
+                  completionWakeDependentStatuses.push(
+                    (yield* team.getMembers(info.id)).find((member) => member.name === "implementer")?.status ??
+                      "missing",
+                  )
+                }
+                return reply({ sessionID, parts: [] }, "looped")
+              }),
+            run: (sessionID) =>
+              Effect.gen(function* () {
+                const pending = yield* team.getPendingMessages(lead.id, info.id)
+                if (pending.some((message) => message.body.includes("architecture ready"))) {
+                  completionWakeDependentStatuses.push(
+                    (yield* team.getMembers(info.id)).find((member) => member.name === "implementer")?.status ??
+                      "missing",
+                  )
+                }
+                return reply({ sessionID, parts: [] }, "looped")
+              }),
           }
-          const team = yield* Team.Service
-          const { lead, assistant, info } = yield* seed()
           const tool = yield* TeamSpawnTool
           const def = yield* tool.init()
 
@@ -789,6 +830,8 @@ describe("tool.team_spawn", () => {
               )
             }),
           )
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
 
           expect(calls).toHaveLength(2)
           expect(calls[1]?.model).toEqual(ref)
@@ -801,6 +844,9 @@ describe("tool.team_spawn", () => {
           expect(calls[1]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")).toContain(
             "architecture ready",
           )
+          expect(completionWakeDependentStatuses.length).toBeGreaterThan(0)
+          expect(completionWakeDependentStatuses).not.toContain("blocked")
+          expect(completionWakeDependentStatuses).not.toContain("missing")
           const pendingLead = yield* team.getPendingMessages(lead.id, info.id)
           expect(pendingLead.some((message) => message.body.includes("implementation done"))).toBe(true)
         }),
@@ -829,6 +875,16 @@ describe("tool.team_spawn", () => {
                 }
                 return reply({ sessionID, parts: [] }, "lead woke")
               }),
+            run: (sessionID) =>
+              Effect.gen(function* () {
+                const pending = yield* team.getPendingMessages(lead.id, info.id)
+                if (pending.some((message) => message.body.includes("completed and returned this result"))) {
+                  observedCompletionWakeStatuses.push(
+                    (yield* team.getMembers(info.id)).find((member) => member.name === "worker")?.status ?? "missing",
+                  )
+                }
+                return reply({ sessionID, parts: [] }, "lead woke")
+              }),
           }
           const tool = yield* TeamSpawnTool
           const def = yield* tool.init()
@@ -847,6 +903,96 @@ describe("tool.team_spawn", () => {
           expect(observedCompletionWakeStatuses).toContain("completed")
           expect(observedCompletionWakeStatuses).not.toContain("active")
           expect((yield* team.getMembers(info.id)).find((member) => member.name === "worker")?.status).toBe("completed")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("reconstructs paused teammate completion once from durable session facts", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const lifecycle = yield* LifecycleReconciler.Service
+          const control = yield* SessionControl.Service
+          const database = yield* Database.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          let release = () => {}
+          const released = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          let wakes = 0
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.gen(function* () {
+                yield* Effect.promise(() => released)
+                const result = reply(input, "durable teammate result")
+                yield* sessions.updateMessage(result.info)
+                for (const part of result.parts) yield* sessions.updatePart(part)
+                return result
+              }),
+            wake: (sessionID) =>
+              Effect.sync(() => {
+                wakes++
+                return reply({ sessionID, parts: [] }, "woke")
+              }),
+            run: (sessionID) =>
+              Effect.sync(() => {
+                wakes++
+                return reply({ sessionID, parts: [] }, "woke")
+              }),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+          const fiber = yield* def
+            .execute(
+              { name: "worker", agent_type: "general", role_prompt: "Do durable work" },
+              context({ lead, assistant, promptOps }),
+            )
+            .pipe(Effect.forkChild)
+
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              return (yield* team.getMembers(info.id)).some(
+                (member) => member.name === "worker" && member.status === "active",
+              )
+            }),
+          )
+          yield* control.pause({ rootSessionID: lead.id })
+          release()
+          yield* Fiber.join(fiber)
+
+          const pausedMember = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
+          expect(pausedMember?.status).toBe("active")
+          const pausedSession = yield* database.db
+            .select({ metadata: SessionTable.metadata })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, SessionID.make(pausedMember!.session_id)))
+            .get()
+            .pipe(Effect.orDie)
+          expect(pausedSession?.metadata?.lifecycleTeamMember).toMatchObject({
+            memberID: pausedMember?.id,
+            state: "completed",
+            output: "durable teammate result",
+          })
+          expect(
+            (yield* team.getMessages(info.id)).filter((message) => message.id.endsWith(":completed")),
+          ).toHaveLength(0)
+
+          yield* control.release(lead.id)
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
+          const completion = (yield* team.getMessages(info.id)).filter((message) => message.id.endsWith(":completed"))
+          expect(member?.status).toBe("completed")
+          expect(member?.result).toBe("durable teammate result")
+          expect(completion).toHaveLength(1)
+          expect(completion[0]?.id).toBe(`lifecycle:member:${member?.id}:completed`)
+          expect(wakes).toBe(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -881,6 +1027,7 @@ describe("tool.team_spawn", () => {
                 )
               }),
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
           const { lead, assistant } = yield* seed()
           const tool = yield* TeamSpawnTool

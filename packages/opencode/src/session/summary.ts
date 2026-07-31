@@ -5,6 +5,9 @@ import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { SessionID, MessageID } from "./schema"
 import { Config } from "@/config/config"
+import { Database } from "@oc2-ai/core/database/database"
+import { SessionRunState } from "./run-state"
+import { Runner } from "@/effect/runner"
 
 function unquoteGitPath(input: string) {
   if (!input.startsWith('"')) return input
@@ -63,7 +66,7 @@ function unquoteGitPath(input: string) {
 }
 
 export interface Interface {
-  readonly summarize: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
+  readonly summarize: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void, Runner.Suspended>
   readonly diff: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Snapshot.FileDiff[]>
   readonly computeDiff: (input: { messages: SessionV1.WithParts[] }) => Effect.Effect<Snapshot.FileDiff[]>
 }
@@ -77,6 +80,7 @@ export const layer = Layer.effect(
     const snapshot = yield* Snapshot.Service
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
+    const { db } = yield* Database.Service
 
     const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: SessionV1.WithParts[] }) {
       let from: string | undefined
@@ -102,6 +106,7 @@ export const layer = Layer.effect(
       sessionID: SessionID
       messageID: MessageID
     }) {
+      yield* SessionRunState.assertNotSuspended(db, input.sessionID)
       yield* sessions.setSummary({
         sessionID: input.sessionID,
         summary: {
@@ -110,6 +115,7 @@ export const layer = Layer.effect(
           files: 0,
         },
       })
+      yield* SessionRunState.assertNotSuspended(db, input.sessionID)
       yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: [] })
       if ((yield* config.get()).snapshot === false) return
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
@@ -122,6 +128,7 @@ export const layer = Layer.effect(
       if (!target || target.info.role !== "user") return
       const msgDiffs = yield* computeDiff({ messages })
       target.info.summary = { ...target.info.summary, diffs: msgDiffs }
+      yield* SessionRunState.assertNotSuspended(db, input.sessionID)
       yield* sessions.updateMessage(target.info)
     })
 
@@ -150,6 +157,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Snapshot.defaultLayer),
     Layer.provide(EventV2Bridge.defaultLayer),
     Layer.provide(Config.defaultLayer),
+    Layer.provide(Database.defaultLayer),
   ),
 )
 

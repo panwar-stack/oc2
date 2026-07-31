@@ -48,6 +48,7 @@ import { Todo } from "@/session/todo"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Database } from "@oc2-ai/core/database/database"
+import { SessionControl } from "@oc2-ai/core/session/control"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
 import { Team } from "@/team/team"
@@ -217,6 +218,7 @@ export function createRoutes(
       fenceLayer.pipe(Layer.provide(Database.defaultLayer)),
       cors(corsOptions),
       Database.defaultLayer,
+      SessionControl.defaultLayer,
       Account.defaultLayer,
       Agent.defaultLayer,
       Auth.defaultLayer,

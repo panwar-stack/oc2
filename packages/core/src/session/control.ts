@@ -19,13 +19,32 @@ export type ResumeIntent = {
   readonly reason: ResumeReason
 }
 
+export type ResumeTicket = ResumeIntent & {
+  readonly generation: number
+}
+
+export type ResumeRequest = {
+  readonly ticket: ResumeTicket
+  /** Effective pause state captured in the same transaction that persisted the intent. */
+  readonly paused: boolean
+}
+
 export type PauseResult = {
   readonly rootSessionID: SessionSchema.ID
   readonly cascadeID: string
   readonly generation: number
   readonly affectedSessionIDs: readonly SessionSchema.ID[]
+  /** Sessions that had live work and received a direct interruption signal from this pause. */
+  readonly interruptionSignalledSessionIDs: readonly SessionSchema.ID[]
   readonly unchanged: boolean
 }
+
+/**
+ * Runtime handler that turns a committed pause barrier into an actual interruption.
+ * It must return without waiting for interrupted fibers to unwind, and it must answer
+ * with the subset of sessions it actually signalled.
+ */
+export type Interrupter = (sessionIDs: readonly SessionSchema.ID[]) => Effect.Effect<readonly SessionSchema.ID[]>
 
 export type ReleaseResult = {
   readonly rootSessionID: SessionSchema.ID
@@ -34,6 +53,7 @@ export type ReleaseResult = {
   readonly affectedSessionIDs: readonly SessionSchema.ID[]
   readonly stillBlockedSessionIDs: readonly SessionSchema.ID[]
   readonly resumableSessionIDs: readonly SessionSchema.ID[]
+  readonly resumeTickets: readonly ResumeTicket[]
   readonly unchanged: boolean
 }
 
@@ -44,6 +64,10 @@ export type State = {
 }
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("SessionControl.NotFoundError", {
+  sessionID: SessionSchema.ID,
+}) {}
+
+export class SessionPausedError extends Schema.TaggedErrorClass<SessionPausedError>()("Session.PausedError", {
   sessionID: SessionSchema.ID,
 }) {}
 
@@ -73,6 +97,89 @@ function chunk<A>(items: readonly A[], size = 500): A[][] {
 export function isPaused(db: DatabaseService, sessionID: SessionSchema.ID) {
   return pausedSessionIDs(db, [sessionID]).pipe(Effect.map((sessionIDs) => sessionIDs.has(sessionID)))
 }
+
+export function isTicketRunnable(db: DatabaseService, ticket: ResumeTicket) {
+  return Effect.gen(function* () {
+    const row = yield* db
+      .select({ sessionID: SessionResumeIntentTable.session_id })
+      .from(SessionResumeIntentTable)
+      .where(
+        and(
+          eq(SessionResumeIntentTable.session_id, ticket.sessionID),
+          eq(SessionResumeIntentTable.generation, ticket.generation),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)
+    return row !== undefined && !(yield* isPaused(db, ticket.sessionID))
+  })
+}
+
+const upsertResumeIntent = Effect.fn("SessionControl.upsertResumeIntent")(function* (
+  db: DatabaseService,
+  intent: ResumeIntent,
+  preserveRunning = true,
+) {
+  const session = yield* db
+    .select({ id: SessionTable.id })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, intent.sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!session) return yield* new NotFoundError({ sessionID: intent.sessionID })
+  const row = yield* db
+    .insert(SessionResumeIntentTable)
+    .values({ session_id: intent.sessionID, generation: 1, reason: intent.reason })
+    .onConflictDoUpdate({
+      target: SessionResumeIntentTable.session_id,
+      set: {
+        generation: sql`${SessionResumeIntentTable.generation} + 1`,
+        // An active run must not be downgraded by advisory work arriving while it is being paused.
+        reason: preserveRunning
+          ? sql`CASE
+              WHEN ${SessionResumeIntentTable.reason} = 'running' OR ${intent.reason} = 'running' THEN 'running'
+              ELSE ${intent.reason}
+            END`
+          : intent.reason,
+      },
+    })
+    .returning({
+      generation: SessionResumeIntentTable.generation,
+      reason: SessionResumeIntentTable.reason,
+    })
+    .get()
+    .pipe(Effect.orDie)
+  return {
+    sessionID: intent.sessionID,
+    generation: row.generation,
+    reason: row.reason,
+  } satisfies ResumeTicket
+})
+
+export const requestResumeInTransaction = Effect.fn("SessionControl.requestResumeInTransaction")(function* (
+  db: DatabaseService,
+  intent: ResumeIntent,
+) {
+  const paused = (yield* activeBlockers(db, [intent.sessionID])).length > 0
+  const existing = yield* db
+    .select({ generation: SessionResumeIntentTable.generation, reason: SessionResumeIntentTable.reason })
+    .from(SessionResumeIntentTable)
+    .where(eq(SessionResumeIntentTable.session_id, intent.sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  const ticket =
+    intent.reason === "running" && existing?.reason === "running"
+      ? ({ sessionID: intent.sessionID, ...existing } satisfies ResumeTicket)
+      : yield* upsertResumeIntent(db, intent, paused)
+  return { ticket, paused } satisfies ResumeRequest
+})
+
+/** Persists resume demand and captures effective pause state under one immediate transaction. */
+export const requestResume = Effect.fn("SessionControl.requestResume")((db: DatabaseService, intent: ResumeIntent) =>
+  db
+    .transaction(() => requestResumeInTransaction(db, intent), { behavior: "immediate" })
+    .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
+)
 
 export function inheritActiveBlockers(
   db: DatabaseService,
@@ -194,6 +301,20 @@ export interface Interface {
     readonly resumeIntents?: readonly ResumeIntent[]
   }) => Effect.Effect<PauseResult, NotFoundError>
   readonly release: (rootSessionID: SessionSchema.ID) => Effect.Effect<ReleaseResult, NotFoundError>
+  /**
+   * Registers a runtime interrupter that `pause` calls directly once the barrier is committed.
+   * Returns the effect that removes the registration. Events stay for observers only; interruption
+   * must never depend on them.
+   */
+  readonly registerInterrupter: (interrupter: Interrupter) => Effect.Effect<Effect.Effect<void>>
+
+  readonly requestResume: (intent: ResumeIntent) => Effect.Effect<ResumeRequest, NotFoundError>
+  /** Returns durable intents that currently have no active pause blocker. */
+  readonly runnableResumeTickets: (sessionIDs?: readonly SessionSchema.ID[]) => Effect.Effect<readonly ResumeTicket[]>
+  /** Checks both ticket generation and effective pause state. */
+  readonly isResumeTicketRunnable: (ticket: ResumeTicket) => Effect.Effect<boolean>
+  /** Clears the exact ticket only when no active blocker exists. */
+  readonly finishResume: (ticket: ResumeTicket) => Effect.Effect<boolean>
   readonly setResumeIntent: (intent: ResumeIntent) => Effect.Effect<number, NotFoundError>
   readonly clearResumeIntent: (input: {
     readonly sessionID: SessionSchema.ID
@@ -217,29 +338,69 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
     const events = yield* EventV2.Service
 
-    const setResumeIntent = Effect.fn("SessionControl.setResumeIntent")(function* (intent: ResumeIntent) {
-      const session = yield* db
-        .select({ id: SessionTable.id })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, intent.sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      if (!session) return yield* new NotFoundError({ sessionID: intent.sessionID })
-      const row = yield* db
-        .insert(SessionResumeIntentTable)
-        .values({ session_id: intent.sessionID, generation: 1, reason: intent.reason })
-        .onConflictDoUpdate({
-          target: SessionResumeIntentTable.session_id,
-          set: {
-            generation: sql`${SessionResumeIntentTable.generation} + 1`,
-            reason: intent.reason,
-          },
+    const setResumeIntent = (intent: ResumeIntent) =>
+      upsertResumeIntent(db, intent).pipe(Effect.map((ticket) => ticket.generation))
+
+    const requestResumeIntent = (intent: ResumeIntent) => requestResume(db, intent)
+
+    const runnableResumeTickets = Effect.fn("SessionControl.runnableResumeTickets")(function* (
+      sessionIDs?: readonly SessionSchema.ID[],
+    ) {
+      if (sessionIDs?.length === 0) return []
+      const query = db
+        .select({
+          sessionID: SessionResumeIntentTable.session_id,
+          generation: SessionResumeIntentTable.generation,
+          reason: SessionResumeIntentTable.reason,
         })
-        .returning({ generation: SessionResumeIntentTable.generation })
-        .get()
-        .pipe(Effect.orDie)
-      return row.generation
+        .from(SessionResumeIntentTable)
+      const rows = yield* (
+        sessionIDs === undefined
+          ? query.all()
+          : query.where(inArray(SessionResumeIntentTable.session_id, sessionIDs)).all()
+      ).pipe(Effect.orDie)
+      const tickets = rows.map(
+        (row) =>
+          ({
+            sessionID: SessionSchema.ID.make(row.sessionID),
+            generation: row.generation,
+            reason: row.reason,
+          }) satisfies ResumeTicket,
+      )
+      const blocked = yield* pausedSessionIDs(
+        db,
+        tickets.map((ticket) => ticket.sessionID),
+      )
+      return tickets.filter((ticket) => !blocked.has(ticket.sessionID))
     })
+
+    const isResumeTicketRunnable = Effect.fn("SessionControl.isResumeTicketRunnable")(function* (ticket: ResumeTicket) {
+      return yield* isTicketRunnable(db, ticket)
+    })
+
+    const finishResume = Effect.fn("SessionControl.finishResume")((ticket: ResumeTicket) =>
+      db
+        .transaction(
+          () =>
+            Effect.gen(function* () {
+              if (yield* isPaused(db, ticket.sessionID)) return false
+              const rows = yield* db
+                .delete(SessionResumeIntentTable)
+                .where(
+                  and(
+                    eq(SessionResumeIntentTable.session_id, ticket.sessionID),
+                    eq(SessionResumeIntentTable.generation, ticket.generation),
+                  ),
+                )
+                .returning({ sessionID: SessionResumeIntentTable.session_id })
+                .all()
+                .pipe(Effect.orDie)
+              return rows.length === 1
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie),
+    )
 
     const mergeResumeIntents = Effect.fn("SessionControl.mergeResumeIntents")(function* (
       affectedSessionIDs: readonly SessionSchema.ID[],
@@ -254,7 +415,7 @@ export const layer = Layer.effect(
     const notifyChanged = Effect.fn("SessionControl.notifyChanged")(function* (
       sessionIDs: readonly SessionSchema.ID[],
     ) {
-      for (const sessionID of sessionIDs) {
+      for (const sessionID of sessionIDs.toReversed()) {
         yield* events.publish(SessionEvent.ControlChanged, { sessionID, timestamp: yield* DateTime.now })
       }
     })
@@ -264,6 +425,31 @@ export const layer = Layer.effect(
         Effect.catchCauseIf(
           (cause) => !Cause.hasInterrupts(cause),
           () => Effect.void,
+        ),
+      )
+
+    const interrupters = new Set<Interrupter>()
+
+    const registerInterrupter = (interrupter: Interrupter) =>
+      Effect.sync(() => {
+        interrupters.add(interrupter)
+        return Effect.sync(() => {
+          interrupters.delete(interrupter)
+        })
+      })
+
+    // Descendants are signalled before their root so a parent cannot observe a child as
+    // still running, and the whole call returns without awaiting fiber unwinding.
+    const signalInterruption = (sessionIDs: readonly SessionSchema.ID[]) =>
+      Effect.suspend(() =>
+        Effect.forEach([...interrupters], (interrupter) => interrupter(sessionIDs.toReversed()), {
+          concurrency: 1,
+        }),
+      ).pipe(
+        Effect.map((batches) => [...new Set(batches.flat())]),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          () => Effect.succeed([] as SessionSchema.ID[]),
         ),
       )
 
@@ -364,9 +550,20 @@ export const layer = Layer.effect(
           )
           .pipe(
             Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error))),
+            // The durable barrier is committed above. Interruption is signalled directly here so it
+            // cannot be lost when nothing observes the ControlChanged event.
+            Effect.flatMap((result) =>
+              signalInterruption(result.affectedSessionIDs).pipe(
+                Effect.map(
+                  (interruptionSignalledSessionIDs) =>
+                    ({ ...result, interruptionSignalledSessionIDs }) satisfies PauseResult,
+                ),
+              ),
+            ),
             Effect.tap((result) => notifyChangedBestEffort(result.affectedSessionIDs)),
           ),
       ),
+      registerInterrupter,
       release: Effect.fn("SessionControl.release")((rootSessionID) =>
         db
           .transaction(
@@ -406,11 +603,14 @@ export const layer = Layer.effect(
                         .all()
                         .pipe(Effect.orDie)).map((row) => SessionSchema.ID.make(row.sessionID))
                     : []
+                  const blocked = new Set((yield* activeBlockers(db, affectedSessionIDs)).map((row) => row.sessionID))
+                  const resumeTickets = yield* runnableResumeTickets(affectedSessionIDs)
                   return {
                     rootSessionID,
                     affectedSessionIDs,
-                    stillBlockedSessionIDs: [],
-                    resumableSessionIDs: [],
+                    stillBlockedSessionIDs: affectedSessionIDs.filter((sessionID) => blocked.has(sessionID)),
+                    resumableSessionIDs: resumeTickets.map((ticket) => ticket.sessionID),
+                    resumeTickets,
                     unchanged: true,
                   }
                 }
@@ -430,7 +630,11 @@ export const layer = Layer.effect(
                   .pipe(Effect.orDie)
                 const blocked = new Set((yield* activeBlockers(db, affectedSessionIDs)).map((row) => row.sessionID))
                 const intents = yield* db
-                  .select({ sessionID: SessionResumeIntentTable.session_id })
+                  .select({
+                    sessionID: SessionResumeIntentTable.session_id,
+                    generation: SessionResumeIntentTable.generation,
+                    reason: SessionResumeIntentTable.reason,
+                  })
                   .from(SessionResumeIntentTable)
                   .innerJoin(
                     SessionPauseBlockerTable,
@@ -439,15 +643,24 @@ export const layer = Layer.effect(
                   .where(eq(SessionPauseBlockerTable.cascade_id, active.id))
                   .all()
                   .pipe(Effect.orDie)
+                const resumeTickets = intents
+                  .map(
+                    (row) =>
+                      ({
+                        sessionID: SessionSchema.ID.make(row.sessionID),
+                        generation: row.generation,
+                        reason: row.reason,
+                      }) satisfies ResumeTicket,
+                  )
+                  .filter((ticket) => !blocked.has(ticket.sessionID))
                 return {
                   rootSessionID,
                   cascadeID: active.id,
                   generation: active.generation,
                   affectedSessionIDs,
                   stillBlockedSessionIDs: affectedSessionIDs.filter((sessionID) => blocked.has(sessionID)),
-                  resumableSessionIDs: intents
-                    .map((row) => SessionSchema.ID.make(row.sessionID))
-                    .filter((sessionID) => !blocked.has(sessionID)),
+                  resumableSessionIDs: resumeTickets.map((ticket) => ticket.sessionID),
+                  resumeTickets,
                   unchanged: false,
                 }
               }),
@@ -458,20 +671,30 @@ export const layer = Layer.effect(
             Effect.tap((result) => notifyChangedBestEffort(result.affectedSessionIDs)),
           ),
       ),
+      requestResume: requestResumeIntent,
+      runnableResumeTickets,
+      isResumeTicketRunnable,
+      finishResume,
       setResumeIntent,
       clearResumeIntent: Effect.fn("SessionControl.clearResumeIntent")(function* (input) {
-        const rows = yield* db
-          .delete(SessionResumeIntentTable)
+        const row = yield* db
+          .select({ reason: SessionResumeIntentTable.reason })
+          .from(SessionResumeIntentTable)
           .where(
             and(
               eq(SessionResumeIntentTable.session_id, input.sessionID),
               eq(SessionResumeIntentTable.generation, input.generation),
             ),
           )
-          .returning({ sessionID: SessionResumeIntentTable.session_id })
-          .all()
+          .get()
           .pipe(Effect.orDie)
-        return rows.length === 1
+        return row
+          ? yield* finishResume({
+              sessionID: input.sessionID,
+              generation: input.generation,
+              reason: row.reason,
+            })
+          : false
       }),
       isCascadeActive: Effect.fn("SessionControl.isCascadeActive")(function* (input) {
         const row = yield* db

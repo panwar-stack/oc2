@@ -9,11 +9,10 @@ import { Provider } from "@/provider/provider"
 import type { TaskPromptOps } from "./task"
 import { wakeTeamSession } from "./team_wake"
 import { EffectBridge } from "@/effect/bridge"
-import { SessionID } from "@/session/schema"
 import { Cause, Effect, Exit, Schema, Scope, Option } from "effect"
 import { Database } from "@oc2-ai/core/database/database"
-import { ModelV2 } from "@oc2-ai/core/model"
-import { ProviderV2 } from "@oc2-ai/core/provider"
+import { BackgroundJob } from "@/background/job"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 
 const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "Name for this teammate" }),
@@ -40,60 +39,6 @@ type Metadata = {
   dependencyIDs?: string[]
 }
 
-const CommunicationGuidance = [
-  "Proactive communication requirements:",
-  '- Never ask the user questions directly. Route every question or clarification request to the lead with team_send_message recipient "lead".',
-  "- If a child subagent needs user input, relay its question to the lead through team_send_message instead of asking the user directly.",
-  '- Before doing substantial work, send a brief kickoff update to the lead with team_send_message recipient "lead".',
-  "- Send concise progress updates to the lead after material findings, decisions, completed milestones, and before or after risky edits.",
-  "- Message teammates directly when your work affects them, unblocks them, or gives them information they need.",
-  "- Check team_get_messages at natural handoff points, after sending updates, and whenever you may have been unblocked or redirected.",
-  "- Do not wait until your final answer to share useful status, blockers, or intermediate results.",
-  "- When you send a message via team_send_message or team_broadcast, recipients are automatically woken. Do not poll team_get_messages in a loop — check once and continue working.",
-  "- Do not claim that an issue is fixed, a feature is complete, or an action succeeded without supporting evidence.",
-  "- Only report to me in ASD-STE100 Simplified Technical English.",
-  "- Let perfect not be the enemy of good.",
-].join("\n")
-
-const DaemonGuidance = [
-  "Daemon teammate guidance:",
-  "- You are a daemon teammate.",
-  "- Your assignment is long-lived and remains active until the team shuts down.",
-  "- Do not treat the first response as final completion.",
-  "- Work in cycles: inspect, act, report, then wait when there is no useful work.",
-  "- Use team_send_message to alert the lead when your assignment discovers something actionable.",
-  "- Use team_get_messages at natural boundaries, not in a polling loop.",
-  "- If your assignment requires periodic or external triggers, explain what trigger you need instead of inventing an unbounded loop.",
-  "- Never mark yourself done unless explicitly cancelled or told the daemon assignment is over.",
-  "- Do not claim that an issue is fixed, a feature is complete, or an action succeeded without supporting evidence.",
-  "- Only report to me in ASD-STE100 Simplified Technical English.",
-  "- Let perfect not be the enemy of good.",
-].join("\n")
-
-const TaskCompletionGuidance =
-  "When your assigned work is complete, put the concrete result in your final answer so it can be sent back to the lead automatically."
-
-const MemberTools = [
-  "Available team tools (use these to coordinate with the team):",
-  "- team_send_message: Send a message to the lead (recipient 'lead') or a specific teammate by name/session ID. Recipients are woken automatically.",
-  "- team_get_messages: Read pending team mailbox messages addressed to you. Do not poll — check once and continue working.",
-  "- team_broadcast: Send a message to all team members (lead and active teammates) at once. Recipients are woken automatically.",
-  "- team_task_create: Create a shared team task with an optional assignee and dependency task IDs.",
-  "- team_task_list: List all shared team tasks with their statuses and assignees.",
-  "- team_task_claim: Claim a pending task as your own.",
-  "- team_task_update: Update a task's status or assignee.",
-].join("\n")
-
-const MemberToolsPlan = [
-  "- team_plan_submit: Submit your plan to the lead for approval. You must do this before doing any implementation work.",
-].join("\n")
-
-const NestedTeamTools = {
-  team_create: false,
-  team_spawn: false,
-  local_fusion: false,
-}
-
 export const TeamSpawnTool = Tool.define(
   "team_spawn",
   Effect.gen(function* () {
@@ -104,6 +49,8 @@ export const TeamSpawnTool = Tool.define(
     const provider = yield* Provider.Service
     const scope = yield* Scope.Scope
     const database = yield* Database.Service
+    const background = yield* BackgroundJob.Service
+    const lifecycleReconciler = yield* LifecycleReconciler.Service
 
     return {
       description: DESCRIPTION,
@@ -159,6 +106,7 @@ export const TeamSpawnTool = Tool.define(
               metadata: {} as Metadata,
             }
           }
+          yield* lifecycleReconciler.attach(ops)
 
           const leadMessage = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
             Effect.provideService(Database.Service, database),
@@ -304,20 +252,6 @@ export const TeamSpawnTool = Tool.define(
             daemonLastActive: lifecycle === "daemon" ? Date.now() : null,
           })
 
-          const dependencyResults = (members: Team.Member[], dependencies: string[]) => {
-            if (dependencies.length === 0) return ""
-            return [
-              "Dependency results:",
-              ...dependencies.map((dependency) => {
-                const match = members.find((m) => m.session_id === dependency)
-                return [
-                  `- ${match?.name ?? dependency} (${dependency})`,
-                  match?.result ?? "(completed with no result)",
-                ].join("\n")
-              }),
-            ].join("\n")
-          }
-
           const notifySessions = (sender: string, recipients: string[], body: string) =>
             Effect.gen(function* () {
               const uniqueRecipients = [...new Set(recipients)]
@@ -359,160 +293,6 @@ export const TeamSpawnTool = Tool.define(
               )
             })
 
-          let startMember: (member: Team.Member, extraPrompt: string) => Effect.Effect<string>
-          const startReadyBlockedMembers = (completedSessionID: string): Effect.Effect<void> =>
-            Effect.gen(function* () {
-              const members = yield* team.getMembers(teamID)
-              const ready = members.filter((member) => {
-                const dependencies = member.dependency_ids ?? []
-                if (member.status !== "blocked" || !dependencies.includes(completedSessionID)) return false
-                return dependencies.every((dependency: string) =>
-                  members.some(
-                    (candidate) =>
-                      candidate.session_id === dependency &&
-                      candidate.status === "completed" &&
-                      candidate.lifecycle !== "daemon",
-                  ),
-                )
-              })
-              yield* Effect.forEach(
-                ready,
-                (member) => startMember(member, dependencyResults(members, member.dependency_ids ?? [])),
-                { concurrency: "unbounded", discard: true },
-              )
-            })
-
-          startMember = (member: Team.Member, extraPrompt: string): Effect.Effect<string> =>
-            Effect.gen(function* () {
-              const nextAgent = yield* agent.get(member.agent_type)
-              if (!nextAgent) {
-                yield* team.updateMemberStatus(member.id, "cancelled")
-                yield* notifyLead(
-                  member.session_id,
-                  `Teammate ${member.name} (${member.agent_type}) stopped before starting: unknown agent type.`,
-                )
-                return "Teammate stopped before starting: unknown agent type."
-              }
-              const members = yield* team.getMembers(teamID)
-              const teammates = members
-                .filter((candidate) => candidate.session_id !== member.session_id)
-                .map(
-                  (candidate) =>
-                    `- ${candidate.name} (${candidate.agent_type}, ${candidate.status}, session ${candidate.session_id})`,
-                )
-              const planTools = member.plan_mode ? "\n" + MemberToolsPlan : ""
-              const parts = yield* ops.resolvePromptParts(
-                [
-                  `You are teammate "${member.name}" in team "${activeTeam.value.name}".`,
-                  `Team goal: ${activeTeam.value.goal}`,
-                  `The lead session is ${activeTeam.value.lead_session_id}. Your session is ${member.session_id}.`,
-                  MemberTools + planTools,
-                  teammates.length > 0
-                    ? ["Current teammates:", ...teammates].join("\n")
-                    : "No other teammates are registered yet.",
-                  CommunicationGuidance,
-                  member.lifecycle === "daemon" ? DaemonGuidance : TaskCompletionGuidance,
-                  extraPrompt,
-                  member.role_prompt,
-                ].join("\n\n"),
-              )
-              return yield* Effect.gen(function* () {
-                const currentTeam = yield* team.get(teamID)
-                if (Option.isNone(currentTeam) || currentTeam.value.status !== "active") {
-                  return "Teammate did not start because the team is no longer active."
-                }
-
-                yield* team.updateMemberStatus(
-                  member.id,
-                  "active",
-                  member.lifecycle === "daemon"
-                    ? { daemonState: "running", daemonLastActive: Date.now(), daemonError: null }
-                    : undefined,
-                )
-                yield* notifyLead(
-                  member.session_id,
-                  [
-                    `Teammate ${member.name} (${member.agent_type}) started.`,
-                    "",
-                    "Assignment:",
-                    member.role_prompt,
-                    ...(extraPrompt ? ["", "Dependency context was provided in this teammate's prompt."] : []),
-                  ].join("\n"),
-                )
-                const result = yield* ops.prompt({
-                  sessionID: SessionID.make(member.session_id),
-                  model: member.model
-                    ? {
-                        providerID: ProviderV2.ID.make(member.model.providerID),
-                        modelID: ModelV2.ID.make(member.model.modelID),
-                      }
-                    : undefined,
-                  variant: member.model?.variant,
-                  agent: nextAgent.name,
-                  tools: {
-                    ...NestedTeamTools,
-                    ...(member.plan_mode ? { bash: false, write: false, edit: false, apply_patch: false } : {}),
-                  },
-                  parts,
-                })
-                const current = yield* team.getMemberBySession(member.session_id)
-                const latestTeam = yield* team.get(teamID)
-                if (
-                  Option.isNone(current) ||
-                  current.value.status === "cancelled" ||
-                  Option.isNone(latestTeam) ||
-                  latestTeam.value.status !== "active"
-                ) {
-                  return "Teammate stopped before completing."
-                }
-                const output = result.parts.findLast((part) => part.type === "text")?.text ?? ""
-                if (member.lifecycle === "daemon") {
-                  yield* team.updateMemberStatus(member.id, "idle", {
-                    daemonState: "idle",
-                    daemonLastActive: Date.now(),
-                    daemonError: null,
-                  })
-                  return output || "Daemon teammate initialized."
-                }
-                yield* team.updateMemberStatus(member.id, "completed", output)
-                yield* notifyLead(
-                  member.session_id,
-                  [
-                    `Teammate ${member.name} (${member.agent_type}) completed and returned this result:`,
-                    "",
-                    "<teammate_result>",
-                    output || "(no text result)",
-                    "</teammate_result>",
-                  ].join("\n"),
-                )
-                yield* startReadyBlockedMembers(member.session_id)
-                return output || "(no text result)"
-              }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.gen(function* () {
-                    if (Cause.hasInterruptsOnly(cause)) return yield* Effect.interrupt
-                    const error = Cause.squash(cause)
-                    yield* team.updateMemberStatus(
-                      member.id,
-                      "cancelled",
-                      member.lifecycle === "daemon"
-                        ? {
-                            daemonState: "error",
-                            daemonLastActive: Date.now(),
-                            daemonError: error instanceof Error ? error.message : String(error),
-                          }
-                        : undefined,
-                    )
-                    const latestTeam = yield* team.get(teamID)
-                    const message = `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${error instanceof Error ? error.message : String(error)}`
-                    if (Option.isNone(latestTeam) || latestTeam.value.status !== "active") return message
-                    yield* notifyLead(member.session_id, message)
-                    return message
-                  }),
-                ),
-              )
-            })
-
           const latestMembers = yield* team.getMembers(teamID)
           yield* notifyActiveDependencies(latestMembers)
           const blocked = dependencyIDs.some(
@@ -544,16 +324,15 @@ export const TeamSpawnTool = Tool.define(
           }
 
           const runCancel = yield* EffectBridge.make()
-          const cancelMember = Effect.gen(function* () {
-            yield* team
-              .updateMemberStatus(
-                member.id,
-                "cancelled",
-                member.lifecycle === "daemon" ? { daemonState: "cancelled", daemonLastActive: Date.now() } : undefined,
-              )
-              .pipe(Effect.ignore)
-            yield* ops.cancel(SessionID.make(member.session_id)).pipe(Effect.ignore)
-          })
+          const cancelMember = lifecycleReconciler
+            .isPaused([ctx.sessionID, member.session_id])
+            .pipe(
+              Effect.flatMap((paused) =>
+                paused
+                  ? Effect.void
+                  : lifecycleReconciler.cancelMember({ memberID: member.id, ops }).pipe(Effect.ignore),
+              ),
+            )
           function onAbort() {
             runCancel.fork(cancelMember)
           }
@@ -565,7 +344,7 @@ export const TeamSpawnTool = Tool.define(
             }),
             () =>
               Effect.gen(function* () {
-                const result = yield* startMember(member, dependencyResults(latestMembers, dependencyIDs))
+                const result = yield* lifecycleReconciler.startMember({ memberID: member.id, ops })
                 const current = yield* team.getMemberBySession(member.session_id)
                 if (member.lifecycle === "daemon") {
                   const failed = Option.isSome(current) && current.value.daemon_state === "error"
