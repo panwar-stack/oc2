@@ -77,6 +77,12 @@ import { DialogRoots } from "./dialog-roots"
 import { collectExportSessionFromClient } from "../../util/session-export"
 import { FuguStatusBlock } from "./fugu-status"
 import {
+  controlResultFeedback,
+  createPauseStartCommands,
+  dispatchPauseStart,
+  type PauseStartAction,
+} from "../../command/session-pause"
+import {
   sessionBindingCommands,
   sessionGlobalBindingCommands,
   sessionGlobalUnfocusedBindingCommands,
@@ -589,6 +595,25 @@ export function Session() {
     }
   }
 
+  /**
+   * Dispatch the typed pause/start API against the viewed session and surface the
+   * effective result. A child `/start` that leaves the session paused reports the
+   * remaining ancestor blocker explicitly instead of pretending the session resumed.
+   */
+  async function runPauseStart(action: PauseStartAction) {
+    const sessionID = route.sessionID
+    const current = session()
+    if (!current) return
+    const dispatch = await dispatchPauseStart(sdk.client, action, sessionID, project.workspace.current())
+    if (!dispatch.ok) {
+      toast.show({ message: errorMessage(dispatch.error), variant: "error" })
+      return
+    }
+    const feedback = controlResultFeedback(action, dispatch.result)
+    sync.pause.applyResult(sessionID, feedback.state)
+    toast.show({ message: feedback.message, variant: feedback.variant })
+  }
+
   const sessionCommandList = createMemo(() => [
     {
       title: "Rename session",
@@ -1090,6 +1115,14 @@ export function Session() {
         dialog.clear()
       },
     },
+    ...createPauseStartCommands({
+      sessionID: () => session()?.id,
+      pauseState: () => sync.data.session_pause[route.sessionID],
+      run: (action) => {
+        void runPauseStart(action)
+        dialog.clear()
+      },
+    }),
     {
       title: "Go to child session",
       value: "session.child.first",

@@ -1327,6 +1327,33 @@ const scenarios: Scenario[] = [
       }),
     ),
   http.protected
+    .post("/session/{sessionID}/start", "session.start.ancestor-blocked-child")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const lead = yield* ctx.session({ title: "Start ancestor-blocked child lead" })
+        // The child inherits the lead cascade blocker at creation and owns no cascade itself.
+        const child = yield* ctx.session({ title: "Ancestor-blocked child", parentID: lead.id })
+        yield* control("pause", lead.id, ctx.headers())
+        return { lead, child }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/start", { sessionID: ctx.state.child.id }),
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        const result = controlResult(body)
+        check(result.unchanged === true, "child without a cascade should report an unchanged start")
+        check(
+          result.stillBlockedSessionIDs.includes(ctx.state.child.id),
+          "unchanged start must still report the root when an ancestor pause keeps it blocked",
+        )
+        check((yield* ctx.pauseState(ctx.state.child.id)).paused, "child stays paused under the lead cascade")
+      }),
+    ),
+  http.protected
     .post("/session/{sessionID}/start", "session.start.deleted")
     .mutating()
     .seeded((ctx) =>

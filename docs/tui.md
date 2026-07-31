@@ -15,7 +15,7 @@ The prompt supports four related workflows:
 - **Prompt:** Type normal text and press Return. Use Shift+Return, Ctrl+Return, Alt+Return, or Ctrl+J for a newline with the default bindings. References and available slash entries appear through autocomplete.
 - **Shell:** Type `!` at the start of an empty normal prompt, enter a shell command, and press Return. Escape leaves shell mode; Backspace also leaves it when the cursor is at the start. Shell commands run through the session and remain part of its history.
 - **Configured command:** Enter `/<command> [arguments]` for a command defined by OC2 configuration. The TUI expands its configured template and sends it through the session. Arguments may continue on following lines.
-- **TUI slash command:** Enter a slash action exposed by the current UI, such as `/sessions`, `/new`, `/models`, `/agents`, `/roots`, `/status`, `/themes`, `/help`, or `/exit`. These operate the interface rather than sending a model prompt.
+- **TUI slash command:** Enter a slash action exposed by the current UI, such as `/sessions`, `/new`, `/models`, `/agents`, `/roots`, `/status`, `/themes`, `/help`, `/pause`, `/start`, or `/exit`. These operate the interface rather than sending a model prompt.
 
 Autocomplete and the command palette reflect the commands actually available. Configured commands are documented with other agent behavior in [Agents And Permissions](./agents-permissions.md); do not assume an optional or experimental slash command exists until it appears in the current TUI.
 
@@ -39,6 +39,16 @@ While a permission or question is pending, normal prompt submission is disabled 
 - Use the sidebar and timeline commands to inspect session structure and navigate parent or child sessions.
 - Interrupt an active response with Escape under the default bindings.
 - Open `/roots` to manage the directories attached to the current session.
+
+### Pause And Start
+
+`/pause` suspends the viewed session and its full descendant subtree without terminating teams or background tasks. It commits a durable pause blocker, interrupts any currently running descendant work, and persists across process and TUI restarts. `/pause` is disabled while the viewed session already owns an active pause.
+
+`/start` releases the pause owned by the viewed session and resumes the sessions that have durable resume intent and no remaining blockers. It is disabled while the viewed session does not own a pause. A child `/start` cannot clear an ancestor pause: if the session stays paused afterwards, the TUI reports that it remains blocked by an ancestor.
+
+Pause state is hydrated from the most recently updated sessions and self-corrects on the first `/pause` or `/start` action, which are idempotent.
+
+While paused, prompts you send are queued rather than rejected and run after `/start`; side-effecting shell, command, and summarize actions return a paused error instead of partially executing. Shutdown and explicit cancellation remain available while paused. Pausing the lead of a team pauses every teammate; pausing a teammate pauses only that member's subtree.
 
 The roots dialog can add an absolute directory, rename a root, make a root primary, or remove it from the session. The primary root supplies the default base for relative paths. Removing a root unregisters it from the session and does not delete files. Added roots extend session access only through the normal filesystem and permission boundaries.
 

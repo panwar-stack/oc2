@@ -20,8 +20,10 @@ import type {
   SnapshotFileDiff,
   SessionRoot,
   EventSessionNextFuguStatus,
+  SessionV2Info,
   Event,
 } from "@oc2-ai/sdk/v2"
+import type { SessionPauseState } from "../command/session-pause"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
 import { useEvent } from "./event"
@@ -195,6 +197,9 @@ export const {
       session_status: {
         [sessionID: string]: SessionStatus
       }
+      session_pause: {
+        [sessionID: string]: SessionPauseState
+      }
       fugu_status: {
         [sessionID: string]: EventSessionNextFuguStatus["properties"] | undefined
       }
@@ -241,6 +246,7 @@ export const {
       session: [],
       session_root: {},
       session_status: {},
+      session_pause: {},
       fugu_status: {},
       team_member_status: {},
       session_diff: {},
@@ -373,6 +379,58 @@ export const {
     function applySessionList(input: Awaited<ReturnType<typeof listSessions>>) {
       const sessions = sessionAuthority.reconcileList(input.generation, store.session, input.sessions)
       setStore("session", reconcile(sessions))
+    }
+
+    /**
+     * Reconcile the effective pause flags from the v2 session read model. Locally
+     * learned cascade ownership (`cascadeID`) and ancestor-blocking are preserved
+     * only while the session is still effectively paused; a released or resumed
+     * session resets to the plain read-model state.
+     */
+    function applyPauseStates(sessions: SessionV2Info[]) {
+      if (sessions.length === 0) return
+      setStore(
+        "session_pause",
+        produce((draft) => {
+          for (const info of sessions) {
+            const current = draft[info.id]
+            if (!current) {
+              draft[info.id] = { paused: info.paused }
+              continue
+            }
+            if (!info.paused) {
+              draft[info.id] = { paused: false }
+              continue
+            }
+            draft[info.id] = current.paused ? current : { ...current, paused: true }
+          }
+        }),
+      )
+    }
+
+    /**
+     * Refresh effective pause flags from the v2 session read model, which serves the
+     * newest 50 sessions. Older sessions have no entry and read as unpaused until the
+     * first `/pause` or `/start` action reconciles them (both are idempotent).
+     */
+    async function refreshPauseStates() {
+      const response = await sdk.client.v2.session
+        .list({ workspace: project.workspace.current() })
+        .catch(() => undefined)
+      if (!response?.data?.data) return
+      applyPauseStates(response.data.data)
+    }
+
+    // A pause commits one blocker per affected session, so `session.next.control.changed`
+    // can fire N times in the same event batch. Coalesce the read-model refresh into a
+    // single fetch instead of issuing one request per blocker.
+    let pauseRefreshTimer: ReturnType<typeof setTimeout> | undefined
+    const schedulePauseRefresh = () => {
+      if (pauseRefreshTimer) clearTimeout(pauseRefreshTimer)
+      pauseRefreshTimer = setTimeout(() => {
+        pauseRefreshTimer = undefined
+        void refreshPauseStates()
+      }, EVENT_BATCH_FLUSH_MS)
     }
 
     async function refreshSession(sessionID: string, options?: { aggregatesOnly?: boolean }) {
@@ -520,6 +578,7 @@ export const {
                 delete draft.permission[sessionID]
                 delete draft.question[sessionID]
                 delete draft.session_status[sessionID]
+                delete draft.session_pause[sessionID]
                 delete draft.fugu_status[sessionID]
                 delete draft.team_member_status[sessionID]
                 delete draft.session_diff[sessionID]
@@ -573,6 +632,13 @@ export const {
               session.time.updated = event.properties.timestamp
             }),
           )
+          break
+        }
+
+        case "session.next.control.changed": {
+          // Durable pause blockers changed for this session; refresh effective pause
+          // flags from the read model so hydration and live updates agree.
+          schedulePauseRefresh()
           break
         }
 
@@ -856,6 +922,7 @@ export const {
             sdk.client.session.status({ workspace }).then((x) => {
               setStore("session_status", reconcile(x.data ?? {}))
             }),
+            refreshPauseStates(),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
@@ -883,6 +950,7 @@ export const {
 
     onCleanup(() => {
       if (streamingPartFlushTimer) clearTimeout(streamingPartFlushTimer)
+      if (pauseRefreshTimer) clearTimeout(pauseRefreshTimer)
       streamingPartBuffers.clear()
     })
 
@@ -1024,6 +1092,17 @@ export const {
           syncingSessions.set(sessionID, task)
           return task
         },
+      },
+      pause: {
+        state(sessionID: string): SessionPauseState | undefined {
+          return store.session_pause[sessionID]
+        },
+        /** Record the root state after a pause/start action and reconcile affected sessions. */
+        applyResult(sessionID: string, state: SessionPauseState) {
+          setStore("session_pause", sessionID, state)
+          schedulePauseRefresh()
+        },
+        refresh: refreshPauseStates,
       },
       bootstrap,
     }

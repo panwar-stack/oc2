@@ -344,12 +344,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // Only the call that actually released the cascade schedules work. Repeated and concurrent
       // starts observe `unchanged` and must not produce a second provider dispatch.
       const scheduled = result.unchanged ? [] : yield* scheduleResume(result.resumeTickets)
+      const stillBlockedSessionIDs = [...result.stillBlockedSessionIDs]
+      if (
+        result.unchanged &&
+        !stillBlockedSessionIDs.includes(result.rootSessionID) &&
+        (yield* SessionControl.pausedSessionIDs(db, [result.rootSessionID])).has(result.rootSessionID)
+      ) {
+        // An unchanged start on a root without cascade history still reports the root when an
+        // ancestor pause keeps it blocked; otherwise the TUI cannot distinguish "not paused" from
+        // "paused by an ancestor" and would never converge to the ancestor-blocked state.
+        stillBlockedSessionIDs.push(result.rootSessionID)
+      }
       return {
         rootSessionID: result.rootSessionID,
         cascadeID: result.cascadeID,
         affectedSessionIDs: result.affectedSessionIDs,
         interruptionSignalledSessionIDs: [],
-        stillBlockedSessionIDs: result.stillBlockedSessionIDs,
+        stillBlockedSessionIDs,
         scheduledSessionIDs: scheduled,
         unchanged: result.unchanged,
       }
