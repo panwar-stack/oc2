@@ -2,14 +2,14 @@
 
 ## Goal
 
-Add built-in `/pause` and `/start` commands that suspend the currently viewed session and its full descendant subtree without terminating team or background-task state. A lead command affects the lead and all descendants; the same command in a child affects that child's subtree only.
+Add built-in `/pause` and `/unpause` commands that suspend the currently viewed session and its full descendant subtree without terminating team or background-task state. A lead command affects the lead and all descendants; the same command in a child affects that child's subtree only.
 
-Paused execution, queued work, pause ownership, and resume intent must survive process and TUI restarts. `/start` must remove only the selected root's pause and resume eligible work once, in dependency-safe order and from its persisted state.
+Paused execution, queued work, pause ownership, and resume intent must survive process and TUI restarts. `/unpause` must remove only the selected root's pause and resume eligible work once, in dependency-safe order and from its persisted state.
 
 ## Current State
 
 - TUI session commands are registered in `packages/tui/src/routes/session/index.tsx`, normalized through `sessionCommands`, and exposed as slash commands by `packages/tui/src/keymap.tsx`.
-- `packages/tui/src/component/prompt/index.tsx` dispatches exact single-line local slash matches; unmatched commands are sent to the session API. `/pause` and `/start` belong in the local TUI command registry, not `packages/opencode/src/command/index.ts` prompt templates.
+- `packages/tui/src/component/prompt/index.tsx` dispatches exact single-line local slash matches; unmatched commands are sent to the session API. `/pause` and `/unpause` belong in the local TUI command registry, not `packages/opencode/src/command/index.ts` prompt templates.
 - `packages/opencode/src/session/status.ts` and `packages/opencode/src/session/run-state.ts` keep status and runners in instance memory. Neither survives restart.
 - `packages/core/src/session/sql.ts` persists sessions and queued `session_input`, but has no durable pause control. V2 persists `InterruptRequested`, while `packages/core/src/session/projector.ts` discards it and `packages/core/src/session/run-coordinator.ts` keeps its interrupt boundary in memory.
 - `packages/opencode/src/session/prompt.ts` routes normal execution through `SessionPrompt.loop`. Team wakes enter through `packages/opencode/src/tool/team_wake.ts` and `TaskPromptOps.wake`.
@@ -27,13 +27,13 @@ Paused execution, queued work, pause ownership, and resume intent must survive p
 - Persist the pause barrier before interrupting any provider, tool, shell, team member, or background task.
 - Do not implement pause with `SessionPrompt.cancel`, team shutdown, or terminal member/task cancellation.
 - Pausing must not mark a member `completed`, `cancelled`, or `idle`, unblock dependencies, consume mailbox rows, or inject partial task results.
-- Model overlapping pauses as stackable blockers. `/start` on a child must not bypass an active ancestor pause.
+- Model overlapping pauses as stackable blockers. `/unpause` on a child must not bypass an active ancestor pause.
 - Newly created descendants must inherit or dynamically resolve all active ancestor blockers before they can execute.
 - Preserve queued prompts, mailbox messages, admitted V2 inputs, team/task dependency state, and background-task result delivery across restart.
 - Resume only sessions with durable resume intent. Do not blindly run completed, cancelled, dependency-blocked, or idle sessions.
-- Repeated and concurrent `/pause` and `/start` calls must be idempotent and must not duplicate provider turns, tool execution, messages, or result delivery.
+- Repeated and concurrent `/pause` and `/unpause` calls must be idempotent and must not duplicate provider turns, tool execution, messages, or result delivery.
 - First-pass UI scope is the TUI. Leave the web app and direct `oc2 run --interactive` support out unless product explicitly expands scope.
-- The command is `/start`. Do not add the misspelled `/starte` alias in the first pass.
+- The command is `/unpause`, with `/start` retained as a deprecated alias. Do not add the misspelled `/starte` alias in the first pass.
 
 ## Durable Control Model
 
@@ -62,7 +62,7 @@ type SessionResumeIntent = {
 
 - One active cascade per root makes repeated `/pause` on that root a no-op.
 - A session is paused while it has at least one active blocker.
-- `/start(root)` releases only the active cascade owned by `root`.
+- `/unpause(root)` releases only the active cascade owned by `root`.
 - Resume intent remains durable until the session has no blockers and execution has been scheduled successfully.
 - The pause transaction must compute a stable recursive closure using persisted `parent_id` relationships, union active team members, de-duplicate IDs, insert blockers, and snapshot resume intent before interruption.
 - Session creation must copy active ancestor blockers in the same transaction as session creation, or pause checks must resolve ancestors transactionally. A descendant must never run between creation and blocker attachment.
@@ -76,7 +76,7 @@ type SessionResumeIntent = {
 2. Persist the cascade, all blockers, and resume intents transactionally.
 3. Immediately after commit, signal pause-specific interruption to all running affected sessions; process descendants before the root without running terminal abort finalizers or waiting for graceful completion.
 4. Recheck the cascade generation before each interruption.
-5. If `/start` releases the blocker during interruption, compensate by scheduling any still-valid resume intent.
+5. If `/unpause` releases the blocker during interruption, compensate by scheduling any still-valid resume intent.
 
 Introduce a pause-specific suspension path in `packages/opencode/src/session/run-state.ts`. Update `packages/opencode/src/tool/team_spawn.ts`, `packages/opencode/src/tool/task.ts`, and `packages/opencode/src/effect/runner.ts` so suspension is distinguishable from terminal cancellation and preserves lifecycle ownership.
 
@@ -107,7 +107,7 @@ While paused:
 - Resume eligible descendants before the lead. Persist child completion/result notification before waking a waiting parent.
 - Use generation/CAS checks so concurrent starts schedule each session at most once and a concurrent new pause wins before execution.
 - Extract team-member and background-task completion/reconciliation from transient `team_spawn` and `task` watchers into restart-safe services. The reconciler must finalize results, notify the lead, and unblock dependents exactly once after resumed work completes.
-- After process restart, `/start` must reconstruct execution solely from durable blockers, resume intents, queued inputs, member/task rows, and mailbox state. It must not depend on stale `SessionStatus`, `SessionRunState`, or watcher fibers.
+- After process restart, `/unpause` must reconstruct execution solely from durable blockers, resume intents, queued inputs, member/task rows, and mailbox state. It must not depend on stale `SessionStatus`, `SessionRunState`, or watcher fibers.
 
 ## API And TUI Surface
 
@@ -136,8 +136,8 @@ type SessionControlResult = {
 - Pause/start on an already paused/started root returns `unchanged: true`.
 - Start must not resurrect closed teams or terminal members/tasks.
 - Expose effective paused state through the session read/sync model so initial TUI hydration and live updates agree.
-- Register `/pause` and `/start` in `packages/tui/src/routes/session/index.tsx`. The command targets the currently viewed session and dispatches the typed API action.
-- Disable `/pause` when the root already owns an active cascade and disable `/start` when it does not. Effective ancestor blocking may keep the session paused after a successful child `/start`; show that state explicitly.
+- Register `/pause` and `/unpause` in `packages/tui/src/routes/session/index.tsx`. The command targets the currently viewed session and dispatches the typed API action.
+- Disable `/pause` when the root already owns an active cascade and disable `/unpause` when it does not. Effective ancestor blocking may keep the session paused after a successful child `/unpause`; show that state explicitly.
 - Update `docs/tui.md` and the orchestration behavior in `packages/opencode/src/team/README.md`.
 
 ## Implementation Slices
@@ -200,7 +200,7 @@ A fresh read-only teammate must compare routes, schemas, OpenAPI, and generated 
 
 ### PR 4: TUI Commands And Documentation
 
-- Register `/pause` and `/start` as local session commands in `packages/tui/src/routes/session/index.tsx`.
+- Register `/pause` and `/unpause` as local session commands in `packages/tui/src/routes/session/index.tsx`.
 - Dispatch the API against the viewed session and surface effective paused/ancestor-blocked feedback.
 - Add focused tests for slash discovery, exact matching, enabled state, child targeting, API calls, command collisions, whitespace, and no-session behavior.
 - Update `docs/tui.md` and `packages/opencode/src/team/README.md`.
@@ -229,7 +229,7 @@ A fresh read-only teammate must review the diff against the implemented API and 
 - A paused mailbox row is consumed exactly once after start.
 - Pause never completes/cancels a member, unblocks a dependency, or shuts down the team.
 - Completed, cancelled, idle, and dependency-blocked sessions are not blindly resumed.
-- `/start` on a child cannot clear an ancestor-owned pause.
+- `/unpause` on a child cannot clear an ancestor-owned pause.
 - Explicit shutdown/deletion while paused remains terminal; later start cannot resurrect it.
 - Concurrency tests use `Deferred`, `pollWithTimeout`, `awaitWithTimeout`, `llm.wait`, or durable status checks, never fixed sleeps.
 
@@ -243,6 +243,6 @@ A fresh read-only teammate must review the diff against the implemented API and 
 ## Open Questions
 
 - Should prompts submitted while paused queue or fail? Default: queue durable prompt/V2 input, but reject side-effecting command, shell, init, and summarize actions before execution.
-- Should `/start` be allowed from any descendant to release an ancestor cascade? Default: no; it releases only the cascade rooted at the currently viewed session.
+- Should `/unpause` be allowed from any descendant to release an ancestor cascade? Default: no; it releases only the cascade rooted at the currently viewed session.
 - Should daemon teammates that were actively processing resume automatically? Default: yes only when durable resume intent says they were running or received a suppressed wake; idle daemons remain idle.
 - Should first-pass support include the web app and `oc2 run --interactive`? Default: no; keep the initial surface to the TUI and typed API.

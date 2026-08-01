@@ -23,9 +23,9 @@ export type SessionPauseState = {
 /**
  * A session owns an active cascade when this client paused it (cascadeID is known)
  * or, at hydration time, when it is effectively paused and there is no evidence it
- * is only blocked by an ancestor. That conservative default keeps `/start` available
+ * is only blocked by an ancestor. That conservative default keeps `/unpause` available
  * for every effectively paused root; an actual child-of-ancestor case is corrected
- * the first time `/start` reports the session as still blocked.
+ * the first time `/unpause` reports the session as still blocked.
  */
 export function sessionOwnsCascade(state: SessionPauseState | undefined): boolean {
   if (!state) return false
@@ -38,12 +38,12 @@ export function pauseCommandEnabled(state: SessionPauseState | undefined): boole
   return !sessionOwnsCascade(state)
 }
 
-/** `/start` is available while the viewed session owns an active cascade. */
-export function startCommandEnabled(state: SessionPauseState | undefined): boolean {
+/** `/unpause` is available while the viewed session owns an active cascade. */
+export function unpauseCommandEnabled(state: SessionPauseState | undefined): boolean {
   return sessionOwnsCascade(state)
 }
 
-export type PauseStartAction = "pause" | "start"
+export type PauseStartAction = "pause" | "unpause"
 
 export type PauseStartFeedback = {
   /** Pause state to record for the action root after the call. */
@@ -55,9 +55,9 @@ export type PauseStartFeedback = {
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
 
 /**
- * Translate one typed pause/start result into the root's new pause state and the
+ * Translate one typed pause/unpause result into the root's new pause state and the
  * user-facing feedback. `unchanged` reports an idempotent call: pause on a root
- * that already owns a cascade, or start on a root without one.
+ * that already owns a cascade, or unpause on a root without one.
  */
 export function controlResultFeedback(action: PauseStartAction, result: SessionControlResult): PauseStartFeedback {
   const root = result.rootSessionID
@@ -88,7 +88,7 @@ export function controlResultFeedback(action: PauseStartAction, result: SessionC
     if (rootStillBlocked) {
       return {
         state: { paused: true, ancestorBlocked: true },
-        message: "This session is paused by an ancestor; start it from that ancestor",
+        message: "This session is paused by an ancestor; unpause it from that ancestor",
         variant: "warning",
       }
     }
@@ -111,7 +111,7 @@ export function controlResultFeedback(action: PauseStartAction, result: SessionC
   return {
     state: { paused: false },
     message:
-      scheduled > 0 ? `Started; resumed ${plural(scheduled, "session")}` : "Started session; nothing queued to resume",
+      scheduled > 0 ? `Unpaused; resumed ${plural(scheduled, "session")}` : "Unpaused session; nothing queued to resume",
     variant: "success",
   }
 }
@@ -123,7 +123,7 @@ function blockedSuffix(result: SessionControlResult) {
 }
 
 /**
- * Minimal SDK surface the pause/start commands need, so tests can inject a fake
+ * Minimal SDK surface the pause/unpause commands need, so tests can inject a fake
  * and the route can pass the real client.
  */
 export type PauseStartClient = {
@@ -142,8 +142,9 @@ export type PauseStartClient = {
 export type PauseStartDispatch = { ok: true; result: SessionControlResult } | { ok: false; error: unknown }
 
 /**
- * Call the typed pause/start API for one session. `sessionID` is the viewed
- * session, which is also the cascade root for the action.
+ * Call the typed pause/unpause API for one session. The `unpause` action maps to
+ * `client.session.start`; only the HTTP method name is transport-internal and stays
+ * `start`. `sessionID` is the viewed session, which is also the cascade root.
  */
 export async function dispatchPauseStart(
   client: PauseStartClient,
@@ -156,7 +157,7 @@ export async function dispatchPauseStart(
       ? await client.session.pause({ sessionID, workspace })
       : await client.session.start({ sessionID, workspace })
   if (response.error) return { ok: false, error: response.error }
-  if (!response.data) return { ok: false, error: new Error("Pause/start returned no result") }
+  if (!response.data) return { ok: false, error: new Error("Pause/unpause returned no result") }
   return { ok: true, result: response.data }
 }
 
@@ -170,7 +171,7 @@ export type PauseStartCommandContext = {
 }
 
 /**
- * Build the `/pause` or `/start` local session command descriptor in the same
+ * Build the `/pause` or `/unpause` local session command descriptor in the same
  * shape the session route registers through `sessionCommands()`.
  */
 export function createPauseStartCommand(action: PauseStartAction, ctx: PauseStartCommandContext) {
@@ -185,16 +186,16 @@ export function createPauseStartCommand(action: PauseStartAction, ctx: PauseStar
     }
   }
   return {
-    title: "Start session",
-    value: "session.start",
+    title: "Unpause session",
+    value: "session.unpause",
     category: "Session",
-    slash: { name: "start", aliases: undefined },
-    enabled: !!ctx.sessionID() && startCommandEnabled(ctx.pauseState()),
-    run: () => ctx.run("start"),
+    slash: { name: "unpause", aliases: ["start"] },
+    enabled: !!ctx.sessionID() && unpauseCommandEnabled(ctx.pauseState()),
+    run: () => ctx.run("unpause"),
   }
 }
 
-/** Register both `/pause` and `/start` for the session command list. */
+/** Register both `/pause` and `/unpause` for the session command list. */
 export function createPauseStartCommands(ctx: PauseStartCommandContext) {
-  return [createPauseStartCommand("pause", ctx), createPauseStartCommand("start", ctx)]
+  return [createPauseStartCommand("pause", ctx), createPauseStartCommand("unpause", ctx)]
 }

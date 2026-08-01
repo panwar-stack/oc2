@@ -124,7 +124,7 @@ export class SessionBusyError extends Schema.TaggedErrorClass<SessionBusyError>(
 
 /**
  * A durable pause blocker stopped the action before it produced side effects. This is distinct
- * from `SessionBusyError`: the session is not running, it is barred from running until `/start`.
+ * from `SessionBusyError`: the session is not running, it is barred from running until `/unpause`.
  */
 export class SessionPausedError extends Schema.TaggedErrorClass<SessionPausedError>()(
   "SessionPausedError",

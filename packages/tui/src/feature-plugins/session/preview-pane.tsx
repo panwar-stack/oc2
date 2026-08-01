@@ -93,6 +93,12 @@ export function SessionPreviewPane(props: {
     return sync.data.session_status?.[id]?.type
   })
 
+  const paused = createMemo(() => {
+    const id = props.sessionID()
+    if (!id) return false
+    return sync.data.session_pause?.[id]?.paused === true
+  })
+
   onMount(() => {
     const top = sync.data.session
       .filter((s) => s.parentID === undefined)
@@ -134,10 +140,9 @@ export function SessionPreviewPane(props: {
   const loading = createMemo(() => fetchedMessages.loading && !exchange())
 
   const statusLabel = createMemo(() => {
-    const s = status()
-    if (s === "busy") return "working"
-    if (s === "retry") return "retrying"
-    return "idle"
+    const id = props.sessionID()
+    if (!id) return "idle"
+    return previewStatusLabel(status(), paused())
   })
 
   return (
@@ -161,7 +166,7 @@ export function SessionPreviewPane(props: {
       >
         {(s) => (
           <>
-            <Header session={s()} statusLabel={statusLabel()} />
+            <Header session={s()} statusLabel={statusLabel()} paused={paused()} />
             <Show when={loading()}>
               <Spinner>loading preview...</Spinner>
             </Show>
@@ -188,6 +193,14 @@ function messageRole(item: WithParts) {
   return (item.info as { role?: string }).role
 }
 
+/** Header label for a previewed session. Paused wins over the live status. */
+export function previewStatusLabel(status: string | undefined, paused: boolean) {
+  if (paused) return "paused"
+  if (status === "busy") return "working"
+  if (status === "retry") return "retrying"
+  return "idle"
+}
+
 function messageCreated(item: WithParts) {
   return (item.info.time as { created?: number }).created ?? 0
 }
@@ -198,7 +211,7 @@ function messageParentID(item: WithParts) {
 
 const ROW_WIDTH = 40
 
-function Header(props: { session: SdkSession; statusLabel: string }) {
+function Header(props: { session: SdkSession; statusLabel: string; paused: boolean }) {
   const { theme } = useTheme()
   const title = createMemo(() => Locale.truncate(props.session.title, ROW_WIDTH))
   const statusRest = createMemo(() => {
@@ -215,7 +228,7 @@ function Header(props: { session: SdkSession; statusLabel: string }) {
       </Row>
       <Row height={1}>
         <text fg={theme.textMuted} wrapMode="none" overflow="hidden">
-          <span>{props.statusLabel}</span>
+          <span style={{ fg: props.paused ? theme.warning : theme.textMuted }}>{props.statusLabel}</span>
           <span>{statusRest()}</span>
         </text>
       </Row>

@@ -596,11 +596,11 @@ export function Session() {
   }
 
   /**
-   * Dispatch the typed pause/start API against the viewed session and surface the
-   * effective result. A child `/start` that leaves the session paused reports the
+   * Dispatch the typed pause/unpause API against the viewed session and surface the
+   * effective result. A child `/unpause` that leaves the session paused reports the
    * remaining ancestor blocker explicitly instead of pretending the session resumed.
    */
-  async function runPauseStart(action: PauseStartAction) {
+  async function runPauseUnpause(action: PauseStartAction) {
     const sessionID = route.sessionID
     const current = session()
     if (!current) return
@@ -1119,7 +1119,7 @@ export function Session() {
       sessionID: () => session()?.id,
       pauseState: () => sync.data.session_pause[route.sessionID],
       run: (action) => {
-        void runPauseStart(action)
+        void runPauseUnpause(action)
         dialog.clear()
       },
     }),

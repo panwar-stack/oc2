@@ -179,13 +179,17 @@ export function SessionSwitcherDialog() {
       const isDeleting = toDelete() === x.id
       const status = sync.data.session_status?.[x.id]
       const isWorking = status?.type === "busy" || status?.type === "retry"
+      const isPaused = sync.data.session_pause?.[x.id]?.paused === true
       const slot = slotByID.get(x.id)
       const gutter =
-        slot !== undefined || isWorking
+        slot !== undefined || isWorking || isPaused
           ? () => (
               <box flexDirection="row" gap={1}>
                 <Show when={slot !== undefined}>
                   <text fg={theme.accent}>{slot}</text>
+                </Show>
+                <Show when={isPaused}>
+                  <text fg={theme.warning}>⏸</text>
                 </Show>
                 <Show when={isWorking}>
                   <Spinner />

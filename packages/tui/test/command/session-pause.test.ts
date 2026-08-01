@@ -7,7 +7,7 @@ import {
   dispatchPauseStart,
   pauseCommandEnabled,
   sessionOwnsCascade,
-  startCommandEnabled,
+  unpauseCommandEnabled,
   type PauseStartAction,
   type PauseStartClient,
   type SessionPauseState,
@@ -32,10 +32,13 @@ function result(overrides: Partial<SessionControlResult> = {}): SessionControlRe
 
 type PauseStartResponse = { data?: SessionControlResult; error?: unknown }
 
+/** SDK session-control method names; the transport surface keeps the `start` name. */
+type SdkAction = "pause" | "start"
+
 function fakeClient(
-  handler: (action: PauseStartAction, parameters: { sessionID: string; workspace?: string }) => PauseStartResponse,
+  handler: (action: SdkAction, parameters: { sessionID: string; workspace?: string }) => PauseStartResponse,
 ) {
-  const calls: { action: PauseStartAction; sessionID: string; workspace?: string }[] = []
+  const calls: { action: SdkAction; sessionID: string; workspace?: string }[] = []
   const client = {
     session: {
       async pause(parameters: { sessionID: string; workspace?: string }) {
@@ -51,29 +54,57 @@ function fakeClient(
   return { client, calls }
 }
 
-/**
- * Mirrors the exact single-line local slash matching in
- * `packages/tui/src/component/prompt/index.tsx`: multi-line input never matches a
- * local slash, otherwise the *trimmed* input must equal the entry display.
- */
-function matchLocalSlash(entries: { display: string }[], input: string) {
-  const trimmed = input.trim()
-  if (input.includes("\n")) return undefined
-  return entries.find((entry) => entry.display === trimmed)
+type SlashEntry = { display: string; aliases: string[] }
+
+function slashEntries(): SlashEntry[] {
+  return createPauseStartCommands({
+    sessionID: () => SESSION,
+    pauseState: () => undefined,
+    run: () => {},
+  }).map((command) => ({
+    display: `/${command.slash?.name}`,
+    aliases: (command.slash?.aliases ?? []).map((alias) => `/${alias}`),
+  }))
 }
 
-describe("pause/start slash discovery", () => {
-  test("registers /pause and /start local session commands", () => {
+/**
+ * Mirrors local slash resolution for a single-line input: the trimmed input must
+ * equal the primary display exactly (as in
+ * `packages/tui/src/component/prompt/index.tsx`), and a deprecated alias still
+ * resolves to the same command the way the autocomplete dispatch path does.
+ */
+function matchLocalSlash(entries: SlashEntry[], input: string) {
+  const trimmed = input.trim()
+  if (input.includes("\n")) return undefined
+  return entries.find((entry) => entry.display === trimmed || entry.aliases.includes(trimmed))
+}
+
+describe("pause/unpause slash discovery", () => {
+  test("registers /pause and /unpause local session commands", () => {
     const commands = createPauseStartCommands({
       sessionID: () => SESSION,
       pauseState: () => undefined,
       run: () => {},
     })
     const names = commands.map((command) => command.slash?.name)
-    expect(names).toEqual(["pause", "start"])
-    expect(commands.map((command) => command.value)).toEqual(["session.pause", "session.start"])
+    expect(names).toEqual(["pause", "unpause"])
+    expect(commands.map((command) => command.value)).toEqual(["session.pause", "session.unpause"])
     expect(commands.map((command) => command.category)).toEqual(["Session", "Session"])
     expect(commands.every((command) => !("hidden" in command))).toBe(true)
+  })
+
+  test("keeps /start as a deprecated alias of /unpause", () => {
+    const commands = createPauseStartCommands({
+      sessionID: () => SESSION,
+      pauseState: () => undefined,
+      run: () => {},
+    })
+    const unpause = commands.find((command) => command.slash?.name === "unpause")!
+    expect(unpause.slash?.aliases).toEqual(["start"])
+    expect(unpause.title).toBe("Unpause session")
+    const pause = commands.find((command) => command.slash?.name === "pause")!
+    expect(pause.slash?.aliases).toBeUndefined()
+    expect(pause.title).toBe("Pause session")
   })
 
   test("maps through the sessionCommands() registry shape with slash displays", () => {
@@ -86,10 +117,13 @@ describe("pause/start slash discovery", () => {
       namespace: "palette",
       name: command.value,
       slashName: command.slash?.name,
+      slashAliases: command.slash?.aliases,
       ...command,
     }))
     const displays = registry.map((command) => `/${command.slashName}`)
-    expect(displays).toEqual(["/pause", "/start"])
+    expect(displays).toEqual(["/pause", "/unpause"])
+    const aliases = registry.map((command) => (command.slashAliases ?? []).map((alias: string) => `/${alias}`))
+    expect(aliases).toEqual([[], ["/start"]])
   })
 
   test("does not register the misspelled /starte alias", () => {
@@ -104,65 +138,66 @@ describe("pause/start slash discovery", () => {
   })
 })
 
-describe("pause/start exact matching", () => {
-  const entries = createPauseStartCommands({
-    sessionID: () => SESSION,
-    pauseState: () => undefined,
-    run: () => {},
-  }).map((command) => ({ display: `/${command.slash?.name}` }))
+describe("pause/unpause exact matching", () => {
+  const entries = slashEntries()
 
-  test("exact /pause and /start inputs select the matching local command", () => {
+  test("exact /pause and /unpause inputs select the matching local command", () => {
     expect(matchLocalSlash(entries, "/pause")?.display).toBe("/pause")
-    expect(matchLocalSlash(entries, "/start")?.display).toBe("/start")
+    expect(matchLocalSlash(entries, "/unpause")?.display).toBe("/unpause")
   })
 
-  test("an exact /pause does not select /start and vice versa", () => {
-    expect(matchLocalSlash(entries, "/start")?.display).not.toBe("/pause")
-    expect(matchLocalSlash(entries, "/pause")?.display).not.toBe("/start")
+  test("the deprecated /start alias still resolves to the unpause command", () => {
+    expect(matchLocalSlash(entries, "/start")?.display).toBe("/unpause")
   })
 
-  test("/starte is not an exact match for /start", () => {
+  test("an exact /pause does not select /unpause and vice versa", () => {
+    expect(matchLocalSlash(entries, "/unpause")?.display).not.toBe("/pause")
+    expect(matchLocalSlash(entries, "/pause")?.display).not.toBe("/unpause")
+  })
+
+  test("/starte is not an exact match for /start or /unpause", () => {
     expect(matchLocalSlash(entries, "/starte")).toBeUndefined()
     expect(matchLocalSlash(entries, "/started")).toBeUndefined()
   })
 
   test("inputs with arguments or extra text do not match", () => {
     expect(matchLocalSlash(entries, "/pause now")).toBeUndefined()
+    expect(matchLocalSlash(entries, "/unpause session")).toBeUndefined()
     expect(matchLocalSlash(entries, "/start session")).toBeUndefined()
   })
 })
 
-describe("pause/start enabled state", () => {
-  test("an unknown or unpaused session can pause but not start", () => {
+describe("pause/unpause enabled state", () => {
+  test("an unknown or unpaused session can pause but not unpause", () => {
     expect(pauseCommandEnabled(undefined)).toBe(true)
-    expect(startCommandEnabled(undefined)).toBe(false)
+    expect(unpauseCommandEnabled(undefined)).toBe(false)
     expect(pauseCommandEnabled({ paused: false })).toBe(true)
-    expect(startCommandEnabled({ paused: false })).toBe(false)
+    expect(unpauseCommandEnabled({ paused: false })).toBe(false)
   })
 
-  test("a hydrated paused session is treated as owning its cascade: start enabled, pause disabled", () => {
+  test("a hydrated paused session is treated as owning its cascade: unpause enabled, pause disabled", () => {
     expect(sessionOwnsCascade({ paused: true })).toBe(true)
     expect(pauseCommandEnabled({ paused: true })).toBe(false)
-    expect(startCommandEnabled({ paused: true })).toBe(true)
+    expect(unpauseCommandEnabled({ paused: true })).toBe(true)
   })
 
-  test("a locally paused session (cascadeID known) disables pause and enables start", () => {
+  test("a locally paused session (cascadeID known) disables pause and enables unpause", () => {
     const state: SessionPauseState = { paused: true, cascadeID: "cas_1" }
     expect(sessionOwnsCascade(state)).toBe(true)
     expect(pauseCommandEnabled(state)).toBe(false)
-    expect(startCommandEnabled(state)).toBe(true)
+    expect(unpauseCommandEnabled(state)).toBe(true)
   })
 
-  test("an ancestor-blocked session can pause its own subtree but cannot start", () => {
+  test("an ancestor-blocked session can pause its own subtree but cannot unpause", () => {
     const state: SessionPauseState = { paused: true, ancestorBlocked: true }
     expect(sessionOwnsCascade(state)).toBe(false)
     expect(pauseCommandEnabled(state)).toBe(true)
-    expect(startCommandEnabled(state)).toBe(false)
+    expect(unpauseCommandEnabled(state)).toBe(false)
   })
 
   test("a resumed session flips back to pause-enabled", () => {
     expect(pauseCommandEnabled({ paused: false })).toBe(true)
-    expect(startCommandEnabled({ paused: false })).toBe(false)
+    expect(unpauseCommandEnabled({ paused: false })).toBe(false)
   })
 
   test("both commands are disabled without a viewed session", () => {
@@ -185,7 +220,7 @@ describe("pause/start enabled state", () => {
   })
 })
 
-describe("pause/start child targeting and API calls", () => {
+describe("pause/unpause child targeting and API calls", () => {
   test("dispatching from a child view targets the child session", async () => {
     const { client, calls } = fakeClient((action) => ({
       data: result({ rootSessionID: CHILD, affectedSessionIDs: [CHILD] }),
@@ -198,10 +233,10 @@ describe("pause/start child targeting and API calls", () => {
     expect(calls).toEqual([{ action: "pause", sessionID: CHILD, workspace: WORKSPACE }])
   })
 
-  test("pause and start route to the matching SDK methods", async () => {
+  test("pause and unpause route to the matching SDK methods", async () => {
     const { client, calls } = fakeClient(() => ({ data: result() }))
     await dispatchPauseStart(client, "pause", SESSION, undefined)
-    await dispatchPauseStart(client, "start", SESSION, WORKSPACE)
+    await dispatchPauseStart(client, "unpause", SESSION, WORKSPACE)
     expect(calls).toEqual([
       { action: "pause", sessionID: SESSION, workspace: undefined },
       { action: "start", sessionID: SESSION, workspace: WORKSPACE },
@@ -211,7 +246,7 @@ describe("pause/start child targeting and API calls", () => {
   test("an API error surfaces as a failed dispatch", async () => {
     const error = new Error("Session not found")
     const { client } = fakeClient(() => ({ error }))
-    const dispatch = await dispatchPauseStart(client, "start", SESSION, WORKSPACE)
+    const dispatch = await dispatchPauseStart(client, "unpause", SESSION, WORKSPACE)
     expect(dispatch).toEqual({ ok: false, error })
   })
 
@@ -222,7 +257,7 @@ describe("pause/start child targeting and API calls", () => {
   })
 })
 
-describe("pause/start feedback", () => {
+describe("pause/unpause feedback", () => {
   test("pause reports affected and interrupted counts and records the cascade", () => {
     const feedback = controlResultFeedback(
       "pause",
@@ -244,9 +279,9 @@ describe("pause/start feedback", () => {
     expect(feedback.message).toContain("already paused")
   })
 
-  test("child start that stays paused by an ancestor surfaces the blocker explicitly", () => {
+  test("child unpause that stays paused by an ancestor surfaces the blocker explicitly", () => {
     const feedback = controlResultFeedback(
-      "start",
+      "unpause",
       result({
         rootSessionID: CHILD,
         affectedSessionIDs: [CHILD, "ses_grandchild"],
@@ -258,68 +293,72 @@ describe("pause/start feedback", () => {
     expect(feedback.message).toContain("stays paused by an ancestor")
   })
 
-  test("start on a genuinely unpaused session reports it is not paused", () => {
-    // An unchanged start with an empty stillBlocked set means the root owns no
+  test("unpause on a genuinely unpaused session reports it is not paused", () => {
+    // An unchanged unpause with an empty stillBlocked set means the root owns no
     // cascade and no ancestor pause keeps it blocked.
-    const feedback = controlResultFeedback("start", result({ unchanged: true }))
+    const feedback = controlResultFeedback("unpause", result({ unchanged: true }))
     expect(feedback.state).toEqual({ paused: false })
     expect(feedback.variant).toBe("info")
     expect(feedback.message).toContain("not paused")
   })
 
-  test("start on an ancestor-blocked session without a cascade keeps the blocker state", () => {
-    const feedback = controlResultFeedback("start", result({ unchanged: true, stillBlockedSessionIDs: [SESSION] }))
+  test("unpause on an ancestor-blocked session without a cascade keeps the blocker state", () => {
+    const feedback = controlResultFeedback("unpause", result({ unchanged: true, stillBlockedSessionIDs: [SESSION] }))
     expect(feedback.state).toEqual({ paused: true, ancestorBlocked: true })
     expect(feedback.variant).toBe("warning")
     expect(feedback.message).toContain("paused by an ancestor")
   })
 
-  test("an ancestor-blocked child converges: start disabled and pause re-enabled", () => {
+  test("the ancestor warning tells the user to unpause from the ancestor", () => {
+    const feedback = controlResultFeedback("unpause", result({ unchanged: true, stillBlockedSessionIDs: [SESSION] }))
+    expect(feedback.message).toBe("This session is paused by an ancestor; unpause it from that ancestor")
+  })
+
+  test("an ancestor-blocked child converges: unpause disabled and pause re-enabled", () => {
     // The server reports the root in stillBlockedSessionIDs even when the child
     // owns no cascade, so the TUI converges to the ancestor-blocked state instead
     // of treating the session as not paused.
     const feedback = controlResultFeedback(
-      "start",
+      "unpause",
       result({ rootSessionID: CHILD, unchanged: true, stillBlockedSessionIDs: [CHILD] }),
     )
     expect(feedback.state).toEqual({ paused: true, ancestorBlocked: true })
-    expect(startCommandEnabled(feedback.state)).toBe(false)
+    expect(unpauseCommandEnabled(feedback.state)).toBe(false)
     expect(pauseCommandEnabled(feedback.state)).toBe(true)
     expect(feedback.variant).toBe("warning")
     expect(feedback.message).toContain("paused by an ancestor")
   })
 
-  test("successful start reports resumed sessions", () => {
+  test("successful unpause reports resumed sessions", () => {
     const feedback = controlResultFeedback(
-      "start",
+      "unpause",
       result({ affectedSessionIDs: [SESSION, "ses_child"], scheduledSessionIDs: ["ses_child"] }),
     )
     expect(feedback.state).toEqual({ paused: false })
     expect(feedback.variant).toBe("success")
     expect(feedback.message).toContain("resumed 1 session")
+    expect(feedback.message).toContain("Unpaused")
   })
 })
 
-describe("pause/start whitespace handling", () => {
-  const entries = createPauseStartCommands({
-    sessionID: () => SESSION,
-    pauseState: () => undefined,
-    run: () => {},
-  }).map((command) => ({ display: `/${command.slash?.name}` }))
+describe("pause/unpause whitespace handling", () => {
+  const entries = slashEntries()
 
   test("trailing and leading whitespace still matches after trimming", () => {
     expect(matchLocalSlash(entries, "/pause  ")?.display).toBe("/pause")
-    expect(matchLocalSlash(entries, "  /start")?.display).toBe("/start")
+    expect(matchLocalSlash(entries, "  /unpause")?.display).toBe("/unpause")
     expect(matchLocalSlash(entries, " /pause ")?.display).toBe("/pause")
+    expect(matchLocalSlash(entries, "  /start")?.display).toBe("/unpause")
   })
 
   test("multi-line input never matches a local slash", () => {
     expect(matchLocalSlash(entries, "/pause\ncontinue")).toBeUndefined()
+    expect(matchLocalSlash(entries, "/unpause\n")).toBeUndefined()
     expect(matchLocalSlash(entries, "/start\n")).toBeUndefined()
   })
 })
 
-describe("pause/start command collisions", () => {
+describe("pause/unpause command collisions", () => {
   test("command values and slash names are unique across the session registry", () => {
     const commands = createPauseStartCommands({
       sessionID: () => SESSION,
@@ -346,12 +385,8 @@ describe("pause/start command collisions", () => {
   test("an exact local slash match wins over a configured server command", () => {
     // Prompt dispatch: internal slash is resolved first; only unmatched /-prefixed
     // input falls through to `sync.data.command` server commands.
-    const configuredCommands = [{ name: "pause" }, { name: "start" }]
-    const entries = createPauseStartCommands({
-      sessionID: () => SESSION,
-      pauseState: () => undefined,
-      run: () => {},
-    }).map((command) => ({ display: `/${command.slash?.name}` }))
+    const configuredCommands = [{ name: "pause" }, { name: "unpause" }]
+    const entries = slashEntries()
     const input = "/pause"
     const local = matchLocalSlash(entries, input)
     const isConfigured = configuredCommands.some((command) => command.name === input.slice(1))
@@ -359,9 +394,19 @@ describe("pause/start command collisions", () => {
     expect(isConfigured).toBe(true)
     expect(local).toBeDefined() // local dispatch happens before the server command
   })
+
+  test("the deprecated /start alias resolves locally before a server /start command", () => {
+    const configuredCommands = [{ name: "start" }]
+    const entries = slashEntries()
+    const local = matchLocalSlash(entries, "/start")
+    const isConfigured = configuredCommands.some((command) => command.name === "start")
+    expect(local?.display).toBe("/unpause")
+    expect(isConfigured).toBe(true)
+    expect(local).toBeDefined()
+  })
 })
 
-describe("pause/start command run", () => {
+describe("pause/unpause command run", () => {
   test("running the command invokes the action with the viewed session", () => {
     const runs: PauseStartAction[] = []
     const commands = createPauseStartCommands({
@@ -370,22 +415,23 @@ describe("pause/start command run", () => {
       run: (action) => runs.push(action),
     })
     const pause = commands.find((command) => command.value === "session.pause")!
-    const start = commands.find((command) => command.value === "session.start")!
+    const unpause = commands.find((command) => command.value === "session.unpause")!
     pause.run()
-    start.run()
-    expect(runs).toEqual(["pause", "start"])
+    unpause.run()
+    expect(runs).toEqual(["pause", "unpause"])
   })
 
   test("the single-command factory targets its own action", () => {
     const runs: PauseStartAction[] = []
-    const command = createPauseStartCommand("start", {
+    const command = createPauseStartCommand("unpause", {
       sessionID: () => CHILD,
       pauseState: () => ({ paused: true }),
       run: (action) => runs.push(action),
     })
-    expect(command.value).toBe("session.start")
+    expect(command.value).toBe("session.unpause")
+    expect(command.slash?.name).toBe("unpause")
     expect(command.enabled).toBe(true)
     command.run()
-    expect(runs).toEqual(["start"])
+    expect(runs).toEqual(["unpause"])
   })
 })

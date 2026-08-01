@@ -180,6 +180,7 @@ const fetchForPrompt = (async (input: RequestInfo | URL) => {
 
 async function mountPrompt(props: {
   sessionID?: string
+  fetch?: typeof globalThis.fetch
   clipboard?: { read?(): Promise<{ data: string; mime: string } | undefined> }
 }) {
   const { Prompt } = await import("../../../../../tui/src/component/prompt")
@@ -228,7 +229,12 @@ async function mountPrompt(props: {
                     mouse: true,
                   }}
                 >
-                  <SDKProvider url="http://test" directory={directory} fetch={fetchForPrompt} events={events.source}>
+                  <SDKProvider
+                    url="http://test"
+                    directory={directory}
+                    fetch={props.fetch ?? fetchForPrompt}
+                    events={events.source}
+                  >
                     <ProjectProvider>
                       <SyncProvider>
                         <ThemeProvider mode="dark">
@@ -455,6 +461,61 @@ describe("prompt footer", () => {
       expect(frame).toContain("team working")
       read.resolve(undefined)
       await operation
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("shows a paused indicator while the session is paused", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const pausedFetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.pathname === "/api/session") {
+        return json({ data: [{ id: sessionID, paused: true }] })
+      }
+      return fetchForPrompt(input)
+    }) as typeof globalThis.fetch
+
+    const { app, sync } = await mountPrompt({ sessionID, fetch: pausedFetch })
+
+    try {
+      expect(sync.data.session_pause[sessionID]?.paused).toBe(true)
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("paused")
+      expect(frame).not.toContain("team working")
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("does not show a paused indicator while the session is not paused", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const unpausedFetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.pathname === "/api/session") {
+        return json({ data: [{ id: sessionID, paused: false }] })
+      }
+      return fetchForPrompt(input)
+    }) as typeof globalThis.fetch
+
+    const { app, sync } = await mountPrompt({ sessionID, fetch: unpausedFetch })
+
+    try {
+      expect(sync.data.session_pause[sessionID]?.paused).toBe(false)
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).not.toContain("paused")
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous

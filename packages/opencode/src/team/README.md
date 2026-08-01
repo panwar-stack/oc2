@@ -373,7 +373,7 @@ Pause is not shutdown and not member cancellation.
 
 `POST /session/:sessionID/pause` commits a durable pause cascade for that session and its full descendant subtree, then signals interruption to every affected session that is currently running. The TUI exposes this as `/pause` in the viewed session. The lead session is the root of the team, so pausing the lead pauses every teammate; pausing one teammate pauses only that member's subtree.
 
-A session is paused while it has at least one active blocker, and cascades stack. `/start` on a session releases only the cascade that session owns: a child `/start` can never clear an ancestor pause. If a child `/start` succeeds but the child stays paused, an ancestor-owned cascade is still blocking it; the TUI reports that explicitly.
+A session is paused while it has at least one active blocker, and cascades stack. `/unpause` on a session releases only the cascade that session owns: a child `/unpause` can never clear an ancestor pause. If a child `/unpause` succeeds but the child stays paused, an ancestor-owned cascade is still blocking it; the TUI reports that explicitly.
 
 While paused:
 
@@ -382,7 +382,7 @@ While paused:
 - team members and tasks keep their status; nothing is marked completed or cancelled, and no dependency is unblocked
 - shutdown, deletion, and explicit cancellation stay authoritative
 
-Resume intent is durable per session and reason (`running`, `queued-input`, `team-wake`, `background-result`). `/start` releases the root's cascade and schedules exactly the sessions that still have resume intent and no remaining blockers, once, without waking completed, cancelled, idle, or dependency-blocked sessions. After a process restart, `/start` reconstructs execution solely from the durable blockers, resume intents, queued inputs, member/task rows, and mailbox state.
+Resume intent is durable per session and reason (`running`, `queued-input`, `team-wake`, `background-result`). `/unpause` releases the root's cascade and schedules exactly the sessions that still have resume intent and no remaining blockers, once, without waking completed, cancelled, idle, or dependency-blocked sessions. After a process restart, `/unpause` reconstructs execution solely from the durable blockers, resume intents, queued inputs, member/task rows, and mailbox state. The former `/start` name still works as a deprecated alias for `/unpause`.
 
 The typed pause/start actions live in the session HTTP API (`packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts`) and return a `SessionControlResult` with the affected closure, interrupted subset, still-blocked subset, scheduled subset, and an `unchanged` flag for idempotent repeats.
 

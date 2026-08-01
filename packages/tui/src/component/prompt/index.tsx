@@ -174,6 +174,11 @@ export function Prompt(props: PromptProps) {
       return type === "busy" || type === "retry"
     })
   })
+  const paused = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return false
+    return sync.data.session_pause?.[sessionID]?.paused === true
+  })
   const working = createMemo(() => status().type !== "idle" || teammateWorking())
   const history = usePromptHistory()
   const stash = usePromptStash()
@@ -1015,7 +1020,11 @@ export function Prompt(props: PromptProps) {
     }
     const internalSlash = store.prompt.input.includes("\n")
       ? undefined
-      : commandSlashes().find((entry) => entry.display === trimmed)
+      : commandSlashes().find(
+          // `useCommandSlashes` encodes aliases with a leading "/" (e.g. "/start"
+          // for `/unpause`), so they compare directly against the trimmed input.
+          (entry) => entry.display === trimmed || entry.aliases?.includes(trimmed),
+        )
     if (internalSlash) {
       input.clear()
       input.extmarks.clear()
@@ -1565,6 +1574,13 @@ export function Prompt(props: PromptProps) {
             </box>
           </Show>
           <Switch>
+            {/* Paused wins over working: a paused session may still report a transient
+                working status while its live work is being interrupted. */}
+            <Match when={paused()}>
+              <box paddingLeft={3}>
+                <text fg={theme.warning}>⏸ paused</text>
+              </box>
+            </Match>
             <Match when={working()}>
               <box
                 flexDirection="row"

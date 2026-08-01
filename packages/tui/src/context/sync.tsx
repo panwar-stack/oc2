@@ -411,7 +411,7 @@ export const {
     /**
      * Refresh effective pause flags from the v2 session read model, which serves the
      * newest 50 sessions. Older sessions have no entry and read as unpaused until the
-     * first `/pause` or `/start` action reconciles them (both are idempotent).
+     * first `/pause` or `/unpause` action reconciles them (both are idempotent).
      */
     async function refreshPauseStates() {
       const response = await sdk.client.v2.session
@@ -1097,7 +1097,7 @@ export const {
         state(sessionID: string): SessionPauseState | undefined {
           return store.session_pause[sessionID]
         },
-        /** Record the root state after a pause/start action and reconcile affected sessions. */
+        /** Record the root state after a pause/unpause action and reconcile affected sessions. */
         applyResult(sessionID: string, state: SessionPauseState) {
           setStore("session_pause", sessionID, state)
           schedulePauseRefresh()
