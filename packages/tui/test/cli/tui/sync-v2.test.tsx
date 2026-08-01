@@ -125,6 +125,141 @@ test("sync v2 flushes buffered text deltas before step end", async () => {
   }
 })
 
+test("sync v2 shows the first text delta immediately and coalesces later deltas", async () => {
+  const { app, events, sync } = await mountSyncV2()
+  const sessionID = "session-first-delta"
+  const assistantMessageID = "msg_assistant_first_delta"
+  const textID = "text-first-delta"
+  const text = () => {
+    const assistant = sync.session.message.fromSession(sessionID)[0]
+    if (assistant?.type !== "assistant") return
+    const content = assistant.content[0]
+    return content?.type === "text" ? content.text : undefined
+  }
+
+  try {
+    emitTwice(events, {
+      id: "evt_step_first_delta",
+      type: "session.next.step.started",
+      properties: {
+        sessionID,
+        assistantMessageID,
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_text_first_delta_start",
+      type: "session.next.text.started",
+      properties: { sessionID, assistantMessageID, timestamp: 2, textID },
+    })
+    await wait(() => text() === "")
+    await Bun.sleep(25)
+
+    emitTwice(events, {
+      id: "evt_text_delta_first",
+      type: "session.next.text.delta",
+      properties: { sessionID, assistantMessageID, timestamp: 3, textID, delta: "first" },
+    })
+    expect(text()).toBe("first")
+
+    emitTwice(events, {
+      id: "evt_text_delta_second",
+      type: "session.next.text.delta",
+      properties: { sessionID, assistantMessageID, timestamp: 4, textID, delta: " second" },
+    })
+    emitTwice(events, {
+      id: "evt_text_delta_third",
+      type: "session.next.text.delta",
+      properties: { sessionID, assistantMessageID, timestamp: 5, textID, delta: " third" },
+    })
+    expect(text()).toBe("first")
+    await wait(() => text() === "first second third")
+
+    emitTwice(events, {
+      id: "evt_text_delta_before_end",
+      type: "session.next.text.delta",
+      properties: { sessionID, assistantMessageID, timestamp: 6, textID, delta: " fourth" },
+    })
+    emitTwice(events, {
+      id: "evt_text_first_delta_end",
+      type: "session.next.text.ended",
+      properties: { sessionID, assistantMessageID, timestamp: 7, textID, text: "first second third fourth" },
+    })
+    await wait(() => text() === "first second third fourth")
+    await Bun.sleep(80)
+    expect(text()).toBe("first second third fourth")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sync v2 shows the first reasoning delta immediately and coalesces later deltas", async () => {
+  const { app, events, sync } = await mountSyncV2()
+  const sessionID = "session-first-reasoning-delta"
+  const assistantMessageID = "msg_assistant_first_reasoning_delta"
+  const reasoningID = "reasoning-first-delta"
+  const text = () => {
+    const assistant = sync.session.message.fromSession(sessionID)[0]
+    if (assistant?.type !== "assistant") return
+    const content = assistant.content[0]
+    return content?.type === "reasoning" ? content.text : undefined
+  }
+
+  try {
+    emitTwice(events, {
+      id: "evt_step_first_reasoning_delta",
+      type: "session.next.step.started",
+      properties: {
+        sessionID,
+        assistantMessageID,
+        timestamp: 1,
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitTwice(events, {
+      id: "evt_reasoning_first_delta_start",
+      type: "session.next.reasoning.started",
+      properties: { sessionID, assistantMessageID, timestamp: 2, reasoningID, providerMetadata: {} },
+    })
+    await wait(() => text() === "")
+    await Bun.sleep(25)
+
+    emitTwice(events, {
+      id: "evt_reasoning_delta_first",
+      type: "session.next.reasoning.delta",
+      properties: { sessionID, assistantMessageID, timestamp: 3, reasoningID, delta: "first" },
+    })
+    expect(text()).toBe("first")
+
+    emitTwice(events, {
+      id: "evt_reasoning_delta_second",
+      type: "session.next.reasoning.delta",
+      properties: { sessionID, assistantMessageID, timestamp: 4, reasoningID, delta: " second" },
+    })
+    expect(text()).toBe("first")
+    await wait(() => text() === "first second")
+
+    emitTwice(events, {
+      id: "evt_reasoning_delta_before_end",
+      type: "session.next.reasoning.delta",
+      properties: { sessionID, assistantMessageID, timestamp: 5, reasoningID, delta: " third" },
+    })
+    emitTwice(events, {
+      id: "evt_reasoning_first_delta_end",
+      type: "session.next.reasoning.ended",
+      properties: { sessionID, assistantMessageID, timestamp: 6, reasoningID, text: "first second third" },
+    })
+    await wait(() => text() === "first second third")
+    await Bun.sleep(80)
+    expect(text()).toBe("first second third")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("sync v2 flushes buffered reasoning before step failure", async () => {
   const { app, events, sync } = await mountSyncV2()
 

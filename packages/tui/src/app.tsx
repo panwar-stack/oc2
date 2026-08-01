@@ -36,7 +36,7 @@ import { SyncProvider, useSync } from "./context/sync"
 import { SyncProviderV2 } from "./context/sync-v2"
 import { LocalProvider, useLocal } from "./context/local"
 import { useConnected } from "./component/use-connected"
-import { ThemeProvider, useTheme } from "./context/theme"
+import { ThemeProvider, useTheme, waitForStartupThemeMode } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session, SessionRootsCommand } from "./routes/session"
 import { PromptHistoryProvider } from "./component/prompt/history"
@@ -209,7 +209,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       yield* Effect.tryPromise(async () => {
         // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
         void renderer.getPalette({ size: 16 }).catch(() => undefined)
-        const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+        const mode = await waitForStartupThemeMode(renderer)
         if (renderer.isDestroyed) return
 
         await render(() => {

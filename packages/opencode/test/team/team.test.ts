@@ -580,10 +580,11 @@ describe("team", () => {
         const message = yield* team.sendMessage({
           teamID: teamInfo.id,
           sender: leadSessionID,
-          recipients: ["ses_multi_a", "ses_multi_b"],
+          recipients: ["ses_multi_a", "ses_multi_b", "ses_multi_a"],
           body: "Hello both",
         })
 
+        expect(message.recipients).toEqual(["ses_multi_a", "ses_multi_b"])
         expect((yield* team.getPendingMessages("ses_multi_a", teamInfo.id)).length).toBe(1)
         expect((yield* team.getPendingMessages("ses_multi_b", teamInfo.id)).length).toBe(1)
 
@@ -593,6 +594,42 @@ describe("team", () => {
         const stillPending = yield* team.getPendingMessages("ses_multi_b", teamInfo.id)
         expect(stillPending.length).toBe(1)
         expect(stillPending[0].body).toBe("Hello both")
+      }),
+    ),
+  )
+
+  it.live("concurrent claims return multiple messages exactly once", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_concurrent_claims"
+        const recipientSessionID = "ses_test_concurrent_claim_recipient"
+        const teamInfo = yield* team.create({ name: "concurrent-claims", goal: "Claim once", leadSessionID })
+
+        const messages = yield* Effect.all(
+          ["First", "Second", "Third"].map((body) =>
+            team.sendMessage({
+              teamID: teamInfo.id,
+              sender: leadSessionID,
+              recipients: [recipientSessionID],
+              body,
+            }),
+          ),
+          { concurrency: "unbounded" },
+        )
+        const claims = yield* Effect.all(
+          [
+            team.claimPendingMessages(recipientSessionID, teamInfo.id),
+            team.claimPendingMessages(recipientSessionID, teamInfo.id),
+          ],
+          { concurrency: "unbounded" },
+        )
+
+        expect(claims.map((claim) => claim.length).sort()).toEqual([0, 3])
+        expect(new Set(claims.flat().map((message) => message.id))).toEqual(
+          new Set(messages.map((message) => message.id)),
+        )
+        expect(yield* team.getPendingMessages(recipientSessionID, teamInfo.id)).toHaveLength(0)
       }),
     ),
   )

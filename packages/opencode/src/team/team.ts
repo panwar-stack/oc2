@@ -754,23 +754,22 @@ export const layer = Layer.effect(
                   time_updated: now,
                 })
                 .run()
-              yield* Effect.forEach(
-                recipients,
-                (recipient) =>
-                  tx
-                    .insert(TeamMessageRecipientTable)
-                    .values({
+              if (recipients.length > 0) {
+                yield* tx
+                  .insert(TeamMessageRecipientTable)
+                  .values(
+                    recipients.map((recipient) => ({
                       id: crypto.randomUUID(),
                       message_id: id,
                       team_id: input.teamID,
                       recipient,
-                      delivery_status: "pending",
+                      delivery_status: "pending" as const,
                       time_created: now,
                       time_updated: now,
-                    })
-                    .run(),
-                { discard: true },
-              )
+                    })),
+                  )
+                  .run()
+              }
             }),
           { behavior: "immediate" },
         )
@@ -894,21 +893,21 @@ export const layer = Layer.effect(
                   ),
                 )
                 .all()
-              yield* Effect.forEach(
-                pending,
-                (row) =>
-                  tx
-                    .update(TeamMessageRecipientTable)
-                    .set({ delivery_status: "read", time_updated: now })
-                    .where(
-                      and(
-                        eq(TeamMessageRecipientTable.id, row.recipient_id),
-                        eq(TeamMessageRecipientTable.delivery_status, "pending"),
+              if (pending.length > 0) {
+                yield* tx
+                  .update(TeamMessageRecipientTable)
+                  .set({ delivery_status: "read", time_updated: now })
+                  .where(
+                    and(
+                      inArray(
+                        TeamMessageRecipientTable.id,
+                        pending.map((row) => row.recipient_id),
                       ),
-                    )
-                    .run(),
-                { discard: true },
-              )
+                      eq(TeamMessageRecipientTable.delivery_status, "pending"),
+                    ),
+                  )
+                  .run()
+              }
               return pending
             }),
           { behavior: "immediate" },

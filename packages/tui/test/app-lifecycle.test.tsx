@@ -1,9 +1,23 @@
 import { expect, mock, test } from "bun:test"
+import { CliRenderEvents } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
+import { testRender } from "@opentui/solid"
 import { Effect } from "effect"
 import { Global } from "@oc2-ai/core/global"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { createEventSource, createFetch, directory } from "./fixture/tui-sdk"
+import { TestTuiContexts } from "./fixture/tui-environment"
+import { TuiConfigProvider } from "../src/config"
+import { KVProvider } from "../src/context/kv"
+import { ThemeProvider, useTheme } from "../src/context/theme"
+
+async function waitFor(check: () => boolean, timeout = 2000) {
+  const start = Date.now()
+  while (!check()) {
+    if (Date.now() - start > timeout) throw new Error("timed out waiting for condition")
+    await Bun.sleep(10)
+  }
+}
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
@@ -55,5 +69,42 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     mock.restore()
+  }
+})
+
+test("late terminal theme mode reconciles unless the user locks the mode", async () => {
+  let theme: ReturnType<typeof useTheme> | undefined
+
+  function CaptureTheme() {
+    theme = useTheme()
+    return null
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <TuiConfigProvider config={createTuiResolvedConfig()}>
+        <KVProvider>
+          <ThemeProvider mode="dark" source={{ discover: async () => ({}) }}>
+            <CaptureTheme />
+          </ThemeProvider>
+        </KVProvider>
+      </TuiConfigProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await waitFor(() => theme !== undefined)
+    expect(theme?.mode()).toBe("dark")
+
+    app.renderer.emit(CliRenderEvents.THEME_MODE, "light")
+    expect(theme?.mode()).toBe("light")
+
+    theme?.setMode("dark")
+    expect(theme?.locked()).toBe(true)
+    app.renderer.emit(CliRenderEvents.THEME_MODE, "light")
+    expect(theme?.mode()).toBe("dark")
+  } finally {
+    theme?.unlock()
+    app.renderer.destroy()
   }
 })

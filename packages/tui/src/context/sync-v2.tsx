@@ -669,32 +669,41 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             })
           })
           break
-        case "session.next.text.delta":
-          if (
-            latestText(
-              ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
-              event.properties.textID,
-            )
-          ) {
-            const key = streamingContentKey(
+        case "session.next.text.delta": {
+          const content = latestText(
+            ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
+            event.properties.textID,
+          )
+          if (!content) break
+          const flushImmediately = content.text.length === 0
+          const key = streamingContentKey(
+            event.properties.sessionID,
+            event.properties.assistantMessageID,
+            "text",
+            event.properties.textID,
+          )
+          const buffer = streamingContentBuffers.get(key)
+          if (buffer) buffer.text += event.properties.delta
+          else
+            streamingContentBuffers.set(key, {
+              sessionID: event.properties.sessionID,
+              assistantMessageID: event.properties.assistantMessageID,
+              contentID: event.properties.textID,
+              type: "text",
+              text: event.properties.delta,
+            })
+          if (flushImmediately) {
+            flushStreamingContentItem(
               event.properties.sessionID,
               event.properties.assistantMessageID,
               "text",
               event.properties.textID,
             )
-            const buffer = streamingContentBuffers.get(key)
-            if (buffer) buffer.text += event.properties.delta
-            else
-              streamingContentBuffers.set(key, {
-                sessionID: event.properties.sessionID,
-                assistantMessageID: event.properties.assistantMessageID,
-                contentID: event.properties.textID,
-                type: "text",
-                text: event.properties.delta,
-              })
-            scheduleStreamingContentFlush()
+            break
           }
+          scheduleStreamingContentFlush()
           break
+        }
         case "session.next.text.ended":
           flushStreamingContentItem(
             event.properties.sessionID,
@@ -821,32 +830,41 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             })
           })
           break
-        case "session.next.reasoning.delta":
-          if (
-            latestReasoning(
-              ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
-              event.properties.reasoningID,
-            )
-          ) {
-            const key = streamingContentKey(
+        case "session.next.reasoning.delta": {
+          const content = latestReasoning(
+            ownedAssistant(store.messages[event.properties.sessionID] ?? [], event.properties.assistantMessageID),
+            event.properties.reasoningID,
+          )
+          if (!content) break
+          const flushImmediately = content.text.length === 0
+          const key = streamingContentKey(
+            event.properties.sessionID,
+            event.properties.assistantMessageID,
+            "reasoning",
+            event.properties.reasoningID,
+          )
+          const buffer = streamingContentBuffers.get(key)
+          if (buffer) buffer.text += event.properties.delta
+          else
+            streamingContentBuffers.set(key, {
+              sessionID: event.properties.sessionID,
+              assistantMessageID: event.properties.assistantMessageID,
+              contentID: event.properties.reasoningID,
+              type: "reasoning",
+              text: event.properties.delta,
+            })
+          if (flushImmediately) {
+            flushStreamingContentItem(
               event.properties.sessionID,
               event.properties.assistantMessageID,
               "reasoning",
               event.properties.reasoningID,
             )
-            const buffer = streamingContentBuffers.get(key)
-            if (buffer) buffer.text += event.properties.delta
-            else
-              streamingContentBuffers.set(key, {
-                sessionID: event.properties.sessionID,
-                assistantMessageID: event.properties.assistantMessageID,
-                contentID: event.properties.reasoningID,
-                type: "reasoning",
-                text: event.properties.delta,
-              })
-            scheduleStreamingContentFlush()
+            break
           }
+          scheduleStreamingContentFlush()
           break
+        }
         case "session.next.reasoning.ended":
           flushStreamingContentItem(
             event.properties.sessionID,

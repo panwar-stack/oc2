@@ -1,4 +1,4 @@
-import { CliRenderEvents, SyntaxStyle, type TerminalColors } from "@opentui/core"
+import { CliRenderEvents, SyntaxStyle, type CliRenderer, type TerminalColors } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
   DEFAULT_THEMES,
@@ -80,6 +80,12 @@ export {
 } from "../theme"
 
 const THEME_REFRESH_DELAYS = [250, 1000] as const
+
+export const STARTUP_THEME_WAIT_MS = 250
+
+export async function waitForStartupThemeMode(renderer: Pick<CliRenderer, "waitForThemeMode">) {
+  return (await renderer.waitForThemeMode(STARTUP_THEME_WAIT_MS)) ?? "dark"
+}
 
 type State = {
   themes: Record<string, ThemeJson>

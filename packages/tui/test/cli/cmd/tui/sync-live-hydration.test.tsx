@@ -352,6 +352,86 @@ test("legacy sync buffers text deltas and flushes accumulated content", async ()
   }
 })
 
+test("legacy sync shows the first text delta immediately and coalesces later deltas", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmp.path)
+
+  const text = () => {
+    const part = sync.data.part[messageID]?.[0]
+    return part?.type === "text" ? part.text : undefined
+  }
+
+  try {
+    emit(global({ id: "evt_message_first_delta", type: "message.updated", properties: { sessionID, info: assistant } }))
+    emit(
+      global({
+        id: "evt_part_first_delta",
+        type: "message.part.updated",
+        properties: { sessionID, time: 1, part: { id: partID, sessionID, messageID, type: "text", text: "" } },
+      }),
+    )
+    await wait(() => text() === "")
+    await Bun.sleep(25)
+
+    emit(
+      global({
+        id: "evt_delta_first",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: "first" },
+      }),
+    )
+    expect(text()).toBe("first")
+
+    emit(
+      global({
+        id: "evt_delta_second",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: " second" },
+      }),
+    )
+    emit(
+      global({
+        id: "evt_delta_third",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: " third" },
+      }),
+    )
+    expect(text()).toBe("first")
+    await wait(() => text() === "first second third")
+
+    emit(
+      global({
+        id: "evt_delta_before_update",
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID, field: "text", delta: " fourth" },
+      }),
+    )
+    emit(
+      global({
+        id: "evt_part_after_delta",
+        type: "message.part.updated",
+        properties: {
+          sessionID,
+          time: 2,
+          part: { id: partID, sessionID, messageID, type: "text", text: "first second third fourth" },
+        },
+      }),
+    )
+    await wait(() => text() === "first second third fourth")
+    await Bun.sleep(80)
+    expect(text()).toBe("first second third fourth")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("legacy sync flushes buffered deltas before final part reconciliation", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")

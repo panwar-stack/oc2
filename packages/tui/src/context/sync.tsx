@@ -793,6 +793,7 @@ export const {
             )
             break
           }
+          const flushImmediately = part.text.length === 0
           const key = streamingPartKey(event.properties.sessionID, event.properties.messageID, event.properties.partID)
           const buffer = streamingPartBuffers.get(key)
           if (buffer) buffer.text += event.properties.delta
@@ -803,6 +804,10 @@ export const {
               partID: event.properties.partID,
               text: event.properties.delta,
             })
+          if (flushImmediately) {
+            flushStreamingPart(event.properties.sessionID, event.properties.messageID, event.properties.partID)
+            break
+          }
           scheduleStreamingPartFlush()
           break
         }

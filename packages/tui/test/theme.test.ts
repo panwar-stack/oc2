@@ -1,9 +1,9 @@
-import { expect, test } from "bun:test"
+import { expect, mock, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
 import { DEFAULT_THEMES, addTheme, allThemes, hasTheme, resolveTheme, terminalMode } from "../src/theme"
-import { discoverThemes } from "../src/context/theme"
+import { STARTUP_THEME_WAIT_MS, discoverThemes, waitForStartupThemeMode } from "../src/context/theme"
 import { tmpdir } from "./fixture/fixture"
 
 test("addTheme writes into module theme store", () => {
@@ -66,6 +66,21 @@ test("terminalMode derives mode from refreshed background", () => {
 
 test("terminalMode does not derive mode from ANSI slot zero", () => {
   expect(terminalMode(terminalColors(null, ["#000000"]))).toBeUndefined()
+})
+
+test.each(["dark", "light"] as const)("startup uses responsive %s terminal mode", async (mode) => {
+  const waitForThemeMode = mock(async () => mode)
+
+  await expect(waitForStartupThemeMode({ waitForThemeMode })).resolves.toBe(mode)
+  expect(waitForThemeMode).toHaveBeenCalledWith(STARTUP_THEME_WAIT_MS)
+  expect(STARTUP_THEME_WAIT_MS).toBe(250)
+})
+
+test("startup falls back to dark when terminal theme detection times out", async () => {
+  const waitForThemeMode = mock(async () => null)
+
+  await expect(waitForStartupThemeMode({ waitForThemeMode })).resolves.toBe("dark")
+  expect(waitForThemeMode).toHaveBeenCalledWith(250)
 })
 
 test("custom theme precedence follows directory order", async () => {
