@@ -14,6 +14,9 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
+import { Runner } from "@/effect/runner"
+import { Database } from "@oc2-ai/core/database/database"
+import { SessionControl } from "@oc2-ai/core/session/control"
 import { NamedError } from "@oc2-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
@@ -56,6 +59,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
+    const control = yield* SessionControl.Service
+    const { db } = yield* Database.Service
     const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
     const statusSvc = yield* SessionStatus.Service
@@ -274,11 +279,107 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return true
     })
 
+    const mapControlNotFound = <A, E, R>(sessionID: SessionID, self: Effect.Effect<A, E | SessionControl.NotFoundError, R>) =>
+      self.pipe(
+        Effect.catchTag("SessionControl.NotFoundError", () =>
+          Effect.fail(SessionError.notFoundSession(sessionID)),
+        ),
+      )
+
+    /**
+     * Schedules one loop iteration per runnable resume ticket. `wake` returns as soon as the
+     * iteration is scheduled, so the response never waits for a provider turn, and the runner
+     * collapses a concurrent schedule into the run that is already in flight.
+     */
+    const scheduleResume = Effect.fn("SessionHttpApi.scheduleResume")(function* (
+      tickets: readonly SessionControl.ResumeTicket[],
+    ) {
+      const scheduled: SessionID[] = []
+      for (const ticket of tickets) {
+        const present = yield* session.get(ticket.sessionID).pipe(
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false)),
+        )
+        // A session deleted while paused stays terminal. Its durable intent must never revive it.
+        if (!present) continue
+        const woken = yield* promptSvc.wake(ticket.sessionID).pipe(
+          Effect.as(true),
+          // A pause that won the race leaves the durable intent in place for the next start.
+          Effect.catchTag("RunnerSuspended", () => Effect.succeed(false)),
+        )
+        if (woken) {
+          scheduled.push(ticket.sessionID)
+          // The intent has served its purpose: it scheduled this iteration. Clearing it here
+          // (same as wakeWithIntent / the V2 drain finish) keeps a stale ticket from scheduling
+          // a no-op loop iteration on a later pause/start cycle.
+          yield* control.finishResume(ticket).pipe(Effect.ignore)
+        }
+      }
+      return scheduled
+    })
+
+    const pause = Effect.fn("SessionHttpApi.pause")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      const result = yield* mapControlNotFound(
+        ctx.params.sessionID,
+        control.pause({ rootSessionID: ctx.params.sessionID }),
+      )
+      // The barrier is committed and interruption is already signalled. If a concurrent start
+      // released this cascade while interruption was in flight, compensate here by scheduling the
+      // resume intents that are still valid instead of leaving the subtree stopped.
+      const compensated =
+        result.unchanged ||
+        (yield* control.isCascadeActive({ cascadeID: result.cascadeID, generation: result.generation }))
+          ? []
+          : yield* scheduleResume(yield* control.runnableResumeTickets(result.affectedSessionIDs))
+      const blocked = yield* SessionControl.pausedSessionIDs(db, result.affectedSessionIDs)
+      return {
+        rootSessionID: result.rootSessionID,
+        cascadeID: result.cascadeID,
+        affectedSessionIDs: result.affectedSessionIDs,
+        interruptionSignalledSessionIDs: result.interruptionSignalledSessionIDs,
+        stillBlockedSessionIDs: result.affectedSessionIDs.filter((sessionID) => blocked.has(sessionID)),
+        scheduledSessionIDs: compensated,
+        unchanged: result.unchanged,
+      }
+    })
+
+    const start = Effect.fn("SessionHttpApi.start")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      const result = yield* mapControlNotFound(ctx.params.sessionID, control.release(ctx.params.sessionID))
+      // Only the call that actually released the cascade schedules work. Repeated and concurrent
+      // starts observe `unchanged` and must not produce a second provider dispatch.
+      const scheduled = result.unchanged ? [] : yield* scheduleResume(result.resumeTickets)
+      const stillBlockedSessionIDs = [...result.stillBlockedSessionIDs]
+      if (
+        result.unchanged &&
+        !stillBlockedSessionIDs.includes(result.rootSessionID) &&
+        (yield* SessionControl.pausedSessionIDs(db, [result.rootSessionID])).has(result.rootSessionID)
+      ) {
+        // An unchanged start on a root without cascade history still reports the root when an
+        // ancestor pause keeps it blocked; otherwise the TUI cannot distinguish "not paused" from
+        // "paused by an ancestor" and would never converge to the ancestor-blocked state.
+        stillBlockedSessionIDs.push(result.rootSessionID)
+      }
+      return {
+        rootSessionID: result.rootSessionID,
+        cascadeID: result.cascadeID,
+        affectedSessionIDs: result.affectedSessionIDs,
+        interruptionSignalledSessionIDs: [],
+        stillBlockedSessionIDs,
+        scheduledSessionIDs: scheduled,
+        unchanged: result.unchanged,
+      }
+    })
+
     const init = Effect.fn("SessionHttpApi.init")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof InitPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* runState
+        .assertNotSuspended(ctx.params.sessionID)
+        .pipe(Effect.mapError(() => SessionError.paused(ctx.params.sessionID)))
       yield* promptSvc
         .command({
           sessionID: ctx.params.sessionID,
@@ -287,7 +388,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           command: Command.Default.INIT,
           arguments: "",
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          // A runner suspension must surface as the typed paused error; every other failure stays
+          // a plain 400. The discrimination has to happen in one map, otherwise a trailing mapError
+          // would rewrite the paused error into a BadRequest.
+          Effect.mapError((error) =>
+            error instanceof Runner.Suspended
+              ? SessionError.paused(ctx.params.sessionID)
+              : new HttpApiError.BadRequest({}),
+          ),
+        )
       return true
     })
 
@@ -295,6 +405,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof SummarizePayload.Type
     }) {
+      yield* runState
+        .assertNotSuspended(ctx.params.sessionID)
+        .pipe(Effect.mapError(() => SessionError.paused(ctx.params.sessionID)))
       yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       const defaultAgent = yield* agentSvc.defaultAgent()
@@ -309,7 +422,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         },
         auto: ctx.payload.auto ?? false,
       })
-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID })
+      yield* promptSvc
+        .loop({ sessionID: ctx.params.sessionID })
+        .pipe(Effect.mapError(() => SessionError.paused(ctx.params.sessionID)))
       return true
     })
 
@@ -323,7 +438,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ...ctx.payload,
           sessionID: ctx.params.sessionID,
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          // A prompt sent to a paused session is admitted durably but must not execute. The typed
+          // paused error tells the caller the input is queued rather than rejected, and must not be
+          // rewritten into a BadRequest by the fallback mapping below.
+          Effect.mapError((error) =>
+            error instanceof Runner.Suspended
+              ? SessionError.paused(ctx.params.sessionID)
+              : new HttpApiError.BadRequest({}),
+          ),
+        )
       return HttpServerResponse.stream(Stream.make(JSON.stringify(message)).pipe(Stream.encodeText), {
         contentType: "application/json",
       })
@@ -358,7 +482,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       return yield* promptSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof Runner.Suspended
+              ? SessionError.paused(ctx.params.sessionID)
+              : new HttpApiError.BadRequest({}),
+          ),
+        )
     })
 
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
@@ -366,7 +496,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ShellPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
+      return yield* SessionError.mapBusyOrPaused(
+        ctx.params.sessionID,
+        promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }),
+      )
     })
 
     const revert = Effect.fn("SessionHttpApi.revert")(function* (ctx: {
@@ -452,6 +585,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("update", update)
       .handleRaw("fork", forkRaw)
       .handle("abort", abort)
+      .handle("pause", pause)
+      .handle("start", start)
       .handle("init", init)
       .handle("summarize", summarize)
       .handle("prompt", prompt)

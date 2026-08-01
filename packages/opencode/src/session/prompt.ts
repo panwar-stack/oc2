@@ -63,6 +63,8 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@oc2-ai/llm"
 import { Team } from "@/team/team"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import { Runner } from "@/effect/runner"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -98,10 +100,14 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
-  readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
-  readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
-  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error | Runner.Suspended>
+  readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts, Runner.Suspended>
+  /** Schedules a loop iteration for the session and returns once it is scheduled. */
+  readonly wake: (sessionID: SessionID) => Effect.Effect<void, Runner.Suspended>
+  readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError | Runner.Suspended>
+  readonly command: (
+    input: CommandInput,
+  ) => Effect.Effect<SessionV1.WithParts, Image.Error | Session.BusyError | Runner.Suspended>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
 
@@ -140,12 +146,14 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const { db } = database
     const team = yield* Team.Service
+    const control = yield* SessionControl.Service
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
-        prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
-        wake: (sessionID: SessionID) => loop({ sessionID }),
+        prompt: (input: PromptInput) => Runner.keepSuspended(prompt(input)),
+        wake: (sessionID: SessionID) => wake(sessionID),
+        run: (sessionID: SessionID) => loop({ sessionID }),
       } satisfies TaskPromptOps
     })
 
@@ -668,6 +676,8 @@ export const layer = Layer.effect(
             }).pipe(Effect.scoped, Effect.orDie),
           ).pipe(Effect.exit)
 
+          const suspended = Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause) && (yield* Runner.isSuspending)
+          if (suspended) return yield* Effect.failCause(exit.cause)
           if (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause) && !Cause.hasDies(exit.cause)) {
             aborted = true
           }
@@ -1229,11 +1239,12 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
+    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error | Runner.Suspended> = Effect.fn(
       "SessionPrompt.prompt",
     )(function* (input: PromptInput) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      yield* revert.cleanup(session)
+      const suspendedAtAdmission = yield* SessionRunState.isSuspended(db, input.sessionID)
+      if (!suspendedAtAdmission) yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
@@ -1251,6 +1262,21 @@ export const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: merged })
       }
 
+      if (suspendedAtAdmission || (yield* SessionRunState.isSuspended(db, input.sessionID))) {
+        const request = yield* control
+          .requestResume({ sessionID: input.sessionID, reason: "queued-input" })
+          .pipe(Effect.orDie)
+        if (request.paused) {
+          if (input.noReply === true) return message
+          return yield* new Runner.Suspended()
+        }
+        if (input.noReply === true) {
+          yield* control.finishResume(request.ticket)
+          return message
+        }
+        yield* state.wake(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+        if (!(yield* control.finishResume(request.ticket))) return yield* new Runner.Suspended()
+      }
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
     })
@@ -1278,46 +1304,64 @@ export const layer = Layer.effect(
       if (Option.isNone(context)) return false
       const messages = yield* team.claimPendingMessages(input.session.id, context.value.team.id)
       if (messages.length === 0) return false
-
-      const members = yield* team.getMembers(context.value.team.id)
-      const senderName = (sender: string) => {
-        if (sender === context.value.team.lead_session_id) return "lead"
-        return members.find((member) => member.session_id === sender)?.name ?? sender
-      }
-      const userMsg: SessionV1.User = {
-        id: MessageID.ascending(),
-        sessionID: input.session.id,
-        role: "user",
-        time: { created: Date.now() },
-        agent: input.lastUser.agent,
-        model: input.lastUser.model,
-        tools: input.lastUser.tools,
-      }
-      yield* sessions.updateMessage(userMsg)
-      yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: userMsg.id,
-        sessionID: input.session.id,
-        type: "text",
-        synthetic: true,
-        text: [
-          "<team-messages>",
-          context.value.member
-            ? "You have pending team mailbox messages. Address them now and continue your teammate task."
-            : "You have pending team mailbox messages. As team lead, coordinate follow-up work and report to the user when the team goal is complete. Do NOT attempt to do teammate tasks yourself — your role is to delegate, wait for results, and integrate them. Trust your teammates to complete their assigned work. As you process these messages, look for new sub-tasks that can be split off and delegated to new or existing teammates.",
-          "",
-          ...messages.map((message) =>
-            [`From ${senderName(message.sender)} (${message.sender}):`, message.body].join("\n"),
+      let acknowledged = false
+      return yield* Effect.gen(function* () {
+        const members = yield* team.getMembers(context.value.team.id)
+        const senderName = (sender: string) => {
+          if (sender === context.value.team.lead_session_id) return "lead"
+          return members.find((member) => member.session_id === sender)?.name ?? sender
+        }
+        // The delivery marker is persisted BEFORE the synthetic message write. If this delivery is
+        // suspended in between, the ensuring below cannot revert the claim (only "read" rows are
+        // reverted), so a resumed loop never claims these messages again and never injects a
+        // duplicate synthetic message.
+        yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, input.session.id), {
+          concurrency: "unbounded",
+          discard: true,
+        })
+        const userMsg: SessionV1.User = {
+          id: MessageID.ascending(),
+          sessionID: input.session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: input.lastUser.agent,
+          model: input.lastUser.model,
+          tools: input.lastUser.tools,
+        }
+        yield* sessions.updateMessage(userMsg)
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.session.id,
+          type: "text",
+          synthetic: true,
+          text: [
+            "<team-messages>",
+            context.value.member
+              ? "You have pending team mailbox messages. Address them now and continue your teammate task."
+              : "You have pending team mailbox messages. As team lead, coordinate follow-up work and report to the user when the team goal is complete. Do NOT attempt to do teammate tasks yourself — your role is to delegate, wait for results, and integrate them. Trust your teammates to complete their assigned work. As you process these messages, look for new sub-tasks that can be split off and delegated to new or existing teammates.",
+            "",
+            ...messages.map((message) =>
+              [`From ${senderName(message.sender)} (${message.sender}):`, message.body].join("\n"),
+            ),
+            "</team-messages>",
+          ].join("\n"),
+        } satisfies SessionV1.TextPart)
+        acknowledged = true
+        yield* sessions.touch(input.session.id)
+        return true
+      }).pipe(
+        Effect.ensuring(
+          Effect.suspend(() =>
+            acknowledged
+              ? Effect.void
+              : team.releaseClaimedMessages(
+                  messages.map((message) => message.id),
+                  input.session.id,
+                ),
           ),
-          "</team-messages>",
-        ].join("\n"),
-      } satisfies SessionV1.TextPart)
-      yield* Effect.forEach(messages, (message) => team.markMessageDelivered(message.id, input.session.id), {
-        concurrency: "unbounded",
-        discard: true,
-      })
-      yield* sessions.touch(input.session.id)
-      return true
+        ),
+      )
     })
 
     const teamLeadSystemPrompt = Effect.fn("SessionPrompt.teamLeadSystemPrompt")(function* (input: {
@@ -1384,7 +1428,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
       ].join("\n")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
+    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, Runner.Suspended> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
         const slog = elog.with({ sessionID })
@@ -1393,6 +1437,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
+          yield* SessionRunState.assertNotSuspended(db, sessionID)
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
 
@@ -1509,6 +1554,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
           yield* sessions.updateMessage(msg)
 
           const finalizeInterruptedAssistant = Effect.gen(function* () {
+            if (yield* Runner.isSuspending) return
             if (msg.time.completed) return
             msg.error ??= MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
               providerID: msg.providerID,
@@ -1544,6 +1590,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
               Effect.provideService(ToolRegistry.Service, registry),
               Effect.provideService(MCP.Service, mcp),
               Effect.provideService(Truncate.Service, truncate),
+              Effect.provideService(Database.Service, database),
             )
 
             if (lastUser.format?.type === "json_schema") {
@@ -1654,13 +1701,24 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
       },
     )
 
-    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
-      input: LoopInput,
-    ) {
+    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts, Runner.Suspended> = Effect.fn(
+      "SessionPrompt.loop",
+    )(function* (input: LoopInput) {
       return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
     })
 
-    const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
+    // Non-blocking counterpart of `loop`: it attaches to the live run or schedules a new one and
+    // returns as soon as the work is scheduled. It deliberately reports no result, because a caller
+    // that reads "the latest assistant message" right after a wake reads a stale turn.
+    const wake: (sessionID: SessionID) => Effect.Effect<void, Runner.Suspended> = Effect.fn("SessionPrompt.wake")(
+      function* (sessionID: SessionID) {
+        yield* state.wake(sessionID, lastAssistant(sessionID), runLoop(sessionID))
+      },
+    )
+
+    const shell: (
+      input: ShellInput,
+    ) => Effect.Effect<SessionV1.WithParts, Session.BusyError | Runner.Suspended> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
@@ -1668,6 +1726,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
     })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+      yield* SessionRunState.assertNotSuspended(db, input.sessionID)
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
@@ -1706,11 +1765,23 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
 
       const shellMatches = ConfigMarkdown.shell(template)
       if (shellMatches.length > 0) {
+        yield* SessionRunState.assertNotSuspended(db, input.sessionID)
         const cfg = yield* config.get()
         const sh = Shell.preferred(cfg.shell)
-        const results = yield* Effect.promise(() =>
-          Promise.all(
-            shellMatches.map(async ([, cmd]) => (await Process.text([cmd], { shell: sh, nothrow: true })).text),
+        const results = yield* state.startSubstitution(
+          input.sessionID,
+          Effect.acquireUseRelease(
+            Effect.sync(() => new AbortController()),
+            (controller) =>
+              Effect.promise(() =>
+                Promise.all(
+                  shellMatches.map(
+                    async ([, cmd]) =>
+                      (await Process.text([cmd], { shell: sh, nothrow: true, abort: controller.signal })).text,
+                  ),
+                ),
+              ),
+            (controller) => Effect.sync(() => controller.abort()),
           ),
         )
         let index = 0
@@ -1794,6 +1865,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
       cancel,
       prompt,
       loop,
+      wake,
       shell,
       command,
       resolvePromptParts,
@@ -1820,6 +1892,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Session.defaultLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(SessionSummary.defaultLayer),
+    Layer.provide(SessionControl.defaultLayer),
     Layer.provide(Image.defaultLayer),
     Layer.provide(
       Layer.mergeAll(

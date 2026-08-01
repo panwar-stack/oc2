@@ -97,6 +97,7 @@ function stubOps(input?: {
         return reply(prompt, input?.text?.(prompt) ?? String(prompt.model?.modelID))
       }),
     wake: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
+    run: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
   }
 }
 

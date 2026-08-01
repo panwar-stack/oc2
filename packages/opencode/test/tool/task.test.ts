@@ -18,9 +18,14 @@ import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { disposeAllInstances } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { MessageV2 } from "@/session/message-v2"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import { SessionTable } from "@oc2-ai/core/session/sql"
+import { eq } from "drizzle-orm"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -45,6 +50,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     ToolRegistry.defaultLayer,
     Database.defaultLayer,
     RuntimeFlags.layer(flags),
+    SessionControl.defaultLayer,
   )
 
 const it = testEffect(layer())
@@ -99,7 +105,18 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
       }),
     wake: (sessionID) =>
       Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, opts?.text ?? "done")),
+    run: (sessionID) =>
+      Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, opts?.text ?? "done")),
   }
+}
+
+// The reconciler injects the parent notification with a normal ascending message ID, so the
+// notification is identified by its synthetic rendered task output instead of an ID prefix.
+function isBackgroundNotification(message: SessionV1.WithParts) {
+  return (
+    message.info.role === "user" &&
+    message.parts.some((part) => part.type === "text" && part.synthetic === true && part.text.startsWith("<task id="))
+  )
 }
 
 function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
@@ -328,6 +345,7 @@ describe("tool.task", () => {
             return cancelled.promise
           }).pipe(Effect.as(reply(input, "cancelled"))),
         wake: (sessionID) => Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, "looped")),
+        run: (sessionID) => Effect.sync(() => reply({ sessionID, agent: "general", model: ref, parts: [] }, "looped")),
       }
 
       const fiber = yield* def
@@ -577,15 +595,12 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const ready = yield* Deferred.make<void>()
       const done = yield* Deferred.make<void>()
-      const injected = yield* Deferred.make<SessionPrompt.PromptInput>()
+      const woken = yield* Deferred.make<SessionID>()
       let runs = 0
       const promptOps: TaskPromptOps = {
         cancel: () => Effect.void,
         resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
         prompt: (input) => {
-          if (input.sessionID === chat.id) {
-            return Deferred.succeed(injected, input).pipe(Effect.as(reply(input, "injected")))
-          }
           return Effect.gen(function* () {
             runs += 1
             yield* Deferred.succeed(ready, undefined)
@@ -594,7 +609,13 @@ describe("tool.task", () => {
           })
         },
         wake: (sessionID) =>
-          Effect.succeed(reply({ sessionID, agent: "general", model: ref, parts: [] }, "background done")),
+          Deferred.succeed(woken, sessionID).pipe(
+            Effect.as(reply({ sessionID, agent: "general", model: ref, parts: [] }, "background done")),
+          ),
+        run: (sessionID) =>
+          Deferred.succeed(woken, sessionID).pipe(
+            Effect.as(reply({ sessionID, agent: "general", model: ref, parts: [] }, "background done")),
+          ),
       }
 
       const fiber = yield* def
@@ -632,7 +653,7 @@ describe("tool.task", () => {
 
       yield* Deferred.succeed(done, undefined)
       expect((yield* jobs.wait({ id: result.metadata.sessionId })).info?.output).toBe("background done")
-      expect((yield* Deferred.await(injected)).parts[0]?.type).toBe("text")
+      expect(yield* Deferred.await(woken)).toBe(chat.id)
       expect(runs).toBe(1)
     }),
   )
@@ -684,19 +705,23 @@ describe("tool.task", () => {
       const first = defer<void>()
       const second = defer<void>()
       const updated = defer<SessionPrompt.PromptInput>()
-      const injected = defer<SessionPrompt.PromptInput>()
+      const woken = defer<SessionID>()
       let prompts = 0
       const promptOps: TaskPromptOps = {
         ...stubOps(),
         prompt: (input) => {
-          if (input.sessionID === chat.id) {
-            injected.resolve(input)
-            return Effect.succeed(reply(input, "done"))
-          }
           prompts++
           if (prompts === 1) return Effect.promise(() => first.promise).pipe(Effect.as(reply(input, "first done")))
           updated.resolve(input)
           return Effect.promise(() => second.promise).pipe(Effect.as(reply(input, "second done")))
+        },
+        wake: (sessionID) => {
+          woken.resolve(sessionID)
+          return Effect.succeed(reply({ sessionID, agent: "general", model: ref, parts: [] }, "done"))
+        },
+        run: (sessionID) => {
+          woken.resolve(sessionID)
+          return Effect.succeed(reply({ sessionID, agent: "general", model: ref, parts: [] }, "done"))
         },
       }
       const context = {
@@ -742,10 +767,11 @@ describe("tool.task", () => {
       const waited = yield* jobs.wait({ id: started.metadata.sessionId, timeout: 1_000 })
       expect(waited.info?.status).toBe("completed")
       expect(waited.info?.output).toBe("second done")
-      const notification = yield* Effect.promise(() => injected.promise)
-      expect(notification.variant).toBe("xhigh")
-      expect(notification.parts[0]?.type).toBe("text")
-      if (notification.parts[0]?.type === "text") expect(notification.parts[0].text).toContain("second done")
+      expect(yield* Effect.promise(() => woken.promise)).toBe(chat.id)
+      const notification = (yield* MessageV2.stream(chat.id)).find((message) =>
+        message.parts.some((part) => part.type === "text" && part.text.includes("second done")),
+      )
+      expect(notification?.info.role).toBe("user")
     }),
   )
 
@@ -779,6 +805,302 @@ describe("tool.task", () => {
       expect(waited.timedOut).toBe(false)
       expect(waited.info?.status).toBe("completed")
       expect(waited.info?.output).toBe("background done")
+    }),
+  )
+
+  background.instance("keeps paused background completion durable and delivers it exactly once after release", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const lifecycle = yield* LifecycleReconciler.Service
+      const control = yield* SessionControl.Service
+      const database = yield* Database.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let wakes = 0
+      const promptOps: TaskPromptOps = {
+        ...stubOps({ text: "restart-safe result" }),
+        wake: (sessionID) =>
+          Effect.sync(() => {
+            wakes++
+            return reply({ sessionID, agent: "general", model: ref, parts: [] }, "woke")
+          }),
+        run: (sessionID) =>
+          Effect.sync(() => {
+            wakes++
+            return reply({ sessionID, agent: "general", model: ref, parts: [] }, "woke")
+          }),
+      }
+
+      yield* control.pause({ rootSessionID: chat.id })
+      const result = yield* def.execute(
+        {
+          description: "inspect restart",
+          prompt: "produce a durable result",
+          subagent_type: "general",
+          background: true,
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      yield* jobs.wait({ id: result.metadata.sessionId, timeout: 1_000 })
+      yield* Effect.sleep("20 millis")
+
+      const paused = yield* database.db
+        .select({ metadata: SessionTable.metadata })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, result.metadata.sessionId))
+        .get()
+        .pipe(Effect.orDie)
+      expect(paused?.metadata?.lifecycleReconciler as { state?: string; output?: string } | undefined).toMatchObject({
+        state: "completed",
+        output: "restart-safe result",
+      })
+      expect(wakes).toBe(0)
+      expect((yield* MessageV2.stream(chat.id)).filter(isBackgroundNotification)).toHaveLength(0)
+
+      yield* control.release(chat.id)
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const notifications = (yield* MessageV2.stream(chat.id)).filter(isBackgroundNotification)
+          return notifications.length === 1 && wakes === 1 ? notifications : undefined
+        }),
+        "Timed out waiting for durable background notification",
+      )
+      yield* lifecycle.reconcile
+      yield* lifecycle.reconcile
+
+      const notifications = (yield* MessageV2.stream(chat.id)).filter(isBackgroundNotification)
+      expect(notifications).toHaveLength(1)
+      expect(notifications[0]?.parts).toHaveLength(1)
+      expect(notifications[0]?.parts[0]?.type === "text" && notifications[0].parts[0].synthetic).toBe(true)
+      expect(notifications[0]?.parts[0]?.type).toBe("text")
+      if (notifications[0]?.parts[0]?.type === "text") {
+        expect(notifications[0].parts[0].text).toContain("restart-safe result")
+      }
+      expect(wakes).toBe(1)
+    }),
+  )
+
+  background.instance("does not cancel the background job when a foreground task is suspended", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const control = yield* SessionControl.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const started = yield* Deferred.make<void>()
+      const complete = yield* Deferred.make<void>()
+      const promptOps: TaskPromptOps = {
+        ...stubOps(),
+        prompt: (input) =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(complete)),
+            Effect.as(reply(input, "completed after release")),
+          ),
+      }
+      const fiber = yield* def
+        .execute(
+          { description: "suspend foreground", prompt: "wait", subagent_type: "general" },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const job = (yield* jobs.list()).find((item) => item.metadata?.parentSessionId === chat.id)
+      expect(job?.status).toBe("running")
+
+      yield* control.pause({ rootSessionID: chat.id })
+      yield* Fiber.interrupt(fiber)
+
+      expect((yield* jobs.get(job!.id))?.status).toBe("running")
+      yield* Deferred.succeed(complete, undefined)
+      expect((yield* jobs.wait({ id: job!.id, timeout: 1_000 })).info?.status).toBe("completed")
+      yield* control.release(chat.id)
+    }),
+  )
+
+  background.instance("rebuilds the lifecycle layer and delivers a persisted paused error once", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const control = yield* SessionControl.Service
+      const database = yield* Database.Service
+      const { chat } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, title: "restart child" })
+      let wakes = 0
+      const ops: TaskPromptOps = {
+        ...stubOps(),
+        wake: (sessionID) =>
+          Effect.sync(() => {
+            wakes++
+            return reply({ sessionID, agent: "general", model: ref, parts: [] }, "woke")
+          }),
+        run: (sessionID) =>
+          Effect.sync(() => {
+            wakes++
+            return reply({ sessionID, agent: "general", model: ref, parts: [] }, "woke")
+          }),
+      }
+
+      yield* control.pause({ rootSessionID: chat.id })
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* LifecycleReconciler.Service
+        yield* lifecycle.attach(ops)
+        const registration = yield* lifecycle.registerBackground({
+          sessionID: child.id,
+          parentSessionID: chat.id,
+          description: "restart error delivery",
+          agent: "build",
+          model: ref,
+          notifyParent: true,
+          ops,
+        })
+        yield* lifecycle.settleBackground({
+          sessionID: child.id,
+          generation: registration.generation,
+          state: "error",
+          text: "failed before dispose",
+          ops,
+        })
+      }).pipe(Effect.provide(Layer.fresh(LifecycleReconciler.layer)))
+
+      const before = yield* database.db
+        .select({ metadata: SessionTable.metadata })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, child.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(before?.metadata?.lifecycleReconciler).toMatchObject({
+        state: "error",
+        error: "failed before dispose",
+        notification: "pending",
+      })
+      expect(wakes).toBe(0)
+
+      yield* control.release(chat.id)
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* LifecycleReconciler.Service
+        yield* lifecycle.attach(ops)
+        yield* Effect.all([lifecycle.reconcile, lifecycle.reconcile, lifecycle.reconcile], {
+          concurrency: "unbounded",
+          discard: true,
+        })
+      }).pipe(Effect.provide(Layer.fresh(LifecycleReconciler.layer)))
+
+      const notifications = (yield* MessageV2.stream(chat.id)).filter(isBackgroundNotification)
+      expect(notifications).toHaveLength(1)
+      expect(
+        notifications[0]?.parts.some((part) => part.type === "text" && part.text.includes("failed before dispose")),
+      ).toBe(true)
+      expect(wakes).toBe(1)
+    }),
+  )
+
+  background.instance("ignores stale background generations and keeps explicit paused cancellation terminal", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const control = yield* SessionControl.Service
+      const database = yield* Database.Service
+      const { chat } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, title: "generation child" })
+      const ops = stubOps()
+
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* LifecycleReconciler.Service
+        const first = yield* lifecycle.registerBackground({
+          sessionID: child.id,
+          parentSessionID: chat.id,
+          description: "first generation",
+          agent: "build",
+          model: ref,
+          notifyParent: true,
+          ops,
+        })
+        yield* lifecycle.cancelBackground(child.id)
+        const second = yield* lifecycle.registerBackground({
+          sessionID: child.id,
+          parentSessionID: chat.id,
+          description: "second generation",
+          agent: "build",
+          model: ref,
+          notifyParent: true,
+          ops,
+        })
+        expect(second.generation).toBe(first.generation + 1)
+
+        const stale = reply(
+          {
+            sessionID: child.id,
+            messageID: first.promptMessageID,
+            agent: "build",
+            model: ref,
+            parts: [],
+          },
+          "stale first generation",
+        )
+        yield* sessions.updateMessage(stale.info)
+        for (const part of stale.parts) yield* sessions.updatePart(part)
+        yield* lifecycle.reconcile
+        yield* lifecycle.settleBackground({
+          sessionID: child.id,
+          generation: first.generation,
+          state: "completed",
+          text: "late watcher output",
+          ops,
+        })
+
+        let row = yield* database.db
+          .select({ metadata: SessionTable.metadata })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, child.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(row?.metadata?.lifecycleReconciler).toMatchObject({
+          generation: second.generation,
+          promptMessageID: second.promptMessageID,
+          state: "running",
+        })
+
+        yield* control.pause({ rootSessionID: chat.id })
+        yield* lifecycle.cancelBackground(child.id)
+        yield* lifecycle.settleBackground({
+          sessionID: child.id,
+          generation: second.generation,
+          state: "completed",
+          text: "late after cancel",
+          ops,
+        })
+        yield* control.release(chat.id)
+        yield* lifecycle.reconcile
+
+        row = yield* database.db
+          .select({ metadata: SessionTable.metadata })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, child.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(row?.metadata?.lifecycleReconciler).toMatchObject({
+          generation: second.generation,
+          state: "cancelled",
+          notification: "none",
+        })
+      }).pipe(Effect.provide(Layer.fresh(LifecycleReconciler.layer)))
     }),
   )
 

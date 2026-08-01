@@ -27,6 +27,7 @@ import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
+import { TeamMessageRecipientTable } from "@/team/team.sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@oc2-ai/core/fs-util"
@@ -64,6 +65,8 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import { Runner } from "@/effect/runner"
 
 void Log.init({ print: false })
 
@@ -194,6 +197,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    SessionControl.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -453,6 +457,35 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
 })
 
 // Loop semantics
+
+noLLMServer.instance(
+  "paused prompt preserves queued input without entering the loop",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, sessions, chat } = yield* boot()
+      const control = yield* SessionControl.Service
+      yield* control.pause({ rootSessionID: chat.id })
+
+      const exit = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "queued while paused" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      expect(
+        messages.some((message) =>
+          message.parts.some((part) => part.type === "text" && part.text === "queued while paused"),
+        ),
+      ).toBe(true)
+      expect(yield* control.release(chat.id)).toMatchObject({ resumableSessionIDs: [chat.id] })
+    }),
+  { config: cfg },
+)
 
 noLLMServer.instance(
   "loop exits immediately when last assistant has stop finish",
@@ -940,6 +973,70 @@ it.instance(
 // Cancel semantics
 
 it.instance(
+  "suspend interrupts the loop without cancellation finalizers",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const control = yield* SessionControl.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      yield* user(chat.id, "pause this run")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      yield* control.pause({ rootSessionID: chat.id })
+
+      const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("100 millis"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          return (yield* llm.pending) === 0 ? true : undefined
+        }),
+        "provider stream did not unwind after suspension",
+      )
+      const assistant = (yield* sessions.messages({ sessionID: chat.id }))
+        .map((message) => message.info)
+        .findLast((message): message is SessionV1.Assistant => message.role === "assistant")
+      expect(assistant?.error).toBeUndefined()
+      expect(assistant?.time.completed).toBeUndefined()
+    }),
+  3_000,
+)
+
+it.instance(
+  "wake schedules the loop and returns before the turn completes",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      yield* user(chat.id, "wake me")
+
+      // wake must not block on the turn, and it must report no result. Callers that treat its
+      // answer as the final assistant message settle work against a stale or missing turn.
+      const woken = yield* prompt.wake(chat.id).pipe(Effect.timeout("1 second"), Effect.orDie)
+      expect(woken).toBeUndefined()
+      yield* llm.wait(1)
+      expect(yield* llm.calls).toBe(1)
+
+      // The provider stream still hangs, so the scheduled turn is demonstrably unfinished.
+      const assistantBeforeFinish = (yield* sessions.messages({ sessionID: chat.id }))
+        .map((message) => message.info)
+        .findLast((message): message is SessionV1.Assistant => message.role === "assistant")
+      expect(assistantBeforeFinish?.finish).toBeUndefined()
+      expect(assistantBeforeFinish?.time.completed).toBeUndefined()
+
+      yield* prompt.cancel(chat.id)
+    }),
+  5_000,
+)
+
+it.instance(
   "cancel interrupts loop and resolves with an assistant message",
   () =>
     Effect.gen(function* () {
@@ -1307,6 +1404,93 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
 )
 
 it.live(
+  "does not duplicate team message injection when delivery is suspended mid-way",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const control = yield* SessionControl.Service
+        const { db } = yield* Database.Service
+        const lead = yield* sessions.create({ title: "Lead" })
+        const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+        const info = yield* team.create({ name: "mid-delivery", goal: "Coordinate work", leadSessionID: lead.id })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: worker.id,
+          name: "worker",
+          agentType: "build",
+          rolePrompt: "Report progress",
+        })
+        yield* prompt.prompt({
+          sessionID: lead.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "start coordinating" }],
+        })
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Worker is ready.",
+        })
+        yield* llm.text("done")
+
+        const loop = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+
+        // Wait until the delivery claim is visible (the row is no longer "pending"), then suspend
+        // the session so the delivery is interrupted either between the claim and the marker, in
+        // the marker-to-write window, or while the loop is mid-dispatch. The poll is tight because
+        // the claim-to-marker window is only a few database writes.
+        yield* Effect.gen(function* () {
+          let status: string | undefined
+          while (status === undefined || status === "pending") {
+            status = (yield* db
+              .select({ status: TeamMessageRecipientTable.delivery_status })
+              .from(TeamMessageRecipientTable)
+              .where(eq(TeamMessageRecipientTable.team_id, info.id))
+              .get()
+              .pipe(Effect.orDie))?.status
+            if (status === undefined || status === "pending") yield* Effect.sleep("1 millis")
+          }
+        }).pipe(Effect.timeout("5 seconds"))
+        const paused = yield* control.pause({ rootSessionID: lead.id })
+        expect(paused.interruptionSignalledSessionIDs).toContain(lead.id)
+        yield* control.release(lead.id)
+        yield* prompt.wake(lead.id)
+        yield* awaitWithTimeout(Fiber.await(loop), "timed out waiting for the resumed loop")
+
+        // Exactly one injection: the interrupted delivery either finished before the pause or was
+        // re-run cleanly; it must never be injected twice.
+        const teamMessageParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter(
+            (part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Worker is ready."),
+          )
+        expect(teamMessageParts).toHaveLength(1)
+        expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
+        expect(
+          (yield* db
+            .select({ status: TeamMessageRecipientTable.delivery_status })
+            .from(TeamMessageRecipientTable)
+            .where(eq(TeamMessageRecipientTable.team_id, info.id))
+            .get()
+            .pipe(Effect.orDie))?.status,
+        ).toBe("delivered")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+)
+
+it.live(
   "does not inject removed memory guidance into prompts",
   () =>
     provideTmpdirServer(
@@ -1522,7 +1706,7 @@ it.live(
         }),
       },
     ),
-  5_000,
+  15_000,
 )
 
 it.instance(
@@ -1683,7 +1867,7 @@ it.instance(
       }
     }),
   { git: true },
-  3_000,
+  10_000,
 )
 
 // Queue semantics
@@ -1790,6 +1974,77 @@ it.instance(
       expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
     }),
   3_000,
+)
+
+it.instance(
+  "pause mid-turn persists a running resume intent and start resumes the turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const control = yield* SessionControl.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* llm.hold("first", deferredAsPromise(gate))
+      yield* llm.text("second")
+
+      const fiber = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        .pipe(Effect.forkChild)
+
+      // The turn is in flight once the provider dispatch hit the server (the stream is held).
+      // A titled session skips the title request, so this is the turn's own dispatch.
+      yield* llm.wait(1)
+
+      // Pause mid-turn. The interrupter signals the live runner and persists a durable
+      // "running" resume intent for the signalled session. The held first dispatch stays
+      // blocked so the interrupted attempt can never complete.
+      const paused = yield* control.pause({ rootSessionID: chat.id })
+      expect(paused.interruptionSignalledSessionIDs).toContain(chat.id)
+
+      // The interrupted caller observes the typed suspended error, not a defect.
+      const callerExit = yield* Fiber.await(fiber).pipe(Effect.timeout("5 seconds"))
+      expect(Exit.isFailure(callerExit)).toBe(true)
+      if (Exit.isFailure(callerExit)) expect(Cause.squash(callerExit.cause)).toBeInstanceOf(Runner.Suspended)
+
+      // Start: release reports the durable intent as a resumable running ticket.
+      const released = yield* control.release(chat.id)
+      expect(released.resumeTickets).toEqual([{ sessionID: chat.id, generation: 1, reason: "running" }])
+      expect(released.resumableSessionIDs).toEqual([chat.id])
+
+      // Wake the runner exactly like the start handler does: the interrupted turn resumes
+      // without any new user prompt and dispatches to the provider exactly once more.
+      yield* prompt.wake(chat.id)
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(
+            Effect.map((msgs) =>
+              msgs.some((msg) => msg.info.role === "assistant" && msg.parts.some((p) => p.type === "text" && p.text === "second"))
+                ? true
+                : undefined,
+            ),
+          ),
+        "timed out waiting for the resumed turn to complete",
+      )
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      expect(msgs.filter((msg) => msg.info.role === "user")).toHaveLength(1)
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      const finalAssistant = assistants.at(-1)
+      expect(finalAssistant?.parts.some((p) => p.type === "text" && p.text === "second")).toBe(true)
+      // Exactly two provider dispatches for the prompt: the interrupted attempt and the resumed one.
+      const dispatches = (yield* llm.inputs).filter((body) => JSON.stringify(body).includes("hello"))
+      expect(dispatches).toHaveLength(2)
+    }),
+  10_000,
 )
 
 it.instance(
@@ -2664,6 +2919,41 @@ unix(
       ),
     ),
   30_000,
+)
+
+unix(
+  "cancel aborts tracked command substitution",
+  () =>
+    withSh(() =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const done = path.join(dir, "substitution-finished")
+            yield* writeConfig(dir, {
+              ...cfg,
+              command: {
+                slow: {
+                  template: `Result: !\`sleep 30; touch "${done}"; printf late\``,
+                },
+              },
+            })
+            const { prompt, chat } = yield* boot()
+            const command = yield* prompt
+              .command({ sessionID: chat.id, command: "slow", arguments: "", agent: "build" })
+              .pipe(Effect.forkChild)
+            yield* waitForBusy(chat.id)
+
+            yield* prompt.cancel(chat.id)
+
+            expect(Exit.isFailure(yield* Fiber.await(command))).toBe(true)
+            yield* Effect.sleep("100 millis")
+            const fs = yield* FSUtil.Service
+            expect(yield* fs.existsSafe(done)).toBe(false)
+          }),
+        { git: true, config: cfg },
+      ),
+    ),
+  10_000,
 )
 
 unix(

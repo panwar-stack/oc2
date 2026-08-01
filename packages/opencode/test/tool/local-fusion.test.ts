@@ -91,6 +91,7 @@ function promptOps(): TaskPromptOps {
             : reply(input, "branch output"),
       ),
     wake: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
+    run: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
   }
 }
 

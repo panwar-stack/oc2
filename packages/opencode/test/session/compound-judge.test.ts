@@ -89,6 +89,7 @@ function stubOps(input: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
         return reply(prompt, input.text)
       }),
     wake: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
+    run: (sessionID) => Effect.succeed(reply({ sessionID, parts: [] }, "done")),
   }
 }
 

@@ -204,6 +204,52 @@ describe("Runner", () => {
   )
 
   it.live(
+    "suspend signals callers without waiting for interruption finalizers",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const workStarted = yield* Deferred.make<void>()
+      const finalizerStarted = yield* Deferred.make<void>()
+      const releaseFinalizer = yield* Deferred.make<void>()
+      const interruptedFallbacks = yield* Ref.make(0)
+      yield* Effect.gen(function* () {
+        const runner = Runner.make<string>(s, {
+          onInterrupt: Ref.updateAndGet(interruptedFallbacks, (count) => count + 1).pipe(Effect.as("cancelled")),
+        })
+        const work = Deferred.succeed(workStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(
+            Deferred.succeed(finalizerStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFinalizer))),
+          ),
+          Effect.as("never"),
+        )
+        const caller = yield* runner.ensureRunning(work).pipe(Effect.forkChild)
+        yield* Deferred.await(workStarted)
+
+        yield* runner.suspend.pipe(Effect.timeout("100 millis"))
+
+        const exit = yield* Fiber.await(caller).pipe(Effect.timeout("100 millis"))
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+        expect(yield* Ref.get(interruptedFallbacks)).toBe(0)
+        expect(runner.state._tag).toBe("SuspendingRun")
+        expect(runner.busy).toBe(true)
+
+        const replacementStarted = yield* Deferred.make<void>()
+        const replacement = yield* runner
+          .ensureRunning(Deferred.succeed(replacementStarted, undefined).pipe(Effect.as("replacement")))
+          .pipe(Effect.forkChild)
+        yield* waitForState(runner, "SuspendingRunThenRun")
+        expect(yield* Deferred.isDone(replacementStarted)).toBe(false)
+
+        yield* Deferred.await(finalizerStarted).pipe(Effect.timeout("100 millis"))
+        yield* Deferred.succeed(releaseFinalizer, undefined)
+        expect(yield* Fiber.join(replacement).pipe(Effect.timeout("100 millis"))).toBe("replacement")
+        expect(runner.busy).toBe(false)
+      }).pipe(Effect.ensuring(Deferred.succeed(releaseFinalizer, undefined).pipe(Effect.ignore)))
+    }),
+  )
+
+  it.live(
     "cancel does not deadlock when replacement work starts before interrupted run exits",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
@@ -328,6 +374,66 @@ describe("Runner", () => {
       expect(Exit.isFailure(shellExit)).toBe(true)
 
       yield* Deferred.succeed(gate, undefined).pipe(Effect.ignore)
+    }),
+  )
+
+  it.live(
+    "suspend signals a shell distinctly from cancel",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const interruptedFallbacks = yield* Ref.make(0)
+      const runner = Runner.make<string>(s, {
+        onInterrupt: Ref.updateAndGet(interruptedFallbacks, (count) => count + 1).pipe(Effect.as("cancelled")),
+      })
+      const shell = yield* runner.startShell(Effect.never.pipe(Effect.as("never"))).pipe(Effect.forkChild)
+      yield* waitForState(runner, "Shell")
+
+      yield* runner.suspend.pipe(Effect.timeout("100 millis"))
+
+      const exit = yield* Fiber.await(shell).pipe(Effect.timeout("100 millis"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+      expect(yield* Ref.get(interruptedFallbacks)).toBe(0)
+      yield* waitForState(runner, "Idle")
+      expect(runner.busy).toBe(false)
+    }),
+  )
+
+  it.live(
+    "explicit cancel takes terminal ownership from an in-flight suspension",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const finalizerStarted = yield* Deferred.make<void>()
+      const inspectFinalizer = yield* Deferred.make<void>()
+      const observedSuspending = yield* Deferred.make<boolean>()
+      const runner = Runner.make<string>(s)
+      const caller = yield* runner
+        .ensureRunning(
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(finalizerStarted, undefined)
+                yield* Deferred.await(inspectFinalizer)
+                yield* Deferred.succeed(observedSuspending, yield* Runner.isSuspending)
+              }),
+            ),
+            Effect.as("never"),
+          ),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* runner.suspend
+      yield* Deferred.await(finalizerStarted)
+      const cancel = yield* runner.cancel.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(inspectFinalizer, undefined)
+
+      expect(yield* Deferred.await(observedSuspending)).toBe(false)
+      yield* Fiber.join(cancel)
+      expect(Exit.isFailure(yield* Fiber.await(caller))).toBe(true)
+      expect(runner.busy).toBe(false)
     }),
   )
 

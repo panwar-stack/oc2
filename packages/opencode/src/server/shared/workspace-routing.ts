@@ -25,7 +25,13 @@ export function getWorkspaceRouteSessionID(url: URL) {
     url.pathname.match(/^\/experimental\/session\/([^/]+)\/background$/)?.[1]
   if (!id) return null
 
-  return SessionID.make(id)
+  try {
+    return SessionID.make(id)
+  } catch {
+    // A malformed session ID is not a routable workspace target; the endpoint's
+    // own param schema reports the invalid value as a 400 instead of crashing.
+    return null
+  }
 }
 
 export function workspaceProxyURL(target: string | URL, requestURL: URL) {

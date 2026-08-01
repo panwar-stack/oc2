@@ -16,6 +16,7 @@ import { SessionExecution } from "@oc2-ai/core/session/execution"
 import { SessionInput } from "@oc2-ai/core/session/input"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
 import { SessionStore } from "@oc2-ai/core/session/store"
+import { SessionControl } from "@oc2-ai/core/session/control"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -39,6 +40,7 @@ const execution = Layer.succeed(
         interruptCalls.push(sessionID)
         interruptSeqs.push(seq)
       }),
+    suspend: () => Effect.void,
     wake: (sessionID, seq) =>
       Effect.sync(() => {
         wakeCalls.push(sessionID)
@@ -46,6 +48,7 @@ const execution = Layer.succeed(
       }),
   }),
 )
+const control = SessionControl.layer.pipe(Layer.provide(events), Layer.provide(database))
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -53,7 +56,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
 )
-const it = testEffect(Layer.mergeAll(database, events, projector, store, execution, sessions))
+const it = testEffect(Layer.mergeAll(database, events, projector, store, control, execution, sessions))
 const sessionID = SessionV2.ID.make("ses_prompt_test")
 const messageID = SessionMessage.ID.create()
 
@@ -603,6 +606,25 @@ describe("SessionV2.prompt", () => {
       expect(executionCalls).toEqual([])
       expect(wakeCalls).toEqual([])
       expect(wakeSeqs).toEqual([])
+    }),
+  )
+
+  it.effect("records resume intent without waking execution while paused", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const control = yield* SessionControl.Service
+      yield* control.pause({ rootSessionID: sessionID })
+      wakeCalls.length = 0
+
+      const message = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Queue while paused" }) })
+
+      expect(yield* admitted(message.id)).toMatchObject({ sessionID, prompt: { text: "Queue while paused" } })
+      expect(wakeCalls).toEqual([])
+      expect(yield* control.runnableResumeTickets([sessionID])).toEqual([])
+      expect(yield* control.release(sessionID)).toMatchObject({
+        resumeTickets: [{ sessionID, reason: "queued-input", generation: expect.any(Number) }],
+      })
     }),
   )
 })

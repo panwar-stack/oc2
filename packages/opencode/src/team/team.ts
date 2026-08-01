@@ -5,7 +5,9 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Context, Effect, Layer, Schema, Option } from "effect"
-import { eq, and, asc, desc, sql } from "drizzle-orm"
+import { eq, and, asc, desc, inArray, isNull, notInArray, sql } from "drizzle-orm"
+import { Runner } from "@/effect/runner"
+import { SessionPauseBlockerTable, SessionPauseCascadeTable } from "@oc2-ai/core/session/sql"
 import {
   TeamTable,
   TeamMemberTable,
@@ -109,7 +111,11 @@ export interface Interface {
   sendMessage: (input: { teamID: string; sender: string; recipients: string[]; body: string }) => Effect.Effect<Message>
   getMessages: (teamID: string) => Effect.Effect<Message[]>
   getPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[]>
-  claimPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[]>
+  claimPendingMessages: (
+    recipientSession: string,
+    teamID: string,
+  ) => Effect.Effect<Message[], Runner.Suspended>
+  releaseClaimedMessages: (messageIDs: readonly string[], recipientSession: string) => Effect.Effect<void>
   markMessageDelivered: (messageID: string, recipientSession?: string) => Effect.Effect<void>
   createUsageEvent: (input: {
     teamID: string
@@ -840,6 +846,21 @@ export const layer = Layer.effect(
         .transaction(
           (tx) =>
             Effect.gen(function* () {
+              const blocker = yield* tx
+                .select({ cascadeID: SessionPauseCascadeTable.id })
+                .from(SessionPauseBlockerTable)
+                .innerJoin(
+                  SessionPauseCascadeTable,
+                  eq(SessionPauseCascadeTable.id, SessionPauseBlockerTable.cascade_id),
+                )
+                .where(
+                  and(
+                    eq(SessionPauseBlockerTable.session_id, SessionID.make(recipientSession)),
+                    isNull(SessionPauseCascadeTable.time_released),
+                  ),
+                )
+                .get()
+              if (blocker) return yield* new Runner.Suspended()
               const pending = yield* tx
                 .select({
                   recipient_id: TeamMessageRecipientTable.id,
@@ -867,7 +888,7 @@ export const layer = Layer.effect(
                 (row) =>
                   tx
                     .update(TeamMessageRecipientTable)
-                    .set({ delivery_status: "delivered", time_updated: now })
+                    .set({ delivery_status: "read", time_updated: now })
                     .where(
                       and(
                         eq(TeamMessageRecipientTable.id, row.recipient_id),
@@ -877,34 +898,15 @@ export const layer = Layer.effect(
                     .run(),
                 { discard: true },
               )
-              yield* Effect.forEach(
-                [...new Set(pending.map((row) => row.id))],
-                (messageID) =>
-                  Effect.gen(function* () {
-                    const remaining = yield* tx
-                      .select()
-                      .from(TeamMessageRecipientTable)
-                      .where(
-                        and(
-                          eq(TeamMessageRecipientTable.message_id, messageID),
-                          eq(TeamMessageRecipientTable.delivery_status, "pending"),
-                        ),
-                      )
-                      .all()
-                    if (remaining.length > 0) return
-                    yield* tx
-                      .update(TeamMessageTable)
-                      .set({ delivery_status: "delivered", time_updated: now })
-                      .where(eq(TeamMessageTable.id, messageID))
-                      .run()
-                  }),
-                { discard: true },
-              )
               return pending
             }),
           { behavior: "immediate" },
         )
-        .pipe(Effect.orDie)
+        .pipe(
+          Effect.catch((error) =>
+            error instanceof Runner.Suspended ? Effect.fail(error) : Effect.die(error),
+          ),
+        )
       return rows.map((row) => ({
         id: row.id,
         team_id: row.team_id,
@@ -915,6 +917,25 @@ export const layer = Layer.effect(
         time_created: row.time_created,
         time_updated: row.time_updated,
       }))
+    })
+
+    const releaseClaimedMessages = Effect.fn("Team.releaseClaimedMessages")(function* (
+      messageIDs: readonly string[],
+      recipientSession: string,
+    ) {
+      if (messageIDs.length === 0) return
+      yield* db
+        .update(TeamMessageRecipientTable)
+        .set({ delivery_status: "pending", time_updated: Date.now() })
+        .where(
+          and(
+            inArray(TeamMessageRecipientTable.message_id, messageIDs),
+            eq(TeamMessageRecipientTable.recipient, recipientSession),
+            eq(TeamMessageRecipientTable.delivery_status, "read"),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
     })
 
     const markMessageDelivered = Effect.fn("Team.markMessageDelivered")(function* (
@@ -941,7 +962,7 @@ export const layer = Layer.effect(
         .where(
           and(
             eq(TeamMessageRecipientTable.message_id, messageID),
-            eq(TeamMessageRecipientTable.delivery_status, "pending"),
+            notInArray(TeamMessageRecipientTable.delivery_status, ["delivered"]),
           ),
         )
         .all()
@@ -1026,6 +1047,7 @@ export const layer = Layer.effect(
       getMessages,
       getPendingMessages,
       claimPendingMessages,
+      releaseClaimedMessages,
       markMessageDelivered,
       createUsageEvent,
       getUsageEvents,

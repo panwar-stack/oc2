@@ -9,10 +9,11 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionSchema } from "./schema"
 import { SessionTable } from "./sql"
 
-export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.Info {
+export function fromRow(row: typeof SessionTable.$inferSelect, paused = false): SessionSchema.Info {
   return SessionSchema.Info.make({
     id: SessionSchema.ID.make(row.id),
     projectID: ProjectV2.ID.make(row.project_id),
+    paused,
     title: row.title,
     parentID: row.parent_id ? SessionSchema.ID.make(row.parent_id) : undefined,
     agent: row.agent ? AgentV2.ID.make(row.agent) : undefined,

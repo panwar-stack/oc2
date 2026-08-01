@@ -33,11 +33,41 @@ import {
 import { color, printHeader, printResults } from "./report"
 import { coverageResult, parseOptions, routeKey, routeKeys, selectedScenarios } from "./routing"
 import { runScenario } from "./runner"
-import { disposeApps } from "./backend"
+import { callPath, disposeApps } from "./backend"
 import { runtime } from "./runtime"
 import { type Scenario } from "./types"
 
 void (await import("@oc2-ai/core/util/log")).init({ print: false })
+
+type ControlResult = {
+  rootSessionID: string
+  cascadeID?: string
+  affectedSessionIDs: string[]
+  interruptionSignalledSessionIDs: string[]
+  stillBlockedSessionIDs: string[]
+  scheduledSessionIDs: string[]
+  unchanged: boolean
+}
+
+function controlResult(body: unknown): ControlResult {
+  object(body)
+  array(body.affectedSessionIDs)
+  array(body.interruptionSignalledSessionIDs)
+  array(body.stillBlockedSessionIDs)
+  array(body.scheduledSessionIDs)
+  boolean(body.unchanged)
+  return body as unknown as ControlResult
+}
+
+/** Calls a session control route directly so a scenario can prove overlap and idempotency. */
+function control(action: "pause" | "start", sessionID: string, headers: Record<string, string>) {
+  return callPath({ method: "POST", path: `/session/${sessionID}/${action}`, headers }).pipe(
+    Effect.map((result) => {
+      check(result.status === 200, `${action} ${sessionID} expected 200, got ${result.status}: ${result.text}`)
+      return controlResult(result.body)
+    }),
+  )
+}
 
 function cursor(input: Record<string, unknown>) {
   return Buffer.from(JSON.stringify(input)).toString("base64url")
@@ -1189,6 +1219,424 @@ const scenarios: Scenario[] = [
     .json(200, (body) => {
       check(body === true, "missing session abort should remain a no-op success")
     }),
+  http.protected
+    .post("/session/{sessionID}/pause", "session.pause")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const lead = yield* ctx.session({ title: "Pause lead" })
+        const child = yield* ctx.session({ title: "Pause child", parentID: lead.id })
+        const grandchild = yield* ctx.session({ title: "Pause grandchild", parentID: child.id })
+        return { lead, child, grandchild }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/pause", { sessionID: ctx.state.lead.id }),
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        const result = controlResult(body)
+        const subtree = [ctx.state.lead.id, ctx.state.child.id, ctx.state.grandchild.id]
+        check(result.rootSessionID === ctx.state.lead.id, "pause should report the requested root")
+        check(result.unchanged === false, "first pause of a root should not be unchanged")
+        check(typeof result.cascadeID === "string", "a new pause should report its cascade")
+        // Subtree scope: the durable closure covers every descendant, not just direct children.
+        for (const id of subtree) {
+          check(result.affectedSessionIDs.includes(id), `pause should cover ${id}`)
+          check(result.stillBlockedSessionIDs.includes(id), `pause should leave ${id} blocked`)
+          check((yield* ctx.pauseState(id)).paused, `${id} should be durably paused`)
+        }
+        check(result.scheduledSessionIDs.length === 0, "pause must not schedule work")
+        // Idempotency: a second pause of the same root is a no-op.
+        const again = yield* control("pause", ctx.state.lead.id, ctx.headers())
+        check(again.unchanged === true, "repeated pause should report unchanged")
+        check(again.cascadeID === result.cascadeID, "repeated pause should keep the same cascade")
+
+        // Overlap: a child pause stacks a second blocker on the child subtree.
+        const childPause = yield* control("pause", ctx.state.child.id, ctx.headers())
+        check(childPause.unchanged === false, "child pause owns its own cascade")
+        check(childPause.cascadeID !== result.cascadeID, "child pause must not reuse the lead cascade")
+        check(!childPause.affectedSessionIDs.includes(ctx.state.lead.id), "child pause must not cover its parent")
+
+        // A child start releases only the child cascade; the ancestor pause still blocks it.
+        const childStart = yield* control("start", ctx.state.child.id, ctx.headers())
+        check(childStart.unchanged === false, "child start should release the child cascade")
+        check(
+          childStart.stillBlockedSessionIDs.includes(ctx.state.child.id),
+          "child start must not clear an ancestor pause",
+        )
+        check((yield* ctx.pauseState(ctx.state.child.id)).paused, "child stays paused under the lead cascade")
+
+        const leadStart = yield* control("start", ctx.state.lead.id, ctx.headers())
+        check(leadStart.unchanged === false, "lead start should release the lead cascade")
+        for (const id of subtree) check(!(yield* ctx.pauseState(id)).paused, `${id} should be running again`)
+        const startAgain = yield* control("start", ctx.state.lead.id, ctx.headers())
+        check(startAgain.unchanged === true, "repeated start should report unchanged")
+        check(startAgain.scheduledSessionIDs.length === 0, "repeated start must not schedule a second time")
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/pause", "session.pause.missing")
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/pause", { sessionID: "ses_httpapi_missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(404, (body) => {
+      object(body)
+      check(body.name === "NotFoundError", "unknown session should use the typed not found response")
+    }),
+  http.protected
+    .post("/session/{sessionID}/pause", "session.pause.malformed")
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/pause", { sessionID: "not-a-session-id" }),
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/session/{sessionID}/start", "session.start")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const lead = yield* ctx.session({ title: "Start lead" })
+        const child = yield* ctx.session({ title: "Start child", parentID: lead.id })
+        const idle = yield* ctx.session({ title: "Start idle child", parentID: lead.id })
+        // Only the child claims durable resume intent, so only the child may be scheduled.
+        yield* ctx.resumeIntent(child.id, "queued-input")
+        yield* control("pause", lead.id, ctx.headers())
+        return { lead, child, idle }
+      }),
+    )
+    .at((ctx) => ({
+      path: `${route("/session/{sessionID}/start", { sessionID: ctx.state.lead.id })}?directory=${encodeURIComponent(
+        ctx.directory ?? "",
+      )}`,
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        const result = controlResult(body)
+        check(result.unchanged === false, "start should release the active cascade")
+        check(result.interruptionSignalledSessionIDs.length === 0, "start must not signal interruption")
+        check(result.stillBlockedSessionIDs.length === 0, "no ancestor pause remains")
+        check(result.scheduledSessionIDs.includes(ctx.state.child.id), "resume intent should be scheduled")
+        check(!result.scheduledSessionIDs.includes(ctx.state.idle.id), "an idle session must not be resumed")
+        for (const id of [ctx.state.lead.id, ctx.state.child.id]) {
+          check(!(yield* ctx.pauseState(id)).paused, `${id} should no longer be paused`)
+        }
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/start", "session.start.ancestor-blocked-child")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const lead = yield* ctx.session({ title: "Start ancestor-blocked child lead" })
+        // The child inherits the lead cascade blocker at creation and owns no cascade itself.
+        const child = yield* ctx.session({ title: "Ancestor-blocked child", parentID: lead.id })
+        yield* control("pause", lead.id, ctx.headers())
+        return { lead, child }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/start", { sessionID: ctx.state.child.id }),
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        const result = controlResult(body)
+        check(result.unchanged === true, "child without a cascade should report an unchanged start")
+        check(
+          result.stillBlockedSessionIDs.includes(ctx.state.child.id),
+          "unchanged start must still report the root when an ancestor pause keeps it blocked",
+        )
+        check((yield* ctx.pauseState(ctx.state.child.id)).paused, "child stays paused under the lead cascade")
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/start", "session.start.deleted")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Start deleted" })
+        yield* control("pause", session.id, ctx.headers())
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/start", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        controlResult(body)
+        // Deletion stays terminal: a later start cannot resurrect the session.
+        const removed = yield* callPath({
+          method: "DELETE",
+          path: route("/session/{sessionID}", { sessionID: ctx.state.id }),
+          headers: ctx.headers(),
+        })
+        check(removed.status === 200, `delete expected 200, got ${removed.status}`)
+        const after = yield* callPath({
+          method: "POST",
+          path: route("/session/{sessionID}/start", { sessionID: ctx.state.id }),
+          headers: ctx.headers(),
+        })
+        check(after.status === 404, `start of a deleted session expected 404, got ${after.status}`)
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/start", "session.start.deleted-child")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const lead = yield* ctx.session({ title: "Start lead with deleted child" })
+        const child = yield* ctx.session({ title: "Start deleted child", parentID: lead.id })
+        yield* ctx.resumeIntent(child.id, "queued-input")
+        yield* control("pause", lead.id, ctx.headers())
+        // Deleting a paused descendant must not resurrect it on a later start.
+        const removed = yield* callPath({
+          method: "DELETE",
+          path: route("/session/{sessionID}", { sessionID: child.id }),
+          headers: ctx.headers(),
+        })
+        check(removed.status === 200, `delete of paused child expected 200, got ${removed.status}`)
+        return { lead, child }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/start", { sessionID: ctx.state.lead.id }),
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        const result = controlResult(body)
+        check(result.unchanged === false, "start should release the active cascade")
+        check(
+          !result.scheduledSessionIDs.includes(ctx.state.child.id),
+          "a deleted descendant must never be scheduled or resurrected",
+        )
+        check(result.scheduledSessionIDs.length === 0, "the only resume intent belonged to the deleted child")
+        check((yield* ctx.sessionGet(ctx.state.child.id)) === undefined, "the deleted child must stay deleted")
+        check(!(yield* ctx.pauseState(ctx.state.lead.id)).paused, "the lead should no longer be paused")
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/pause", "session.pause.concurrent-start")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const lead = yield* ctx.session({ title: "Concurrent pause lead" })
+        const child = yield* ctx.session({ title: "Concurrent pause child", parentID: lead.id })
+        yield* ctx.resumeIntent(child.id, "queued-input")
+        yield* control("pause", lead.id, ctx.headers())
+        return { lead, child }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/pause", { sessionID: ctx.state.lead.id }),
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        // The seed already owns an active cascade, so the scripted pause observes it.
+        const first = controlResult(body)
+        check(first.unchanged === true, "pause of an already paused root should report unchanged")
+        // A pause racing a start must never double-schedule: the start releases the active cascade
+        // and schedules the durable intent exactly once; the pause either observes the still-active
+        // cascade (no-op) or stacks a fresh cascade after the release (never schedules).
+        const [race, started] = yield* Effect.all(
+          [control("pause", ctx.state.lead.id, ctx.headers()), control("start", ctx.state.lead.id, ctx.headers())],
+          { concurrency: 2 },
+        )
+        check(race.scheduledSessionIDs.length === 0, "pause must never schedule work, even racing a start")
+        check(started.unchanged === false, "start racing a pause should still release the active cascade")
+        check(
+          started.scheduledSessionIDs.length === 1 && started.scheduledSessionIDs[0] === ctx.state.child.id,
+          "the single eligible resume ticket should be scheduled exactly once",
+        )
+        const union = new Set([...race.scheduledSessionIDs, ...started.scheduledSessionIDs])
+        check(union.size === 1 && union.has(ctx.state.child.id), "scheduled sessions must dedupe to the one eligible ticket")
+        // Whichever interleaving won, the durable pause state must match the observed responses.
+        const childState = yield* ctx.pauseState(ctx.state.child.id)
+        check(
+          race.unchanged === false ? childState.paused : !childState.paused,
+          "durable pause state should match the observed interleaving",
+        )
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/pause", "session.pause.live")
+    .withLlm()
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Pause live run" })
+        // Hold the provider stream open so the run stays live when pause lands.
+        yield* ctx.llmHang()
+        const started = yield* callPath({
+          method: "POST",
+          path: route("/session/{sessionID}/prompt_async", { sessionID: session.id }),
+          headers: ctx.headers(),
+          body: {
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text: "live" }],
+          },
+        })
+        check(started.status === 204, `prompt_async expected 204, got ${started.status}`)
+        // Wait for a provider request to be in flight so the runner is provably busy.
+        yield* ctx.llmWait(1)
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/pause", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        const result = controlResult(body)
+        check(result.unchanged === false, "pause of a live session should commit a new cascade")
+        check(
+          result.interruptionSignalledSessionIDs.includes(ctx.state.id),
+          "pause must report the session that has live work as interrupted",
+        )
+        check(result.stillBlockedSessionIDs.includes(ctx.state.id), "the live session should remain durably paused")
+        check(result.scheduledSessionIDs.length === 0, "pause must not schedule work")
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/init", "session.init.paused")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Paused init" })
+        const message = yield* ctx.message(session.id, { text: "initialize" })
+        yield* control("pause", session.id, ctx.headers())
+        return { session, message }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/init", { sessionID: ctx.state.session.id }),
+      headers: ctx.headers(),
+      body: { providerID: "test", modelID: "test-model", messageID: ctx.state.message.info.id },
+    }))
+    .jsonEffect(409, (body, ctx) =>
+      Effect.gen(function* () {
+        object(body)
+        check(body._tag === "SessionPausedError", "paused init should fail with the typed SessionPausedError")
+        check((yield* ctx.sessionGet(ctx.state.session.id)) !== undefined, "paused init must not delete the session")
+        const messages = yield* ctx.messages(ctx.state.session.id)
+        check(messages.length === 1, "paused init must not execute or add messages")
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/summarize", "session.summarize.paused")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Paused summarize" })
+        yield* ctx.message(session.id, { text: "summarize this work" })
+        yield* control("pause", session.id, ctx.headers())
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/summarize", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { providerID: "test", modelID: "test-model", auto: false },
+    }))
+    .jsonEffect(409, (body, ctx) =>
+      Effect.gen(function* () {
+        object(body)
+        check(body._tag === "SessionPausedError", "paused summarize should fail with the typed SessionPausedError")
+        const messages = yield* ctx.messages(ctx.state.id)
+        check(messages.length === 1, "paused summarize must not run or add a summary message")
+        check(
+          !messages.some((message) => message.info.role === "assistant" && message.info.summary === true),
+          "paused summarize must not create a summary assistant message",
+        )
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/message", "session.prompt.paused")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Paused prompt" })
+        yield* control("pause", session.id, ctx.headers())
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/message", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {
+        agent: "build",
+        model: { providerID: "test", modelID: "test-model" },
+        parts: [{ type: "text", text: "paused prompt" }],
+      },
+    }))
+    .jsonEffect(409, (body, ctx) =>
+      Effect.gen(function* () {
+        object(body)
+        check(body._tag === "SessionPausedError", "paused prompt should fail with the typed SessionPausedError")
+        const messages = yield* ctx.messages(ctx.state.id)
+        check(messages.length === 1, "a paused prompt is admitted durably as one user message")
+        check(messages[0]?.info.role === "user", "the admitted message must be a user message, never executed")
+        check(
+          !messages.some((message) => message.info.role === "assistant"),
+          "a paused prompt must never produce an assistant turn",
+        )
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/command", "session.command.paused")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Paused command" })
+        yield* control("pause", session.id, ctx.headers())
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/command", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { command: "init", arguments: "", model: "test/test-model" },
+    }))
+    .jsonEffect(409, (body, ctx) =>
+      Effect.gen(function* () {
+        object(body)
+        check(body._tag === "SessionPausedError", "paused command should fail with the typed SessionPausedError")
+        const messages = yield* ctx.messages(ctx.state.id)
+        check(messages.length === 0, "paused command must not execute or add messages")
+      }),
+    ),
+  http.protected
+    .post("/session/{sessionID}/shell", "session.shell.paused")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Paused shell" })
+        yield* control("pause", session.id, ctx.headers())
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/shell", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { agent: "build", model: { providerID: "test", modelID: "test-model" }, command: "printf shell-ok" },
+    }))
+    .jsonEffect(409, (body, ctx) =>
+      Effect.gen(function* () {
+        object(body)
+        check(body._tag === "SessionPausedError", "paused shell should fail with the typed SessionPausedError")
+        const messages = yield* ctx.messages(ctx.state.id)
+        check(messages.length === 0, "paused shell must not execute or add messages")
+      }),
+    ),
   http.protected
     .post("/session/{sessionID}/init", "session.init")
     .preserveDatabase()

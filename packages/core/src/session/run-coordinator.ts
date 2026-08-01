@@ -7,6 +7,7 @@ import { SessionSchema } from "./schema"
 import { Log } from "../util/log"
 
 export type Mode = "run" | "wake"
+export type Ownership = { readonly isSuspended: () => boolean }
 const log = Log.create({ service: "session.run-coordinator" })
 
 /** Why one drain generation should run. Explicit runs dominate advisory wakes when demands coalesce. */
@@ -37,6 +38,8 @@ export interface Coordinator<Key, A, E> {
   readonly awaitIdle: (key: Key) => Effect.Effect<void, E>
   /** Interrupts the active ownership chain without automatically draining pending wakes. */
   readonly interrupt: (key: Key, seq?: number) => Effect.Effect<void>
+  /** Stops local ownership after a durable pause without turning it into terminal cancellation. */
+  readonly suspend: (key: Key) => Effect.Effect<void>
 }
 
 /** One Session's process-local execution lane: one active demand and at most one coalesced follow-up. */
@@ -52,7 +55,7 @@ type Entry<A, E> = {
   explicitWaiter?: Deferred.Deferred<A, E>
   interruptSeq?: number
   owner?: Fiber.Fiber<void, never>
-  stopping: boolean
+  stopping?: "interrupt" | "pause"
 }
 
 /** Combines follow-up demand: runs dominate, while wakes retain the newest durable admission sequence. */
@@ -69,7 +72,7 @@ const maxSeq = (left: number | undefined, right: number | undefined) => {
 
 /** Constructs a scoped coordinator. Every in-memory transition is synchronous. */
 export const make = <Key, A, E>(options: {
-  readonly drain: (key: Key, mode: Mode) => Effect.Effect<A, E>
+  readonly drain: (key: Key, mode: Mode, ownership: Ownership) => Effect.Effect<A, E>
   readonly onFailure?: (key: Key, cause: Cause.Cause<E>) => Effect.Effect<void>
   readonly logKey?: (key: Key) => Record<string, unknown>
 }): Effect.Effect<Coordinator<Key, A, E>, never, Scope.Scope> =>
@@ -89,13 +92,16 @@ export const make = <Key, A, E>(options: {
       }),
     )
 
-    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<A, E>, queuedAt = Date.now()): Entry<A, E> => ({
+    const makeEntry = (
+      current: Demand,
+      explicitWaiter?: Deferred.Deferred<A, E>,
+      queuedAt = Date.now(),
+    ): Entry<A, E> => ({
       done: Deferred.makeUnsafe<A, E>(),
       settled: Deferred.makeUnsafe<Exit.Exit<A, E>>(),
       current,
       currentQueuedAt: queuedAt,
       explicitWaiter,
-      stopping: false,
     })
 
     const start = (key: Key, entry: Entry<A, E>, demand: Demand, successor = false) => {
@@ -110,7 +116,9 @@ export const make = <Key, A, E>(options: {
         seq: demand._tag === "wake" ? demand.seq : undefined,
         status: "started",
       })
-      const drain = Effect.suspend(() => options.drain(key, demand._tag))
+      const drain = Effect.suspend(() =>
+        options.drain(key, demand._tag, { isSuspended: () => entry.stopping === "pause" }),
+      )
       // Initial work retains immediate-start behavior but cannot run before ownership is published.
       // Observer-started successors yield once so synchronous drains cannot recurse on the JS stack.
       const owner = fork(
@@ -169,7 +177,8 @@ export const make = <Key, A, E>(options: {
         return
       }
 
-      const successor = entry.pending !== undefined ? makeEntry(entry.pending, entry.explicitWaiter, entry.pendingQueuedAt) : undefined
+      const successor =
+        entry.pending !== undefined ? makeEntry(entry.pending, entry.explicitWaiter, entry.pendingQueuedAt) : undefined
       if (successor === undefined) active.delete(key)
       else active.set(key, successor)
       if (successor !== undefined) start(key, successor, successor.current, true)
@@ -250,13 +259,26 @@ export const make = <Key, A, E>(options: {
           suppressPendingAtOrBefore(key, entry, seq)
           return Fiber.interrupt(entry.owner)
         }
-        entry.stopping = true
+        entry.stopping = "interrupt"
         entry.interruptSeq = seq
         suppressPendingAtOrBefore(key, entry, seq)
         return Fiber.interrupt(entry.owner)
       })
 
-    return { run, wake, awaitIdle, interrupt }
+    const suspend = (key: Key): Effect.Effect<void> =>
+      Effect.suspend(() => {
+        const entry = active.get(key)
+        if (entry?.owner === undefined) return Effect.void
+        entry.stopping = "pause"
+        entry.interruptSeq = undefined
+        entry.pending = undefined
+        entry.pendingQueuedAt = undefined
+        log.debug("drain.suspended", { ...logFields(key), status: "paused" })
+        fork(Fiber.interrupt(entry.owner).pipe(Effect.asVoid))
+        return Effect.void
+      })
+
+    return { run, wake, awaitIdle, interrupt, suspend }
 
     function run(key: Key): Effect.Effect<A, E> {
       return Effect.uninterruptibleMask((restore) => {
@@ -287,6 +309,7 @@ export const make = <Key, A, E>(options: {
     }
 
     function acceptsWake(entry: Entry<A, E>, seq: number | undefined) {
+      if (entry.stopping === "pause") return true
       return !entry.stopping || (entry.interruptSeq !== undefined && seq !== undefined && seq > entry.interruptSeq)
     }
 
@@ -348,7 +371,8 @@ export const layer = Layer.effect(
   SessionRunner.Service.pipe(
     Effect.flatMap((runner) =>
       make<SessionSchema.ID, void, SessionRunner.RunError>({
-        drain: (sessionID, mode) => runner.run({ sessionID, force: mode === "run" }),
+        drain: (sessionID, mode, ownership) =>
+          runner.run({ sessionID, force: mode === "run", isSuspended: ownership.isSuspended }),
         onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
         logKey: (sessionID) => ({ sessionID }),
       }),

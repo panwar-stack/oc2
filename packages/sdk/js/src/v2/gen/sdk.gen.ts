@@ -211,6 +211,8 @@ import type {
   SessionMessageResponses,
   SessionMessagesErrors,
   SessionMessagesResponses,
+  SessionPauseErrors,
+  SessionPauseResponses,
   SessionPromptAsyncErrors,
   SessionPromptAsyncResponses,
   SessionPromptErrors,
@@ -227,6 +229,8 @@ import type {
   SessionRootUpdateResponses,
   SessionShellErrors,
   SessionShellResponses,
+  SessionStartErrors,
+  SessionStartResponses,
   SessionStatusErrors,
   SessionStatusResponses,
   SessionSummarizeErrors,
@@ -4254,6 +4258,70 @@ export class Session2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<SessionAbortResponses, SessionAbortErrors, ThrowOnError>({
       url: "/session/{sessionID}/abort",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Pause session
+   *
+   * Pause a session and its descendant subtree. Commits durable pause blockers, signals interruption to running sessions, and returns without waiting for interrupted work to unwind.
+   */
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionPauseResponses, SessionPauseErrors, ThrowOnError>({
+      url: "/session/{sessionID}/pause",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start session
+   *
+   * Release the pause cascade owned by this session and schedule sessions that have durable resume intent and no remaining blockers. Sessions blocked by an ancestor pause stay paused.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionStartResponses, SessionStartErrors, ThrowOnError>({
+      url: "/session/{sessionID}/start",
       ...options,
       ...params,
     })

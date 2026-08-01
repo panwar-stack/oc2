@@ -25,6 +25,7 @@ export type ID = typeof ID.Type
 export class Info extends Schema.Class<Info>("SessionV2.Info")({
   id: ID,
   parentID: ID.pipe(optionalOmitUndefined),
+  paused: Schema.Boolean,
   projectID: ProjectV2.ID,
   agent: AgentV2.ID.pipe(Schema.optional),
   model: ModelV2.Ref.pipe(Schema.optional),

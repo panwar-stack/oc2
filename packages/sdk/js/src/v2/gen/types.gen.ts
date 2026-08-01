@@ -54,6 +54,7 @@ export type Event =
   | EventSessionNextCompactionEnded
   | EventSessionNextCompactionStarted
   | EventSessionNextContextUpdated
+  | EventSessionNextControlChanged
   | EventSessionNextFuguStatus
   | EventSessionNextInterruptRequested
   | EventSessionNextModelSwitched
@@ -1307,6 +1308,14 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.control.changed"
+        properties: {
+          timestamp: number
+          sessionID: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.fugu.status"
         properties: {
           timestamp: number
@@ -1832,6 +1841,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextCompactionEnded
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextContextUpdated
+    | SyncEventSessionNextControlChanged
     | SyncEventSessionNextInterruptRequested
     | SyncEventSessionNextModelSwitched
     | SyncEventSessionNextMoved
@@ -3235,6 +3245,22 @@ export type Session5 = {
   }
 }
 
+export type SessionControlResult = {
+  rootSessionID: string
+  cascadeID?: string
+  affectedSessionIDs: Array<string>
+  interruptionSignalledSessionIDs: Array<string>
+  stillBlockedSessionIDs: Array<string>
+  scheduledSessionIDs: Array<string>
+  unchanged: boolean
+}
+
+export type SessionPausedError = {
+  _tag: "SessionPausedError"
+  sessionID: string
+  message: string
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -4525,6 +4551,21 @@ export type SyncEventSessionNextContextUpdated = {
   }
 }
 
+export type SyncEventSessionNextControlChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.control.changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+    }
+  }
+}
+
 export type SyncEventSessionNextInterruptRequested = {
   type: "sync"
   id: string
@@ -5071,6 +5112,7 @@ export type AgentV2Info = {
 export type SessionV2Info = {
   id: string
   parentID?: string
+  paused: boolean
   projectID: string
   agent?: string
   model?: {
@@ -6083,6 +6125,15 @@ export type EventSessionNextContextUpdated = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type EventSessionNextControlChanged = {
+  id: string
+  type: "session.next.control.changed"
+  properties: {
+    timestamp: number
+    sessionID: string
   }
 }
 
@@ -9694,6 +9745,10 @@ export type SessionPromptErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * SessionPausedError
+   */
+  409: SessionPausedError
 }
 
 export type SessionPromptError = SessionPromptErrors[keyof SessionPromptErrors]
@@ -9853,6 +9908,74 @@ export type SessionAbortResponses = {
 
 export type SessionAbortResponse = SessionAbortResponses[keyof SessionAbortResponses]
 
+export type SessionPauseData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/pause"
+}
+
+export type SessionPauseErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionPauseError = SessionPauseErrors[keyof SessionPauseErrors]
+
+export type SessionPauseResponses = {
+  /**
+   * Pause result
+   */
+  200: SessionControlResult
+}
+
+export type SessionPauseResponse = SessionPauseResponses[keyof SessionPauseResponses]
+
+export type SessionStartData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/start"
+}
+
+export type SessionStartErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionStartError = SessionStartErrors[keyof SessionStartErrors]
+
+export type SessionStartResponses = {
+  /**
+   * Start result
+   */
+  200: SessionControlResult
+}
+
+export type SessionStartResponse = SessionStartResponses[keyof SessionStartResponses]
+
 export type SessionInitData = {
   body?: {
     modelID: string
@@ -9878,6 +10001,10 @@ export type SessionInitErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * SessionPausedError
+   */
+  409: SessionPausedError
 }
 
 export type SessionInitError = SessionInitErrors[keyof SessionInitErrors]
@@ -9916,6 +10043,10 @@ export type SessionSummarizeErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * SessionPausedError
+   */
+  409: SessionPausedError
 }
 
 export type SessionSummarizeError = SessionSummarizeErrors[keyof SessionSummarizeErrors]
@@ -10014,6 +10145,10 @@ export type SessionCommandErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * SessionPausedError
+   */
+  409: SessionPausedError
 }
 
 export type SessionCommandError = SessionCommandErrors[keyof SessionCommandErrors]
@@ -10060,9 +10195,9 @@ export type SessionShellErrors = {
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * SessionBusyError | SessionPausedError
    */
-  409: SessionBusyError
+  409: SessionBusyError | SessionPausedError
 }
 
 export type SessionShellError = SessionShellErrors[keyof SessionShellErrors]

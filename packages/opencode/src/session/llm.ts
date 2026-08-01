@@ -43,6 +43,8 @@ import { LLMRequestPrep } from "./llm/request"
 import type { TaskPromptOps } from "@/tool/task"
 import { SessionRetry, type CacheUse } from "./retry"
 import { TuiEvent } from "@/server/tui-event"
+import { Database } from "@oc2-ai/core/database/database"
+import { SessionRunState } from "./run-state"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -139,6 +141,7 @@ const live: Layer.Layer<
   | EventV2Bridge.Service
   | LLMClientService
   | RuntimeFlags.Service
+  | Database.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -150,11 +153,13 @@ const live: Layer.Layer<
     const events = yield* EventV2Bridge.Service
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
+    const { db } = yield* Database.Service
     const scope = yield* Scope.Scope
     const cacheChecker = CacheState.createRegressionChecker()
     const cacheSelfHealing = CacheSelfHealing.createPolicy({ mode: flags.experimentalPromptCacheSelfHealing ? "observe" : "off" })
 
     const runProvider = Effect.fn("LLM.runProvider")(function* (input: StreamRequest) {
+      yield* SessionRunState.assertNotSuspended(db, SessionID.make(input.sessionID))
       const l = log
         .clone()
         .tag("providerID", input.model.providerID)
@@ -653,6 +658,7 @@ const live: Layer.Layer<
       const output = Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
+            yield* SessionRunState.assertNotSuspended(db, SessionID.make(input.sessionID))
             const ctrl = yield* Effect.acquireRelease(
               Effect.sync(() => new AbortController()),
               (ctrl) => Effect.sync(() => ctrl.abort()),
@@ -717,7 +723,11 @@ const live: Layer.Layer<
   }),
 )
 
-export const layer = live.pipe(Layer.provide(Permission.defaultLayer), Layer.provide(EventV2Bridge.defaultLayer))
+export const layer = live.pipe(
+  Layer.provide(Permission.defaultLayer),
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+)
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(

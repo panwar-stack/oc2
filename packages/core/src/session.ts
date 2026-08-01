@@ -29,6 +29,7 @@ import { logFailure } from "./session/logging"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { pausedSessionIDs, requestResume as persistResumeRequest, SessionControl } from "./session/control"
 
 // get project -> project.locations
 //
@@ -72,6 +73,7 @@ export type ListInput = typeof ListInput.Type
 
 type CreateInput = {
   id?: SessionSchema.ID
+  parentID?: SessionSchema.ID
   agent?: AgentV2.ID
   model?: ModelV2.Ref
   location: Location.Ref
@@ -171,18 +173,20 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
-    const scope = yield* Effect.scope
+    const requestResume = (intent: SessionControl.ResumeIntent) =>
+      persistResumeRequest(db, intent).pipe(
+        Effect.mapError((error) => new NotFoundError({ sessionID: error.sessionID })),
+      )
 
-    const enqueueWake = (admitted: SessionInput.Admitted) =>
-      execution.wake(admitted.sessionID, admitted.admittedSeq).pipe(
+    const enqueueWake = (admitted: SessionInput.Admitted, ticket: SessionControl.ResumeTicket) =>
+      execution.wake(admitted.sessionID, admitted.admittedSeq, ticket).pipe(
         Effect.tapCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.void
             : logFailure("Failed to wake Session", admitted.sessionID, cause),
         ),
         Effect.ignore,
-        Effect.forkIn(scope, { startImmediately: true }),
-        Effect.asVoid,
+        Effect.andThen(Effect.yieldNow),
       )
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -214,6 +218,7 @@ export const layer = Layer.effect(
           slug: Slug.create(),
           version: InstallationVersion,
           projectID: project.id,
+          parentID: input.parentID,
           directory: input.location.directory,
           path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
           workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
@@ -291,7 +296,13 @@ export const layer = Layer.effect(
         const rows = yield* (input.limit === undefined ? query.all() : query.limit(input.limit).all()).pipe(
           Effect.orDie,
         )
-        return (direction === "previous" ? rows.toReversed() : rows).map((row) => fromRow(row))
+        const paused = yield* pausedSessionIDs(
+          db,
+          rows.map((row) => SessionSchema.ID.make(row.id)),
+        )
+        return (direction === "previous" ? rows.toReversed() : rows).map((row) =>
+          fromRow(row, paused.has(SessionSchema.ID.make(row.id))),
+        )
       }),
       messages: Effect.fn("V2Session.messages")(function* (input) {
         yield* result.get(input.sessionID)
@@ -350,7 +361,10 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             yield* result.get(input.sessionID)
             const returnPrompt = Effect.fnUntraced(function* (admitted: SessionInput.Admitted) {
-              if (input.resume !== false) yield* enqueueWake(admitted)
+              if (input.resume !== false) {
+                const request = yield* requestResume({ sessionID: admitted.sessionID, reason: "queued-input" })
+                if (!request.paused) yield* enqueueWake(admitted, request.ticket)
+              }
               return admitted
             }, Effect.uninterruptible)
             const messageID = input.id ?? SessionMessage.ID.create()

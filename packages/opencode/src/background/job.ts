@@ -1,5 +1,6 @@
 import { BackgroundJob as CoreBackgroundJob } from "@oc2-ai/core/background-job"
 import { InstanceState } from "@/effect/instance-state"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { Effect, Layer } from "effect"
 
 export {
@@ -17,6 +18,7 @@ export {
 export const layer = Layer.effect(
   CoreBackgroundJob.Service,
   Effect.gen(function* () {
+    const lifecycle = yield* LifecycleReconciler.Service
     const state = yield* InstanceState.make(() => CoreBackgroundJob.make)
     return CoreBackgroundJob.Service.of({
       list: () => InstanceState.useEffect(state, (jobs) => jobs.list()),
@@ -26,11 +28,14 @@ export const layer = Layer.effect(
       wait: (input) => InstanceState.useEffect(state, (jobs) => jobs.wait(input)),
       waitForPromotion: (id) => InstanceState.useEffect(state, (jobs) => jobs.waitForPromotion(id)),
       promote: (id) => InstanceState.useEffect(state, (jobs) => jobs.promote(id)),
-      cancel: (id) => InstanceState.useEffect(state, (jobs) => jobs.cancel(id)),
+      cancel: (id) =>
+        InstanceState.useEffect(state, (jobs) => jobs.cancel(id)).pipe(
+          Effect.tap(() => lifecycle.cancelBackground(id)),
+        ),
     })
   }),
 )
 
-export const defaultLayer = layer
+export const defaultLayer = layer.pipe(Layer.provideMerge(LifecycleReconciler.defaultLayer))
 
 export * as BackgroundJob from "./job"

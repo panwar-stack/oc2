@@ -12,6 +12,9 @@ import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { Reference } from "@/reference/reference"
 import * as EffectLogger from "@oc2-ai/core/effect/logger"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
+import { SessionPrompt } from "@/session/prompt"
+import { Runner } from "@/effect/runner"
 
 const log = EffectLogger.create({ service: "instance.bootstrap" })
 
@@ -27,6 +30,8 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const format = yield* Format.Service
     const lsp = yield* LSP.Service
+    const lifecycle = yield* LifecycleReconciler.Service
+    const prompt = yield* SessionPrompt.Service
     const plugin = yield* Plugin.Service
     const project = yield* Project.Service
     const reference = yield* Reference.Service
@@ -56,11 +61,19 @@ export const layer = Layer.effect(
       yield* log.info("startup stage", { directory: ctx.directory, stage: "plugin.init", status: "started" })
       yield* plugin.init()
       yield* log.info("startup stage", { directory: ctx.directory, stage: "plugin.init", status: "completed" })
+      yield* lifecycle.attach({
+        cancel: prompt.cancel,
+        resolvePromptParts: prompt.resolvePromptParts,
+        prompt: (input) => Runner.keepSuspended(prompt.prompt(input)),
+        wake: (sessionID) => prompt.wake(sessionID),
+        run: (sessionID) => prompt.loop({ sessionID }),
+      })
+
       // Each service self-manages its own slow work via Effect.forkScoped against
       // its per-instance state scope. We just await materialization here.
       yield* log.info("startup stage", { directory: ctx.directory, stage: "service.init", status: "started" })
       yield* Effect.forEach(
-        [reference, lsp, format, vcs, snapshot, project],
+        [reference, lsp, format, vcs, snapshot, project, lifecycle],
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
@@ -77,6 +90,8 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
     Config.defaultLayer,
     Format.defaultLayer,
     LSP.defaultLayer,
+    LifecycleReconciler.defaultLayer,
+    SessionPrompt.defaultLayer,
     Plugin.defaultLayer,
     Project.defaultLayer,
     Reference.defaultLayer,

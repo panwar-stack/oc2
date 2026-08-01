@@ -186,6 +186,65 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 
+  it.effect("suspends active ownership without replaying in-memory demand", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>()
+        const resumed = yield* Deferred.make<void>()
+        let runs = 0
+        const coordinator = yield* SessionRunCoordinator.make({
+          drain: () =>
+            Effect.sync(() => ++runs).pipe(
+              Effect.flatMap((run) =>
+                run === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Effect.never))
+                  : Deferred.succeed(resumed, undefined),
+              ),
+            ),
+        })
+
+        const first = yield* coordinator.run("session").pipe(Effect.exit, Effect.forkChild)
+        yield* Deferred.await(firstStarted)
+        yield* coordinator.wake("session")
+        yield* coordinator.suspend("session")
+        const firstExit = yield* Fiber.join(first)
+        expect(Exit.isFailure(firstExit) && Cause.hasInterruptsOnly(firstExit.cause)).toBeTrue()
+        yield* coordinator.awaitIdle("session").pipe(Effect.exit)
+        expect(runs).toBe(1)
+
+        yield* coordinator.run("session")
+        yield* Deferred.await(resumed)
+        expect(runs).toBe(2)
+      }),
+    ),
+  )
+
+  it.effect("signals suspension without waiting for owner cleanup", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const cleanupStarted = yield* Deferred.make<void>()
+        const cleanupGate = yield* Deferred.make<void>()
+        const coordinator = yield* SessionRunCoordinator.make<string, void, never>({
+          drain: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() =>
+                Deferred.succeed(cleanupStarted, undefined).pipe(Effect.andThen(Deferred.await(cleanupGate))),
+              ),
+            ),
+        })
+
+        yield* coordinator.wake("session")
+        yield* Deferred.await(started)
+        yield* coordinator.suspend("session")
+        yield* Deferred.await(cleanupStarted)
+        yield* Deferred.succeed(cleanupGate, undefined)
+        yield* coordinator.awaitIdle("session").pipe(Effect.exit)
+      }),
+    ),
+  )
+
   it.effect("suppresses a wake received during interruption cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

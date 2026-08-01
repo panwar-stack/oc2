@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -16,6 +16,8 @@ import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { wakeTeamSession } from "@/tool/team_wake"
 import { Permission } from "@/permission"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import { Runner } from "@/effect/runner"
 import { Database } from "@oc2-ai/core/database/database"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { ModelID, ProviderID } from "@/provider/schema"
@@ -39,6 +41,7 @@ const it = testEffect(
     Database.defaultLayer,
     Session.defaultLayer,
     Team.defaultLayer,
+    SessionControl.defaultLayer,
     Truncate.defaultLayer,
   ),
 )
@@ -117,6 +120,7 @@ function promptOps(input: {
     resolvePromptParts: () => Effect.succeed([]),
     prompt: () => Effect.succeed(input.response),
     wake: input.wake ?? (() => Effect.succeed(input.response)),
+    run: input.wake ?? (() => Effect.succeed(input.response)),
   }
 }
 
@@ -513,6 +517,92 @@ describe("tool.team_plan_decide", () => {
 })
 
 describe("team message wake safety", () => {
+  it.live("mailbox claims require an explicit durable acknowledgement", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, info, worker } = yield* seed()
+          const message = yield* team.sendMessage({
+            teamID: info.id,
+            sender: lead.id,
+            recipients: [worker.id],
+            body: "Persist before acknowledging.",
+          })
+
+          expect(yield* team.claimPendingMessages(worker.id, info.id)).toHaveLength(1)
+          expect(yield* team.getPendingMessages(worker.id, info.id)).toHaveLength(0)
+          expect((yield* team.getMessages(info.id)).find((item) => item.id === message.id)?.delivery_status).toBe(
+            "pending",
+          )
+
+          yield* team.releaseClaimedMessages([message.id], worker.id)
+          expect(yield* team.getPendingMessages(worker.id, info.id)).toHaveLength(1)
+
+          yield* team.claimPendingMessages(worker.id, info.id)
+          yield* team.markMessageDelivered(message.id, worker.id)
+          expect((yield* team.getMessages(info.id)).find((item) => item.id === message.id)?.delivery_status).toBe(
+            "delivered",
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("paused mailbox claims stay pending and fail with suspension", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const control = yield* SessionControl.Service
+          const { lead, info, worker } = yield* seed()
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: lead.id,
+            recipients: [worker.id],
+            body: "Keep this pending.",
+          })
+          yield* control.pause({ rootSessionID: worker.id })
+
+          const exit = yield* team.claimPendingMessages(worker.id, info.id).pipe(Effect.exit)
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+          expect(yield* team.getPendingMessages(worker.id, info.id)).toHaveLength(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("paused team wake records a resume intent without starting the loop", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const control = yield* SessionControl.Service
+          const { assistant, member } = yield* seed()
+          const wakeCount = { value: 0 }
+          yield* control.pause({ rootSessionID: SessionID.make(member.session_id) })
+
+          yield* wakeTeamSession(
+            promptOps({
+              response: responseFor(assistant),
+              wake: () =>
+                Effect.sync(() => {
+                  wakeCount.value++
+                }).pipe(Effect.as(responseFor(assistant))),
+            }),
+            member.session_id,
+          )
+
+          expect(wakeCount.value).toBe(0)
+          expect(yield* control.release(SessionID.make(member.session_id))).toMatchObject({
+            resumableSessionIDs: [member.session_id],
+          })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("wakeTeamSession intentionally wakes the target twice", () =>
     provideTmpdirInstance(
       () =>

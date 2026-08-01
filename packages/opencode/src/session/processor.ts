@@ -43,6 +43,8 @@ import type { CacheTelemetry as CacheTelemetryInfo } from "@oc2-ai/llm/cache/cap
 import { ToolOutput } from "@oc2-ai/core/tool-output"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { TuiEvent } from "@/server/tui-event"
+import { SessionRunState } from "./run-state"
+import { Runner } from "@/effect/runner"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
@@ -116,7 +118,7 @@ export interface Handle {
       attachments?: SessionV1.FilePart[]
     },
   ) => Effect.Effect<void>
-  readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
+  readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result, Runner.Suspended>
 }
 
 type Input = {
@@ -126,7 +128,7 @@ type Input = {
 }
 
 export interface Interface {
-  readonly create: (input: Input) => Effect.Effect<Handle>
+  readonly create: (input: Input) => Effect.Effect<Handle, Runner.Suspended>
 }
 
 type ToolCall = {
@@ -192,8 +194,12 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const { db } = database
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
+      // A pause that lands between the run-loop admission check and here surfaces as the typed
+      // suspended error instead of a defect, so callers treat it as paused work, never as a crash.
+      yield* SessionRunState.assertNotSuspended(db, input.sessionID)
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
@@ -1138,6 +1144,13 @@ export const layer = Layer.effect(
 
       const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
         ctx.providerTiming = undefined
+        if (yield* Runner.isSuspending) {
+          ctx.currentText = undefined
+          ctx.currentTextID = undefined
+          ctx.reasoningMap = {}
+          ctx.toolcalls = {}
+          return
+        }
         if (ctx.snapshot) {
           const patch = yield* snapshot.patch(ctx.snapshot)
           if (patch.files.length) {
@@ -1285,6 +1298,7 @@ export const layer = Layer.effect(
       })
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
+        yield* SessionRunState.assertNotSuspended(db, ctx.sessionID)
         slog.info("process")
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
@@ -1298,6 +1312,7 @@ export const layer = Layer.effect(
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
+            yield* SessionRunState.assertNotSuspended(db, ctx.sessionID)
             ctx.currentText = undefined
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
@@ -1326,6 +1341,7 @@ export const layer = Layer.effect(
           }).pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
+                if (yield* Runner.isSuspending) return
                 aborted = true
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
@@ -1376,7 +1392,11 @@ export const layer = Layer.effect(
                 },
               }),
             ),
-            Effect.catch(halt),
+            // Suspension must stay in the typed error channel: the halt path would mark the turn
+            // as failed, while the runner and its callers treat Suspended as paused, not terminal.
+            Effect.catch((error) =>
+              error instanceof Runner.Suspended ? Effect.fail(error) : halt(error),
+            ),
             Effect.ensuring(cleanup()),
           )
 

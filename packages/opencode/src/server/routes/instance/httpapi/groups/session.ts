@@ -20,7 +20,7 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
-import { ApiNotFoundError, PermissionNotFoundError, SessionBusyError } from "../errors"
+import { ApiNotFoundError, PermissionNotFoundError, SessionBusyError, SessionPausedError } from "../errors"
 import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@oc2-ai/core/provider"
@@ -83,6 +83,26 @@ export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
 
+/**
+ * Result of a pause or start action on one cascade root.
+ *
+ * `affectedSessionIDs` is the durable closure the action captured. `interruptionSignalledSessionIDs`
+ * is the subset that had live work and was signalled; it stays empty for start. `scheduledSessionIDs`
+ * is the subset that this call scheduled for resumption; it stays empty for pause unless a concurrent
+ * start released the cascade while this pause was interrupting. `stillBlockedSessionIDs` reports the
+ * sessions that remain paused afterwards, which is how a child start reports an ancestor-owned pause.
+ */
+export const SessionControlResult = Schema.Struct({
+  rootSessionID: SessionID,
+  cascadeID: Schema.optional(Schema.String),
+  affectedSessionIDs: Schema.Array(SessionID),
+  interruptionSignalledSessionIDs: Schema.Array(SessionID),
+  stillBlockedSessionIDs: Schema.Array(SessionID),
+  scheduledSessionIDs: Schema.Array(SessionID),
+  unchanged: Schema.Boolean,
+}).annotate({ identifier: "SessionControlResult" })
+export type SessionControlResult = typeof SessionControlResult.Type
+
 export const SessionPaths = {
   list: root,
   status: `${root}/status`,
@@ -99,6 +119,8 @@ export const SessionPaths = {
   update: `${root}/:sessionID`,
   fork: `${root}/:sessionID/fork`,
   abort: `${root}/:sessionID/abort`,
+  pause: `${root}/:sessionID/pause`,
+  start: `${root}/:sessionID/start`,
   init: `${root}/:sessionID/init`,
   summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
@@ -321,12 +343,38 @@ export const SessionApi = HttpApi.make("session")
             description: "Abort an active session and stop any ongoing AI processing or command execution.",
           }),
         ),
+        HttpApiEndpoint.post("pause", SessionPaths.pause, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(SessionControlResult, "Pause result"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.pause",
+            summary: "Pause session",
+            description:
+              "Pause a session and its descendant subtree. Commits durable pause blockers, signals interruption to running sessions, and returns without waiting for interrupted work to unwind.",
+          }),
+        ),
+        HttpApiEndpoint.post("start", SessionPaths.start, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(SessionControlResult, "Start result"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.start",
+            summary: "Start session",
+            description:
+              "Release the pause cascade owned by this session and schedule sessions that have durable resume intent and no remaining blockers. Sessions blocked by an ancestor pause stay paused.",
+          }),
+        ),
         HttpApiEndpoint.post("init", SessionPaths.init, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           payload: InitPayload,
           success: described(Schema.Boolean, "200"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionPausedError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.init",
@@ -340,7 +388,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: SummarizePayload,
           success: described(Schema.Boolean, "Summarized session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionPausedError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.summarize",
@@ -353,7 +401,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionPausedError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt",
@@ -380,7 +428,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: CommandPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionPausedError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.command",
@@ -393,7 +441,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: ShellPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, SessionPausedError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.shell",

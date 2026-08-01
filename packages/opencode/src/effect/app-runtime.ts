@@ -53,11 +53,14 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Memory } from "@/memory/memory"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
+import { SessionControl } from "@oc2-ai/core/session/control"
 
 const CoreLayer = Layer.mergeAll(
   Npm.defaultLayer,
   FSUtil.defaultLayer,
   Database.defaultLayer,
+  SessionControl.defaultLayer,
   Auth.defaultLayer,
   Account.defaultLayer,
   Config.defaultLayer,
@@ -83,6 +86,7 @@ const SessionLayer = Layer.mergeAll(
   Session.defaultLayer,
   SessionStatus.defaultLayer,
   BackgroundJob.defaultLayer,
+  LifecycleReconciler.defaultLayer,
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
   SessionRunState.defaultLayer,

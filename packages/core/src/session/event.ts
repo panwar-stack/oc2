@@ -153,6 +153,13 @@ export const InterruptRequested = EventV2.define({
 })
 export type InterruptRequested = typeof InterruptRequested.Type
 
+export const ControlChanged = EventV2.define({
+  type: "session.next.control.changed",
+  ...options,
+  schema: Base,
+})
+export type ControlChanged = typeof ControlChanged.Type
+
 export const ContextUpdated = EventV2.define({
   type: "session.next.context.updated",
   ...options,
@@ -692,6 +699,7 @@ const DurableDefinitions = [
   PromptLifecycle.Admitted,
   PromptLifecycle.Promoted,
   InterruptRequested,
+  ControlChanged,
   ContextUpdated,
   Synthetic,
   Shell.Started,
