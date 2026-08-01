@@ -1,9 +1,11 @@
 import { expect } from "bun:test"
+import { eq } from "drizzle-orm"
 import { BackgroundJob } from "@/background/job"
 import { Runner } from "@/effect/runner"
 import { SessionRunState } from "@/session/run-state"
 import { SessionID } from "@/session/schema"
 import { SessionStatus } from "@/session/status"
+import { TeamMessageRecipientTable } from "@/team/team.sql"
 import { Database } from "@oc2-ai/core/database/database"
 import { EventV2 } from "@oc2-ai/core/event"
 import { Location } from "@oc2-ai/core/location"
@@ -87,6 +89,8 @@ const it = testEffect(
     // Exported to the test body so it can drive pause/release and create sessions directly.
     SessionControl.defaultLayer,
     sessions,
+    // Exported to the test body so it can seed pending mailbox rows directly.
+    Database.defaultLayer,
   ),
 )
 
@@ -157,6 +161,56 @@ it.instance(
         const exit = yield* Fiber.await(caller).pipe(Effect.timeout("100 millis"))
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+      }),
+    ),
+)
+
+it.instance(
+  "pause persists a durable team-wake resume intent for an idle session with a pending mailbox row",
+  () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const state = yield* SessionRunState.Service
+        const control = yield* SessionControl.Service
+        const sessions = yield* SessionV2.Service
+        const { db } = yield* Database.Service
+        const idle = yield* sessions.create({ location })
+
+        const now = Date.now()
+        yield* db
+          .insert(TeamMessageRecipientTable)
+          .values({
+            id: "tmr_team_wake",
+            message_id: "tmsg_team_wake",
+            team_id: "team_wake",
+            recipient: idle.id,
+            delivery_status: "pending",
+            time_created: now,
+            time_updated: now,
+          })
+          .run()
+          .pipe(Effect.orDie)
+
+        const paused = yield* control.pause({ rootSessionID: idle.id })
+        // The idle session was not interruption-signalled; only its durable intent matters.
+        expect([...paused.interruptionSignalledSessionIDs]).toEqual([])
+
+        // The mailbox row is still pending — the probe never claims it.
+        expect(
+          (yield* db
+            .select({ status: TeamMessageRecipientTable.delivery_status })
+            .from(TeamMessageRecipientTable)
+            .where(eq(TeamMessageRecipientTable.id, "tmr_team_wake"))
+            .get()
+            .pipe(Effect.orDie))?.status,
+        ).toBe("pending")
+
+        // The durable team-wake intent lands and release() turns it into a resume ticket.
+        const released = yield* control.release(idle.id)
+        expect(released.resumableSessionIDs).toEqual([idle.id])
+        expect(released.resumeTickets).toEqual([{ sessionID: idle.id, generation: 1, reason: "team-wake" }])
+        // The ticket is finishable now that the blocker is gone, exactly like a start schedules it.
+        expect(yield* control.finishResume(released.resumeTickets[0]!)).toBe(true)
       }),
     ),
 )

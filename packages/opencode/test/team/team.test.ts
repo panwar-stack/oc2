@@ -435,6 +435,39 @@ describe("team", () => {
     ),
   )
 
+  it.live("hasPendingMailboxMessages reports pending rows without claiming them", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_pending_probe"
+
+        yield* team.create({ name: "pending-probe", goal: "Probe", leadSessionID })
+        const teamInfo = unwrap(yield* team.getActive(leadSessionID))
+        yield* team.addMember({
+          teamID: teamInfo.id,
+          sessionID: "ses_probe_member",
+          name: "probe",
+          agentType: "general",
+          rolePrompt: "Probe",
+        })
+
+        expect(yield* team.hasPendingMailboxMessages(leadSessionID)).toBe(false)
+        yield* team.sendMessage({
+          teamID: teamInfo.id,
+          sender: "ses_probe_member",
+          recipients: [leadSessionID],
+          body: "Pending probe",
+        })
+        expect(yield* team.hasPendingMailboxMessages(leadSessionID)).toBe(true)
+        // The probe must not claim the row.
+        expect((yield* team.getPendingMessages(leadSessionID, teamInfo.id)).length).toBe(1)
+
+        yield* team.claimPendingMessages(leadSessionID, teamInfo.id)
+        expect(yield* team.hasPendingMailboxMessages(leadSessionID)).toBe(false)
+      }),
+    ),
+  )
+
   it.live("shutdown team", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {

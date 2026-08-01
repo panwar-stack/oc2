@@ -290,6 +290,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
      * Schedules one loop iteration per runnable resume ticket. `wake` returns as soon as the
      * iteration is scheduled, so the response never waits for a provider turn, and the runner
      * collapses a concurrent schedule into the run that is already in flight.
+     *
+     * The ticket itself is consumed by the woken run at run start (via the ticket passed to
+     * `wake`), so a run that is re-suspended before it begins keeps its durable resume demand for
+     * the next start instead of losing it here.
      */
     const scheduleResume = Effect.fn("SessionHttpApi.scheduleResume")(function* (
       tickets: readonly SessionControl.ResumeTicket[],
@@ -302,18 +306,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         )
         // A session deleted while paused stays terminal. Its durable intent must never revive it.
         if (!present) continue
-        const woken = yield* promptSvc.wake(ticket.sessionID).pipe(
+        const woken = yield* promptSvc.wake(ticket.sessionID, ticket).pipe(
           Effect.as(true),
           // A pause that won the race leaves the durable intent in place for the next start.
           Effect.catchTag("RunnerSuspended", () => Effect.succeed(false)),
         )
-        if (woken) {
-          scheduled.push(ticket.sessionID)
-          // The intent has served its purpose: it scheduled this iteration. Clearing it here
-          // (same as wakeWithIntent / the V2 drain finish) keeps a stale ticket from scheduling
-          // a no-op loop iteration on a later pause/start cycle.
-          yield* control.finishResume(ticket).pipe(Effect.ignore)
-        }
+        if (woken) scheduled.push(ticket.sessionID)
       }
       return scheduled
     })

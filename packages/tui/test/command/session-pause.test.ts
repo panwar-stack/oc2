@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionControlResult } from "@oc2-ai/sdk/v2"
 import {
+  affectedPauseStates,
   controlResultFeedback,
   createPauseStartCommand,
   createPauseStartCommands,
@@ -338,6 +339,69 @@ describe("pause/unpause feedback", () => {
     expect(feedback.variant).toBe("success")
     expect(feedback.message).toContain("resumed 1 session")
     expect(feedback.message).toContain("Unpaused")
+  })
+})
+
+describe("pause/unpause affected-session reconciliation", () => {
+  test("an ancestor-blocked child keeps paused/ancestorBlocked while the root clears", () => {
+    const states = affectedPauseStates(
+      result({
+        affectedSessionIDs: [SESSION, CHILD],
+        stillBlockedSessionIDs: [CHILD],
+        scheduledSessionIDs: [SESSION],
+      }),
+      { paused: false },
+    )
+    expect(states).toEqual({
+      [SESSION]: { paused: false },
+      [CHILD]: { paused: true, ancestorBlocked: true },
+    })
+    // Command enablement derives from the reconciled states, not the action root.
+    expect(unpauseCommandEnabled(states[CHILD])).toBe(false)
+    expect(pauseCommandEnabled(states[CHILD])).toBe(true)
+    expect(unpauseCommandEnabled(states[SESSION])).toBe(false)
+    expect(pauseCommandEnabled(states[SESSION])).toBe(true)
+  })
+
+  test("a successful unpause clears every affected session that is no longer blocked", () => {
+    const states = affectedPauseStates(
+      result({
+        affectedSessionIDs: [SESSION, CHILD, "ses_grandchild"],
+        stillBlockedSessionIDs: [],
+        scheduledSessionIDs: [CHILD, "ses_grandchild"],
+      }),
+      { paused: false },
+    )
+    expect(states).toEqual({
+      [SESSION]: { paused: false },
+      [CHILD]: { paused: false },
+      ses_grandchild: { paused: false },
+    })
+  })
+
+  test("a pause keeps affected children paused as ancestor-blocked and records the root cascade", () => {
+    const states = affectedPauseStates(
+      result({
+        cascadeID: "cas_1",
+        affectedSessionIDs: [SESSION, CHILD],
+        stillBlockedSessionIDs: [SESSION, CHILD],
+      }),
+      { paused: true, cascadeID: "cas_1", ancestorBlocked: false },
+    )
+    expect(states).toEqual({
+      [SESSION]: { paused: true, cascadeID: "cas_1", ancestorBlocked: false },
+      [CHILD]: { paused: true, ancestorBlocked: true },
+    })
+    expect(sessionOwnsCascade(states[SESSION])).toBe(true)
+    expect(sessionOwnsCascade(states[CHILD])).toBe(false)
+  })
+
+  test("an unchanged start without cascade history still records the root feedback state", () => {
+    const states = affectedPauseStates(
+      result({ affectedSessionIDs: [], unchanged: true, stillBlockedSessionIDs: [SESSION] }),
+      { paused: true, ancestorBlocked: true },
+    )
+    expect(states).toEqual({ [SESSION]: { paused: true, ancestorBlocked: true } })
   })
 })
 

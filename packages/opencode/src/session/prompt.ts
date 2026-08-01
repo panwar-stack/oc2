@@ -103,7 +103,7 @@ export interface Interface {
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error | Runner.Suspended>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts, Runner.Suspended>
   /** Schedules a loop iteration for the session and returns once it is scheduled. */
-  readonly wake: (sessionID: SessionID) => Effect.Effect<void, Runner.Suspended>
+  readonly wake: (sessionID: SessionID, ticket?: SessionControl.ResumeTicket) => Effect.Effect<void, Runner.Suspended>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError | Runner.Suspended>
   readonly command: (
     input: CommandInput,
@@ -152,7 +152,7 @@ export const layer = Layer.effect(
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => Runner.keepSuspended(prompt(input)),
-        wake: (sessionID: SessionID) => wake(sessionID),
+        wake: (sessionID: SessionID, ticket?: SessionControl.ResumeTicket) => wake(sessionID, ticket),
         run: (sessionID: SessionID) => loop({ sessionID }),
       } satisfies TaskPromptOps
     })
@@ -1274,8 +1274,10 @@ export const layer = Layer.effect(
           yield* control.finishResume(request.ticket)
           return message
         }
-        yield* state.wake(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
-        if (!(yield* control.finishResume(request.ticket))) return yield* new Runner.Suspended()
+        // The queued-input ticket travels with the woken run and is consumed at run start (or
+        // cleared immediately when the wake attaches to a run already in flight), so a run that
+        // is re-suspended before it begins keeps its durable resume demand for the next start.
+        yield* wake(input.sessionID, request.ticket)
       }
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
@@ -1710,11 +1712,38 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
     // Non-blocking counterpart of `loop`: it attaches to the live run or schedules a new one and
     // returns as soon as the work is scheduled. It deliberately reports no result, because a caller
     // that reads "the latest assistant message" right after a wake reads a stale turn.
-    const wake: (sessionID: SessionID) => Effect.Effect<void, Runner.Suspended> = Effect.fn("SessionPrompt.wake")(
-      function* (sessionID: SessionID) {
-        yield* state.wake(sessionID, lastAssistant(sessionID), runLoop(sessionID))
-      },
-    )
+    //
+    // When a resume ticket is passed, the durable intent is consumed only when the scheduled run
+    // actually begins executing (or immediately when the wake attaches to an already running loop),
+    // so a run that is re-suspended before it starts keeps its resume demand for the next start.
+    const wake: (
+      sessionID: SessionID,
+      ticket?: SessionControl.ResumeTicket,
+    ) => Effect.Effect<void, Runner.Suspended> = Effect.fn("SessionPrompt.wake")(function* (
+      sessionID: SessionID,
+      ticket?: SessionControl.ResumeTicket,
+    ) {
+      const onInterrupt = lastAssistant(sessionID)
+      if (!ticket) {
+        yield* state.wake(sessionID, onInterrupt, runLoop(sessionID))
+        return
+      }
+      const accepted = yield* state.wake(
+        sessionID,
+        onInterrupt,
+        Effect.gen(function* () {
+          // Consume the durable intent only when this run actually begins executing. A run that is
+          // re-suspended or never starts must keep its resume demand for the next start.
+          yield* control.finishResume(ticket).pipe(Effect.ignore)
+          return yield* runLoop(sessionID)
+        }),
+      )
+      if (!accepted) {
+        // The wake attached to an already running loop; that loop is doing the work, so the stale
+        // ticket must not schedule a no-op iteration on a later pause/start cycle.
+        yield* control.finishResume(ticket).pipe(Effect.ignore)
+      }
+    })
 
     const shell: (
       input: ShellInput,

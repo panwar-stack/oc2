@@ -22,8 +22,9 @@ import type {
   EventSessionNextFuguStatus,
   SessionV2Info,
   Event,
+  SessionControlResult,
 } from "@oc2-ai/sdk/v2"
-import type { SessionPauseState } from "../command/session-pause"
+import { affectedPauseStates, type SessionPauseState } from "../command/session-pause"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
 import { useEvent } from "./event"
@@ -1097,9 +1098,22 @@ export const {
         state(sessionID: string): SessionPauseState | undefined {
           return store.session_pause[sessionID]
         },
-        /** Record the root state after a pause/unpause action and reconcile affected sessions. */
-        applyResult(sessionID: string, state: SessionPauseState) {
-          setStore("session_pause", sessionID, state)
+        /**
+         * Record the root state after a pause/unpause action and reconcile every
+         * affected session. The v2 read model only serves the newest 50 sessions,
+         * so without this an older affected session keeps a stale paused label
+         * until it is included in a refresh.
+         */
+        applyResult(result: SessionControlResult, rootState: SessionPauseState) {
+          const states = affectedPauseStates(result, rootState)
+          setStore(
+            "session_pause",
+            produce((draft) => {
+              for (const [sessionID, state] of Object.entries(states)) {
+                draft[sessionID] = state
+              }
+            }),
+          )
           schedulePauseRefresh()
         },
         refresh: refreshPauseStates,

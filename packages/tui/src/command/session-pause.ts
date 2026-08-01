@@ -116,6 +116,33 @@ export function controlResultFeedback(action: PauseStartAction, result: SessionC
   }
 }
 
+/**
+ * Reconcile the pause state for every session affected by one pause/unpause
+ * action. The v2 session read model only serves the newest 50 sessions, so older
+ * affected sessions would otherwise keep a stale paused label after a resume.
+ *
+ * - The action root always uses the derived feedback state (`rootState`), even
+ *   when the result's `affectedSessionIDs` is empty (an unchanged start without
+ *   cascade history).
+ * - Any other affected session that is still blocked (present in
+ *   `stillBlockedSessionIDs`) stays paused and is marked as ancestor-blocked,
+ *   because only an ancestor-owned pause can keep it paused after this release.
+ * - Every other affected session is released: `paused=false`, with cascade
+ *   ownership and ancestor-blocking cleared.
+ */
+export function affectedPauseStates(
+  result: SessionControlResult,
+  rootState: SessionPauseState,
+): Record<string, SessionPauseState> {
+  const states: Record<string, SessionPauseState> = { [result.rootSessionID]: rootState }
+  const stillBlocked = new Set(result.stillBlockedSessionIDs)
+  for (const sessionID of result.affectedSessionIDs) {
+    if (sessionID === result.rootSessionID) continue
+    states[sessionID] = stillBlocked.has(sessionID) ? { paused: true, ancestorBlocked: true } : { paused: false }
+  }
+  return states
+}
+
 function blockedSuffix(result: SessionControlResult) {
   const others =
     result.stillBlockedSessionIDs.length - (result.stillBlockedSessionIDs.includes(result.rootSessionID) ? 1 : 0)

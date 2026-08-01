@@ -595,4 +595,53 @@ describe("tui sync", () => {
       app.renderer.destroy()
     }
   })
+
+  test("reconciles pause state for every affected session on unpause", async () => {
+    const { app, sync } = await mount()
+    try {
+      const root = "ses_pause_root"
+      const child = "ses_pause_child"
+      // The action root resumes while a child stays paused by an ancestor cascade.
+      sync.pause.applyResult(
+        {
+          rootSessionID: root,
+          cascadeID: "cas_1",
+          affectedSessionIDs: [root, child],
+          interruptionSignalledSessionIDs: [],
+          stillBlockedSessionIDs: [child],
+          scheduledSessionIDs: [root],
+          unchanged: false,
+        },
+        { paused: false },
+      )
+      expect(sync.data.session_pause[root]).toEqual({ paused: false })
+      expect(sync.data.session_pause[child]).toEqual({ paused: true, ancestorBlocked: true })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("reconciles pause state for every affected session on pause", async () => {
+    const { app, sync } = await mount()
+    try {
+      const root = "ses_pause_root"
+      const child = "ses_pause_child"
+      sync.pause.applyResult(
+        {
+          rootSessionID: root,
+          cascadeID: "cas_2",
+          affectedSessionIDs: [root, child],
+          interruptionSignalledSessionIDs: [child],
+          stillBlockedSessionIDs: [root, child],
+          scheduledSessionIDs: [],
+          unchanged: false,
+        },
+        { paused: true, cascadeID: "cas_2", ancestorBlocked: false },
+      )
+      expect(sync.data.session_pause[root]).toEqual({ paused: true, cascadeID: "cas_2", ancestorBlocked: false })
+      expect(sync.data.session_pause[child]).toEqual({ paused: true, ancestorBlocked: true })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 })

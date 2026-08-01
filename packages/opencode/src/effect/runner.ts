@@ -4,7 +4,12 @@ export interface Runner<A, E = never> {
   readonly state: State<A, E>
   readonly busy: boolean
   readonly ensureRunning: (work: Effect.Effect<A, E>) => Effect.Effect<A, E | Suspended>
-  readonly wake: (work: Effect.Effect<A, E>) => Effect.Effect<void, Suspended>
+  /**
+   * Schedules `work` for execution and reports whether a run that will execute it is now in
+   * flight: `true` when a new run is started or queued, `false` when the wake attached to an
+   * already running loop and the passed `work` was dropped (the in-flight run covers the work).
+   */
+  readonly wake: (work: Effect.Effect<A, E>) => Effect.Effect<boolean, Suspended>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy | Suspended>
   readonly cancel: Effect.Effect<void>
   readonly suspend: Effect.Effect<void>
@@ -217,14 +222,14 @@ export const make = <A, E = never>(
           case "ShellThenRun":
           case "SuspendingRunThenRun":
           case "SuspendingShellThenRun":
-            return [Effect.void, st] as const
+            return [Effect.succeed(false), st] as const
           case "Shell": {
             const run = {
               id: next(),
               done: yield* Deferred.make<A, E | Cancelled | Suspended>(),
               work,
             } satisfies PendingHandle<A, E>
-            return [Effect.void, { _tag: "ShellThenRun", shell: st.shell, run }] as const
+            return [Effect.succeed(true), { _tag: "ShellThenRun", shell: st.shell, run }] as const
           }
           case "SuspendingRun": {
             const run = {
@@ -232,7 +237,7 @@ export const make = <A, E = never>(
               done: yield* Deferred.make<A, E | Cancelled | Suspended>(),
               work,
             } satisfies PendingHandle<A, E>
-            return [Effect.void, { _tag: "SuspendingRunThenRun", current: st.run, run }] as const
+            return [Effect.succeed(true), { _tag: "SuspendingRunThenRun", current: st.run, run }] as const
           }
           case "SuspendingShell": {
             const run = {
@@ -240,12 +245,12 @@ export const make = <A, E = never>(
               done: yield* Deferred.make<A, E | Cancelled | Suspended>(),
               work,
             } satisfies PendingHandle<A, E>
-            return [Effect.void, { _tag: "SuspendingShellThenRun", shell: st.shell, run }] as const
+            return [Effect.succeed(true), { _tag: "SuspendingShellThenRun", shell: st.shell, run }] as const
           }
           case "Idle": {
             const done = yield* Deferred.make<A, E | Cancelled | Suspended>()
             const run = yield* startRun(work, done)
-            return [run.start.open.pipe(Effect.asVoid), { _tag: "Running", run }] as const
+            return [run.start.open.pipe(Effect.as(true)), { _tag: "Running", run }] as const
           }
         }
       }),

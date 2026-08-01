@@ -610,7 +610,7 @@ export function Session() {
       return
     }
     const feedback = controlResultFeedback(action, dispatch.result)
-    sync.pause.applyResult(sessionID, feedback.state)
+    sync.pause.applyResult(dispatch.result, feedback.state)
     toast.show({ message: feedback.message, variant: feedback.variant })
   }
 

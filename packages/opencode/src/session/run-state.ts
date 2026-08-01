@@ -10,6 +10,7 @@ import { Database } from "@oc2-ai/core/database/database"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { EventV2 } from "@oc2-ai/core/event"
 import { SessionEvent } from "@oc2-ai/core/session/event"
+import { PendingMailbox } from "@/team/pending-mailbox"
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
@@ -26,7 +27,7 @@ export interface Interface {
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
     work: Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
-  ) => Effect.Effect<void, Runner.Suspended>
+  ) => Effect.Effect<boolean, Runner.Suspended>
   readonly startShell: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
@@ -148,7 +149,7 @@ export const layer = Layer.effect(
       work: Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
     ) {
       yield* assertNotSuspended(db, sessionID)
-      yield* (yield* runner(sessionID, onInterrupt)).wake(work)
+      return yield* (yield* runner(sessionID, onInterrupt)).wake(work)
     })
 
     const startShell = Effect.fn("SessionRunState.startShell")(function* (
@@ -196,7 +197,9 @@ export const layer = Layer.effect(
     // Direct pause -> interruption path. SessionControl.pause calls this immediately after the
     // durable barrier commits, so interruption never depends on an observer of ControlChanged.
     // Sessions with live work get a durable "running" resume intent so a later start wakes the
-    // interrupted turn; idle sessions get none.
+    // interrupted turn. Idle sessions that are still owed team mailbox work get a durable
+    // "team-wake" intent so /unpause actually wakes them; the mailbox probe is non-destructive
+    // and never claims the rows.
     const unregisterInterrupter = yield* control.registerInterrupter((sessionIDs) =>
       Effect.forEach(
         sessionIDs,
@@ -210,7 +213,22 @@ export const layer = Layer.effect(
                     Effect.catchCause(() => Effect.succeed(0)),
                     Effect.as([sessionID]),
                   )
-                : Effect.succeed([]),
+                : PendingMailbox.hasPendingMailboxMessages(db, sessionID).pipe(
+                    Effect.flatMap((hasPending) =>
+                      hasPending
+                        ? control.setResumeIntent({ sessionID, reason: "team-wake" }).pipe(
+                            // A best-effort intent write can never fail the pause path.
+                            Effect.catchCause(() => Effect.succeed(0)),
+                            // An idle session is not interruption-signalled; only its durable
+                            // intent matters so a later release() includes it in resumeTickets.
+                            Effect.as([]),
+                          )
+                        : Effect.succeed([]),
+                    ),
+                    // The interrupter must stay infallible so a failed mailbox probe can never
+                    // hide which sessions were signalled.
+                    Effect.catchCause(() => Effect.succeed([])),
+                  ),
             ),
           ),
         {

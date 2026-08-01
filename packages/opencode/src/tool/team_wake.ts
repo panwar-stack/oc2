@@ -13,9 +13,10 @@ export function wakeTeamSession(ops: TaskPromptOps, sessionID: string): Effect.E
     if (request.paused) return
     // The first wake can attach a blocked session to the current turn; the second
     // gives sessions that became idle during attach a chance to consume mailbox input.
+    // The ticket travels with the first woken run and is consumed at run start (or cleared when
+    // that wake attaches to a run already in flight), so a re-suspended run keeps its demand.
+    yield* ops.wake(id, request.ticket).pipe(Effect.ignore)
     yield* ops.wake(id).pipe(Effect.ignore)
-    yield* ops.wake(id).pipe(Effect.ignore)
-    yield* control.finishResume(request.ticket)
   })
   // Building SessionControl.defaultLayer opens its own database connection, so reuse the ambient
   // service whenever the caller already has one and only fall back for contexts without it.

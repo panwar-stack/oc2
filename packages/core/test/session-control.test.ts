@@ -106,6 +106,74 @@ describe("SessionControl", () => {
     }),
   )
 
+  it.effect("orders release resume tickets descendants before their lead", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const control = yield* SessionControl.Service
+      const lead = yield* sessions.create({ location })
+      const child = yield* sessions.create({ location, parentID: lead.id })
+      const grandchild = yield* sessions.create({ location, parentID: child.id })
+
+      yield* control.pause({
+        rootSessionID: lead.id,
+        resumeIntents: [
+          { sessionID: lead.id, reason: "running" },
+          { sessionID: child.id, reason: "running" },
+          { sessionID: grandchild.id, reason: "running" },
+        ],
+      })
+
+      const released = yield* control.release(lead.id)
+      expect(released.unchanged).toBeFalse()
+      // Descendants resume before the lead: grandchild, then child, then lead.
+      expect(released.resumableSessionIDs).toEqual([grandchild.id, child.id, lead.id])
+      expect(released.resumeTickets.map((ticket) => ticket.sessionID)).toEqual([grandchild.id, child.id, lead.id])
+
+      // Repeated release stays idempotent and keeps the same descendant-first order.
+      const repeated = yield* control.release(lead.id)
+      expect(repeated.unchanged).toBeTrue()
+      expect(repeated.resumeTickets.map((ticket) => ticket.sessionID)).toEqual([grandchild.id, child.id, lead.id])
+    }),
+  )
+
+  it.effect("orders release resume tickets team members before their lead", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const control = yield* SessionControl.Service
+      const { db } = yield* Database.Service
+      const lead = yield* sessions.create({ location })
+      const member = yield* sessions.create({ location })
+      const now = Date.now()
+      yield* db.run(sql`
+        INSERT INTO team (id, name, goal, lead_session_id, status, time_created, time_updated)
+        VALUES ('team_order_test', 'order test', 'test ordering', ${lead.id}, 'active', ${now}, ${now})
+      `)
+      yield* db.run(sql`
+        INSERT INTO team_member (
+          id, team_id, session_id, name, agent_type, role_prompt, status, plan_mode, work_mode,
+          time_created, time_updated
+        ) VALUES (
+          'member_order_test', 'team_order_test', ${member.id}, 'member', 'general', 'test', 'active', false, 'implement',
+          ${now}, ${now}
+        )
+      `)
+
+      yield* control.pause({
+        rootSessionID: lead.id,
+        resumeIntents: [
+          { sessionID: lead.id, reason: "running" },
+          { sessionID: member.id, reason: "team-wake" },
+        ],
+      })
+
+      const released = yield* control.release(lead.id)
+      expect(released.unchanged).toBeFalse()
+      // Team members resume before their lead.
+      expect(released.resumableSessionIDs).toEqual([member.id, lead.id])
+      expect(released.resumeTickets.map((ticket) => ticket.sessionID)).toEqual([member.id, lead.id])
+    }),
+  )
+
   it.effect("keeps overlapping child and ancestor cascades independent", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionV2.Service

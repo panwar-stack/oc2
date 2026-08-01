@@ -217,16 +217,13 @@ type TeamRow = {
   readonly memberStatus: string | null
 }
 
-function targetClosure(db: DatabaseService, rootSessionID: SessionSchema.ID) {
+function loadClosureGraph(db: DatabaseService) {
   return Effect.gen(function* () {
     const sessions = yield* db
       .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
       .from(SessionTable)
       .all()
       .pipe(Effect.orDie)
-    if (!sessions.some((session) => session.id === rootSessionID)) {
-      return yield* new NotFoundError({ sessionID: rootSessionID })
-    }
 
     const children = new Map<string, SessionSchema.ID[]>()
     const storedSessionIDs = new Set<string>(sessions.map((session) => session.id))
@@ -265,15 +262,62 @@ function targetClosure(db: DatabaseService, rootSessionID: SessionSchema.ID) {
       teams.set(row.leadSessionID, members)
     }
 
+    return { children, teams, storedSessionIDs }
+  })
+}
+
+function targetClosure(db: DatabaseService, rootSessionID: SessionSchema.ID) {
+  return Effect.gen(function* () {
+    const graph = yield* loadClosureGraph(db)
+    if (!graph.storedSessionIDs.has(rootSessionID)) {
+      return yield* new NotFoundError({ sessionID: rootSessionID })
+    }
+
     const result = new Set<SessionSchema.ID>()
     const pending = [rootSessionID]
     while (pending.length > 0) {
       const sessionID = pending.shift()
       if (!sessionID || result.has(sessionID)) continue
       result.add(sessionID)
-      pending.push(...(children.get(sessionID) ?? []), ...(teams.get(sessionID) ?? []))
+      pending.push(...(graph.children.get(sessionID) ?? []), ...(graph.teams.get(sessionID) ?? []))
     }
     return [...result]
+  })
+}
+
+/**
+ * Distance of each session in the root's closure from the root, where the root/lead
+ * sits at depth 0 and a direct child or direct team member sits at depth 1.
+ */
+function closureDepths(db: DatabaseService, rootSessionID: SessionSchema.ID) {
+  return Effect.gen(function* () {
+    const graph = yield* loadClosureGraph(db)
+    if (!graph.storedSessionIDs.has(rootSessionID)) {
+      return yield* new NotFoundError({ sessionID: rootSessionID })
+    }
+
+    const depth = new Map<SessionSchema.ID, number>([[rootSessionID, 0]])
+    const pending = [rootSessionID]
+    while (pending.length > 0) {
+      const sessionID = pending.shift()
+      if (!sessionID) continue
+      const nextDepth = (depth.get(sessionID) ?? 0) + 1
+      for (const next of [...(graph.children.get(sessionID) ?? []), ...(graph.teams.get(sessionID) ?? [])]) {
+        if (depth.has(next)) continue
+        depth.set(next, nextDepth)
+        pending.push(next)
+      }
+    }
+    return depth
+  })
+}
+
+/** Orders tickets deepest-first (descendants before their lead), breaking ties deterministically by sessionID. */
+function orderTicketsByDepth(tickets: readonly ResumeTicket[], depth: ReadonlyMap<SessionSchema.ID, number>) {
+  return [...tickets].sort((left, right) => {
+    const byDepth = (depth.get(right.sessionID) ?? 0) - (depth.get(left.sessionID) ?? 0)
+    if (byDepth !== 0) return byDepth
+    return left.sessionID < right.sessionID ? -1 : left.sessionID > right.sessionID ? 1 : 0
   })
 }
 
@@ -576,6 +620,8 @@ export const layer = Layer.effect(
                   .get()
                   .pipe(Effect.orDie)
                 if (!session) return yield* new NotFoundError({ sessionID: rootSessionID })
+                // Resume tickets are ordered deepest-first (descendants before their lead).
+                const depth = yield* closureDepths(db, rootSessionID)
                 const active = yield* db
                   .select()
                   .from(SessionPauseCascadeTable)
@@ -604,7 +650,10 @@ export const layer = Layer.effect(
                         .pipe(Effect.orDie)).map((row) => SessionSchema.ID.make(row.sessionID))
                     : []
                   const blocked = new Set((yield* activeBlockers(db, affectedSessionIDs)).map((row) => row.sessionID))
-                  const resumeTickets = yield* runnableResumeTickets(affectedSessionIDs)
+                  const resumeTickets = orderTicketsByDepth(
+                    yield* runnableResumeTickets(affectedSessionIDs),
+                    depth,
+                  )
                   return {
                     rootSessionID,
                     affectedSessionIDs,
@@ -643,16 +692,19 @@ export const layer = Layer.effect(
                   .where(eq(SessionPauseBlockerTable.cascade_id, active.id))
                   .all()
                   .pipe(Effect.orDie)
-                const resumeTickets = intents
-                  .map(
-                    (row) =>
-                      ({
-                        sessionID: SessionSchema.ID.make(row.sessionID),
-                        generation: row.generation,
-                        reason: row.reason,
-                      }) satisfies ResumeTicket,
-                  )
-                  .filter((ticket) => !blocked.has(ticket.sessionID))
+                const resumeTickets = orderTicketsByDepth(
+                  intents
+                    .map(
+                      (row) =>
+                        ({
+                          sessionID: SessionSchema.ID.make(row.sessionID),
+                          generation: row.generation,
+                          reason: row.reason,
+                        }) satisfies ResumeTicket,
+                    )
+                    .filter((ticket) => !blocked.has(ticket.sessionID)),
+                  depth,
+                )
                 return {
                   rootSessionID,
                   cascadeID: active.id,

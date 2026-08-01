@@ -17,6 +17,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@oc2-ai/core/database/database"
 import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { Permission } from "@/permission"
+import type { SessionControl } from "@oc2-ai/core/session/control"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -24,9 +25,11 @@ export interface TaskPromptOps {
   prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts, Runner.Suspended>
   /**
    * Non-blocking nudge. Attaches to the live run or schedules a new one and returns as soon as the
-   * work is scheduled. It never reports the session's final result.
+   * work is scheduled. It never reports the session's final result. When a resume ticket is passed,
+   * the durable intent is consumed by the woken run at run start (or immediately when the wake
+   * attaches to a run already in flight).
    */
-  wake(sessionID: SessionID): Effect.Effect<void, Runner.Suspended>
+  wake(sessionID: SessionID, ticket?: SessionControl.ResumeTicket): Effect.Effect<void, Runner.Suspended>
   /** Runs the session loop to completion and answers with its final assistant message. */
   run(sessionID: SessionID): Effect.Effect<SessionV1.WithParts, Runner.Suspended>
 }

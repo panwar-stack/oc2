@@ -16,6 +16,7 @@ import {
   TeamMessageRecipientTable,
   TeamUsageEventTable,
 } from "./team.sql"
+import { PendingMailbox } from "./pending-mailbox"
 
 const toOption = <T>(v: T | null | undefined): Option.Option<T> => (v != null ? Option.some(v) : Option.none())
 
@@ -111,6 +112,12 @@ export interface Interface {
   sendMessage: (input: { teamID: string; sender: string; recipients: string[]; body: string }) => Effect.Effect<Message>
   getMessages: (teamID: string) => Effect.Effect<Message[]>
   getPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[]>
+  /**
+   * Non-destructive pending-mailbox probe. Reports whether the recipient has any mailbox rows
+   * still in "pending" state without claiming them, so a paused session's mailbox stays
+   * claimable exactly once after resume.
+   */
+  hasPendingMailboxMessages: (recipientSession: string) => Effect.Effect<boolean>
   claimPendingMessages: (
     recipientSession: string,
     teamID: string,
@@ -837,6 +844,10 @@ export const layer = Layer.effect(
       }))
     })
 
+    const hasPendingMailboxMessages = Effect.fn("Team.hasPendingMailboxMessages")((recipientSession: string) =>
+      PendingMailbox.hasPendingMailboxMessages(db, recipientSession),
+    )
+
     const claimPendingMessages = Effect.fn("Team.claimPendingMessages")(function* (
       recipientSession: string,
       teamID: string,
@@ -1046,6 +1057,7 @@ export const layer = Layer.effect(
       sendMessage,
       getMessages,
       getPendingMessages,
+      hasPendingMailboxMessages,
       claimPendingMessages,
       releaseClaimedMessages,
       markMessageDelivered,
