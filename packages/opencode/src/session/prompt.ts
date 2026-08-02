@@ -1667,7 +1667,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
-          const outcome: "break" | "break-structured" | "break-error" | "continue" = yield* Effect.gen(function* () {
+          const outcome: "break-structured" | "break-error" | "continue" = yield* Effect.gen(function* () {
             const bypassAgentCheck = primaryLastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
@@ -1780,7 +1780,10 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
               }
             }
 
-            if (result === "stop") return "break" as const
+            // A processor "stop" is an error/blocked termination (a message error or a denied
+            // tool that stops the turn), not a successful finalization: it bypasses the barrier.
+            // Clean finishes are already handled by the finished-assistant exit above.
+            if (result === "stop") return "break-error" as const
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
@@ -1795,10 +1798,6 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
-          if (outcome === "break") {
-            if (yield* finalizationBarrier({ session, lastUser })) continue
-            break
-          }
           if (outcome === "break-structured" || outcome === "break-error") break
           continue
         }

@@ -2293,6 +2293,42 @@ it.instance(
 )
 
 it.instance(
+  "a processor-stop (rejected tool) finalization bypasses the barrier even while a finite teammate is nonterminal",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const registry = yield* ToolRegistry.Service
+        const { read } = yield* registry.named()
+        const original = read.execute
+        // A rejected tool marks the processor as blocked (ctx.blocked), which yields "stop". The
+        // finalization barrier must be bypassed: the lead finalizes immediately instead of
+        // parking on the nonterminal worker.
+        read.execute = (() => Effect.fail(new Question.RejectedError())) as unknown as typeof read.execute
+        yield* Effect.addFinalizer(() => Effect.sync(() => void (read.execute = original)))
+
+        const { prompt, team, lead, info, member } = yield* parkLeadOnWorker({ llm, memberStatus: "active" })
+        yield* llm.tool("read", { filePath: "/tmp/nonexistent" })
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "lead parked on a processor-stop finalization instead of bypassing the barrier",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        const members = yield* team.getMembers(info.id)
+        expect(members.find((candidate) => candidate.id === member.id)?.status).toBe("active")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  15_000,
+)
+
+it.instance(
   "cancel finalizes subtask tool state",
   () =>
     Effect.gen(function* () {
