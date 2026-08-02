@@ -2,12 +2,75 @@ import { describe, expect } from "bun:test"
 import { Deferred, Effect, Layer, Option } from "effect"
 import { Team } from "@/team/team"
 import { Bus } from "@/bus"
+import { Agent } from "@/agent/agent"
+import { BackgroundJob } from "@/background/job"
+import { Config } from "@/config/config"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
+import { Session } from "@/session/session"
+import { SessionRunState } from "@/session/run-state"
+import { SessionStatus } from "@/session/status"
+import { MessageID, PartID } from "@/session/schema"
+import type { SessionPrompt } from "@/session/prompt"
+import { ModelV2 } from "@oc2-ai/core/model"
+import { ProviderV2 } from "@oc2-ai/core/provider"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
+import { Truncate } from "@/tool/truncate"
+import type { TaskPromptOps } from "@/tool/task"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
+import { Database } from "@oc2-ai/core/database/database"
 import { Permission } from "@/permission"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 
-const it = testEffect(Layer.mergeAll(Team.defaultLayer, Bus.layer, CrossSpawnSpawner.defaultLayer))
+const ref = {
+  providerID: ProviderV2.ID.make("test"),
+  modelID: ModelV2.ID.make("test-model"),
+}
+
+function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
+  const id = MessageID.ascending()
+  return {
+    info: {
+      id,
+      role: "assistant",
+      parentID: input.messageID ?? MessageID.ascending(),
+      sessionID: input.sessionID,
+      mode: input.agent ?? "general",
+      agent: input.agent ?? "general",
+      cost: 0,
+      path: { cwd: "/tmp", root: "/tmp" },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: input.model?.modelID ?? ref.modelID,
+      providerID: input.model?.providerID ?? ref.providerID,
+      time: { created: Date.now() },
+      finish: "stop",
+    },
+    parts: [{ id: PartID.ascending(), messageID: id, sessionID: input.sessionID, type: "text", text }],
+  } as SessionV1.WithParts
+}
+
+const it = testEffect(
+  Layer.mergeAll(
+    Agent.defaultLayer,
+    BackgroundJob.defaultLayer,
+    Config.defaultLayer,
+    CrossSpawnSpawner.defaultLayer,
+    Database.defaultLayer,
+    EventV2Bridge.defaultLayer,
+    LifecycleReconciler.defaultLayer,
+    Session.defaultLayer,
+    SessionControl.defaultLayer,
+    SessionRunState.defaultLayer,
+    SessionStatus.defaultLayer,
+    Team.defaultLayer,
+    Truncate.defaultLayer,
+    RuntimeFlags.layer({ experimentalBackgroundSubagents: true }),
+    Bus.layer,
+  ),
+)
 
 function unwrap<T>(opt: Option.Option<T>): T {
   if (Option.isNone(opt)) throw new Error("Option is None")
@@ -821,6 +884,151 @@ describe("team", () => {
         const noop = yield* team.getPendingMessages("ses_nonexistent", teamInfo.id)
         expect(noop.length).toBe(0)
       }),
+    ),
+  )
+
+  it.live("new teams start on protocol 0", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const created = yield* team.create({ name: "protocol-zero", goal: "Stay on protocol 0", leadSessionID: "ses_test_lead_protocol_0" })
+        expect(created.protocol_version).toBe(0)
+      }),
+    ),
+  )
+
+  it.live("shutdown leaves failed members failed", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_failed_shutdown"
+        const info = yield* team.create({ name: "failed-shutdown", goal: "Keep failed terminal", leadSessionID })
+        const failed = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_test_failed_member",
+          name: "failed",
+          agentType: "general",
+          rolePrompt: "Fail",
+        })
+        yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+
+        yield* team.shutdown(info.id)
+
+        const members = yield* team.getMembers(info.id)
+        expect(members[0]?.status).toBe("failed")
+        expect(members[0]?.failure_code).toBe("provider_error")
+      }),
+    ),
+  )
+
+  it.live("a failed member is not cancelled again by shutdown", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_failed_not_cancelled"
+        const info = yield* team.create({ name: "failed-not-cancelled", goal: "Keep failed terminal", leadSessionID })
+        const failed = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_test_failed_not_cancelled",
+          name: "failed",
+          agentType: "general",
+          rolePrompt: "Fail",
+        })
+        const active = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_test_active_cancelled",
+          name: "active",
+          agentType: "general",
+          rolePrompt: "Keep working",
+        })
+        yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+        yield* team.updateMemberStatus(active.id, "active")
+
+        yield* team.shutdown(info.id)
+
+        const members = yield* team.getMembers(info.id)
+        expect(members.find((member) => member.id === failed.id)?.status).toBe("failed")
+        expect(members.find((member) => member.id === active.id)?.status).toBe("cancelled")
+      }),
+    ),
+  )
+
+  it.live("a failed finite member cancels blocked descendants and leaves independent members untouched", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const upstreamSession = yield* sessions.create({ parentID: lead.id, title: "Upstream" })
+          const dependentSession = yield* sessions.create({ parentID: lead.id, title: "Dependent" })
+          const independentSession = yield* sessions.create({ parentID: lead.id, title: "Independent" })
+          const info = yield* team.create({
+            name: "failed-descendants",
+            goal: "Cancel blocked descendants",
+            leadSessionID: lead.id,
+          })
+          const upstream = yield* team.addMember({
+            teamID: info.id,
+            sessionID: upstreamSession.id,
+            name: "upstream",
+            agentType: "general",
+            rolePrompt: "Fail",
+            model: ref,
+          })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: dependentSession.id,
+            name: "dependent",
+            agentType: "general",
+            rolePrompt: "Wait for upstream",
+            dependencyIDs: [upstreamSession.id],
+          })
+          const independent = yield* team.addMember({
+            teamID: info.id,
+            sessionID: independentSession.id,
+            name: "independent",
+            agentType: "general",
+            rolePrompt: "Independent",
+            model: ref,
+          })
+          const dependent = (yield* team.getMembers(info.id)).find((member) => member.name === "dependent")
+          yield* team.updateMemberStatus(dependent!.id, "blocked")
+          yield* team.updateMemberStatus(independent.id, "active")
+
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: () =>
+              Effect.sync(() => {
+                throw new Error("boom")
+              }),
+            wake: () => Effect.void,
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const outcome = yield* lifecycle.startMember({ memberID: upstream.id, ops: promptOps })
+          expect(outcome).toBe("boom")
+
+          const members = yield* team.getMembers(info.id)
+          const upstreamNow = members.find((member) => member.id === upstream.id)
+          const dependentNow = members.find((member) => member.name === "dependent")
+          const independentNow = members.find((member) => member.name === "independent")
+          expect(upstreamNow?.status).toBe("failed")
+          expect(upstreamNow?.failure_code).toBe("provider_error")
+          expect(dependentNow?.status).toBe("cancelled")
+          expect(dependentNow?.failure_code).toBe("dependency_failed")
+          expect(independentNow?.status).toBe("active")
+
+          const messages = yield* team.getMessages(info.id)
+          const cancelled = messages.find(
+            (message) => message.id === `lifecycle:member:${dependentNow?.id}:cancelled`,
+          )
+          expect(cancelled?.body).toContain("upstream")
+          const failed = messages.find((message) => message.id === `lifecycle:member:${upstream.id}:failed`)
+          expect(failed?.body).toContain("boom")
+        }),
+      { config: { experimental: { agent_teams: true } } },
     ),
   )
 

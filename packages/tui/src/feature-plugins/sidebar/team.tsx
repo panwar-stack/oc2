@@ -15,6 +15,7 @@ function memberStatusDot(
   if (t === "busy") return theme.success
   if (teamStatus?.status === "completed") return theme.success
   if (teamStatus?.status === "cancelled") return theme.error
+  if (teamStatus?.status === "failed") return theme.error
   if (["starting", "blocked", "active", "idle"].includes(teamStatus?.status ?? "")) return theme.info
   return theme.textMuted
 }
@@ -29,6 +30,7 @@ export function statusLabel(
   if (t === "busy") return "working"
   if (teamStatus?.status === "completed") return "completed"
   if (teamStatus?.status === "cancelled") return "cancelled"
+  if (teamStatus?.status === "failed") return "failed"
   if (teamStatus?.status === "active") return "active"
   if (teamStatus?.status === "starting") return "starting"
   if (teamStatus?.status === "blocked") return "blocked"

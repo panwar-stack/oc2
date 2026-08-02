@@ -255,7 +255,8 @@ function loadClosureGraph(db: DatabaseService) {
         row.memberSessionID &&
         storedSessionIDs.has(row.memberSessionID) &&
         row.memberStatus !== "completed" &&
-        row.memberStatus !== "cancelled"
+        row.memberStatus !== "cancelled" &&
+        row.memberStatus !== "failed"
       ) {
         members.push(SessionSchema.ID.make(row.memberSessionID))
       }

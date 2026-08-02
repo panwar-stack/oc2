@@ -175,6 +175,7 @@ export const TeamReportTool = Tool.define<
           const totalMemberRuntime = members.reduce((acc, item) => acc + (item.time_updated - item.time_created), 0)
           const completedMembers = members.filter((member) => member.status === "completed")
           const canceledMembers = members.filter((member) => member.status === "cancelled")
+          const failedMembers = members.filter((member) => member.status === "failed")
           const blockedMembers = members.filter((member) => member.status === "blocked")
           const daemonMembers = members.filter((member) => member.lifecycle === "daemon")
           const daemonMetrics = {
@@ -324,6 +325,7 @@ export const TeamReportTool = Tool.define<
             `- members: ${members.length}`,
             `- completed: ${completedMembers.length} (${pct(completedMembers.length, members.length).toFixed(1)}%)`,
             `- cancelled: ${canceledMembers.length} (${pct(canceledMembers.length, members.length).toFixed(1)}%)`,
+            `- failed: ${failedMembers.length} (${pct(failedMembers.length, members.length).toFixed(1)}%)`,
             `- blocked: ${blockedMembers.length} (${pct(blockedMembers.length, members.length).toFixed(1)}%)`,
             `- active now: ${activeMembers.length} (${pct(activeMembers.length, members.length).toFixed(1)}%)`,
             `- starting now: ${startedMembers.length} (${pct(startedMembers.length, members.length).toFixed(1)}%)`,
@@ -402,6 +404,7 @@ export const TeamReportTool = Tool.define<
                 member_count: members.length,
                 completed_member_count: completedMembers.length,
                 cancelled_member_count: canceledMembers.length,
+                failed_member_count: failedMembers.length,
                 blocked_member_count: blockedMembers.length,
                 parallelism,
               },

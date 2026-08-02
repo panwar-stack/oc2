@@ -12,6 +12,7 @@ export const TeamTable = sqliteTable(
     status: text({ enum: ["active", "closed", "cancelled"] })
       .notNull()
       .default("active"),
+    protocol_version: integer().notNull().default(0),
     ...Timestamps,
   },
   (table) => ({
@@ -31,7 +32,7 @@ export const TeamMemberTable = sqliteTable(
     agent_type: text().notNull(),
     model: text({ mode: "json" }).$type<{ providerID: string; modelID: string; variant?: string } | null>(),
     role_prompt: text().notNull(),
-    status: text({ enum: ["starting", "blocked", "active", "idle", "completed", "cancelled"] })
+    status: text({ enum: ["starting", "blocked", "active", "idle", "completed", "cancelled", "failed"] })
       .notNull()
       .default("starting"),
     lifecycle: text({ enum: ["task", "daemon"] })
@@ -40,6 +41,7 @@ export const TeamMemberTable = sqliteTable(
     daemon_state: text({ enum: ["initializing", "running", "idle", "cancelled", "error"] }),
     daemon_last_active: integer(),
     daemon_error: text(),
+    failure_code: text(),
     plan_mode: integer({ mode: "boolean" }).notNull().default(false),
     work_mode: text({ enum: ["plan", "implement"] })
       .notNull()

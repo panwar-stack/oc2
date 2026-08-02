@@ -784,7 +784,7 @@ describe("session.lifecycle-reconciler", () => {
     ),
   )
 
-  it.live("an assistant error settles the teammate as cancelled with the error text", () =>
+  it.live("an assistant error settles a finite teammate as failed with provider_error", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -806,15 +806,16 @@ describe("session.lifecycle-reconciler", () => {
           const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
           expect(outcome).toBe("boom")
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
-          expect(settled?.status).toBe("cancelled")
-          const cancelled = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":cancelled"))
-          expect(cancelled?.body).toContain("boom")
+          expect(settled?.status).toBe("failed")
+          expect(settled?.failure_code).toBe("provider_error")
+          const failed = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":failed"))
+          expect(failed?.body).toContain("boom")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("restart reconciliation settles a member from an errored assistant as cancelled", () =>
+  it.live("restart reconciliation settles a member from an errored assistant as failed", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -841,9 +842,10 @@ describe("session.lifecycle-reconciler", () => {
           yield* afterRestart(Effect.flatMap(LifecycleReconciler.Service, (lifecycle) => lifecycle.reconcile))
 
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
-          expect(settled?.status).toBe("cancelled")
-          const cancelled = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":cancelled"))
-          expect(cancelled?.body).toContain("boom")
+          expect(settled?.status).toBe("failed")
+          expect(settled?.failure_code).toBe("provider_error")
+          const failed = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":failed"))
+          expect(failed?.body).toContain("boom")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

@@ -28,6 +28,7 @@ export type TeamEvalFindingCategory =
   | "planning.missing_or_wrong_dependency"
   | "execution.unknown_agent"
   | "execution.cancelled_member"
+  | "execution.failed_member"
   | "execution.empty_result"
   | "execution.stuck_or_blocked"
   | "messaging.pending_delivery"
@@ -209,6 +210,7 @@ function reportFromRows(
         daemon_state: member.daemon_state,
         daemon_last_active: member.daemon_last_active,
         daemon_error: member.daemon_error,
+        failure_code: member.failure_code,
       },
     })),
     ...tasks.map((task) => ({
@@ -382,6 +384,13 @@ function deterministicFindings(
               message: `Member ${member.name} was cancelled.`,
               suffix: "cancelled",
               metadata: { session_id: member.session_id, member_id: member.id },
+            })
+          : undefined,
+        member.status === "failed" && member.lifecycle !== "daemon"
+          ? finding("execution.failed_member", "error", nodeID("member", member.session_id), member.time_updated, {
+              message: `Member ${member.name} failed${member.failure_code ? ` (${member.failure_code})` : ""}.`,
+              suffix: "failed",
+              metadata: { session_id: member.session_id, member_id: member.id, failure_code: member.failure_code },
             })
           : undefined,
         member.status === "blocked" && dependenciesCompleted

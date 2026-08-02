@@ -157,6 +157,35 @@ describe("tool.team_shutdown", () => {
       { config: { experimental: { agent_teams: true } } },
     ),
   )
+
+  it.live("shutdown does not cancel failed members", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "shutdown-failed", goal: "Close", leadSessionID: lead.id })
+          const failed = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_shutdown_failed",
+            name: "failed",
+            agentType: "general",
+            rolePrompt: "Fail",
+          })
+          yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+          const tool = yield* TeamShutdownTool
+          const def = yield* tool.init()
+
+          yield* def.execute({}, context(lead.id))
+          const member = (yield* team.getMembers(info.id)).find((member) => member.id === failed.id)
+
+          expect(member?.status).toBe("failed")
+          expect(member?.failure_code).toBe("provider_error")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
 })
 
 function context(sessionID: SessionID): Context {

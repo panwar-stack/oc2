@@ -45,8 +45,13 @@ export type MemberLifecycle = TeamMemberRow["lifecycle"]
 export type MemberDaemonState = NonNullable<TeamMemberRow["daemon_state"]>
 export type TaskStatus = TeamTaskRow["status"]
 
+/** Stable failure codes for terminal failed members. Only provider_error and dependency_failed are
+ * produced in this slice; the remaining codes arrive with later retry and handoff slices. */
+export type MemberFailureCode = "empty_result" | "provider_error" | "dependency_failed" | "missing_task_handoff"
+
 type TeamMemberStatusUpdate = {
   result?: string
+  failureCode?: MemberFailureCode | null
   daemonState?: MemberDaemonState | null
   daemonLastActive?: number | null
   daemonError?: string | null
@@ -199,6 +204,7 @@ export const layer = Layer.effect(
         goal: input.goal,
         lead_session_id: input.leadSessionID,
         status: "active",
+        protocol_version: 0,
         time_created: now,
         time_updated: now,
       } satisfies Info
@@ -245,7 +251,10 @@ export const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       yield* Effect.forEach(
-        allMembers.filter((member) => member.status !== "completed" && member.status !== "cancelled"),
+        allMembers.filter(
+          (member) =>
+            member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed",
+        ),
         (member) =>
           db
             .update(TeamMemberTable)
@@ -270,7 +279,10 @@ export const layer = Layer.effect(
           events.publish(MemberUpdated, {
             memberID: member.id,
             sessionID: member.session_id,
-            status: member.status === "completed" || member.status === "cancelled" ? member.status : "cancelled",
+            status:
+              member.status === "completed" || member.status === "cancelled" || member.status === "failed"
+                ? member.status
+                : "cancelled",
             lifecycle: member.lifecycle,
             daemonState: member.lifecycle === "daemon" ? "cancelled" : (member.daemon_state ?? undefined),
           }),
@@ -339,6 +351,7 @@ export const layer = Layer.effect(
         daemon_state: input.daemonState ?? null,
         daemon_last_active: input.daemonLastActive ?? null,
         daemon_error: input.daemonError ?? null,
+        failure_code: null,
         plan_mode: input.planMode ?? false,
         work_mode: input.workMode ?? "implement",
         dependency_ids: input.dependencyIDs,
@@ -357,6 +370,7 @@ export const layer = Layer.effect(
       const update = typeof resultOrUpdate === "string" ? { result: resultOrUpdate } : resultOrUpdate
       const setData: Partial<TeamMemberInsert> = { status, time_updated: now }
       if (update?.result !== undefined) setData.result = update.result
+      if (update?.failureCode !== undefined) setData.failure_code = update.failureCode
       if (update?.daemonState !== undefined) setData.daemon_state = update.daemonState
       if (update?.daemonLastActive !== undefined) setData.daemon_last_active = update.daemonLastActive
       if (update?.daemonError !== undefined) setData.daemon_error = update.daemonError
@@ -376,8 +390,9 @@ export const layer = Layer.effect(
         daemonState: row.daemon_state ?? undefined,
       })
 
-      if (row.status === "completed" || row.status === "idle") {
-        const statusText = row.status === "completed" ? "completed their work" : "became idle"
+      if (row.status === "completed" || row.status === "idle" || row.status === "failed") {
+        const statusText =
+          row.status === "completed" ? "completed their work" : row.status === "failed" ? "failed" : "became idle"
         const team = yield* db.select().from(TeamTable).where(eq(TeamTable.id, row.team_id)).get().pipe(Effect.orDie)
         if (team) {
           yield* sendMessage({
@@ -408,6 +423,7 @@ export const layer = Layer.effect(
         daemon_state: row.daemon_state,
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
+        failure_code: row.failure_code,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -452,6 +468,7 @@ export const layer = Layer.effect(
         daemon_state: row.daemon_state,
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
+        failure_code: row.failure_code,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -480,6 +497,7 @@ export const layer = Layer.effect(
         daemon_state: row.daemon_state,
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
+        failure_code: row.failure_code,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -510,6 +528,7 @@ export const layer = Layer.effect(
         daemon_state: row.daemon_state,
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
+        failure_code: row.failure_code,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,

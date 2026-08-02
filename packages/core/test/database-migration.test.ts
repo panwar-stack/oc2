@@ -93,6 +93,43 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("adds team protocol version and member failure columns and accepts failed status", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.get(
+            sql`SELECT name, dflt_value FROM pragma_table_info('team') WHERE name = 'protocol_version'`,
+          ),
+        ).toEqual({ name: "protocol_version", dflt_value: "0" })
+        expect(
+          yield* db.get(sql`SELECT name FROM pragma_table_info('team_member') WHERE name = 'failure_code'`),
+        ).toEqual({ name: "failure_code" })
+
+        yield* db.run(sql`
+          INSERT INTO team (id, name, goal, lead_session_id, status, time_created, time_updated)
+          VALUES ('team_failed_state', 't', 'g', 'lead', 'active', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO team_member (id, team_id, session_id, name, agent_type, role_prompt, status, lifecycle, plan_mode, work_mode, time_created, time_updated)
+          VALUES ('member_failed_state', 'team_failed_state', 'ses_failed', 'm', 'general', 'r', 'failed', 'task', 0, 'implement', 1, 1)
+        `)
+        yield* db.run(sql`
+          UPDATE team_member SET failure_code = 'provider_error' WHERE id = 'member_failed_state'
+        `)
+
+        expect(yield* db.get(sql`SELECT protocol_version FROM team WHERE id = 'team_failed_state'`)).toEqual({
+          protocol_version: 0,
+        })
+        expect(
+          yield* db.get(sql`SELECT status, failure_code FROM team_member WHERE id = 'member_failed_state'`),
+        ).toEqual({ status: "failed", failure_code: "provider_error" })
+      }),
+    )
+  })
+
   test("backfills existing Context Epoch rows to the build agent", async () => {
     await run(
       Effect.gen(function* () {

@@ -871,6 +871,40 @@ describe("team eval", () => {
       }),
     ),
   )
+
+  it.live("a failed member is terminal and appears as a deterministic failure finding with its code", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({
+          name: "eval-failed-terminal",
+          goal: "Evaluate failed terminal members",
+          leadSessionID: "ses_eval_failed_lead",
+        })
+        const failed = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_failed_member",
+          name: "failed",
+          agentType: "general",
+          rolePrompt: "Fail",
+        })
+        yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+        yield* closeTeam(info.id)
+
+        const report = yield* TeamEval.build(info.id)
+        const failedFinding = finding(report, "execution.failed_member", node("member", failed.session_id))
+
+        expect(failedFinding).toBeDefined()
+        expect(failedFinding?.root_cause).toBe(true)
+        expect(failedFinding?.message).toContain("failed")
+        expect(failedFinding?.message).toContain("provider_error")
+        expect(failedFinding?.metadata?.failure_code).toBe("provider_error")
+        // failed is terminal: no premature shutdown and no cancelled-member finding.
+        expect(categories(report)).not.toContain("integration.premature_shutdown")
+        expect(categories(report)).not.toContain("execution.cancelled_member")
+      }),
+    ),
+  )
 })
 
 function finding(report: TeamEvalReport, category: TeamEvalFindingCategory, nodeID?: string) {

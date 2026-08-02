@@ -14,6 +14,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable } from "@/team/team.sql"
+import type { MemberFailureCode } from "@/team/team"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Schedule, Scope } from "effect"
 
@@ -62,9 +63,10 @@ type MemberMetadata = {
   kind: "team-member"
   memberID: string
   promptMessageID: string
-  state: "running" | "completed" | "idle" | "cancelled"
+  state: "running" | "completed" | "idle" | "cancelled" | "failed"
   output?: string
   error?: string
+  failureCode?: string
 }
 
 type State = {
@@ -85,11 +87,11 @@ type SessionRow = typeof SessionTable.$inferSelect
 type PartRow = typeof PartTable.$inferSelect
 type DatabaseService = Database.Interface["db"]
 type QueryDatabase = Pick<DatabaseService, "select">
-type WriteDatabase = Pick<DatabaseService, "insert">
+type WriteDatabase = Pick<DatabaseService, "insert" | "select" | "update">
 
 const metadataKey = "lifecycleReconciler"
 const memberMetadataKey = "lifecycleTeamMember"
-const terminalMemberStatuses = ["completed", "cancelled"] as const
+const terminalMemberStatuses = ["completed", "cancelled", "failed"] as const
 // Reconciliation is poll driven so it also covers work that no live fiber owns after a restart.
 // The interval is a deliberate trade-off between resume latency and idle query cost; see the
 // "polling cost" note in the persistent-session-pause spec follow-ups.
@@ -185,7 +187,7 @@ function memberMetadata(row: SessionRow): MemberMetadata | undefined {
     item.kind !== "team-member" ||
     typeof item.memberID !== "string" ||
     typeof item.promptMessageID !== "string" ||
-    !["running", "completed", "idle", "cancelled"].includes(String(item.state))
+    !["running", "completed", "idle", "cancelled", "failed"].includes(String(item.state))
   )
     return
   return item as MemberMetadata
@@ -203,7 +205,7 @@ function backgroundWatchKey(sessionID: string, generation: number) {
   return `${sessionID}:${generation}`
 }
 
-function memberMessageID(memberID: string, kind: "started" | "completed" | "idle" | "cancelled") {
+function memberMessageID(memberID: string, kind: "started" | "completed" | "idle" | "cancelled" | "failed") {
   return `lifecycle:member:${memberID}:${kind}`
 }
 
@@ -414,7 +416,7 @@ export const layer = Layer.effect(
       input: {
         team: TeamRow
         member: TeamMemberRow
-        kind: "started" | "completed" | "idle" | "cancelled"
+        kind: "started" | "completed" | "idle" | "cancelled" | "failed"
         body: string
       },
     ) => {
@@ -525,11 +527,76 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
+    /**
+     * Deterministically cancels every still-blocked descendant of a failed member. A descendant is a
+     * member whose dependency graph transitively includes the failed member's session. Blocked
+     * finite descendants become cancelled with failure_code "dependency_failed"; blocked daemons are
+     * also cancelled (daemon_state included) so the graph never keeps an unreachable blocked row.
+     * Runs inside the same immediate transaction as the failed settlement.
+     */
+    const cancelBlockedDescendants = Effect.fn("LifecycleReconciler.cancelBlockedDescendants")(function* (input: {
+      tx: WriteDatabase
+      team: TeamRow
+      failedMember: TeamMemberRow
+      members: TeamMemberRow[]
+      now: number
+    }) {
+      const { tx, team, failedMember, members, now } = input
+      const dependents = new Map<string, TeamMemberRow[]>()
+      for (const member of members) {
+        for (const dependency of member.dependency_ids ?? []) {
+          const list = dependents.get(dependency) ?? []
+          list.push(member)
+          dependents.set(dependency, list)
+        }
+      }
+      const reached = new Set<string>([failedMember.session_id])
+      const queue = [failedMember.session_id]
+      while (queue.length > 0) {
+        const sessionID = queue.shift()
+        if (!sessionID) continue
+        for (const dependent of (dependents.get(sessionID) ?? []).sort((a, b) => a.id.localeCompare(b.id))) {
+          if (reached.has(dependent.session_id)) continue
+          reached.add(dependent.session_id)
+          queue.push(dependent.session_id)
+        }
+      }
+      const descendants = members
+        .filter(
+          (member) =>
+            member.id !== failedMember.id &&
+            member.status === "blocked" &&
+            reached.has(member.session_id),
+        )
+        .sort((a, b) => a.id.localeCompare(b.id))
+      for (const member of descendants) {
+        yield* tx
+          .update(TeamMemberTable)
+          .set({
+            status: "cancelled",
+            failure_code: "dependency_failed" as const,
+            time_updated: now,
+            ...(member.lifecycle === "daemon"
+              ? { daemon_state: "cancelled" as const, daemon_last_active: now }
+              : {}),
+          })
+          .where(eq(TeamMemberTable.id, member.id))
+          .run()
+        yield* sendMemberMessage(tx, {
+          team,
+          member,
+          kind: "cancelled",
+          body: `Cancelled: dependency ${failedMember.name} failed.`,
+        })
+      }
+    })
+
     const settleMember = Effect.fn("LifecycleReconciler.settleMember")(function* (input: {
       memberID: string
-      state: "completed" | "idle" | "cancelled"
+      state: "completed" | "idle" | "cancelled" | "failed"
       output: string
       error?: string
+      failureCode?: MemberFailureCode
       promptMessageID?: string
       allowWhilePaused?: boolean
     }) {
@@ -572,6 +639,7 @@ export const layer = Layer.effect(
                       state: input.state,
                       output: input.output,
                       ...(input.error ? { error: input.error } : {}),
+                      ...(input.failureCode ? { failureCode: input.failureCode } : {}),
                     }),
                     time_updated: Date.now(),
                   })
@@ -586,6 +654,7 @@ export const layer = Layer.effect(
                   status: input.state,
                   result: input.state === "completed" ? input.output : member.result,
                   time_updated: now,
+                  ...(input.state === "failed" ? { failure_code: input.failureCode ?? null } : {}),
                   ...(member.lifecycle === "daemon"
                     ? {
                         daemon_state:
@@ -620,6 +689,7 @@ export const layer = Layer.effect(
                       state: input.state,
                       output: input.output,
                       ...(input.error ? { error: input.error } : {}),
+                      ...(input.failureCode ? { failureCode: input.failureCode } : {}),
                     }),
                     time_updated: now,
                   })
@@ -638,8 +708,18 @@ export const layer = Layer.effect(
                     ].join("\n")
                   : input.state === "idle"
                     ? `Daemon teammate ${member.name} (${member.agent_type}) initialized and is idle.`
-                    : `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${input.error ?? "cancelled"}`
+                    : input.state === "failed"
+                      ? `Teammate ${member.name} (${member.agent_type}) failed: ${input.error ?? input.failureCode ?? "provider error"}`
+                      : `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${input.error ?? "cancelled"}`
               yield* sendMemberMessage(tx, { team, member, kind, body })
+              if (input.state === "failed") {
+                const allMembers = yield* tx
+                  .select()
+                  .from(TeamMemberTable)
+                  .where(eq(TeamMemberTable.team_id, member.team_id))
+                  .all()
+                yield* cancelBlockedDescendants({ tx, team, failedMember: member, members: allMembers, now })
+              }
               return { paused: false as const, team, member }
             }),
           { behavior: "immediate" },
@@ -804,6 +884,7 @@ export const layer = Layer.effect(
             state: prepared.lifecycle.state as Exclude<MemberMetadata["state"], "running">,
             output: prepared.lifecycle.output ?? "",
             error: prepared.lifecycle.error,
+            failureCode: prepared.lifecycle.failureCode as MemberFailureCode | undefined,
             promptMessageID: prepared.lifecycle.promptMessageID,
           })
           return prepared.lifecycle.output ?? prepared.lifecycle.error ?? "Teammate settlement restored."
@@ -815,9 +896,10 @@ export const layer = Layer.effect(
         if (!prepared.member.model) {
           yield* settleMember({
             memberID: prepared.member.id,
-            state: "cancelled",
+            state: prepared.member.lifecycle === "daemon" ? "cancelled" : "failed",
             output: "",
             error: "missing persisted model",
+            failureCode: "provider_error",
             promptMessageID: prepared.promptMessageID,
           })
           return "Teammate stopped before starting: missing persisted model."
@@ -858,9 +940,10 @@ export const layer = Layer.effect(
           const message = error instanceof Error ? error.message : String(error)
           yield* settleMember({
             memberID: prepared.member.id,
-            state: "cancelled",
+            state: prepared.member.lifecycle === "daemon" ? "cancelled" : "failed",
             output: "",
             error: message,
+            failureCode: "provider_error",
             promptMessageID: prepared.promptMessageID,
           })
           return message
@@ -872,9 +955,17 @@ export const layer = Layer.effect(
         const output = terminal.text
         yield* settleMember({
           memberID: prepared.member.id,
-          state: terminal.state === "error" ? "cancelled" : prepared.member.lifecycle === "daemon" ? "idle" : "completed",
+          state:
+            terminal.state === "error"
+              ? prepared.member.lifecycle === "daemon"
+                ? "cancelled"
+                : "failed"
+              : prepared.member.lifecycle === "daemon"
+                ? "idle"
+                : "completed",
           output,
           error: terminal.state === "error" ? output : undefined,
+          failureCode: terminal.state === "error" && prepared.member.lifecycle !== "daemon" ? "provider_error" : undefined,
           promptMessageID: prepared.promptMessageID,
         })
 
@@ -1295,6 +1386,7 @@ export const layer = Layer.effect(
             state: fact.state,
             output: fact.output ?? "",
             error: fact.error,
+            failureCode: fact.failureCode as MemberFailureCode | undefined,
             promptMessageID: fact.promptMessageID,
           })
           continue
@@ -1313,9 +1405,17 @@ export const layer = Layer.effect(
           const text = assistantResult(info, parts)?.text ?? ""
           yield* settleMember({
             memberID: member.id,
-            state: terminal.state === "error" ? "cancelled" : member.lifecycle === "daemon" ? "idle" : "completed",
+            state:
+              terminal.state === "error"
+                ? member.lifecycle === "daemon"
+                  ? "cancelled"
+                  : "failed"
+                : member.lifecycle === "daemon"
+                  ? "idle"
+                  : "completed",
             output: text,
             error: terminal.state === "error" ? text : undefined,
+            failureCode: terminal.state === "error" && member.lifecycle !== "daemon" ? "provider_error" : undefined,
             promptMessageID,
           })
           continue

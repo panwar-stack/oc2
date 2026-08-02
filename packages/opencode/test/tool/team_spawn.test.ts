@@ -480,6 +480,48 @@ describe("tool.team_spawn", () => {
     ),
   )
 
+  it.live("a provider/session error during a finite member run settles the member failed with provider_error", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: () =>
+              Effect.sync(() => {
+                throw new Error("boom")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Do the work",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
+          expect(result.title).toBe("Teammate Completed")
+          expect(result.output).toContain("boom")
+          expect(member?.status).toBe("failed")
+          expect(member?.failure_code).toBe("provider_error")
+          const failed = (yield* team.getMessages(info.id)).find(
+            (message) => message.id === `lifecycle:member:${member?.id}:failed`,
+          )
+          expect(failed?.body).toContain("boom")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("does not unblock dependents from daemon initialization", () =>
     provideTmpdirInstance(
       () =>

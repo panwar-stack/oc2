@@ -3813,6 +3813,7 @@ export type TeamEvalFinding = {
     | "planning.missing_or_wrong_dependency"
     | "execution.unknown_agent"
     | "execution.cancelled_member"
+    | "execution.failed_member"
     | "execution.empty_result"
     | "execution.stuck_or_blocked"
     | "messaging.pending_delivery"
