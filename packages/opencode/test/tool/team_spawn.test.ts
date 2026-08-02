@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageV2 } from "@/session/message-v2"
@@ -16,7 +16,7 @@ import { Database } from "@oc2-ai/core/database/database"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { ProviderTest } from "../fake/provider"
-import { pollWithTimeout, testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect, awaitWithTimeout } from "../lib/effect"
 import { BackgroundJob } from "@/background/job"
 import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { SessionControl } from "@oc2-ai/core/session/control"
@@ -574,6 +574,64 @@ describe("tool.team_spawn", () => {
           )
           expect(notifications).toHaveLength(1)
           expect(notifications[0]?.body).toContain("setup boom")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("an interrupt after member creation terminalizes the member as notified cancelled", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          // The second getMembers call (the post-addMember latest-members read) blocks on a
+          // gate until the fiber is interrupted, simulating an abort between member creation
+          // and start (before the acquireUseRelease release handler exists).
+          let getMembersCalls = 0
+          const entered = yield* Deferred.make<void>()
+          const gate = yield* Deferred.make<void>()
+          const blockingTeam = {
+            ...team,
+            getMembers: Effect.fn("Team.getMembers.interrupt")(function* (teamID: string) {
+              getMembersCalls += 1
+              if (getMembersCalls >= 2) {
+                yield* Deferred.succeed(entered, undefined)
+                yield* Deferred.await(gate)
+              }
+              return yield* team.getMembers(teamID)
+            }),
+          }
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: () =>
+              Effect.sync(() => {
+                throw new Error("boom")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const tool = yield* TeamSpawnTool.pipe(Effect.provideService(Team.Service, blockingTeam))
+          const def = yield* tool.init()
+          const fiber = yield* def
+            .execute(
+              { name: "worker", agent_type: "general", role_prompt: "Do the work" },
+              context({ lead, assistant, promptOps }),
+            )
+            .pipe(Effect.forkScoped)
+          yield* awaitWithTimeout(Deferred.await(entered), "spawn did not reach the setup gate")
+          yield* Fiber.interrupt(fiber)
+          const exit = yield* Fiber.await(fiber)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+
+          const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+          expect(member?.status).toBe("cancelled")
+          const notifications = (yield* team.getMessages(info.id)).filter(
+            (message) => message.id === `team:member:${member?.id}:terminal:cancelled`,
+          )
+          expect(notifications).toHaveLength(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

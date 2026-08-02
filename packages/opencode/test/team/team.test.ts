@@ -1482,6 +1482,39 @@ describe("team terminal handoff atomicity", () => {
       }),
     ),
   )
+
+  it.live("a terminal transition publishes exactly one member and one message event after commit", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const bus = yield* Bus.Service
+        const info = yield* team.create({ name: "handoff-events", goal: "Events", leadSessionID: "ses_handoff_evt_lead" })
+        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_evt_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+
+        const seen: string[] = []
+        const bothReceived = yield* Deferred.make<void>()
+        const unsubscribe = yield* bus.subscribeAllCallback((event) => {
+          if (event.type !== "team.member.updated" && event.type !== "team.message.received") return
+          seen.push(event.type)
+          if (
+            seen.filter((type) => type === "team.member.updated").length === 1 &&
+            seen.filter((type) => type === "team.message.received").length === 1
+          ) {
+            Deferred.doneUnsafe(bothReceived, Effect.void)
+          }
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribe()))
+
+        yield* team.updateMemberStatus(member.id, "completed", "done")
+        yield* awaitWithTimeout(Deferred.await(bothReceived), "terminal events were not published")
+
+        // A repeated terminal update is a no-op and publishes nothing new.
+        yield* team.updateMemberStatus(member.id, "completed", "again")
+        expect(seen.filter((type) => type === "team.member.updated")).toHaveLength(1)
+        expect(seen.filter((type) => type === "team.message.received")).toHaveLength(1)
+      }),
+    ),
+  )
 })
 
 describe("team shutdown admission", () => {

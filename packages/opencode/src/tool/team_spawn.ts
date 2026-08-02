@@ -253,8 +253,11 @@ export const TeamSpawnTool = Tool.define(
           })
 
           // Every failure after member creation must terminalize the member as a notified
-          // cancelled transition so a finite teammate never strands in `starting`. Interrupt
-          // causes are excluded: the acquireUseRelease release handler cancels those instead.
+          // cancelled transition so a finite teammate never strands in `starting`. This includes
+          // interrupts: an interrupt before acquireUseRelease (which owns the release-handler
+          // cancellation) would otherwise leave the member in `starting`/`blocked` forever. The
+          // terminalization is idempotent, so when the release handler also cancels (interrupt
+          // inside acquireUseRelease) no duplicate notification is produced.
           const terminalizeCancelled = (cause: Cause.Cause<unknown>) =>
             Effect.gen(function* () {
               const error = Cause.squash(cause)
@@ -266,7 +269,16 @@ export const TeamSpawnTool = Tool.define(
                     ? { daemonState: "error" as const, daemonError: reason }
                     : {}),
                 })
-                .pipe(Effect.ignore)
+                .pipe(
+                  Effect.catchCause((inner) =>
+                    Effect.gen(function* () {
+                      yield* Effect.logWarning("failed to terminalize spawned member as cancelled", {
+                        memberID: member.id,
+                        cause: inner,
+                      })
+                    }),
+                  ),
+                )
             })
 
           const notifySessions = (sender: string, recipients: string[], body: string) =>
@@ -404,14 +416,12 @@ export const TeamSpawnTool = Tool.define(
               ),
           )
           }).pipe(
-            Effect.catchCause((cause) =>
-              Cause.hasInterrupts(cause)
-                ? Effect.failCause(cause)
-                : Effect.gen(function* () {
-                    yield* terminalizeCancelled(cause)
-                    return yield* Effect.failCause(cause)
-                  }),
-            ),
+            // Terminalize on any non-success exit (failure, defect, or interruption) before the
+            // exit propagates, so a finite teammate never strands in `starting`/`blocked`.
+            // Idempotent: the acquireUseRelease release handler or a prior settleMember may
+            // already have cancelled the member, and a successful spawn (member completed,
+            // cancelled, blocked, or daemon idle) never terminalizes here.
+            Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : terminalizeCancelled(exit.cause))),
           )
         }).pipe(Effect.orDie),
     }

@@ -1114,7 +1114,17 @@ export const layer = Layer.effect(
       }
       if (settled.kind === "retry") return settled
       // Publish the terminal member and canonical-message events only after commit, wrapped
-      // uninterruptibly so the commit -> publish section cannot be interrupted mid-way.
+      // uninterruptibly so the commit -> publish section cannot be interrupted mid-way. A publish
+      // defect is logged, never fatal: the terminal facts already committed and the wake below
+      // must still run.
+      const safePublish = (effect: Effect.Effect<void>) =>
+        effect.pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning("team event publish failed after member settlement", { cause })
+            }),
+          ),
+        )
       yield* Effect.uninterruptible(
         Effect.gen(function* () {
           const member = yield* db
@@ -1124,32 +1134,40 @@ export const layer = Layer.effect(
             .get()
             .pipe(Effect.orDie)
           if (member) {
-            yield* events.publish(TeamEvents.memberUpdated, {
-              memberID: member.id,
-              sessionID: member.session_id,
-              status: member.status,
-              lifecycle: member.lifecycle,
-              daemonState: member.daemon_state ?? undefined,
-            })
-            yield* events.publish(TeamEvents.messageReceived, {
-              messageID: settled.messageID,
-              teamID: member.team_id,
-              sender: member.session_id,
-            })
+            yield* safePublish(
+              events.publish(TeamEvents.memberUpdated, {
+                memberID: member.id,
+                sessionID: member.session_id,
+                status: member.status,
+                lifecycle: member.lifecycle,
+                daemonState: member.daemon_state ?? undefined,
+              }),
+            )
+            yield* safePublish(
+              events.publish(TeamEvents.messageReceived, {
+                messageID: settled.messageID,
+                teamID: member.team_id,
+                sender: member.session_id,
+              }),
+            )
           }
           for (const descendant of settled.cancelledDescendants) {
-            yield* events.publish(TeamEvents.memberUpdated, {
-              memberID: descendant.id,
-              sessionID: descendant.session_id,
-              status: "cancelled",
-              lifecycle: descendant.lifecycle,
-              daemonState: descendant.daemon_state ?? undefined,
-            })
-            yield* events.publish(TeamEvents.messageReceived, {
-              messageID: memberMessageID(descendant.id, "cancelled", descendant.run_generation),
-              teamID: descendant.team_id,
-              sender: descendant.session_id,
-            })
+            yield* safePublish(
+              events.publish(TeamEvents.memberUpdated, {
+                memberID: descendant.id,
+                sessionID: descendant.session_id,
+                status: "cancelled",
+                lifecycle: descendant.lifecycle,
+                daemonState: descendant.daemon_state ?? undefined,
+              }),
+            )
+            yield* safePublish(
+              events.publish(TeamEvents.messageReceived, {
+                messageID: memberMessageID(descendant.id, "cancelled", descendant.run_generation),
+                teamID: descendant.team_id,
+                sender: descendant.session_id,
+              }),
+            )
           }
         }),
       )

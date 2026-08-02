@@ -159,6 +159,17 @@ const terminalNotificationBody = (member: TeamMemberRow, status: MemberStatus, u
   return head
 }
 
+/** Publish a team event, logging instead of failing on a broken event bus so a committed
+ * terminal transition or a wake can never be failed by an in-memory publish defect. */
+const safePublish = (effect: Effect.Effect<void>) =>
+  effect.pipe(
+    Effect.catchCause((cause) =>
+      Effect.gen(function* () {
+        yield* Effect.logWarning("team event publish failed", { cause })
+      }),
+    ),
+  )
+
 /** Expected conflict when a lead session already has an active team. The database
  * partial unique index `team_active_lead_session_idx` is the final race guard; this
  * typed error is produced both by the precheck and by a lost insert race. */
@@ -816,19 +827,23 @@ export const layer = Layer.effect(
             .pipe(Effect.orDie)
           if (!row) return Option.none()
           if (outcome.wrote) {
-            yield* events.publish(MemberUpdated, {
-              memberID: row.id,
-              sessionID: row.session_id,
-              status: row.status,
-              lifecycle: row.lifecycle,
-              daemonState: row.daemon_state ?? undefined,
-            })
+            yield* safePublish(
+              events.publish(MemberUpdated, {
+                memberID: row.id,
+                sessionID: row.session_id,
+                status: row.status,
+                lifecycle: row.lifecycle,
+                daemonState: row.daemon_state ?? undefined,
+              }),
+            )
             if (outcome.messageID) {
-              yield* events.publish(MessageReceived, {
-                messageID: outcome.messageID,
-                teamID: row.team_id,
-                sender: row.session_id,
-              })
+              yield* safePublish(
+                events.publish(MessageReceived, {
+                  messageID: outcome.messageID,
+                  teamID: row.team_id,
+                  sender: row.session_id,
+                }),
+              )
             }
           }
           // Daemon idle notifications are not terminal handoffs and keep their existing behavior:
@@ -846,12 +861,14 @@ export const layer = Layer.effect(
                 // team is closed, so the automatic notification is moot.
                 Effect.catchTag("Team.MessageToClosedTeam", () => Effect.void),
               )
-              yield* events.publish(TuiEvent.ToastShow, {
-                title: "Teammate Update",
-                message: `${row.name} (${row.agent_type}) has become idle.`,
-                variant: "info",
-                duration: 5000,
-              })
+              yield* safePublish(
+                events.publish(TuiEvent.ToastShow, {
+                  title: "Teammate Update",
+                  message: `${row.name} (${row.agent_type}) has become idle.`,
+                  variant: "info",
+                  duration: 5000,
+                }),
+              )
             }
           }
           return Option.some({
