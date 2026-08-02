@@ -2320,6 +2320,60 @@ it.instance(
   15_000,
 )
 
+it.live(
+  "an errored assistant finalization bypasses the barrier even while a finite teammate is nonterminal",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, info, member } = yield* parkLeadOnWorker({ llm, memberStatus: "active" })
+        // Seed an errored assistant message (finish "error" with an error object). On the next
+        // bare wake there is no mail and no newer user message, so the loop reaches the
+        // finished-assistant exit: an errored finalization must break immediately without calling
+        // the model and without parking on the nonterminal worker.
+        const lastUser = (yield* sessions.messages({ sessionID: lead.id })).findLast(
+          (m) => m.info.role === "user",
+        )
+        if (!lastUser || lastUser.info.role !== "user") throw new Error("expected lead user message")
+        const errored: SessionV1.Assistant = {
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: lastUser.info.id,
+          sessionID: lead.id,
+          mode: "build",
+          agent: "build",
+          cost: 0,
+          path: { cwd: "/tmp", root: "/tmp" },
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          time: { created: Date.now() },
+          finish: "error",
+          error: new NamedError.Unknown({ message: "provider exploded" }).toObject(),
+        }
+        yield* sessions.updateMessage(errored)
+
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "lead parked on an errored finalization instead of bypassing the barrier",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        if (result.info.role === "assistant") expect(result.info.finish).toBe("error")
+        expect((yield* llm.inputs).length).toBe(0)
+        const members = yield* team.getMembers(info.id)
+        expect(members.find((candidate) => candidate.id === member.id)?.status).toBe("active")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  15_000,
+)
+
 it.instance(
   "cancel finalizes subtask tool state",
   () =>

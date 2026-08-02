@@ -65,8 +65,8 @@ export const TeamGetMessagesTool = Tool.define(
               ? [
                   "No pending messages.",
                   previousEmptyChecks > 0
-                    ? "Repeated empty mailbox check suppressed. Do not poll for mail; finalization parks automatically until teammates are done or mail arrives."
-                    : "Check complete. If teammates are still active, finalization parks automatically and resumes you when mail arrives or all teammates finish; an empty mailbox does not require ending this turn.",
+                    ? "Repeated empty mailbox check suppressed. Do not poll for mail; finalization parks automatically until every finite teammate is terminal or mail arrives."
+                    : "Check complete. If finite teammates are still active, finalization parks automatically and resumes you when mail arrives or every finite teammate is terminal; an empty mailbox does not require ending this turn.",
                   "Team messages are delivered asynchronously; busy teammates can only process broadcasts or direct messages at their next prompt boundary.",
                   "Do not send routine status-check broadcasts just because the mailbox is empty. Teammates will wake you when they have progress, blockers, or results.",
                 ]

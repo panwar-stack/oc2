@@ -179,7 +179,7 @@ Inside the teammate run:
 
 When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. The lead resumes after the relevant running teammates finish, then it can integrate results and decide the next coordination step.
 
-Once the lead's own assistant step completes, successful finalization does not exit the session while finite teammates remain nonterminal. The lead finalization barrier parks the exit and resumes the model loop on mail delivery or terminal transitions. See [Lead Finalization Barrier](#lead-finalization-barrier).
+Once the lead's own assistant step completes, successful finalization does not exit the session while finite teammates remain nonterminal. The lead finalization barrier parks the exit and resumes the model loop on mail delivery; it releases the exit when every finite teammate is terminal. See [Lead Finalization Barrier](#lead-finalization-barrier).
 
 ## Daemon Teammates
 
@@ -289,7 +289,7 @@ Successful finalization of the active team's lead session is event-backed.
 When the lead attempts to finalize, the prompt loop runs a private finalization barrier before exiting. The barrier:
 
 1. Confirms the session is still the active team lead.
-2. Registers scoped listeners for `team.message.received`, `team.member.updated`, and `team.closed` before any durable read.
+2. Registers scoped listeners for `team.message.received`, `team.member.updated`, and `team.closed` before reading members or delivering mail.
 3. Reads and delivers pending lead mail through the durable mailbox path; a delivery resumes the model loop.
 4. Queries current members from durable state.
 5. Parks while any finite (task-lifecycle) member is not terminal.

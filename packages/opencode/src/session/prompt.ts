@@ -1580,6 +1580,10 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
               })
             }
             yield* slog.info("exiting loop")
+            // Errored finalizations bypass the finalization barrier: an assistant message that
+            // carries an error is an unsuccessful termination, so it must not park while a finite
+            // teammate remains nonterminal.
+            if (lastAssistant?.error) break
             if (yield* finalizationBarrier({ session, lastUser })) continue
             break
           }
