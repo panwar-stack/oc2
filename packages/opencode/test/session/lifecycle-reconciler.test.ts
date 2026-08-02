@@ -1,4 +1,4 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
@@ -76,6 +76,23 @@ function assistant(sessionID: SessionID, parentID: MessageID, text: string): Ses
   }
 }
 
+function textPart(
+  sessionID: SessionID,
+  messageID: MessageID,
+  text: string,
+  flags?: { synthetic?: boolean; ignored?: boolean },
+): SessionV1.TextPart {
+  return {
+    id: PartID.ascending(),
+    messageID,
+    sessionID,
+    type: "text",
+    text,
+    ...(flags?.synthetic ? { synthetic: true } : {}),
+    ...(flags?.ignored ? { ignored: true } : {}),
+  }
+}
+
 type OpsSpy = {
   readonly ops: TaskPromptOps
   readonly prompts: Ref.Ref<number>
@@ -89,6 +106,7 @@ type OpsSpy = {
  */
 const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
   readonly text?: string
+  readonly result?: (sessionID: SessionID, parentID: MessageID) => SessionV1.WithParts
   readonly onPrompt?: (promptInput: SessionPrompt.PromptInput) => Effect.Effect<void, Runner.Suspended>
   readonly onRun?: (sessionID: SessionID) => Effect.Effect<void, Runner.Suspended>
   readonly wakeFails?: boolean
@@ -98,6 +116,8 @@ const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
   const wakes = yield* Ref.make(0)
   const runs = yield* Ref.make(0)
   const text = input?.text ?? "done"
+  const resultFor = (sessionID: SessionID, parentID: MessageID) =>
+    input?.result ? input.result(sessionID, parentID) : assistant(sessionID, parentID, text)
   const persist = Effect.fn("LifecycleReconcilerTest.persist")(function* (result: SessionV1.WithParts) {
     yield* sessions.updateMessage(result.info)
     for (const part of result.parts) yield* sessions.updatePart(part)
@@ -120,7 +140,7 @@ const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
           time: { created: Date.now() },
         })
         if (input?.onPrompt) yield* input.onPrompt(promptInput)
-        return yield* persist(assistant(promptInput.sessionID, messageID, text))
+        return yield* persist(resultFor(promptInput.sessionID, messageID))
       }),
     wake: () =>
       Ref.update(wakes, (count) => count + 1).pipe(
@@ -130,7 +150,7 @@ const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
       Effect.gen(function* () {
         yield* Ref.update(runs, (count) => count + 1)
         if (input?.onRun) yield* input.onRun(sessionID)
-        return yield* persist(assistant(sessionID, MessageID.ascending(), text))
+        return yield* persist(resultFor(sessionID, MessageID.ascending()))
       }),
   }
   return { ops, prompts, wakes, runs } satisfies OpsSpy
@@ -565,6 +585,267 @@ describe("session.lifecycle-reconciler", () => {
         ).toBe(true)
         expect(yield* backgroundState(child.id)).toMatchObject({ notification: "delivered" })
       }),
+    ),
+  )
+
+  test("assistantResult treats tool-calls and unknown finishes as nonterminal", () => {
+    const sessionID = SessionID.make("ses-unit")
+    const parentID = MessageID.ascending()
+    const base = assistant(sessionID, parentID, "intermediate")
+    const info = base.info as SessionV1.Assistant
+    const userInfo: SessionV1.Info = {
+      id: info.id,
+      role: "user",
+      sessionID,
+      agent: "general",
+      model: ref,
+      time: { created: Date.now() },
+    }
+    expect(LifecycleReconciler.assistantResult(undefined)).toBeUndefined()
+    expect(LifecycleReconciler.assistantResult(userInfo, base.parts)).toBeUndefined()
+    expect(LifecycleReconciler.assistantResult({ ...info, finish: undefined }, base.parts)).toBeUndefined()
+    expect(LifecycleReconciler.assistantResult({ ...info, finish: "tool-calls" }, base.parts)).toBeUndefined()
+    expect(LifecycleReconciler.assistantResult({ ...info, finish: "unknown" }, base.parts)).toBeUndefined()
+  })
+
+  test("assistantResult joins non-synthetic non-ignored text parts in PartTable.id order and trims once", () => {
+    const sessionID = SessionID.make("ses-unit")
+    const parentID = MessageID.ascending()
+    const base = assistant(sessionID, parentID, "")
+    const id = base.info.id
+    const result = LifecycleReconciler.assistantResult(base.info, [
+      textPart(sessionID, id, "  first  "),
+      textPart(sessionID, id, "hidden", { synthetic: true }),
+      textPart(sessionID, id, "second", { ignored: true }),
+      textPart(sessionID, id, "third"),
+    ])
+    expect(result).toEqual({ state: "completed", messageID: id, text: "first  \nthird", valid: true })
+  })
+
+  test("assistantResult reports synthetic-only and ignored-only turns as invalid blank results", () => {
+    const sessionID = SessionID.make("ses-unit")
+    const parentID = MessageID.ascending()
+    const base = assistant(sessionID, parentID, "")
+    const id = base.info.id
+    expect(LifecycleReconciler.assistantResult(base.info, [textPart(sessionID, id, "hidden", { synthetic: true })])).toEqual({
+      state: "completed",
+      messageID: id,
+      text: "",
+      valid: false,
+    })
+    expect(LifecycleReconciler.assistantResult(base.info, [textPart(sessionID, id, "hidden", { ignored: true })])).toEqual({
+      state: "completed",
+      messageID: id,
+      text: "",
+      valid: false,
+    })
+  })
+
+  test("assistantResult keeps a trailing blank text part from invalidating the result", () => {
+    const sessionID = SessionID.make("ses-unit")
+    const parentID = MessageID.ascending()
+    const base = assistant(sessionID, parentID, "")
+    const id = base.info.id
+    const result = LifecycleReconciler.assistantResult(base.info, [
+      textPart(sessionID, id, "real"),
+      textPart(sessionID, id, "   "),
+    ])
+    expect(result).toEqual({ state: "completed", messageID: id, text: "real", valid: true })
+  })
+
+  test("assistantResult treats a tool-only turn as an invalid blank completed result", () => {
+    const sessionID = SessionID.make("ses-unit")
+    const parentID = MessageID.ascending()
+    const base = assistant(sessionID, parentID, "")
+    expect(LifecycleReconciler.assistantResult(base.info, [])).toEqual({
+      state: "completed",
+      messageID: base.info.id,
+      text: "",
+      valid: false,
+    })
+  })
+
+  test("assistantResult reports an assistant error as an error result with the error text", () => {
+    const sessionID = SessionID.make("ses-unit")
+    const parentID = MessageID.ascending()
+    const base = assistant(sessionID, parentID, "")
+    const errored = {
+      ...base.info,
+      error: new SessionV1.StructuredOutputError({ message: "boom", retries: 0 }).toObject(),
+    }
+    expect(LifecycleReconciler.assistantResult(errored, [])).toEqual({
+      state: "error",
+      messageID: base.info.id,
+      text: "boom",
+    })
+  })
+
+  it.live("a tool-calls or unknown finish does not settle the teammate", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          for (const finish of ["tool-calls", "unknown"] as const) {
+            const team = yield* Team.Service
+            const lifecycle = yield* LifecycleReconciler.Service
+            const { info, member } = yield* seedTeam()
+            const spy = yield* spyOps({
+              result: (sessionID, parentID) => {
+                const base = assistant(sessionID, parentID, "intermediate")
+                return { info: { ...base.info, finish }, parts: base.parts }
+              },
+            })
+            const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+            expect(outcome).toContain("did not finish")
+            const unsettled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+            expect(unsettled?.status).toBe("active")
+            expect(unsettled?.result).toBeNull()
+            const messages = yield* team.getMessages(info.id)
+            expect(messages.filter((message) => message.id.endsWith(":completed"))).toHaveLength(0)
+            expect(messages.filter((message) => message.id.endsWith(":cancelled"))).toHaveLength(0)
+          }
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a tool-only turn settles as completed with an empty result in this slice", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member } = yield* seedTeam()
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return { info: { ...base.info, finish: "stop" }, parts: [] }
+            },
+          })
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+          expect(outcome).toBe("(no text result)")
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("completed")
+          expect(settled?.result).toBe("")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("live settlement and restart reconciliation extract the same result", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          let promptMessageID: MessageID | undefined
+          const spy = yield* spyOps({
+            onPrompt: (promptInput) =>
+              Effect.sync(() => {
+                promptMessageID = promptInput.messageID
+              }),
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              const id = base.info.id
+              return {
+                info: base.info,
+                parts: [
+                  textPart(sessionID, id, "  alpha  "),
+                  textPart(sessionID, id, "hidden", { synthetic: true }),
+                  textPart(sessionID, id, "beta", { ignored: true }),
+                  textPart(sessionID, id, "gamma"),
+                ],
+              }
+            },
+          })
+
+          yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+          const live = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(live?.status).toBe("completed")
+          expect(live?.result).toBe("alpha  \ngamma")
+          expect(promptMessageID).toBeDefined()
+
+          // Simulate a restart with the same persisted parts: put the member back into a runnable
+          // state so restart reconciliation must re-extract from the stored parts.
+          yield* team.updateMemberStatus(member.id, "active")
+          yield* seedMemberMetadata({
+            sessionID: memberSession.id,
+            memberID: member.id,
+            promptMessageID: promptMessageID!,
+          })
+
+          yield* afterRestart(Effect.flatMap(LifecycleReconciler.Service, (lifecycle) => lifecycle.reconcile))
+
+          const restarted = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(restarted?.status).toBe("completed")
+          expect(restarted?.result).toBe("alpha  \ngamma")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("an assistant error settles the teammate as cancelled with the error text", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member } = yield* seedTeam()
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return {
+                info: {
+                  ...base.info,
+                  error: new SessionV1.StructuredOutputError({ message: "boom", retries: 0 }).toObject(),
+                },
+                parts: base.parts,
+              }
+            },
+          })
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+          expect(outcome).toBe("boom")
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("cancelled")
+          const cancelled = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":cancelled"))
+          expect(cancelled?.body).toContain("boom")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("restart reconciliation settles a member from an errored assistant as cancelled", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          const promptMessageID = MessageID.ascending()
+          yield* sessions.updateMessage({
+            id: promptMessageID,
+            role: "user",
+            sessionID: memberSession.id,
+            agent: "general",
+            model: ref,
+            time: { created: Date.now() },
+          })
+          const base = assistant(memberSession.id, promptMessageID, "")
+          yield* sessions.updateMessage({
+            ...base.info,
+            error: new SessionV1.StructuredOutputError({ message: "boom", retries: 0 }).toObject(),
+          })
+          yield* seedMemberMetadata({ sessionID: memberSession.id, memberID: member.id, promptMessageID })
+          yield* team.updateMemberStatus(member.id, "active")
+
+          yield* afterRestart(Effect.flatMap(LifecycleReconciler.Service, (lifecycle) => lifecycle.reconcile))
+
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("cancelled")
+          const cancelled = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":cancelled"))
+          expect(cancelled?.body).toContain("boom")
+        }),
+      { config: { experimental: { agent_teams: true } } },
     ),
   )
 })

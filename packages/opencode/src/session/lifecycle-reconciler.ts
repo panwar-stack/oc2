@@ -82,6 +82,7 @@ type State = {
 type TeamMemberRow = typeof TeamMemberTable.$inferSelect
 type TeamRow = typeof TeamTable.$inferSelect
 type SessionRow = typeof SessionTable.$inferSelect
+type PartRow = typeof PartTable.$inferSelect
 type DatabaseService = Database.Interface["db"]
 type QueryDatabase = Pick<DatabaseService, "select">
 type WriteDatabase = Pick<DatabaseService, "insert">
@@ -237,6 +238,15 @@ function partData(part: SessionV1.Part) {
   return data
 }
 
+function partRowToPart(part: PartRow): SessionV1.Part {
+  return {
+    ...part.data,
+    id: part.id,
+    messageID: part.message_id,
+    sessionID: part.session_id,
+  } as SessionV1.Part
+}
+
 function activePause(db: QueryDatabase, sessionIDs: readonly string[]) {
   if (sessionIDs.length === 0) return Effect.succeed(false)
   return db
@@ -286,18 +296,41 @@ function isSuspension(cause: Cause.Cause<unknown>) {
   return Option.getOrUndefined(Cause.findErrorOption(cause)) instanceof Runner.Suspended
 }
 
-function assistantResult(info: SessionV1.Info | undefined) {
-  if (!info || info.role !== "assistant" || (!info.finish && !info.error)) return
+export type AssistantResult =
+  | { state: "error"; messageID: MessageID; text: string }
+  | { state: "completed"; messageID: MessageID; text: string; valid: boolean }
 
-  const errorText =
-    info.error && "message" in info.error.data && typeof info.error.data.message === "string"
-      ? info.error.data.message
-      : info.error?.name
-  return {
-    state: info.error ? ("error" as const) : ("completed" as const),
-    text: errorText,
-    messageID: info.id,
+/**
+ * Canonical terminal-result extractor shared by live settlement and restart reconciliation.
+ *
+ * Returns `undefined` for a nonterminal assistant turn: no info, a non-assistant role, no finish
+ * and no error, or a "tool-calls"/"unknown" finish (matching prompt.ts). An assistant error is a
+ * failed attempt and yields the error text. Otherwise the parts (caller-supplied, already ordered
+ * by PartTable.id ASC) keep only non-synthetic, non-ignored text parts, joined with "\n" and
+ * trimmed once; a blank value marks the completed result invalid.
+ */
+export function assistantResult(
+  info: SessionV1.Info | undefined,
+  parts: readonly SessionV1.Part[] = [],
+): AssistantResult | undefined {
+  if (!info || info.role !== "assistant" || (!info.finish && !info.error)) return
+  if (info.finish === "tool-calls" || info.finish === "unknown") return
+  if (info.error) {
+    const errorText =
+      info.error && "message" in info.error.data && typeof info.error.data.message === "string"
+        ? info.error.data.message
+        : info.error?.name
+    return { state: "error", messageID: info.id, text: errorText }
   }
+  const text = parts
+    .filter(
+      (part): part is SessionV1.TextPart =>
+        part.type === "text" && part.synthetic !== true && part.ignored !== true,
+    )
+    .map((part) => part.text)
+    .join("\n")
+    .trim()
+  return { state: "completed", messageID: info.id, text, valid: text !== "" }
 }
 
 export interface Interface {
@@ -832,11 +865,16 @@ export const layer = Layer.effect(
           })
           return message
         }
-        const output = result.value.parts.findLast((part) => part.type === "text")?.text ?? ""
+        const terminal = assistantResult(result.value.info, result.value.parts)
+        // A nonterminal turn (for example a "tool-calls" finish) is not a fact to settle on; the
+        // member keeps its active status so a later reconcile resumes the run.
+        if (!terminal) return "Teammate did not finish."
+        const output = terminal.text
         yield* settleMember({
           memberID: prepared.member.id,
-          state: prepared.member.lifecycle === "daemon" ? "idle" : "completed",
+          state: terminal.state === "error" ? "cancelled" : prepared.member.lifecycle === "daemon" ? "idle" : "completed",
           output,
+          error: terminal.state === "error" ? output : undefined,
           promptMessageID: prepared.promptMessageID,
         })
 
@@ -1262,28 +1300,17 @@ export const layer = Layer.effect(
           continue
         }
         const promptMessageID = fact?.promptMessageID
-        const terminal = promptMessageID
-          ? assistantResult(yield* latestAssistant(db, member.session_id, promptMessageID))
-          : undefined
+        const info = promptMessageID ? yield* latestAssistant(db, member.session_id, promptMessageID) : undefined
+        const terminal = info ? assistantResult(info) : undefined
         if (terminal && member.status === "active") {
           const parts = yield* db
             .select()
             .from(PartTable)
             .where(eq(PartTable.message_id, terminal.messageID))
+            .orderBy(PartTable.id)
             .all()
-            .pipe(Effect.orDie)
-          const output = parts
-            .map(
-              (part) =>
-                ({
-                  ...part.data,
-                  id: part.id,
-                  messageID: part.message_id,
-                  sessionID: part.session_id,
-                }) as SessionV1.Part,
-            )
-            .findLast((part): part is SessionV1.TextPart => part.type === "text")
-          const text = output?.text ?? terminal.text ?? ""
+            .pipe(Effect.orDie, Effect.map((rows) => rows.map(partRowToPart)))
+          const text = assistantResult(info, parts)?.text ?? ""
           yield* settleMember({
             memberID: member.id,
             state: terminal.state === "error" ? "cancelled" : member.lifecycle === "daemon" ? "idle" : "completed",
@@ -1304,26 +1331,17 @@ export const layer = Layer.effect(
         const lifecycle = backgroundMetadata(session)
         if (!lifecycle) continue
         if (lifecycle.state === "running") {
-          const terminal = assistantResult(yield* latestAssistant(db, session.id, lifecycle.promptMessageID))
+          const info = yield* latestAssistant(db, session.id, lifecycle.promptMessageID)
+          const terminal = info ? assistantResult(info) : undefined
           if (terminal) {
             const parts = yield* db
               .select()
               .from(PartTable)
               .where(eq(PartTable.message_id, terminal.messageID))
+              .orderBy(PartTable.id)
               .all()
-              .pipe(Effect.orDie)
-            const output = parts
-              .map(
-                (part) =>
-                  ({
-                    ...part.data,
-                    id: part.id,
-                    messageID: part.message_id,
-                    sessionID: part.session_id,
-                  }) as SessionV1.Part,
-              )
-              .findLast((part): part is SessionV1.TextPart => part.type === "text")
-            const text = output?.text ?? terminal.text ?? ""
+              .pipe(Effect.orDie, Effect.map((rows) => rows.map(partRowToPart)))
+            const text = assistantResult(info, parts)?.text ?? ""
             yield* settleBackgroundOnce({
               sessionID: session.id,
               generation: lifecycle.generation,
@@ -1351,7 +1369,7 @@ export const layer = Layer.effect(
                   sessionID: session.id,
                   generation: lifecycle.generation,
                   state: "completed",
-                  text: result.parts.findLast((part) => part.type === "text")?.text ?? "",
+                  text: assistantResult(result.info, result.parts)?.text ?? "",
                   ops,
                 }),
               ),
