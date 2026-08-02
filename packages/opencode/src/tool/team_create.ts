@@ -3,7 +3,7 @@ import DESCRIPTION from "./team_create.txt"
 import { Team } from "@/team/team"
 import { Session } from "@/session/session"
 import { Config } from "@/config/config"
-import { Effect, Option, Schema } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 
 const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "Short name for the team" }),
@@ -45,11 +45,25 @@ export const TeamCreateTool = Tool.define(
               metadata: {},
             }
           }
-          const info = yield* team.create({
-            name: params.name,
-            goal: params.goal,
-            leadSessionID: ctx.sessionID,
-          })
+          const exit = yield* team
+            .create({
+              name: params.name,
+              goal: params.goal,
+              leadSessionID: ctx.sessionID,
+            })
+            .pipe(Effect.exit)
+          if (Exit.isFailure(exit)) {
+            const conflict = Cause.squash(exit.cause)
+            if (!(conflict instanceof Team.ActiveTeamConflict)) return yield* Effect.die(conflict)
+            const existing = yield* team.get(conflict.teamID)
+            const existingName = Option.isSome(existing) ? existing.value.name : conflict.teamID
+            return {
+              title: "Team Create Failed",
+              output: `This lead session already has an active team "${existingName}" (${conflict.teamID}). Reuse that team instead of creating another one. Shut it down with team_shutdown before creating a replacement.`,
+              metadata: {},
+            }
+          }
+          const info = exit.value
           return {
             title: "Team Created",
             output: JSON.stringify({ teamID: info.id, name: info.name, status: info.status }, null, 2),

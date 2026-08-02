@@ -4,7 +4,8 @@ import { SessionRunState } from "@/session/run-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
 import { EventV2 } from "@oc2-ai/core/event"
-import { Context, Effect, Layer, Schema, Option } from "effect"
+import { Context, Effect, Layer, Schema, Option, Cause } from "effect"
+import { SqlError } from "effect/unstable/sql/SqlError"
 import { eq, and, asc, desc, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Runner } from "@/effect/runner"
 import { SessionPauseBlockerTable, SessionPauseCascadeTable } from "@oc2-ai/core/session/sql"
@@ -60,6 +61,21 @@ type TeamMemberStatusUpdate = {
   daemonError?: string | null
 }
 
+/** Expected conflict when a lead session already has an active team. The database
+ * partial unique index `team_active_lead_session_idx` is the final race guard; this
+ * typed error is produced both by the precheck and by a lost insert race. */
+export class ActiveTeamConflict extends Schema.TaggedErrorClass<ActiveTeamConflict>()(
+  "Team.ActiveTeamConflict",
+  {
+    leadSessionID: Schema.String,
+    teamID: Schema.String,
+  },
+) {
+  override get message() {
+    return `Lead session ${this.leadSessionID} already has an active team (${this.teamID})`
+  }
+}
+
 export type UsageEventType = TeamUsageEventRow["type"]
 
 export type UsageEvent = {
@@ -73,7 +89,7 @@ export type UsageEvent = {
 }
 
 export interface Interface {
-  create: (input: { name: string; goal: string; leadSessionID: string }) => Effect.Effect<Info>
+  create: (input: { name: string; goal: string; leadSessionID: string }) => Effect.Effect<Info, ActiveTeamConflict>
   getActive: (leadSessionID: string) => Effect.Effect<Option.Option<Info>>
   getByLeadSession: (leadSessionID: string) => Effect.Effect<Option.Option<Info>>
   get: (teamID: string) => Effect.Effect<Option.Option<Info>>
@@ -176,11 +192,19 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (existing) {
-        return yield* Effect.die(new Error("Lead session already has an active team"))
+        return yield* Effect.fail(
+          new ActiveTeamConflict({ leadSessionID: input.leadSessionID, teamID: existing.id }),
+        )
       }
 
       const id = crypto.randomUUID()
       const now = Date.now()
+      // The partial unique index `team_active_lead_session_idx` is the final race guard.
+      // A lost insert race surfaces through the database layer as an EffectDrizzleQueryError
+      // whose cause chain holds a SqlError with a UniqueViolation reason; map that to the
+      // same typed conflict (reading the winning team back for its ID) so two concurrent
+      // creates yield exactly one success and one typed conflict, never a second row and
+      // never a defect.
       yield* db
         .insert(TeamTable)
         .values({
@@ -193,7 +217,26 @@ export const layer = Layer.effect(
           time_updated: now,
         })
         .run()
-        .pipe(Effect.orDie)
+        .pipe(
+          Effect.catchTag("EffectDrizzleQueryError", (error) => {
+            const cause = Cause.findErrorOption(error.cause as Cause.Cause<unknown>)
+            const isUniqueViolation =
+              Option.isSome(cause) && cause.value instanceof SqlError && cause.value.reason._tag === "UniqueViolation"
+            if (!isUniqueViolation) return Effect.die(error)
+            return Effect.gen(function* () {
+              const winner = yield* db
+                .select()
+                .from(TeamTable)
+                .where(and(eq(TeamTable.lead_session_id, input.leadSessionID), eq(TeamTable.status, "active")))
+                .get()
+                .pipe(Effect.orDie)
+              if (!winner) return yield* Effect.die(error)
+              return yield* Effect.fail(
+                new ActiveTeamConflict({ leadSessionID: input.leadSessionID, teamID: winner.id }),
+              )
+            })
+          }),
+        )
       yield* events.publish(TeamCreated, { teamID: id })
       yield* events.publish(TuiEvent.ToastShow, {
         title: "Team Created",

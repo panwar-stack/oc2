@@ -344,6 +344,145 @@ describe("tool.team_send_message", () => {
       { config: { experimental: { agent_teams: true } } },
     ),
   )
+
+  it.live("rejects messages to completed finite members without mailbox rows or wakes", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const done = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_terminal_completed",
+            name: "doneMember",
+            agentType: "general",
+            rolePrompt: "Finish",
+          })
+          yield* team.updateMemberStatus(done.id, "completed")
+          const tool = yield* TeamSendMessageTool
+          const def = yield* tool.init()
+
+          const messagesBefore = yield* team.getMessages(info.id)
+          const wakeCount = { value: 0 }
+          const result = yield* def.execute(
+            { recipient: "doneMember", body: "Hello" },
+            context({
+              lead,
+              assistant,
+              extra: {
+                promptOps: promptOps({
+                  response: responseFor(assistant),
+                  wake: () =>
+                    Effect.sync(() => {
+                      wakeCount.value++
+                    }).pipe(Effect.as(responseFor(assistant))),
+                }),
+              },
+            }),
+          )
+
+          expect(result.title).toBe("Team Message")
+          expect(result.output).toBe("Recipient 'doneMember' is completed and cannot receive messages.")
+          expect(wakeCount.value).toBe(0)
+          expect(yield* team.getPendingMessages(done.session_id, info.id)).toHaveLength(0)
+          expect((yield* team.getMessages(info.id)).length).toBe(messagesBefore.length)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects multi-recipient sends when any finite member is terminal", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const done = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_terminal_multi_done",
+            name: "doneMember",
+            agentType: "general",
+            rolePrompt: "Finish",
+          })
+          const cancelled = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_terminal_multi_cancelled",
+            name: "cancelledMember",
+            agentType: "general",
+            rolePrompt: "Cancelled",
+          })
+          const failed = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_terminal_multi_failed",
+            name: "failedMember",
+            agentType: "general",
+            rolePrompt: "Fail",
+          })
+          yield* team.updateMemberStatus(done.id, "completed")
+          yield* team.updateMemberStatus(cancelled.id, "cancelled")
+          yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+          const tool = yield* TeamSendMessageTool
+          const def = yield* tool.init()
+
+          const messagesBefore = yield* team.getMessages(info.id)
+          const result = yield* def.execute(
+            { recipient: `${done.session_id},${cancelled.session_id},${failed.session_id}`, body: "Hi" },
+            context({ lead, assistant }),
+          )
+
+          expect(result.title).toBe("Team Message")
+          expect(result.output).toContain("Recipient 'doneMember' is completed and cannot receive messages.")
+          expect(result.output).toContain("Recipient 'cancelledMember' is cancelled and cannot receive messages.")
+          expect(result.output).toContain("Recipient 'failedMember' is failed and cannot receive messages.")
+          expect((yield* team.getMessages(info.id)).length).toBe(messagesBefore.length)
+          for (const sessionID of [done.session_id, cancelled.session_id, failed.session_id]) {
+            expect(yield* team.getPendingMessages(sessionID, info.id)).toHaveLength(0)
+          }
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("still delivers to active members and idle daemons", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info, member } = yield* seed()
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_idle_daemon",
+            name: "sentinel",
+            agentType: "general",
+            rolePrompt: "Monitor",
+            lifecycle: "daemon",
+            daemonState: "initializing",
+            daemonLastActive: Date.now(),
+          })
+          yield* team.updateMemberStatus(daemon.id, "idle", {
+            daemonState: "idle",
+            daemonLastActive: Date.now(),
+          })
+          const tool = yield* TeamSendMessageTool
+          const def = yield* tool.init()
+
+          const activeResult = yield* def.execute(
+            { recipient: member.name, body: "Review this." },
+            context({ lead, assistant }),
+          )
+          expect(activeResult.title).toBe("Message Sent")
+          expect(yield* team.getPendingMessages(member.session_id, info.id)).toHaveLength(1)
+
+          const daemonResult = yield* def.execute(
+            { recipient: "sentinel", body: "Keep watching." },
+            context({ lead, assistant }),
+          )
+          expect(daemonResult.title).toBe("Message Sent")
+          expect(yield* team.getPendingMessages(daemon.session_id, info.id)).toHaveLength(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
 })
 
 describe("tool.team_plan_submit", () => {

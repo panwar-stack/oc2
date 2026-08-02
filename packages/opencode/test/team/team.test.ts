@@ -1,6 +1,8 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Layer, Option } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, Option } from "effect"
 import { Team } from "@/team/team"
+import { TeamTable } from "@/team/team.sql"
+import { and, eq } from "drizzle-orm"
 import { Bus } from "@/bus"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -92,8 +94,62 @@ describe("team", () => {
         expect(Option.isSome(active)).toBe(true)
         expect(unwrap(active).id).toBe(created.id)
 
-        const result = yield* team.create({ name: "dup", goal: "x", leadSessionID }).pipe(Effect.exit)
-        expect(result._tag).toBe("Failure")
+        const conflict = yield* team.create({ name: "dup", goal: "x", leadSessionID }).pipe(Effect.flip)
+        expect(conflict).toBeInstanceOf(Team.ActiveTeamConflict)
+        expect(conflict.leadSessionID).toBe(leadSessionID)
+        expect(conflict.teamID).toBe(created.id)
+
+        const { db } = yield* Database.Service
+        const activeRows = yield* db
+          .select({ id: TeamTable.id })
+          .from(TeamTable)
+          .where(and(eq(TeamTable.lead_session_id, leadSessionID), eq(TeamTable.status, "active")))
+          .all()
+          .pipe(Effect.orDie)
+        expect(activeRows).toHaveLength(1)
+        expect(activeRows[0]?.id).toBe(created.id)
+      }),
+    ),
+  )
+
+  it.live("concurrent creates for one lead yield one success and one typed conflict", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const leadSessionID = "ses_test_lead_concurrent_create"
+
+        const results = yield* Effect.all(
+          [
+            team.create({ name: "concurrent-a", goal: "Goal", leadSessionID }).pipe(Effect.exit),
+            team.create({ name: "concurrent-b", goal: "Goal", leadSessionID }).pipe(Effect.exit),
+          ],
+          { concurrency: "unbounded" },
+        )
+
+        const winners = results.filter((result) => Exit.isSuccess(result))
+        const losers = results.filter((result) => {
+          if (!Exit.isFailure(result)) return false
+          return Cause.squash(result.cause) instanceof Team.ActiveTeamConflict
+        })
+        expect(winners).toHaveLength(1)
+        expect(losers).toHaveLength(1)
+
+        const winner = winners[0] as Exit.Success<Team.Info>
+        expect(winner.value.status).toBe("active")
+        const loser = losers[0] as Exit.Failure<never, Team.ActiveTeamConflict>
+        const conflict = Cause.squash(loser.cause) as Team.ActiveTeamConflict
+        expect(conflict.leadSessionID).toBe(leadSessionID)
+        expect(conflict.teamID).toBe(winner.value.id)
+
+        const { db } = yield* Database.Service
+        const activeRows = yield* db
+          .select({ id: TeamTable.id })
+          .from(TeamTable)
+          .where(and(eq(TeamTable.lead_session_id, leadSessionID), eq(TeamTable.status, "active")))
+          .all()
+          .pipe(Effect.orDie)
+        expect(activeRows).toHaveLength(1)
+        expect(activeRows[0]?.id).toBe(winner.value.id)
       }),
     ),
   )

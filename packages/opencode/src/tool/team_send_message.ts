@@ -66,6 +66,24 @@ export const TeamSendMessageTool = Tool.define(
           }
           const recipients = [...new Set(recipientIDs)]
           if (recipients.length === 0) return { title: "Team Message", output: "No recipients.", metadata: {} }
+          // A finite member that already reached a terminal status cannot receive
+          // messages; waking it would start untracked lifecycle work. Idle daemon
+          // recipients remain valid because their status is "idle", not terminal.
+          const terminalMembers = members.filter(
+            (member) =>
+              recipients.includes(member.session_id) &&
+              member.lifecycle === "task" &&
+              (member.status === "completed" || member.status === "cancelled" || member.status === "failed"),
+          )
+          if (terminalMembers.length > 0) {
+            return {
+              title: "Team Message",
+              output: terminalMembers
+                .map((member) => `Recipient '${member.name}' is ${member.status} and cannot receive messages.`)
+                .join("\n"),
+              metadata: {},
+            }
+          }
           const msg = yield* team.sendMessage({
             teamID: context.value.team.id,
             sender: ctx.sessionID,

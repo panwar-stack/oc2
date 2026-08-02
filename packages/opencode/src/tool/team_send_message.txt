@@ -4,5 +4,7 @@ Messages wake idle recipient sessions immediately — they will see your message
 When the lead sends a message to teammates, this call waits for woken teammate run(s) to finish.
 When a teammate sends a message, delivery stays asynchronous so teammate work is not blocked.
 If a recipient is already busy, they will only process the message after the current run reaches the next prompt boundary.
+Terminal finite teammates (completed, cancelled, or failed) cannot receive messages and are rejected with a stable error; idle daemon teammates remain reachable.
+Do not use this tool to resume a completed, cancelled, or failed teammate. To get more evidence from finished work, inspect the mailbox and worktree and spawn a fresh read-only reviewer in the same active team.
 As team lead, do not use this for routine status checks while teammates are working.
 Use this to coordinate work between teammates or provide information from the lead.

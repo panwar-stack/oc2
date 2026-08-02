@@ -5,9 +5,12 @@ import { Config } from "@/config/config"
 import { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
+import { TeamTable } from "@/team/team.sql"
 import { TeamCreateTool } from "@/tool/team_create"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
+import { Database } from "@oc2-ai/core/database/database"
+import { and, eq } from "drizzle-orm"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -20,6 +23,7 @@ const it = testEffect(
     Agent.defaultLayer,
     Config.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
+    Database.defaultLayer,
     Session.defaultLayer,
     Team.defaultLayer,
     Truncate.defaultLayer,
@@ -74,6 +78,41 @@ describe("tool.team_create", () => {
           expect(result.title).toBe("Team Create Failed")
           expect(result.output).toContain("Child sessions cannot create teams")
           expect(Option.isNone(yield* team.getActive(child.id))).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("duplicate create returns stable Team Create Failed with existing team identity", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const existing = yield* team.create({ name: "primary", goal: "Coordinate work", leadSessionID: lead.id })
+          const tool = yield* TeamCreateTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({ name: "duplicate", goal: "Duplicate work" }, context(lead.id))
+
+          expect(result.title).toBe("Team Create Failed")
+          expect(result.output).toContain(existing.name)
+          expect(result.output).toContain(existing.id)
+          expect(result.output).toContain("Reuse that team")
+          expect(result.output).toContain("team_shutdown")
+          expect(Option.isSome(yield* team.getActive(lead.id))).toBe(true)
+
+          // The duplicate create must not add a second active team row.
+          const { db } = yield* Database.Service
+          const rows = yield* db
+            .select({ id: TeamTable.id })
+            .from(TeamTable)
+            .where(and(eq(TeamTable.lead_session_id, lead.id), eq(TeamTable.status, "active")))
+            .all()
+            .pipe(Effect.orDie)
+          expect(rows).toHaveLength(1)
+          expect(rows[0]?.id).toBe(existing.id)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
