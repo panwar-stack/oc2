@@ -32,6 +32,56 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("adds team_file_ownership with a partial unique index on active path_key", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'team_file_ownership'`),
+        ).toEqual({ name: "team_file_ownership" })
+
+        const columns = yield* db.all<{ name: string; type: string; notnull: number }>(
+          sql`PRAGMA table_info('team_file_ownership')`,
+        )
+        expect(columns.map((column) => column.name)).toEqual([
+          "id",
+          "team_id",
+          "task_id",
+          "root_key",
+          "path_key",
+          "display_path",
+          "owner_session_id",
+          "time_released",
+          "time_created",
+          "time_updated",
+        ])
+
+        const activePath = yield* db.get<{ name: string; sql: string }>(
+          sql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name = 'team_file_ownership_active_path_idx'`,
+        )
+        expect(activePath?.name).toBe("team_file_ownership_active_path_idx")
+        expect(activePath?.sql).toContain("UNIQUE INDEX")
+        expect(activePath?.sql).toContain("team_file_ownership_active_path_idx")
+        expect(activePath?.sql).toContain('"time_released" IS NULL')
+
+        const indexes = yield* db.all<{ name: string; unique: number }>(
+          sql`PRAGMA index_list('team_file_ownership')`,
+        )
+        expect(indexes.map((index) => index.name).filter((name) => !name.startsWith("sqlite_autoindex")).sort()).toEqual([
+          "team_file_ownership_active_path_idx",
+          "team_file_ownership_owner_session_idx",
+          "team_file_ownership_task_idx",
+        ])
+        const activeUnique = indexes.find(
+          (index) => index.name === "team_file_ownership_active_path_idx",
+        )
+        expect(activeUnique?.unique).toBe(1)
+      }),
+    )
+  })
+
   test("serializes concurrent embedded initialization for one database path", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "embedded.sqlite")

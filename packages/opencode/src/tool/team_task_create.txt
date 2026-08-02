@@ -4,3 +4,6 @@ Create shared tasks for multi-step work and assign owners before implementation 
 Use dependency_ids when one task needs another task's result; leave dependencies empty for independent work.
 Dependency tasks must complete before dependent tasks can be claimed.
 Creating a task records tracking state only; it does not start or wake a teammate.
+
+Exact-file reservations (owned_paths):
+Pass owned_paths to exclusively reserve exact file paths for this task. Each path is canonicalized; a path already reserved by another task rejects the whole create. An owned task binds its owner only when a teammate claims it with team_task_claim (do not pass assignee for owned tasks). The owner may complete the task; the owner or the lead may cancel it. Reservations are released on completion or cancellation and kept for audit. Directory and glob claims are not supported yet; reserve exact files only.

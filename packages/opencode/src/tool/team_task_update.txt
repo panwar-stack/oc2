@@ -1,3 +1,6 @@
 Update the status or assignee of a shared team task.
 Statuses: pending, in_progress, completed, cancelled.
 Only the lead or the assigned teammate can update a task.
+
+Exact-file reservations (owned tasks):
+An owned task (created with owned_paths) follows stricter rules enforced by the service. It cannot go directly from pending to completed. An in-progress owned task cannot be reassigned; cancel it and create a replacement. Only the task owner can complete an owned task. The owner or the lead can cancel it. Completion and cancellation release the task's file reservations atomically in the same transaction. Protocol-0 and unowned tasks keep the existing assignee and status behavior.

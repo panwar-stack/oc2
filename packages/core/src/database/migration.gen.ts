@@ -42,6 +42,7 @@ export const migrations = (
     import("./migration/20260727045732_yielding_preak"),
     import("./migration/20260730222055_persistent_session_pause"),
     import("./migration/20260801120000_add_team_member_failed_state"),
+    import("./migration/20260802084641_team_file_ownership"),
     import("./migration/20260802120000_add_team_member_run_generation"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

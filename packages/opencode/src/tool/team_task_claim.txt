@@ -1,3 +1,6 @@
 Claim a pending task from the shared task list to work on it.
 Only tasks with all dependencies satisfied can be claimed.
 Once claimed, the task is marked as in_progress and assigned to the claiming teammate.
+
+Exact-file reservations (owned tasks):
+Claiming an owned task (created with owned_paths) binds every reserved file to the claiming session in the same transaction. The claiming session becomes the authoritative owner: only it may complete the task, and it may cancel it. The lead may also cancel an owned task. A reservation already owned by a different session rejects the claim.

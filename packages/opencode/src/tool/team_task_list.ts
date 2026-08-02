@@ -25,7 +25,9 @@ export const TeamTaskListTool = Tool.define(
           if (tasks.length === 0) return { title: "Team Tasks", output: "No tasks found.", metadata: {} }
           const lines = tasks.map(
             (task) =>
-              `- [${task.status}] ${task.id.slice(0, 8)}: ${task.description}${task.assignee ? ` (${task.assignee})` : ""}`,
+              `- [${task.status}] ${task.id.slice(0, 8)}: ${task.description}${task.assignee ? ` (${task.assignee})` : ""}${
+                task.owned_paths.length > 0 ? ` [owned: ${task.owned_paths.join(", ")}]` : ""
+              }`,
           )
           return { title: "Team Tasks", output: lines.join("\n"), metadata: {} }
         }).pipe(Effect.orDie),

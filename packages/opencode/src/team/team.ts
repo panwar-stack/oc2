@@ -9,6 +9,7 @@ import { SqlError } from "effect/unstable/sql/SqlError"
 import { eq, and, asc, desc, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Runner } from "@/effect/runner"
 import { SessionPauseBlockerTable, SessionPauseCascadeTable } from "@oc2-ai/core/session/sql"
+import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import {
   TeamTable,
   TeamMemberTable,
@@ -18,6 +19,14 @@ import {
   TeamUsageEventTable,
 } from "./team.sql"
 import { PendingMailbox } from "./pending-mailbox"
+import {
+  OwnedPathConflict,
+  assertNoActivePathConflicts,
+  buildReservationRows,
+  toOwnedReservation,
+  type OwnedPath,
+  type OwnedReservation,
+} from "./file-ownership"
 
 const toOption = <T>(v: T | null | undefined): Option.Option<T> => (v != null ? Option.some(v) : Option.none())
 
@@ -39,6 +48,10 @@ export type Task = Omit<TeamTaskRow, "assignee" | "dependency_ids" | "metadata">
   assignee: TeamTaskInsert["assignee"]
   dependency_ids: TeamTaskInsert["dependency_ids"]
   metadata: TeamTaskInsert["metadata"]
+  /** Root-relative display paths of this task's reservation rows (active or released). */
+  owned_paths: string[]
+  /** Reservation summary rows for audit and listing. */
+  reservations: OwnedReservation[]
 }
 export type Message = TeamMessageRow
 export type MemberStatus = TeamMemberRow["status"]
@@ -124,12 +137,14 @@ export interface Interface {
     assignee?: string
     dependencyIDs?: string[]
     metadata?: Record<string, unknown>
+    owned?: OwnedPath[]
   }) => Effect.Effect<Task, Error>
   getTask: (teamID: string, taskID: string) => Effect.Effect<Option.Option<Task>, Error>
   updateTask: (
     teamID: string,
     taskID: string,
     update: Partial<{ status: TaskStatus; assignee: string }>,
+    caller?: { sessionID: string; isLead: boolean },
   ) => Effect.Effect<Option.Option<Task>, Error>
   claimTask: (teamID: string, taskID: string, assignee: string) => Effect.Effect<Option.Option<Task>, Error>
   getTasks: (teamID: string) => Effect.Effect<Task[]>
@@ -605,6 +620,7 @@ export const layer = Layer.effect(
       assignee?: string
       dependencyIDs?: string[]
       metadata?: Record<string, unknown>
+      owned?: OwnedPath[]
     }) {
       const dependencyIDs = yield* Effect.forEach(input.dependencyIDs ?? [], (dependencyID) =>
         Effect.gen(function* () {
@@ -614,34 +630,104 @@ export const layer = Layer.effect(
           return resolved.value
         }),
       )
+      const owned = input.owned ?? []
       const id = crypto.randomUUID()
       const now = Date.now()
-      yield* db
-        .insert(TeamTaskTable)
-        .values({
+      // Owned tasks bind the owner at claim time from authoritative ctx.sessionID;
+      // a free-form assignee is meaningless for them and must not be stored.
+      const assignee = owned.length > 0 ? undefined : input.assignee
+
+      if (owned.length === 0) {
+        yield* db
+          .insert(TeamTaskTable)
+          .values({
+            id,
+            team_id: input.teamID,
+            description: input.description,
+            status: "pending",
+            assignee: assignee ?? null,
+            dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : null,
+            metadata: input.metadata ?? null,
+            time_created: now,
+            time_updated: now,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        return {
           id,
           team_id: input.teamID,
           description: input.description,
           status: "pending",
-          assignee: input.assignee ?? null,
-          dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : null,
-          metadata: input.metadata ?? null,
+          assignee: assignee,
+          dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : undefined,
+          metadata: input.metadata,
+          owned_paths: [],
+          reservations: [],
           time_created: now,
           time_updated: now,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      return {
-        id,
-        team_id: input.teamID,
-        description: input.description,
-        status: "pending",
-        assignee: input.assignee,
-        dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : undefined,
-        metadata: input.metadata,
-        time_created: now,
-        time_updated: now,
-      } satisfies Task
+        } satisfies Task
+      }
+
+      // Owned task: insert the pending task and all reservation rows in one
+      // immediate transaction. Any active-path conflict rolls back the entire
+      // operation and fails with a stable error naming the conflicting file.
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              yield* assertNoActivePathConflicts(tx, owned)
+              yield* tx
+                .insert(TeamTaskTable)
+                .values({
+                  id,
+                  team_id: input.teamID,
+                  description: input.description,
+                  status: "pending",
+                  assignee: null,
+                  dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : null,
+                  metadata: input.metadata ?? null,
+                  time_created: now,
+                  time_updated: now,
+                })
+                .run()
+              yield* tx
+                .insert(TeamFileOwnershipTable)
+                .values(buildReservationRows({ id, teamID: input.teamID, taskID: id, owned, now }))
+                .run()
+              return {
+                id,
+                team_id: input.teamID,
+                description: input.description,
+                status: "pending",
+                assignee: undefined,
+                dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : undefined,
+                metadata: input.metadata,
+                owned_paths: owned.map((entry) => entry.displayPath),
+                reservations: owned.map((entry, index) => ({
+                  id: `${id}-${index}`,
+                  rootKey: entry.rootKey,
+                  pathKey: entry.pathKey,
+                  displayPath: entry.displayPath,
+                  ownerSessionID: null,
+                  timeReleased: null,
+                })),
+                time_created: now,
+                time_updated: now,
+              } satisfies Task
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(
+          Effect.catchTag("EffectDrizzleQueryError", (error) => {
+            // The partial unique index is the final race guard; a lost insert
+            // race surfaces here. Map it to the same stable conflict error.
+            const cause = Cause.findErrorOption(error.cause as Cause.Cause<unknown>)
+            const isUniqueViolation =
+              Option.isSome(cause) && cause.value instanceof SqlError && cause.value.reason._tag === "UniqueViolation"
+            if (!isUniqueViolation) return Effect.die(error)
+            return Effect.fail(new OwnedPathConflict({ displayPath: owned[0]?.displayPath ?? "" }))
+          }),
+        )
     })
 
     const getTask = Effect.fn("Team.getTask")(function* (teamID: string, taskID: string) {
@@ -654,6 +740,17 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (!row) return Option.none()
+      const reservations = yield* db
+        .select()
+        .from(TeamFileOwnershipTable)
+        .where(
+          and(
+            eq(TeamFileOwnershipTable.team_id, teamID),
+            eq(TeamFileOwnershipTable.task_id, resolved.value),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
       return Option.some({
         id: row.id,
         team_id: row.team_id,
@@ -662,6 +759,8 @@ export const layer = Layer.effect(
         assignee: row.assignee,
         dependency_ids: row.dependency_ids,
         metadata: row.metadata,
+        owned_paths: reservations.map((reservation) => reservation.display_path),
+        reservations: reservations.map(toOwnedReservation),
         time_created: row.time_created,
         time_updated: row.time_updated,
       })
@@ -671,36 +770,149 @@ export const layer = Layer.effect(
       teamID: string,
       taskID: string,
       update: Partial<{ status: TaskStatus; assignee: string }>,
+      caller?: { sessionID: string; isLead: boolean },
     ) {
       const resolved = yield* resolveTaskID(teamID, taskID)
       if (Option.isNone(resolved)) return Option.none()
       const now = Date.now()
-      const setData: Partial<TeamTaskInsert> = { time_updated: now }
-      if (update.status !== undefined) setData.status = update.status
-      if (update.assignee !== undefined) setData.assignee = update.assignee
-      yield* db
-        .update(TeamTaskTable)
-        .set(setData)
-        .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
-        .run()
-        .pipe(Effect.orDie)
-      const row = yield* db
-        .select()
-        .from(TeamTaskTable)
-        .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
-        .get()
-        .pipe(Effect.orDie)
-      if (!row) return Option.none()
+      const result = yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const current = yield* tx
+                .select()
+                .from(TeamTaskTable)
+                .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+                .get()
+              if (!current) return null
+              const reservations = yield* tx
+                .select()
+                .from(TeamFileOwnershipTable)
+                .where(
+                  and(
+                    eq(TeamFileOwnershipTable.team_id, teamID),
+                    eq(TeamFileOwnershipTable.task_id, resolved.value),
+                  ),
+                )
+                .all()
+              const isOwned = reservations.length > 0
+              const setData: Partial<TeamTaskInsert> = { time_updated: now }
+
+              if (isOwned) {
+                // Owned-task invariants live here, not only in the tool wrapper.
+                if (!caller)
+                  return yield* Effect.fail(new Error("Caller identity is required to update an owned task."))
+                const ownerSessionID = reservations[0]?.owner_session_id ?? null
+                if (update.assignee !== undefined) {
+                  return yield* Effect.fail(
+                    new Error("Cannot reassign an owned task. Cancel it and create a replacement."),
+                  )
+                }
+                if (update.status !== undefined) {
+                  const target = update.status
+                  if (target === "completed") {
+                    if (current.status === "pending") {
+                      return yield* Effect.fail(
+                        new Error("An owned task cannot transition directly from pending to completed."),
+                      )
+                    }
+                    if (current.status !== "in_progress") {
+                      return yield* Effect.fail(new Error(`Cannot complete a ${current.status} owned task.`))
+                    }
+                    if (ownerSessionID !== caller.sessionID) {
+                      return yield* Effect.fail(new Error("Only the task owner can complete this task."))
+                    }
+                    setData.status = "completed"
+                  } else if (target === "cancelled") {
+                    if (current.status === "completed" || current.status === "cancelled") {
+                      return yield* Effect.fail(new Error(`Cannot cancel a ${current.status} owned task.`))
+                    }
+                    if (!caller.isLead && ownerSessionID !== caller.sessionID) {
+                      return yield* Effect.fail(new Error("Only the task owner or the lead can cancel this task."))
+                    }
+                    setData.status = "cancelled"
+                  } else if (target === "in_progress") {
+                    return yield* Effect.fail(
+                      new Error("Only team_task_claim may start an owned task."),
+                    )
+                  } else {
+                    return yield* Effect.fail(new Error(`Invalid transition to ${target} for an owned task.`))
+                  }
+                }
+                yield* tx
+                  .update(TeamTaskTable)
+                  .set(setData)
+                  .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+                  .run()
+                // On completion or cancellation release all reservations in the
+                // same transaction. Rows are kept for audit.
+                if (setData.status === "completed" || setData.status === "cancelled") {
+                  yield* tx
+                    .update(TeamFileOwnershipTable)
+                    .set({ time_released: now, time_updated: now })
+                    .where(
+                      and(
+                        eq(TeamFileOwnershipTable.team_id, teamID),
+                        eq(TeamFileOwnershipTable.task_id, resolved.value),
+                        isNull(TeamFileOwnershipTable.time_released),
+                      ),
+                    )
+                    .run()
+                }
+              } else {
+                if (update.status !== undefined) setData.status = update.status
+                if (update.assignee !== undefined) setData.assignee = update.assignee
+                yield* tx
+                  .update(TeamTaskTable)
+                  .set(setData)
+                  .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+                  .run()
+              }
+
+              const row = yield* tx
+                .select()
+                .from(TeamTaskTable)
+                .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
+                .get()
+              const updatedReservations = yield* tx
+                .select()
+                .from(TeamFileOwnershipTable)
+                .where(
+                  and(
+                    eq(TeamFileOwnershipTable.team_id, teamID),
+                    eq(TeamFileOwnershipTable.task_id, resolved.value),
+                  ),
+                )
+                .all()
+              if (!row) return null
+              return {
+                row,
+                reservations: updatedReservations,
+              }
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(
+          // Expected validation failures are Error instances; only database
+          // query failures should become defects.
+          Effect.catchIf(
+            (error): error is Error => !(error instanceof Error),
+            (error) => Effect.die(error),
+          ),
+        )
+      if (!result) return Option.none()
       return Option.some({
-        id: row.id,
-        team_id: row.team_id,
-        description: row.description,
-        status: row.status,
-        assignee: row.assignee,
-        dependency_ids: row.dependency_ids,
-        metadata: row.metadata,
-        time_created: row.time_created,
-        time_updated: row.time_updated,
+        id: result.row.id,
+        team_id: result.row.team_id,
+        description: result.row.description,
+        status: result.row.status,
+        assignee: result.row.assignee,
+        dependency_ids: result.row.dependency_ids,
+        metadata: result.row.metadata,
+        owned_paths: result.reservations.map((reservation) => reservation.display_path),
+        reservations: result.reservations.map(toOwnedReservation),
+        time_created: result.row.time_created,
+        time_updated: result.row.time_updated,
       })
     })
 
@@ -727,51 +939,114 @@ export const layer = Layer.effect(
                   .all()).filter((t) => deps.includes(t.id) && t.status === "completed")
                 if (!deps.every((id) => completed.some((t) => t.id === id))) return null
               }
+              // Owned tasks bind every reservation to the claiming session in
+              // the same transaction. Reject if any reservation is already
+              // owned by a different session.
+              const reservations = yield* tx
+                .select()
+                .from(TeamFileOwnershipTable)
+                .where(
+                  and(
+                    eq(TeamFileOwnershipTable.team_id, teamID),
+                    eq(TeamFileOwnershipTable.task_id, resolved.value),
+                  ),
+                )
+                .all()
+              if (reservations.length > 0) {
+                const foreignOwner = reservations.find(
+                  (reservation) =>
+                    reservation.owner_session_id !== null && reservation.owner_session_id !== assignee,
+                )
+                if (foreignOwner) return null
+                yield* tx
+                  .update(TeamFileOwnershipTable)
+                  .set({ owner_session_id: assignee, time_updated: now })
+                  .where(
+                    and(
+                      eq(TeamFileOwnershipTable.team_id, teamID),
+                      eq(TeamFileOwnershipTable.task_id, resolved.value),
+                      isNull(TeamFileOwnershipTable.time_released),
+                    ),
+                  )
+                  .run()
+              }
               yield* tx
                 .update(TeamTaskTable)
                 .set({ status: "in_progress", assignee, time_updated: now })
                 .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
                 .run()
-              return yield* tx
+              const row = yield* tx
                 .select()
                 .from(TeamTaskTable)
                 .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
                 .get()
+              const updatedReservations = yield* tx
+                .select()
+                .from(TeamFileOwnershipTable)
+                .where(
+                  and(
+                    eq(TeamFileOwnershipTable.team_id, teamID),
+                    eq(TeamFileOwnershipTable.task_id, resolved.value),
+                  ),
+                )
+                .all()
+              return row ? { row, reservations: updatedReservations } : null
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
       if (!result) return Option.none()
       return Option.some({
-        id: result.id,
-        team_id: result.team_id,
-        description: result.description,
-        status: result.status,
-        assignee: result.assignee,
-        dependency_ids: result.dependency_ids,
-        metadata: result.metadata,
-        time_created: result.time_created,
-        time_updated: result.time_updated,
+        id: result.row.id,
+        team_id: result.row.team_id,
+        description: result.row.description,
+        status: result.row.status,
+        assignee: result.row.assignee,
+        dependency_ids: result.row.dependency_ids,
+        metadata: result.row.metadata,
+        owned_paths: result.reservations.map((reservation) => reservation.display_path),
+        reservations: result.reservations.map(toOwnedReservation),
+        time_created: result.row.time_created,
+        time_updated: result.row.time_updated,
       })
     })
 
     const getTasks = Effect.fn("Team.getTasks")(function* (teamID: string) {
-      return (yield* db
+      const rows = yield* db
         .select()
         .from(TeamTaskTable)
         .where(eq(TeamTaskTable.team_id, teamID))
+        .orderBy(asc(TeamTaskTable.time_created), asc(TeamTaskTable.id))
         .all()
-        .pipe(Effect.orDie)).map((row) => ({
-        id: row.id,
-        team_id: row.team_id,
-        description: row.description,
-        status: row.status,
-        assignee: row.assignee,
-        dependency_ids: row.dependency_ids,
-        metadata: row.metadata,
-        time_created: row.time_created,
-        time_updated: row.time_updated,
-      }))
+        .pipe(Effect.orDie)
+      const reservations = yield* db
+        .select()
+        .from(TeamFileOwnershipTable)
+        .where(eq(TeamFileOwnershipTable.team_id, teamID))
+        .all()
+        .pipe(Effect.orDie)
+      const byTask = new Map<string, typeof TeamFileOwnershipTable.$inferSelect[]>()
+      for (const reservation of reservations) {
+        const list = byTask.get(reservation.task_id) ?? []
+        list.push(reservation)
+        byTask.set(reservation.task_id, list)
+      }
+      return rows.map((row) => {
+        const taskReservations = byTask.get(row.id) ?? []
+        return {
+          id: row.id,
+          team_id: row.team_id,
+          description: row.description,
+          status: row.status,
+          assignee: row.assignee,
+          dependency_ids: row.dependency_ids,
+          metadata: row.metadata,
+          owned_paths: taskReservations.map((reservation) => reservation.display_path),
+          reservations: taskReservations.map(toOwnedReservation),
+          time_created: row.time_created,
+          time_updated: row.time_updated,
+        }
+      })
     })
 
     const resolveTaskID = Effect.fn("Team.resolveTaskID")(function* (teamID: string, taskID: string) {

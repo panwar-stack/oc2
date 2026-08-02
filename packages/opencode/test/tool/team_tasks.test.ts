@@ -1,6 +1,8 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { eq } from "drizzle-orm"
+import fs from "fs/promises"
+import path from "path"
+import { eq, isNull } from "drizzle-orm"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageID, SessionID } from "@/session/schema"
@@ -11,10 +13,12 @@ import { TeamTaskClaimTool } from "@/tool/team_task_claim"
 import { TeamTaskCreateTool } from "@/tool/team_task_create"
 import { TeamTaskListTool } from "@/tool/team_task_list"
 import { TeamTaskUpdateTool } from "@/tool/team_task_update"
+import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import type { Context } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Database } from "@oc2-ai/core/database/database"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -28,6 +32,7 @@ const it = testEffect(
     Config.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     Database.defaultLayer,
+    FSUtil.defaultLayer,
     Session.defaultLayer,
     Team.defaultLayer,
     Truncate.defaultLayer,
@@ -287,6 +292,448 @@ describe("tool.team_tasks", () => {
           expect(result.output.toLowerCase()).toContain("task")
           expect(row?.status).toBe("pending")
           expect(row?.assignee).toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("creates an owned task with active reservations and lists owned paths", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-create")
+          const owned = path.join(directory, "owned.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const listTool = yield* TeamTaskListTool
+          const listDef = yield* listTool.init()
+
+          const created = yield* createDef.execute(
+            { description: "Owned create", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const { db } = yield* Database.Service
+          const task = yield* getTasks(seed.info.id)
+          const taskID = task.find((row) => row.description === "Owned create")?.id
+          if (!taskID) throw new Error("owned task was not persisted")
+          const reservations = yield* db
+            .select()
+            .from(TeamFileOwnershipTable)
+            .where(eq(TeamFileOwnershipTable.task_id, taskID))
+            .all()
+            .pipe(Effect.orDie)
+          const listed = yield* listDef.execute({}, context(seed.lead.id))
+
+          expect(created.title).toBe("Task Created")
+          expect(reservations).toHaveLength(1)
+          expect(reservations[0]?.owner_session_id).toBeNull()
+          expect(reservations[0]?.time_released).toBeNull()
+          expect(reservations[0]?.display_path).toBe("owned.txt")
+          expect(listed.output).toContain("owned.txt")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects an owned task reserving a path already active for another team and rolls back fully", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const owner = yield* seedTeam("tasks-owned-conflict-owner")
+          const other = yield* seedTeam("tasks-owned-conflict-other")
+          const shared = path.join(directory, "shared.txt")
+          yield* Effect.promise(() => fs.writeFile(shared, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+
+          const first = yield* createDef.execute(
+            { description: "Reserves shared", owned_paths: [shared] },
+            context(owner.lead.id),
+          )
+          expect(first.title).toBe("Task Created")
+
+          const second = yield* createDef.execute(
+            { description: "Conflicts with shared", owned_paths: [shared] },
+            context(other.lead.id),
+          )
+          expect(second.title).toBe("Task Create Failed")
+          expect(second.output.toLowerCase()).toContain("already reserved")
+          expect(second.output).toContain("shared.txt")
+
+          const ownerTasks = yield* getTasks(owner.info.id)
+          const otherTasks = yield* getTasks(other.info.id)
+          expect(ownerTasks).toHaveLength(1)
+          expect(otherTasks).toHaveLength(0)
+          const { db } = yield* Database.Service
+          const rows = yield* db.select().from(TeamFileOwnershipTable).all().pipe(Effect.orDie)
+          expect(rows).toHaveLength(1)
+          expect(rows[0]?.display_path).toBe("shared.txt")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects a duplicate owned path alias within one create", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-dup")
+          const a = path.join(directory, "Alias.txt")
+          yield* Effect.promise(() => fs.writeFile(a, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+
+          const result = yield* createDef.execute(
+            { description: "Duplicate alias", owned_paths: [a, path.join(directory, "alias.txt")] },
+            context(seed.lead.id),
+          )
+          expect(result.title).toBe("Task Create Failed")
+          const tasks = yield* getTasks(seed.info.id)
+          expect(tasks).toHaveLength(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("claim binds all reservations to the claiming session", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-claim")
+          const a = path.join(directory, "claim-a.txt")
+          const b = path.join(directory, "claim-b.txt")
+          yield* Effect.promise(() => fs.writeFile(a, "x"))
+          yield* Effect.promise(() => fs.writeFile(b, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+
+          yield* createDef.execute(
+            { description: "Claim owned", owned_paths: [a, b] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Claim owned")
+          if (!task) throw new Error("owned task was not persisted")
+
+          const claimed = yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+          const { db } = yield* Database.Service
+          const rows = yield* db
+            .select()
+            .from(TeamFileOwnershipTable)
+            .where(eq(TeamFileOwnershipTable.task_id, task.id))
+            .all()
+            .pipe(Effect.orDie)
+
+          expect(claimed.title).toBe("Task Claimed")
+          expect(rows).toHaveLength(2)
+          for (const row of rows) {
+            expect(row.owner_session_id).toBe(seed.worker.session_id)
+            expect(row.time_released).toBeNull()
+          }
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects pending to completed for an owned task", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-pending-complete")
+          const owned = path.join(directory, "pending-complete.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "No direct complete", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find(
+            (row) => row.description === "No direct complete",
+          )
+          if (!task) throw new Error("owned task was not persisted")
+
+          const updated = yield* updateDef.execute(
+            { task_id: task.id, status: "completed" },
+            context(seed.lead.id),
+          )
+          const row = yield* getTask(task.id)
+
+          expect(updated.title).toBe("Task Update Failed")
+          expect(updated.output.toLowerCase()).toContain("pending")
+          expect(row?.status).toBe("pending")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects in-progress reassignment of an owned task", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-reassign")
+          const owned = path.join(directory, "reassign.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "No reassign", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "No reassign")
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+
+          const updated = yield* updateDef.execute(
+            { task_id: task.id, assignee: seed.other.session_id },
+            context(seed.lead.id),
+          )
+          const row = yield* getTask(task.id)
+
+          expect(updated.title).toBe("Task Update Failed")
+          expect(updated.output.toLowerCase()).toContain("reassign")
+          expect(row?.assignee).toBe(seed.worker.session_id)
+          expect(row?.status).toBe("in_progress")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("only the owner can complete an owned task; the lead cannot", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-complete")
+          const owned = path.join(directory, "complete.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "Owner complete", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Owner complete")
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+
+          const leadComplete = yield* updateDef.execute(
+            { task_id: task.id, status: "completed" },
+            context(seed.lead.id),
+          )
+          expect(leadComplete.title).toBe("Task Update Failed")
+          expect(leadComplete.output.toLowerCase()).toContain("owner")
+
+          const ownerComplete = yield* updateDef.execute(
+            { task_id: task.id, status: "completed" },
+            context(seed.worker.session_id),
+          )
+          const row = yield* getTask(task.id)
+
+          expect(ownerComplete.title).toBe("Task Updated")
+          expect(row?.status).toBe("completed")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("completion releases reservations atomically and keeps the rows", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-release")
+          const owned = path.join(directory, "release.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "Release on complete", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find(
+            (row) => row.description === "Release on complete",
+          )
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+          const { db } = yield* Database.Service
+
+          yield* updateDef.execute(
+            { task_id: task.id, status: "completed" },
+            context(seed.worker.session_id),
+          )
+
+          const rows = yield* db
+            .select()
+            .from(TeamFileOwnershipTable)
+            .where(eq(TeamFileOwnershipTable.task_id, task.id))
+            .all()
+            .pipe(Effect.orDie)
+          expect(rows).toHaveLength(1)
+          expect(rows[0]?.time_released).not.toBeNull()
+          expect(rows[0]?.owner_session_id).toBe(seed.worker.session_id)
+          // The released path is available for a new reservation.
+          const again = yield* createDef.execute(
+            { description: "Reuses released path", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          expect(again.title).toBe("Task Created")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("the owner or the lead can cancel an owned task and release its reservations", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-cancel")
+          const owned = path.join(directory, "cancel.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "Cancel owned", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Cancel owned")
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+
+          const cancelled = yield* updateDef.execute(
+            { task_id: task.id, status: "cancelled" },
+            context(seed.lead.id),
+          )
+          const { db } = yield* Database.Service
+          const rows = yield* db
+            .select()
+            .from(TeamFileOwnershipTable)
+            .where(eq(TeamFileOwnershipTable.task_id, task.id))
+            .all()
+            .pipe(Effect.orDie)
+
+          expect(cancelled.title).toBe("Task Updated")
+          expect((yield* getTask(task.id))?.status).toBe("cancelled")
+          expect(rows[0]?.time_released).not.toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("claim rejects an owned task whose reservation is owned by a different session", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-foreign-owner")
+          const owned = path.join(directory, "foreign.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const { db } = yield* Database.Service
+
+          yield* createDef.execute(
+            { description: "Foreign owner claim", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find(
+            (row) => row.description === "Foreign owner claim",
+          )
+          if (!task) throw new Error("owned task was not persisted")
+          // Force the reservation to another owner while the task stays pending.
+          yield* db
+            .update(TeamFileOwnershipTable)
+            .set({ owner_session_id: "ses_foreign_owner" })
+            .where(eq(TeamFileOwnershipTable.task_id, task.id))
+            .run()
+            .pipe(Effect.orDie)
+
+          const result = yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+          const row = yield* getTask(task.id)
+
+          expect(result.title).toBe("Task Claim Failed")
+          expect(row?.status).toBe("pending")
+          expect(row?.assignee).toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("lists tasks ordered by (time_created, id) with owned paths via the service", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-order")
+          const owned = path.join(directory, "order.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          yield* createDef.execute(
+            { description: "Owned order", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          yield* createDef.execute({ description: "Plain order" }, context(seed.lead.id))
+          const team = yield* Team.Service
+
+          const tasks = yield* team.getTasks(seed.info.id)
+          expect(tasks).toHaveLength(2)
+          expect(tasks[0]?.time_created).toBeLessThanOrEqual(tasks[1]?.time_created ?? 0)
+          const ownedTask = tasks.find((task) => task.owned_paths.length > 0)
+          expect(ownedTask?.owned_paths).toEqual(["order.txt"])
+          expect(ownedTask?.reservations).toHaveLength(1)
+          expect(ownedTask?.reservations[0]?.ownerSessionID).toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("keeps legacy unowned behavior for assignee and direct transitions", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-unowned-legacy")
+          yield* insertTask({
+            id: "task_legacy_direct",
+            teamID: seed.info.id,
+            description: "Legacy direct complete",
+            assignee: seed.worker.session_id,
+          })
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          const updated = yield* updateDef.execute(
+            { task_id: "task_legacy_direct", status: "completed" },
+            context(seed.worker.session_id),
+          )
+          const row = yield* getTask("task_legacy_direct")
+
+          expect(updated.title).toBe("Task Updated")
+          expect(row?.status).toBe("completed")
+          expect(row?.assignee).toBe(seed.worker.session_id)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

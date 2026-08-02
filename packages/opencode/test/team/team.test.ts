@@ -504,6 +504,164 @@ describe("team", () => {
     ),
   )
 
+  it.live("owned task create, claim bind, and owner completion via the service", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "owned-service", goal: "Owned tasks", leadSessionID: "ses_owned_lead" })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_owned_worker",
+          name: "owned-worker",
+          agentType: "general",
+          rolePrompt: "Do owned work",
+        })
+
+        const task = yield* team.createTask({
+          teamID: info.id,
+          description: "Owned service task",
+          owned: [
+            { rootKey: "/work", pathKey: "/work/a.txt", displayPath: "a.txt" },
+            { rootKey: "/work", pathKey: "/work/b.txt", displayPath: "b.txt" },
+          ],
+        })
+        expect(task.status).toBe("pending")
+        expect(task.assignee).toBeUndefined()
+        expect(task.owned_paths).toEqual(["a.txt", "b.txt"])
+        expect(task.reservations).toHaveLength(2)
+
+        const claimed = yield* team.claimTask(info.id, task.id, "ses_owned_worker")
+        expect(Option.isSome(claimed)).toBe(true)
+        expect(unwrap(claimed).status).toBe("in_progress")
+        expect(unwrap(claimed).reservations.every((reservation) => reservation.ownerSessionID === "ses_owned_worker")).toBe(
+          true,
+        )
+
+        // A foreign session cannot complete.
+        const foreign = yield* team
+          .updateTask(info.id, task.id, { status: "completed" }, { sessionID: "ses_stranger", isLead: false })
+          .pipe(Effect.flip)
+        expect(foreign.message).toContain("owner")
+
+        // A lead cannot complete either.
+        const leadComplete = yield* team
+          .updateTask(info.id, task.id, { status: "completed" }, { sessionID: "ses_owned_lead", isLead: true })
+          .pipe(Effect.flip)
+        expect(leadComplete.message).toContain("owner")
+
+        // The owner can complete; reservations release atomically.
+        const completed = yield* team.updateTask(
+          info.id,
+          task.id,
+          { status: "completed" },
+          { sessionID: "ses_owned_worker", isLead: false },
+        )
+        expect(unwrap(completed).status).toBe("completed")
+        expect(unwrap(completed).reservations.every((reservation) => reservation.timeReleased !== null)).toBe(true)
+      }),
+    ),
+  )
+
+  it.live("owned task rejections: pending-to-completed and reassignment", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "owned-reject", goal: "Rejections", leadSessionID: "ses_reject_lead" })
+
+        const task = yield* team.createTask({
+          teamID: info.id,
+          description: "Reject owned",
+          owned: [{ rootKey: "/work", pathKey: "/work/reject.txt", displayPath: "reject.txt" }],
+        })
+
+        const directComplete = yield* team
+          .updateTask(info.id, task.id, { status: "completed" }, { sessionID: "ses_reject_lead", isLead: true })
+          .pipe(Effect.flip)
+        expect(directComplete.message).toContain("pending")
+
+        yield* team.claimTask(info.id, task.id, "ses_reject_worker")
+        const reassign = yield* team
+          .updateTask(
+            info.id,
+            task.id,
+            { assignee: "ses_reject_other" },
+            { sessionID: "ses_reject_lead", isLead: true },
+          )
+          .pipe(Effect.flip)
+        expect(reassign.message).toContain("reassign")
+
+        const leadCancels = yield* team.updateTask(
+          info.id,
+          task.id,
+          { status: "cancelled" },
+          { sessionID: "ses_reject_lead", isLead: true },
+        )
+        expect(unwrap(leadCancels).status).toBe("cancelled")
+        expect(unwrap(leadCancels).reservations[0]?.timeReleased).not.toBeNull()
+      }),
+    ),
+  )
+
+  it.live("owned task conflicts globally reject the same active path across teams", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const first = yield* team.create({ name: "owned-conflict-a", goal: "A", leadSessionID: "ses_conf_a" })
+        const second = yield* team.create({ name: "owned-conflict-b", goal: "B", leadSessionID: "ses_conf_b" })
+
+        yield* team.createTask({
+          teamID: first.id,
+          description: "First reserves",
+          owned: [{ rootKey: "/work", pathKey: "/work/shared.txt", displayPath: "shared.txt" }],
+        })
+        const conflict = yield* team
+          .createTask({
+            teamID: second.id,
+            description: "Second conflicts",
+            owned: [{ rootKey: "/work", pathKey: "/work/shared.txt", displayPath: "shared.txt" }],
+          })
+          .pipe(Effect.flip)
+        expect(conflict.message).toContain("already reserved")
+        expect(conflict.message).toContain("shared.txt")
+
+        // Different path keys are isolated even in the same worktree.
+        yield* team.createTask({
+          teamID: second.id,
+          description: "Second own file",
+          owned: [{ rootKey: "/work", pathKey: "/work/other.txt", displayPath: "other.txt" }],
+        })
+        expect(yield* team.getTasks(second.id)).toHaveLength(1)
+      }),
+    ),
+  )
+
+  it.live("a released reservation frees its path for a new owned task", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "owned-reuse", goal: "Reuse", leadSessionID: "ses_reuse_lead" })
+        const first = yield* team.createTask({
+          teamID: info.id,
+          description: "First",
+          owned: [{ rootKey: "/work", pathKey: "/work/reuse.txt", displayPath: "reuse.txt" }],
+        })
+        yield* team.claimTask(info.id, first.id, "ses_reuse_worker")
+        yield* team.updateTask(
+          info.id,
+          first.id,
+          { status: "cancelled" },
+          { sessionID: "ses_reuse_lead", isLead: true },
+        )
+        const second = yield* team.createTask({
+          teamID: info.id,
+          description: "Second",
+          owned: [{ rootKey: "/work", pathKey: "/work/reuse.txt", displayPath: "reuse.txt" }],
+        })
+        expect(second.status).toBe("pending")
+      }),
+    ),
+  )
+
   it.live("send and receive team messages", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
