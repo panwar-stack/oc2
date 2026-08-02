@@ -2,8 +2,8 @@ Read pending messages addressed to the current team session.
 Use this when coordinating with teammates, waiting for a teammate result, or checking the team mailbox.
 Messages are marked delivered after this tool returns them.
 
-IMPORTANT: Do NOT call this repeatedly in a loop waiting for messages. When you or a teammate calls team_send_message, team_broadcast, or team_plan_submit, the recipient session is automatically woken and new messages are injected as a <team-messages> block on the next loop iteration. Check messages once — if empty, end your turn. The system will wake you when messages arrive.
+IMPORTANT: Do NOT call this repeatedly in a loop waiting for messages. When you or a teammate calls team_send_message, team_broadcast, or team_plan_submit, the recipient session is automatically woken and new messages are injected as a <team-messages> block on the next loop iteration. Check messages once — if empty, do not poll. The system will wake you when messages arrive. As the active team lead, your successful finalization parks automatically while any finite teammate remains nonterminal, so an empty mailbox does not require ending your turn.
 
-As team lead, an empty mailbox is not a reason to send status-check broadcasts. Teammates may be busy inside their current run and will process new messages only at their next prompt boundary.
+As team lead, an empty mailbox is not a reason to send status-check broadcasts. Your successful finalization parks automatically until every finite teammate is terminal, the team closes, or you stop being the active lead; the system wakes you when messages arrive. Teammates may be busy inside their current run and will process new messages only at their next prompt boundary.
 
 Remember: your role is to coordinate and integrate teammate results. Do NOT take over a teammate's task yourself while waiting for them. Delegate and wait — trust your teammates to produce results. When teammates complete tasks, evaluate whether their findings reveal new sub-tasks that can be delegated to new or existing teammates.

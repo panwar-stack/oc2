@@ -179,6 +179,8 @@ Inside the teammate run:
 
 When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. The lead resumes after the relevant running teammates finish, then it can integrate results and decide the next coordination step.
 
+Once the lead's own assistant step completes, successful finalization does not exit the session while finite teammates remain nonterminal. The lead finalization barrier parks the exit and resumes the model loop on mail delivery or terminal transitions. See [Lead Finalization Barrier](#lead-finalization-barrier).
+
 ## Daemon Teammates
 
 Daemon teammates are team members with `lifecycle: "daemon"`.
@@ -279,6 +281,33 @@ The actual delivery happens in `SessionPrompt.deliverTeamMessages`:
 So a teammate does not need to poll forever. If another participant sends a message, the recipient is woken and sees the message as a normal prompt input on the next loop.
 
 Lead-initiated wake waits are bounded. Lead tools briefly wait for woken teammate runs, while teammate-initiated delivery remains asynchronous so teammate work is not blocked.
+
+## Lead Finalization Barrier
+
+Successful finalization of the active team's lead session is event-backed.
+
+When the lead attempts to finalize, the prompt loop runs a private finalization barrier before exiting. The barrier:
+
+1. Confirms the session is still the active team lead.
+2. Registers scoped listeners for `team.message.received`, `team.member.updated`, and `team.closed` before any durable read.
+3. Reads and delivers pending lead mail through the durable mailbox path; a delivery resumes the model loop.
+4. Queries current members from durable state.
+5. Parks while any finite (task-lifecycle) member is not terminal.
+6. Rechecks durable mail and member state after every signal.
+7. Permits exit when every finite member is terminal, the team is closed, or the session is no longer the active lead.
+
+Listeners only signal the parked fiber. Durable database state remains authoritative; the barrier never polls the database, sleeps, or invokes the LLM while parked.
+
+Key properties:
+
+- Terminal statuses are `completed` and `cancelled`. Legacy `failed` rows also count as terminal so old teams cannot park the lead forever.
+- Daemon members never block in any status. Daemon `idle` notifications are not terminal handoffs; a parked lead is not released by daemon idle events.
+- Pending lead mail resumes the lead even while finite work continues. Progress or blocker mail wakes the parked lead, and the next successful-finalization attempt parks again.
+- Team closure releases a parked lead regardless of stale member rows. Cancelling one member releases the barrier only when no other finite member remains nonterminal.
+- Error paths bypass the barrier: lead interruption or cancellation, provider and processor errors, structured-output errors, compaction errors, and other unsuccessful termination paths exit immediately.
+- Mailbox continuations preserve the structured-output contract: the synthetic user message keeps the original format and system, and a fresh structured-output result is required after the handoff is integrated.
+
+The barrier applies only to successful finalization of the active team lead. It is not a scheduling primitive: it does not start work, run teammates, or replace `team_get_messages`.
 
 ## Plan Mode
 
@@ -436,6 +465,8 @@ The service publishes bus events for team lifecycle and member updates:
 - `team.closed`
 - `team.member.updated`
 - `team.message.received`
+
+The lead finalization barrier subscribes to `team.closed`, `team.member.updated`, and `team.message.received` to wake a parked lead (see [Lead Finalization Barrier](#lead-finalization-barrier)).
 
 The TUI sidebar lists child sessions for the current parent session. That means older `task` subagents and team teammates can appear in the same Team section because both are child sessions. `team_member_status` is keyed by session ID and adds team-specific status for teammate children; plain subagents do not have a `team_member` row.
 

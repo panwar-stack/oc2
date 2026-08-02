@@ -1,6 +1,6 @@
 Broadcast a message to all teammates in the team.
 This sends the same message to every active teammate at once, and to the lead when called by a teammate.
-When the lead broadcasts to teammates, this call waits for woken teammate run(s) to finish.
+When the lead broadcasts to teammates, this call waits briefly for woken teammate run(s) to finish; wake waits are bounded.
 When a teammate broadcasts, delivery stays asynchronous so teammate work is not blocked.
 Use this for announcements, goal changes, or urgent coordination.
 Use this to broadcast scope changes or key discoveries that affect multiple teammates.

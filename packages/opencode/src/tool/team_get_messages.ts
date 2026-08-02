@@ -57,14 +57,16 @@ export const TeamGetMessagesTool = Tool.define(
               part.state.metadata.count === 0,
           ).length
           if (messages.length === 0) {
-            // An empty mailbox is not a wait primitive; steer participants back to ending the turn or continuing work.
+            // An empty mailbox is not a wait primitive. For the lead, successful finalization parks
+            // automatically while finite teammates remain nonterminal, so no special waiting action
+            // is required; teammates continue their assigned work.
             const lead = ctx.sessionID === context.value.team.lead_session_id
             const guidance = lead
               ? [
                   "No pending messages.",
                   previousEmptyChecks > 0
-                    ? "Repeated empty mailbox check suppressed. End this turn now instead of polling."
-                    : "Check complete. If teammates are still active, end this turn instead of polling.",
+                    ? "Repeated empty mailbox check suppressed. Do not poll for mail; finalization parks automatically until teammates are done or mail arrives."
+                    : "Check complete. If teammates are still active, finalization parks automatically and resumes you when mail arrives or all teammates finish; an empty mailbox does not require ending this turn.",
                   "Team messages are delivered asynchronously; busy teammates can only process broadcasts or direct messages at their next prompt boundary.",
                   "Do not send routine status-check broadcasts just because the mailbox is empty. Teammates will wake you when they have progress, blockers, or results.",
                 ]

@@ -168,7 +168,7 @@ const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.As
   )
 
 describe("tool.team_get_messages", () => {
-  it.live("tells the lead to end the turn when the mailbox is empty", () =>
+  it.live("tells the lead that finalization parks automatically when the mailbox is empty", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -180,7 +180,8 @@ describe("tool.team_get_messages", () => {
 
           expect(result.title).toBe("Team Messages")
           expect(result.output).toContain("No pending messages.")
-          expect(result.output).toContain("end this turn instead of polling")
+          expect(result.output).toContain("finalization parks automatically")
+          expect(result.output).toContain("does not require ending this turn")
           expect(result.output).toContain("worker (general, active, session")
           expect(result.metadata.count).toBe(0)
           expect(result.metadata.repeated).toBe(false)

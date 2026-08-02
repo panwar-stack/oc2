@@ -1,7 +1,7 @@
 Send a message to one or more teammates via the team mailbox.
 Use a teammate name, teammate session ID, "lead", or comma-separated recipients.
 Messages wake idle recipient sessions immediately — they will see your message as part of their next prompt. Recipients do not need to poll for your message.
-When the lead sends a message to teammates, this call waits for woken teammate run(s) to finish.
+When the lead sends a message to teammates, this call waits briefly for woken teammate run(s) to finish; wake waits are bounded.
 When a teammate sends a message, delivery stays asynchronous so teammate work is not blocked.
 If a recipient is already busy, they will only process the message after the current run reaches the next prompt boundary.
 Terminal finite teammates (completed, cancelled, or failed) cannot receive messages and are rejected with a stable error; idle daemon teammates remain reachable.

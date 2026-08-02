@@ -191,6 +191,35 @@ Review:
 
 Use a fresh read-only reviewer to verify report/eval findings are deterministic, docs match implemented behavior, and no speculative UI promises were added.
 
+The slices below implement `specs/team-lead-finalization-barrier.md`. They extend the mailbox and wake reliability work above with an atomic terminal-handoff contract and an event-backed finalization barrier for the active team lead. They continue the PR numbering of this file and do not renumber the PR 1 through PR 5 plan above.
+
+### PR 6: Atomic Terminal Handoffs
+
+- Refactored terminal persistence in `packages/opencode/src/team/team.ts` so the first transition into `completed` or `cancelled` atomically persists the member status and result, one canonical lead notification, and that notification's lead recipient row.
+- Consolidated completion and cancellation notifications in `packages/opencode/src/tool/team_spawn.ts`; no duplicate terminal messages are persisted after `updateMemberStatus`, and wake-only behavior is preserved after the transaction commits.
+- Every failure after member creation becomes a notified `cancelled` transition; repeated terminal updates emit no extra notification.
+- Member and message events publish only after commit. Daemon `idle` notifications remain unchanged and are not terminal handoffs.
+- Added idempotency, atomic visibility, failure, and rollback coverage in `test/team/team.test.ts`, plus setup-failure and single-notification coverage in `test/tool/team_spawn.test.ts`.
+
+### PR 7: Private Finalization Barrier
+
+- Added one private event-backed helper in `packages/opencode/src/session/prompt.ts` and routed both successful-finalization paths through it.
+- The barrier confirms active-lead status, subscribes to `team.message.received`, `team.member.updated`, and `team.closed` before any durable read, delivers pending lead mail, parks while any finite member is nonterminal, and rechecks durable state after every signal.
+- Error paths bypass the barrier: interruption/cancellation, provider and processor errors, structured-output errors, and compaction errors exit immediately.
+- Daemon members never block; legacy `failed` rows count as terminal; team closure releases a parked lead; lead cancellation interrupts parking before shutdown can release it as success.
+- Mailbox continuations preserve structured-output contracts, reset candidates per provider turn, and require a fresh structured-output result after handoff integration.
+- Added deterministic coverage in `test/session/prompt.test.ts` for mail-after-check, nonterminal statuses, release paths, daemon exclusion, structured output, and the existing finished-assistant and processor-stop exit paths.
+
+### PR 8: Align Team Waiting Guidance
+
+- Replaced "end this turn" guidance in `packages/opencode/src/tool/team_get_messages.ts` and `packages/opencode/src/tool/team_get_messages.txt` with automatic-parking semantics: an empty mailbox does not require ending the turn, and lead finalization parks automatically.
+- Stated in the lead system prompt (`packages/opencode/src/session/prompt.ts`) that the lead must not finalize while finite teammates remain nonterminal.
+- Corrected bounded-wait descriptions in `packages/opencode/src/tool/team_send_message.txt`, `packages/opencode/src/tool/team_broadcast.txt`, and `packages/opencode/src/tool/team_plan_decide.txt`.
+- Documented the barrier and daemon exclusion in `packages/opencode/src/team/README.md`.
+- Updated assertions in `test/tool/team_messages.test.ts`.
+
+Follow-ups: a premature-finalization evaluation metric remains Future Work per `specs/team-lead-finalization-barrier.md`. General queued-rerun semantics in `Runner`, a public `team_wait` tool, cross-process team execution ownership, and team scheduler or daemon lifecycle redesign are also out of scope for these slices.
+
 ## Future Work
 
 - Add richer TUI rendering tests for team sidebar status, task/message tabs, pending permissions, and shutdown actions.
