@@ -35,6 +35,19 @@ const TeamMemberSchema = Schema.Struct({
   time_updated: Schema.Number,
 }).annotate({ identifier: "TeamMember" })
 
+const TeamTaskHandoffSchema = Schema.Struct({
+  summary: Schema.String,
+  changed_paths: Schema.Array(Schema.String),
+  verification: Schema.Array(
+    Schema.Struct({
+      command: Schema.String,
+      status: Schema.Literals(["passed", "failed", "not_run"]),
+      detail: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  risks: Schema.optionalKey(Schema.Array(Schema.String)),
+}).annotate({ identifier: "TeamTaskHandoff" })
+
 const TeamTaskSchema = Schema.Struct({
   id: Schema.String,
   team_id: Schema.String,
@@ -43,6 +56,8 @@ const TeamTaskSchema = Schema.Struct({
   assignee: Schema.optionalKey(Schema.String),
   dependency_ids: Schema.optionalKey(Schema.Array(Schema.String)),
   metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  owned_paths: Schema.Array(Schema.String),
+  handoff: Schema.NullOr(TeamTaskHandoffSchema),
   time_created: Schema.Number,
   time_updated: Schema.Number,
 }).annotate({ identifier: "TeamTask" })

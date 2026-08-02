@@ -4,7 +4,7 @@
 // https://github.com/cline/cline/blob/main/evals/diff-edits/diff-apply/diff-06-26-25.ts
 
 import * as path from "path"
-import { Effect, Schema, Semaphore } from "effect"
+import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
 import { createTwoFilesPatch, diffLines } from "diff"
@@ -19,6 +19,15 @@ import { assertExternalDirectoryWithSession } from "./external-directory"
 import * as Bom from "@/util/bom"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
+import { Database } from "@oc2-ai/core/database/database"
+import { canonicalize, withWriteLease } from "@/team/file-ownership"
+import * as LSPClient from "@/lsp/client"
+
+type EditMetadata = {
+  diagnostics: Record<string, LSPClient.Diagnostic[]>
+  diff: string
+  filediff: Snapshot.FileDiff
+}
 
 function normalizeLineEndings(text: string): string {
   return text.replaceAll("\r\n", "\n")
@@ -31,18 +40,6 @@ function detectLineEnding(text: string): "\n" | "\r\n" {
 function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   if (ending === "\n") return text
   return text.replaceAll("\n", "\r\n")
-}
-
-const locks = new Map<string, Semaphore.Semaphore>()
-
-function lock(filePath: string) {
-  const resolvedFilePath = FSUtil.resolve(filePath)
-  const hit = locks.get(resolvedFilePath)
-  if (hit) return hit
-
-  const next = Semaphore.makeUnsafe(1)
-  locks.set(resolvedFilePath, next)
-  return next
 }
 
 export const Parameters = Schema.Struct({
@@ -64,6 +61,7 @@ export const EditTool = Tool.define(
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
     const session = yield* Session.Service
+    const { db } = yield* Database.Service
 
     return {
       description: DESCRIPTION,
@@ -82,10 +80,22 @@ export const EditTool = Tool.define(
           const filePath = resolved.path
           yield* assertExternalDirectoryWithSession(session, ctx, filePath)
 
+          // Canonicalize the target (read-only realpath I/O), then acquire the write lease. The
+          // sorted path lock is held through the ownership check, the permission ask, and the full
+          // mutation; a reservation owned by another session denies the edit before any ask or I/O.
+          // The lease subsumes the previous per-file semaphore lock, so no inner lock is kept.
+          // Paths that cannot canonicalize (scratch outside the workspace, directories, .git) can
+          // never be reserved, so the lease is skipped for them and the existing behavior applies.
+          const owned = yield* canonicalize(session, ctx, params.filePath)
+            .pipe(Effect.provideService(FSUtil.Service, afs))
+            .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
           let diff = ""
           let contentOld = ""
           let contentNew = ""
-          yield* lock(filePath).withPermits(1)(
+          yield* withWriteLease(
+            db,
+            String(ctx.sessionID),
+            owned ? [owned.pathKey] : [],
             Effect.gen(function* () {
               if (params.oldString === "") {
                 const existed = yield* afs.existsSafe(filePath)
@@ -205,11 +215,21 @@ export const EditTool = Tool.define(
               diagnostics,
               diff,
               filediff,
-            },
+            } satisfies EditMetadata,
             title: resolved.relative,
             output,
           }
-        }),
+        }).pipe(
+          // A path reserved by another task is a stable denial, not a defect: report it without
+          // asking permission or touching the file.
+          Effect.catchTag("Team.OwnedWriteDenied", (error) =>
+            Effect.succeed({
+              title: "Edit Failed",
+              output: error.message,
+              metadata: { diagnostics: {}, diff: "", filediff: {} as Snapshot.FileDiff } satisfies EditMetadata,
+            }),
+          ),
+        ),
     }
   }),
 )

@@ -15,8 +15,17 @@ import { assertExternalDirectoryWithSession } from "./external-directory"
 import * as Bom from "@/util/bom"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
+import { Database } from "@oc2-ai/core/database/database"
+import { canonicalize, withWriteLease } from "@/team/file-ownership"
+import * as LSPClient from "@/lsp/client"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
+
+type WriteMetadata = {
+  diagnostics: Record<string, LSPClient.Diagnostic[]>
+  filepath: string
+  exists: boolean
+}
 
 export const Parameters = Schema.Struct({
   content: Schema.String.annotate({ description: "The content to write to the file" }),
@@ -33,6 +42,7 @@ export const WriteTool = Tool.define(
     const events = yield* EventV2Bridge.Service
     const format = yield* Format.Service
     const session = yield* Session.Service
+    const { db } = yield* Database.Service
 
     return {
       description: DESCRIPTION,
@@ -43,33 +53,50 @@ export const WriteTool = Tool.define(
           const filepath = resolved.path
           yield* assertExternalDirectoryWithSession(session, ctx, filepath)
 
-          const exists = yield* fs.existsSafe(filepath)
-          const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
-          const next = Bom.split(params.content)
-          const desiredBom = source.bom || next.bom
-          const contentOld = source.text
-          const contentNew = next.text
+          // Canonicalize the target (read-only realpath I/O), then acquire the write lease: the
+          // sorted path lock is held through the ownership check, the permission ask, and the full
+          // mutation. A reservation owned by another session denies the write before any ask or I/O.
+          // Paths that cannot canonicalize (scratch outside the workspace, directories, .git) can
+          // never be reserved, so the lease is skipped for them and the existing permission flow
+          // applies unchanged.
+          const owned = yield* canonicalize(session, ctx, params.filePath)
+            .pipe(Effect.provideService(FSUtil.Service, fs))
+            .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
+          const { exists } = yield* withWriteLease(
+            db,
+            String(ctx.sessionID),
+            owned ? [owned.pathKey] : [],
+            Effect.gen(function* () {
+              const exists = yield* fs.existsSafe(filepath)
+              const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
+              const next = Bom.split(params.content)
+              const desiredBom = source.bom || next.bom
+              const contentOld = source.text
+              const contentNew = next.text
 
-          const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
-          yield* ctx.ask({
-            permission: "edit",
-            patterns: [resolved.relative],
-            always: ["*"],
-            metadata: {
-              filepath,
-              diff,
-            },
-          })
+              const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
+              yield* ctx.ask({
+                permission: "edit",
+                patterns: [resolved.relative],
+                always: ["*"],
+                metadata: {
+                  filepath,
+                  diff,
+                },
+              })
 
-          yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
-          if (yield* format.file(filepath)) {
-            yield* Bom.syncFile(fs, filepath, desiredBom)
-          }
-          yield* events.publish(FileSystem.Event.Edited, { file: filepath })
-          yield* events.publish(Watcher.Event.Updated, {
-            file: filepath,
-            event: exists ? "change" : "add",
-          })
+              yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
+              if (yield* format.file(filepath)) {
+                yield* Bom.syncFile(fs, filepath, desiredBom)
+              }
+              yield* events.publish(FileSystem.Event.Edited, { file: filepath })
+              yield* events.publish(Watcher.Event.Updated, {
+                file: filepath,
+                event: exists ? "change" : "add",
+              })
+              return { exists }
+            }),
+          )
 
           let output = "Wrote file successfully."
           yield* lsp.touchFile(filepath, "document", resolved.root)
@@ -95,10 +122,21 @@ export const WriteTool = Tool.define(
               diagnostics,
               filepath,
               exists: exists,
-            },
+            } satisfies WriteMetadata,
             output,
           }
-        }).pipe(Effect.orDie),
+        }).pipe(
+          // A path reserved by another task is a stable denial, not a defect: report it without
+          // asking permission or touching the file.
+          Effect.catchTag("Team.OwnedWriteDenied", (error) =>
+            Effect.succeed({
+              title: "Write Failed",
+              output: error.message,
+              metadata: { diagnostics: {}, filepath: error.displayPath, exists: false } satisfies WriteMetadata,
+            }),
+          ),
+          Effect.orDie,
+        ),
     }
   }),
 )

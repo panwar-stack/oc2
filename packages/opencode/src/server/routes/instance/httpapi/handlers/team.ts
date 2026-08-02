@@ -48,6 +48,8 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
         ...(task.assignee == null ? {} : { assignee: task.assignee }),
         ...(task.dependency_ids == null ? {} : { dependency_ids: task.dependency_ids }),
         ...(task.metadata == null ? {} : { metadata: task.metadata }),
+        owned_paths: task.owned_paths,
+        handoff: task.handoff,
         time_created: task.time_created,
         time_updated: task.time_updated,
       }))

@@ -7,6 +7,7 @@ import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryWithSession } from "./external-directory"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
+import * as LSPClient from "@/lsp/client"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
 import { FileSystem } from "@oc2-ai/core/filesystem"
@@ -14,6 +15,22 @@ import { Format } from "../format"
 import * as Bom from "@/util/bom"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
+import { Database } from "@oc2-ai/core/database/database"
+import { canonicalize, withWriteLease } from "@/team/file-ownership"
+
+type PatchMetadata = {
+  diff: string
+  files: Array<{
+    filePath: string
+    relativePath: string
+    type: "add" | "update" | "delete" | "move"
+    patch: string
+    additions: number
+    deletions: number
+    movePath?: string
+  }>
+  diagnostics: Record<string, LSPClient.Diagnostic[]>
+}
 
 export const Parameters = Schema.Struct({
   patchText: Schema.String.annotate({ description: "The full patch text that describes all changes to be made" }),
@@ -27,6 +44,7 @@ export const ApplyPatchTool = Tool.define(
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
     const session = yield* Session.Service
+    const { db } = yield* Database.Service
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -64,6 +82,10 @@ export const ApplyPatchTool = Tool.define(
         movePath?: string
         moveRelativePath?: string
         moveRoot?: ToolPath.Root
+        /** Canonical pathKey of the source, used for the write-lease ownership check. */
+        pathKey?: string
+        /** Canonical pathKey of a move destination, used for the write-lease ownership check. */
+        movePathKey?: string
         diff: string
         additions: number
         deletions: number
@@ -76,6 +98,13 @@ export const ApplyPatchTool = Tool.define(
         const resolved = yield* ToolPath.resolveWithSession(session, ctx, hunk.path)
         const filePath = resolved.path
         yield* assertExternalDirectoryWithSession(session, ctx, filePath)
+        // Canonicalize every source and move destination (read-only realpath I/O) before the
+        // single permission request so one denied path makes the whole patch write nothing. Paths
+        // that cannot canonicalize (scratch outside the workspace, directories, .git) can never be
+        // reserved, so they are skipped and the existing permission flow applies unchanged.
+        const sourceOwned = yield* canonicalize(session, ctx, hunk.path)
+          .pipe(Effect.provideService(FSUtil.Service, afs))
+          .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
 
         switch (hunk.type) {
           case "add": {
@@ -99,6 +128,7 @@ export const ApplyPatchTool = Tool.define(
               newContent: next.text,
               type: "add",
               root: resolved.root,
+              pathKey: sourceOwned?.pathKey,
               diff,
               additions,
               deletions,
@@ -148,6 +178,11 @@ export const ApplyPatchTool = Tool.define(
             const move = hunk.move_path ? yield* ToolPath.resolveWithSession(session, ctx, hunk.move_path) : undefined
             const movePath = move?.path
             yield* assertExternalDirectoryWithSession(session, ctx, movePath)
+            const moveOwned = hunk.move_path
+              ? yield* canonicalize(session, ctx, hunk.move_path)
+                  .pipe(Effect.provideService(FSUtil.Service, afs))
+                  .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
+              : undefined
 
             fileChanges.push({
               filePath,
@@ -159,6 +194,8 @@ export const ApplyPatchTool = Tool.define(
               movePath,
               moveRelativePath: move?.relative,
               moveRoot: move?.root,
+              pathKey: sourceOwned?.pathKey,
+              movePathKey: moveOwned?.pathKey,
               diff,
               additions,
               deletions,
@@ -191,6 +228,7 @@ export const ApplyPatchTool = Tool.define(
               newContent: "",
               type: "delete",
               root: resolved.root,
+              pathKey: sourceOwned?.pathKey,
               diff: deleteDiff,
               additions: 0,
               deletions,
@@ -227,60 +265,77 @@ export const ApplyPatchTool = Tool.define(
         diff: totalDiff,
         files,
       }
-      yield* ctx.ask({
-        permission: "apply_patch",
-        patterns: relativePaths,
-        always: ["*"],
-        metadata,
-      })
+      // One write lease for the whole patch: every source and move destination must be owned by the
+      // calling session (or unreserved). One denied path fails here before any permission ask or
+      // mutation, so the patch is all-or-nothing on ownership.
+      const allPathKeys = Array.from(
+        new Set(
+          fileChanges.flatMap((change) =>
+            [change.pathKey, change.movePathKey].filter((key): key is string => key !== undefined),
+          ),
+        ),
+      )
+      yield* withWriteLease(
+        db,
+        String(ctx.sessionID),
+        allPathKeys,
+        Effect.gen(function* () {
+          yield* ctx.ask({
+            permission: "apply_patch",
+            patterns: relativePaths,
+            always: ["*"],
+            metadata,
+          })
 
-      // Apply the changes
-      const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
+          // Apply the changes
+          const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
 
-      for (const change of fileChanges) {
-        const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
-        switch (change.type) {
-          case "add":
-            // Create parent directories (recursive: true is safe on existing/root dirs)
+          for (const change of fileChanges) {
+            const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
+            switch (change.type) {
+              case "add":
+                // Create parent directories (recursive: true is safe on existing/root dirs)
 
-            yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
-            updates.push({ file: change.filePath, event: "add" })
-            break
+                yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
+                updates.push({ file: change.filePath, event: "add" })
+                break
 
-          case "update":
-            yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
-            updates.push({ file: change.filePath, event: "change" })
-            break
+              case "update":
+                yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
+                updates.push({ file: change.filePath, event: "change" })
+                break
 
-          case "move":
-            if (change.movePath) {
-              // Create parent directories (recursive: true is safe on existing/root dirs)
+              case "move":
+                if (change.movePath) {
+                  // Create parent directories (recursive: true is safe on existing/root dirs)
 
-              yield* afs.writeWithDirs(change.movePath!, Bom.join(change.newContent, change.bom))
-              yield* afs.remove(change.filePath)
-              updates.push({ file: change.filePath, event: "unlink" })
-              updates.push({ file: change.movePath, event: "add" })
+                  yield* afs.writeWithDirs(change.movePath!, Bom.join(change.newContent, change.bom))
+                  yield* afs.remove(change.filePath)
+                  updates.push({ file: change.filePath, event: "unlink" })
+                  updates.push({ file: change.movePath, event: "add" })
+                }
+                break
+
+              case "delete":
+                yield* afs.remove(change.filePath)
+                updates.push({ file: change.filePath, event: "unlink" })
+                break
             }
-            break
 
-          case "delete":
-            yield* afs.remove(change.filePath)
-            updates.push({ file: change.filePath, event: "unlink" })
-            break
-        }
-
-        if (edited) {
-          if (yield* format.file(edited)) {
-            yield* Bom.syncFile(afs, edited, change.bom)
+            if (edited) {
+              if (yield* format.file(edited)) {
+                yield* Bom.syncFile(afs, edited, change.bom)
+              }
+              yield* events.publish(FileSystem.Event.Edited, { file: edited })
+            }
           }
-          yield* events.publish(FileSystem.Event.Edited, { file: edited })
-        }
-      }
 
-      // Publish file change events
-      for (const update of updates) {
-        yield* events.publish(Watcher.Event.Updated, update)
-      }
+          // Publish file change events
+          for (const update of updates) {
+            yield* events.publish(Watcher.Event.Updated, update)
+          }
+        }),
+      )
 
       // Notify LSP of file changes and collect diagnostics
       for (const change of fileChanges) {
@@ -317,7 +372,7 @@ export const ApplyPatchTool = Tool.define(
           diff: totalDiff,
           files,
           diagnostics,
-        },
+        } satisfies PatchMetadata,
         output,
       }
     })
@@ -326,7 +381,18 @@ export const ApplyPatchTool = Tool.define(
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
-        run(params, ctx).pipe(Effect.orDie),
+        run(params, ctx).pipe(
+          // A path reserved by another task is a stable denial, not a defect: report it without
+          // asking permission or writing anything.
+          Effect.catchTag("Team.OwnedWriteDenied", (error) =>
+            Effect.succeed({
+              title: "Patch Failed",
+              output: error.message,
+              metadata: { diff: "", files: [], diagnostics: {} } satisfies PatchMetadata,
+            }),
+          ),
+          Effect.orDie,
+        ),
     }
   }),
 )

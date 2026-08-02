@@ -549,15 +549,28 @@ describe("team", () => {
           .pipe(Effect.flip)
         expect(leadComplete.message).toContain("owner")
 
-        // The owner can complete; reservations release atomically.
+        // The owner can complete with a structured handoff; reservations release atomically.
         const completed = yield* team.updateTask(
           info.id,
           task.id,
-          { status: "completed" },
+          {
+            status: "completed",
+            handoff: {
+              summary: "Implemented the owned task",
+              changed_paths: ["a.txt", "b.txt"],
+              verification: [{ command: "bun run typecheck", status: "passed" }],
+            },
+            handoffPathKeys: ["/work/a.txt", "/work/b.txt"],
+          },
           { sessionID: "ses_owned_worker", isLead: false },
         )
-        expect(unwrap(completed).status).toBe("completed")
-        expect(unwrap(completed).reservations.every((reservation) => reservation.timeReleased !== null)).toBe(true)
+        const completedTask = unwrap(completed)
+        expect(completedTask.status).toBe("completed")
+        expect(completedTask.handoff?.summary).toBe("Implemented the owned task")
+        expect(completedTask.metadata?.handoff).toEqual(
+          expect.objectContaining({ summary: "Implemented the owned task" }),
+        )
+        expect(completedTask.reservations.every((reservation) => reservation.timeReleased !== null)).toBe(true)
       }),
     ),
   )

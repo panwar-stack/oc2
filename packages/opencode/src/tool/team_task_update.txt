@@ -4,3 +4,6 @@ Only the lead or the assigned teammate can update a task.
 
 Exact-file reservations (owned tasks):
 An owned task (created with owned_paths) follows stricter rules enforced by the service. It cannot go directly from pending to completed. An in-progress owned task cannot be reassigned; cancel it and create a replacement. Only the task owner can complete an owned task. The owner or the lead can cancel it. Completion and cancellation release the task's file reservations atomically in the same transaction. Protocol-0 and unowned tasks keep the existing assignee and status behavior.
+
+Structured handoff on completion:
+Completing an owned task requires a structured handoff with a nonblank summary. Each changed path is canonicalized and must be a subset of the task's reserved owned_paths. Verification entries report the commands or checks run with a status of passed, failed, or not_run. The handoff is stored on the task and returned with team_task_list and the team HTTP/SDK task output. Cancellation releases reservations without a handoff.

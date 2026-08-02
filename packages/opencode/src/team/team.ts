@@ -24,11 +24,18 @@ import {
   assertNoActivePathConflicts,
   buildReservationRows,
   toOwnedReservation,
+  withReservationLocks,
   type OwnedPath,
   type OwnedReservation,
 } from "./file-ownership"
 
 const toOption = <T>(v: T | null | undefined): Option.Option<T> => (v != null ? Option.some(v) : Option.none())
+
+/** Read the stored v1 structured handoff from task metadata, or null. */
+const readTaskHandoff = (metadata: Record<string, unknown> | null | undefined): TaskHandoff | null => {
+  const value = metadata?.["handoff"]
+  return value && typeof value === "object" ? (value as TaskHandoff) : null
+}
 
 type TeamRow = typeof TeamTable.$inferSelect
 type TeamMemberRow = typeof TeamMemberTable.$inferSelect
@@ -44,6 +51,19 @@ export type Member = Omit<TeamMemberRow, "model" | "dependency_ids" | "result"> 
   dependency_ids: TeamMemberInsert["dependency_ids"]
   result: TeamMemberInsert["result"]
 }
+
+/** Structured v1 terminal handoff required to complete an owned task. */
+export type TaskHandoff = {
+  summary: string
+  changed_paths: string[]
+  verification: Array<{
+    command: string
+    status: "passed" | "failed" | "not_run"
+    detail?: string
+  }>
+  risks?: string[]
+}
+
 export type Task = Omit<TeamTaskRow, "assignee" | "dependency_ids" | "metadata"> & {
   assignee: TeamTaskInsert["assignee"]
   dependency_ids: TeamTaskInsert["dependency_ids"]
@@ -52,6 +72,8 @@ export type Task = Omit<TeamTaskRow, "assignee" | "dependency_ids" | "metadata">
   owned_paths: string[]
   /** Reservation summary rows for audit and listing. */
   reservations: OwnedReservation[]
+  /** The structured v1 handoff stored on completion, when present. */
+  handoff: TaskHandoff | null
 }
 export type Message = TeamMessageRow
 export type MemberStatus = TeamMemberRow["status"]
@@ -143,7 +165,13 @@ export interface Interface {
   updateTask: (
     teamID: string,
     taskID: string,
-    update: Partial<{ status: TaskStatus; assignee: string }>,
+    update: Partial<{
+      status: TaskStatus
+      assignee: string
+      handoff: TaskHandoff
+      /** Canonical pathKeys of `handoff.changed_paths`, validated against the task's reservations. */
+      handoffPathKeys?: string[]
+    }>,
     caller?: { sessionID: string; isLead: boolean },
   ) => Effect.Effect<Option.Option<Task>, Error>
   claimTask: (teamID: string, taskID: string, assignee: string) => Effect.Effect<Option.Option<Task>, Error>
@@ -663,16 +691,20 @@ export const layer = Layer.effect(
           metadata: input.metadata,
           owned_paths: [],
           reservations: [],
+          handoff: null,
           time_created: now,
           time_updated: now,
         } satisfies Task
       }
 
       // Owned task: insert the pending task and all reservation rows in one
-      // immediate transaction. Any active-path conflict rolls back the entire
-      // operation and fails with a stable error naming the conflicting file.
-      return yield* db
-        .transaction(
+      // immediate transaction. The sorted path locks are held from before the
+      // conflict check through commit (matching the file tools' lease order);
+      // any active-path conflict rolls back the entire operation and fails
+      // with a stable error naming the conflicting file.
+      return yield* withReservationLocks(
+        owned.map((entry) => entry.pathKey),
+        db.transaction(
           (tx) =>
             Effect.gen(function* () {
               yield* assertNoActivePathConflicts(tx, owned)
@@ -711,12 +743,14 @@ export const layer = Layer.effect(
                   ownerSessionID: null,
                   timeReleased: null,
                 })),
+                handoff: null,
                 time_created: now,
                 time_updated: now,
               } satisfies Task
             }),
           { behavior: "immediate" },
-        )
+        ),
+      )
         .pipe(
           Effect.catchTag("EffectDrizzleQueryError", (error) => {
             // The partial unique index is the final race guard; a lost insert
@@ -761,6 +795,7 @@ export const layer = Layer.effect(
         metadata: row.metadata,
         owned_paths: reservations.map((reservation) => reservation.display_path),
         reservations: reservations.map(toOwnedReservation),
+        handoff: readTaskHandoff(row.metadata),
         time_created: row.time_created,
         time_updated: row.time_updated,
       })
@@ -769,14 +804,30 @@ export const layer = Layer.effect(
     const updateTask = Effect.fn("Team.updateTask")(function* (
       teamID: string,
       taskID: string,
-      update: Partial<{ status: TaskStatus; assignee: string }>,
+      update: Partial<{
+        status: TaskStatus
+        assignee: string
+        handoff: TaskHandoff
+        handoffPathKeys?: string[]
+      }>,
       caller?: { sessionID: string; isLead: boolean },
     ) {
       const resolved = yield* resolveTaskID(teamID, taskID)
       if (Option.isNone(resolved)) return Option.none()
       const now = Date.now()
-      const result = yield* db
-        .transaction(
+      // Peek the task's reservation pathKeys so the owned-update transaction holds the same sorted
+      // path locks the file tools use; release/cancellation must acquire them before changing
+      // reservation state, and sorted acquisition keeps service and tool paths deadlock-free.
+      const reservedRows = yield* db
+        .select({ pathKey: TeamFileOwnershipTable.path_key })
+        .from(TeamFileOwnershipTable)
+        .where(and(eq(TeamFileOwnershipTable.team_id, teamID), eq(TeamFileOwnershipTable.task_id, resolved.value)))
+        .all()
+        .pipe(Effect.orDie)
+      const reservedPathKeys = reservedRows.map((row) => row.pathKey)
+      const result = yield* withReservationLocks(
+        reservedPathKeys,
+        db.transaction(
           (tx) =>
             Effect.gen(function* () {
               const current = yield* tx
@@ -822,7 +873,47 @@ export const layer = Layer.effect(
                     if (ownerSessionID !== caller.sessionID) {
                       return yield* Effect.fail(new Error("Only the task owner can complete this task."))
                     }
+                    // PR 6: completion requires a nonblank structured handoff whose canonical
+                    // changed pathKeys are a subset of this task's reserved pathKeys.
+                    if (!update.handoff) {
+                      return yield* Effect.fail(
+                        new Error(
+                          "Completing an owned task requires a structured handoff with a nonblank summary.",
+                        ),
+                      )
+                    }
+                    if (typeof update.handoff.summary !== "string" || update.handoff.summary.trim() === "") {
+                      return yield* Effect.fail(
+                        new Error("Owned-task completion requires a nonblank handoff summary."),
+                      )
+                    }
+                    if (
+                      !Array.isArray(update.handoff.verification) ||
+                      !update.handoff.verification.every(
+                        (entry) =>
+                          entry &&
+                          typeof entry.command === "string" &&
+                          ["passed", "failed", "not_run"].includes(entry.status),
+                      )
+                    ) {
+                      return yield* Effect.fail(
+                        new Error(
+                          "Owned-task completion requires verification entries with a valid status.",
+                        ),
+                      )
+                    }
+                    const reservedKeySet = new Set(reservations.map((reservation) => reservation.path_key))
+                    for (const pathKey of update.handoffPathKeys ?? []) {
+                      if (!reservedKeySet.has(pathKey)) {
+                        return yield* Effect.fail(
+                          new Error("Handoff changed path is not reserved by this task."),
+                        )
+                      }
+                    }
                     setData.status = "completed"
+                    // Store the v1 terminal handoff with the completion in the same transaction.
+                    const nextMetadata = { ...(current.metadata ?? {}), handoff: update.handoff }
+                    setData.metadata = nextMetadata
                   } else if (target === "cancelled") {
                     if (current.status === "completed" || current.status === "cancelled") {
                       return yield* Effect.fail(new Error(`Cannot cancel a ${current.status} owned task.`))
@@ -891,15 +982,15 @@ export const layer = Layer.effect(
               }
             }),
           { behavior: "immediate" },
-        )
-        .pipe(
-          // Expected validation failures are Error instances; only database
-          // query failures should become defects.
-          Effect.catchIf(
-            (error): error is Error => !(error instanceof Error),
-            (error) => Effect.die(error),
-          ),
-        )
+        ),
+      ).pipe(
+        // Expected validation failures are Error instances; only database
+        // query failures should become defects.
+        Effect.catchIf(
+          (error): error is Error => !(error instanceof Error),
+          (error) => Effect.die(error),
+        ),
+      )
       if (!result) return Option.none()
       return Option.some({
         id: result.row.id,
@@ -911,6 +1002,7 @@ export const layer = Layer.effect(
         metadata: result.row.metadata,
         owned_paths: result.reservations.map((reservation) => reservation.display_path),
         reservations: result.reservations.map(toOwnedReservation),
+        handoff: readTaskHandoff(result.row.metadata),
         time_created: result.row.time_created,
         time_updated: result.row.time_updated,
       })
@@ -1006,6 +1098,7 @@ export const layer = Layer.effect(
         metadata: result.row.metadata,
         owned_paths: result.reservations.map((reservation) => reservation.display_path),
         reservations: result.reservations.map(toOwnedReservation),
+        handoff: readTaskHandoff(result.row.metadata),
         time_created: result.row.time_created,
         time_updated: result.row.time_updated,
       })
@@ -1043,6 +1136,7 @@ export const layer = Layer.effect(
           metadata: row.metadata,
           owned_paths: taskReservations.map((reservation) => reservation.display_path),
           reservations: taskReservations.map(toOwnedReservation),
+          handoff: readTaskHandoff(row.metadata),
           time_created: row.time_created,
           time_updated: row.time_updated,
         }

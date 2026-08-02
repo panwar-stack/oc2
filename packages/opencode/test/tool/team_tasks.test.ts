@@ -539,13 +539,24 @@ describe("tool.team_tasks", () => {
           expect(leadComplete.output.toLowerCase()).toContain("owner")
 
           const ownerComplete = yield* updateDef.execute(
-            { task_id: task.id, status: "completed" },
+            {
+              task_id: task.id,
+              status: "completed",
+              handoff: {
+                summary: "Completed the owned task",
+                changed_paths: [owned],
+                verification: [{ command: "bun test", status: "passed" }],
+              },
+            },
             context(seed.worker.session_id),
           )
           const row = yield* getTask(task.id)
 
           expect(ownerComplete.title).toBe("Task Updated")
           expect(row?.status).toBe("completed")
+          expect(row?.metadata?.handoff).toEqual(
+            expect.objectContaining({ summary: "Completed the owned task" }),
+          )
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -577,7 +588,15 @@ describe("tool.team_tasks", () => {
           const { db } = yield* Database.Service
 
           yield* updateDef.execute(
-            { task_id: task.id, status: "completed" },
+            {
+              task_id: task.id,
+              status: "completed",
+              handoff: {
+                summary: "Released the reserved file",
+                changed_paths: [owned],
+                verification: [{ command: "bun test", status: "passed" }],
+              },
+            },
             context(seed.worker.session_id),
           )
 
@@ -706,6 +725,191 @@ describe("tool.team_tasks", () => {
           expect(ownedTask?.owned_paths).toEqual(["order.txt"])
           expect(ownedTask?.reservations).toHaveLength(1)
           expect(ownedTask?.reservations[0]?.ownerSessionID).toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects completion of an owned task without a structured handoff", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-no-handoff")
+          const owned = path.join(directory, "no-handoff.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "Needs handoff", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Needs handoff")
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+
+          const result = yield* updateDef.execute(
+            { task_id: task.id, status: "completed" },
+            context(seed.worker.session_id),
+          )
+          const row = yield* getTask(task.id)
+
+          expect(result.title).toBe("Task Update Failed")
+          expect(result.output.toLowerCase()).toContain("handoff")
+          expect(row?.status).toBe("in_progress")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("completes an owned task with a valid structured handoff and stores it with the release", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-handoff-ok")
+          const owned = path.join(directory, "handoff-ok.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "Handoff ok", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Handoff ok")
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+          const { db } = yield* Database.Service
+
+          const result = yield* updateDef.execute(
+            {
+              task_id: task.id,
+              status: "completed",
+              handoff: {
+                summary: "Finished the handoff task",
+                changed_paths: [owned],
+                verification: [{ command: "bun test", status: "passed", detail: "green" }],
+                risks: ["none"],
+              },
+            },
+            context(seed.worker.session_id),
+          )
+          const row = yield* getTask(task.id)
+          const rows = yield* db
+            .select()
+            .from(TeamFileOwnershipTable)
+            .where(eq(TeamFileOwnershipTable.task_id, task.id))
+            .all()
+            .pipe(Effect.orDie)
+
+          expect(result.title).toBe("Task Updated")
+          expect(row?.status).toBe("completed")
+          expect(row?.metadata?.handoff).toEqual(
+            expect.objectContaining({
+              summary: "Finished the handoff task",
+              changed_paths: ["handoff-ok.txt"],
+              verification: [{ command: "bun test", status: "passed", detail: "green" }],
+              risks: ["none"],
+            }),
+          )
+          expect(rows[0]?.time_released).not.toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects a handoff whose changed paths are not a subset of the reserved paths", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-handoff-unreserved")
+          const owned = path.join(directory, "handoff-subset.txt")
+          const outside = path.join(directory, "unreserved.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "Subset check", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Subset check")
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+
+          const result = yield* updateDef.execute(
+            {
+              task_id: task.id,
+              status: "completed",
+              handoff: {
+                summary: "Changed an unreserved file",
+                changed_paths: [outside],
+                verification: [{ command: "bun test", status: "passed" }],
+              },
+            },
+            context(seed.worker.session_id),
+          )
+          const row = yield* getTask(task.id)
+
+          expect(result.title).toBe("Task Update Failed")
+          expect(result.output.toLowerCase()).toContain("reserved")
+          expect(row?.status).toBe("in_progress")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects completion with a blank handoff summary", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-owned-handoff-blank")
+          const owned = path.join(directory, "handoff-blank.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const createTool = yield* TeamTaskCreateTool
+          const createDef = yield* createTool.init()
+          const claimTool = yield* TeamTaskClaimTool
+          const claimDef = yield* claimTool.init()
+          const updateTool = yield* TeamTaskUpdateTool
+          const updateDef = yield* updateTool.init()
+
+          yield* createDef.execute(
+            { description: "Blank summary", owned_paths: [owned] },
+            context(seed.lead.id),
+          )
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Blank summary")
+          if (!task) throw new Error("owned task was not persisted")
+          yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
+
+          const result = yield* updateDef.execute(
+            {
+              task_id: task.id,
+              status: "completed",
+              handoff: {
+                summary: "   ",
+                changed_paths: [owned],
+                verification: [{ command: "bun test", status: "passed" }],
+              },
+            },
+            context(seed.worker.session_id),
+          )
+          const row = yield* getTask(task.id)
+
+          expect(result.title).toBe("Task Update Failed")
+          expect(result.output.toLowerCase()).toContain("summary")
+          expect(row?.status).toBe("in_progress")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

@@ -16,6 +16,9 @@ import { Session } from "@/session/session"
 import { Permission } from "@/permission"
 import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
+import { Database } from "@oc2-ai/core/database/database"
+import { Team } from "@/team/team"
+import { canonicalize } from "@/team/file-ownership"
 import {
   disposeAllInstances,
   provideInstance,
@@ -51,6 +54,8 @@ const it = testEffect(
     CrossSpawnSpawner.defaultLayer,
     Truncate.defaultLayer,
     Agent.defaultLayer,
+    Database.defaultLayer,
+    Team.defaultLayer,
   ),
 )
 
@@ -444,4 +449,112 @@ describe("tool.write", () => {
       }),
     )
   })
+
+  describe("reservation lease", () => {
+    it.instance("allows the owning teammate to write a reserved path", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const futil = yield* FSUtil.Service
+        const lead = yield* sessions.create({ title: "Lease Lead" })
+        const ownerSession = yield* sessions.create({ parentID: lead.id, title: "Lease Owner" })
+        const info = yield* team.create({ name: "lease-write-owner", goal: "Lease", leadSessionID: lead.id })
+        const owner = yield* team.addMember({
+          teamID: info.id,
+          sessionID: ownerSession.id,
+          name: "owner",
+          agentType: "general",
+          rolePrompt: "Own",
+        })
+        yield* team.updateMemberStatus(owner.id, "active")
+        const filepath = path.join(test.directory, "reserved.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "old"))
+        const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), filepath).pipe(
+          Effect.provideService(FSUtil.Service, futil),
+        )
+        yield* team.createTask({ teamID: info.id, description: "Reserve", owned: [owned] })
+        const task = (yield* team.getTasks(info.id))[0]
+        if (!task) throw new Error("task missing")
+        yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+        const result = yield* run(
+          { filePath: filepath, content: "new" },
+          { ...ctx, sessionID: SessionID.make(ownerSession.id) },
+        )
+
+        expect(result.output).toContain("Wrote file successfully")
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("new")
+      }),
+    )
+
+    it.instance("denies a non-owner write to a reserved path before any permission ask", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const futil = yield* FSUtil.Service
+        const lead = yield* sessions.create({ title: "Lease Lead" })
+        const ownerSession = yield* sessions.create({ parentID: lead.id, title: "Lease Owner" })
+        const otherSession = yield* sessions.create({ parentID: lead.id, title: "Lease Other" })
+        const info = yield* team.create({ name: "lease-write-deny", goal: "Lease", leadSessionID: lead.id })
+        const owner = yield* team.addMember({
+          teamID: info.id,
+          sessionID: ownerSession.id,
+          name: "owner",
+          agentType: "general",
+          rolePrompt: "Own",
+        })
+        const other = yield* team.addMember({
+          teamID: info.id,
+          sessionID: otherSession.id,
+          name: "other",
+          agentType: "general",
+          rolePrompt: "Other",
+        })
+        yield* team.updateMemberStatus(owner.id, "active")
+        yield* team.updateMemberStatus(other.id, "active")
+        const filepath = path.join(test.directory, "reserved.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "old"))
+        const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), filepath).pipe(
+          Effect.provideService(FSUtil.Service, futil),
+        )
+        yield* team.createTask({ teamID: info.id, description: "Reserve", owned: [owned] })
+        const task = (yield* team.getTasks(info.id))[0]
+        if (!task) throw new Error("task missing")
+        yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+        const asks: Array<Parameters<Tool.Context["ask"]>[0]> = []
+        const result = yield* run(
+          { filePath: filepath, content: "sneaky" },
+          {
+            ...ctx,
+            sessionID: SessionID.make(otherSession.id),
+            ask: (request) =>
+              Effect.sync(() => {
+                asks.push(request)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Write Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("old")
+      }),
+    )
+  })
 })
+
+function leaseContext(sessionID: string): Tool.Context {
+  return {
+    sessionID: SessionID.make(sessionID),
+    messageID: MessageID.make("msg_lease"),
+    callID: "",
+    agent: "build",
+    abort: AbortSignal.any([]),
+    messages: [],
+    metadata: () => Effect.void,
+    ask: () => Effect.void,
+  }
+}

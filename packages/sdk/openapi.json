@@ -29506,6 +29506,59 @@
         ],
         "additionalProperties": false
       },
+      "TeamTaskHandoff": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "changed_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verification": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "passed",
+                    "failed",
+                    "not_run"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "summary",
+          "changed_paths",
+          "verification"
+        ],
+        "additionalProperties": false
+      },
       "TeamTask": {
         "type": "object",
         "properties": {
@@ -29532,6 +29585,15 @@
           },
           "metadata": {
             "type": "object"
+          },
+          "owned_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "handoff": {
+            "$ref": "#/components/schemas/TeamTaskHandoff"
           },
           "time_created": {
             "anyOf": [
@@ -29605,6 +29667,8 @@
           "team_id",
           "description",
           "status",
+          "owned_paths",
+          "handoff",
           "time_created",
           "time_updated"
         ],

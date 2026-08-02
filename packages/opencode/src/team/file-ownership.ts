@@ -1,5 +1,5 @@
 import path from "path"
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Semaphore } from "effect"
 import { and, inArray, isNull } from "drizzle-orm"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Database } from "@oc2-ai/core/database/database"
@@ -203,5 +203,99 @@ export const toOwnedReservation = (row: typeof TeamFileOwnershipTable.$inferSele
   ownerSessionID: row.owner_session_id,
   timeReleased: row.time_released,
 })
+
+/**
+ * Stable denial for a structured write to a path with an active reservation owned by another
+ * session (or by no session yet). Emitted only while holding the sorted path locks, so the
+ * check-to-mutation race inside one project instance is closed.
+ */
+export class OwnedWriteDenied extends Schema.TaggedErrorClass<OwnedWriteDenied>()("Team.OwnedWriteDenied", {
+  displayPath: Schema.String,
+  taskID: Schema.String,
+}) {
+  override get message() {
+    return `Write denied: ${this.displayPath} is reserved by task ${this.taskID.slice(0, 8)}. Complete or cancel that task before writing this file.`
+  }
+}
+
+/** Process-wide in-process keyed lock registry: one semaphore per canonical pathKey. */
+const locks = new Map<string, Semaphore.Semaphore>()
+
+function lockFor(pathKey: string) {
+  const existing = locks.get(pathKey)
+  if (existing) return existing
+  const next = Semaphore.makeUnsafe(1)
+  locks.set(pathKey, next)
+  return next
+}
+
+/**
+ * Acquire one permit per unique canonical pathKey in SORTED order, run `effect`, and release the
+ * permits in reverse order. Sorted acquisition prevents lock-order deadlock between any two
+ * multi-path operations, and `withPermits` guarantees release on success, failure, or interrupt.
+ */
+export const withPathLocks = <A, E, R>(
+  pathKeys: readonly string[],
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> => {
+  const unique = [...new Set(pathKeys)].sort()
+  let wrapped = effect
+  for (let index = unique.length - 1; index >= 0; index--) {
+    const semaphore = lockFor(unique[index]!)
+    wrapped = semaphore.withPermits(1)(wrapped)
+  }
+  return wrapped
+}
+
+/** Inside the held locks, verify every active reservation belongs to `sessionID`. */
+const assertLeaseAllowed = Effect.fn("Team.FileOwnership.assertLeaseAllowed")(function* (
+  db: Pick<Database.Interface["db"], "select">,
+  sessionID: string,
+  pathKeys: readonly string[],
+) {
+  const unique = [...new Set(pathKeys)]
+  if (unique.length === 0) return
+  const rows = yield* db
+    .select({
+      displayPath: TeamFileOwnershipTable.display_path,
+      taskID: TeamFileOwnershipTable.task_id,
+      ownerSessionID: TeamFileOwnershipTable.owner_session_id,
+    })
+    .from(TeamFileOwnershipTable)
+    .where(and(isNull(TeamFileOwnershipTable.time_released), inArray(TeamFileOwnershipTable.path_key, unique)))
+    .all()
+    .pipe(Effect.orDie)
+  for (const row of rows) {
+    // An active reservation with no owner, or with a different owner, denies the mutation. The
+    // authoritative owner succeeds; an unreserved (protocol-0) path remains allowed.
+    if (row.ownerSessionID === null || row.ownerSessionID !== sessionID) {
+      return yield* Effect.fail(new OwnedWriteDenied({ displayPath: row.displayPath, taskID: row.taskID }))
+    }
+  }
+})
+
+/**
+ * Structured write lease: acquire the sorted path locks, verify inside the locks that every active
+ * reservation for the given canonical pathKeys is owned by `sessionID` (or unreserved), then run the
+ * full mutation (permission ask plus all writes) while holding the locks. One denied path fails the
+ * whole operation before any permission ask or mutation.
+ */
+export const withWriteLease = <A, E, R>(
+  db: Pick<Database.Interface["db"], "select">,
+  sessionID: string,
+  pathKeys: readonly string[],
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | OwnedWriteDenied, R> =>
+  withPathLocks(pathKeys, assertLeaseAllowed(db, sessionID, pathKeys).pipe(Effect.andThen(effect)))
+
+/**
+ * Sorted path locks for the service on reservation mutation: task creation holds them from before
+ * the conflict check through commit; release/cancellation holds them before changing reservation
+ * state. Identical ordering to `withWriteLease`, so service and file tools never deadlock.
+ */
+export const withReservationLocks = <A, E, R>(
+  pathKeys: readonly string[],
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> => withPathLocks(pathKeys, effect)
 
 export * as FileOwnership from "./file-ownership"

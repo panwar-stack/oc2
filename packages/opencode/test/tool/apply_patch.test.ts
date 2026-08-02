@@ -17,6 +17,9 @@ import { Session } from "@/session/session"
 import { testEffect } from "../lib/effect"
 import { Permission } from "../../src/permission"
 import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
+import { Database } from "@oc2-ai/core/database/database"
+import { Team } from "@/team/team"
+import { canonicalize } from "@/team/file-ownership"
 
 const it = testEffect(
   Layer.mergeAll(
@@ -29,6 +32,8 @@ const it = testEffect(
     testInstanceStoreLayer,
     Truncate.defaultLayer,
     Agent.defaultLayer,
+    Database.defaultLayer,
+    Team.defaultLayer,
   ),
 )
 
@@ -781,4 +786,193 @@ EOF`
       expect(yield* readText(target)).toBe(`He said "hi"\nsome${emDash}dash\nend\n`)
     }),
   )
+
+  describe("reservation lease", () => {
+    it.instance("allows the owning teammate to patch a reserved path", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const futil = yield* FSUtil.Service
+        const lead = yield* sessions.create({ title: "Lease Lead" })
+        const ownerSession = yield* sessions.create({ parentID: lead.id, title: "Lease Owner" })
+        const info = yield* team.create({ name: "lease-patch-owner", goal: "Lease", leadSessionID: lead.id })
+        const owner = yield* team.addMember({
+          teamID: info.id,
+          sessionID: ownerSession.id,
+          name: "owner",
+          agentType: "general",
+          rolePrompt: "Own",
+        })
+        yield* team.updateMemberStatus(owner.id, "active")
+        const filepath = path.join(test.directory, "patch-owner.txt")
+        yield* writeText(filepath, "old\n")
+        const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), filepath).pipe(
+          Effect.provideService(FSUtil.Service, futil),
+        )
+        yield* team.createTask({ teamID: info.id, description: "Reserve", owned: [owned] })
+        const task = (yield* team.getTasks(info.id))[0]
+        if (!task) throw new Error("task missing")
+        yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+        const result = yield* execute(
+          {
+            patchText: "*** Begin Patch\n*** Update File: patch-owner.txt\n@@\n-old\n+new\n*** End Patch",
+          },
+          { ...baseCtx, sessionID: SessionID.make(ownerSession.id), ask: () => Effect.void },
+        )
+
+        expect(result.title).toContain("Success")
+        expect(yield* readText(filepath)).toBe("new\n")
+      }),
+    )
+
+    it.instance("one denied path makes the whole patch write nothing and skip the permission ask", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const futil = yield* FSUtil.Service
+        const lead = yield* sessions.create({ title: "Lease Lead" })
+        const ownerSession = yield* sessions.create({ parentID: lead.id, title: "Lease Owner" })
+        const otherSession = yield* sessions.create({ parentID: lead.id, title: "Lease Other" })
+        const info = yield* team.create({ name: "lease-patch-deny", goal: "Lease", leadSessionID: lead.id })
+        const owner = yield* team.addMember({
+          teamID: info.id,
+          sessionID: ownerSession.id,
+          name: "owner",
+          agentType: "general",
+          rolePrompt: "Own",
+        })
+        const other = yield* team.addMember({
+          teamID: info.id,
+          sessionID: otherSession.id,
+          name: "other",
+          agentType: "general",
+          rolePrompt: "Other",
+        })
+        yield* team.updateMemberStatus(owner.id, "active")
+        yield* team.updateMemberStatus(other.id, "active")
+        const blocked = path.join(test.directory, "blocked.txt")
+        const free = path.join(test.directory, "free.txt")
+        yield* writeText(blocked, "old blocked\n")
+        yield* writeText(free, "old free\n")
+        const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), blocked).pipe(
+          Effect.provideService(FSUtil.Service, futil),
+        )
+        yield* team.createTask({ teamID: info.id, description: "Reserve", owned: [owned] })
+        const task = (yield* team.getTasks(info.id))[0]
+        if (!task) throw new Error("task missing")
+        yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+        const asks: Array<AskInput> = []
+        const result = yield* execute(
+          {
+            patchText: [
+              "*** Begin Patch",
+              "*** Update File: blocked.txt",
+              "@@",
+              "-old blocked",
+              "+new blocked",
+              "*** Update File: free.txt",
+              "@@",
+              "-old free",
+              "+new free",
+              "*** End Patch",
+            ].join("\n"),
+          },
+          {
+            ...baseCtx,
+            sessionID: SessionID.make(otherSession.id),
+            ask: (input) =>
+              Effect.sync(() => {
+                asks.push(input)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Patch Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* readText(blocked)).toBe("old blocked\n")
+        expect(yield* readText(free)).toBe("old free\n")
+      }),
+    )
+
+    it.instance("denies a patch moving into a reserved destination before writing anything", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const futil = yield* FSUtil.Service
+        const lead = yield* sessions.create({ title: "Lease Lead" })
+        const ownerSession = yield* sessions.create({ parentID: lead.id, title: "Lease Owner" })
+        const otherSession = yield* sessions.create({ parentID: lead.id, title: "Lease Other" })
+        const info = yield* team.create({ name: "lease-patch-move", goal: "Lease", leadSessionID: lead.id })
+        const owner = yield* team.addMember({
+          teamID: info.id,
+          sessionID: ownerSession.id,
+          name: "owner",
+          agentType: "general",
+          rolePrompt: "Own",
+        })
+        const other = yield* team.addMember({
+          teamID: info.id,
+          sessionID: otherSession.id,
+          name: "other",
+          agentType: "general",
+          rolePrompt: "Other",
+        })
+        yield* team.updateMemberStatus(owner.id, "active")
+        yield* team.updateMemberStatus(other.id, "active")
+        const source = path.join(test.directory, "source.txt")
+        const destination = path.join(test.directory, "moved.txt")
+        yield* writeText(source, "from\n")
+        const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), destination).pipe(
+          Effect.provideService(FSUtil.Service, futil),
+        )
+        yield* team.createTask({ teamID: info.id, description: "Reserve", owned: [owned] })
+        const task = (yield* team.getTasks(info.id))[0]
+        if (!task) throw new Error("task missing")
+        yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+        const asks: Array<AskInput> = []
+        const result = yield* execute(
+          {
+            patchText: [
+              "*** Begin Patch",
+              "*** Update File: source.txt",
+              "*** Move to: moved.txt",
+              "@@",
+              "-from",
+              "+to",
+              "*** End Patch",
+            ].join("\n"),
+          },
+          {
+            ...baseCtx,
+            sessionID: SessionID.make(otherSession.id),
+            ask: (input) =>
+              Effect.sync(() => {
+                asks.push(input)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Patch Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* readText(source)).toBe("from\n")
+        yield* expectReadFailure(destination)
+      }),
+    )
+  })
 })
+
+function leaseContext(sessionID: string): ToolCtx {
+  return {
+    ...baseCtx,
+    sessionID: SessionID.make(sessionID),
+    ask: () => Effect.void,
+  }
+}

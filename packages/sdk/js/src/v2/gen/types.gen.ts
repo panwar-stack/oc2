@@ -3868,6 +3868,17 @@ export type TeamEvalReport = {
   }
 }
 
+export type TeamTaskHandoff = {
+  summary: string
+  changed_paths: Array<string>
+  verification: Array<{
+    command: string
+    status: "passed" | "failed" | "not_run"
+    detail?: string
+  }>
+  risks?: Array<string>
+}
+
 export type TeamTask = {
   id: string
   team_id: string
@@ -3878,6 +3889,8 @@ export type TeamTask = {
   metadata?: {
     [key: string]: unknown
   }
+  owned_paths: Array<string>
+  handoff: TeamTaskHandoff
   time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }

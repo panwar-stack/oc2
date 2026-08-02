@@ -172,6 +172,79 @@ describe("team HttpApi", () => {
     }),
   )
 
+  it.instance("returns owned_paths and handoff on task responses", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const team = yield* Team.Service
+      const info = yield* team.create({
+        name: "http-owned",
+        goal: "Owned tasks",
+        leadSessionID: "ses_http_owned_lead",
+      })
+      const task = yield* team.createTask({
+        teamID: info.id,
+        description: "Owned HTTP task",
+        owned: [{ rootKey: "/work", pathKey: "/work/owned.txt", displayPath: "owned.txt" }],
+      })
+      yield* team.claimTask(info.id, task.id, "ses_http_owned_worker")
+      yield* team.updateTask(
+        info.id,
+        task.id,
+        {
+          status: "completed",
+          handoff: {
+            summary: "Finished the owned HTTP task",
+            changed_paths: ["owned.txt"],
+            verification: [{ command: "bun test", status: "passed" }],
+          },
+          handoffPathKeys: ["/work/owned.txt"],
+        },
+        { sessionID: "ses_http_owned_worker", isLead: false },
+      )
+
+      const response = yield* request(withSession(`${TeamPaths.root}/${info.id}/tasks`, info.lead_session_id), {
+        headers: { "x-oc2-directory": test.directory },
+      })
+      const body = yield* responseJson(response)
+
+      expect(response.status, JSON.stringify(body)).toBe(200)
+      expect(body).toContainEqual(
+        expect.objectContaining({
+          id: task.id,
+          owned_paths: ["owned.txt"],
+          handoff: expect.objectContaining({ summary: "Finished the owned HTTP task" }),
+        }),
+      )
+    }),
+  )
+
+  it.instance("returns owned_paths and a null handoff for unowned tasks", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const team = yield* Team.Service
+      const info = yield* team.create({
+        name: "http-unowned",
+        goal: "Plain tasks",
+        leadSessionID: "ses_http_unowned_lead",
+      })
+      const task = yield* team.createTask({ teamID: info.id, description: "Plain HTTP task" })
+
+      const response = yield* request(withSession(`${TeamPaths.root}/${info.id}/tasks`, info.lead_session_id), {
+        headers: { "x-oc2-directory": test.directory },
+      })
+      const body = yield* responseJson(response)
+
+      expect(response.status, JSON.stringify(body)).toBe(200)
+      expect(body).toContainEqual(
+        expect.objectContaining({
+          id: task.id,
+          owned_paths: [],
+          handoff: null,
+        }),
+      )
+    }),
+  )
+
   it.instance("rejects outsider access to team resources", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

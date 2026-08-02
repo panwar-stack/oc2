@@ -2,7 +2,32 @@ import * as Tool from "./tool"
 import DESCRIPTION from "./team_task_update.txt"
 import { Team } from "@/team/team"
 import { Config } from "@/config/config"
+import { Session } from "@/session/session"
+import { canonicalize } from "@/team/file-ownership"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Effect, Schema, Option } from "effect"
+
+const HandoffVerificationSchema = Schema.Struct({
+  command: Schema.String.annotate({ description: "The command or check that was run" }),
+  status: Schema.Literals(["passed", "failed", "not_run"]).annotate({
+    description: "Outcome of the check: passed, failed, or not_run",
+  }),
+  detail: Schema.optional(Schema.String).annotate({ description: "Optional detail for the check result" }),
+})
+
+const HandoffSchema = Schema.Struct({
+  summary: Schema.String.annotate({ description: "Nonblank summary of the completed work" }),
+  changed_paths: Schema.Array(Schema.String).annotate({
+    description:
+      "Exact file paths changed by this task. Each path is canonicalized and must be a subset of the task's reserved owned_paths.",
+  }),
+  verification: Schema.Array(HandoffVerificationSchema).annotate({
+    description: "Commands or checks run to verify the work",
+  }),
+  risks: Schema.optional(Schema.Array(Schema.String)).annotate({
+    description: "Optional known risks or caveats",
+  }),
+})
 
 const Parameters = Schema.Struct({
   task_id: Schema.String.annotate({ description: "The task ID" }),
@@ -10,6 +35,9 @@ const Parameters = Schema.Struct({
     description: "New status",
   }),
   assignee: Schema.optional(Schema.String).annotate({ description: "New assignee" }),
+  handoff: Schema.optional(HandoffSchema).annotate({
+    description: "Structured handoff required to complete an owned task",
+  }),
 })
 
 export const TeamTaskUpdateTool = Tool.define(
@@ -17,6 +45,8 @@ export const TeamTaskUpdateTool = Tool.define(
   Effect.gen(function* () {
     const team = yield* Team.Service
     const config = yield* Config.Service
+    const session = yield* Session.Service
+    const fs = yield* FSUtil.Service
     return {
       description: DESCRIPTION,
       parameters: Parameters,
@@ -35,12 +65,34 @@ export const TeamTaskUpdateTool = Tool.define(
               output: "Only the lead or assigned teammate can update this task.",
               metadata: {},
             }
+          // Canonicalize the handoff's changed paths. Each entry must canonicalize; the display
+          // paths are stored and the canonical pathKeys are validated against the task's
+          // reservations by the service.
+          let handoff: Team.TaskHandoff | undefined
+          let handoffPathKeys: string[] | undefined
+          if (params.handoff) {
+            const changed = yield* Effect.forEach(params.handoff.changed_paths, (target) =>
+              canonicalize(session, ctx, target).pipe(Effect.provideService(FSUtil.Service, fs)),
+            )
+            handoff = {
+              summary: params.handoff.summary,
+              changed_paths: changed.map((entry) => entry.displayPath),
+              verification: params.handoff.verification.map((entry) => ({
+                command: entry.command,
+                status: entry.status,
+                ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
+              })),
+              ...(params.handoff.risks ? { risks: [...params.handoff.risks] } : {}),
+            }
+            handoffPathKeys = changed.map((entry) => entry.pathKey)
+          }
           const result = yield* team.updateTask(
             context.value.team.id,
             params.task_id,
             {
               status: params.status,
               assignee: params.assignee,
+              ...(handoff ? { handoff, handoffPathKeys } : {}),
             },
             { sessionID: ctx.sessionID, isLead: context.value.team.lead_session_id === ctx.sessionID },
           )

@@ -13,7 +13,8 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
 import { MessageID, PartID, SessionID } from "@/session/schema"
-import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable } from "@/team/team.sql"
+import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable, TeamTaskTable } from "@/team/team.sql"
+import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Schedule, Scope } from "effect"
@@ -144,7 +145,7 @@ const TaskCompletionGuidance =
   "When your assigned work is complete, put the concrete result in your final answer so it can be sent back to the lead automatically."
 
 const RetryGuidance =
-  "Your previous response contained no final text result. Provide only your final result text now."
+  "Your previous response contained no final text result or left an owned task unfinished. If you own tasks, submit the structured handoff with team_task_update before providing your final result text. Provide only your final result text now."
 
 const MemberTools = [
   "Available team tools (use these to coordinate with the team):",
@@ -173,8 +174,9 @@ const NestedTeamTools = {
  * only by session permission. Every general-mutation, shell, work-creation, web, and team tool is
  * therefore denied explicitly. MCP and plugin tools are instance-dynamic and cannot be statically
  * denied here; they are covered by the member's inherited session permissions and the RetryGuidance
- * prompt text, consistent with the codebase's plan-mode precedent. PR 6 re-enables only the
- * task-handoff tool (team_task_update) in this allowlist.
+ * prompt text, consistent with the codebase's plan-mode precedent. The only enabled tool is
+ * team_task_update, so a member that still owns unfinished work can submit the structured handoff
+ * before producing final text.
  */
 const RetryPromptTools = {
   bash: false,
@@ -203,7 +205,7 @@ const RetryPromptTools = {
   team_task_create: false,
   team_task_list: false,
   team_task_claim: false,
-  team_task_update: false,
+  team_task_update: true,
   team_plan_submit: false,
   team_plan_decide: false,
   team_shutdown: false,
@@ -632,16 +634,37 @@ export const layer = Layer.effect(
     })
 
     /**
-     * Missing-task-handoff hook. It always returns false until owned tasks exist (PR 6), so the
-     * gen1 valid-but-missing-handoff retry and the gen2 `failed(missing_task_handoff)` transitions
-     * stay unreachable in this slice.
+     * Missing-task-handoff hook. A finite member owns an unfinished task when a task belonging to
+     * the member's team is in_progress and has an active reservation row whose owner_session_id is
+     * the member's session. The query runs inside the same immediate transaction as settlement and
+     * is bounded by the partial active-path index, so it stays cheap and deterministic.
      */
-    const memberOwnsUnfinishedTask = (member: TeamMemberRow) => false
+    const memberOwnsUnfinishedTask = Effect.fn("LifecycleReconciler.memberOwnsUnfinishedTask")(function* (
+      tx: WriteDatabase,
+      member: TeamMemberRow,
+    ) {
+      const row = yield* tx
+        .select({ id: TeamTaskTable.id })
+        .from(TeamTaskTable)
+        .innerJoin(TeamFileOwnershipTable, eq(TeamFileOwnershipTable.task_id, TeamTaskTable.id))
+        .where(
+          and(
+            eq(TeamTaskTable.team_id, member.team_id),
+            eq(TeamTaskTable.status, "in_progress"),
+            eq(TeamFileOwnershipTable.owner_session_id, member.session_id),
+            isNull(TeamFileOwnershipTable.time_released),
+          ),
+        )
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      return row !== undefined
+    })
 
     /**
-     * Terminal-failure transaction hooks for later slices. They are no-ops now and only structure
-     * the terminal boundary so PR 6 (owned-task cancellation + reservation release) and PR 8 (one
-     * team-revision increment) can slot in without restructuring.
+     * Terminal-failure transaction hooks. `cancelOwnedTasksOf` cancels every in-progress owned task
+     * of the failed member and releases its reservations in this same immediate transaction,
+     * keeping the rows for audit. No handoff is stored on cancellation.
      */
     const cancelOwnedTasksOf = Effect.fn("LifecycleReconciler.cancelOwnedTasksOf")(function* (input: {
       tx: WriteDatabase
@@ -649,8 +672,44 @@ export const layer = Layer.effect(
       member: TeamMemberRow
       now: number
     }) {
-      // PR 6: cancel the failed member's owned in-progress tasks in this same transaction.
-      return yield* Effect.void
+      const inProgress = yield* input.tx
+        .select()
+        .from(TeamTaskTable)
+        .where(and(eq(TeamTaskTable.team_id, input.team.id), eq(TeamTaskTable.status, "in_progress")))
+        .all()
+        .pipe(Effect.orDie)
+      for (const task of inProgress) {
+        const owned = yield* input.tx
+          .select({ id: TeamFileOwnershipTable.id })
+          .from(TeamFileOwnershipTable)
+          .where(
+            and(
+              eq(TeamFileOwnershipTable.team_id, input.team.id),
+              eq(TeamFileOwnershipTable.task_id, task.id),
+              eq(TeamFileOwnershipTable.owner_session_id, input.member.session_id),
+              isNull(TeamFileOwnershipTable.time_released),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie)
+        if (owned.length === 0) continue
+        yield* input.tx
+          .update(TeamTaskTable)
+          .set({ status: "cancelled", time_updated: input.now })
+          .where(eq(TeamTaskTable.id, task.id))
+          .run()
+        yield* input.tx
+          .update(TeamFileOwnershipTable)
+          .set({ time_released: input.now, time_updated: input.now })
+          .where(
+            and(
+              eq(TeamFileOwnershipTable.task_id, task.id),
+              eq(TeamFileOwnershipTable.owner_session_id, input.member.session_id),
+              isNull(TeamFileOwnershipTable.time_released),
+            ),
+          )
+          .run()
+      }
     })
 
     const releaseReservationsOf = Effect.fn("LifecycleReconciler.releaseReservationsOf")(function* (input: {
@@ -659,7 +718,8 @@ export const layer = Layer.effect(
       member: TeamMemberRow
       now: number
     }) {
-      // PR 6: release the failed member's file reservations in this same transaction.
+      // Cancelling the member's owned tasks already released their reservations in the same
+      // transaction; this hook exists for the terminal boundary structure and stays a no-op.
       return yield* Effect.void
     })
 
@@ -819,13 +879,14 @@ export const layer = Layer.effect(
               }
               const now = Date.now()
               const isFinite = member.lifecycle !== "daemon"
-              // Generation 1 with a blank completed result is one bounded retry: CAS the member
-              // 1 -> 2, allocate a fresh prompt ID, and persist retry_admitted in this transaction.
+              // Generation 1 with a blank completed result, or a valid result while the member
+              // still owns an unfinished task, is one bounded retry: CAS the member 1 -> 2,
+              // allocate a fresh prompt ID, and persist retry_admitted in this transaction.
               if (
                 isFinite &&
                 input.state === "completed" &&
                 generation === 1 &&
-                (input.output === "" || memberOwnsUnfinishedTask(member))
+                (input.output === "" || (yield* memberOwnsUnfinishedTask(tx, member)))
               ) {
                 const advanced = yield* tx
                   .update(TeamMemberTable)
@@ -864,13 +925,19 @@ export const layer = Layer.effect(
                 }
               }
               // Generation 2 never retries again: a blank result fails as empty_result and a still
-              // missing task handoff fails as missing_task_handoff (unreachable until PR 6).
+              // missing task handoff fails as missing_task_handoff (reachable now that owned tasks
+              // exist and the hook is live).
               let effectiveState = input.state
               let effectiveCode = input.failureCode
               if (isFinite && input.state === "completed" && generation === 2 && input.output === "") {
                 effectiveState = "failed"
                 effectiveCode = "empty_result"
-              } else if (isFinite && input.state === "completed" && generation === 2 && memberOwnsUnfinishedTask(member)) {
+              } else if (
+                isFinite &&
+                input.state === "completed" &&
+                generation === 2 &&
+                (yield* memberOwnsUnfinishedTask(tx, member))
+              ) {
                 effectiveState = "failed"
                 effectiveCode = "missing_task_handoff"
               }

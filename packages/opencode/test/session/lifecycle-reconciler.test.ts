@@ -23,10 +23,15 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { SessionTable } from "@oc2-ai/core/session/sql"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
-import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
-import { eq } from "drizzle-orm"
+import { Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
+import { eq, isNull } from "drizzle-orm"
+import fs from "fs/promises"
+import path from "path"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { FSUtil } from "@oc2-ai/core/fs-util"
+import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
+import { canonicalize } from "@/team/file-ownership"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -45,6 +50,7 @@ const it = testEffect(
     CrossSpawnSpawner.defaultLayer,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    FSUtil.defaultLayer,
     Session.defaultLayer,
     SessionControl.defaultLayer,
     SessionRunState.defaultLayer,
@@ -159,10 +165,13 @@ const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
 
 /**
  * The completion-only retry prompt must pass an explicit deny map (a permission delta) so the model
- * cannot see the general mutation/shell/team tools. An empty `{}` would change nothing.
+ * cannot see the general mutation/shell/team tools. An empty `{}` would change nothing. The only
+ * enabled tool is team_task_update, so a member that still owns unfinished work can submit the
+ * structured handoff before producing final text.
  */
 function expectRetryPromptToolsDenyGeneral(tools: SessionPrompt.PromptInput["tools"]) {
   expect(tools).not.toEqual({})
+  expect(tools?.["team_task_update"]).toBe(true)
   for (const tool of [
     "bash",
     "write",
@@ -179,7 +188,6 @@ function expectRetryPromptToolsDenyGeneral(tools: SessionPrompt.PromptInput["too
     "team_send_message",
     "team_broadcast",
     "team_task_create",
-    "team_task_update",
     "team_task_claim",
     "team_task_list",
     "team_report",
@@ -288,6 +296,19 @@ function isTaskNotification(message: SessionV1.WithParts) {
 /** Matches a generation-scoped member lifecycle notification like `lifecycle:member:<id>:<kind>:<gen>`. */
 function memberMessage(kind: string) {
   return (message: { id: string }) => message.id.includes(`:${kind}:`)
+}
+
+/** Minimal tool context used to canonicalize reservation paths inside this test file. */
+function toolContext(sessionID: SessionID) {
+  return {
+    sessionID,
+    messageID: MessageID.ascending(),
+    agent: "build",
+    abort: AbortSignal.any([]),
+    messages: [],
+    metadata: () => Effect.void,
+    ask: () => Effect.void,
+  }
 }
 
 const seedTeam = Effect.fn("LifecycleReconcilerTest.seedTeam")(function* () {
@@ -1048,7 +1069,7 @@ describe("session.lifecycle-reconciler", () => {
             write: false,
             edit: false,
             apply_patch: false,
-            team_task_update: false,
+            team_task_update: true,
           })
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
           expect(settled?.status).toBe("completed")
@@ -1104,6 +1125,85 @@ describe("session.lifecycle-reconciler", () => {
           const messages = yield* team.getMessages(info.id)
           expect(messages.some((message) => message.id === `lifecycle:member:${dependent.id}:cancelled:0`)).toBe(true)
           expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:failed:2`)).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a member that owns an unfinished task retries with a completion-only prompt and fails as missing_task_handoff on the second valid result", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const futil = yield* FSUtil.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          // Create and claim an owned task bound to the member session.
+          const owned = path.join(directory, "handoff.txt")
+          yield* Effect.promise(() => fs.writeFile(owned, "x"))
+          const ownedPath = yield* canonicalize(sessions, toolContext(memberSession.id), owned).pipe(
+            Effect.provideService(FSUtil.Service, futil),
+          )
+          const task = yield* team.createTask({ teamID: info.id, description: "Owned work", owned: [ownedPath] })
+          yield* team.claimTask(info.id, task.id, memberSession.id)
+
+          const prompts: SessionPrompt.PromptInput[] = []
+          const spy = yield* spyOps({
+            onPrompt: (promptInput) => Effect.sync(() => prompts.push(promptInput)),
+            result: (sessionID, parentID) => assistant(sessionID, parentID, "valid work result"),
+          })
+
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+
+          expect(outcome).toBe("valid work result")
+          expect(prompts).toHaveLength(2)
+          // The retry prompt is completion-only with team_task_update as the only enabled tool.
+          expectRetryPromptToolsDenyGeneral(prompts[1]?.tools)
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("failed")
+          expect(settled?.failure_code).toBe("missing_task_handoff")
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+          // The owned in-progress task was cancelled and its reservations released.
+          const taskNow = yield* team.getTask(info.id, task.id)
+          expect(Option.isSome(taskNow)).toBe(true)
+          if (Option.isSome(taskNow)) expect(taskNow.value.status).toBe("cancelled")
+          const { db } = yield* Database.Service
+          const rows = yield* db
+            .select()
+            .from(TeamFileOwnershipTable)
+            .where(eq(TeamFileOwnershipTable.task_id, task.id))
+            .all()
+            .pipe(Effect.orDie)
+          expect(rows).toHaveLength(1)
+          expect(rows[0]?.owner_session_id).toBe(memberSession.id)
+          expect(rows[0]?.time_released).not.toBeNull()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a member with no owned tasks settles a valid result without retry", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          const prompts: SessionPrompt.PromptInput[] = []
+          const spy = yield* spyOps({
+            onPrompt: (promptInput) => Effect.sync(() => prompts.push(promptInput)),
+            result: (sessionID, parentID) => assistant(sessionID, parentID, "plain result"),
+          })
+
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+
+          expect(outcome).toBe("plain result")
+          expect(prompts).toHaveLength(1)
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("completed")
+          expect(settled?.result).toBe("plain result")
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
