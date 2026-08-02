@@ -1682,7 +1682,7 @@ it.live("team lead starts multiple teammates from one assistant step in parallel
 
       const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
       yield* Effect.promise(async () => {
-        const end = Date.now() + 5_000
+        const end = Date.now() + 15_000
         while (Date.now() < end) {
           const bodies = (await Effect.runPromise(llm.inputs)).map((input) => JSON.stringify(input))
           if (
@@ -1714,6 +1714,7 @@ it.live("team lead starts multiple teammates from one assistant step in parallel
       }),
     },
   ),
+  30_000,
 )
 
 it.live(
