@@ -1294,3 +1294,76 @@ describe("team", () => {
     }),
   )
 })
+
+describe("team revision", () => {
+  it.live("team creation starts at revision 0 and each material mutation bumps exactly once", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const { db } = yield* Database.Service
+        const revisionOf = (teamID: string) =>
+          db
+            .select({ revision: TeamTable.revision })
+            .from(TeamTable)
+            .where(eq(TeamTable.id, teamID))
+            .get()
+            .pipe(Effect.orDie)
+
+        const info = yield* team.create({ name: "revision-team", goal: "Track revisions", leadSessionID: "ses_rev_lead" })
+        expect((yield* revisionOf(info.id))?.revision).toBe(0)
+
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_rev_member",
+          name: "builder",
+          agentType: "general",
+          rolePrompt: "Build",
+        })
+        expect((yield* revisionOf(info.id))?.revision).toBe(1)
+
+        yield* team.updateMemberStatus(member.id, "active")
+        expect((yield* revisionOf(info.id))?.revision).toBe(2)
+
+        const task = yield* team.createTask({ teamID: info.id, description: "Rev task" })
+        expect((yield* revisionOf(info.id))?.revision).toBe(3)
+
+        yield* team.claimTask(info.id, task.id, member.session_id)
+        expect((yield* revisionOf(info.id))?.revision).toBe(4)
+
+        yield* team.updateTask(info.id, task.id, { status: "completed" })
+        expect((yield* revisionOf(info.id))?.revision).toBe(5)
+      }),
+    ),
+  )
+
+  it.live("a terminal status change and its notification message each bump exactly once", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const { db } = yield* Database.Service
+        const revisionOf = (teamID: string) =>
+          db
+            .select({ revision: TeamTable.revision })
+            .from(TeamTable)
+            .where(eq(TeamTable.id, teamID))
+            .get()
+            .pipe(Effect.orDie)
+
+        const info = yield* team.create({ name: "revision-fail", goal: "Track", leadSessionID: "ses_rev_fail_lead" })
+        const failed = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_rev_failed",
+          name: "failed",
+          agentType: "general",
+          rolePrompt: "Fail",
+        })
+        const before = (yield* revisionOf(info.id))?.revision ?? -1
+
+        // A failed member is terminal; the status change bumps once and the auto-notification
+        // message to the lead bumps once in a separate logical transaction.
+        yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+        expect((yield* revisionOf(info.id))?.revision).toBe(before + 2)
+      }),
+    ),
+  )
+})

@@ -13,7 +13,7 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { Team } from "@/team/team"
-import { TeamMemberTable } from "@/team/team.sql"
+import { TeamMemberTable, TeamTable } from "@/team/team.sql"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
@@ -258,6 +258,18 @@ const setMemberRunGeneration = Effect.fn("LifecycleReconcilerTest.setMemberRunGe
     .where(eq(TeamMemberTable.id, memberID))
     .run()
     .pipe(Effect.orDie)
+})
+
+/** Reads the durable team revision, the anchor for the final-report checkpoint. */
+const teamRevision = Effect.fn("LifecycleReconcilerTest.teamRevision")(function* (teamID: string) {
+  const { db } = yield* Database.Service
+  const row = yield* db
+    .select({ revision: TeamTable.revision })
+    .from(TeamTable)
+    .where(eq(TeamTable.id, teamID))
+    .get()
+    .pipe(Effect.orDie)
+  return row?.revision ?? 0
 })
 
 /** Reads the persisted member lifecycle metadata of a session. */
@@ -1561,6 +1573,101 @@ describe("session.lifecycle-reconciler", () => {
           expect(settled?.status).toBe("idle")
           expect(settled?.run_generation).toBe(1)
           expect((yield* memberState(daemonSession.id))?.phase).toBe("terminal")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a settled idle daemon keeps the team revision constant across reconcile polls", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "daemon-team", goal: "Watch", leadSessionID: lead.id })
+          const daemonSession = yield* sessions.create({ parentID: lead.id, title: "Daemon" })
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: daemonSession.id,
+            name: "sentinel",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Watch forever",
+            lifecycle: "daemon",
+          })
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return { info: { ...base.info, finish: "stop" }, parts: [] }
+            },
+          })
+
+          // Member creation already bumped once, so capture the baseline before the admission.
+          const baseline = yield* teamRevision(info.id)
+          yield* lifecycle.startMember({ memberID: daemon.id, ops: spy.ops })
+
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === daemon.id)
+          expect(settled?.status).toBe("idle")
+          // The admission (0 -> 1) and the first active -> idle settlement each bump exactly once.
+          const revision = yield* teamRevision(info.id)
+          expect(revision).toBe(baseline + 2)
+          expect((yield* team.getMessages(info.id)).filter((message) => memberMessage("idle")(message))).toHaveLength(1)
+
+          // Reconcile polls keep re-settling the idle daemon; each poll must be a durable no-op
+          // that neither rewrites the row nor bumps the revision.
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+
+          expect(yield* teamRevision(info.id)).toBe(revision)
+          expect((yield* team.getMessages(info.id)).filter((message) => memberMessage("idle")(message))).toHaveLength(1)
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === daemon.id)?.status).toBe("idle")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("re-activating an already active member does not bump the team revision", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          // The run returns a nonterminal turn, so the first admission leaves the member active
+          // with running metadata instead of settling it.
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return { info: { ...base.info, finish: "tool-calls" }, parts: [] }
+            },
+          })
+          // seedTeam's member creation already bumped once; the admission bumps exactly once more.
+          const baseline = yield* teamRevision(info.id)
+
+          expect(yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })).toBe("Teammate did not finish.")
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)?.status).toBe(
+            "active",
+          )
+          expect((yield* memberState(memberSession.id))?.state).toBe("running")
+          // The one admission (status -> active, generation 0 -> 1, started message) bumped once.
+          const revision = yield* teamRevision(info.id)
+          expect(revision).toBe(baseline + 1)
+
+          // The second start resumes the already-active member: no status change, no new started
+          // message, so it must neither rewrite the row nor bump the revision.
+          expect(yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })).toBe("Teammate did not finish.")
+          expect(yield* teamRevision(info.id)).toBe(revision)
+          expect(yield* Ref.get(spy.prompts)).toBe(1)
+          expect(yield* Ref.get(spy.runs)).toBe(1)
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)?.status).toBe(
+            "active",
+          )
+          expect((yield* memberState(memberSession.id))?.state).toBe("running")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

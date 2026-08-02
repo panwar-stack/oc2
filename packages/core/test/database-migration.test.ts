@@ -180,6 +180,40 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("adds team revision with a zero default and a nullable final report revision", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.get(
+            sql`SELECT name, dflt_value, "notnull" FROM pragma_table_info('team') WHERE name = 'revision'`,
+          ),
+        ).toEqual({ name: "revision", dflt_value: "0", notnull: 1 })
+        expect(
+          yield* db.get(
+            sql`SELECT name, dflt_value, "notnull" FROM pragma_table_info('team') WHERE name = 'final_report_revision'`,
+          ),
+        ).toEqual({ name: "final_report_revision", dflt_value: null, notnull: 0 })
+
+        yield* db.run(sql`
+          INSERT INTO team (id, name, goal, lead_session_id, status, time_created, time_updated)
+          VALUES ('team_revision', 't', 'g', 'lead', 'active', 1, 1)
+        `)
+        expect(yield* db.get(sql`SELECT revision, final_report_revision FROM team WHERE id = 'team_revision'`)).toEqual({
+          revision: 0,
+          final_report_revision: null,
+        })
+        yield* db.run(sql`UPDATE team SET revision = 3, final_report_revision = 3 WHERE id = 'team_revision'`)
+        expect(yield* db.get(sql`SELECT revision, final_report_revision FROM team WHERE id = 'team_revision'`)).toEqual({
+          revision: 3,
+          final_report_revision: 3,
+        })
+      }),
+    )
+  })
+
   test("adds team member run_generation with a zero default and accepts explicit values", async () => {
     await run(
       Effect.gen(function* () {

@@ -8,7 +8,7 @@ import { Database } from "@oc2-ai/core/database/database"
 import { TeamTable, TeamMessageRecipientTable } from "@/team/team.sql"
 import { SessionTable } from "@oc2-ai/core/session/sql"
 import { SessionID } from "@/session/schema"
-import { TeamEval, type TeamEvalFindingSeverity, type TeamUsageMetrics } from "@/team/eval"
+import { TeamEval, type TeamEvalFindingSeverity, type TeamEvalReport, type TeamUsageMetrics } from "@/team/eval"
 
 const Parameters = Schema.Struct({
   team_id: Schema.optional(Schema.String).annotate({
@@ -24,6 +24,10 @@ const Parameters = Schema.Struct({
         "Optional lead session IDs to compare against this team run (subagent-only or direct baseline sessions).",
     }),
   ),
+  final: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Record a final-report checkpoint for this team. Lead-only; requires every finite member to be terminal, no daemon to be starting or running, and (for protocol-1 teams) every task finished. The checkpoint is bound to the team revision at build time.",
+  }),
 })
 
 function pct(value: number, total: number) {
@@ -117,6 +121,25 @@ export const TeamReportTool = Tool.define<
             }
           }
 
+          // Final-report checkpoint state. `revision` is the team revision captured at build time;
+          // the CAS in recordFinalReport only succeeds when the team is still active and the
+          // revision has not moved, so a mutation during construction makes the report stale.
+          let finalState: { revision: number; stale: boolean } | undefined
+
+          if (params.final === true) {
+            // Lead-only: the lead session has no member row in its team context.
+            const isLead =
+              Option.isSome(context) && context.value.team.id === teams.id && context.value.member === undefined
+            if (!isLead) {
+              return {
+                title: "Team Report",
+                metadata: {},
+                output:
+                  "Final reports are lead-only. Run team_report({ final: true }) from the lead session of this team.",
+              }
+            }
+          }
+
           yield* ctx.ask({
             permission: "team_report",
             patterns: [teams.id],
@@ -126,6 +149,75 @@ export const TeamReportTool = Tool.define<
 
           const members = yield* team.getMembers(teams.id)
           const tasks = yield* team.getTasks(teams.id)
+
+          if (params.final === true) {
+            // Gate 1: every finite (task-lifecycle) member must be terminal. A terminal failed
+            // member is allowed and shows up as a deterministic finding in the report.
+            const nonterminalFinite = members.filter(
+              (member) =>
+                member.lifecycle !== "daemon" &&
+                (member.status === "starting" || member.status === "blocked" || member.status === "active"),
+            )
+            if (nonterminalFinite.length > 0) {
+              return {
+                title: "Team Report",
+                metadata: {},
+                output: [
+                  "Final report rejected: finite teammate(s) are still non-terminal.",
+                  ...nonterminalFinite.map(
+                    (member) => `- ${member.name} (${member.agent_type}, ${member.status})`,
+                  ),
+                ].join("\n"),
+              }
+            }
+            // Daemon policy: idle (and terminal) daemons are allowed; a daemon that is still
+            // starting or running blocks the final checkpoint.
+            const activeDaemons = members.filter(
+              (member) =>
+                member.lifecycle === "daemon" &&
+                (member.status === "starting" ||
+                  member.status === "active" ||
+                  member.daemon_state === "initializing" ||
+                  member.daemon_state === "running"),
+            )
+            if (activeDaemons.length > 0) {
+              return {
+                title: "Team Report",
+                metadata: {},
+                output: [
+                  "Final report rejected: daemon teammate(s) are still starting or running.",
+                  ...activeDaemons.map(
+                    (member) => `- ${member.name} (${member.daemon_state ?? member.status})`,
+                  ),
+                ].join("\n"),
+              }
+            }
+            // Protocol-v1 task gate: pending or in-progress tasks block the final report. Protocol-0
+            // teams do not use this shutdown gate (all teams are protocol 0 today, so this is
+            // unreachable until PR 8 switches new teams to protocol 1).
+            if (teams.protocol_version === 1) {
+              const unfinishedTasks = tasks.filter(
+                (task) => task.status === "pending" || task.status === "in_progress",
+              )
+              if (unfinishedTasks.length > 0) {
+                return {
+                  title: "Team Report",
+                  metadata: {},
+                  output: `Final report rejected: ${unfinishedTasks.length} task(s) are pending or in_progress.`,
+                }
+              }
+            }
+          }
+
+          // Build the report and capture the team revision before any further construction. The
+          // returned revision is the CAS anchor for recordFinalReport below.
+          let finalEvalReport: TeamEvalReport | undefined
+          if (params.final === true) {
+            const built = yield* team.buildFinalReport(teams.id)
+            finalState = { revision: built.revision, stale: false }
+            finalEvalReport = built.report
+          }
+
           const messages = yield* team.getMessages(teams.id)
           const recipients = yield* db
             .select()
@@ -188,8 +280,11 @@ export const TeamReportTool = Tool.define<
           const activeMembers = members.filter((member) => member.status === "active")
           const startedMembers = members.filter((member) => member.status === "starting")
           const completedRuntime = completedMembers.map((member) => member.time_updated - member.time_created)
+          // Interim reports keep their legacy report_generated event when no member is active. Final
+          // reports record their checkpoint event in recordFinalReport instead (with the revision),
+          // so the legacy interim event must not fire for them.
           const finalReport = activeMembers.length === 0 && startedMembers.length === 0 && blockedMembers.length === 0
-          if (finalReport) {
+          if (params.final !== true && finalReport) {
             yield* team.createUsageEvent({
               teamID: teams.id,
               sessionID: ctx.sessionID,
@@ -199,7 +294,9 @@ export const TeamReportTool = Tool.define<
               metadata: { generated_at: Date.now() },
             })
           }
-          const evalReport = yield* TeamEval.build(teams.id).pipe(Effect.provideService(Database.Service, database))
+          const evalReport =
+            finalEvalReport ??
+            (yield* TeamEval.build(teams.id).pipe(Effect.provideService(Database.Service, database)))
           const rollupReports = yield* Effect.forEach(
             yield* db.select().from(TeamTable).all().pipe(Effect.orDie),
             (row) => TeamEval.build(row.id).pipe(Effect.provideService(Database.Service, database)),
@@ -311,6 +408,18 @@ export const TeamReportTool = Tool.define<
           ]
           const usage = evalReport.summary.usage
 
+          // Record the final-report checkpoint only after the full report is constructed. The CAS
+          // compares the team status and the revision captured at build time; if any material
+          // mutation happened during construction the record fails and the report is stale.
+          if (finalState) {
+            const recorded = yield* team.recordFinalReport({
+              teamID: teams.id,
+              revision: finalState.revision,
+              sessionID: ctx.sessionID,
+            })
+            finalState.stale = !recorded
+          }
+
           const output = [
             "# Team Effectiveness Report",
             "",
@@ -320,6 +429,15 @@ export const TeamReportTool = Tool.define<
             `Lead session: ${teams.lead_session_id}`,
             `Status: ${teams.status}`,
             `Team window: ${durationText(teamWindowMs)}`,
+            ...(finalState
+              ? [
+                  "",
+                  "## Final report checkpoint",
+                  `- revision: ${finalState.revision}`,
+                  `- final: yes`,
+                  `- stale: ${finalState.stale ? "yes" : "no"}`,
+                ]
+              : []),
             "",
             "## Team throughput",
             `- members: ${members.length}`,
@@ -429,6 +547,13 @@ export const TeamReportTool = Tool.define<
               daemon: daemonMetrics,
               usage_rollup: rollup,
               eval: evalReport,
+              ...(finalState
+                ? {
+                    revision: finalState.revision,
+                    final: true,
+                    stale: finalState.stale,
+                  }
+                : {}),
             },
             output,
           }

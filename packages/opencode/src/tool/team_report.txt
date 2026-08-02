@@ -10,3 +10,11 @@ Use this after team orchestration to see:
 Run a final team report for non-trivial team sessions after coordination, implementation, review, and verification are complete.
 
 Pass compare_session_ids with lead session IDs from earlier direct or subagent-only runs to benchmark outcomes.
+
+Pass final: true to record a final-report checkpoint for the team. A final report:
+- is lead-only; a teammate session is rejected
+- requires every finite (task-lifecycle) teammate to be terminal; a failed teammate is allowed and appears as a deterministic finding
+- requires no daemon to be starting or running; idle daemons are allowed
+- for protocol-1 teams requires every shared task to be finished (protocol-0 teams skip this gate)
+- is bound to the team revision at build time and records the checkpoint only if the team is still active and unchanged while the report was constructed
+- returns stale: true and creates no checkpoint when team state changes during construction

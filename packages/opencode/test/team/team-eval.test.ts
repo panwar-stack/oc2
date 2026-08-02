@@ -9,9 +9,25 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
+import { Session } from "@/session/session"
+import { SessionControl } from "@oc2-ai/core/session/control"
+import type { TaskPromptOps } from "@/tool/task"
 
 const it = testEffect(
   Layer.mergeAll(Team.defaultLayer, Bus.layer, Database.defaultLayer, CrossSpawnSpawner.defaultLayer),
+)
+
+const settlementIt = testEffect(
+  Layer.mergeAll(
+    Team.defaultLayer,
+    Bus.layer,
+    Database.defaultLayer,
+    CrossSpawnSpawner.defaultLayer,
+    LifecycleReconciler.defaultLayer,
+    Session.defaultLayer,
+    SessionControl.defaultLayer,
+  ),
 )
 
 describe("team eval", () => {
@@ -902,6 +918,58 @@ describe("team eval", () => {
         // failed is terminal: no premature shutdown and no cancelled-member finding.
         expect(categories(report)).not.toContain("integration.premature_shutdown")
         expect(categories(report)).not.toContain("execution.cancelled_member")
+      }),
+    ),
+  )
+})
+
+describe("team revision settlement", () => {
+  settlementIt.live("terminal member settlement bumps the team revision exactly once", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const lifecycle = yield* LifecycleReconciler.Service
+        const lead = yield* sessions.create({ title: "Lead" })
+        const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+        const info = yield* team.create({
+          name: "revision-settle",
+          goal: "Settle once",
+          leadSessionID: lead.id,
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: worker.id,
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Do the work",
+        })
+
+        const { db } = yield* Database.Database.Service
+        const revisionOf = (teamID: string) =>
+          db
+            .select({ revision: TeamTable.revision })
+            .from(TeamTable)
+            .where(eq(TeamTable.id, teamID))
+            .get()
+            .pipe(Effect.orDie)
+        const before = (yield* revisionOf(info.id))?.revision ?? -1
+
+        const ops: TaskPromptOps = {
+          cancel: () => Effect.void,
+          resolvePromptParts: () => Effect.succeed([]),
+          prompt: () => Effect.succeed(undefined as never),
+          wake: () => Effect.void,
+          run: () => Effect.succeed(undefined as never),
+        }
+        // settleMember's terminal transaction (member -> cancelled plus the lead message) bumps once.
+        const cancelled = yield* lifecycle.cancelMember({ memberID: member.id, ops })
+        expect(cancelled).toBe(true)
+
+        const after = (yield* revisionOf(info.id))?.revision ?? -1
+        expect(after).toBe(before + 1)
+        const members = yield* team.getMembers(info.id)
+        expect(members[0]?.status).toBe("cancelled")
       }),
     ),
   )

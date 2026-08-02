@@ -13,6 +13,10 @@ export const TeamTable = sqliteTable(
       .notNull()
       .default("active"),
     protocol_version: integer().notNull().default(0),
+    /** Revision counter for material team mutations; incremented once per logical transaction. */
+    revision: integer().notNull().default(0),
+    /** Revision the current final report checkpoint covers, when one exists. */
+    final_report_revision: integer(),
     ...Timestamps,
   },
   (table) => ({

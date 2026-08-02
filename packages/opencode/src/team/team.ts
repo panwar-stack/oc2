@@ -18,6 +18,8 @@ import {
   TeamMessageRecipientTable,
   TeamUsageEventTable,
 } from "./team.sql"
+import { bumpTeamRevision } from "./revision"
+import { TeamEval, type TeamEvalReport } from "./eval"
 import { PendingMailbox } from "./pending-mailbox"
 import {
   OwnedPathConflict,
@@ -199,6 +201,25 @@ export interface Interface {
     metadata?: Record<string, unknown>
   }) => Effect.Effect<UsageEvent>
   getUsageEvents: (teamID: string) => Effect.Effect<UsageEvent[]>
+  /**
+   * Builds the TeamEval report and captures the team revision at construction time. The returned
+   * revision is the CAS anchor for `recordFinalReport`: any material mutation between the build and
+   * the record makes the record fail (stale), so only a report that observed a stable state becomes
+   * the final checkpoint.
+   */
+  buildFinalReport: (teamID: string) => Effect.Effect<{ report: TeamEvalReport; revision: number }, TeamEval.NotFoundError>
+  /**
+   * Records the final-report checkpoint. In one immediate transaction it compares the team status
+   * (active) and the revision (unchanged since the build); on success it sets
+   * `final_report_revision = revision` and inserts the `report_generated` event with metadata
+   * `{ revision, final: true, stale: false }`. Returns true when the checkpoint was recorded and
+   * false when the CAS failed (stale report). Never bumps the revision.
+   */
+  recordFinalReport: (input: {
+    teamID: string
+    revision: number
+    sessionID?: string
+  }) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Team") {}
@@ -294,6 +315,8 @@ export const layer = Layer.effect(
         lead_session_id: input.leadSessionID,
         status: "active",
         protocol_version: 0,
+        revision: 0,
+        final_report_revision: null,
         time_created: now,
         time_updated: now,
       } satisfies Info
@@ -404,28 +427,36 @@ export const layer = Layer.effect(
       const id = crypto.randomUUID()
       const now = Date.now()
       yield* db
-        .insert(TeamMemberTable)
-        .values({
-          id,
-          team_id: input.teamID,
-          session_id: input.sessionID,
-          name: input.name,
-          agent_type: input.agentType,
-          model: input.model ?? null,
-          role_prompt: input.rolePrompt,
-          status: "starting",
-          lifecycle: input.lifecycle ?? "task",
-          daemon_state: input.daemonState ?? null,
-          daemon_last_active: input.daemonLastActive ?? null,
-          daemon_error: input.daemonError ?? null,
-          plan_mode: input.planMode ?? false,
-          work_mode: input.workMode ?? "implement",
-          dependency_ids: input.dependencyIDs ?? null,
-          result: null,
-          time_created: now,
-          time_updated: now,
-        })
-        .run()
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .insert(TeamMemberTable)
+                .values({
+                  id,
+                  team_id: input.teamID,
+                  session_id: input.sessionID,
+                  name: input.name,
+                  agent_type: input.agentType,
+                  model: input.model ?? null,
+                  role_prompt: input.rolePrompt,
+                  status: "starting",
+                  lifecycle: input.lifecycle ?? "task",
+                  daemon_state: input.daemonState ?? null,
+                  daemon_last_active: input.daemonLastActive ?? null,
+                  daemon_error: input.daemonError ?? null,
+                  plan_mode: input.planMode ?? false,
+                  work_mode: input.workMode ?? "implement",
+                  dependency_ids: input.dependencyIDs ?? null,
+                  result: null,
+                  time_created: now,
+                  time_updated: now,
+                })
+                .run()
+              yield* bumpTeamRevision(tx, input.teamID)
+            }),
+          { behavior: "immediate" },
+        )
         .pipe(Effect.orDie)
       return {
         id,
@@ -464,7 +495,27 @@ export const layer = Layer.effect(
       if (update?.daemonState !== undefined) setData.daemon_state = update.daemonState
       if (update?.daemonLastActive !== undefined) setData.daemon_last_active = update.daemonLastActive
       if (update?.daemonError !== undefined) setData.daemon_error = update.daemonError
-      yield* db.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run().pipe(Effect.orDie)
+      yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const member = yield* tx
+                .select()
+                .from(TeamMemberTable)
+                .where(eq(TeamMemberTable.id, memberID))
+                .get()
+              if (!member) return false
+              yield* tx
+                .update(TeamMemberTable)
+                .set(setData)
+                .where(eq(TeamMemberTable.id, memberID))
+                .run()
+              yield* bumpTeamRevision(tx, member.team_id)
+              return true
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
       const row = yield* db
         .select()
         .from(TeamMemberTable)
@@ -526,12 +577,24 @@ export const layer = Layer.effect(
 
     const approveMemberPlan = Effect.fn("Team.approveMemberPlan")(function* (memberID: string) {
       const now = Date.now()
-      yield* db
-        .update(TeamMemberTable)
-        .set({ status: "active", plan_mode: false, work_mode: "implement", time_updated: now })
-        .where(eq(TeamMemberTable.id, memberID))
-        .run()
+      const teamID = yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const member = yield* tx.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get()
+              if (!member) return Option.none<string>()
+              yield* tx
+                .update(TeamMemberTable)
+                .set({ status: "active", plan_mode: false, work_mode: "implement", time_updated: now })
+                .where(eq(TeamMemberTable.id, memberID))
+                .run()
+              yield* bumpTeamRevision(tx, member.team_id)
+              return Option.some(member.team_id)
+            }),
+          { behavior: "immediate" },
+        )
         .pipe(Effect.orDie)
+      if (Option.isNone(teamID)) return Option.none()
       const row = yield* db
         .select()
         .from(TeamMemberTable)
@@ -667,19 +730,27 @@ export const layer = Layer.effect(
 
       if (owned.length === 0) {
         yield* db
-          .insert(TeamTaskTable)
-          .values({
-            id,
-            team_id: input.teamID,
-            description: input.description,
-            status: "pending",
-            assignee: assignee ?? null,
-            dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : null,
-            metadata: input.metadata ?? null,
-            time_created: now,
-            time_updated: now,
-          })
-          .run()
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                yield* tx
+                  .insert(TeamTaskTable)
+                  .values({
+                    id,
+                    team_id: input.teamID,
+                    description: input.description,
+                    status: "pending",
+                    assignee: assignee ?? null,
+                    dependency_ids: dependencyIDs.length > 0 ? dependencyIDs : null,
+                    metadata: input.metadata ?? null,
+                    time_created: now,
+                    time_updated: now,
+                  })
+                  .run()
+                yield* bumpTeamRevision(tx, input.teamID)
+              }),
+            { behavior: "immediate" },
+          )
           .pipe(Effect.orDie)
         return {
           id,
@@ -726,6 +797,7 @@ export const layer = Layer.effect(
                 .insert(TeamFileOwnershipTable)
                 .values(buildReservationRows({ id, teamID: input.teamID, taskID: id, owned, now }))
                 .run()
+              yield* bumpTeamRevision(tx, input.teamID)
               return {
                 id,
                 team_id: input.teamID,
@@ -848,6 +920,7 @@ export const layer = Layer.effect(
                 .all()
               const isOwned = reservations.length > 0
               const setData: Partial<TeamTaskInsert> = { time_updated: now }
+              let material = false
 
               if (isOwned) {
                 // Owned-task invariants live here, not only in the tool wrapper.
@@ -914,6 +987,7 @@ export const layer = Layer.effect(
                     // Store the v1 terminal handoff with the completion in the same transaction.
                     const nextMetadata = { ...(current.metadata ?? {}), handoff: update.handoff }
                     setData.metadata = nextMetadata
+                    material = true
                   } else if (target === "cancelled") {
                     if (current.status === "completed" || current.status === "cancelled") {
                       return yield* Effect.fail(new Error(`Cannot cancel a ${current.status} owned task.`))
@@ -922,6 +996,7 @@ export const layer = Layer.effect(
                       return yield* Effect.fail(new Error("Only the task owner or the lead can cancel this task."))
                     }
                     setData.status = "cancelled"
+                    material = true
                   } else if (target === "in_progress") {
                     return yield* Effect.fail(
                       new Error("Only team_task_claim may start an owned task."),
@@ -951,14 +1026,22 @@ export const layer = Layer.effect(
                     .run()
                 }
               } else {
-                if (update.status !== undefined) setData.status = update.status
-                if (update.assignee !== undefined) setData.assignee = update.assignee
+                if (update.status !== undefined) {
+                  setData.status = update.status
+                  material = true
+                }
+                if (update.assignee !== undefined) {
+                  setData.assignee = update.assignee
+                  material = true
+                }
                 yield* tx
                   .update(TeamTaskTable)
                   .set(setData)
                   .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
                   .run()
               }
+
+              if (material) yield* bumpTeamRevision(tx, teamID)
 
               const row = yield* tx
                 .select()
@@ -1067,6 +1150,7 @@ export const layer = Layer.effect(
                 .set({ status: "in_progress", assignee, time_updated: now })
                 .where(and(eq(TeamTaskTable.team_id, teamID), eq(TeamTaskTable.id, resolved.value)))
                 .run()
+              yield* bumpTeamRevision(tx, teamID)
               const row = yield* tx
                 .select()
                 .from(TeamTaskTable)
@@ -1209,6 +1293,7 @@ export const layer = Layer.effect(
                   )
                   .run()
               }
+              yield* bumpTeamRevision(tx, input.teamID)
             }),
           { behavior: "immediate" },
         )
@@ -1475,6 +1560,51 @@ export const layer = Layer.effect(
       }))
     })
 
+    const buildFinalReport = Effect.fn("Team.buildFinalReport")(function* (teamID: string) {
+      const row = yield* db.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get().pipe(Effect.orDie)
+      if (!row) return yield* new TeamEval.NotFoundError({ teamID })
+      const report = yield* TeamEval.build(teamID).pipe(Effect.provideService(Database.Service, { db }))
+      return { report, revision: row.revision }
+    })
+
+    const recordFinalReport = Effect.fn("Team.recordFinalReport")(function* (input: {
+      teamID: string
+      revision: number
+      sessionID?: string
+    }) {
+      const now = Date.now()
+      const eventID = crypto.randomUUID()
+      const recorded = yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, input.teamID)).get()
+              if (!row || row.status !== "active" || row.revision !== input.revision) return false
+              yield* tx
+                .update(TeamTable)
+                .set({ final_report_revision: input.revision, time_updated: now })
+                .where(eq(TeamTable.id, input.teamID))
+                .run()
+              yield* tx
+                .insert(TeamUsageEventTable)
+                .values({
+                  id: eventID,
+                  team_id: input.teamID,
+                  session_id: input.sessionID ?? null,
+                  member_id: null,
+                  type: "report_generated",
+                  metadata: { revision: input.revision, final: true, stale: false, generated_at: now },
+                  time_created: now,
+                })
+                .run()
+              return true
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+      return recorded
+    })
+
     return Service.of({
       create,
       getActive,
@@ -1501,6 +1631,8 @@ export const layer = Layer.effect(
       markMessageDelivered,
       createUsageEvent,
       getUsageEvents,
+      buildFinalReport,
+      recordFinalReport,
     })
   }).pipe(Effect.withSpan("Team.layer")),
 )

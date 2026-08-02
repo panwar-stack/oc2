@@ -5,6 +5,8 @@ import { Config } from "@/config/config"
 import { MessageID, type SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Database } from "@/storage/db"
+import { TeamTable } from "@/team/team.sql"
+import { eq } from "drizzle-orm"
 import type { TeamEvalReport } from "@/team/eval"
 import { Team } from "@/team/team"
 import { TeamReportTool } from "@/tool/team_report"
@@ -282,6 +284,311 @@ describe("tool.team_report", () => {
             final_report_percent: 50,
             shallow_usage_percent: 50,
           })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+})
+
+describe("tool.team_report final checkpoint", () => {
+  const teamRow = (teamID: string) =>
+    Database.Database.Service.use((database) =>
+      database.db
+        .select()
+        .from(TeamTable)
+        .where(eq(TeamTable.id, teamID))
+        .get()
+        .pipe(Effect.orDie),
+    )
+
+  it.live("final:true is lead-only and rejects member sessions", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+          const info = yield* team.create({ name: "final-lead-only", goal: "Lead gate", leadSessionID: lead.id })
+          const member = yield* team.addMember({
+            teamID: info.id,
+            sessionID: worker.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          yield* team.updateMemberStatus(member.id, "completed", "done")
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id, final: true }, context(worker.id))
+
+          expect(result.title).toBe("Team Report")
+          expect(result.output).toContain("lead-only")
+          expect(yield* team.getUsageEvents(info.id)).toEqual([])
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("final:true rejects while a finite member is active", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "final-active", goal: "Active gate", leadSessionID: lead.id })
+          const worker = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_active_worker",
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          yield* team.updateMemberStatus(worker.id, "active")
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id, final: true }, context(lead.id))
+
+          expect(result.title).toBe("Team Report")
+          expect(result.output).toContain("non-terminal")
+          expect(yield* team.getUsageEvents(info.id)).toEqual([])
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("final:true rejects while a daemon is starting or running", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "final-daemon", goal: "Daemon gate", leadSessionID: lead.id })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_daemon",
+            name: "sentinel",
+            agentType: "general",
+            rolePrompt: "Monitor",
+            lifecycle: "daemon",
+            daemonState: "running",
+          })
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id, final: true }, context(lead.id))
+
+          expect(result.title).toBe("Team Report")
+          expect(result.output).toContain("daemon")
+          expect(yield* team.getUsageEvents(info.id)).toEqual([])
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("final:true allows idle daemons and failed members", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "final-allowed", goal: "Allowed gate", leadSessionID: lead.id })
+          const failed = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_failed",
+            name: "failed",
+            agentType: "general",
+            rolePrompt: "Fail",
+          })
+          yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_idle_daemon",
+            name: "sentinel",
+            agentType: "general",
+            rolePrompt: "Monitor",
+            lifecycle: "daemon",
+            daemonState: "idle",
+          })
+          yield* team.updateMemberStatus(daemon.id, "idle", { daemonState: "idle" })
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id, final: true }, context(lead.id))
+
+          expect(result.metadata.final).toBe(true)
+          expect(result.metadata.stale).toBe(false)
+          expect(result.output).toContain("- final: yes")
+          expect(result.output).toContain("- stale: no")
+          expect(result.output).toContain("error execution.failed_member")
+          const row = yield* teamRow(info.id)
+          expect(row?.final_report_revision).toBe(row?.revision)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("protocol-0 teams skip the task gate and allow pending tasks", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "final-protocol0", goal: "Task gate skip", leadSessionID: lead.id })
+          const worker = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_protocol0_worker",
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          yield* team.updateMemberStatus(worker.id, "completed", "done")
+          yield* team.createTask({ teamID: info.id, description: "Unfinished on purpose" })
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id, final: true }, context(lead.id))
+
+          expect(result.metadata.final).toBe(true)
+          expect(result.metadata.stale).toBe(false)
+          const row = yield* teamRow(info.id)
+          expect(row?.final_report_revision).toBe(row?.revision)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("final:true records the checkpoint event with revision, final, and stale flags", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "final-success", goal: "Success path", leadSessionID: lead.id })
+          const worker = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_success_worker",
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          yield* team.updateMemberStatus(worker.id, "completed", "done")
+          const rowBefore = yield* teamRow(info.id)
+          const revisionBefore = rowBefore?.revision ?? -1
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id, final: true }, context(lead.id))
+
+          expect(result.metadata.final).toBe(true)
+          expect(result.metadata.stale).toBe(false)
+          expect(result.metadata.revision).toBe(revisionBefore)
+
+          const row = yield* teamRow(info.id)
+          expect(row?.final_report_revision).toBe(revisionBefore)
+          expect(row?.revision).toBe(revisionBefore)
+          const events = yield* team.getUsageEvents(info.id)
+          expect(events).toHaveLength(1)
+          expect(events[0]).toEqual(
+            expect.objectContaining({
+              team_id: info.id,
+              type: "report_generated",
+              metadata: expect.objectContaining({
+                revision: revisionBefore,
+                final: true,
+                stale: false,
+              }),
+            }),
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("build-then-record with a mutation between them returns stale and records nothing", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+          const info = yield* team.create({ name: "final-stale", goal: "Stale barrier", leadSessionID: lead.id })
+          const member = yield* team.addMember({
+            teamID: info.id,
+            sessionID: worker.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          yield* team.updateMemberStatus(member.id, "completed", "done")
+
+          // Controlled barrier: build the report at revision N, then mutate the team before record.
+          const built = yield* team.buildFinalReport(info.id)
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: lead.id,
+            recipients: [worker.id],
+            body: "Concurrent material mutation.",
+          })
+          const recorded = yield* team.recordFinalReport({
+            teamID: info.id,
+            revision: built.revision,
+            sessionID: lead.id,
+          })
+
+          expect(recorded).toBe(false)
+          const row = yield* teamRow(info.id)
+          expect(row?.final_report_revision).toBeNull()
+          expect(row?.revision).toBe(built.revision + 1)
+          expect(yield* team.getUsageEvents(info.id)).toEqual([])
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a later material mutation invalidates a recorded final checkpoint", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+          const info = yield* team.create({ name: "final-invalidate", goal: "Invalidate", leadSessionID: lead.id })
+          const member = yield* team.addMember({
+            teamID: info.id,
+            sessionID: worker.id,
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          yield* team.updateMemberStatus(member.id, "completed", "done")
+
+          const tool = yield* TeamReportTool
+          const def = yield* tool.init()
+          const result = yield* def.execute({ team_id: info.id, final: true }, context(lead.id))
+          expect(result.metadata.stale).toBe(false)
+
+          let row = yield* teamRow(info.id)
+          expect(row?.final_report_revision).toBe(row?.revision)
+
+          // A later material mutation (a message) moves the revision and invalidates the checkpoint.
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: lead.id,
+            recipients: [worker.id],
+            body: "After the final report.",
+          })
+          row = yield* teamRow(info.id)
+          expect(row?.revision).toBeGreaterThan(row?.final_report_revision ?? -1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

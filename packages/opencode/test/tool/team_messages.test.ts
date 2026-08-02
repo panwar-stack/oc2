@@ -7,6 +7,8 @@ import { MessageV2 } from "@/session/message-v2"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
+import { TeamTable } from "@/team/team.sql"
+import { eq } from "drizzle-orm"
 import { TeamBroadcastTool } from "@/tool/team_broadcast"
 import { TeamGetMessagesTool } from "@/tool/team_get_messages"
 import { TeamPlanDecideTool } from "@/tool/team_plan_decide"
@@ -944,6 +946,79 @@ describe("team message usage events", () => {
               }),
             }),
           )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+})
+
+describe("team revision", () => {
+  const revisionOf = (teamID: string) =>
+    Database.Service.use((database) =>
+      database.db
+        .select({ revision: TeamTable.revision })
+        .from(TeamTable)
+        .where(eq(TeamTable.id, teamID))
+        .get()
+        .pipe(Effect.orDie),
+    ).pipe(Effect.map((row) => row?.revision ?? -1))
+
+  it.live("sending a message bumps the revision by exactly one", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, info, member } = yield* seed()
+          const before = yield* revisionOf(info.id)
+
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: lead.id,
+            recipients: [member.session_id],
+            body: "Revision bump check.",
+          })
+
+          expect(yield* revisionOf(info.id)).toBe(before + 1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("claiming, delivering, reading, and waking do not bump the revision", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info, member } = yield* seed()
+          const message = yield* team.sendMessage({
+            teamID: info.id,
+            sender: lead.id,
+            recipients: [member.session_id],
+            body: "Delivery state must not bump.",
+          })
+          const afterSend = yield* revisionOf(info.id)
+
+          // Claim (pending -> read) must not bump.
+          yield* team.claimPendingMessages(member.session_id, info.id)
+          expect(yield* revisionOf(info.id)).toBe(afterSend)
+
+          // Delivery acknowledgement must not bump.
+          yield* team.markMessageDelivered(message.id, member.session_id)
+          expect(yield* revisionOf(info.id)).toBe(afterSend)
+
+          // Reading the mailbox must not bump.
+          yield* team.getPendingMessages(member.session_id, info.id)
+          expect(yield* revisionOf(info.id)).toBe(afterSend)
+
+          // Waking a session must not bump.
+          yield* wakeTeamSession(
+            promptOps({
+              response: responseFor(assistant),
+              wake: () => Effect.succeed(responseFor(assistant)),
+            }),
+            member.session_id,
+          )
+          expect(yield* revisionOf(info.id)).toBe(afterSend)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

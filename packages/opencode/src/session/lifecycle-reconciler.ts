@@ -14,6 +14,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable, TeamTaskTable } from "@/team/team.sql"
+import { bumpTeamRevision } from "@/team/revision"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
@@ -626,6 +627,8 @@ export const layer = Layer.effect(
                   .get()
                 if (row) claimed.push(row.id)
               }
+              // Claiming a blocked dependent to starting is one logical lifecycle-status transaction.
+              if (claimed.length > 0) yield* bumpTeamRevision(tx, teamID)
               return claimed
             }),
           { behavior: "immediate" },
@@ -720,15 +723,6 @@ export const layer = Layer.effect(
     }) {
       // Cancelling the member's owned tasks already released their reservations in the same
       // transaction; this hook exists for the terminal boundary structure and stays a no-op.
-      return yield* Effect.void
-    })
-
-    const bumpTeamRevision = Effect.fn("LifecycleReconciler.bumpTeamRevision")(function* (input: {
-      tx: WriteDatabase
-      team: TeamRow
-      now: number
-    }) {
-      // PR 8: increment the team revision once per material terminal transaction.
       return yield* Effect.void
     })
 
@@ -917,6 +911,7 @@ export const layer = Layer.effect(
                   })
                   .where(eq(SessionTable.id, session.id))
                   .run()
+                yield* bumpTeamRevision(tx, team.id)
                 return {
                   kind: "retry" as const,
                   team,
@@ -940,6 +935,40 @@ export const layer = Layer.effect(
               ) {
                 effectiveState = "failed"
                 effectiveCode = "missing_task_handoff"
+              }
+              // Idempotent re-settlement guard. The reconcile loop re-settles every nonterminal
+              // member whose metadata is not "running" on each poll tick, and an idle daemon is
+              // not terminal, so without this guard every tick rewrote the row and bumped the
+              // revision forever. When the member row already carries the exact status, result,
+              // failure code, and daemon fields this settlement would write, and the
+              // deterministic lead message already exists (onConflictDoNothing inserts nothing
+              // new), no material fact changes: return without the UPDATE and without the bump.
+              // Genuine transitions (starting -> completed, active -> failed, active -> idle
+              // first time, legacy 0 -> 1 adoption) still settle and bump exactly as before.
+              const noMaterialChange = (() => {
+                if (member.status !== effectiveState) return false
+                if (effectiveState === "completed" && member.result !== input.output) return false
+                if (effectiveState === "failed" && member.failure_code !== (effectiveCode ?? null)) return false
+                if (member.lifecycle === "daemon") {
+                  const targetDaemonState =
+                    effectiveState === "idle"
+                      ? "idle"
+                      : input.error === "cancelled"
+                        ? "cancelled"
+                        : "error"
+                  if (member.daemon_state !== targetDaemonState) return false
+                  if (member.daemon_error !== (input.error ?? null)) return false
+                }
+                return true
+              })()
+              if (noMaterialChange) {
+                const messageExists = yield* tx
+                  .select({ id: TeamMessageTable.id })
+                  .from(TeamMessageTable)
+                  .where(eq(TeamMessageTable.id, memberMessageID(member.id, effectiveState, generation)))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (messageExists) return undefined
               }
               const update = yield* tx
                 .update(TeamMemberTable)
@@ -1011,7 +1040,6 @@ export const layer = Layer.effect(
               if (effectiveState === "failed") {
                 yield* cancelOwnedTasksOf({ tx, team, member, now })
                 yield* releaseReservationsOf({ tx, team, member, now })
-                yield* bumpTeamRevision({ tx, team, now })
                 const allMembers = yield* tx
                   .select()
                   .from(TeamMemberTable)
@@ -1019,6 +1047,10 @@ export const layer = Layer.effect(
                   .all()
                 yield* cancelBlockedDescendants({ tx, team, failedMember: member, members: allMembers, now })
               }
+              // ONE bump for the whole terminal transaction: member status/result/failure_code,
+              // the lead message, owned-task cancellation, and descendant cancellation all commit
+              // together, so a single revision increment covers the logical settlement.
+              yield* bumpTeamRevision(tx, team.id)
               return { kind: "settled" as const, team, state: effectiveState }
             }),
           { behavior: "immediate" },
@@ -1075,6 +1107,8 @@ export const layer = Layer.effect(
                     .set({ status: "blocked", time_updated: Date.now() })
                     .where(eq(TeamMemberTable.id, member.id))
                     .run()
+                  // A lifecycle status change to blocked is a material member-state transaction.
+                  yield* bumpTeamRevision(tx, team.id)
                 }
                 return { action: "blocked" as const }
               }
@@ -1135,6 +1169,52 @@ export const layer = Layer.effect(
               let phase: MemberRunPhase = persisted?.phase ?? "running"
               if (retry && existing) phase = "retry_running"
 
+              // Re-activation guard. Every resume of an already-active member (and every
+              // reconcile poll with live ops) used to rewrite status "active", the same session
+              // metadata, and the same idempotent started message, then bump the revision for
+              // each no-op. Skip the UPDATE and the bump when the status, generation, metadata,
+              // and started message are already in place; real transitions (blocked/starting ->
+              // active, 0 -> 1 admission, daemon re-arming, retry_admitted -> retry_running, or
+              // a newly created started message) still activate and bump exactly as before.
+              const noOpResume = (() => {
+                if (member.status !== "active") return false
+                if (member.run_generation === 0) return false
+                if (
+                  member.lifecycle === "daemon" &&
+                  (member.daemon_state !== "running" || member.daemon_error !== null)
+                )
+                  return false
+                if (persisted?.memberID !== member.id || persisted.promptMessageID !== String(promptID)) return false
+                if (phase !== (persisted?.phase ?? "running")) return false
+                return true
+              })()
+              if (noOpResume) {
+                // Retry activations insert no lead message (the outcome settles with its own
+                // bump), so no message check applies; a plain resume must find the started
+                // message already in place, otherwise the activation would insert one.
+                const startedExists = retry
+                  ? true
+                  : (yield* tx
+                      .select({ id: TeamMessageTable.id })
+                      .from(TeamMessageTable)
+                      .where(eq(TeamMessageTable.id, memberMessageID(member.id, "started", generation)))
+                      .get()
+                      .pipe(Effect.orDie)) !== undefined
+                if (startedExists) {
+                  // No DB write and no revision bump; the caller still resumes or prompts.
+                  return {
+                    action: existing ? ("resume" as const) : ("prompt" as const),
+                    member: { ...member, run_generation: generation },
+                    team,
+                    members,
+                    promptMessageID: promptID,
+                    generation,
+                    retry,
+                    phase,
+                  }
+                }
+              }
+
               const activated = yield* tx
                 .update(TeamMemberTable)
                 .set({
@@ -1186,6 +1266,9 @@ export const layer = Layer.effect(
                   ].join("\n"),
                 })
               }
+              // One bump for the whole admission transaction: the status -> active change, the
+              // generation 0 -> 1 adoption, and the started message commit together.
+              yield* bumpTeamRevision(tx, team.id)
               return {
                 action: existing ? ("resume" as const) : ("prompt" as const),
                 member: { ...member, run_generation: generation },
