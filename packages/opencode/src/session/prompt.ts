@@ -41,7 +41,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Deferred, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import * as EffectLogger from "@oc2-ai/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
@@ -161,11 +161,14 @@ export const layer = Layer.effect(
       yield* elog.info("cancel", { sessionID })
       const activeTeam = yield* team.getActive(sessionID)
       const teamMembers = Option.isSome(activeTeam) ? yield* team.getMembers(activeTeam.value.id) : []
+      // Cancel the lead BEFORE shutting the team down: the interrupt must reach a parked
+      // finalization barrier before team closure can release it as a successful completion.
+      yield* state.cancel(sessionID)
       if (Option.isSome(activeTeam)) {
         yield* team.shutdown({ teamID: activeTeam.value.id, sessionID }).pipe(Effect.ignore)
       }
       yield* Effect.forEach(
-        [sessionID, ...teamMembers.map((member) => SessionID.make(member.session_id))],
+        teamMembers.map((member) => SessionID.make(member.session_id)),
         (id) => state.cancel(id),
         { concurrency: "unbounded", discard: true },
       )
@@ -762,6 +765,11 @@ export const layer = Layer.effect(
           : undefined
       const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
 
+      // Decode the requested output format to its canonical shape before persisting. The sync
+      // event codec cannot encodeUnknown raw format objects, so a raw object (e.g. from a JSON
+      // config or test call site) would otherwise fail to persist through `Session.updateMessage`.
+      const format = input.format ? Schema.decodeUnknownSync(SessionV1.Format)(input.format) : undefined
+
       const info: SessionV1.User = {
         id: input.messageID ?? MessageID.ascending(),
         role: "user",
@@ -775,7 +783,7 @@ export const layer = Layer.effect(
           variant,
         },
         system: input.system,
-        format: input.format,
+        format,
       }
 
       if (current?.agent !== info.agent) {
@@ -1331,6 +1339,14 @@ export const layer = Layer.effect(
           agent: input.lastUser.agent,
           model: input.lastUser.model,
           tools: input.lastUser.tools,
+          // Preserve the original structured-output contract so the synthetic mailbox
+          // continuation keeps the requested format and system prompt. Re-decode the format to
+          // its canonical shape: the sync event codec's encodeUnknown is not idempotent for raw
+          // format objects read back from storage, so re-encoding the stored value would fail.
+          format: input.lastUser.format
+            ? Schema.decodeUnknownSync(SessionV1.Format)(input.lastUser.format)
+            : undefined,
+          system: input.lastUser.system,
         }
         yield* sessions.updateMessage(userMsg)
         yield* sessions.updatePart({
@@ -1364,6 +1380,65 @@ export const layer = Layer.effect(
                   input.session.id,
                 ),
           ),
+        ),
+      )
+    })
+
+    // Event-backed parking for the active team's lead session. Successful finalization must not
+    // proceed while finite teammates remain nonterminal or pending lead mail exists. Listeners
+    // are registered BEFORE any durable read so no transition is missed; durable database state
+    // remains authoritative and event callbacks only wake the parked fiber. Daemon members never
+    // block in any status. `failed` counts as terminal too: PR1 eliminated task-member `failed`
+    // producers, but legacy rows must not park the lead forever.
+    const finalizationBarrier = Effect.fn("SessionPrompt.finalizationBarrier")(function* (input: {
+      session: Session.Info
+      lastUser: SessionV1.User
+    }) {
+      const active = yield* team.getActive(input.session.id)
+      if (Option.isNone(active)) return false
+      const teamID = active.value.id
+      const nonterminalFinite = (members: Team.Member[]) =>
+        members.some(
+          (member) =>
+            member.lifecycle !== "daemon" && !["completed", "cancelled", "failed"].includes(member.status),
+        )
+      const deliver = () =>
+        deliverTeamMessages({ session: input.session, lastUser: input.lastUser }).pipe(Effect.orDie)
+      const exitPermitted = () =>
+        Effect.gen(function* () {
+          const stillActive = yield* team.getActive(input.session.id)
+          if (Option.isNone(stillActive) || stillActive.value.id !== teamID) return true
+          const members = yield* team.getMembers(teamID)
+          return !nonterminalFinite(members)
+        })
+
+      let signal = yield* Deferred.make<void>()
+      const unsubscribe = yield* Effect.forEach(
+        ["team.message.received", "team.member.updated", "team.closed"],
+        (type) => events.subscribeCallback(type, () => Deferred.doneUnsafe(signal, Effect.void)),
+        { concurrency: "unbounded" },
+      )
+      return yield* Effect.gen(function* () {
+        while (true) {
+          // (a) Deliver pending lead mail; a delivery resumes the model loop.
+          if (yield* deliver()) return true
+          // (b) Permit exit when the team is closed or the session is no longer the active lead.
+          if (yield* exitPermitted()) return false
+          // (c) Park. Swap to a fresh signal, then re-run the full check once more so a
+          // transition that fired between the previous check and this point is not lost: the
+          // fresh signal is only set by events that arrive after the swap.
+          const parked = yield* Deferred.make<void>()
+          signal = parked
+          if (yield* deliver()) return true
+          if (yield* exitPermitted()) return false
+          yield* Deferred.await(parked)
+        }
+      }).pipe(
+        Effect.ensuring(
+          Effect.forEach(unsubscribe, (off) => Effect.sync(() => off()), {
+            concurrency: "unbounded",
+            discard: true,
+          }),
         ),
       )
     })
@@ -1450,6 +1525,9 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
+          // Structured-output candidates are scoped per provider turn: a candidate produced in
+          // one turn must not be reused by a later turn after a finalization barrier continuation.
+          structured = undefined
           yield* SessionRunState.assertNotSuspended(db, sessionID)
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
@@ -1493,6 +1571,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
               })
             }
             yield* slog.info("exiting loop")
+            if (yield* finalizationBarrier({ session, lastUser })) continue
             break
           }
 
@@ -1521,7 +1600,10 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
               auto: task.auto,
               overflow: task.overflow,
             })
-            if (result === "stop") break
+            if (result === "stop") {
+              if (yield* finalizationBarrier({ session, lastUser })) continue
+              break
+            }
             continue
           }
 
@@ -1585,7 +1667,7 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
-          const outcome: "break" | "continue" = yield* Effect.gen(function* () {
+          const outcome: "break" | "break-structured" | "break-error" | "continue" = yield* Effect.gen(function* () {
             const bypassAgentCheck = primaryLastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
@@ -1672,10 +1754,17 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
             })
 
             if (structured !== undefined) {
+              // Successful structured finalization still honors the barrier: if pending mail or
+              // nonterminal teammates require another turn, discard the preliminary candidate so a
+              // fresh one is produced after the handoff is integrated.
+              if (yield* finalizationBarrier({ session, lastUser })) {
+                structured = undefined
+                return "continue" as const
+              }
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
               yield* sessions.updateMessage(handle.message)
-              return "break" as const
+              return "break-structured" as const
             }
 
             const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
@@ -1686,7 +1775,8 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
                   retries: 0,
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
-                return "break" as const
+                // Structured-output errors bypass the finalization barrier.
+                return "break-error" as const
               }
             }
 
@@ -1705,7 +1795,11 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
-          if (outcome === "break") break
+          if (outcome === "break") {
+            if (yield* finalizationBarrier({ session, lastUser })) continue
+            break
+          }
+          if (outcome === "break-structured" || outcome === "break-error") break
           continue
         }
 

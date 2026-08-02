@@ -382,6 +382,64 @@ const succeedVoid = (deferred: Deferred.Deferred<void>) => {
   Effect.runSync(Deferred.succeed(deferred, void 0).pipe(Effect.ignore))
 }
 
+// Asserts the session loop did not exit within the window: the finalization barrier parks the
+// lead while a finite member is nonterminal. Timing-safe because a loop that is still processing
+// (not yet parked) also satisfies "not exited".
+const assertLoopParked = (fiber: Fiber.Fiber<SessionV1.WithParts, Runner.Suspended>, label: string) =>
+  Effect.gen(function* () {
+    const result = yield* Fiber.await(fiber).pipe(Effect.timeout("500 millis"), Effect.exit)
+    // A timeout (Failure) means the loop stayed parked. A Success carrying a fiber Exit means the
+    // loop exited when it should have remained parked.
+    if (Exit.isSuccess(result) && result.value !== undefined) {
+      return yield* Effect.fail(new Error(`${label}: expected the loop to stay parked`))
+    }
+  })
+
+// Sets up an active team whose lead has one worker member in the requested status/lifecycle and
+// returns the services and handles the tests drive.
+const parkLeadOnWorker = Effect.fnUntraced(function* (input: {
+  llm: TestLLMServer["Service"]
+  memberStatus?: Team.MemberStatus
+  lifecycle?: Team.MemberLifecycle
+  daemonState?: Team.MemberDaemonState
+  /** When false, the lead gets no user message; the caller creates its own (e.g. structured). */
+  leadPrompt?: boolean
+}) {
+  const prompt = yield* SessionPrompt.Service
+  const sessions = yield* Session.Service
+  const team = yield* Team.Service
+  const lead = yield* sessions.create({ title: "Lead" })
+  const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+  const info = yield* team.create({
+    name: `park-team-${crypto.randomUUID().slice(0, 6)}`,
+    goal: "Coordinate work",
+    leadSessionID: lead.id,
+  })
+  const member = yield* team.addMember({
+    teamID: info.id,
+    sessionID: worker.id,
+    name: "worker",
+    agentType: "build",
+    rolePrompt: "Worker task",
+    lifecycle: input.lifecycle ?? "task",
+    ...(input.daemonState !== undefined ? { daemonState: input.daemonState } : {}),
+  })
+  if (input.memberStatus !== undefined && input.memberStatus !== "starting") {
+    const update = input.daemonState !== undefined ? { daemonState: input.daemonState } : undefined
+    yield* team.updateMemberStatus(member.id, input.memberStatus, update)
+  }
+  if (input.leadPrompt !== false) {
+    yield* prompt.prompt({
+      sessionID: lead.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "coordinate the team" }],
+    })
+  }
+  return { prompt, sessions, team, lead, worker, info, member }
+})
+
 const user = Effect.fn("test.user")(function* (sessionID: SessionID, text: string) {
   const session = yield* Session.Service
   const msg = yield* session.updateMessage({
@@ -1361,13 +1419,16 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
       const lead = yield* sessions.create({ title: "Lead" })
       const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
       const info = yield* team.create({ name: "mailbox-team", goal: "Coordinate work", leadSessionID: lead.id })
-      yield* team.addMember({
+      const workerMember = yield* team.addMember({
         teamID: info.id,
         sessionID: worker.id,
         name: "worker",
         agentType: "build",
         rolePrompt: "Report progress",
       })
+      // Complete the worker so the finalization barrier does not park the lead indefinitely.
+      // The canonical completion notification is harmless to this test's assertions.
+      yield* team.updateMemberStatus(workerMember.id, "completed")
       yield* prompt.prompt({
         sessionID: lead.id,
         agent: "build",
@@ -1416,13 +1477,16 @@ it.live(
         const lead = yield* sessions.create({ title: "Lead" })
         const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
         const info = yield* team.create({ name: "mid-delivery", goal: "Coordinate work", leadSessionID: lead.id })
-        yield* team.addMember({
+        const workerMember = yield* team.addMember({
           teamID: info.id,
           sessionID: worker.id,
           name: "worker",
           agentType: "build",
           rolePrompt: "Report progress",
         })
+        // Complete the worker so the finalization barrier does not park the lead indefinitely.
+        // The canonical completion notification is harmless to this test's assertions.
+        yield* team.updateMemberStatus(workerMember.id, "completed")
         yield* prompt.prompt({
           sessionID: lead.id,
           agent: "build",
@@ -1707,6 +1771,525 @@ it.live(
       },
     ),
   15_000,
+)
+
+// ---------------------------------------------------------------------------
+// PR 2: private finalization barrier
+// ---------------------------------------------------------------------------
+
+it.live(
+  "finalization barrier delivers mail that arrives after the initial mailbox check and resumes the lead",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({ llm })
+        // Turn 1 (lead finalizes while the worker is nonterminal) and turn 2 (after the mail
+        // continuation integrates the handoff).
+        yield* llm.text("done")
+        yield* llm.text("done again")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        // Wait until turn 1's assistant message is committed, so the top-of-loop mailbox check of
+        // the finalizing iteration has already run.
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const done = msgs.some(
+              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "done"),
+            )
+            return done ? (true as const) : undefined
+          }),
+          "turn 1 never completed",
+          "5 seconds",
+        )
+        // Send mail after the initial mailbox check but before the lead finalizes; the barrier
+        // (or the next loop pass) must deliver it and resume the model loop.
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Late progress",
+        })
+        // The continuation turn must be taken: the second assistant message ("done again")
+        // appears after the mail is integrated.
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const doneAgain = msgs.some(
+              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "done again"),
+            )
+            return doneAgain ? (true as const) : undefined
+          }),
+          "lead did not take a continuation turn after mail delivery",
+          "5 seconds",
+        )
+        // The worker is still nonterminal, so the lead parks again despite the progress.
+        yield* assertLoopParked(fiber, "lead should park while the worker is nonterminal")
+        // Completing the worker releases the barrier.
+        yield* team.updateMemberStatus(member.id, "completed")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after the worker completed",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Late progress"))
+        expect(mailParts).toHaveLength(1)
+        expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "nonterminal task members park the lead; completion and cancellation release it",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        // `idle` is an anomalous status for a task member and must park like the finite statuses.
+        const statuses: Team.MemberStatus[] = ["starting", "blocked", "active", "idle"]
+        for (const memberStatus of statuses) {
+          const { prompt, team, lead, info, member } = yield* parkLeadOnWorker({ llm, memberStatus })
+          yield* llm.text("done")
+          const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+          yield* assertLoopParked(fiber, `lead should park for task member status ${memberStatus}`)
+          yield* team.updateMemberStatus(member.id, "completed")
+          const result = yield* awaitWithTimeout(
+            Fiber.join(fiber),
+            `lead did not exit after completing ${memberStatus} member`,
+            "5 seconds",
+          )
+          expect(result.info.role).toBe("assistant")
+        }
+        // Cancellation releases the barrier exactly like completion.
+        const { prompt, team, lead, info, member } = yield* parkLeadOnWorker({ llm, memberStatus: "active" })
+        yield* llm.text("done")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* assertLoopParked(fiber, "lead should park before cancellation")
+        yield* team.updateMemberStatus(member.id, "cancelled")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after cancelling the member",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        expect((yield* team.getMembers(info.id))[0]?.status).toBe("cancelled")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  60_000,
+)
+
+it.live(
+  "cancelling a dependency does not release the barrier while a dependent stays blocked",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, team, lead, info, member } = yield* parkLeadOnWorker({ llm, memberStatus: "blocked" })
+        const dep = yield* team.createTask({ teamID: info.id, description: "dependency" })
+        yield* team.createTask({
+          teamID: info.id,
+          description: "blocked by dependency",
+          dependencyIDs: [dep.id],
+        })
+        yield* llm.text("done")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* assertLoopParked(fiber, "lead should park while the dependent is blocked")
+        // Cancelling the dependency must NOT make the blocked dependent terminal.
+        yield* team.updateTask(info.id, dep.id, { status: "cancelled" })
+        yield* Effect.sleep("300 millis")
+        yield* assertLoopParked(fiber, "lead must stay parked after the dependency is cancelled")
+        // Cancelling the blocked dependent releases the barrier.
+        yield* team.updateMemberStatus(member.id, "cancelled")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after cancelling the dependent",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        const depTask = yield* team.getTask(info.id, dep.id)
+        if (Option.isSome(depTask)) expect(depTask.value.status).toBe("cancelled")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "pending mail from an already-terminal teammate resumes the loop at the barrier",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({ llm })
+        // Terminal teammate before the loop starts: the completion notification is pending mail.
+        yield* team.updateMemberStatus(member.id, "completed")
+        yield* llm.text("done")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        // Wait until turn 1 ran (iter1 delivered the completion notification and the loop
+        // progressed to the model turn).
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const done = msgs.some(
+              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "done"),
+            )
+            return done ? (true as const) : undefined
+          }),
+          "turn 1 never completed",
+          "5 seconds",
+        )
+        // Mail sent after the top-of-loop check by the already-terminal teammate.
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Final handoff",
+        })
+        // The barrier must deliver this mail before checking members (deliver-before-member
+        // ordering): the loop takes a continuation turn and then exits because all members are
+        // terminal.
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const delivered = msgs.some((m) =>
+              m.parts.some((p) => p.type === "text" && p.text.includes("Final handoff")),
+            )
+            return delivered ? (true as const) : undefined
+          }),
+          "terminal teammate mail was never delivered",
+          "5 seconds",
+        )
+        const result = yield* awaitWithTimeout(Fiber.join(fiber), "lead did not exit after terminal mail", "5 seconds")
+        expect(result.info.role).toBe("assistant")
+        const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Final handoff"))
+        expect(mailParts).toHaveLength(1)
+        expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "progress mail while a teammate remains active resumes the loop and the lead parks again",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+        })
+        yield* llm.text("done")
+        yield* llm.text("done again")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const done = msgs.some(
+              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "done"),
+            )
+            return done ? (true as const) : undefined
+          }),
+          "turn 1 never completed",
+          "5 seconds",
+        )
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Progress while active",
+        })
+        // The mail resumes the loop (continuation turn)...
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const delivered = msgs.some((m) =>
+              m.parts.some((p) => p.type === "text" && p.text.includes("Progress while active")),
+            )
+            return delivered ? (true as const) : undefined
+          }),
+          "progress mail was never delivered",
+          "5 seconds",
+        )
+        // ...but the teammate is still active, so the loop parks again instead of exiting.
+        yield* assertLoopParked(fiber, "lead should park again after progress mail")
+        yield* team.updateMemberStatus(member.id, "completed")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after the active teammate completed",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Progress while active"))
+        expect(mailParts).toHaveLength(1)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "closing the team releases a parked lead",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, team, lead, info } = yield* parkLeadOnWorker({ llm })
+        yield* llm.text("done")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* llm.wait(1)
+        yield* assertLoopParked(fiber, "lead should park before team closure")
+        yield* team.shutdown({ teamID: info.id, sessionID: lead.id })
+        const result = yield* awaitWithTimeout(Fiber.join(fiber), "lead did not exit after team closure", "5 seconds")
+        expect(result.info.role).toBe("assistant")
+        expect(Option.isNone(yield* team.getActive(lead.id))).toBe(true)
+        const closed = yield* team.get(info.id)
+        if (Option.isSome(closed)) expect(closed.value.status).toBe("closed")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "cancelling a parked team lead interrupts the loop before team closure releases it",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, team, lead, info } = yield* parkLeadOnWorker({ llm, memberStatus: "active" })
+        yield* llm.text("done")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* llm.wait(1)
+        // The loop is parked: neither exit condition holds (team active, member nonterminal), so
+        // it would never finalize on its own. Only the lead cancellation can release it.
+        yield* assertLoopParked(fiber, "lead should be parked before cancellation")
+        yield* prompt.cancel(lead.id)
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead loop did not terminate after cancellation",
+          "5 seconds",
+        )
+        // The exit is the interrupted last assistant turn, not a barrier-permitted finalization:
+        // the team is closed only because the cancel ran shutdown, and the loop produced no
+        // continuation turn after parking.
+        expect(result.info.role).toBe("assistant")
+        expect(Option.isNone(yield* team.getActive(lead.id))).toBe(true)
+        const closed = yield* team.get(info.id)
+        if (Option.isSome(closed)) expect(closed.value.status).toBe("closed")
+        expect((yield* team.getMembers(info.id))[0]?.status).toBe("cancelled")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "daemon members never block finalization in active or idle status",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, info, member } = yield* parkLeadOnWorker({
+          llm,
+          lifecycle: "daemon",
+          memberStatus: "active",
+          daemonState: "running",
+        })
+        const sentinelSession = yield* sessions.create({ parentID: lead.id, title: "Sentinel" })
+        const daemonIdle = yield* team.addMember({
+          teamID: info.id,
+          sessionID: sentinelSession.id,
+          name: "sentinel",
+          agentType: "build",
+          rolePrompt: "Watch and report",
+          lifecycle: "daemon",
+          daemonState: "idle",
+        })
+        yield* team.updateMemberStatus(daemonIdle.id, "idle", { daemonState: "idle" })
+        yield* llm.text("done")
+        // No parking: both daemon members are nonterminal but never block the lead.
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "lead finalization was blocked by a daemon member",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        expect(Option.isSome(yield* team.getActive(lead.id))).toBe(true)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "two-turn structured output discards the preliminary candidate when mail is pending",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({
+          llm,
+          leadPrompt: false,
+        })
+        yield* prompt.prompt({
+          sessionID: lead.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "produce structured output" }],
+          format: {
+            type: "json_schema",
+            schema: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+            retryCount: 0,
+          },
+        })
+        // Turn 1 produces a preliminary candidate while team mail is pending; the stream is held
+        // open so the test can stage the mail before the turn completes.
+        const turn1Gate = defer()
+        yield* llm.push(reply().tool("StructuredOutput", { value: "first" }).wait(turn1Gate.promise))
+        // Turn 2 produces the fresh candidate that must be committed.
+        yield* llm.tool("StructuredOutput", { value: "second" })
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* llm.wait(1)
+        // Stage mail and make the teammate terminal while turn 1 is still in flight.
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Structured handoff mail",
+        })
+        yield* team.updateMemberStatus(member.id, "completed")
+        turn1Gate.resolve(undefined)
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "structured loop did not exit",
+          "10 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        // The committed structured value is the second candidate, proving the first was discarded
+        // when the barrier required a continuation turn.
+        const structured = result.info.role === "assistant" ? result.info.structured : undefined
+        expect(structured).toEqual({ value: "second" })
+        const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Structured handoff mail"))
+        expect(mailParts).toHaveLength(1)
+        // Two model calls (turn 1 + turn 2) prove the loop continued after the mail handoff and
+        // produced a fresh candidate. A stale-reuse bug would commit after the first turn.
+        expect((yield* llm.calls) >= 2).toBe(true)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.instance(
+  "finished-assistant finalization still exits without a team",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.text("done")
+      yield* user(chat.id, "hello")
+      const result = yield* awaitWithTimeout(prompt.loop({ sessionID: chat.id }), "finished-assistant loop did not exit")
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+    }),
+  10_000,
+)
+
+it.instance(
+  "current-processor stop (rejected tool) still exits through the funnel without a team",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const registry = yield* ToolRegistry.Service
+      const { read } = yield* registry.named()
+      const original = read.execute
+      // A rejected tool marks the processor as blocked (ctx.blocked), which yields "stop" and
+      // exits through the funnel barrier.
+      read.execute = (() => Effect.fail(new Question.RejectedError())) as unknown as typeof read.execute
+      yield* Effect.addFinalizer(() => Effect.sync(() => void (read.execute = original)))
+
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.tool("read", { filePath: "/tmp/nonexistent" })
+      yield* user(chat.id, "hello")
+      const result = yield* awaitWithTimeout(
+        prompt.loop({ sessionID: chat.id }),
+        "processor-stop loop did not exit",
+      )
+      expect(result.info.role).toBe("assistant")
+      const failedParts = (yield* sessions.messages({ sessionID: chat.id }))
+        .flatMap((message) => message.parts)
+        .filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.state.status === "error")
+      expect(failedParts.length).toBeGreaterThan(0)
+    }),
+  10_000,
 )
 
 it.instance(
