@@ -130,6 +130,38 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("adds team member run_generation with a zero default and accepts explicit values", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.get(
+            sql`SELECT name, dflt_value FROM pragma_table_info('team_member') WHERE name = 'run_generation'`,
+          ),
+        ).toEqual({ name: "run_generation", dflt_value: "0" })
+
+        yield* db.run(sql`
+          INSERT INTO team (id, name, goal, lead_session_id, status, time_created, time_updated)
+          VALUES ('team_generation', 't', 'g', 'lead', 'active', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO team_member (id, team_id, session_id, name, agent_type, role_prompt, status, lifecycle, plan_mode, work_mode, run_generation, time_created, time_updated)
+          VALUES ('member_generation', 'team_generation', 'ses_generation', 'm', 'general', 'r', 'active', 'task', 0, 'implement', 2, 1, 1)
+        `)
+
+        expect(
+          yield* db.get(sql`SELECT run_generation FROM team_member WHERE id = 'member_generation'`),
+        ).toEqual({ run_generation: 2 })
+        yield* db.run(sql`UPDATE team_member SET run_generation = 1 WHERE id = 'member_generation'`)
+        expect(
+          yield* db.get(sql`SELECT run_generation FROM team_member WHERE id = 'member_generation'`),
+        ).toEqual({ run_generation: 1 })
+      }),
+    )
+  })
+
   test("backfills existing Context Epoch rows to the build agent", async () => {
     await run(
       Effect.gen(function* () {

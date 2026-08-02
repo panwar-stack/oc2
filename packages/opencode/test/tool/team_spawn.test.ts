@@ -514,7 +514,7 @@ describe("tool.team_spawn", () => {
           expect(member?.status).toBe("failed")
           expect(member?.failure_code).toBe("provider_error")
           const failed = (yield* team.getMessages(info.id)).find(
-            (message) => message.id === `lifecycle:member:${member?.id}:failed`,
+            (message) => message.id === `lifecycle:member:${member?.id}:failed:1`,
           )
           expect(failed?.body).toContain("boom")
         }),
@@ -1029,11 +1029,13 @@ describe("tool.team_spawn", () => {
           yield* lifecycle.reconcile
 
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
-          const completion = (yield* team.getMessages(info.id)).filter((message) => message.id.endsWith(":completed"))
+          const completion = (yield* team.getMessages(info.id)).filter((message) =>
+            message.id.includes(":completed:"),
+          )
           expect(member?.status).toBe("completed")
           expect(member?.result).toBe("durable teammate result")
           expect(completion).toHaveLength(1)
-          expect(completion[0]?.id).toBe(`lifecycle:member:${member?.id}:completed`)
+          expect(completion[0]?.id).toBe(`lifecycle:member:${member?.id}:completed:1`)
           expect(wakes).toBe(1)
         }),
       { config: { experimental: { agent_teams: true } } },

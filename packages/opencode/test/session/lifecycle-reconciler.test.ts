@@ -13,6 +13,7 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { Team } from "@/team/team"
+import { TeamMemberTable } from "@/team/team.sql"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
@@ -156,6 +157,38 @@ const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
   return { ops, prompts, wakes, runs } satisfies OpsSpy
 })
 
+/**
+ * The completion-only retry prompt must pass an explicit deny map (a permission delta) so the model
+ * cannot see the general mutation/shell/team tools. An empty `{}` would change nothing.
+ */
+function expectRetryPromptToolsDenyGeneral(tools: SessionPrompt.PromptInput["tools"]) {
+  expect(tools).not.toEqual({})
+  for (const tool of [
+    "bash",
+    "write",
+    "edit",
+    "apply_patch",
+    "shell",
+    "webfetch",
+    "websearch",
+    "skill",
+    "todowrite",
+    "local_fusion",
+    "team_create",
+    "team_spawn",
+    "team_send_message",
+    "team_broadcast",
+    "team_task_create",
+    "team_task_update",
+    "team_task_claim",
+    "team_task_list",
+    "team_report",
+    "team_shutdown",
+  ]) {
+    expect(tools?.[tool]).toBe(false)
+  }
+}
+
 const backgroundState = Effect.fn("LifecycleReconcilerTest.backgroundState")(function* (sessionID: SessionID) {
   const { db } = yield* Database.Service
   const row = yield* db
@@ -174,6 +207,9 @@ const seedMemberMetadata = Effect.fn("LifecycleReconcilerTest.seedMemberMetadata
   sessionID: SessionID
   memberID: string
   promptMessageID: MessageID
+  generation?: number
+  phase?: "running" | "retry_admitted" | "retry_running" | "terminal"
+  state?: "running" | "completed" | "idle" | "cancelled" | "failed"
 }) {
   const { db } = yield* Database.Service
   const row = yield* db
@@ -191,7 +227,9 @@ const seedMemberMetadata = Effect.fn("LifecycleReconcilerTest.seedMemberMetadata
           kind: "team-member",
           memberID: input.memberID,
           promptMessageID: input.promptMessageID,
-          state: "running",
+          state: input.state ?? "running",
+          ...(input.generation !== undefined ? { generation: input.generation } : {}),
+          ...(input.phase ? { phase: input.phase } : {}),
         },
       },
       time_updated: Date.now(),
@@ -199,6 +237,40 @@ const seedMemberMetadata = Effect.fn("LifecycleReconcilerTest.seedMemberMetadata
     .where(eq(SessionTable.id, input.sessionID))
     .run()
     .pipe(Effect.orDie)
+})
+
+const setMemberRunGeneration = Effect.fn("LifecycleReconcilerTest.setMemberRunGeneration")(function* (
+  memberID: string,
+  generation: number,
+) {
+  const { db } = yield* Database.Service
+  yield* db
+    .update(TeamMemberTable)
+    .set({ run_generation: generation, time_updated: Date.now() })
+    .where(eq(TeamMemberTable.id, memberID))
+    .run()
+    .pipe(Effect.orDie)
+})
+
+/** Reads the persisted member lifecycle metadata of a session. */
+const memberState = Effect.fn("LifecycleReconcilerTest.memberState")(function* (sessionID: SessionID) {
+  const { db } = yield* Database.Service
+  const row = yield* db
+    .select({ metadata: SessionTable.metadata })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  return row?.metadata?.lifecycleTeamMember as
+    | {
+        state?: string
+        output?: string
+        error?: string
+        failureCode?: string
+        generation?: number
+        phase?: string
+      }
+    | undefined
 })
 
 /** Runs work against a reconciler instance with no shared in-memory state, like a fresh process. */
@@ -211,6 +283,11 @@ function isTaskNotification(message: SessionV1.WithParts) {
     message.info.role === "user" &&
     message.parts.some((part) => part.type === "text" && part.synthetic === true && part.text.startsWith("<task id="))
   )
+}
+
+/** Matches a generation-scoped member lifecycle notification like `lifecycle:member:<id>:<kind>:<gen>`. */
+function memberMessage(kind: string) {
+  return (message: { id: string }) => message.id.includes(`:${kind}:`)
 }
 
 const seedTeam = Effect.fn("LifecycleReconcilerTest.seedTeam")(function* () {
@@ -333,7 +410,7 @@ describe("session.lifecycle-reconciler", () => {
           expect(suspended?.status).toBe("active")
           expect(suspended?.result).toBeFalsy()
           expect(yield* team.getMessages(info.id)).toHaveLength(1)
-          expect((yield* team.getMessages(info.id))[0]?.id).toBe(`lifecycle:member:${member.id}:started`)
+          expect((yield* team.getMessages(info.id))[0]?.id).toBe(`lifecycle:member:${member.id}:started:1`)
           expect(yield* control.state(SessionID.make(memberSession.id))).toMatchObject({ paused: true })
 
           yield* control.release(lead.id)
@@ -384,7 +461,7 @@ describe("session.lifecycle-reconciler", () => {
             "active",
           )
           expect(
-            (yield* team.getMessages(info.id)).filter((message) => message.id.endsWith(":completed")),
+            (yield* team.getMessages(info.id)).filter((message) => memberMessage("completed")(message)),
           ).toHaveLength(0)
 
           yield* Deferred.succeed(release, undefined)
@@ -436,7 +513,7 @@ describe("session.lifecycle-reconciler", () => {
           )
           expect(yield* Ref.get(spy.prompts)).toBe(1)
           expect(
-            (yield* team.getMessages(info.id)).filter((message) => message.id.endsWith(":completed")),
+            (yield* team.getMessages(info.id)).filter((message) => memberMessage("completed")(message)),
           ).toHaveLength(1)
         }),
       { config: { experimental: { agent_teams: true } } },
@@ -700,32 +777,43 @@ describe("session.lifecycle-reconciler", () => {
             expect(unsettled?.status).toBe("active")
             expect(unsettled?.result).toBeNull()
             const messages = yield* team.getMessages(info.id)
-            expect(messages.filter((message) => message.id.endsWith(":completed"))).toHaveLength(0)
-            expect(messages.filter((message) => message.id.endsWith(":cancelled"))).toHaveLength(0)
+            expect(messages.filter((message) => memberMessage("completed")(message))).toHaveLength(0)
+            expect(messages.filter((message) => memberMessage("cancelled")(message))).toHaveLength(0)
           }
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("a tool-only turn settles as completed with an empty result in this slice", () =>
+  it.live("a blank generation-1 result admits one completion-only retry, then fails as empty_result when still blank", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
           const team = yield* Team.Service
           const lifecycle = yield* LifecycleReconciler.Service
           const { info, member } = yield* seedTeam()
+          const prompts: SessionPrompt.PromptInput[] = []
           const spy = yield* spyOps({
             result: (sessionID, parentID) => {
               const base = assistant(sessionID, parentID, "")
               return { info: { ...base.info, finish: "stop" }, parts: [] }
             },
+            onPrompt: (promptInput) => Effect.sync(() => prompts.push(promptInput)),
           })
           const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
-          expect(outcome).toBe("(no text result)")
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
-          expect(settled?.status).toBe("completed")
-          expect(settled?.result).toBe("")
+          expect(outcome).toBe("(no text result)")
+          expect(settled?.status).toBe("failed")
+          expect(settled?.failure_code).toBe("empty_result")
+          expect(yield* Ref.get(spy.prompts)).toBe(2)
+          // The retry prompt is completion-only: every general tool is denied in this slice.
+          expectRetryPromptToolsDenyGeneral(prompts[1]?.tools)
+          expect(prompts[1]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")).toContain(
+            "no final text result",
+          )
+          const failed = (yield* team.getMessages(info.id)).find((message) => memberMessage("failed")(message))
+          expect(failed?.body).toContain("empty_result")
+          expect(failed?.id).toBe(`lifecycle:member:${member.id}:failed:2`)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -808,7 +896,7 @@ describe("session.lifecycle-reconciler", () => {
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
           expect(settled?.status).toBe("failed")
           expect(settled?.failure_code).toBe("provider_error")
-          const failed = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":failed"))
+          const failed = (yield* team.getMessages(info.id)).find((message) => memberMessage("failed")(message))
           expect(failed?.body).toContain("boom")
         }),
       { config: { experimental: { agent_teams: true } } },
@@ -844,8 +932,535 @@ describe("session.lifecycle-reconciler", () => {
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
           expect(settled?.status).toBe("failed")
           expect(settled?.failure_code).toBe("provider_error")
-          const failed = (yield* team.getMessages(info.id)).find((message) => message.id.endsWith(":failed"))
+          const failed = (yield* team.getMessages(info.id)).find((message) => memberMessage("failed")(message))
           expect(failed?.body).toContain("boom")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a new finite member is admitted at generation 1 with a persisted prompt ID", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          let admitted: SessionPrompt.PromptInput | undefined
+          const spy = yield* spyOps({
+            text: "work complete",
+            onPrompt: (promptInput) => Effect.sync(() => (admitted = promptInput)),
+          })
+
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+
+          expect(outcome).toBe("work complete")
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("completed")
+          expect(settled?.result).toBe("work complete")
+          expect(settled?.run_generation).toBe(1)
+          expect((yield* memberState(memberSession.id))?.generation).toBe(1)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+          // The initial prompt ID is persisted and reused, and the started notification is gen-scoped.
+          expect(admitted?.messageID).toBeDefined()
+          const messages = yield* team.getMessages(info.id)
+          expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:started:1`)).toBe(true)
+          expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:completed:1`)).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a valid generation-1 result completes the member, unblocks dependents, and wakes the lead", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { lead, info, member, memberSession } = yield* seedTeam()
+          const dependentSession = yield* sessions.create({ parentID: lead.id, title: "Dependent" })
+          const dependent = yield* team.addMember({
+            teamID: info.id,
+            sessionID: dependentSession.id,
+            name: "dependent",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Wait for worker",
+            dependencyIDs: [memberSession.id],
+          })
+          yield* team.updateMemberStatus(dependent.id, "blocked")
+          const spy = yield* spyOps({ text: "worker done" })
+
+          yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+
+          yield* pollWithTimeout(
+            Effect.gen(function* () {
+              const members = yield* team.getMembers(info.id)
+              return members.some((candidate) => candidate.id === dependent.id && candidate.status === "completed")
+                ? members
+                : undefined
+            }),
+            "Timed out waiting for the dependent to run",
+          )
+          const members = yield* team.getMembers(info.id)
+          expect(members.find((candidate) => candidate.id === member.id)?.status).toBe("completed")
+          expect(members.find((candidate) => candidate.id === dependent.id)?.status).toBe("completed")
+          expect(yield* Ref.get(spy.prompts)).toBe(2)
+          expect(yield* Ref.get(spy.wakes)).toBeGreaterThan(0)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a blank generation-1 result admits a different retry prompt ID and a tools-restricted prompt", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          const prompts: SessionPrompt.PromptInput[] = []
+          let calls = 0
+          const spy = yield* spyOps({
+            onPrompt: (promptInput) => Effect.sync(() => prompts.push(promptInput)),
+            result: (sessionID, parentID) => {
+              calls++
+              return assistant(sessionID, parentID, calls === 1 ? "" : "retry success")
+            },
+          })
+
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+
+          expect(outcome).toBe("retry success")
+          expect(prompts).toHaveLength(2)
+          expect(prompts[0]?.messageID).toBeDefined()
+          expect(prompts[1]?.messageID).not.toBe(prompts[0]?.messageID)
+          // The retry prompt is completion-only: every general tool is denied in this slice.
+          expectRetryPromptToolsDenyGeneral(prompts[1]?.tools)
+          // Focused: the deny map is a permission delta that the real prompt.ts merges into the member
+          // session's permission rules, which is how the model-visible tool set is filtered
+          // (Permission.disabled). The test spy bypasses that merge, so the session permission row is
+          // not observable here; the map delivered to the prompt is the observable artifact.
+          expect(prompts[1]?.tools).toMatchObject({
+            bash: false,
+            write: false,
+            edit: false,
+            apply_patch: false,
+            team_task_update: false,
+          })
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("completed")
+          expect(settled?.result).toBe("retry success")
+          expect(settled?.run_generation).toBe(2)
+          expect((yield* memberState(memberSession.id))?.generation).toBe(2)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+          expect(
+            (yield* team.getMessages(info.id)).some((message) => message.id === `lifecycle:member:${member.id}:completed:2`),
+          ).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a blank generation-2 result fails with empty_result and cancels blocked descendants", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          const dependentSession = yield* sessions.create({ parentID: memberSession.id, title: "Dependent" })
+          const dependent = yield* team.addMember({
+            teamID: info.id,
+            sessionID: dependentSession.id,
+            name: "dependent",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Wait for worker",
+            dependencyIDs: [memberSession.id],
+          })
+          yield* team.updateMemberStatus(dependent.id, "blocked")
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return { info: { ...base.info, finish: "stop" }, parts: [] }
+            },
+          })
+
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+
+          expect(outcome).toBe("(no text result)")
+          const members = yield* team.getMembers(info.id)
+          const failedMember = members.find((candidate) => candidate.id === member.id)
+          expect(failedMember?.status).toBe("failed")
+          expect(failedMember?.failure_code).toBe("empty_result")
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+          const dependentNow = members.find((candidate) => candidate.id === dependent.id)
+          expect(dependentNow?.status).toBe("cancelled")
+          expect(dependentNow?.failure_code).toBe("dependency_failed")
+          const messages = yield* team.getMessages(info.id)
+          expect(messages.some((message) => message.id === `lifecycle:member:${dependent.id}:cancelled:0`)).toBe(true)
+          expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:failed:2`)).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("crash window W1 admits a persisted retry prompt exactly once", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          // A previous process admitted the retry (generation 2, retry_admitted) but crashed before
+          // the prompt message was written.
+          const retryPromptID = MessageID.ascending()
+          yield* seedMemberMetadata({
+            sessionID: memberSession.id,
+            memberID: member.id,
+            promptMessageID: retryPromptID,
+            generation: 2,
+            phase: "retry_admitted",
+          })
+          yield* team.updateMemberStatus(member.id, "active")
+          yield* setMemberRunGeneration(member.id, 2)
+          const prompts: SessionPrompt.PromptInput[] = []
+          const spy = yield* spyOps({
+            onPrompt: (promptInput) => Effect.sync(() => prompts.push(promptInput)),
+            // A nonterminal retry turn keeps the member on retry_running instead of settling.
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "retry work")
+              return { info: { ...base.info, finish: "tool-calls" }, parts: base.parts }
+            },
+          })
+
+          yield* afterRestart(
+            Effect.gen(function* () {
+              const lifecycle = yield* LifecycleReconciler.Service
+              yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+            }),
+          )
+
+          expect(prompts).toHaveLength(1)
+          expect(prompts[0]?.messageID).toBe(retryPromptID)
+          // The persisted retry prompt is completion-only: every general tool is denied.
+          expectRetryPromptToolsDenyGeneral(prompts[0]?.tools)
+          expect(yield* Ref.get(spy.runs)).toBe(0)
+          expect((yield* memberState(memberSession.id))?.generation).toBe(2)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("retry_running")
+          const active = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(active?.status).toBe("active")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("crash window W2 resumes a retry_running member without adding a user prompt", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          // The previous process admitted the retry prompt and set retry_running before dying.
+          const retryPromptID = MessageID.ascending()
+          yield* sessions.updateMessage({
+            id: retryPromptID,
+            role: "user",
+            sessionID: memberSession.id,
+            agent: "general",
+            model: ref,
+            time: { created: Date.now() },
+          })
+          yield* seedMemberMetadata({
+            sessionID: memberSession.id,
+            memberID: member.id,
+            promptMessageID: retryPromptID,
+            generation: 2,
+            phase: "retry_running",
+          })
+          yield* team.updateMemberStatus(member.id, "active")
+          yield* setMemberRunGeneration(member.id, 2)
+          const spy = yield* spyOps({ text: "retry result" })
+
+          yield* afterRestart(
+            Effect.gen(function* () {
+              const lifecycle = yield* LifecycleReconciler.Service
+              yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+            }),
+          )
+
+          expect(yield* Ref.get(spy.prompts)).toBe(0)
+          expect(yield* Ref.get(spy.runs)).toBe(1)
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("completed")
+          expect(settled?.result).toBe("retry result")
+          expect(settled?.run_generation).toBe(2)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("crash window W3 settles an existing terminal assistant exactly once", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          const promptMessageID = MessageID.ascending()
+          yield* sessions.updateMessage({
+            id: promptMessageID,
+            role: "user",
+            sessionID: memberSession.id,
+            agent: "general",
+            model: ref,
+            time: { created: Date.now() },
+          })
+          // The terminal assistant exists but settlement never committed.
+          const terminalResult = assistant(memberSession.id, promptMessageID, "finished once")
+          yield* sessions.updateMessage(terminalResult.info)
+          for (const part of terminalResult.parts) yield* sessions.updatePart(part)
+          yield* seedMemberMetadata({ sessionID: memberSession.id, memberID: member.id, promptMessageID, generation: 1, phase: "running" })
+          yield* team.updateMemberStatus(member.id, "active")
+          yield* setMemberRunGeneration(member.id, 1)
+
+          yield* afterRestart(Effect.flatMap(LifecycleReconciler.Service, (lifecycle) => lifecycle.reconcile))
+          yield* afterRestart(Effect.flatMap(LifecycleReconciler.Service, (lifecycle) => lifecycle.reconcile))
+
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("completed")
+          expect(settled?.result).toBe("finished once")
+          expect(settled?.run_generation).toBe(1)
+          const completions = (yield* team.getMessages(info.id)).filter((message) => memberMessage("completed")(message))
+          expect(completions).toHaveLength(1)
+          expect(completions[0]?.id).toBe(`lifecycle:member:${member.id}:completed:1`)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("adopts a generation-0 nonterminal member without a new prompt and never adopts terminal legacy members", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          // Legacy facts: generation 0 member with a persisted prompt and running metadata.
+          const promptMessageID = MessageID.ascending()
+          yield* sessions.updateMessage({
+            id: promptMessageID,
+            role: "user",
+            sessionID: memberSession.id,
+            agent: "general",
+            model: ref,
+            time: { created: Date.now() },
+          })
+          yield* seedMemberMetadata({ sessionID: memberSession.id, memberID: member.id, promptMessageID })
+          yield* team.updateMemberStatus(member.id, "active")
+          const spy = yield* spyOps({ text: "adopted result" })
+
+          yield* afterRestart(
+            Effect.gen(function* () {
+              const lifecycle = yield* LifecycleReconciler.Service
+              yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+            }),
+          )
+
+          expect(yield* Ref.get(spy.prompts)).toBe(0)
+          expect(yield* Ref.get(spy.runs)).toBe(1)
+          const adopted = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(adopted?.status).toBe("completed")
+          expect(adopted?.result).toBe("adopted result")
+          expect(adopted?.run_generation).toBe(1)
+          expect((yield* memberState(memberSession.id))?.generation).toBe(1)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+
+          // A terminal legacy member (completed at generation 0) is never adopted or retried.
+          const terminalSession = yield* sessions.create({ parentID: memberSession.id, title: "Terminal legacy" })
+          const terminalMember = yield* team.addMember({
+            teamID: info.id,
+            sessionID: terminalSession.id,
+            name: "terminal",
+            agentType: "general",
+            rolePrompt: "Already done",
+          })
+          yield* team.updateMemberStatus(terminalMember.id, "completed")
+          yield* seedMemberMetadata({
+            sessionID: terminalSession.id,
+            memberID: terminalMember.id,
+            promptMessageID: promptMessageID,
+            state: "completed",
+          })
+          yield* setMemberRunGeneration(terminalMember.id, 0)
+
+          yield* afterRestart(Effect.flatMap(LifecycleReconciler.Service, (lifecycle) => lifecycle.reconcile))
+
+          const terminalNow = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === terminalMember.id)
+          expect(terminalNow?.status).toBe("completed")
+          expect(terminalNow?.run_generation).toBe(0)
+          expect(yield* Ref.get(spy.runs)).toBe(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a stale settlement from an old generation changes nothing", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          // The member is really on generation 2, but a stale attempt carries generation-1 facts
+          // together with a terminal assistant for the generation-1 prompt.
+          const gen1PromptID = MessageID.ascending()
+          yield* sessions.updateMessage({
+            id: gen1PromptID,
+            role: "user",
+            sessionID: memberSession.id,
+            agent: "general",
+            model: ref,
+            time: { created: Date.now() },
+          })
+          const staleResult = assistant(memberSession.id, gen1PromptID, "stale result")
+          yield* sessions.updateMessage(staleResult.info)
+          for (const part of staleResult.parts) yield* sessions.updatePart(part)
+          yield* seedMemberMetadata({
+            sessionID: memberSession.id,
+            memberID: member.id,
+            promptMessageID: gen1PromptID,
+            generation: 1,
+            phase: "running",
+          })
+          yield* team.updateMemberStatus(member.id, "active")
+          yield* setMemberRunGeneration(member.id, 2)
+          const before = yield* team.getMessages(info.id)
+          const spy = yield* spyOps()
+
+          yield* afterRestart(
+            Effect.gen(function* () {
+              const lifecycle = yield* LifecycleReconciler.Service
+              yield* lifecycle.attach(spy.ops)
+              yield* lifecycle.reconcile
+            }),
+          )
+
+          const after = yield* team.getMessages(info.id)
+          expect(after).toHaveLength(before.length)
+          const unchanged = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(unchanged?.status).toBe("active")
+          expect(unchanged?.run_generation).toBe(2)
+          expect(yield* Ref.get(spy.wakes)).toBe(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("pause during the retry prompt keeps the member active and never adds another prompt", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const control = yield* SessionControl.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { lead, info, member, memberSession } = yield* seedTeam()
+          let promptIndex = 0
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return { info: { ...base.info, finish: "stop" }, parts: [] }
+            },
+            onPrompt: () => {
+              promptIndex++
+              if (promptIndex === 2) {
+                // The retry admission prompt loses the pause race and suspends.
+                return Effect.gen(function* () {
+                  yield* control.pause({ rootSessionID: lead.id }).pipe(Effect.orDie)
+                  return yield* new Runner.Suspended()
+                })
+              }
+              return Effect.void
+            },
+          })
+
+          const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+          expect(outcome).toContain("suspended")
+          expect(yield* Ref.get(spy.prompts)).toBe(2)
+          const pausedMember = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(pausedMember?.status).toBe("active")
+          expect(pausedMember?.run_generation).toBe(2)
+          expect((yield* memberState(memberSession.id))?.phase).toBe("retry_admitted")
+          expect(
+            (yield* team.getMessages(info.id)).filter((message) => memberMessage("failed")(message)),
+          ).toHaveLength(0)
+
+          // Releasing the pause resumes the same prompt; no second user prompt is ever added.
+          yield* control.release(lead.id)
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+
+          yield* pollWithTimeout(
+            Effect.gen(function* () {
+              const members = yield* team.getMembers(info.id)
+              return members.some((candidate) => candidate.id === member.id && candidate.status === "failed")
+                ? members
+                : undefined
+            }),
+            "Timed out waiting for the resumed retry to settle",
+          )
+          expect(yield* Ref.get(spy.prompts)).toBe(2)
+          expect(yield* Ref.get(spy.runs)).toBe(1)
+          const failed = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(failed?.status).toBe("failed")
+          expect(failed?.failure_code).toBe("empty_result")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a blank daemon initialization result settles idle without retry", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "daemon-team", goal: "Watch", leadSessionID: lead.id })
+          const daemonSession = yield* sessions.create({ parentID: lead.id, title: "Daemon" })
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: daemonSession.id,
+            name: "sentinel",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Watch forever",
+            lifecycle: "daemon",
+          })
+          const prompts: SessionPrompt.PromptInput[] = []
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return { info: { ...base.info, finish: "stop" }, parts: [] }
+            },
+            onPrompt: (promptInput) => Effect.sync(() => prompts.push(promptInput)),
+          })
+
+          const outcome = yield* lifecycle.startMember({ memberID: daemon.id, ops: spy.ops })
+
+          expect(outcome).toBe("Daemon teammate initialized.")
+          expect(prompts).toHaveLength(1)
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === daemon.id)
+          expect(settled?.status).toBe("idle")
+          expect(settled?.run_generation).toBe(1)
+          expect((yield* memberState(daemonSession.id))?.phase).toBe("terminal")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

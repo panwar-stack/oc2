@@ -1022,10 +1022,10 @@ describe("team", () => {
 
           const messages = yield* team.getMessages(info.id)
           const cancelled = messages.find(
-            (message) => message.id === `lifecycle:member:${dependentNow?.id}:cancelled`,
+            (message) => message.id === `lifecycle:member:${dependentNow?.id}:cancelled:0`,
           )
           expect(cancelled?.body).toContain("upstream")
-          const failed = messages.find((message) => message.id === `lifecycle:member:${upstream.id}:failed`)
+          const failed = messages.find((message) => message.id === `lifecycle:member:${upstream.id}:failed:1`)
           expect(failed?.body).toContain("boom")
         }),
       { config: { experimental: { agent_teams: true } } },

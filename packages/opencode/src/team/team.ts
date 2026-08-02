@@ -49,6 +49,9 @@ export type TaskStatus = TeamTaskRow["status"]
  * produced in this slice; the remaining codes arrive with later retry and handoff slices. */
 export type MemberFailureCode = "empty_result" | "provider_error" | "dependency_failed" | "missing_task_handoff"
 
+/** Durable run-phase of a finite member session, persisted with the session lifecycle metadata. */
+export type MemberRunPhase = "running" | "retry_admitted" | "retry_running" | "terminal"
+
 type TeamMemberStatusUpdate = {
   result?: string
   failureCode?: MemberFailureCode | null
@@ -352,6 +355,7 @@ export const layer = Layer.effect(
         daemon_last_active: input.daemonLastActive ?? null,
         daemon_error: input.daemonError ?? null,
         failure_code: null,
+        run_generation: 0,
         plan_mode: input.planMode ?? false,
         work_mode: input.workMode ?? "implement",
         dependency_ids: input.dependencyIDs,
@@ -424,6 +428,7 @@ export const layer = Layer.effect(
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
         failure_code: row.failure_code,
+        run_generation: row.run_generation,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -469,6 +474,7 @@ export const layer = Layer.effect(
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
         failure_code: row.failure_code,
+        run_generation: row.run_generation,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -498,6 +504,7 @@ export const layer = Layer.effect(
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
         failure_code: row.failure_code,
+        run_generation: row.run_generation,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,
@@ -529,6 +536,7 @@ export const layer = Layer.effect(
         daemon_last_active: row.daemon_last_active,
         daemon_error: row.daemon_error,
         failure_code: row.failure_code,
+        run_generation: row.run_generation,
         plan_mode: row.plan_mode,
         work_mode: row.work_mode,
         dependency_ids: row.dependency_ids,

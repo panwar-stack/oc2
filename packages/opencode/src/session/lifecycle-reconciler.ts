@@ -14,7 +14,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable } from "@/team/team.sql"
-import type { MemberFailureCode } from "@/team/team"
+import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Schedule, Scope } from "effect"
 
@@ -64,6 +64,13 @@ type MemberMetadata = {
   memberID: string
   promptMessageID: string
   state: "running" | "completed" | "idle" | "cancelled" | "failed"
+  /**
+   * The member run generation this metadata describes. Absent on legacy metadata written before
+   * PR 3, which is treated as generation 0 (not admitted).
+   */
+  generation?: number
+  /** Durable run phase; absent on legacy metadata (treated as "running"). */
+  phase?: MemberRunPhase
   output?: string
   error?: string
   failureCode?: string
@@ -136,6 +143,9 @@ const DaemonGuidance = [
 const TaskCompletionGuidance =
   "When your assigned work is complete, put the concrete result in your final answer so it can be sent back to the lead automatically."
 
+const RetryGuidance =
+  "Your previous response contained no final text result. Provide only your final result text now."
+
 const MemberTools = [
   "Available team tools (use these to coordinate with the team):",
   "- team_send_message: Send a message to the lead (recipient 'lead') or a specific teammate by name/session ID. Recipients are woken automatically.",
@@ -154,6 +164,54 @@ const NestedTeamTools = {
   team_create: false,
   team_spawn: false,
   local_fusion: false,
+}
+
+/**
+ * Tools denied for the completion-only retry prompt. The prompt `tools` map is a permission delta
+ * only (prompt.ts merges each entry into the session permission rules as allow/deny), so an empty
+ * map would change nothing: the model-facing tool set comes from the full registry + MCP, filtered
+ * only by session permission. Every general-mutation, shell, work-creation, web, and team tool is
+ * therefore denied explicitly. MCP and plugin tools are instance-dynamic and cannot be statically
+ * denied here; they are covered by the member's inherited session permissions and the RetryGuidance
+ * prompt text, consistent with the codebase's plan-mode precedent. PR 6 re-enables only the
+ * task-handoff tool (team_task_update) in this allowlist.
+ */
+const RetryPromptTools = {
+  bash: false,
+  shell: false,
+  write: false,
+  edit: false,
+  apply_patch: false,
+  read: false,
+  glob: false,
+  grep: false,
+  opengrep: false,
+  task: false,
+  local_fusion: false,
+  webfetch: false,
+  websearch: false,
+  skill: false,
+  todowrite: false,
+  question: false,
+  lsp: false,
+  plan_exit: false,
+  team_create: false,
+  team_spawn: false,
+  team_get_messages: false,
+  team_send_message: false,
+  team_broadcast: false,
+  team_task_create: false,
+  team_task_list: false,
+  team_task_claim: false,
+  team_task_update: false,
+  team_plan_submit: false,
+  team_plan_decide: false,
+  team_shutdown: false,
+  team_report: false,
+  memory_search_commit: false,
+  memory_examine_commit: false,
+  memory_search_summary: false,
+  memory_view_summary: false,
 }
 
 function backgroundMetadata(row: SessionRow): BackgroundMetadata | undefined {
@@ -187,7 +245,10 @@ function memberMetadata(row: SessionRow): MemberMetadata | undefined {
     item.kind !== "team-member" ||
     typeof item.memberID !== "string" ||
     typeof item.promptMessageID !== "string" ||
-    !["running", "completed", "idle", "cancelled", "failed"].includes(String(item.state))
+    !["running", "completed", "idle", "cancelled", "failed"].includes(String(item.state)) ||
+    (item.generation !== undefined && typeof item.generation !== "number") ||
+    (item.phase !== undefined &&
+      !["running", "retry_admitted", "retry_running", "terminal"].includes(String(item.phase)))
   )
     return
   return item as MemberMetadata
@@ -205,8 +266,10 @@ function backgroundWatchKey(sessionID: string, generation: number) {
   return `${sessionID}:${generation}`
 }
 
-function memberMessageID(memberID: string, kind: "started" | "completed" | "idle" | "cancelled" | "failed") {
-  return `lifecycle:member:${memberID}:${kind}`
+function memberMessageID(memberID: string, kind: "started" | "completed" | "idle" | "cancelled" | "failed", generation: number) {
+  // Generation-scoped so a stale attempt can never reuse or overwrite a notification of another
+  // generation, and never-admitted descendants (generation 0) get their own stable ID.
+  return `lifecycle:member:${memberID}:${kind}:${generation}`
 }
 
 function memberRecipientID(messageID: string, recipient: string) {
@@ -301,6 +364,32 @@ function isSuspension(cause: Cause.Cause<unknown>) {
 export type AssistantResult =
   | { state: "error"; messageID: MessageID; text: string }
   | { state: "completed"; messageID: MessageID; text: string; valid: boolean }
+
+/**
+ * Outcome of a member settlement. `settled` is a terminal settlement (after commit the caller may
+ * claim dependents and wake the lead); `retry` means a bounded retry was admitted and the caller
+ * must run one completion-only prompt with the returned prompt ID.
+ */
+export type MemberSettleOutcome =
+  | { kind: "settled"; team: TeamRow; state: "completed" | "idle" | "cancelled" | "failed" }
+  | { kind: "retry"; team: TeamRow; member: TeamMemberRow; promptMessageID: MessageID }
+
+/** Result of a member preparation. Only the prompt/resume variant carries generation facts. */
+export type PrepareResult =
+  | { action: "terminal" }
+  | { action: "blocked" }
+  | { action: "paused"; member: TeamMemberRow; team: TeamRow }
+  | { action: "settle"; member: TeamMemberRow; lifecycle: MemberMetadata }
+  | {
+      action: "prompt" | "resume"
+      member: TeamMemberRow
+      team: TeamRow
+      members: TeamMemberRow[]
+      promptMessageID: MessageID
+      generation: number
+      retry: boolean
+      phase: MemberRunPhase
+    }
 
 /**
  * Canonical terminal-result extractor shared by live settlement and restart reconciliation.
@@ -416,11 +505,12 @@ export const layer = Layer.effect(
       input: {
         team: TeamRow
         member: TeamMemberRow
+        generation: number
         kind: "started" | "completed" | "idle" | "cancelled" | "failed"
         body: string
       },
     ) => {
-      const id = memberMessageID(input.member.id, input.kind)
+      const id = memberMessageID(input.member.id, input.kind, input.generation)
       const now = Date.now()
       return Effect.gen(function* () {
         yield* tx
@@ -491,6 +581,20 @@ export const layer = Layer.effect(
         .join("\n\n")
     }
 
+    /**
+     * Completion-only retry prompt. It runs in the same child session as the original prompt and
+     * denies every general tool (`RetryPromptTools`), so the model can only produce final text. The
+     * structured task-handoff tool arrives with PR 6; until then the handoff requirement is disabled.
+     */
+    const memberRetryPrompt = (team: TeamRow, member: TeamMemberRow) =>
+      [
+        `You are teammate "${member.name}" in team "${team.name}".`,
+        `Team goal: ${team.goal}`,
+        `The lead session is ${team.lead_session_id}. Your session is ${member.session_id}.`,
+        TaskCompletionGuidance,
+        RetryGuidance,
+      ].join("\n\n")
+
     const claimReadyDependents = Effect.fn("LifecycleReconciler.claimReadyDependents")(function* (teamID: string) {
       return yield* db
         .transaction(
@@ -525,6 +629,47 @@ export const layer = Layer.effect(
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
+    })
+
+    /**
+     * Missing-task-handoff hook. It always returns false until owned tasks exist (PR 6), so the
+     * gen1 valid-but-missing-handoff retry and the gen2 `failed(missing_task_handoff)` transitions
+     * stay unreachable in this slice.
+     */
+    const memberOwnsUnfinishedTask = (member: TeamMemberRow) => false
+
+    /**
+     * Terminal-failure transaction hooks for later slices. They are no-ops now and only structure
+     * the terminal boundary so PR 6 (owned-task cancellation + reservation release) and PR 8 (one
+     * team-revision increment) can slot in without restructuring.
+     */
+    const cancelOwnedTasksOf = Effect.fn("LifecycleReconciler.cancelOwnedTasksOf")(function* (input: {
+      tx: WriteDatabase
+      team: TeamRow
+      member: TeamMemberRow
+      now: number
+    }) {
+      // PR 6: cancel the failed member's owned in-progress tasks in this same transaction.
+      return yield* Effect.void
+    })
+
+    const releaseReservationsOf = Effect.fn("LifecycleReconciler.releaseReservationsOf")(function* (input: {
+      tx: WriteDatabase
+      team: TeamRow
+      member: TeamMemberRow
+      now: number
+    }) {
+      // PR 6: release the failed member's file reservations in this same transaction.
+      return yield* Effect.void
+    })
+
+    const bumpTeamRevision = Effect.fn("LifecycleReconciler.bumpTeamRevision")(function* (input: {
+      tx: WriteDatabase
+      team: TeamRow
+      now: number
+    }) {
+      // PR 8: increment the team revision once per material terminal transaction.
+      return yield* Effect.void
     })
 
     /**
@@ -585,6 +730,7 @@ export const layer = Layer.effect(
         yield* sendMemberMessage(tx, {
           team,
           member,
+          generation: member.run_generation,
           kind: "cancelled",
           body: `Cancelled: dependency ${failedMember.name} failed.`,
         })
@@ -598,6 +744,8 @@ export const layer = Layer.effect(
       error?: string
       failureCode?: MemberFailureCode
       promptMessageID?: string
+      /** The run generation this settlement applies to. Omitted for legacy settle paths. */
+      generation?: number
       allowWhilePaused?: boolean
     }) {
       const settled = yield* db
@@ -620,13 +768,33 @@ export const layer = Layer.effect(
                 .get()
               if (!session) return undefined
               const persisted = memberMetadata(session)
+              // Guard 2: a stale generation or a prompt-ID mismatch changes nothing.
+              if (input.generation !== undefined && input.generation !== member.run_generation) return undefined
               if (
                 input.promptMessageID &&
                 persisted &&
                 (persisted.memberID !== member.id || persisted.promptMessageID !== input.promptMessageID)
               )
                 return undefined
+              // Resolve the generation this settlement applies to. Legacy metadata (no generation)
+              // is adopted 0 -> 1 in this same transaction and settled directly without any retry
+              // decision; an already-admitted legacy row keeps its persisted run_generation.
+              let generation = input.generation ?? persisted?.generation
+              if (generation === undefined) {
+                if (member.run_generation === 0) {
+                  const adopted = yield* tx
+                    .update(TeamMemberTable)
+                    .set({ run_generation: 1, time_updated: Date.now() })
+                    .where(and(eq(TeamMemberTable.id, member.id), eq(TeamMemberTable.run_generation, 0)))
+                    .returning({ id: TeamMemberTable.id })
+                    .get()
+                  if (!adopted) return undefined
+                }
+                generation = member.run_generation === 0 ? 1 : member.run_generation
+              }
               if (!input.allowWhilePaused && (yield* activePause(tx, [team.lead_session_id, member.session_id]))) {
+                // W4: persist the durable fact with the current generation, no advance, no prompt,
+                // member stays active, and the durable resume intent is preserved by the caller.
                 const promptMessageID = input.promptMessageID ?? persisted?.promptMessageID
                 if (!promptMessageID) return undefined
                 yield* tx
@@ -636,6 +804,8 @@ export const layer = Layer.effect(
                       kind: "team-member",
                       memberID: member.id,
                       promptMessageID,
+                      generation,
+                      phase: persisted?.phase ?? "running",
                       state: input.state,
                       output: input.output,
                       ...(input.error ? { error: input.error } : {}),
@@ -645,20 +815,76 @@ export const layer = Layer.effect(
                   })
                   .where(eq(SessionTable.id, session.id))
                   .run()
-                return { paused: true as const, team, member }
+                return { kind: "paused" as const, team }
               }
               const now = Date.now()
+              const isFinite = member.lifecycle !== "daemon"
+              // Generation 1 with a blank completed result is one bounded retry: CAS the member
+              // 1 -> 2, allocate a fresh prompt ID, and persist retry_admitted in this transaction.
+              if (
+                isFinite &&
+                input.state === "completed" &&
+                generation === 1 &&
+                (input.output === "" || memberOwnsUnfinishedTask(member))
+              ) {
+                const advanced = yield* tx
+                  .update(TeamMemberTable)
+                  .set({ run_generation: 2, time_updated: now })
+                  .where(
+                    and(
+                      eq(TeamMemberTable.id, member.id),
+                      eq(TeamMemberTable.run_generation, 1),
+                      notInArray(TeamMemberTable.status, [...terminalMemberStatuses]),
+                    ),
+                  )
+                  .returning({ id: TeamMemberTable.id })
+                  .get()
+                if (!advanced) return undefined
+                const retryPromptMessageID = MessageID.ascending()
+                yield* tx
+                  .update(SessionTable)
+                  .set({
+                    metadata: withMemberMetadata(session, {
+                      kind: "team-member",
+                      memberID: member.id,
+                      promptMessageID: retryPromptMessageID,
+                      generation: 2,
+                      phase: "retry_admitted",
+                      state: "running",
+                    }),
+                    time_updated: now,
+                  })
+                  .where(eq(SessionTable.id, session.id))
+                  .run()
+                return {
+                  kind: "retry" as const,
+                  team,
+                  member: { ...member, run_generation: 2 },
+                  promptMessageID: retryPromptMessageID,
+                }
+              }
+              // Generation 2 never retries again: a blank result fails as empty_result and a still
+              // missing task handoff fails as missing_task_handoff (unreachable until PR 6).
+              let effectiveState = input.state
+              let effectiveCode = input.failureCode
+              if (isFinite && input.state === "completed" && generation === 2 && input.output === "") {
+                effectiveState = "failed"
+                effectiveCode = "empty_result"
+              } else if (isFinite && input.state === "completed" && generation === 2 && memberOwnsUnfinishedTask(member)) {
+                effectiveState = "failed"
+                effectiveCode = "missing_task_handoff"
+              }
               const update = yield* tx
                 .update(TeamMemberTable)
                 .set({
-                  status: input.state,
-                  result: input.state === "completed" ? input.output : member.result,
+                  status: effectiveState,
+                  result: effectiveState === "completed" ? input.output : member.result,
                   time_updated: now,
-                  ...(input.state === "failed" ? { failure_code: input.failureCode ?? null } : {}),
+                  ...(effectiveState === "failed" ? { failure_code: effectiveCode ?? null } : {}),
                   ...(member.lifecycle === "daemon"
                     ? {
                         daemon_state:
-                          input.state === "idle"
+                          effectiveState === "idle"
                             ? ("idle" as const)
                             : input.error === "cancelled"
                               ? ("cancelled" as const)
@@ -671,6 +897,7 @@ export const layer = Layer.effect(
                 .where(
                   and(
                     eq(TeamMemberTable.id, member.id),
+                    eq(TeamMemberTable.run_generation, generation),
                     notInArray(TeamMemberTable.status, [...terminalMemberStatuses]),
                   ),
                 )
@@ -686,19 +913,21 @@ export const layer = Layer.effect(
                       kind: "team-member",
                       memberID: member.id,
                       promptMessageID,
-                      state: input.state,
+                      generation,
+                      phase: "terminal",
+                      state: effectiveState,
                       output: input.output,
                       ...(input.error ? { error: input.error } : {}),
-                      ...(input.failureCode ? { failureCode: input.failureCode } : {}),
+                      ...(effectiveCode ? { failureCode: effectiveCode } : {}),
                     }),
                     time_updated: now,
                   })
                   .where(eq(SessionTable.id, session.id))
                   .run()
               }
-              const kind = input.state
+              const kind = effectiveState
               const body =
-                input.state === "completed"
+                effectiveState === "completed"
                   ? [
                       `Teammate ${member.name} (${member.agent_type}) completed and returned this result:`,
                       "",
@@ -706,13 +935,16 @@ export const layer = Layer.effect(
                       input.output || "(no text result)",
                       "</teammate_result>",
                     ].join("\n")
-                  : input.state === "idle"
+                  : effectiveState === "idle"
                     ? `Daemon teammate ${member.name} (${member.agent_type}) initialized and is idle.`
-                    : input.state === "failed"
-                      ? `Teammate ${member.name} (${member.agent_type}) failed: ${input.error ?? input.failureCode ?? "provider error"}`
+                    : effectiveState === "failed"
+                      ? `Teammate ${member.name} (${member.agent_type}) failed: ${input.error ?? effectiveCode ?? "provider error"}`
                       : `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${input.error ?? "cancelled"}`
-              yield* sendMemberMessage(tx, { team, member, kind, body })
-              if (input.state === "failed") {
+              yield* sendMemberMessage(tx, { team, member, generation, kind, body })
+              if (effectiveState === "failed") {
+                yield* cancelOwnedTasksOf({ tx, team, member, now })
+                yield* releaseReservationsOf({ tx, team, member, now })
+                yield* bumpTeamRevision({ tx, team, now })
                 const allMembers = yield* tx
                   .select()
                   .from(TeamMemberTable)
@@ -720,18 +952,19 @@ export const layer = Layer.effect(
                   .all()
                 yield* cancelBlockedDescendants({ tx, team, failedMember: member, members: allMembers, now })
               }
-              return { paused: false as const, team, member }
+              return { kind: "settled" as const, team, state: effectiveState }
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
-      if (!settled) return false
-      if (settled.paused) {
+      if (!settled) return undefined
+      if (settled.kind === "paused") {
         yield* setIntent(settled.team.lead_session_id, "team-wake")
-        return false
+        return undefined
       }
+      if (settled.kind === "retry") return settled
       const current = yield* InstanceState.get(state)
-      if (input.state === "completed") {
+      if (settled.state === "completed") {
         const claimed = yield* claimReadyDependents(settled.team.id)
         if (current.ops) {
           yield* Effect.forEach(
@@ -742,7 +975,7 @@ export const layer = Layer.effect(
         }
       }
       yield* wakeWithIntent(current.ops, settled.team.lead_session_id, "team-wake")
-      return true
+      return settled
     })
 
     const prepareMember = Effect.fn("LifecycleReconciler.prepareMember")(function* (memberID: string) {
@@ -797,6 +1030,24 @@ export const layer = Layer.effect(
                   .get()
                 if (!claim) return { action: "terminal" as const }
               }
+              // Resolve the run generation this activation uses. New and legacy members are adopted
+              // 0 -> 1 in this same immediate transaction with their persisted prompt ID; retry
+              // members stay on generation 2. Stale metadata (generation mismatch) is never acted on.
+              let generation = persisted?.generation
+              if (generation === undefined) {
+                if (member.run_generation === 0) {
+                  const adopted = yield* tx
+                    .update(TeamMemberTable)
+                    .set({ run_generation: 1, time_updated: Date.now() })
+                    .where(and(eq(TeamMemberTable.id, member.id), eq(TeamMemberTable.run_generation, 0)))
+                    .returning({ id: TeamMemberTable.id })
+                    .get()
+                  if (!adopted) return { action: "terminal" as const }
+                }
+                generation = member.run_generation === 0 ? 1 : member.run_generation
+              } else if (generation !== member.run_generation) {
+                return { action: "terminal" as const }
+              }
               const promptID =
                 persisted?.memberID === member.id && persisted.promptMessageID
                   ? MessageID.make(persisted.promptMessageID)
@@ -810,6 +1061,12 @@ export const layer = Layer.effect(
                   and(eq(MessageTable.id, promptID), eq(MessageTable.session_id, SessionID.make(member.session_id))),
                 )
                 .get()
+              const retry = persisted?.phase === "retry_admitted" || persisted?.phase === "retry_running"
+              // W2: when the retry prompt already exists the resume path advances the phase to
+              // retry_running here. When the prompt is still missing (W1), retry_admitted is kept so
+              // the admission finishes first and the phase CAS happens after the prompt is durable.
+              let phase: MemberRunPhase = persisted?.phase ?? "running"
+              if (retry && existing) phase = "retry_running"
 
               const activated = yield* tx
                 .update(TeamMemberTable)
@@ -836,37 +1093,181 @@ export const layer = Layer.effect(
                     kind: "team-member",
                     memberID: member.id,
                     promptMessageID: promptID,
+                    generation,
+                    phase,
                     state: "running",
                   }),
                   time_updated: Date.now(),
                 })
                 .where(eq(SessionTable.id, session.id))
                 .run()
-              yield* sendMemberMessage(tx, {
-                team,
-                member,
-                kind: "started",
-                body: [
-                  `Teammate ${member.name} (${member.agent_type}) started.`,
-                  "",
-                  "Assignment:",
-                  member.role_prompt,
-                  ...(dependencies.length > 0
-                    ? ["", "Dependency context was provided in this teammate's prompt."]
-                    : []),
-                ].join("\n"),
-              })
+              // Retry admission and retry resume stay silent; the lead only hears the outcome.
+              if (!retry) {
+                yield* sendMemberMessage(tx, {
+                  team,
+                  member,
+                  generation,
+                  kind: "started",
+                  body: [
+                    `Teammate ${member.name} (${member.agent_type}) started.`,
+                    "",
+                    "Assignment:",
+                    member.role_prompt,
+                    ...(dependencies.length > 0
+                      ? ["", "Dependency context was provided in this teammate's prompt."]
+                      : []),
+                  ].join("\n"),
+                })
+              }
               return {
                 action: existing ? ("resume" as const) : ("prompt" as const),
-                member,
+                member: { ...member, run_generation: generation },
                 team,
                 members,
                 promptMessageID: promptID,
+                generation,
+                retry,
+                phase,
               }
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
+    })
+
+    /**
+     * Advances a member from retry_admitted to retry_running with compare-and-set semantics guarded
+     * by the member identity, the generation, and the retry prompt ID. It is a no-op when the phase
+     * already left retry_admitted, so concurrent recoveries cannot double-advance or admit twice.
+     */
+    const markRetryRunning = Effect.fn("LifecycleReconciler.markRetryRunning")(function* (
+      memberID: string,
+      promptMessageID: MessageID,
+    ) {
+      yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const member = yield* tx.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get()
+              if (!member) return
+              const session = yield* tx
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, SessionID.make(member.session_id)))
+                .get()
+              if (!session) return
+              const persisted = memberMetadata(session)
+              if (
+                !persisted ||
+                persisted.memberID !== member.id ||
+                persisted.generation !== 2 ||
+                persisted.phase !== "retry_admitted" ||
+                persisted.promptMessageID !== String(promptMessageID)
+              )
+                return
+              yield* tx
+                .update(SessionTable)
+                .set({
+                  metadata: withMemberMetadata(session, { ...persisted, phase: "retry_running" }),
+                  time_updated: Date.now(),
+                })
+                .where(eq(SessionTable.id, session.id))
+                .run()
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
+    /**
+     * Runs the one bounded retry: a completion-only prompt in the same child session with every
+     * general tool denied (`RetryPromptTools`), the retry_admitted -> retry_running phase CAS, then
+     * the generation-2 settlement.
+     */
+    const runRetryPrompt = Effect.fn("LifecycleReconciler.runRetryPrompt")(function* (input: {
+      memberID: string
+      promptMessageID: MessageID
+      ops: PromptOps
+    }) {
+      const member = yield* db
+        .select()
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.id, input.memberID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!member || terminalMemberStatuses.includes(member.status as (typeof terminalMemberStatuses)[number])) {
+        return "Teammate is already in a terminal state."
+      }
+      const team = yield* db.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get().pipe(Effect.orDie)
+      if (!team || team.status !== "active") return "Teammate is already in a terminal state."
+      const model = member.model
+      if (!model) {
+        yield* settleMember({
+          memberID: member.id,
+          state: "failed",
+          output: "",
+          error: "missing persisted model",
+          failureCode: "provider_error",
+          promptMessageID: String(input.promptMessageID),
+          generation: 2,
+        })
+        return "Teammate stopped before retrying: missing persisted model."
+      }
+      const parts = yield* input.ops.resolvePromptParts(memberRetryPrompt(team, member))
+      const result = yield* input.ops
+        .prompt({
+          messageID: input.promptMessageID,
+          sessionID: SessionID.make(member.session_id),
+          model: {
+            providerID: ProviderV2.ID.make(model.providerID),
+            modelID: ModelV2.ID.make(model.modelID),
+          },
+          variant: model.variant,
+          agent: member.agent_type,
+          // Completion-only retry: deny every general tool in this slice. The structured
+          // task-handoff tool arrives with PR 6; the model may only produce final text here.
+          tools: RetryPromptTools,
+          parts,
+        })
+        .pipe(Effect.exit)
+      if (Exit.isFailure(result) && Cause.hasInterrupts(result.cause)) return yield* Effect.interrupt
+      if (Exit.isFailure(result) && isSuspension(result.cause)) {
+        // W4: the retry fact stays durable with its prompt ID and a resume intent, so a later start
+        // resumes it without ever adding a second user prompt.
+        yield* setIntent(member.session_id, "running")
+        return "Teammate is suspended and will resume after the pause is released."
+      }
+      if (Exit.isFailure(result)) {
+        const error = Cause.squash(result.cause)
+        const message = error instanceof Error ? error.message : String(error)
+        yield* settleMember({
+          memberID: member.id,
+          state: "failed",
+          output: "",
+          error: message,
+          failureCode: "provider_error",
+          promptMessageID: String(input.promptMessageID),
+          generation: 2,
+        })
+        return message
+      }
+      // The retry prompt is durably admitted; advance the phase with a generation + prompt-ID guard.
+      yield* markRetryRunning(member.id, input.promptMessageID)
+      const terminal = assistantResult(result.value.info, result.value.parts)
+      // A nonterminal retry turn (for example a "tool-calls" finish) keeps the member active on
+      // retry_running; reconcile resumes the run without a new user prompt.
+      if (!terminal) return "Teammate did not finish."
+      const output = terminal.text
+      yield* settleMember({
+        memberID: member.id,
+        state: terminal.state === "error" ? "failed" : "completed",
+        output,
+        error: terminal.state === "error" ? output : undefined,
+        failureCode: terminal.state === "error" ? "provider_error" : undefined,
+        promptMessageID: String(input.promptMessageID),
+        generation: 2,
+      })
+      return output || "(no text result)"
     })
 
     const startMember: Interface["startMember"] = Effect.fn("LifecycleReconciler.startMember")(function* (input) {
@@ -879,14 +1280,22 @@ export const layer = Layer.effect(
         if (prepared.action === "terminal") return "Teammate is already in a terminal state."
         if (prepared.action === "blocked") return "Teammate is waiting for dependencies."
         if (prepared.action === "settle") {
-          yield* settleMember({
+          const settled = yield* settleMember({
             memberID: prepared.member.id,
             state: prepared.lifecycle.state as Exclude<MemberMetadata["state"], "running">,
             output: prepared.lifecycle.output ?? "",
             error: prepared.lifecycle.error,
             failureCode: prepared.lifecycle.failureCode as MemberFailureCode | undefined,
             promptMessageID: prepared.lifecycle.promptMessageID,
+            generation: prepared.lifecycle.generation,
           })
+          if (settled?.kind === "retry") {
+            return yield* runRetryPrompt({
+              memberID: prepared.member.id,
+              promptMessageID: settled.promptMessageID,
+              ops: input.ops,
+            })
+          }
           return prepared.lifecycle.output ?? prepared.lifecycle.error ?? "Teammate settlement restored."
         }
         if (prepared.action === "paused") {
@@ -901,6 +1310,7 @@ export const layer = Layer.effect(
             error: "missing persisted model",
             failureCode: "provider_error",
             promptMessageID: prepared.promptMessageID,
+            generation: prepared.generation,
           })
           return "Teammate stopped before starting: missing persisted model."
         }
@@ -910,7 +1320,9 @@ export const layer = Layer.effect(
           // scheduled, so its value would settle the member against a stale turn.
           if (prepared.action === "resume") return yield* input.ops.run(SessionID.make(prepared.member.session_id))
           const parts = yield* input.ops.resolvePromptParts(
-            memberPrompt(prepared.team, prepared.member, prepared.members),
+            prepared.retry
+              ? memberRetryPrompt(prepared.team, prepared.member)
+              : memberPrompt(prepared.team, prepared.member, prepared.members),
           )
           return yield* input.ops.prompt({
             messageID: prepared.promptMessageID,
@@ -921,10 +1333,15 @@ export const layer = Layer.effect(
             },
             variant: model.variant,
             agent: prepared.member.agent_type,
-            tools: {
-              ...NestedTeamTools,
-              ...(prepared.member.plan_mode ? { bash: false, write: false, edit: false, apply_patch: false } : {}),
-            },
+            tools: prepared.retry
+              ? // Completion-only retry: deny every general tool. PR 6 adds the task-handoff tool.
+                RetryPromptTools
+              : {
+                  ...NestedTeamTools,
+                  ...(prepared.member.plan_mode
+                    ? { bash: false, write: false, edit: false, apply_patch: false }
+                    : {}),
+                },
             parts,
           })
         }).pipe(Effect.exit)
@@ -945,15 +1362,20 @@ export const layer = Layer.effect(
             error: message,
             failureCode: "provider_error",
             promptMessageID: prepared.promptMessageID,
+            generation: prepared.generation,
           })
           return message
+        }
+        // After a successful retry admission the phase advances before the result settles.
+        if (prepared.retry && prepared.action === "prompt") {
+          yield* markRetryRunning(prepared.member.id, prepared.promptMessageID)
         }
         const terminal = assistantResult(result.value.info, result.value.parts)
         // A nonterminal turn (for example a "tool-calls" finish) is not a fact to settle on; the
         // member keeps its active status so a later reconcile resumes the run.
         if (!terminal) return "Teammate did not finish."
         const output = terminal.text
-        yield* settleMember({
+        const settled = yield* settleMember({
           memberID: prepared.member.id,
           state:
             terminal.state === "error"
@@ -967,8 +1389,15 @@ export const layer = Layer.effect(
           error: terminal.state === "error" ? output : undefined,
           failureCode: terminal.state === "error" && prepared.member.lifecycle !== "daemon" ? "provider_error" : undefined,
           promptMessageID: prepared.promptMessageID,
+          generation: prepared.generation,
         })
-
+        if (settled?.kind === "retry") {
+          return yield* runRetryPrompt({
+            memberID: prepared.member.id,
+            promptMessageID: settled.promptMessageID,
+            ops: input.ops,
+          })
+        }
         return output || (prepared.member.lifecycle === "daemon" ? "Daemon teammate initialized." : "(no text result)")
       }).pipe(
         Effect.ensuring(
@@ -1359,8 +1788,8 @@ export const layer = Layer.effect(
         error: "cancelled",
         allowWhilePaused: true,
       })
-      if (settled) yield* input.ops.cancel(SessionID.make(member.session_id)).pipe(Effect.ignore)
-      return settled
+      if (settled?.kind === "settled") yield* input.ops.cancel(SessionID.make(member.session_id)).pipe(Effect.ignore)
+      return settled?.kind === "settled"
     })
 
     const reconcile: Interface["reconcile"] = Effect.gen(function* () {
@@ -1381,14 +1810,22 @@ export const layer = Layer.effect(
         const persisted = sessionsByID.get(SessionID.make(member.session_id))
         const fact = persisted ? memberMetadata(persisted) : undefined
         if (fact?.memberID === member.id && fact.state !== "running") {
-          yield* settleMember({
+          const settled = yield* settleMember({
             memberID: member.id,
             state: fact.state,
             output: fact.output ?? "",
             error: fact.error,
             failureCode: fact.failureCode as MemberFailureCode | undefined,
             promptMessageID: fact.promptMessageID,
+            generation: fact.generation,
           })
+          if (settled?.kind === "retry" && current.ops) {
+            yield* runRetryPrompt({
+              memberID: member.id,
+              promptMessageID: settled.promptMessageID,
+              ops: current.ops,
+            }).pipe(Effect.forkIn(current.scope))
+          }
           continue
         }
         const promptMessageID = fact?.promptMessageID
@@ -1403,7 +1840,7 @@ export const layer = Layer.effect(
             .all()
             .pipe(Effect.orDie, Effect.map((rows) => rows.map(partRowToPart)))
           const text = assistantResult(info, parts)?.text ?? ""
-          yield* settleMember({
+          const settled = yield* settleMember({
             memberID: member.id,
             state:
               terminal.state === "error"
@@ -1417,7 +1854,15 @@ export const layer = Layer.effect(
             error: terminal.state === "error" ? text : undefined,
             failureCode: terminal.state === "error" && member.lifecycle !== "daemon" ? "provider_error" : undefined,
             promptMessageID,
+            generation: fact?.generation,
           })
+          if (settled?.kind === "retry" && current.ops) {
+            yield* runRetryPrompt({
+              memberID: member.id,
+              promptMessageID: settled.promptMessageID,
+              ops: current.ops,
+            }).pipe(Effect.forkIn(current.scope))
+          }
           continue
         }
         if (

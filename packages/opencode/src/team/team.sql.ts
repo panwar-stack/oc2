@@ -42,6 +42,7 @@ export const TeamMemberTable = sqliteTable(
     daemon_last_active: integer(),
     daemon_error: text(),
     failure_code: text(),
+    run_generation: integer().notNull().default(0),
     plan_mode: integer({ mode: "boolean" }).notNull().default(false),
     work_mode: text({ enum: ["plan", "implement"] })
       .notNull()
