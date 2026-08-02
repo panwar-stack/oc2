@@ -161,7 +161,9 @@ export const layer = Layer.effect(
       yield* elog.info("cancel", { sessionID })
       const activeTeam = yield* team.getActive(sessionID)
       const teamMembers = Option.isSome(activeTeam) ? yield* team.getMembers(activeTeam.value.id) : []
-      if (Option.isSome(activeTeam)) yield* team.shutdown(activeTeam.value.id).pipe(Effect.ignore)
+      if (Option.isSome(activeTeam)) {
+        yield* team.shutdown({ teamID: activeTeam.value.id, sessionID }).pipe(Effect.ignore)
+      }
       yield* Effect.forEach(
         [sessionID, ...teamMembers.map((member) => SessionID.make(member.session_id))],
         (id) => state.cancel(id),

@@ -10019,16 +10019,31 @@
               "type": "string"
             },
             "required": true
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
           }
         ],
         "responses": {
           "200": {
-            "description": "Team shut down",
+            "description": "Team shutdown result",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "boolean",
-                  "description": "Team shut down"
+                  "$ref": "#/components/schemas/TeamShutdownResult"
                 }
               }
             }
@@ -10051,7 +10066,7 @@
             }
           }
         },
-        "description": "Shutdown a team and cancel all active member sessions.",
+        "description": "Shutdown a team and cancel all non-terminal member sessions and tasks. Lead-only. force=true requires a nonblank reason and bypasses the final-report checkpoint.",
         "summary": "Shutdown team",
         "x-codeSamples": [
           {
@@ -29774,6 +29789,154 @@
           "delivery_status",
           "time_created",
           "time_updated"
+        ],
+        "additionalProperties": false
+      },
+      "TeamShutdownResult": {
+        "type": "object",
+        "properties": {
+          "team_id": {
+            "type": "string"
+          },
+          "cancelled_members": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "cancelled_tasks": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "released_reservations": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "session_cancellation_failures": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "NaN"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "-Infinity"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "team_id",
+          "cancelled_members",
+          "cancelled_tasks",
+          "released_reservations",
+          "session_cancellation_failures"
         ],
         "additionalProperties": false
       },

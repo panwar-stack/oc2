@@ -294,7 +294,7 @@ describe("team HttpApi", () => {
     }),
   )
 
-  it.instance("allows authorized shutdown", () =>
+  it.instance("allows authorized shutdown and returns stable counts", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const team = yield* Team.Service
@@ -321,10 +321,46 @@ describe("team HttpApi", () => {
       const members = yield* team.getMembers(info.id)
 
       expect(response.status, JSON.stringify(body)).toBe(200)
-      expect(body).toBe(true)
+      expect(body).toMatchObject({
+        team_id: info.id,
+        cancelled_members: 1,
+        cancelled_tasks: 0,
+        released_reservations: 0,
+        session_cancellation_failures: 0,
+      })
       expect(Option.isSome(after)).toBe(true)
       if (Option.isSome(after)) expect(after.value.status).toBe("closed")
       expect(members.find((row) => row.id === member.id)?.status).toBe("cancelled")
+    }),
+  )
+
+  it.instance("rejects shutdown from a member session even though reads are allowed", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const team = yield* Team.Service
+      const info = yield* team.create({
+        name: "http-shutdown-member",
+        goal: "Close cleanly",
+        leadSessionID: "ses_shutdown_lead_member",
+      })
+      const member = yield* team.addMember({
+        teamID: info.id,
+        sessionID: "ses_shutdown_http_member",
+        name: "worker",
+        agentType: "general",
+        rolePrompt: "Do the work",
+      })
+      yield* team.updateMemberStatus(member.id, "active")
+
+      const response = yield* request(withSession(`${TeamPaths.root}/${info.id}/shutdown`, member.session_id), {
+        method: "POST",
+        headers: { "x-oc2-directory": test.directory },
+      })
+      const after = yield* team.get(info.id)
+
+      expect(response.status).toBe(400)
+      expect(Option.isSome(after)).toBe(true)
+      if (Option.isSome(after)) expect(after.value.status).toBe("active")
     }),
   )
 })

@@ -192,6 +192,20 @@ const TeamAccessQuery = Schema.Struct({
   sessionID: Schema.String,
 })
 
+const TeamShutdownQuery = Schema.Struct({
+  sessionID: Schema.String,
+  force: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+})
+
+const TeamShutdownResultSchema = Schema.Struct({
+  team_id: Schema.String,
+  cancelled_members: Schema.Number,
+  cancelled_tasks: Schema.Number,
+  released_reservations: Schema.Number,
+  session_cancellation_failures: Schema.Number,
+}).annotate({ identifier: "TeamShutdownResult" })
+
 export const TeamApi = HttpApi.make("team").add(
   HttpApiGroup.make("team")
     .add(
@@ -256,14 +270,15 @@ export const TeamApi = HttpApi.make("team").add(
       ),
       HttpApiEndpoint.post("shutdown", `${TeamPaths.root}/:teamID/shutdown`, {
         params: { teamID: Schema.String },
-        query: TeamAccessQuery,
-        success: described(Schema.Boolean, "Team shut down"),
+        query: TeamShutdownQuery,
+        success: described(TeamShutdownResultSchema, "Team shutdown result"),
         error: HttpApiError.BadRequest,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "team.shutdown",
           summary: "Shutdown team",
-          description: "Shutdown a team and cancel all active member sessions.",
+          description:
+            "Shutdown a team and cancel all non-terminal member sessions and tasks. Lead-only. force=true requires a nonblank reason and bypasses the final-report checkpoint.",
         }),
       ),
     )

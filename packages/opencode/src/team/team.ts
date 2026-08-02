@@ -113,6 +113,79 @@ export class ActiveTeamConflict extends Schema.TaggedErrorClass<ActiveTeamConfli
   }
 }
 
+/** Stable rejection when a non-lead session attempts to shut a team down. */
+export class ShutdownNotAuthorized extends Schema.TaggedErrorClass<ShutdownNotAuthorized>()(
+  "Team.ShutdownNotAuthorized",
+  { teamID: Schema.String },
+) {
+  override get message() {
+    return `Only the team lead can shut down team ${this.teamID}.`
+  }
+}
+
+/** Stable rejection when the team is not active (already closed or cancelled). */
+export class ShutdownAlreadyClosed extends Schema.TaggedErrorClass<ShutdownAlreadyClosed>()(
+  "Team.ShutdownAlreadyClosed",
+  { teamID: Schema.String },
+) {
+  override get message() {
+    return `Team ${this.teamID} is already closed.`
+  }
+}
+
+/** Stable rejection for protocol-1 normal shutdown without a current final-report checkpoint. */
+export class ShutdownFinalReportRequired extends Schema.TaggedErrorClass<ShutdownFinalReportRequired>()(
+  "Team.ShutdownFinalReportRequired",
+  {
+    teamID: Schema.String,
+    revision: Schema.Number,
+    finalReportRevision: Schema.NullOr(Schema.Number),
+  },
+) {
+  override get message() {
+    return `Team ${this.teamID} requires a current final report before normal shutdown (revision ${this.revision}, final report covers ${
+      this.finalReportRevision ?? "nothing"
+    }). Run team_report({ final: true }) or force shutdown with a nonblank reason.`
+  }
+}
+
+/** Stable rejection when a forced shutdown is requested without a nonblank reason. */
+export class ShutdownReasonRequired extends Schema.TaggedErrorClass<ShutdownReasonRequired>()(
+  "Team.ShutdownReasonRequired",
+  { teamID: Schema.String },
+) {
+  override get message() {
+    return `Forced shutdown requires a nonblank reason.`
+  }
+}
+
+/** Stable rejection when a message targets a team that is not active. */
+export class MessageToClosedTeam extends Schema.TaggedErrorClass<MessageToClosedTeam>()(
+  "Team.MessageToClosedTeam",
+  { teamID: Schema.String },
+) {
+  override get message() {
+    return `Cannot send messages to team ${this.teamID}: the team is not active.`
+  }
+}
+
+export type ShutdownResult = {
+  /** Members transitioned from a nonterminal status to cancelled by this shutdown. */
+  cancelledMembers: number
+  /** Tasks transitioned from pending/in_progress to cancelled by this shutdown. */
+  cancelledTasks: number
+  /** Reservation rows released (time_released set) by this shutdown; rows are kept for audit. */
+  releasedReservations: number
+  /** Per-session run cancellation failures after commit; durable team state stays closed. */
+  sessionCancellationFailures: number
+}
+
+export type ShutdownError =
+  | ShutdownNotAuthorized
+  | ShutdownAlreadyClosed
+  | ShutdownFinalReportRequired
+  | ShutdownReasonRequired
+
 export type UsageEventType = TeamUsageEventRow["type"]
 
 export type UsageEvent = {
@@ -130,7 +203,21 @@ export interface Interface {
   getActive: (leadSessionID: string) => Effect.Effect<Option.Option<Info>>
   getByLeadSession: (leadSessionID: string) => Effect.Effect<Option.Option<Info>>
   get: (teamID: string) => Effect.Effect<Option.Option<Info>>
-  shutdown: (teamID: string) => Effect.Effect<void>
+  /**
+   * Shuts a team down. Lead-only: rejects unless the caller is the team's lead session.
+   * Normal shutdown of a protocol-1 team requires the current final-report checkpoint
+   * (`final_report_revision === revision`). `force: true` bypasses the checkpoint and
+   * requires a nonblank `reason`; it records a `forced_shutdown` usage event. The close,
+   * member cancellation, task cancellation, and reservation release happen in one immediate
+   * transaction that does not bump the revision. Events and per-session run cancellation
+   * happen only after commit.
+   */
+  shutdown: (input: {
+    teamID: string
+    sessionID: string
+    force?: boolean
+    reason?: string
+  }) => Effect.Effect<ShutdownResult, ShutdownError>
   addMember: (input: {
     teamID: string
     sessionID: string
@@ -178,7 +265,12 @@ export interface Interface {
   ) => Effect.Effect<Option.Option<Task>, Error>
   claimTask: (teamID: string, taskID: string, assignee: string) => Effect.Effect<Option.Option<Task>, Error>
   getTasks: (teamID: string) => Effect.Effect<Task[]>
-  sendMessage: (input: { teamID: string; sender: string; recipients: string[]; body: string }) => Effect.Effect<Message>
+  sendMessage: (input: {
+    teamID: string
+    sender: string
+    recipients: string[]
+    body: string
+  }) => Effect.Effect<Message, MessageToClosedTeam>
   getMessages: (teamID: string) => Effect.Effect<Message[]>
   getPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[]>
   /**
@@ -348,45 +440,150 @@ export const layer = Layer.effect(
       return toOption(row)
     })
 
-    const shutdown = Effect.fn("Team.shutdown")(function* (teamID: string) {
+    const shutdown = Effect.fn("Team.shutdown")(function* (input: {
+      teamID: string
+      sessionID: string
+      force?: boolean
+      reason?: string
+    }) {
       const now = Date.now()
-      yield* db
-        .update(TeamTable)
-        .set({ status: "closed", time_updated: now })
-        .where(eq(TeamTable.id, teamID))
-        .run()
-        .pipe(Effect.orDie)
-      const allMembers = yield* db
-        .select()
-        .from(TeamMemberTable)
-        .where(eq(TeamMemberTable.team_id, teamID))
-        .all()
-        .pipe(Effect.orDie)
+      const force = input.force === true
+      // Forced shutdown is the explicit abort path for a wedged or abandoned team. It must
+      // never become the normal completion path: it requires a nonblank reason and records a
+      // deterministic forced_shutdown usage event inside the close transaction.
+      if (force && (typeof input.reason !== "string" || input.reason.trim() === "")) {
+        return yield* Effect.fail(new ShutdownReasonRequired({ teamID: input.teamID }))
+      }
+      // ONE immediate transaction: admission checks, close, member cancellation, task
+      // cancellation, reservation release, and (for forced shutdown) the audit event. The
+      // checked revision covers all pre-shutdown work; this transaction must NOT bump the
+      // revision. Unread mailbox rows are never touched.
+      const closed = yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, input.teamID)).get()
+              if (!team || team.status !== "active") {
+                return yield* Effect.fail(new ShutdownAlreadyClosed({ teamID: input.teamID }))
+              }
+              if (team.lead_session_id !== input.sessionID) {
+                return yield* Effect.fail(new ShutdownNotAuthorized({ teamID: input.teamID }))
+              }
+              // Protocol-1 gate: normal shutdown requires the final-report checkpoint to cover
+              // the current revision. Protocol-0 teams skip this gate. Forced shutdown bypasses
+              // it for a wedged or explicitly abandoned team.
+              if (team.protocol_version === 1 && !force && team.final_report_revision !== team.revision) {
+                return yield* Effect.fail(
+                  new ShutdownFinalReportRequired({
+                    teamID: input.teamID,
+                    revision: team.revision,
+                    finalReportRevision: team.final_report_revision,
+                  }),
+                )
+              }
+              yield* tx
+                .update(TeamTable)
+                .set({ status: "closed", time_updated: now })
+                .where(eq(TeamTable.id, input.teamID))
+                .run()
+              const members = yield* tx
+                .select()
+                .from(TeamMemberTable)
+                .where(eq(TeamMemberTable.team_id, input.teamID))
+                .all()
+              const nonterminal = members.filter(
+                (member) =>
+                  member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed",
+              )
+              yield* Effect.forEach(
+                nonterminal,
+                (member) =>
+                  tx
+                    .update(TeamMemberTable)
+                    .set({
+                      status: "cancelled",
+                      time_updated: now,
+                      ...(member.lifecycle === "daemon"
+                        ? { daemon_state: "cancelled" as const, daemon_last_active: now }
+                        : {}),
+                    })
+                    .where(eq(TeamMemberTable.id, member.id))
+                    .run(),
+                { concurrency: "unbounded", discard: true },
+              )
+              const pendingTasks = yield* tx
+                .select({ id: TeamTaskTable.id })
+                .from(TeamTaskTable)
+                .where(
+                  and(
+                    eq(TeamTaskTable.team_id, input.teamID),
+                    inArray(TeamTaskTable.status, ["pending", "in_progress"]),
+                  ),
+                )
+                .all()
+              yield* Effect.forEach(
+                pendingTasks,
+                (task) =>
+                  tx
+                    .update(TeamTaskTable)
+                    .set({ status: "cancelled", time_updated: now })
+                    .where(eq(TeamTaskTable.id, task.id))
+                    .run(),
+                { concurrency: "unbounded", discard: true },
+              )
+              // Release reservations of the tasks cancelled above. Rows are kept for audit; only
+              // the release time is set, so a later owned task can re-reserve the path.
+              let releasedReservations = 0
+              if (pendingTasks.length > 0) {
+                const released = yield* tx
+                  .update(TeamFileOwnershipTable)
+                  .set({ time_released: now, time_updated: now })
+                  .where(
+                    and(
+                      eq(TeamFileOwnershipTable.team_id, input.teamID),
+                      inArray(
+                        TeamFileOwnershipTable.task_id,
+                        pendingTasks.map((task) => task.id),
+                      ),
+                      isNull(TeamFileOwnershipTable.time_released),
+                    ),
+                  )
+                  .returning({ id: TeamFileOwnershipTable.id })
+                  .run()
+                releasedReservations = released.length
+              }
+              if (force) {
+                yield* tx
+                  .insert(TeamUsageEventTable)
+                  .values({
+                    id: crypto.randomUUID(),
+                    team_id: input.teamID,
+                    session_id: input.sessionID,
+                    member_id: null,
+                    type: "forced_shutdown",
+                    metadata: { reason: input.reason, force: true, forced_at: now },
+                    time_created: now,
+                  })
+                  .run()
+              }
+              return { members, nonterminal, pendingTasks, releasedReservations }
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(
+          Effect.catch((error) =>
+            error instanceof ShutdownAlreadyClosed ||
+            error instanceof ShutdownNotAuthorized ||
+            error instanceof ShutdownFinalReportRequired
+              ? Effect.fail(error)
+              : Effect.die(error),
+          ),
+        )
+      // AFTER commit only: publish member and team events, and cancel each cancelled member's
+      // session run. Cancellation failures are collected as a stable count and never reopen the
+      // durable closed team state.
       yield* Effect.forEach(
-        allMembers.filter(
-          (member) =>
-            member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed",
-        ),
-        (member) =>
-          db
-            .update(TeamMemberTable)
-            .set({
-              status: "cancelled",
-              time_updated: now,
-              ...(member.lifecycle === "daemon" ? { daemon_state: "cancelled" as const, daemon_last_active: now } : {}),
-            })
-            .where(eq(TeamMemberTable.id, member.id))
-            .run()
-            .pipe(Effect.orDie),
-        { concurrency: "unbounded", discard: true },
-      )
-      yield* Effect.forEach(
-        allMembers,
-        (member) => runState.cancel(SessionID.make(member.session_id)).pipe(Effect.ignore),
-        { concurrency: "unbounded", discard: true },
-      )
-      yield* Effect.forEach(
-        allMembers,
+        closed.members,
         (member) =>
           events.publish(MemberUpdated, {
             memberID: member.id,
@@ -400,13 +597,33 @@ export const layer = Layer.effect(
           }),
         { concurrency: "unbounded", discard: true },
       )
-      yield* events.publish(TeamClosed, { teamID })
+      yield* events.publish(TeamClosed, { teamID: input.teamID })
       yield* events.publish(TuiEvent.ToastShow, {
         title: "Team Shut Down",
         message: "The team has been closed and all active members cancelled.",
         variant: "info",
         duration: 5000,
       })
+      const cancelOutcomes = yield* Effect.forEach(
+        closed.nonterminal,
+        (member) =>
+          runState.cancel(SessionID.make(member.session_id)).pipe(
+            // Any per-session cancellation failure (typed or defect) is surfaced as a stable
+            // count; it must never reopen the durable closed team state.
+            Effect.matchCause({
+              onFailure: () => 1,
+              onSuccess: () => 0,
+            }),
+          ),
+        { concurrency: "unbounded" },
+      )
+      const sessionCancellationFailures = cancelOutcomes.reduce((acc, value) => acc + value, 0)
+      return {
+        cancelledMembers: closed.nonterminal.length,
+        cancelledTasks: closed.pendingTasks.length,
+        releasedReservations: closed.releasedReservations,
+        sessionCancellationFailures,
+      } satisfies ShutdownResult
     })
 
     const addMember = Effect.fn("Team.addMember")(function* (input: {
@@ -541,7 +758,11 @@ export const layer = Layer.effect(
             sender: row.session_id,
             recipients: [team.lead_session_id],
             body: `Teammate ${row.name} (${row.agent_type}) has ${statusText}.`,
-          })
+          }).pipe(
+            // A terminal transition racing a team close must not fail the status update: the
+            // team is closed, so the automatic notification is moot.
+            Effect.catchTag("Team.MessageToClosedTeam", () => Effect.void),
+          )
           yield* events.publish(TuiEvent.ToastShow, {
             title: "Teammate Update",
             message: `${row.name} (${row.agent_type}) has ${statusText}.`,
@@ -1260,10 +1481,16 @@ export const layer = Layer.effect(
       const id = crypto.randomUUID()
       const now = Date.now()
       const recipients = [...new Set(input.recipients)]
+      // Reject messages to a closed or cancelled team in the same immediate transaction as the
+      // insert, so no message or recipient rows are ever created for a non-active team.
       yield* db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
+              const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, input.teamID)).get()
+              if (!team || team.status !== "active") {
+                return yield* Effect.fail(new MessageToClosedTeam({ teamID: input.teamID }))
+              }
               yield* tx
                 .insert(TeamMessageTable)
                 .values({
@@ -1297,7 +1524,11 @@ export const layer = Layer.effect(
             }),
           { behavior: "immediate" },
         )
-        .pipe(Effect.orDie)
+        .pipe(
+          Effect.catch((error) =>
+            error instanceof MessageToClosedTeam ? Effect.fail(error) : Effect.die(error),
+          ),
+        )
       yield* events.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender })
       return {
         id,

@@ -75,11 +75,41 @@ export const teamHandlers = HttpApiBuilder.group(InstanceHttpApi, "team", (handl
 
     const shutdown = Effect.fn("TeamHttpApi.shutdown")(function* (ctx: {
       params: { teamID: string }
-      query: { sessionID: string }
+      query: { sessionID: string; force?: string; reason?: string }
     }) {
-      yield* requireTeamAccess(ctx.params.teamID, ctx.query.sessionID)
-      yield* team.shutdown(ctx.params.teamID)
-      return true
+      // Shutdown is lead-only. Unlike the read endpoints (requireTeamAccess), a member session
+      // must not be able to close the team.
+      const teamInfo = yield* team.get(ctx.params.teamID)
+      if (Option.isNone(teamInfo) || teamInfo.value.lead_session_id !== ctx.query.sessionID) {
+        return yield* new HttpApiError.BadRequest({})
+      }
+      const result = yield* team
+        .shutdown({
+          teamID: ctx.params.teamID,
+          sessionID: ctx.query.sessionID,
+          force: ctx.query.force === "true",
+          reason: ctx.query.reason,
+        })
+        .pipe(
+          Effect.catch((error) => {
+            if (
+              error instanceof Team.ShutdownNotAuthorized ||
+              error instanceof Team.ShutdownAlreadyClosed ||
+              error instanceof Team.ShutdownFinalReportRequired ||
+              error instanceof Team.ShutdownReasonRequired
+            ) {
+              return Effect.fail(new HttpApiError.BadRequest({}))
+            }
+            return Effect.die(error)
+          }),
+        )
+      return {
+        team_id: ctx.params.teamID,
+        cancelled_members: result.cancelledMembers,
+        cancelled_tasks: result.cancelledTasks,
+        released_reservations: result.releasedReservations,
+        session_cancellation_failures: result.sessionCancellationFailures,
+      }
     })
 
     return handlers

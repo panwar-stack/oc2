@@ -1,10 +1,12 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer, Option } from "effect"
+import { and, eq } from "drizzle-orm"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
-import { MessageID, type SessionID } from "@/session/schema"
+import { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
+import { TeamTable, TeamUsageEventTable } from "@/team/team.sql"
 import { TeamShutdownTool } from "@/tool/team_shutdown"
 import type { Context } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
@@ -66,7 +68,7 @@ describe("tool.team_shutdown", () => {
     ),
   )
 
-  it.live("shuts down the active team for the lead", () =>
+  it.live("shuts down the active team for the lead and returns stable counts", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -81,9 +83,152 @@ describe("tool.team_shutdown", () => {
           const after = yield* team.get(info.id)
 
           expect(result.title).toBe("Team Shut Down")
-          expect(result.output).toBe("Team shut down successfully.")
+          expect(result.output).toContain("Team shut down successfully.")
+          expect(result.metadata).toMatchObject({
+            cancelledMembers: 0,
+            cancelledTasks: 0,
+            releasedReservations: 0,
+            sessionCancellationFailures: 0,
+          })
           expect(Option.isSome(after)).toBe(true)
           if (Option.isSome(after)) expect(after.value.status).toBe("closed")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects a member session explicitly as lead-only", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "shutdown-member", goal: "Close", leadSessionID: lead.id })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_shutdown_member",
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          const tool = yield* TeamShutdownTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({}, context(SessionID.make("ses_shutdown_member")))
+          const after = yield* team.get(info.id)
+
+          expect(result.title).toBe("Team Shutdown Failed")
+          expect(result.output).toBe("Only the team lead can shut down a team.")
+          expect(Option.isSome(after)).toBe(true)
+          if (Option.isSome(after)) expect(after.value.status).toBe("active")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("rejects protocol-1 normal shutdown without a current final report", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "shutdown-p1", goal: "Close", leadSessionID: lead.id })
+          const { db } = yield* Database.Service
+          yield* db
+            .update(TeamTable)
+            .set({ protocol_version: 1 })
+            .where(eq(TeamTable.id, info.id))
+            .run()
+            .pipe(Effect.orDie)
+          const tool = yield* TeamShutdownTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({}, context(lead.id))
+          const after = yield* team.get(info.id)
+
+          expect(result.title).toBe("Team Shutdown Rejected")
+          expect(result.output).toContain("final report")
+          expect(Option.isSome(after)).toBe(true)
+          if (Option.isSome(after)) expect(after.value.status).toBe("active")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("forced shutdown with a reason bypasses the final-report gate and records the event", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "shutdown-force", goal: "Close", leadSessionID: lead.id })
+          yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_shutdown_force_member",
+            name: "worker",
+            agentType: "general",
+            rolePrompt: "Do the work",
+          })
+          const { db } = yield* Database.Service
+          yield* db
+            .update(TeamTable)
+            .set({ protocol_version: 1 })
+            .where(eq(TeamTable.id, info.id))
+            .run()
+            .pipe(Effect.orDie)
+          const tool = yield* TeamShutdownTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({ force: true, reason: "team wedged" }, context(lead.id))
+          const after = yield* team.get(info.id)
+          const forcedEvents = yield* db
+            .select()
+            .from(TeamUsageEventTable)
+            .where(
+              and(
+                eq(TeamUsageEventTable.team_id, info.id),
+                eq(TeamUsageEventTable.type, "forced_shutdown"),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+
+          expect(result.title).toBe("Team Shut Down")
+          expect(Option.isSome(after)).toBe(true)
+          if (Option.isSome(after)) expect(after.value.status).toBe("closed")
+          expect(forcedEvents).toHaveLength(1)
+          expect(forcedEvents[0]?.metadata).toEqual(
+            expect.objectContaining({ reason: "team wedged", force: true }),
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("forced shutdown without a nonblank reason is rejected", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "shutdown-force-noreason", goal: "Close", leadSessionID: lead.id })
+          const tool = yield* TeamShutdownTool
+          const def = yield* tool.init()
+
+          const missing = yield* def.execute({ force: true }, context(lead.id))
+          const blank = yield* def.execute({ force: true, reason: "   " }, context(lead.id))
+          const after = yield* team.get(info.id)
+
+          expect(missing.title).toBe("Team Shutdown Rejected")
+          expect(missing.output).toContain("reason")
+          expect(blank.title).toBe("Team Shutdown Rejected")
+          expect(blank.output).toContain("reason")
+          expect(Option.isSome(after)).toBe(true)
+          if (Option.isSome(after)) expect(after.value.status).toBe("active")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -116,9 +261,10 @@ describe("tool.team_shutdown", () => {
           const tool = yield* TeamShutdownTool
           const def = yield* tool.init()
 
-          yield* def.execute({}, context(lead.id))
+          const result = yield* def.execute({}, context(lead.id))
           const members = yield* team.getMembers(info.id)
 
+          expect(result.metadata.cancelledMembers).toBe(1)
           expect(members.find((member) => member.id === active.id)?.status).toBe("cancelled")
           expect(members.find((member) => member.id === completed.id)?.status).toBe("completed")
         }),

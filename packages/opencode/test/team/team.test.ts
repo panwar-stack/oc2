@@ -1,19 +1,21 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Layer, Option } from "effect"
+import { Cause, Deferred, Effect, Exit, Latch, Layer, Option } from "effect"
 import { Team } from "@/team/team"
-import { TeamTable } from "@/team/team.sql"
-import { and, eq } from "drizzle-orm"
+import { TeamMessageRecipientTable, TeamMessageTable, TeamTable, TeamUsageEventTable } from "@/team/team.sql"
+import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
+import { and, eq, inArray, isNull } from "drizzle-orm"
 import { Bus } from "@/bus"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Runner } from "@/effect/runner"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { Session } from "@/session/session"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
-import { MessageID, PartID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import type { SessionPrompt } from "@/session/prompt"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
@@ -161,7 +163,7 @@ describe("team", () => {
         const leadSessionID = "ses_test_lead_recreate"
 
         const first = yield* team.create({ name: "first-team", goal: "First goal", leadSessionID })
-        yield* team.shutdown(first.id)
+        yield* team.shutdown({ teamID: first.id, sessionID: leadSessionID })
 
         const second = yield* team.create({ name: "second-team", goal: "Second goal", leadSessionID })
         expect(second.id).not.toBe(first.id)
@@ -203,7 +205,7 @@ describe("team", () => {
         )
 
         const first = yield* team.create({ name: "first-team", goal: "First goal", leadSessionID })
-        yield* team.shutdown(first.id)
+        yield* team.shutdown({ teamID: first.id, sessionID: leadSessionID })
         crypto.randomUUID = () => "00000000-0000-4000-8000-000000000000"
         yield* team.create({ name: "second-team", goal: "Second goal", leadSessionID })
 
@@ -222,7 +224,7 @@ describe("team", () => {
         const leadSessionID = "ses_test_lead_closed_lookup"
 
         const created = yield* team.create({ name: "closed-team", goal: "Goal", leadSessionID })
-        yield* team.shutdown(created.id)
+        yield* team.shutdown({ teamID: created.id, sessionID: leadSessionID })
 
         const active = yield* team.getActive(leadSessionID)
         expect(Option.isNone(active)).toBe(true)
@@ -281,7 +283,7 @@ describe("team", () => {
           }
         })
 
-        yield* team.shutdown(created.id)
+        yield* team.shutdown({ teamID: created.id, sessionID: leadSessionID })
         yield* awaitWithTimeout(
           Deferred.await(receivedFinalStatuses),
           "shutdown member status events were not published",
@@ -775,7 +777,7 @@ describe("team", () => {
           rolePrompt: "Work",
         })
 
-        yield* team.shutdown(teamInfo.id)
+        yield* team.shutdown({ teamID: teamInfo.id, sessionID: leadSessionID })
 
         const active = yield* team.getActive(leadSessionID)
         expect(Option.isNone(active)).toBe(true)
@@ -1139,7 +1141,7 @@ describe("team", () => {
         })
         yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
 
-        yield* team.shutdown(info.id)
+        yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
 
         const members = yield* team.getMembers(info.id)
         expect(members[0]?.status).toBe("failed")
@@ -1171,7 +1173,7 @@ describe("team", () => {
         yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
         yield* team.updateMemberStatus(active.id, "active")
 
-        yield* team.shutdown(info.id)
+        yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
 
         const members = yield* team.getMembers(info.id)
         expect(members.find((member) => member.id === failed.id)?.status).toBe("failed")
@@ -1363,6 +1365,452 @@ describe("team revision", () => {
         // message to the lead bumps once in a separate logical transaction.
         yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
         expect((yield* revisionOf(info.id))?.revision).toBe(before + 2)
+      }),
+    ),
+  )
+})
+
+describe("team shutdown admission", () => {
+  const leadSessionID = "ses_shutdown_admission_lead"
+
+  const setProtocol = (teamID: string, protocol: number, finalReportRevision?: number) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .update(TeamTable)
+        .set({
+          protocol_version: protocol,
+          ...(finalReportRevision === undefined ? {} : { final_report_revision: finalReportRevision }),
+        })
+        .where(eq(TeamTable.id, teamID))
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+  const revisionOf = (teamID: string) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return (yield* db
+        .select({ revision: TeamTable.revision, final_report_revision: TeamTable.final_report_revision })
+        .from(TeamTable)
+        .where(eq(TeamTable.id, teamID))
+        .get()
+        .pipe(Effect.orDie))?.revision
+    })
+
+  it.live("shutdown is lead-only and rejects a member caller", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "lead-only", goal: "Close", leadSessionID })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_shutdown_member_caller",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+
+        const error = yield* team
+          .shutdown({ teamID: info.id, sessionID: "ses_shutdown_member_caller" })
+          .pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Team.ShutdownNotAuthorized)
+
+        const after = yield* team.get(info.id)
+        expect(unwrap(after).status).toBe("active")
+      }),
+    ),
+  )
+
+  it.live("shutdown rejects an unknown team as already closed", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const error = yield* team.shutdown({ teamID: "ses_does_not_exist", sessionID: leadSessionID }).pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Team.ShutdownAlreadyClosed)
+      }),
+    ),
+  )
+
+  it.live("protocol-0 normal shutdown closes atomically, releases tasks, preserves mail, and does not bump revision", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "protocol-0-close", goal: "Close", leadSessionID })
+        const active = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_p0_active",
+          name: "active",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        const completed = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_p0_completed",
+          name: "done",
+          agentType: "general",
+          rolePrompt: "Finish",
+        })
+        yield* team.updateMemberStatus(active.id, "active")
+        yield* team.updateMemberStatus(completed.id, "completed")
+        const pendingTask = yield* team.createTask({ teamID: info.id, description: "Pending task" })
+        const ownedTask = yield* team.createTask({
+          teamID: info.id,
+          description: "Owned task",
+          owned: [
+            { rootKey: "/work", pathKey: "/work/p0-a.txt", displayPath: "p0-a.txt" },
+            { rootKey: "/work", pathKey: "/work/p0-b.txt", displayPath: "p0-b.txt" },
+          ],
+        })
+        yield* team.claimTask(info.id, ownedTask.id, "ses_p0_active")
+        // Unread mailbox row: must survive shutdown untouched.
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: leadSessionID,
+          recipients: [active.session_id],
+          body: "Read this later",
+        })
+        const before = (yield* revisionOf(info.id)) ?? -1
+        const { db } = yield* Database.Service
+        const recipientBefore = yield* db
+          .select()
+          .from(TeamMessageRecipientTable)
+          .where(and(eq(TeamMessageRecipientTable.team_id, info.id), eq(TeamMessageRecipientTable.recipient, active.session_id)))
+          .all()
+          .pipe(Effect.orDie)
+        // One unread recipient row for the explicit message (the completed-member auto-notification
+        // targets the lead and is separate). It must survive shutdown untouched.
+        expect(recipientBefore).toHaveLength(1)
+        expect(recipientBefore[0]?.delivery_status).toBe("pending")
+        const totalRecipientsBefore = (
+          yield* db
+            .select()
+            .from(TeamMessageRecipientTable)
+            .where(eq(TeamMessageRecipientTable.team_id, info.id))
+            .all()
+            .pipe(Effect.orDie)
+        ).length
+
+        const result = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
+
+        expect(result.cancelledMembers).toBe(1)
+        expect(result.cancelledTasks).toBe(2)
+        expect(result.releasedReservations).toBe(2)
+        expect(result.sessionCancellationFailures).toBe(0)
+
+        const after = unwrap(yield* team.get(info.id))
+        expect(after.status).toBe("closed")
+        expect((yield* revisionOf(info.id))).toBe(before)
+
+        const members = yield* team.getMembers(info.id)
+        expect(members.find((member) => member.id === active.id)?.status).toBe("cancelled")
+        expect(members.find((member) => member.id === completed.id)?.status).toBe("completed")
+
+        const tasks = yield* team.getTasks(info.id)
+        expect(tasks.find((task) => task.id === pendingTask.id)?.status).toBe("cancelled")
+        const cancelledOwned = tasks.find((task) => task.id === ownedTask.id)
+        expect(cancelledOwned?.status).toBe("cancelled")
+        expect(cancelledOwned?.reservations.every((reservation) => reservation.timeReleased !== null)).toBe(true)
+
+        const recipientAfter = yield* db
+          .select()
+          .from(TeamMessageRecipientTable)
+          .where(eq(TeamMessageRecipientTable.team_id, info.id))
+          .all()
+          .pipe(Effect.orDie)
+        // Unread mailbox rows are preserved: the same recipient rows exist with the same state.
+        expect(recipientAfter).toHaveLength(totalRecipientsBefore)
+        const explicitAfter = recipientAfter.find((row) => row.recipient === active.session_id)
+        expect(explicitAfter?.delivery_status).toBe("pending")
+        expect((yield* team.getMessages(info.id))).toHaveLength(2)
+      }),
+    ),
+  )
+
+  it.live("protocol-1 normal shutdown without a current final report is rejected", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "protocol-1-gate", goal: "Close", leadSessionID })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_p1_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        yield* setProtocol(info.id, 1)
+        const revision = (yield* revisionOf(info.id)) ?? -1
+
+        const error = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID }).pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Team.ShutdownFinalReportRequired)
+        if (error instanceof Team.ShutdownFinalReportRequired) {
+          expect(error.revision).toBe(revision)
+          expect(error.finalReportRevision).toBeNull()
+        }
+
+        const after = yield* team.get(info.id)
+        expect(unwrap(after).status).toBe("active")
+      }),
+    ),
+  )
+
+  it.live("protocol-1 normal shutdown closes when the final report covers the current revision", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "protocol-1-clear", goal: "Close", leadSessionID })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_p1_clear_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        const revision = (yield* revisionOf(info.id)) ?? -1
+        yield* setProtocol(info.id, 1, revision)
+
+        const result = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
+        expect(result.cancelledMembers).toBe(1)
+        expect(unwrap(yield* team.get(info.id)).status).toBe("closed")
+      }),
+    ),
+  )
+
+  it.live("protocol-1 normal shutdown rejects a stale final report after a later mutation", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "protocol-1-stale", goal: "Close", leadSessionID })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_p1_stale_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        const revision = (yield* revisionOf(info.id)) ?? -1
+        yield* setProtocol(info.id, 1, revision)
+        // A later material mutation bumps the revision and invalidates the checkpoint.
+        yield* team.createTask({ teamID: info.id, description: "Late task" })
+
+        const error = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID }).pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Team.ShutdownFinalReportRequired)
+        expect(unwrap(yield* team.get(info.id)).status).toBe("active")
+      }),
+    ),
+  )
+
+  it.live("forced shutdown with a reason bypasses the protocol-1 gate and records the event", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "forced-close", goal: "Close", leadSessionID })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_forced_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        yield* setProtocol(info.id, 1)
+
+        const result = yield* team.shutdown({
+          teamID: info.id,
+          sessionID: leadSessionID,
+          force: true,
+          reason: "lead abandoned the team",
+        })
+        expect(result.cancelledMembers).toBe(1)
+        expect(unwrap(yield* team.get(info.id)).status).toBe("closed")
+
+        const { db } = yield* Database.Service
+        const events = yield* db
+          .select()
+          .from(TeamUsageEventTable)
+          .where(and(eq(TeamUsageEventTable.team_id, info.id), eq(TeamUsageEventTable.type, "forced_shutdown")))
+          .all()
+          .pipe(Effect.orDie)
+        expect(events).toHaveLength(1)
+        expect(events[0]?.metadata).toEqual(
+          expect.objectContaining({ reason: "lead abandoned the team", force: true }),
+        )
+      }),
+    ),
+  )
+
+  it.live("forced shutdown without a nonblank reason is rejected", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "forced-no-reason", goal: "Close", leadSessionID })
+
+        const missing = yield* team
+          .shutdown({ teamID: info.id, sessionID: leadSessionID, force: true })
+          .pipe(Effect.flip)
+        expect(missing).toBeInstanceOf(Team.ShutdownReasonRequired)
+
+        const blank = yield* team
+          .shutdown({ teamID: info.id, sessionID: leadSessionID, force: true, reason: "   " })
+          .pipe(Effect.flip)
+        expect(blank).toBeInstanceOf(Team.ShutdownReasonRequired)
+
+        expect(unwrap(yield* team.get(info.id)).status).toBe("active")
+      }),
+    ),
+  )
+
+  it.live("force:false keeps normal shutdown behavior and does not record a forced event", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "force-false", goal: "Close", leadSessionID })
+        yield* setProtocol(info.id, 1)
+
+        const error = yield* team
+          .shutdown({ teamID: info.id, sessionID: leadSessionID, force: false, reason: "irrelevant" })
+          .pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Team.ShutdownFinalReportRequired)
+
+        yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID, force: true, reason: "wedged" })
+        const { db } = yield* Database.Service
+        const events = yield* db
+          .select()
+          .from(TeamUsageEventTable)
+          .where(eq(TeamUsageEventTable.team_id, info.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(events.filter((event) => event.type === "forced_shutdown")).toHaveLength(1)
+      }),
+    ),
+  )
+
+  it.live("a second shutdown after close is a stable error", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "double-close", goal: "Close", leadSessionID })
+        yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
+
+        const error = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID }).pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Team.ShutdownAlreadyClosed)
+        expect(unwrap(yield* team.get(info.id)).status).toBe("closed")
+      }),
+    ),
+  )
+
+  it.live("sendMessage after close is rejected and creates no rows", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "post-close-message", goal: "Close", leadSessionID })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_post_close_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
+
+        const error = yield* team
+          .sendMessage({ teamID: info.id, sender: leadSessionID, recipients: ["ses_post_close_member"], body: "late" })
+          .pipe(Effect.flip)
+        expect(error).toBeInstanceOf(Team.MessageToClosedTeam)
+
+        const { db } = yield* Database.Service
+        const messages = yield* db
+          .select()
+          .from(TeamMessageTable)
+          .where(eq(TeamMessageTable.team_id, info.id))
+          .all()
+          .pipe(Effect.orDie)
+        const recipients = yield* db
+          .select()
+          .from(TeamMessageRecipientTable)
+          .where(eq(TeamMessageRecipientTable.team_id, info.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(messages).toHaveLength(0)
+        expect(recipients).toHaveLength(0)
+      }),
+    ),
+  )
+})
+
+describe("team shutdown session cancellation", () => {
+  const leadSessionID = "ses_shutdown_cancel_lead"
+  const failSessionID = "ses_shutdown_cancel_fail"
+
+  // A stub SessionRunState whose cancel fails for one member session, so the shutdown
+  // service must surface the failure as a stable count without reopening the team.
+  const runStateStub = (): SessionRunState.Interface => ({
+    assertNotBusy: () => Effect.void,
+    assertNotSuspended: () => Effect.void,
+    cancel: (sessionID) =>
+      sessionID === SessionID.make(failSessionID)
+        ? Effect.die(new Error("simulated cancel failure"))
+        : Effect.void,
+    suspend: () => Effect.succeed(false),
+    ensureRunning: () => Effect.void as unknown as Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
+    wake: () => Effect.succeed(false),
+    startShell: () =>
+      Effect.void as unknown as Effect.Effect<SessionV1.WithParts, Session.BusyError | Runner.Suspended>,
+    startSubstitution: () => Effect.succeed([]),
+  })
+
+  const itStubbed = testEffect(
+    Layer.mergeAll(
+      Agent.defaultLayer,
+      BackgroundJob.defaultLayer,
+      Config.defaultLayer,
+      CrossSpawnSpawner.defaultLayer,
+      Database.defaultLayer,
+      EventV2Bridge.defaultLayer,
+      LifecycleReconciler.defaultLayer,
+      Session.defaultLayer,
+      SessionControl.defaultLayer,
+      SessionRunState.defaultLayer,
+      SessionStatus.defaultLayer,
+      Truncate.defaultLayer,
+      RuntimeFlags.layer({ experimentalBackgroundSubagents: true }),
+      Bus.layer,
+      Team.layer.pipe(
+        Layer.provide(Layer.succeed(SessionRunState.Service, runStateStub())),
+        Layer.provide(EventV2Bridge.defaultLayer),
+        Layer.provide(Database.defaultLayer),
+        Layer.provide(CrossSpawnSpawner.defaultLayer),
+      ),
+    ),
+  )
+
+  itStubbed.live("shutdown reports per-session cancellation failures as a stable count", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "cancel-failure", goal: "Close", leadSessionID })
+        yield* team.addMember({
+          teamID: info.id,
+          sessionID: failSessionID,
+          name: "failing",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        const ok = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_shutdown_cancel_ok",
+          name: "ok",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        yield* team.updateMemberStatus(ok.id, "active")
+
+        const result = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
+
+        expect(result.cancelledMembers).toBe(2)
+        expect(result.sessionCancellationFailures).toBe(1)
+        // Durable state stays closed despite the cancellation failure.
+        expect(unwrap(yield* team.get(info.id)).status).toBe("closed")
       }),
     ),
   )

@@ -5048,12 +5048,14 @@ export class Team extends HeyApiClient {
   /**
    * Shutdown team
    *
-   * Shutdown a team and cancel all active member sessions.
+   * Shutdown a team and cancel all non-terminal member sessions and tasks. Lead-only. force=true requires a nonblank reason and bypasses the final-report checkpoint.
    */
   public shutdown<ThrowOnError extends boolean = false>(
     parameters: {
       teamID: string
       sessionID: string
+      force?: string
+      reason?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5064,6 +5066,8 @@ export class Team extends HeyApiClient {
           args: [
             { in: "path", key: "teamID" },
             { in: "query", key: "sessionID" },
+            { in: "query", key: "force" },
+            { in: "query", key: "reason" },
           ],
         },
       ],

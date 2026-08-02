@@ -3906,6 +3906,14 @@ export type TeamMessage = {
   time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
+export type TeamShutdownResult = {
+  team_id: string
+  cancelled_members: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  cancelled_tasks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  released_reservations: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  session_cancellation_failures: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type EventTuiPromptAppend = {
   type: "tui.prompt.append"
   properties: {
@@ -10705,6 +10713,8 @@ export type TeamShutdownData = {
   }
   query: {
     sessionID: string
+    force?: string
+    reason?: string
   }
   url: "/team/{teamID}/shutdown"
 }
@@ -10720,9 +10730,9 @@ export type TeamShutdownError = TeamShutdownErrors[keyof TeamShutdownErrors]
 
 export type TeamShutdownResponses = {
   /**
-   * Team shut down
+   * Team shutdown result
    */
-  200: boolean
+  200: TeamShutdownResult
 }
 
 export type TeamShutdownResponse = TeamShutdownResponses[keyof TeamShutdownResponses]

@@ -1,3 +1,7 @@
-Shut down the active team, cancelling all active teammate sessions and marking the team as closed.
-Use this when the team has completed its goal or needs to be terminated.
+Shut down the active team, cancelling all non-terminal teammate sessions and tasks, releasing task file reservations, and marking the team as closed. Lead-only.
+
+Normal shutdown requires a current final report for protocol-1 teams; run team_report({ final: true }) immediately before shutdown.
+
+Use force: true only for a wedged or explicitly abandoned team. Force is lead-only, requires a nonblank reason, bypasses the final-report checkpoint, and records a forced-shutdown audit event. It is an escape hatch, not the normal completion path.
+
 This does not cancel the lead session.
