@@ -12,10 +12,12 @@ import {
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TeamMemberTable, TeamMessageRecipientTable, TeamMessageTable, TeamTable, TeamTaskTable } from "@/team/team.sql"
 import { bumpTeamRevision } from "@/team/revision"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
+import { TeamEvents } from "@/team/events"
 import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Schedule, Scope } from "effect"
@@ -387,7 +389,14 @@ export type AssistantResult =
  * must run one completion-only prompt with the returned prompt ID.
  */
 export type MemberSettleOutcome =
-  | { kind: "settled"; team: TeamRow; state: "completed" | "idle" | "cancelled" | "failed" }
+  | {
+      kind: "settled"
+      team: TeamRow
+      state: "completed" | "idle" | "cancelled" | "failed"
+      generation: number
+      messageID: string
+      cancelledDescendants: TeamMemberRow[]
+    }
   | { kind: "retry"; team: TeamRow; member: TeamMemberRow; promptMessageID: MessageID }
 
 /** Result of a member preparation. Only the prompt/resume variant carries generation facts. */
@@ -482,6 +491,7 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const { db } = database
     const control = yield* SessionControl.Service
+    const events = yield* EventV2Bridge.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("LifecycleReconciler.state")(function* (ctx) {
@@ -802,6 +812,7 @@ export const layer = Layer.effect(
           body: `Cancelled: dependency ${failedMember.name} failed.`,
         })
       }
+      return descendants
     })
 
     const settleMember = Effect.fn("LifecycleReconciler.settleMember")(function* (input: {
@@ -938,7 +949,7 @@ export const layer = Layer.effect(
               let effectiveState = input.state
               let effectiveCode = input.failureCode
               if (isFinite && input.state === "completed" && generation === 2 && input.output === "") {
-                effectiveState = "failed"
+                effectiveState = "cancelled"
                 effectiveCode = "empty_result"
               } else if (
                 isFinite &&
@@ -946,7 +957,7 @@ export const layer = Layer.effect(
                 generation === 2 &&
                 (yield* memberOwnsUnfinishedTask(tx, member))
               ) {
-                effectiveState = "failed"
+                effectiveState = "cancelled"
                 effectiveCode = "missing_task_handoff"
               }
               // Idempotent re-settlement guard. The reconcile loop re-settles every nonterminal
@@ -961,7 +972,7 @@ export const layer = Layer.effect(
               const noMaterialChange = (() => {
                 if (member.status !== effectiveState) return false
                 if (effectiveState === "completed" && member.result !== input.output) return false
-                if (effectiveState === "failed" && member.failure_code !== (effectiveCode ?? null)) return false
+                if ((effectiveState === "failed" || effectiveState === "cancelled") && member.failure_code !== (effectiveCode ?? null)) return false
                 if (member.lifecycle === "daemon") {
                   const targetDaemonState =
                     effectiveState === "idle"
@@ -989,7 +1000,10 @@ export const layer = Layer.effect(
                   status: effectiveState,
                   result: effectiveState === "completed" ? input.output : member.result,
                   time_updated: now,
-                  ...(effectiveState === "failed" ? { failure_code: effectiveCode ?? null } : {}),
+                  // A cancelled-with-failure settlement (provider error, empty_result,
+                  // missing_task_handoff) keeps the failure code on the member row so the
+                  // cancellation reason is durable and inspectable.
+                  ...(effectiveCode ? { failure_code: effectiveCode } : {}),
                   ...(member.lifecycle === "daemon"
                     ? {
                         daemon_state:
@@ -1046,11 +1060,21 @@ export const layer = Layer.effect(
                     ].join("\n")
                   : effectiveState === "idle"
                     ? `Daemon teammate ${member.name} (${member.agent_type}) initialized and is idle.`
-                    : effectiveState === "failed"
-                      ? `Teammate ${member.name} (${member.agent_type}) failed: ${input.error ?? effectiveCode ?? "provider error"}`
-                      : `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${input.error ?? "cancelled"}`
+                  : effectiveState === "failed"
+                    ? `Teammate ${member.name} (${member.agent_type}) failed: ${input.error ?? effectiveCode ?? "provider error"}`
+                    : `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${input.error ?? effectiveCode ?? "cancelled"}`
               yield* sendMemberMessage(tx, { team, member, generation, kind, body })
-              if (effectiveState === "failed") {
+              // A failure that surfaces as `cancelled` (provider error, empty_result,
+              // missing_task_handoff) keeps the old `failed` cleanup semantics: cancel the member's
+              // owned tasks and every still-blocked descendant. A normal cancellation (error
+              // "cancelled", no failure code) does not touch descendants.
+              const failureCancellation =
+                effectiveState === "failed" ||
+                (isFinite &&
+                  effectiveState === "cancelled" &&
+                  (effectiveCode !== undefined || (input.error !== undefined && input.error !== "cancelled")))
+              const cancelledDescendants: TeamMemberRow[] = []
+              if (effectiveState === "failed" || failureCancellation) {
                 yield* cancelOwnedTasksOf({ tx, team, member, now })
                 yield* releaseReservationsOf({ tx, team, member, now })
                 const allMembers = yield* tx
@@ -1058,13 +1082,27 @@ export const layer = Layer.effect(
                   .from(TeamMemberTable)
                   .where(eq(TeamMemberTable.team_id, member.team_id))
                   .all()
-                yield* cancelBlockedDescendants({ tx, team, failedMember: member, members: allMembers, now })
+                const descendants = yield* cancelBlockedDescendants({
+                  tx,
+                  team,
+                  failedMember: member,
+                  members: allMembers,
+                  now,
+                })
+                cancelledDescendants.push(...descendants)
               }
               // ONE bump for the whole terminal transaction: member status/result/failure_code,
               // the lead message, owned-task cancellation, and descendant cancellation all commit
               // together, so a single revision increment covers the logical settlement.
               yield* bumpTeamRevision(tx, team.id)
-              return { kind: "settled" as const, team, state: effectiveState }
+              return {
+                kind: "settled" as const,
+                team,
+                state: effectiveState,
+                generation,
+                messageID: memberMessageID(member.id, effectiveState, generation),
+                cancelledDescendants,
+              }
             }),
           { behavior: "immediate" },
         )
@@ -1075,6 +1113,46 @@ export const layer = Layer.effect(
         return undefined
       }
       if (settled.kind === "retry") return settled
+      // Publish the terminal member and canonical-message events only after commit, wrapped
+      // uninterruptibly so the commit -> publish section cannot be interrupted mid-way.
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const member = yield* db
+            .select()
+            .from(TeamMemberTable)
+            .where(eq(TeamMemberTable.id, input.memberID))
+            .get()
+            .pipe(Effect.orDie)
+          if (member) {
+            yield* events.publish(TeamEvents.memberUpdated, {
+              memberID: member.id,
+              sessionID: member.session_id,
+              status: member.status,
+              lifecycle: member.lifecycle,
+              daemonState: member.daemon_state ?? undefined,
+            })
+            yield* events.publish(TeamEvents.messageReceived, {
+              messageID: settled.messageID,
+              teamID: member.team_id,
+              sender: member.session_id,
+            })
+          }
+          for (const descendant of settled.cancelledDescendants) {
+            yield* events.publish(TeamEvents.memberUpdated, {
+              memberID: descendant.id,
+              sessionID: descendant.session_id,
+              status: "cancelled",
+              lifecycle: descendant.lifecycle,
+              daemonState: descendant.daemon_state ?? undefined,
+            })
+            yield* events.publish(TeamEvents.messageReceived, {
+              messageID: memberMessageID(descendant.id, "cancelled", descendant.run_generation),
+              teamID: descendant.team_id,
+              sender: descendant.session_id,
+            })
+          }
+        }),
+      )
       const current = yield* InstanceState.get(state)
       if (settled.state === "completed") {
         const claimed = yield* claimReadyDependents(settled.team.id)
@@ -1367,7 +1445,7 @@ export const layer = Layer.effect(
       if (!model) {
         yield* settleMember({
           memberID: member.id,
-          state: "failed",
+          state: "cancelled",
           output: "",
           error: "missing persisted model",
           failureCode: "provider_error",
@@ -1405,7 +1483,7 @@ export const layer = Layer.effect(
         const message = error instanceof Error ? error.message : String(error)
         yield* settleMember({
           memberID: member.id,
-          state: "failed",
+          state: "cancelled",
           output: "",
           error: message,
           failureCode: "provider_error",
@@ -1423,7 +1501,7 @@ export const layer = Layer.effect(
       const output = terminal.text
       yield* settleMember({
         memberID: member.id,
-        state: terminal.state === "error" ? "failed" : "completed",
+        state: terminal.state === "error" ? "cancelled" : "completed",
         output,
         error: terminal.state === "error" ? output : undefined,
         failureCode: terminal.state === "error" ? "provider_error" : undefined,
@@ -1468,7 +1546,7 @@ export const layer = Layer.effect(
         if (!prepared.member.model) {
           yield* settleMember({
             memberID: prepared.member.id,
-            state: prepared.member.lifecycle === "daemon" ? "cancelled" : "failed",
+            state: "cancelled",
             output: "",
             error: "missing persisted model",
             failureCode: "provider_error",
@@ -1520,7 +1598,7 @@ export const layer = Layer.effect(
           const message = error instanceof Error ? error.message : String(error)
           yield* settleMember({
             memberID: prepared.member.id,
-            state: prepared.member.lifecycle === "daemon" ? "cancelled" : "failed",
+            state: "cancelled",
             output: "",
             error: message,
             failureCode: "provider_error",
@@ -1542,9 +1620,7 @@ export const layer = Layer.effect(
           memberID: prepared.member.id,
           state:
             terminal.state === "error"
-              ? prepared.member.lifecycle === "daemon"
-                ? "cancelled"
-                : "failed"
+              ? "cancelled"
               : prepared.member.lifecycle === "daemon"
                 ? "idle"
                 : "completed",
@@ -2007,9 +2083,7 @@ export const layer = Layer.effect(
             memberID: member.id,
             state:
               terminal.state === "error"
-                ? member.lifecycle === "daemon"
-                  ? "cancelled"
-                  : "failed"
+                ? "cancelled"
                 : member.lifecycle === "daemon"
                   ? "idle"
                   : "completed",
@@ -2194,6 +2268,10 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(SessionControl.defaultLayer), Layer.provide(Database.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(SessionControl.defaultLayer),
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+)
 
 export * as LifecycleReconciler from "./lifecycle-reconciler"

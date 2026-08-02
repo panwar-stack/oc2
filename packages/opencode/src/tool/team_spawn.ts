@@ -252,6 +252,23 @@ export const TeamSpawnTool = Tool.define(
             daemonLastActive: lifecycle === "daemon" ? Date.now() : null,
           })
 
+          // Every failure after member creation must terminalize the member as a notified
+          // cancelled transition so a finite teammate never strands in `starting`. Interrupt
+          // causes are excluded: the acquireUseRelease release handler cancels those instead.
+          const terminalizeCancelled = (cause: Cause.Cause<unknown>) =>
+            Effect.gen(function* () {
+              const error = Cause.squash(cause)
+              const reason = error instanceof Error ? error.message : String(error)
+              yield* team
+                .updateMemberStatus(member.id, "cancelled", {
+                  result: reason,
+                  ...(member.lifecycle === "daemon"
+                    ? { daemonState: "error" as const, daemonError: reason }
+                    : {}),
+                })
+                .pipe(Effect.ignore)
+            })
+
           const notifySessions = (sender: string, recipients: string[], body: string) =>
             Effect.gen(function* () {
               const uniqueRecipients = [...new Set(recipients)]
@@ -293,6 +310,7 @@ export const TeamSpawnTool = Tool.define(
               )
             })
 
+          return yield* Effect.gen(function* () {
           const latestMembers = yield* team.getMembers(teamID)
           yield* notifyActiveDependencies(latestMembers)
           const blocked = dependencyIDs.some(
@@ -384,6 +402,16 @@ export const TeamSpawnTool = Tool.define(
                   }),
                 ),
               ),
+          )
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterrupts(cause)
+                ? Effect.failCause(cause)
+                : Effect.gen(function* () {
+                    yield* terminalizeCancelled(cause)
+                    return yield* Effect.failCause(cause)
+                  }),
+            ),
           )
         }).pipe(Effect.orDie),
     }

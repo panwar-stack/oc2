@@ -3,7 +3,6 @@ import { SessionID } from "@/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
-import { EventV2 } from "@oc2-ai/core/event"
 import { Context, Effect, Layer, Schema, Option, Cause } from "effect"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { eq, and, asc, desc, inArray, isNull, notInArray, sql } from "drizzle-orm"
@@ -18,6 +17,7 @@ import {
   TeamMessageRecipientTable,
   TeamUsageEventTable,
 } from "./team.sql"
+import { TeamCreated, TeamClosed, MemberUpdated, MessageReceived } from "./events"
 import { bumpTeamRevision } from "./revision"
 import { TeamEval, type TeamEvalReport } from "./eval"
 import { PendingMailbox } from "./pending-mailbox"
@@ -96,6 +96,67 @@ type TeamMemberStatusUpdate = {
   daemonState?: MemberDaemonState | null
   daemonLastActive?: number | null
   daemonError?: string | null
+}
+
+type MessageTx = Pick<Database.Interface["db"], "insert">
+
+/** Insert a team message row and one recipient row per recipient inside an already-open
+ * immediate transaction. Callers own the active-team check and the single revision bump. */
+const insertMessageRows = (
+  tx: MessageTx,
+  input: { id: string; teamID: string; sender: string; recipients: string[]; body: string; now: number },
+) =>
+  Effect.gen(function* () {
+    yield* tx
+      .insert(TeamMessageTable)
+      .values({
+        id: input.id,
+        team_id: input.teamID,
+        sender: input.sender,
+        recipients: input.recipients,
+        body: input.body,
+        delivery_status: "pending",
+        time_created: input.now,
+        time_updated: input.now,
+      })
+      .run()
+    if (input.recipients.length > 0) {
+      yield* tx
+        .insert(TeamMessageRecipientTable)
+        .values(
+          input.recipients.map((recipient) => ({
+            id: crypto.randomUUID(),
+            message_id: input.id,
+            team_id: input.teamID,
+            recipient,
+            delivery_status: "pending" as const,
+            time_created: input.now,
+            time_updated: input.now,
+          })),
+        )
+        .run()
+    }
+  })
+
+/** Canonical terminal lead notification, containing the result or failure reason. */
+const terminalNotificationBody = (member: TeamMemberRow, status: MemberStatus, update?: TeamMemberStatusUpdate) => {
+  const statusText =
+    status === "completed" ? "completed their work" : status === "cancelled" ? "been cancelled" : "failed"
+  const head = `Teammate ${member.name} (${member.agent_type}) has ${statusText}.`
+  if (status === "completed" && update?.result) return `${head}\n\nResult:\n${update.result}`
+  if (status === "cancelled") {
+    const reason =
+      typeof update?.result === "string" && update.result.trim() !== ""
+        ? update.result
+        : update?.failureCode
+          ? `failure code ${update.failureCode}`
+          : undefined
+    return reason ? `${head}\n\nReason: ${reason}` : head
+  }
+  if (status === "failed" && (update?.result || update?.failureCode)) {
+    return `${head}\n\nReason: ${update?.result ?? `failure code ${update.failureCode}`}`
+  }
+  return head
 }
 
 /** Expected conflict when a lead session already has an active team. The database
@@ -316,22 +377,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Team") {}
 
-const TeamCreated = EventV2.define({ type: "team.created", schema: { teamID: Schema.String } })
-const TeamClosed = EventV2.define({ type: "team.closed", schema: { teamID: Schema.String } })
-const MemberUpdated = EventV2.define({
-  type: "team.member.updated",
-  schema: {
-    memberID: Schema.String,
-    sessionID: Schema.String,
-    status: Schema.String,
-    lifecycle: Schema.optional(Schema.String),
-    daemonState: Schema.optional(Schema.String),
-  },
-})
-const MessageReceived = EventV2.define({
-  type: "team.message.received",
-  schema: { messageID: Schema.String, teamID: Schema.String, sender: Schema.String },
-})
+export { TeamEvents } from "./events"
 
 export const layer = Layer.effect(
   Service,
@@ -712,7 +758,14 @@ export const layer = Layer.effect(
       if (update?.daemonState !== undefined) setData.daemon_state = update.daemonState
       if (update?.daemonLastActive !== undefined) setData.daemon_last_active = update.daemonLastActive
       if (update?.daemonError !== undefined) setData.daemon_error = update.daemonError
-      yield* db
+
+      const terminalStatuses: MemberStatus[] = ["completed", "cancelled", "failed"]
+      const terminalTarget = terminalStatuses.includes(status)
+
+      // A terminal status and its canonical lead notification persist in ONE immediate
+      // transaction with ONE revision bump. Repeated terminal updates are idempotent: an
+      // already-terminal member is a no-op (no write, no new notification, no bump).
+      const outcome = yield* db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
@@ -721,79 +774,110 @@ export const layer = Layer.effect(
                 .from(TeamMemberTable)
                 .where(eq(TeamMemberTable.id, memberID))
                 .get()
-              if (!member) return false
+              if (!member) return { found: false } as const
+              const alreadyTerminal = terminalStatuses.includes(member.status)
+              if (alreadyTerminal) return { found: true, wrote: false, messageID: undefined } as const
               yield* tx
                 .update(TeamMemberTable)
                 .set(setData)
                 .where(eq(TeamMemberTable.id, memberID))
                 .run()
+              let messageID: string | undefined
+              if (terminalTarget) {
+                const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get()
+                if (team) {
+                  messageID = `team:member:${memberID}:terminal:${status}`
+                  yield* insertMessageRows(tx, {
+                    id: messageID,
+                    teamID: member.team_id,
+                    sender: member.session_id,
+                    recipients: [team.lead_session_id],
+                    body: terminalNotificationBody(member, status, update),
+                    now,
+                  })
+                }
+              }
               yield* bumpTeamRevision(tx, member.team_id)
-              return true
+              return { found: true, wrote: true, messageID } as const
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
-      const row = yield* db
-        .select()
-        .from(TeamMemberTable)
-        .where(eq(TeamMemberTable.id, memberID))
-        .get()
-        .pipe(Effect.orDie)
-      if (!row) return Option.none()
-      yield* events.publish(MemberUpdated, {
-        memberID: row.id,
-        sessionID: row.session_id,
-        status: row.status,
-        lifecycle: row.lifecycle,
-        daemonState: row.daemon_state ?? undefined,
-      })
-
-      if (row.status === "completed" || row.status === "idle" || row.status === "failed") {
-        const statusText =
-          row.status === "completed" ? "completed their work" : row.status === "failed" ? "failed" : "became idle"
-        const team = yield* db.select().from(TeamTable).where(eq(TeamTable.id, row.team_id)).get().pipe(Effect.orDie)
-        if (team) {
-          yield* sendMessage({
-            teamID: row.team_id,
-            sender: row.session_id,
-            recipients: [team.lead_session_id],
-            body: `Teammate ${row.name} (${row.agent_type}) has ${statusText}.`,
-          }).pipe(
-            // A terminal transition racing a team close must not fail the status update: the
-            // team is closed, so the automatic notification is moot.
-            Effect.catchTag("Team.MessageToClosedTeam", () => Effect.void),
-          )
-          yield* events.publish(TuiEvent.ToastShow, {
-            title: "Teammate Update",
-            message: `${row.name} (${row.agent_type}) has ${statusText}.`,
-            variant: "info",
-            duration: 5000,
+      if (!outcome.found) return Option.none()
+      // After commit: publish member and message events uninterruptibly so the commit -> publish
+      // section cannot be interrupted mid-way.
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const row = yield* db
+            .select()
+            .from(TeamMemberTable)
+            .where(eq(TeamMemberTable.id, memberID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!row) return Option.none()
+          if (outcome.wrote) {
+            yield* events.publish(MemberUpdated, {
+              memberID: row.id,
+              sessionID: row.session_id,
+              status: row.status,
+              lifecycle: row.lifecycle,
+              daemonState: row.daemon_state ?? undefined,
+            })
+            if (outcome.messageID) {
+              yield* events.publish(MessageReceived, {
+                messageID: outcome.messageID,
+                teamID: row.team_id,
+                sender: row.session_id,
+              })
+            }
+          }
+          // Daemon idle notifications are not terminal handoffs and keep their existing behavior:
+          // the status transaction already committed and the notification persists separately.
+          if (row.status === "idle") {
+            const team = yield* db.select().from(TeamTable).where(eq(TeamTable.id, row.team_id)).get().pipe(Effect.orDie)
+            if (team) {
+              yield* sendMessage({
+                teamID: row.team_id,
+                sender: row.session_id,
+                recipients: [team.lead_session_id],
+                body: `Teammate ${row.name} (${row.agent_type}) has become idle.`,
+              }).pipe(
+                // A terminal transition racing a team close must not fail the status update: the
+                // team is closed, so the automatic notification is moot.
+                Effect.catchTag("Team.MessageToClosedTeam", () => Effect.void),
+              )
+              yield* events.publish(TuiEvent.ToastShow, {
+                title: "Teammate Update",
+                message: `${row.name} (${row.agent_type}) has become idle.`,
+                variant: "info",
+                duration: 5000,
+              })
+            }
+          }
+          return Option.some({
+            id: row.id,
+            team_id: row.team_id,
+            session_id: row.session_id,
+            name: row.name,
+            agent_type: row.agent_type,
+            model: row.model,
+            role_prompt: row.role_prompt,
+            status: row.status,
+            lifecycle: row.lifecycle,
+            daemon_state: row.daemon_state,
+            daemon_last_active: row.daemon_last_active,
+            daemon_error: row.daemon_error,
+            failure_code: row.failure_code,
+            run_generation: row.run_generation,
+            plan_mode: row.plan_mode,
+            work_mode: row.work_mode,
+            dependency_ids: row.dependency_ids,
+            result: row.result,
+            time_created: row.time_created,
+            time_updated: row.time_updated,
           })
-        }
-      }
-
-      return Option.some({
-        id: row.id,
-        team_id: row.team_id,
-        session_id: row.session_id,
-        name: row.name,
-        agent_type: row.agent_type,
-        model: row.model,
-        role_prompt: row.role_prompt,
-        status: row.status,
-        lifecycle: row.lifecycle,
-        daemon_state: row.daemon_state,
-        daemon_last_active: row.daemon_last_active,
-        daemon_error: row.daemon_error,
-        failure_code: row.failure_code,
-        run_generation: row.run_generation,
-        plan_mode: row.plan_mode,
-        work_mode: row.work_mode,
-        dependency_ids: row.dependency_ids,
-        result: row.result,
-        time_created: row.time_created,
-        time_updated: row.time_updated,
-      })
+        }),
+      )
     })
 
     const approveMemberPlan = Effect.fn("Team.approveMemberPlan")(function* (memberID: string) {
@@ -1491,35 +1575,14 @@ export const layer = Layer.effect(
               if (!team || team.status !== "active") {
                 return yield* Effect.fail(new MessageToClosedTeam({ teamID: input.teamID }))
               }
-              yield* tx
-                .insert(TeamMessageTable)
-                .values({
-                  id,
-                  team_id: input.teamID,
-                  sender: input.sender,
-                  recipients,
-                  body: input.body,
-                  delivery_status: "pending",
-                  time_created: now,
-                  time_updated: now,
-                })
-                .run()
-              if (recipients.length > 0) {
-                yield* tx
-                  .insert(TeamMessageRecipientTable)
-                  .values(
-                    recipients.map((recipient) => ({
-                      id: crypto.randomUUID(),
-                      message_id: id,
-                      team_id: input.teamID,
-                      recipient,
-                      delivery_status: "pending" as const,
-                      time_created: now,
-                      time_updated: now,
-                    })),
-                  )
-                  .run()
-              }
+              yield* insertMessageRows(tx, {
+                id,
+                teamID: input.teamID,
+                sender: input.sender,
+                recipients,
+                body: input.body,
+                now,
+              })
               yield* bumpTeamRevision(tx, input.teamID)
             }),
           { behavior: "immediate" },

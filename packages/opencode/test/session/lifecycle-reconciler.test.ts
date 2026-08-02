@@ -818,7 +818,7 @@ describe("session.lifecycle-reconciler", () => {
     ),
   )
 
-  it.live("a blank generation-1 result admits one completion-only retry, then fails as empty_result when still blank", () =>
+  it.live("a blank generation-1 result admits one completion-only retry, then settles cancelled as empty_result when still blank", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -836,7 +836,7 @@ describe("session.lifecycle-reconciler", () => {
           const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
           expect(outcome).toBe("(no text result)")
-          expect(settled?.status).toBe("failed")
+          expect(settled?.status).toBe("cancelled")
           expect(settled?.failure_code).toBe("empty_result")
           expect(yield* Ref.get(spy.prompts)).toBe(2)
           // The retry prompt is completion-only: every general tool is denied in this slice.
@@ -844,9 +844,11 @@ describe("session.lifecycle-reconciler", () => {
           expect(prompts[1]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")).toContain(
             "no final text result",
           )
-          const failed = (yield* team.getMessages(info.id)).find((message) => memberMessage("failed")(message))
-          expect(failed?.body).toContain("empty_result")
-          expect(failed?.id).toBe(`lifecycle:member:${member.id}:failed:2`)
+          const cancelledMessage = (yield* team.getMessages(info.id)).find((message) =>
+            memberMessage("cancelled")(message),
+          )
+          expect(cancelledMessage?.body).toContain("empty_result")
+          expect(cancelledMessage?.id).toBe(`lifecycle:member:${member.id}:cancelled:2`)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -905,7 +907,7 @@ describe("session.lifecycle-reconciler", () => {
     ),
   )
 
-  it.live("an assistant error settles a finite teammate as failed with provider_error", () =>
+  it.live("an assistant error settles a finite teammate as cancelled with provider_error", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -927,16 +929,18 @@ describe("session.lifecycle-reconciler", () => {
           const outcome = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
           expect(outcome).toBe("boom")
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
-          expect(settled?.status).toBe("failed")
+          expect(settled?.status).toBe("cancelled")
           expect(settled?.failure_code).toBe("provider_error")
-          const failed = (yield* team.getMessages(info.id)).find((message) => memberMessage("failed")(message))
-          expect(failed?.body).toContain("boom")
+          const cancelledMessage = (yield* team.getMessages(info.id)).find((message) =>
+            memberMessage("cancelled")(message),
+          )
+          expect(cancelledMessage?.body).toContain("boom")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("restart reconciliation settles a member from an errored assistant as failed", () =>
+  it.live("restart reconciliation settles a member from an errored assistant as cancelled", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -963,10 +967,12 @@ describe("session.lifecycle-reconciler", () => {
           yield* afterRestart(Effect.flatMap(LifecycleReconciler.Service, (lifecycle) => lifecycle.reconcile))
 
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
-          expect(settled?.status).toBe("failed")
+          expect(settled?.status).toBe("cancelled")
           expect(settled?.failure_code).toBe("provider_error")
-          const failed = (yield* team.getMessages(info.id)).find((message) => memberMessage("failed")(message))
-          expect(failed?.body).toContain("boom")
+          const cancelledMessage = (yield* team.getMessages(info.id)).find((message) =>
+            memberMessage("cancelled")(message),
+          )
+          expect(cancelledMessage?.body).toContain("boom")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -1097,7 +1103,7 @@ describe("session.lifecycle-reconciler", () => {
     ),
   )
 
-  it.live("a blank generation-2 result fails with empty_result and cancels blocked descendants", () =>
+  it.live("a blank generation-2 result settles cancelled with empty_result and cancels blocked descendants", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -1128,7 +1134,7 @@ describe("session.lifecycle-reconciler", () => {
           expect(outcome).toBe("(no text result)")
           const members = yield* team.getMembers(info.id)
           const failedMember = members.find((candidate) => candidate.id === member.id)
-          expect(failedMember?.status).toBe("failed")
+          expect(failedMember?.status).toBe("cancelled")
           expect(failedMember?.failure_code).toBe("empty_result")
           expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
           const dependentNow = members.find((candidate) => candidate.id === dependent.id)
@@ -1136,13 +1142,13 @@ describe("session.lifecycle-reconciler", () => {
           expect(dependentNow?.failure_code).toBe("dependency_failed")
           const messages = yield* team.getMessages(info.id)
           expect(messages.some((message) => message.id === `lifecycle:member:${dependent.id}:cancelled:0`)).toBe(true)
-          expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:failed:2`)).toBe(true)
+          expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:cancelled:2`)).toBe(true)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("a member that owns an unfinished task retries with a completion-only prompt and fails as missing_task_handoff on the second valid result", () =>
+  it.live("a member that owns an unfinished task retries with a completion-only prompt and settles cancelled as missing_task_handoff on the second valid result", () =>
     provideTmpdirInstance(
       (directory) =>
         Effect.gen(function* () {
@@ -1173,7 +1179,7 @@ describe("session.lifecycle-reconciler", () => {
           // The retry prompt is completion-only with team_task_update as the only enabled tool.
           expectRetryPromptToolsDenyGeneral(prompts[1]?.tools)
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
-          expect(settled?.status).toBe("failed")
+          expect(settled?.status).toBe("cancelled")
           expect(settled?.failure_code).toBe("missing_task_handoff")
           expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
           // The owned in-progress task was cancelled and its reservations released.
@@ -1510,7 +1516,7 @@ describe("session.lifecycle-reconciler", () => {
           expect(pausedMember?.run_generation).toBe(2)
           expect((yield* memberState(memberSession.id))?.phase).toBe("retry_admitted")
           expect(
-            (yield* team.getMessages(info.id)).filter((message) => memberMessage("failed")(message)),
+            (yield* team.getMessages(info.id)).filter((message) => memberMessage("cancelled")(message)),
           ).toHaveLength(0)
 
           // Releasing the pause resumes the same prompt; no second user prompt is ever added.
@@ -1521,7 +1527,7 @@ describe("session.lifecycle-reconciler", () => {
           yield* pollWithTimeout(
             Effect.gen(function* () {
               const members = yield* team.getMembers(info.id)
-              return members.some((candidate) => candidate.id === member.id && candidate.status === "failed")
+              return members.some((candidate) => candidate.id === member.id && candidate.status === "cancelled")
                 ? members
                 : undefined
             }),
@@ -1529,9 +1535,9 @@ describe("session.lifecycle-reconciler", () => {
           )
           expect(yield* Ref.get(spy.prompts)).toBe(2)
           expect(yield* Ref.get(spy.runs)).toBe(1)
-          const failed = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
-          expect(failed?.status).toBe("failed")
-          expect(failed?.failure_code).toBe("empty_result")
+          const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(settled?.status).toBe("cancelled")
+          expect(settled?.failure_code).toBe("empty_result")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

@@ -1243,19 +1243,21 @@ describe("team", () => {
           const upstreamNow = members.find((member) => member.id === upstream.id)
           const dependentNow = members.find((member) => member.name === "dependent")
           const independentNow = members.find((member) => member.name === "independent")
-          expect(upstreamNow?.status).toBe("failed")
+          expect(upstreamNow?.status).toBe("cancelled")
           expect(upstreamNow?.failure_code).toBe("provider_error")
           expect(dependentNow?.status).toBe("cancelled")
           expect(dependentNow?.failure_code).toBe("dependency_failed")
           expect(independentNow?.status).toBe("active")
 
           const messages = yield* team.getMessages(info.id)
-          const cancelled = messages.find(
+          const dependentCancelled = messages.find(
             (message) => message.id === `lifecycle:member:${dependentNow?.id}:cancelled:0`,
           )
-          expect(cancelled?.body).toContain("upstream")
-          const failed = messages.find((message) => message.id === `lifecycle:member:${upstream.id}:failed:1`)
-          expect(failed?.body).toContain("boom")
+          expect(dependentCancelled?.body).toContain("upstream")
+          const upstreamCancelled = messages.find(
+            (message) => message.id === `lifecycle:member:${upstream.id}:cancelled:1`,
+          )
+          expect(upstreamCancelled?.body).toContain("boom")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -1338,7 +1340,7 @@ describe("team revision", () => {
     ),
   )
 
-  it.live("a terminal status change and its notification message each bump exactly once", () =>
+  it.live("a terminal status change and its canonical notification commit with one atomic revision bump", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const team = yield* Team.Service
@@ -1361,10 +1363,122 @@ describe("team revision", () => {
         })
         const before = (yield* revisionOf(info.id))?.revision ?? -1
 
-        // A failed member is terminal; the status change bumps once and the auto-notification
-        // message to the lead bumps once in a separate logical transaction.
+        // A terminal status and its canonical lead notification persist in one atomic
+        // transaction, so the whole terminal handoff bumps the revision exactly once.
         yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
-        expect((yield* revisionOf(info.id))?.revision).toBe(before + 2)
+        expect((yield* revisionOf(info.id))?.revision).toBe(before + 1)
+      }),
+    ),
+  )
+})
+
+describe("team terminal handoff atomicity", () => {
+  const revisionOf = (teamID: string) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return (yield* db
+        .select({ revision: TeamTable.revision })
+        .from(TeamTable)
+        .where(eq(TeamTable.id, teamID))
+        .get()
+        .pipe(Effect.orDie))?.revision
+    })
+
+  it.live("a terminal update persists status and one canonical notification atomically", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "handoff-atomic", goal: "Atomic", leadSessionID: "ses_handoff_atomic_lead" })
+        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_atomic_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        const before = (yield* revisionOf(info.id)) ?? -1
+
+        yield* team.updateMemberStatus(member.id, "completed", "done result")
+
+        const current = unwrap(yield* team.getMemberBySession(member.session_id))
+        expect(current.status).toBe("completed")
+        expect(current.result).toBe("done result")
+        const messages = yield* team.getMessages(info.id)
+        expect(messages).toHaveLength(1)
+        expect(messages[0]?.id).toBe(`team:member:${member.id}:terminal:completed`)
+        expect(messages[0]?.body).toContain("completed their work")
+        expect(messages[0]?.body).toContain("done result")
+        expect(yield* revisionOf(info.id)).toBe(before + 1)
+      }),
+    ),
+  )
+
+  it.live("repeated terminal updates are idempotent: one notification and one revision bump total", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "handoff-idempotent", goal: "Idempotent", leadSessionID: "ses_handoff_idem_lead" })
+        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_idem_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        const before = (yield* revisionOf(info.id)) ?? -1
+
+        yield* team.updateMemberStatus(member.id, "completed", "first")
+        yield* team.updateMemberStatus(member.id, "completed", "second")
+
+        const messages = (yield* team.getMessages(info.id)).filter(
+          (message) => message.id === `team:member:${member.id}:terminal:completed`,
+        )
+        expect(messages).toHaveLength(1)
+        expect(messages[0]?.body).toContain("first")
+        expect(yield* revisionOf(info.id)).toBe(before + 1)
+      }),
+    ),
+  )
+
+  it.live("a cancelled terminal update notifies the lead with the failure reason", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({ name: "handoff-cancelled", goal: "Cancelled", leadSessionID: "ses_handoff_cancel_lead" })
+        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_cancel_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+
+        yield* team.updateMemberStatus(member.id, "cancelled", { failureCode: "provider_error", result: "boom" })
+
+        const messages = yield* team.getMessages(info.id)
+        expect(messages).toHaveLength(1)
+        expect(messages[0]?.id).toBe(`team:member:${member.id}:terminal:cancelled`)
+        expect(messages[0]?.body).toContain("been cancelled")
+        expect(messages[0]?.body).toContain("boom")
+        const current = unwrap(yield* team.getMemberBySession(member.session_id))
+        expect(current.failure_code).toBe("provider_error")
+        expect(current.result).toBe("boom")
+      }),
+    ),
+  )
+
+  it.live("a notification insert failure rolls back the terminal status update", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const { db } = yield* Database.Service
+        const info = yield* team.create({ name: "handoff-rollback", goal: "Rollback", leadSessionID: "ses_handoff_rb_lead" })
+        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_rb_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        // Force the in-transaction notification insert to conflict on the deterministic message
+        // primary key: the status write must roll back with it.
+        yield* db
+          .insert(TeamMessageTable)
+          .values({
+            id: `team:member:${member.id}:terminal:completed`,
+            team_id: info.id,
+            sender: member.session_id,
+            recipients: [info.lead_session_id],
+            body: "conflicting pre-inserted message",
+            delivery_status: "pending",
+            time_created: Date.now(),
+            time_updated: Date.now(),
+          })
+          .run()
+          .pipe(Effect.orDie)
+
+        const exit = yield* team.updateMemberStatus(member.id, "completed", "never persisted").pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+
+        const current = unwrap(yield* team.getMemberBySession(member.session_id))
+        expect(current.status).toBe("starting")
+        expect(current.result).toBeNull()
       }),
     ),
   )

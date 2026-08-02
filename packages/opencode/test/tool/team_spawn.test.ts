@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Effect, Fiber, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageV2 } from "@/session/message-v2"
@@ -480,7 +480,7 @@ describe("tool.team_spawn", () => {
     ),
   )
 
-  it.live("a provider/session error during a finite member run settles the member failed with provider_error", () =>
+  it.live("a provider/session error during a finite member run settles the member cancelled with provider_error", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -511,12 +511,69 @@ describe("tool.team_spawn", () => {
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
           expect(result.title).toBe("Teammate Completed")
           expect(result.output).toContain("boom")
-          expect(member?.status).toBe("failed")
+          expect(member?.status).toBe("cancelled")
           expect(member?.failure_code).toBe("provider_error")
-          const failed = (yield* team.getMessages(info.id)).find(
-            (message) => message.id === `lifecycle:member:${member?.id}:failed:1`,
+          const cancelled = (yield* team.getMessages(info.id)).find(
+            (message) => message.id === `lifecycle:member:${member?.id}:cancelled:1`,
           )
-          expect(failed?.body).toContain("boom")
+          expect(cancelled?.body).toContain("boom")
+          // Exactly one canonical terminal notification per transition.
+          expect(
+            (yield* team.getMessages(info.id)).filter((message) => message.id.includes(":cancelled:")),
+          ).toHaveLength(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a setup failure between addMember and startMember terminalizes the member as notified cancelled", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          // The first getMembers call (pre-addMember existence check) succeeds; the second
+          // (post-addMember latest-members read) dies, simulating a setup failure.
+          let getMembersCalls = 0
+          const failingTeam = {
+            ...team,
+            getMembers: Effect.fn("Team.getMembers.setupFailure")(function* (teamID: string) {
+              getMembersCalls += 1
+              if (getMembersCalls >= 2) return yield* Effect.die(new Error("setup boom"))
+              return yield* team.getMembers(teamID)
+            }),
+          }
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: () =>
+              Effect.sync(() => {
+                throw new Error("boom")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          // The tool resolves its Team service when `TeamSpawnTool` itself is evaluated, so the
+          // override must wrap that evaluation (not `tool.init()`).
+          const tool = yield* TeamSpawnTool.pipe(Effect.provideService(Team.Service, failingTeam))
+          const def = yield* tool.init()
+
+          const exit = yield* def
+            .execute(
+              { name: "worker", agent_type: "general", role_prompt: "Do the work" },
+              context({ lead, assistant, promptOps }),
+            )
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+
+          const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+          expect(member?.status).toBe("cancelled")
+          expect(member?.result).toBe("setup boom")
+          const notifications = (yield* team.getMessages(info.id)).filter(
+            (message) => message.id === `team:member:${member?.id}:terminal:cancelled`,
+          )
+          expect(notifications).toHaveLength(1)
+          expect(notifications[0]?.body).toContain("setup boom")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
