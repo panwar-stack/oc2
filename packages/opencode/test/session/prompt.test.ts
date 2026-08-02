@@ -1940,34 +1940,26 @@ it.live(
   () =>
     provideTmpdirServer(
       Effect.fnUntraced(function* ({ llm }) {
-        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({ llm })
-        // Terminal teammate before the loop starts: the completion notification is pending mail.
-        yield* team.updateMemberStatus(member.id, "completed")
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+        })
         yield* llm.text("done")
+        yield* llm.text("done again")
         const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
-        // Wait until turn 1 ran (iter1 delivered the completion notification and the loop
-        // progressed to the model turn).
-        yield* pollWithTimeout(
-          Effect.gen(function* () {
-            const msgs = yield* sessions.messages({ sessionID: lead.id })
-            const done = msgs.some(
-              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "done"),
-            )
-            return done ? (true as const) : undefined
-          }),
-          "turn 1 never completed",
-          "5 seconds",
-        )
-        // Mail sent after the top-of-loop check by the already-terminal teammate.
+        // The lead parks deterministically on the active worker before any mail is staged.
+        yield* assertLoopParked(fiber, "lead should park before mail staging")
+        // Stage mail from the worker, then complete it: when the barrier rechecks, the teammate
+        // is terminal AND its mail is pending, so the deliver-before-member ordering must resume
+        // the loop (continue) instead of permitting exit.
         yield* team.sendMessage({
           teamID: info.id,
           sender: worker.id,
           recipients: [lead.id],
           body: "Final handoff",
         })
-        // The barrier must deliver this mail before checking members (deliver-before-member
-        // ordering): the loop takes a continuation turn and then exits because all members are
-        // terminal.
+        yield* team.updateMemberStatus(member.id, "completed")
+        // The loop must take a continuation turn and then exit with the mail delivered.
         yield* pollWithTimeout(
           Effect.gen(function* () {
             const msgs = yield* sessions.messages({ sessionID: lead.id })

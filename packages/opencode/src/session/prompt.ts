@@ -1413,12 +1413,27 @@ export const layer = Layer.effect(
         })
 
       let signal = yield* Deferred.make<void>()
-      const unsubscribe = yield* Effect.forEach(
-        ["team.message.received", "team.member.updated", "team.closed"],
-        (type) => events.subscribeCallback(type, () => Deferred.doneUnsafe(signal, Effect.void)),
-        { concurrency: "unbounded" },
-      )
+      const unsubscribes: Array<() => void> = []
+      // Registration and the park loop share one ensuring scope so listeners are removed on
+      // success, failure, defect, AND interruption — including an interrupt that lands while the
+      // subscriptions are still being registered (partially registered listeners are cleaned up).
+      const cleanup = () =>
+        Effect.forEach(
+          unsubscribes.splice(0),
+          (off) => Effect.sync(() => off()),
+          { concurrency: "unbounded", discard: true },
+        )
       return yield* Effect.gen(function* () {
+        yield* Effect.forEach(
+          ["team.message.received", "team.member.updated", "team.closed"],
+          (type) =>
+            events.subscribeCallback(type, () => Deferred.doneUnsafe(signal, Effect.void)).pipe(
+              Effect.map((off) => {
+                unsubscribes.push(off)
+              }),
+            ),
+          { concurrency: "unbounded", discard: true },
+        )
         while (true) {
           // (a) Deliver pending lead mail; a delivery resumes the model loop.
           if (yield* deliver()) return true
@@ -1433,14 +1448,7 @@ export const layer = Layer.effect(
           if (yield* exitPermitted()) return false
           yield* Deferred.await(parked)
         }
-      }).pipe(
-        Effect.ensuring(
-          Effect.forEach(unsubscribe, (off) => Effect.sync(() => off()), {
-            concurrency: "unbounded",
-            discard: true,
-          }),
-        ),
-      )
+      }).pipe(Effect.ensuring(Effect.suspend(cleanup)))
     })
 
     const teamLeadSystemPrompt = Effect.fn("SessionPrompt.teamLeadSystemPrompt")(function* (input: {
@@ -1600,10 +1608,9 @@ Be patient while your teammates complete their tasks. Ask for periodic updates.`
               auto: task.auto,
               overflow: task.overflow,
             })
-            if (result === "stop") {
-              if (yield* finalizationBarrier({ session, lastUser })) continue
-              break
-            }
+            // Compaction returns "stop" only on error/overflow paths (the assistant message is
+            // marked with an error), so it bypasses the finalization barrier like other errors.
+            if (result === "stop") break
             continue
           }
 
