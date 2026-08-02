@@ -1407,8 +1407,17 @@ Variant policy: use lower reasoning effort only for simple precise work; default
 Use daemon teammates only for monitoring, sentinels, rolling checklists, or other long lived tasks. Give them specific reporting criteria and shut down the team when monitoring ends.
 
 Do not create a team for trivial one step requests or when the user explicitly asks you to work alone.
-Be patient while your teammates complete their tasks. Ask for periodic updates.`
-
+Be patient while your teammates complete their tasks. Ask for periodic updates.`,
+        `Team protocol guidance:
+- One active team per lead session. Reuse the current active team; team_create on an existing team fails with a stable "Team Create Failed" result naming it. Do not create a second team for review.
+- Run review phases with fresh read-only reviewer sessions spawned INSIDE the same active team. Do not create a separate concurrent team for review.
+- Create shared tasks before mutation and reserve disjoint exact files with team_task_create owned_paths so teammate file writes do not collide.
+- Treat an empty teammate result as an untrusted runtime failure, not proof that no work occurred. Before deciding whether work exists, check the mailbox once and inspect git status --short plus the focused diff.
+- A teammate that returned an empty or failed result cannot be resumed by messaging. Spawn a fresh read-only reviewer in the same active team for more evidence.
+- Keep Git staging, commit, branch, stash, reset, restore, clean, rebase, push, and PR operations in the lead session. This is protocol guidance, not runtime enforcement; teammates must not run whole-worktree Git mutation commands.
+- Run a current final report with team_report({ final: true }) immediately before normal shutdown. Shutdown then records a final-report checkpoint.
+- Owned-task file reservations cover exact files through write, edit, and apply_patch inside one running project instance only. Shell, plugin, MCP, formatter, external-process, and cross-process writes are not runtime controlled.
+- Expect owned-task completion to carry a structured handoff (summary, changed_paths within the reserved files, and verification evidence). A blank final result is a failed attempt.`
       ]
 
       if (Option.isNone(context)) return guidance.join("\n")

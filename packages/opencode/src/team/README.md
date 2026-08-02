@@ -28,9 +28,15 @@ So when you read the code, do not look for a central "team scheduler" that owns 
 - `src/tool/team_send_message.ts`: direct mailbox messages.
 - `src/tool/team_broadcast.ts`: mailbox broadcast to active participants.
 - `src/tool/team_get_messages.ts`: explicit mailbox read tool.
+- `src/tool/team_task_create.ts`: shared task creation with optional exact-file reservations.
+- `src/tool/team_task_list.ts`: shared task listing.
+- `src/tool/team_task_claim.ts`: task claim that binds owned-task reservations to a session.
+- `src/tool/team_task_update.ts`: task status updates and structured handoff on owned-task completion.
 - `src/tool/team_plan_submit.ts`: teammate submits a plan to the lead.
 - `src/tool/team_plan_decide.ts`: lead approves or rejects a plan.
 - `src/tool/team_report.ts`: builds a human-readable team effectiveness report and includes eval metadata.
+- `src/tool/team_shutdown.ts`: lead-only team shutdown with the optional forced-abort path.
+- `src/team/file-ownership.ts`: canonical exact-file paths, reservation rows, and the structured write lease that guards `write`, `edit`, and `apply_patch`.
 - `src/team/eval.ts`: builds the team evaluation graph, summary counts, and findings.
 - `src/session/prompt.ts`: prompt loop integration that injects pending team messages.
 - `src/tool/registry.ts`: enables team tools when `experimental.agent_teams` is true.
@@ -46,8 +52,10 @@ There is only one active team per lead session. The schema enforces this with a 
 The lead is responsible for:
 
 - creating the team
+- reusing the current active team (never creating a second concurrent team, including for review)
 - creating shared tasks for multi-step work
 - assigning owners before implementation starts
+- reserving disjoint exact files with `owned_paths` before teammates mutate
 - spawning teammates
 - using dependencies when one task or teammate needs another result
 - receiving start, waiting, completion, and blocker updates
@@ -55,7 +63,9 @@ The lead is responsible for:
 - broadcasting scope changes or key discoveries
 - approving or rejecting plan-mode work
 - coordinating follow-up work
-- running a final `team_report` for non-trivial sessions
+- spawning fresh read-only reviewer sessions inside the same team after implementation
+- running a current final `team_report({ final: true })` immediately before normal shutdown
+- keeping Git staging, commit, branch, stash, reset, restore, clean, rebase, push, and PR operations in the lead session
 - shutting down the team when needed
 
 The lead is still just a normal assistant session. It does these things by choosing team tools in response to the user's request.
@@ -162,9 +172,9 @@ Inside the teammate run:
 2. Lead gets an automatic "teammate started" message.
 3. The child session receives its assignment prompt.
 4. The teammate runs through the normal session prompt pipeline.
-5. When the teammate finishes, the last text result is extracted.
+5. When the teammate finishes, the canonical terminal result is extracted (see [Canonical Final Results And Empty-Result Handling](#canonical-final-results-and-empty-result-handling)).
 6. The lead gets an automatic completion message containing the result.
-7. Member status becomes `completed`.
+7. Member status becomes `completed` — or `failed` with a deterministic `failure_code` after a blank retry, a provider error, or a missing owned-task handoff.
 8. Any blocked teammates that depended on this session are checked and possibly started.
 
 When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. The lead resumes after the relevant running teammates finish, then it can integrate results and decide the next coordination step.
@@ -220,6 +230,8 @@ If a dependency is missing, spawn fails. If a dependency exists but is not compl
 
 When a task teammate completes, `startReadyBlockedMembers` checks blocked members that reference the completed session. A blocked member starts only when every dependency session has status `completed` and is not a daemon teammate.
 
+When a finite member fails, its still-blocked descendants are cancelled deterministically with `failure_code: "dependency_failed"` so no blocked graph is left unreachable. Active independent members continue.
+
 When it starts, the dependency results are injected into the prompt under `Dependency results:`.
 
 ## Mailbox Coordination
@@ -240,6 +252,8 @@ Common tools:
 - `team_get_messages`: explicitly read pending messages for the current session
 
 Sending a message also tries to wake recipients through `wakeTeamSession`.
+
+Terminal finite teammates (`completed`, `cancelled`, or `failed`) are rejected as message recipients with a stable error. Idle daemon recipients remain reachable, and a mailbox message cannot reopen a terminal finite member. See [Terminal Recipient Rule](#terminal-recipient-rule).
 
 Message recipient resolution follows the same identity rule as teammate dependencies. `lead` resolves to the lead session, a teammate session ID is authoritative, and a teammate name must match exactly one member. Ambiguous names fail without sending a message so older duplicate-name teams do not silently route to the wrong recipient.
 
@@ -308,6 +322,8 @@ They live in `team_task` and are manipulated by:
 
 Creating a task only records tracking state. It does not spawn or wake a teammate.
 
+`team_task_create` also accepts `owned_paths` to exclusively reserve exact file paths for the task. See [Exact-File Reservations And Their Boundaries](#exact-file-reservations-and-their-boundaries) for the reservation contract and its limits.
+
 Task IDs passed to `team_task_claim`, `team_task_update`, and task dependencies may be full IDs or unambiguous prefixes scoped to the current team. Ambiguous prefixes fail with the matching short prefixes and must not mutate state.
 
 Task lookup, updates, and claims are always scoped by `team_id`; a task ID from another team must not be resolved or mutated.
@@ -317,6 +333,76 @@ Claiming a task enforces task dependency IDs. A pending task cannot be claimed u
 `team_task_update` is restricted to the lead session or the current task assignee. `team_task_claim` assigns the claiming session ID and moves the task from `pending` to `in_progress` in one transaction.
 
 Use this for shared work tracking inside a team. Use `depends_on` / `wait_for` when one teammate should not start until another teammate completes.
+
+## Protocol And Runtime Contract
+
+The prompts, tool descriptions, and this guide describe one protocol. Some parts of it are enforced by the runtime; others are protocol guidance that the lead and teammate prompts ask participants to follow. Keep the two distinct: guidance describes the expected contract, and it is not a complete runtime guarantee.
+
+### One Active Team Per Lead Session
+
+A lead session has at most one active team. The database enforces this with a partial unique index on active `lead_session_id`, and `team.create` checks again before inserting.
+
+A second `team_create` while a team is already active does not create another team and is not a defect. It returns a stable `Team Create Failed` result that names the existing team and its ID, with instructions to reuse that team or shut it down before creating a replacement.
+
+Review phases use the same active team. A lead that wants more evidence after a teammate finishes spawns a fresh read-only reviewer session inside the current team. It does not create a second concurrent team for review.
+
+### Terminal Recipient Rule
+
+`team_send_message` rejects finite teammates that already reached a terminal status (`completed`, `cancelled`, or `failed`) with a stable error. Idle daemon recipients remain reachable.
+
+A mailbox message cannot reopen a terminal finite member. General completed-member resume is out of scope. To get more evidence from finished work, inspect the mailbox and worktree, then spawn a fresh read-only reviewer in the same active team.
+
+### Exact-File Reservations And Their Boundaries
+
+`team_task_create` accepts `owned_paths` to reserve exact file paths for a task. The reservations are exclusive: a path already reserved by another task rejects the create, and claiming an owned task binds every reserved path to the claiming session.
+
+The ownership check is enforced for the structured file tools `write`, `edit`, and `apply_patch` inside one running project instance. A mutation to a path actively reserved by another owner is denied before any write happens. Protocol-0 and unreserved paths keep their previous behavior.
+
+This is an exclusive reservation system for structured file tools, not a complete filesystem sandbox. Shell, plugin, MCP, formatter, external-process, and cross-process writes are not runtime controlled. The write lease serializes same-path structured writes but does not intercept other tool surfaces. Directory and glob reservations are future work.
+
+### Structured Handoff
+
+An owned task is a task created with a nonempty `owned_paths` array and at least one active or released reservation row. Only the authoritative owner (bound by `team_task_claim`) can complete it; the owner or the lead can cancel it.
+
+Completion of an owned task requires a nonblank structured handoff stored in `team_task.metadata.handoff`:
+
+- `summary`: nonblank description of the completed work
+- `changed_paths`: canonical paths that must be a subset of the task's reserved `owned_paths`
+- `verification`: command/check entries with a status of `passed`, `failed`, or `not_run`
+
+Completion and cancellation release the task's reservations atomically in the same transaction. Cancellation stores no handoff. A finite teammate cannot settle `completed` while it still owns an in-progress task; the first such result enters the bounded completion retry with `missing_task_handoff`, and a second invalid result fails the member and cancels its owned tasks.
+
+### Canonical Final Results And Empty-Result Handling
+
+Live settlement and restart reconciliation share one terminal-result extractor. An assistant error is a failed attempt, and intermediate `tool-calls` / `unknown` turns are not terminal facts. Eligible text is the non-synthetic, non-ignored text parts joined with `\n` and trimmed once; a blank result is invalid.
+
+A finite member gets at most two attempts. A blank, whitespace-only, synthetic-only, ignored-only, or tool-only finite result is not successful completion and enters the bounded completion-only retry; a second invalid result fails the member with a deterministic `failure_code`. Daemon idle output is exempt from the empty-result rule.
+
+An empty teammate result is therefore an untrusted runtime failure, not proof that no work occurred. Before deciding whether work exists, check the mailbox once and inspect `git status --short` plus the focused diff.
+
+### Lead-Owned Git Operations
+
+Git staging, commit, branch, stash, reset, restore, clean, rebase, push, and PR operations belong in the lead session. Teammates are instructed not to run whole-worktree Git mutation commands.
+
+This is protocol guidance. There is no shell or process-level enforcement of the Git rule yet; do not describe it as a complete runtime guarantee.
+
+### Final Report And Forced Abort
+
+`team_report({ final: true })` records a revision-bound final-report checkpoint:
+
+- lead-only; a teammate session is rejected
+- every finite (task-lifecycle) teammate must be terminal; a failed teammate is allowed and appears as a deterministic finding
+- no daemon may be starting or running; idle daemons are allowed
+- for protocol-1 teams, every shared task must be finished (protocol-0 teams skip this gate)
+- the checkpoint is bound to the team revision at build time and records only if the team is still active and unchanged during construction; a changing team gets `stale: true` and no checkpoint
+
+Run a current final report immediately before normal shutdown. `team_shutdown` for protocol-1 teams requires that `final_report_revision` matches `revision`.
+
+`team_shutdown({ force: true, reason })` is the lead-only escape hatch for a wedged or explicitly abandoned team. It requires a nonblank reason, bypasses the report checkpoint, records a deterministic forced-shutdown finding, and still closes/cancels/releases state atomically. It must not become the normal completion path.
+
+### Protocol Version
+
+New teams are created with `protocol_version = 0`. The protocol-v1 shutdown gate (normal shutdown requires `final_report_revision === revision`) and the final-report task gate exist in the runtime but apply only to protocol-1 teams. Version 1 is not enabled for new teams until the lead finalization barrier prerequisite is deployed.
 
 ## Usage Metrics And Shallow Usage
 
@@ -364,8 +450,11 @@ Shutdown:
 - marks the team `closed`
 - marks non-finished members `cancelled`
 - cancels active member session run state
+- releases task file reservations
 - publishes `team.closed`
 - does not cancel the lead session
+
+Normal shutdown for a protocol-1 team requires a current final report: `team_report({ final: true })` must have recorded a checkpoint at the team's current revision, and the lead should run that report immediately before shutdown. `team_shutdown({ force: true, reason })` is the lead-only escape hatch for a wedged or abandoned team; it requires a nonblank reason, bypasses the report checkpoint, records a deterministic forced-shutdown finding, and must not become the normal completion path. See [Final Report And Forced Abort](#final-report-and-forced-abort).
 
 ## Pause And Start
 
@@ -499,11 +588,15 @@ teammate sends mailbox updates / uses shared tasks / submits plans
   |
 messages wake recipient sessions and inject <team-messages>
   |
-teammate finishes
+teammate finishes with a canonical result
   |
 result sent to lead and stored on team_member
   |
 dependent blocked teammates may start
   |
-lead reports final result or shuts down team
+lead spawns fresh read-only reviewers in the same team when more evidence is needed
+  |
+lead runs team_report({ final: true }) immediately before normal shutdown
+  |
+lead shuts down the team (or uses force: true only for a wedged team)
 ```

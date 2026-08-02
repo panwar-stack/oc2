@@ -3,6 +3,7 @@ The current session becomes the lead session that manages the team.
 Only one active team can exist per lead session at a time.
 If a team is already active for this lead session, creation fails with a stable "Team Create Failed" result that names the existing team and its ID.
 Reuse that team instead of creating another one. Shut it down with team_shutdown before creating a replacement.
+Review phases stay inside the same active team: spawn fresh read-only reviewer sessions with team_spawn instead of creating a second concurrent team.
 
 As team lead, you should:
 - Prefer creating a team for non-trivial research, implementation, review, or verification work

@@ -6,6 +6,7 @@ Teammates are instructed to send proactive kickoff, progress, handoff, and block
 The lead receives automatic started/waiting updates, and active dependency teammates are notified when someone is waiting on their work.
 Use this when you need multiple agents working in parallel on different aspects of the team's goal.
 Use this aggressively for independent research, file reading, implementation slices, reviews, and verification so the lead session can preserve context and focus on coordination.
+For review phases, spawn fresh read-only reviewer sessions inside the same active team rather than creating a second team or resuming a finished teammate.
 Prefer several focused teammates over one broad teammate when the work can proceed in parallel.
 Spawn multiple independent teammates in one parallel tool-call batch whenever possible.
 Use depends_on or wait_for when this teammate must wait for one or more teammate names/session IDs to complete before starting.

@@ -8,6 +8,7 @@ Use this after team orchestration to see:
 - session cost and token impact
 
 Run a final team report for non-trivial team sessions after coordination, implementation, review, and verification are complete.
+Run a current final report (final: true) immediately before normal shutdown; protocol-1 shutdown requires its checkpoint.
 
 Pass compare_session_ids with lead session IDs from earlier direct or subagent-only runs to benchmark outcomes.
 

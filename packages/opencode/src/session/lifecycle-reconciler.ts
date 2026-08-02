@@ -123,6 +123,9 @@ const CommunicationGuidance = [
   "- Do not wait until your final answer to share useful status, blockers, or intermediate results.",
   "- When you send a message via team_send_message or team_broadcast, recipients are automatically woken. Do not poll team_get_messages in a loop — check once and continue working.",
   "- Do not claim that an issue is fixed, a feature is complete, or an action succeeded without supporting evidence.",
+  "- Do not overwrite or revert another participant's work.",
+  "- Do not run whole-worktree Git mutation commands (staging, commit, branch, stash, reset, restore, clean, rebase, push, PR operations). Those belong in the lead session.",
+  "- A blank or empty final result is treated as a failed attempt, not proof that no work occurred.",
   "- Only report to me in ASD-STE100 Simplified Technical English.",
   "- Let perfect not be the enemy of good.",
 ].join("\n")
@@ -145,6 +148,16 @@ const DaemonGuidance = [
 const TaskCompletionGuidance =
   "When your assigned work is complete, put the concrete result in your final answer so it can be sent back to the lead automatically."
 
+const TaskWorkGuidance = [
+  "Owned-task work guidance:",
+  "- Kick off with your task ID, the exact files you intend to change, the expected handoff, and the checks you plan to run.",
+  "- Claim the shared task with team_task_claim before mutating files.",
+  "- Stop on an ownership conflict or unexpected concurrent change. Notify the lead and the affected teammate before doing more mutation.",
+  "- Do not overwrite or revert another participant's work.",
+  "- Complete owned tasks with structured handoff evidence: call team_task_update with a handoff containing a nonblank summary, the changed paths within your reserved owned_paths, and verification entries for the checks you ran.",
+  "- Send a mailbox summary of the completed work to the lead and return a nonblank final result.",
+].join("\n")
+
 const RetryGuidance =
   "Your previous response contained no final text result or left an owned task unfinished. If you own tasks, submit the structured handoff with team_task_update before providing your final result text. Provide only your final result text now."
 
@@ -156,7 +169,7 @@ const MemberTools = [
   "- team_task_create: Create a shared team task with an optional assignee and dependency task IDs.",
   "- team_task_list: List all shared team tasks with their statuses and assignees.",
   "- team_task_claim: Claim a pending task as your own.",
-  "- team_task_update: Update a task's status or assignee.",
+  "- team_task_update: Update a task's status or assignee. Completing an owned task requires a structured handoff (summary, changed paths, verification).",
 ].join("\n")
 
 const MemberToolsPlan =
@@ -576,7 +589,7 @@ export const layer = Layer.effect(
           ? ["Current teammates:", ...teammates].join("\n")
           : "No other teammates are registered yet.",
         CommunicationGuidance,
-        member.lifecycle === "daemon" ? DaemonGuidance : TaskCompletionGuidance,
+        member.lifecycle === "daemon" ? DaemonGuidance : [TaskWorkGuidance, TaskCompletionGuidance].join("\n\n"),
         dependencyResults(members, member.dependency_ids ?? []),
         member.role_prompt,
       ]

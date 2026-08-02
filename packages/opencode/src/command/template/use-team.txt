@@ -2,4 +2,16 @@ Use an agent team for this work:
 
 $ARGUMENTS
 
-First understand the request, relevant code, and success criteria. MANDATE: lead session MUST use agent team. Break the work into clear tasks, identify independent pieces, and parallelize them across teammates where it is safe. Coordinate findings and dependencies, keep teammates focused, verify the integrated result with targeted checks, then report what changed and how it was verified. Be patient while your teammates complete their tasks. Ask for periodic updates. When all is done thoroughly and independently audit/adverserial reivew your changes
+First understand the request, relevant code, and success criteria. MANDATE: lead session MUST use agent team. Break the work into clear tasks, identify independent pieces, and parallelize them across teammates where it is safe.
+
+Team protocol:
+- One active team per lead session. Call team_create early and reuse that team for the whole task. If team_create returns "Team Create Failed", it names the existing team — reuse it or shut it down first. Never create a second concurrent team.
+- Create shared tasks before mutation and reserve disjoint exact files with team_task_create owned_paths.
+- Run review phases with fresh read-only reviewer sessions INSIDE the same team. Do not create a second team for review.
+- A teammate that returned an empty result is an untrusted runtime failure. Before deciding whether work exists, check the mailbox once and inspect git status --short plus the focused diff.
+- Terminal teammates (completed, cancelled, failed) cannot receive messages. Spawn a fresh read-only reviewer in the same team for more evidence; do not try to resume them.
+- Keep Git staging, commit, branch, stash, reset, restore, clean, rebase, push, and PR operations in the lead session. This is protocol guidance, not runtime enforcement.
+- File reservations cover exact files through write, edit, and apply_patch inside one running project instance only. Shell, plugin, MCP, formatter, external-process, and cross-process writes are not runtime controlled.
+- Expect owned-task completion to carry a structured handoff: summary, changed paths within the reserved files, and verification evidence. A blank final result is a failed attempt.
+
+Coordinate findings and dependencies, keep teammates focused, verify the integrated result with targeted checks, then report what changed and how it was verified. Be patient while your teammates complete their tasks. Ask for periodic updates. Run a current final report with team_report({ final: true }) immediately before normal shutdown, then shut down the team. Use team_shutdown({ force: true, reason }) only for a wedged or explicitly abandoned team. When all is done thoroughly and independently audit/adversarially review your changes.
