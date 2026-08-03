@@ -11,9 +11,9 @@ import { Database } from "@oc2-ai/core/database/database"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Team } from "@/team/team"
 import { Truncate } from "@/tool/truncate"
-import { canonicalize, OwnedPathError } from "@/team/file-ownership"
+import { canonicalize, canonicalPathKey, mutationLockKeys, OwnedPathError } from "@/team/file-ownership"
 import type { Context } from "@/tool/tool"
-import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
+import { disposeAllInstances, provideTmpdirInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 afterEach(async () => {
@@ -45,8 +45,7 @@ function context(sessionID: string): Context {
   }
 }
 
-const caseFold = (p: string) =>
-  process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p
+const caseFold = (p: string) => (process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p)
 
 const createSession = Effect.fn("FileOwnershipTest.createSession")(function* (title: string) {
   const sessions = yield* Session.Service
@@ -84,6 +83,103 @@ describe("team.file-ownership", () => {
           const realDirectory = yield* Effect.promise(() => fs.realpath(directory))
           expect(result.pathKey).toBe(caseFold(`${realDirectory.replaceAll("\\", "/")}/nested/future.txt`))
           expect(result.displayPath).toBe("nested/future.txt")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("uses one canonical mutation key for direct and symlink-alias targets", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const targetDirectory = path.join(directory, "target")
+          const target = path.join(targetDirectory, "shared.txt")
+          const aliasDirectory = path.join(directory, "alias")
+          const alias = path.join(aliasDirectory, "shared.txt")
+          yield* Effect.promise(() => fs.mkdir(targetDirectory))
+          yield* Effect.promise(() => fs.writeFile(target, "hello"))
+          yield* Effect.promise(() =>
+            fs.symlink(targetDirectory, aliasDirectory, process.platform === "win32" ? "junction" : "dir"),
+          )
+          const futil = yield* FSUtil.Service
+
+          const directKeys = yield* mutationLockKeys(futil, target)
+          const aliasKeys = yield* mutationLockKeys(futil, alias)
+
+          expect(directKeys.some((key) => aliasKeys.includes(key))).toBe(true)
+          expect(aliasKeys.length).toBe(2)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("uses the reserved unprefixed pathKey outside the caller root and through a cross-root symlink", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const external = yield* tmpdirScoped()
+          const target = path.join(external, "reserved.txt")
+          yield* Effect.promise(() => fs.writeFile(target, "hello"))
+          const aliasDirectory = path.join(directory, "external-alias")
+          yield* Effect.promise(() =>
+            fs.symlink(external, aliasDirectory, process.platform === "win32" ? "junction" : "dir"),
+          )
+
+          const owner = yield* createSession("canon-owner-root")
+          const caller = yield* createSession("canon-caller-root")
+          const sessions = yield* Session.Service
+          const futil = yield* FSUtil.Service
+          yield* sessions.addRoot({ sessionID: owner.id, directory: external })
+          const reserved = yield* canonicalize(sessions, context(owner.id), target)
+          const callerReservation = yield* canonicalize(sessions, context(caller.id), target).pipe(Effect.flip)
+          const directKey = yield* canonicalPathKey(futil, target)
+          const aliasKey = yield* canonicalPathKey(futil, path.join(aliasDirectory, "reserved.txt"))
+
+          expect(callerReservation).toBeInstanceOf(OwnedPathError)
+          expect(callerReservation.message).toContain("escapes")
+          expect(directKey).toBe(reserved.pathKey)
+          expect(aliasKey).toBe(reserved.pathKey)
+          expect(directKey.startsWith("mutation:")).toBe(false)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("keeps a symlink key stable when its target disappears during canonicalization", () =>
+    provideTmpdirInstance(
+      (directory) =>
+        Effect.gen(function* () {
+          const target = path.join(directory, "race-target.txt")
+          const alias = path.join(directory, "race-alias.txt")
+          yield* Effect.promise(() => fs.writeFile(target, "hello"))
+          yield* Effect.promise(() => fs.symlink(target, alias))
+          const session = yield* createSession("canon-symlink-race")
+          const sessions = yield* Session.Service
+          const futil = yield* FSUtil.Service
+          const stable = yield* canonicalize(sessions, context(session.id), alias)
+          let removed = false
+          const removeTarget = Effect.fnUntraced(function* () {
+            if (removed) return
+            removed = true
+            yield* Effect.promise(() => fs.rm(target, { force: true }))
+          })
+          const racedFs: FSUtil.Interface = {
+            ...futil,
+            exists: (input) =>
+              futil
+                .exists(input)
+                .pipe(Effect.tap((exists) => (input === alias && exists ? removeTarget() : Effect.void))),
+            readLink: (input) =>
+              futil.readLink(input).pipe(Effect.tap(() => (input === alias ? removeTarget() : Effect.void))),
+          }
+
+          const raced = yield* canonicalize(sessions, context(session.id), alias).pipe(
+            Effect.provideService(FSUtil.Service, racedFs),
+          )
+
+          expect(removed).toBe(true)
+          expect((yield* Effect.promise(() => fs.stat(target)).pipe(Effect.exit))._tag).toBe("Failure")
+          expect(raced).toEqual(stable)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

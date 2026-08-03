@@ -39,12 +39,25 @@ export type PauseResult = {
   readonly unchanged: boolean
 }
 
+export const PauseProvenance = Schema.Struct({
+  _tag: Schema.Literal("SessionControl.PauseProvenance"),
+  rootSessionID: SessionSchema.ID,
+  cascadeID: Schema.String,
+  generation: Schema.Number,
+})
+export type PauseProvenance = typeof PauseProvenance.Type
+export const isPauseProvenance = Schema.is(PauseProvenance)
+
 /**
  * Runtime handler that turns a committed pause barrier into an actual interruption.
  * It must return without waiting for interrupted fibers to unwind, and it must answer
- * with the subset of sessions it actually signalled.
+ * with the subset of sessions it actually signalled. The provenance identifies that
+ * exact committed barrier and must follow each interruption signal.
  */
-export type Interrupter = (sessionIDs: readonly SessionSchema.ID[]) => Effect.Effect<readonly SessionSchema.ID[]>
+export type Interrupter = (
+  sessionIDs: readonly SessionSchema.ID[],
+  provenance: PauseProvenance,
+) => Effect.Effect<readonly SessionSchema.ID[]>
 
 export type ReleaseResult = {
   readonly rootSessionID: SessionSchema.ID
@@ -485,9 +498,9 @@ export const layer = Layer.effect(
 
     // Descendants are signalled before their root so a parent cannot observe a child as
     // still running, and the whole call returns without awaiting fiber unwinding.
-    const signalInterruption = (sessionIDs: readonly SessionSchema.ID[]) =>
+    const signalInterruption = (sessionIDs: readonly SessionSchema.ID[], provenance: PauseProvenance) =>
       Effect.suspend(() =>
-        Effect.forEach([...interrupters], (interrupter) => interrupter(sessionIDs.toReversed()), {
+        Effect.forEach([...interrupters], (interrupter) => interrupter(sessionIDs.toReversed(), provenance), {
           concurrency: 1,
         }),
       ).pipe(
@@ -598,7 +611,12 @@ export const layer = Layer.effect(
             // The durable barrier is committed above. Interruption is signalled directly here so it
             // cannot be lost when nothing observes the ControlChanged event.
             Effect.flatMap((result) =>
-              signalInterruption(result.affectedSessionIDs).pipe(
+              signalInterruption(result.affectedSessionIDs, {
+                _tag: "SessionControl.PauseProvenance",
+                rootSessionID: result.rootSessionID,
+                cascadeID: result.cascadeID,
+                generation: result.generation,
+              }).pipe(
                 Effect.map(
                   (interruptionSignalledSessionIDs) =>
                     ({ ...result, interruptionSignalledSessionIDs }) satisfies PauseResult,
@@ -651,10 +669,7 @@ export const layer = Layer.effect(
                         .pipe(Effect.orDie)).map((row) => SessionSchema.ID.make(row.sessionID))
                     : []
                   const blocked = new Set((yield* activeBlockers(db, affectedSessionIDs)).map((row) => row.sessionID))
-                  const resumeTickets = orderTicketsByDepth(
-                    yield* runnableResumeTickets(affectedSessionIDs),
-                    depth,
-                  )
+                  const resumeTickets = orderTicketsByDepth(yield* runnableResumeTickets(affectedSessionIDs), depth)
                   return {
                     rootSessionID,
                     affectedSessionIDs,

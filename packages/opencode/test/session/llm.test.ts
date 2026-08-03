@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import path from "path"
 import { tool, type ModelMessage } from "ai"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Ref, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Ref, Scope, Stream } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
@@ -34,6 +34,8 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { SessionEvent } from "@oc2-ai/core/session/event"
 import { TuiEvent } from "@/server/tui-event"
+import { Runner } from "@/effect/runner"
+import { SessionControl } from "@oc2-ai/core/session/control"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -3042,6 +3044,99 @@ describe("session.llm.stream", () => {
           expect(Cause.hasInterrupts(inner.cause)).toBe(true)
         }
         yield* Effect.promise(() => Promise.race([pending.requestAborted, timeout(500)]).catch(() => undefined))
+      }),
+    {
+      config: () => ({
+        enabled_providers: [alibabaQwenFixture.providerID],
+        provider: {
+          [alibabaQwenFixture.providerID]: {
+            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+          },
+        },
+      }),
+    },
+  )
+
+  it.instance(
+    "provider abort signal keeps Runner pause provenance",
+    () =>
+      Effect.gen(function* () {
+        const fixture = loadFixture(alibabaQwenFixture.providerID, alibabaQwenFixture.modelID)
+        const llm = yield* LLM.Service
+        const request = waitRequest(
+          "/chat/completions",
+          new Response(createToolCallStream({}), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const toolStarted = deferred<AbortSignal>()
+
+        const resolved = yield* Provider.use.getModel(
+          ProviderV2.ID.make(alibabaQwenFixture.providerID),
+          ModelV2.ID.make(fixture.model.id),
+        )
+        const sessionID = SessionID.make("session-test-pause-provenance")
+        const agent = testAgent()
+        const user = {
+          id: MessageID.make("msg_user-pause-provenance"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderV2.ID.make(alibabaQwenFixture.providerID), modelID: resolved.id },
+        } satisfies SessionV1.User
+        const provenance = {
+          _tag: "SessionControl.PauseProvenance",
+          rootSessionID: sessionID,
+          cascadeID: "pause_test",
+          generation: 3,
+        } satisfies SessionControl.PauseProvenance
+        const scope = yield* Scope.Scope
+        const runner = Runner.make<void, unknown>(scope)
+        const caller = yield* runner
+          .ensureRunning(
+            llm
+              .stream({
+                user,
+                sessionID,
+                model: resolved,
+                agent,
+                system: ["You are a helpful assistant."],
+                messages: [{ role: "user", content: "Call lookup" }],
+                tools: {
+                  lookup: tool({
+                    description: "Lookup data",
+                    inputSchema: z.object({}),
+                    execute: async (_input, options) => {
+                      const signal = options.abortSignal!
+                      toolStarted.resolve(signal)
+                      if (!signal.aborted) {
+                        await new Promise<void>((resolve) =>
+                          signal.addEventListener("abort", () => resolve(), { once: true }),
+                        )
+                      }
+                      return { output: "aborted" }
+                    },
+                  }),
+                },
+              })
+              .pipe(Stream.runDrain),
+          )
+          .pipe(Effect.forkScoped)
+
+        yield* Effect.promise(() => request)
+        const signal = yield* Effect.promise(() => Promise.race([toolStarted.promise, timeout(500)]))
+        yield* runner.suspendWith(provenance)
+        yield* pollWithTimeout(
+          Effect.sync(() => (signal.aborted ? true : undefined)),
+          "provider signal did not abort",
+        )
+
+        expect(signal.reason).toBe(provenance)
+        const exit = yield* Fiber.await(caller)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
       }),
     {
       config: () => ({

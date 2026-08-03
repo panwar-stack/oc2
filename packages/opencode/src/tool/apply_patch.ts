@@ -16,7 +16,7 @@ import * as Bom from "@/util/bom"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
 import { Database } from "@oc2-ai/core/database/database"
-import { canonicalize, withWriteLease } from "@/team/file-ownership"
+import { canonicalPathKey, mutationLockKeys, withMutationLease } from "@/team/file-ownership"
 
 type PatchMetadata = {
   diff: string
@@ -30,6 +30,16 @@ type PatchMetadata = {
     movePath?: string
   }>
   diagnostics: Record<string, LSPClient.Diagnostic[]>
+}
+
+type PreparedHunk = {
+  hunk: Patch.Hunk
+  resolved: ToolPath.Resolved
+  pathKey: string
+  lockKeys: string[]
+  move?: ToolPath.Resolved
+  movePathKey?: string
+  moveLockKeys: string[]
 }
 
 export const Parameters = Schema.Struct({
@@ -71,220 +81,210 @@ export const ApplyPatchTool = Tool.define(
         return yield* Effect.fail(new Error("apply_patch verification failed: no hunks found"))
       }
 
-      // Validate file paths and check permissions
-      const fileChanges: Array<{
-        filePath: string
-        relativePath: string
-        oldContent: string
-        newContent: string
-        type: "add" | "update" | "delete" | "move"
-        root: ToolPath.Root
-        movePath?: string
-        moveRelativePath?: string
-        moveRoot?: ToolPath.Root
-        /** Canonical pathKey of the source, used for the write-lease ownership check. */
-        pathKey?: string
-        /** Canonical pathKey of a move destination, used for the write-lease ownership check. */
-        movePathKey?: string
-        diff: string
-        additions: number
-        deletions: number
-        bom: boolean
-      }> = []
-
-      let totalDiff = ""
-
+      // Resolve the complete lock set before taking any lock. All operations then acquire those
+      // locks once, in sorted order, which prevents deadlocks between overlapping multi-file patches.
+      const preparedHunks: PreparedHunk[] = []
       for (const hunk of hunks) {
         const resolved = yield* ToolPath.resolveWithSession(session, ctx, hunk.path)
-        const filePath = resolved.path
-        yield* assertExternalDirectoryWithSession(session, ctx, filePath)
-        // Canonicalize every source and move destination (read-only realpath I/O) before the
-        // single permission request so one denied path makes the whole patch write nothing. Paths
-        // that cannot canonicalize (scratch outside the workspace, directories, .git) can never be
-        // reserved, so they are skipped and the existing permission flow applies unchanged.
-        const sourceOwned = yield* canonicalize(session, ctx, hunk.path)
-          .pipe(Effect.provideService(FSUtil.Service, afs))
-          .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
-
-        switch (hunk.type) {
-          case "add": {
-            const oldContent = ""
-            const newContent =
-              hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`
-            const next = Bom.split(newContent)
-            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, next.text))
-
-            let additions = 0
-            let deletions = 0
-            for (const change of diffLines(oldContent, next.text)) {
-              if (change.added) additions += change.count || 0
-              if (change.removed) deletions += change.count || 0
-            }
-
-            fileChanges.push({
-              filePath,
-              relativePath: resolved.relative,
-              oldContent,
-              newContent: next.text,
-              type: "add",
-              root: resolved.root,
-              pathKey: sourceOwned?.pathKey,
-              diff,
-              additions,
-              deletions,
-              bom: next.bom,
-            })
-
-            totalDiff += diff + "\n"
-            break
-          }
-
-          case "update": {
-            // Check if file exists for update
-            const stats = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
-            if (!stats || stats.type === "Directory") {
-              return yield* Effect.fail(
-                new Error(`apply_patch verification failed: Failed to read file to update: ${filePath}`),
-              )
-            }
-
-            const source = yield* Bom.readFile(afs, filePath)
-            const oldContent = source.text
-            let newContent = oldContent
-            let bom = source.bom
-
-            // Apply the update chunks to get new content
-            try {
-              const fileUpdate = Patch.deriveNewContentsFromChunks(
-                filePath,
-                hunk.chunks,
-                Bom.join(source.text, source.bom),
-              )
-              newContent = fileUpdate.content
-              bom = fileUpdate.bom
-            } catch (error) {
-              return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
-            }
-
-            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
-
-            let additions = 0
-            let deletions = 0
-            for (const change of diffLines(oldContent, newContent)) {
-              if (change.added) additions += change.count || 0
-              if (change.removed) deletions += change.count || 0
-            }
-
-            const move = hunk.move_path ? yield* ToolPath.resolveWithSession(session, ctx, hunk.move_path) : undefined
-            const movePath = move?.path
-            yield* assertExternalDirectoryWithSession(session, ctx, movePath)
-            const moveOwned = hunk.move_path
-              ? yield* canonicalize(session, ctx, hunk.move_path)
-                  .pipe(Effect.provideService(FSUtil.Service, afs))
-                  .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
-              : undefined
-
-            fileChanges.push({
-              filePath,
-              relativePath: resolved.relative,
-              oldContent,
-              newContent,
-              type: hunk.move_path ? "move" : "update",
-              root: resolved.root,
-              movePath,
-              moveRelativePath: move?.relative,
-              moveRoot: move?.root,
-              pathKey: sourceOwned?.pathKey,
-              movePathKey: moveOwned?.pathKey,
-              diff,
-              additions,
-              deletions,
-              bom,
-            })
-
-            totalDiff += diff + "\n"
-            break
-          }
-
-          case "delete": {
-            const source = yield* Bom.readFile(afs, filePath).pipe(
-              Effect.catch((error) =>
-                Effect.fail(
-                  new Error(
-                    `apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`,
-                  ),
-                ),
-              ),
-            )
-            const contentToDelete = source.text
-            const deleteDiff = trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
-
-            const deletions = contentToDelete.split("\n").length
-
-            fileChanges.push({
-              filePath,
-              relativePath: resolved.relative,
-              oldContent: contentToDelete,
-              newContent: "",
-              type: "delete",
-              root: resolved.root,
-              pathKey: sourceOwned?.pathKey,
-              diff: deleteDiff,
-              additions: 0,
-              deletions,
-              bom: source.bom,
-            })
-
-            totalDiff += deleteDiff + "\n"
-            break
-          }
-        }
+        const pathKey = yield* canonicalPathKey(afs, resolved.path)
+        const lockKeys = yield* mutationLockKeys(afs, resolved.path)
+        const move =
+          hunk.type === "update" && hunk.move_path
+            ? yield* ToolPath.resolveWithSession(session, ctx, hunk.move_path)
+            : undefined
+        const movePathKey = move ? yield* canonicalPathKey(afs, move.path) : undefined
+        const moveLockKeys = move ? yield* mutationLockKeys(afs, move.path) : []
+        preparedHunks.push({
+          hunk,
+          resolved,
+          pathKey,
+          lockKeys,
+          move,
+          movePathKey,
+          moveLockKeys,
+        })
       }
-
-      // Build per-file metadata for UI rendering (used for both permission and result)
-      const files = fileChanges.map((change) => ({
-        filePath: change.filePath,
-        relativePath: change.moveRelativePath ?? change.relativePath,
-        type: change.type,
-        patch: change.diff,
-        additions: change.additions,
-        deletions: change.deletions,
-        movePath: change.movePath,
-      }))
-
-      // Check permissions if needed
-      const relativePaths = Array.from(
-        new Set(
-          fileChanges.flatMap((change) =>
-            [change.relativePath, change.moveRelativePath].filter((path) => path !== undefined),
-          ),
-        ),
+      const allLockKeys = Array.from(
+        new Set(preparedHunks.flatMap((prepared) => [...prepared.lockKeys, ...prepared.moveLockKeys])),
       )
-      const metadata = {
-        filepath: relativePaths.join(", "),
-        diff: totalDiff,
-        files,
-      }
-      // One write lease for the whole patch: every source and move destination must be owned by the
-      // calling session (or unreserved). One denied path fails here before any permission ask or
-      // mutation, so the patch is all-or-nothing on ownership.
+      // Keep authorization separate from mutation locks. Every resolved target contributes the
+      // same unprefixed canonical filesystem key that reservation creation stores, even when the
+      // caller reaches it from another root.
       const allPathKeys = Array.from(
         new Set(
-          fileChanges.flatMap((change) =>
-            [change.pathKey, change.movePathKey].filter((key): key is string => key !== undefined),
+          preparedHunks.flatMap((prepared) =>
+            [prepared.pathKey, prepared.movePathKey].filter((key): key is string => key !== undefined),
           ),
         ),
       )
-      yield* withWriteLease(
+
+      const { fileChanges, totalDiff, files } = yield* withMutationLease(
         db,
         String(ctx.sessionID),
         allPathKeys,
+        allLockKeys,
         Effect.gen(function* () {
+          // External-directory checks can ask permission, so keep them inside the same lease as
+          // verification and mutation. This also ensures a denied reservation asks nothing.
+          for (const prepared of preparedHunks) {
+            yield* assertExternalDirectoryWithSession(session, ctx, prepared.resolved.path)
+            yield* assertExternalDirectoryWithSession(session, ctx, prepared.move?.path)
+          }
+
+          const fileChanges: Array<{
+            filePath: string
+            relativePath: string
+            oldContent: string
+            newContent: string
+            type: "add" | "update" | "delete" | "move"
+            root: ToolPath.Root
+            movePath?: string
+            moveRelativePath?: string
+            moveRoot?: ToolPath.Root
+            diff: string
+            additions: number
+            deletions: number
+            bom: boolean
+          }> = []
+          let totalDiff = ""
+
+          // Read, verify, and derive while the lease is held. A concurrent structured writer cannot
+          // change a source between this read and the final write.
+          for (const prepared of preparedHunks) {
+            const { hunk, resolved, move } = prepared
+            const filePath = resolved.path
+            switch (hunk.type) {
+              case "add": {
+                const oldContent = ""
+                const newContent =
+                  hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`
+                const next = Bom.split(newContent)
+                const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, next.text))
+                let additions = 0
+                let deletions = 0
+                for (const change of diffLines(oldContent, next.text)) {
+                  if (change.added) additions += change.count || 0
+                  if (change.removed) deletions += change.count || 0
+                }
+                fileChanges.push({
+                  filePath,
+                  relativePath: resolved.relative,
+                  oldContent,
+                  newContent: next.text,
+                  type: "add",
+                  root: resolved.root,
+                  diff,
+                  additions,
+                  deletions,
+                  bom: next.bom,
+                })
+                totalDiff += diff + "\n"
+                break
+              }
+
+              case "update": {
+                const stats = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                if (!stats || stats.type === "Directory") {
+                  return yield* Effect.fail(
+                    new Error(`apply_patch verification failed: Failed to read file to update: ${filePath}`),
+                  )
+                }
+                const source = yield* Bom.readFile(afs, filePath)
+                const oldContent = source.text
+                let newContent = oldContent
+                let bom = source.bom
+                try {
+                  const fileUpdate = Patch.deriveNewContentsFromChunks(
+                    filePath,
+                    hunk.chunks,
+                    Bom.join(source.text, source.bom),
+                  )
+                  newContent = fileUpdate.content
+                  bom = fileUpdate.bom
+                } catch (error) {
+                  return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
+                }
+                const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
+                let additions = 0
+                let deletions = 0
+                for (const change of diffLines(oldContent, newContent)) {
+                  if (change.added) additions += change.count || 0
+                  if (change.removed) deletions += change.count || 0
+                }
+                fileChanges.push({
+                  filePath,
+                  relativePath: resolved.relative,
+                  oldContent,
+                  newContent,
+                  type: move ? "move" : "update",
+                  root: resolved.root,
+                  movePath: move?.path,
+                  moveRelativePath: move?.relative,
+                  moveRoot: move?.root,
+                  diff,
+                  additions,
+                  deletions,
+                  bom,
+                })
+                totalDiff += diff + "\n"
+                break
+              }
+
+              case "delete": {
+                const source = yield* Bom.readFile(afs, filePath).pipe(
+                  Effect.catch((error) =>
+                    Effect.fail(
+                      new Error(
+                        `apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                      ),
+                    ),
+                  ),
+                )
+                const contentToDelete = source.text
+                const diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
+                fileChanges.push({
+                  filePath,
+                  relativePath: resolved.relative,
+                  oldContent: contentToDelete,
+                  newContent: "",
+                  type: "delete",
+                  root: resolved.root,
+                  diff,
+                  additions: 0,
+                  deletions: contentToDelete.split("\n").length,
+                  bom: source.bom,
+                })
+                totalDiff += diff + "\n"
+                break
+              }
+            }
+          }
+
+          const files = fileChanges.map((change) => ({
+            filePath: change.filePath,
+            relativePath: change.moveRelativePath ?? change.relativePath,
+            type: change.type,
+            patch: change.diff,
+            additions: change.additions,
+            deletions: change.deletions,
+            movePath: change.movePath,
+          }))
+          const relativePaths = Array.from(
+            new Set(
+              fileChanges.flatMap((change) =>
+                [change.relativePath, change.moveRelativePath].filter((path) => path !== undefined),
+              ),
+            ),
+          )
           yield* ctx.ask({
             permission: "apply_patch",
             patterns: relativePaths,
             always: ["*"],
-            metadata,
+            metadata: {
+              filepath: relativePaths.join(", "),
+              diff: totalDiff,
+              files,
+            },
           })
 
           // Apply the changes
@@ -309,7 +309,7 @@ export const ApplyPatchTool = Tool.define(
                 if (change.movePath) {
                   // Create parent directories (recursive: true is safe on existing/root dirs)
 
-                  yield* afs.writeWithDirs(change.movePath!, Bom.join(change.newContent, change.bom))
+                  yield* afs.writeWithDirs(change.movePath, Bom.join(change.newContent, change.bom))
                   yield* afs.remove(change.filePath)
                   updates.push({ file: change.filePath, event: "unlink" })
                   updates.push({ file: change.movePath, event: "add" })
@@ -334,6 +334,8 @@ export const ApplyPatchTool = Tool.define(
           for (const update of updates) {
             yield* events.publish(Watcher.Event.Updated, update)
           }
+
+          return { fileChanges, totalDiff, files }
         }),
       )
 

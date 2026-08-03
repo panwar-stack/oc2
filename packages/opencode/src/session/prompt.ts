@@ -165,7 +165,18 @@ export const layer = Layer.effect(
       // finalization barrier before team closure can release it as a successful completion.
       yield* state.cancel(sessionID)
       if (Option.isSome(activeTeam)) {
-        yield* team.shutdown({ teamID: activeTeam.value.id, sessionID }).pipe(Effect.ignore)
+        // Lead cancellation is an abort path, so it bypasses the protocol-1 final-report gate.
+        yield* team
+          .shutdown({
+            teamID: activeTeam.value.id,
+            sessionID,
+            force: true,
+            reason: "Lead session cancelled",
+          })
+          .pipe(
+            Effect.catchTag("Team.ShutdownAlreadyClosed", () => Effect.void),
+            Effect.orDie,
+          )
       }
       yield* Effect.forEach(
         teamMembers.map((member) => SessionID.make(member.session_id)),

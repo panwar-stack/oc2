@@ -20,7 +20,7 @@ import * as Bom from "@/util/bom"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
 import { Database } from "@oc2-ai/core/database/database"
-import { canonicalize, withWriteLease } from "@/team/file-ownership"
+import { canonicalPathKey, mutationLockKeys, withMutationLease } from "@/team/file-ownership"
 import * as LSPClient from "@/lsp/client"
 
 type EditMetadata = {
@@ -78,25 +78,21 @@ export const EditTool = Tool.define(
 
           const resolved = yield* ToolPath.resolveWithSession(session, ctx, params.filePath)
           const filePath = resolved.path
-          yield* assertExternalDirectoryWithSession(session, ctx, filePath)
 
-          // Canonicalize the target (read-only realpath I/O), then acquire the write lease. The
-          // sorted path lock is held through the ownership check, the permission ask, and the full
-          // mutation; a reservation owned by another session denies the edit before any ask or I/O.
-          // The lease subsumes the previous per-file semaphore lock, so no inner lock is kept.
-          // Paths that cannot canonicalize (scratch outside the workspace, directories, .git) can
-          // never be reserved, so the lease is skipped for them and the existing behavior applies.
-          const owned = yield* canonicalize(session, ctx, params.filePath)
-            .pipe(Effect.provideService(FSUtil.Service, afs))
-            .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
+          // Authorization always uses the canonical filesystem key, even when this caller sees the
+          // target as external. Root containment limits reservation creation, not lease lookup.
+          const pathKey = yield* canonicalPathKey(afs, filePath).pipe(Effect.orDie)
+          const lockKeys = yield* mutationLockKeys(afs, filePath)
           let diff = ""
           let contentOld = ""
           let contentNew = ""
-          yield* withWriteLease(
+          yield* withMutationLease(
             db,
             String(ctx.sessionID),
-            owned ? [owned.pathKey] : [],
+            [pathKey],
+            lockKeys,
             Effect.gen(function* () {
+              yield* assertExternalDirectoryWithSession(session, ctx, filePath)
               if (params.oldString === "") {
                 const existed = yield* afs.existsSafe(filePath)
                 if (existed) {

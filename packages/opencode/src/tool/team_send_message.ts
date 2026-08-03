@@ -84,12 +84,25 @@ export const TeamSendMessageTool = Tool.define(
               metadata: {},
             }
           }
-          const msg = yield* team.sendMessage({
-            teamID: context.value.team.id,
-            sender: ctx.sessionID,
-            recipients,
-            body: params.body,
-          })
+          const sendResult = yield* team
+            .sendMessage({
+              teamID: context.value.team.id,
+              sender: ctx.sessionID,
+              recipients,
+              body: params.body,
+            })
+            .pipe(
+              Effect.map((message) => ({ message }) as const),
+              Effect.catchTag("Team.MessageToTerminalMember", (error) => Effect.succeed({ terminal: error } as const)),
+              Effect.catchTag("Team.MessageToClosedTeam", () => Effect.succeed({ closed: true } as const)),
+            )
+          if ("terminal" in sendResult) {
+            return { title: "Team Message", output: sendResult.terminal.message, metadata: {} }
+          }
+          if ("closed" in sendResult) {
+            return { title: "Team Message", output: "No active team.", metadata: {} }
+          }
+          const msg = sendResult.message
           const lead = ctx.sessionID === context.value.team.lead_session_id
           const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
           if (promptOps) {
@@ -97,8 +110,8 @@ export const TeamSendMessageTool = Tool.define(
               recipients.filter((recipient) => recipient !== ctx.sessionID),
               (recipient) =>
                 lead
-                  ? wakeTeamSessionBounded(promptOps, recipient).pipe(Effect.ignore)
-                  : wakeTeamSession(promptOps, recipient).pipe(Effect.ignore, Effect.forkIn(scope)),
+                  ? wakeTeamSessionBounded(promptOps, recipient, undefined, team).pipe(Effect.ignore)
+                  : wakeTeamSession(promptOps, recipient, team).pipe(Effect.ignore, Effect.forkIn(scope)),
               { concurrency: "unbounded", discard: true },
             )
           }

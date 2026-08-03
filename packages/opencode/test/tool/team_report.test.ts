@@ -293,12 +293,7 @@ describe("tool.team_report", () => {
 describe("tool.team_report final checkpoint", () => {
   const teamRow = (teamID: string) =>
     Database.Database.Service.use((database) =>
-      database.db
-        .select()
-        .from(TeamTable)
-        .where(eq(TeamTable.id, teamID))
-        .get()
-        .pipe(Effect.orDie),
+      database.db.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get().pipe(Effect.orDie),
     )
 
   it.live("final:true is lead-only and rejects member sessions", () =>
@@ -441,6 +436,14 @@ describe("tool.team_report final checkpoint", () => {
           const team = yield* Team.Service
           const lead = yield* sessions.create({ title: "Lead" })
           const info = yield* team.create({ name: "final-protocol0", goal: "Task gate skip", leadSessionID: lead.id })
+          yield* Database.Database.Service.use((database) =>
+            database.db
+              .update(TeamTable)
+              .set({ protocol_version: 0 })
+              .where(eq(TeamTable.id, info.id))
+              .run()
+              .pipe(Effect.orDie),
+          )
           const worker = yield* team.addMember({
             teamID: info.id,
             sessionID: "ses_report_final_protocol0_worker",
@@ -535,7 +538,7 @@ describe("tool.team_report final checkpoint", () => {
           yield* team.sendMessage({
             teamID: info.id,
             sender: lead.id,
-            recipients: [worker.id],
+            recipients: [lead.id],
             body: "Concurrent material mutation.",
           })
           const recorded = yield* team.recordFinalReport({
@@ -544,7 +547,7 @@ describe("tool.team_report final checkpoint", () => {
             sessionID: lead.id,
           })
 
-          expect(recorded).toBe(false)
+          expect(recorded).toEqual({ status: "stale" })
           const row = yield* teamRow(info.id)
           expect(row?.final_report_revision).toBeNull()
           expect(row?.revision).toBe(built.revision + 1)
@@ -584,11 +587,103 @@ describe("tool.team_report final checkpoint", () => {
           yield* team.sendMessage({
             teamID: info.id,
             sender: lead.id,
-            recipients: [worker.id],
+            recipients: [lead.id],
             body: "After the final report.",
           })
           row = yield* teamRow(info.id)
           expect(row?.revision).toBeGreaterThan(row?.final_report_revision ?? -1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("recordFinalReport atomically enforces authorization, member, daemon, and task admission", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lead = yield* sessions.create({ title: "Lead" })
+          const info = yield* team.create({ name: "final-admission", goal: "Atomic gates", leadSessionID: lead.id })
+          const finite = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_admission_finite",
+            name: "finite",
+            agentType: "general",
+            rolePrompt: "Finish",
+          })
+          yield* team.updateMemberStatus(finite.id, "active")
+
+          let built = yield* team.buildFinalReport(info.id)
+          const finiteResult = yield* team.recordFinalReport({
+            teamID: info.id,
+            revision: built.revision,
+            sessionID: lead.id,
+          })
+          expect(finiteResult.status).toBe("nonterminal_members")
+
+          yield* team.updateMemberStatus(finite.id, "completed", "done")
+          const daemon = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_report_final_admission_daemon",
+            name: "sentinel",
+            agentType: "general",
+            rolePrompt: "Monitor",
+            lifecycle: "daemon",
+            daemonState: "running",
+          })
+          yield* team.updateMemberStatus(daemon.id, "active", { daemonState: "running" })
+
+          built = yield* team.buildFinalReport(info.id)
+          const daemonResult = yield* team.recordFinalReport({
+            teamID: info.id,
+            revision: built.revision,
+            sessionID: lead.id,
+          })
+          expect(daemonResult.status).toBe("active_daemons")
+
+          yield* team.updateMemberStatus(daemon.id, "idle", { daemonState: "idle" })
+          const task = yield* team.createTask({ teamID: info.id, description: "Finish before report" })
+          built = yield* team.buildFinalReport(info.id)
+
+          const unauthorized = yield* team.recordFinalReport({
+            teamID: info.id,
+            revision: built.revision,
+            sessionID: "ses_not_the_lead",
+          })
+          expect(unauthorized).toEqual({ status: "not_authorized" })
+
+          const taskResult = yield* team.recordFinalReport({
+            teamID: info.id,
+            revision: built.revision,
+            sessionID: lead.id,
+          })
+          expect(taskResult).toEqual({ status: "unfinished_tasks", count: 1 })
+
+          yield* team.updateTask(info.id, task.id, { status: "completed" })
+          built = yield* team.buildFinalReport(info.id)
+          const recorded = yield* team.recordFinalReport({
+            teamID: info.id,
+            revision: built.revision,
+            sessionID: lead.id,
+          })
+          expect(recorded).toEqual({ status: "recorded" })
+
+          yield* Database.Database.Service.use((database) =>
+            database.db
+              .update(TeamTable)
+              .set({ status: "closed" })
+              .where(eq(TeamTable.id, info.id))
+              .run()
+              .pipe(Effect.orDie),
+          )
+          const inactive = yield* team.recordFinalReport({
+            teamID: info.id,
+            revision: built.revision,
+            sessionID: lead.id,
+          })
+          expect(inactive).toEqual({ status: "team_inactive" })
+          expect(yield* team.getUsageEvents(info.id)).toHaveLength(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

@@ -2,14 +2,23 @@ import { describe, expect } from "bun:test"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
-import { Effect } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage } from "ai"
 import type { Agent } from "@/agent/agent"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import type { Plugin } from "@/plugin"
+import { MCP } from "@/mcp"
+import { Permission } from "@/permission"
+import { Plugin } from "@/plugin"
 import type { Provider } from "@/provider/provider"
-import { prepare } from "@/session/llm/request"
+import { LLMRequestPrep, prepare } from "@/session/llm/request"
 import { MessageID, SessionID } from "@/session/schema"
+import type { Session } from "@/session/session"
+import { SessionTools } from "@/session/tools"
+import type { TaskPromptOps } from "@/tool/task"
+import { ToolRegistry } from "@/tool/registry"
+import { Tool } from "@/tool/tool"
+import { Truncate } from "@/tool/truncate"
+import { Database } from "@oc2-ai/core/database/database"
 import { testEffect } from "../lib/effect"
 
 const model: Provider.Model = {
@@ -72,6 +81,7 @@ const plugin: Plugin.Interface = {
 }
 
 const it = testEffect(RuntimeFlags.layer())
+const completionOnlyTools = { "*": false, team_task_update: true } satisfies Record<string, boolean>
 
 const makeTool = (description: string) =>
   aiTool({
@@ -79,6 +89,60 @@ const makeTool = (description: string) =>
     inputSchema: jsonSchema({ type: "object", properties: {} }),
     execute: async () => ({ output: "ok" }),
   })
+
+const makeRegistryTool = (description: string): Tool.Def => ({
+  id: "team_task_update",
+  description,
+  parameters: Schema.Struct({}),
+  execute: () => Effect.succeed({ title: "Task Updated", output: description, metadata: {} }),
+})
+
+function collisionLayer(kind: "plugin" | "mcp") {
+  const trusted = makeRegistryTool("trusted built-in team_task_update")
+  const pluginCollision = makeRegistryTool("plugin collision team_task_update")
+  const registryItems = kind === "plugin" ? [{ ...trusted }, pluginCollision] : [{ ...trusted }]
+  const mcpTools: Record<string, ReturnType<typeof makeTool>> = kind === "mcp"
+    ? { team_task_update: makeTool("MCP collision team_task_update") }
+    : {}
+  return Layer.mergeAll(
+    Layer.mock(Plugin.Service, {
+      trigger: (_name, _input, output) => Effect.succeed(output),
+    }),
+    Layer.mock(Permission.Service, {}),
+    Layer.mock(ToolRegistry.Service, {
+      named: () => Effect.succeed({ task: trusted, read: trusted, teamTaskUpdate: trusted } as never),
+      tools: () => Effect.succeed(registryItems),
+    }),
+    Layer.mock(MCP.Service, {
+      tools: () => Effect.succeed(mcpTools),
+    }),
+    Layer.mock(Truncate.Service, {}),
+    Layer.succeed(Database.Service, Database.Service.of({ db: {} as Database.Interface["db"] })),
+  )
+}
+
+const resolveCollision = (kind: "plugin" | "mcp", completionOnly: boolean) =>
+  SessionTools.resolve({
+    agent,
+    model,
+    session: { id: sessionID, permission: [] } as unknown as Session.Info,
+    processor: {
+      message: { id: MessageID.make("msg_tool-collision") } as SessionV1.Assistant,
+      updateToolCall: () => Effect.succeed(undefined),
+      completeToolCall: () => Effect.void,
+    },
+    bypassAgentCheck: false,
+    messages: [
+      {
+        info: {
+          ...user,
+          tools: completionOnly ? completionOnlyTools : undefined,
+        },
+        parts: [],
+      },
+    ],
+    promptOps: {} as TaskPromptOps,
+  }).pipe(Effect.provide(collisionLayer(kind)))
 
 const getPreparedToolDescriptions = Effect.fnUntraced(function* () {
   const flags = yield* RuntimeFlags.Service
@@ -119,4 +183,39 @@ describe("session.llm.request shape", () => {
       })
     }),
   )
+
+  for (const kind of ["plugin", "mcp"] as const) {
+    it.effect(`pins the trusted completion tool across a ${kind} name collision`, () =>
+      Effect.gen(function* () {
+        const flags = yield* RuntimeFlags.Service
+        const resolved = yield* resolveCollision(kind, true)
+        const prepared = yield* prepare({
+          user: { ...user, tools: completionOnlyTools },
+          sessionID,
+          model,
+          agent,
+          system: [],
+          messages: [{ role: "user", content: "finish the task" }] satisfies ModelMessage[],
+          tools: resolved,
+          provider,
+          auth: undefined,
+          plugin,
+          flags,
+          isWorkflow: false,
+        })
+
+        expect(LLMRequestPrep.isCompletionOnlyToolSelection(completionOnlyTools)).toBe(true)
+        expect(LLMRequestPrep.isCompletionOnlyToolSelection({ ...completionOnlyTools, team_send_message: false })).toBe(
+          false,
+        )
+        expect(Object.keys(prepared.tools)).toEqual(["team_task_update"])
+        expect(prepared.tools.team_task_update?.description).toBe("trusted built-in team_task_update")
+
+        const normal = yield* resolveCollision(kind, false)
+        expect(normal.team_task_update?.description).toBe(
+          kind === "plugin" ? "plugin collision team_task_update" : "MCP collision team_task_update",
+        )
+      }),
+    )
+  }
 })

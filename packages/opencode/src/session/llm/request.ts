@@ -250,7 +250,11 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       model: cachePlan.model,
       fields: cacheRequestFields(input.model, preparedParams.options, cachePlan),
     }),
-    CacheGuardrails.checkInvalidDuration({ provider: cachePlan.provider, model: cachePlan.model, duration: cachePlan.duration }),
+    CacheGuardrails.checkInvalidDuration({
+      provider: cachePlan.provider,
+      model: cachePlan.model,
+      duration: cachePlan.duration,
+    }),
     CacheGuardrails.checkBreakpointOverflow({
       provider: cachePlan.provider,
       model: cachePlan.model,
@@ -306,13 +310,28 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
-  return Record.filter(
-    input.tools,
-    (_, k) =>
-      input.user.tools?.[k] !== false &&
-      (input.user.tools?.["*"] !== false || input.user.tools?.[k] === true) &&
-      !disabled.has(k),
+  return selectTools(
+    Record.filter(input.tools, (_, key) => !disabled.has(key)),
+    input.user.tools,
   )
+}
+
+/**
+ * Applies a prompt's tool selection to the complete runtime registry. `"*": false` is an
+ * allow-list boundary: tools added dynamically by plugins or MCP servers stay unavailable unless
+ * the prompt explicitly sets that exact tool name to `true`.
+ */
+export function selectTools(tools: Record<string, Tool>, selection: Record<string, boolean> | undefined) {
+  return Record.filter(
+    tools,
+    (_, key) => selection?.[key] !== false && (selection?.["*"] !== false || selection?.[key] === true),
+  )
+}
+
+/** True only for the lifecycle reconciler's completion-only retry allow-list. */
+export function isCompletionOnlyToolSelection(selection: Record<string, boolean> | undefined) {
+  if (selection?.["*"] !== false || selection.team_task_update !== true) return false
+  return Object.keys(selection).every((key) => key === "*" || key === "team_task_update")
 }
 
 function schemaFromTool(tool: Tool) {
@@ -450,10 +469,7 @@ function sameCacheControl(
   return left?.type === right?.type && (left?.ttl ?? "5m") === (right?.ttl ?? "5m")
 }
 
-function setRequestCacheControl(
-  options: Record<string, any>,
-  cacheControl: { type: "ephemeral"; ttl?: "5m" | "1h" },
-) {
+function setRequestCacheControl(options: Record<string, any>, cacheControl: { type: "ephemeral"; ttl?: "5m" | "1h" }) {
   options.cacheControl = cacheControl.ttl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" }
   delete options.cache_control
 }
@@ -482,7 +498,11 @@ function isRecord(value: unknown): value is Record<string, any> {
 }
 
 function isCacheControl(value: unknown): value is { type: "ephemeral"; ttl?: "5m" | "1h" } {
-  return isRecord(value) && value.type === "ephemeral" && (value.ttl === undefined || value.ttl === "5m" || value.ttl === "1h")
+  return (
+    isRecord(value) &&
+    value.type === "ephemeral" &&
+    (value.ttl === undefined || value.ttl === "5m" || value.ttl === "1h")
+  )
 }
 
 function scrubCacheControlOptions(value: unknown, model: Provider.Model) {
@@ -533,7 +553,8 @@ function promptCacheKeyFromOptions(options: Record<string, any>) {
 }
 
 function explicitCacheFields(model: Provider.Model) {
-  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") return ["cache_control"]
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic")
+    return ["cache_control"]
   return []
 }
 

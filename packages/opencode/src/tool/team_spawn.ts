@@ -11,8 +11,10 @@ import { wakeTeamSession } from "./team_wake"
 import { EffectBridge } from "@/effect/bridge"
 import { Cause, Effect, Exit, Schema, Scope, Option } from "effect"
 import { Database } from "@oc2-ai/core/database/database"
+import { SessionControl } from "@oc2-ai/core/session/control"
 import { BackgroundJob } from "@/background/job"
 import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
+import { Runner } from "@/effect/runner"
 
 const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "Name for this teammate" }),
@@ -265,9 +267,7 @@ export const TeamSpawnTool = Tool.define(
               yield* team
                 .updateMemberStatus(member.id, "cancelled", {
                   result: reason,
-                  ...(member.lifecycle === "daemon"
-                    ? { daemonState: "error" as const, daemonError: reason }
-                    : {}),
+                  ...(member.lifecycle === "daemon" ? { daemonState: "error" as const, daemonError: reason } : {}),
                 })
                 .pipe(
                   Effect.catchCause((inner) =>
@@ -280,6 +280,18 @@ export const TeamSpawnTool = Tool.define(
                   ),
                 )
             })
+
+          // AbortSignal.reason is sticky, so it stays authoritative even after the pause releases.
+          // Direct Effect callers have no provider AbortController; only those callers fall back to
+          // the suspension provenance stored on Runner's interrupted target fiber.
+          const interruptedByPause = Effect.suspend(() => {
+            if (ctx.abort.aborted) return Effect.succeed(SessionControl.isPauseProvenance(ctx.abort.reason))
+            return Runner.currentSuspension.pipe(
+              Effect.map(
+                (suspension) => Option.isSome(suspension) && SessionControl.isPauseProvenance(suspension.value),
+              ),
+            )
+          })
 
           const notifySessions = (sender: string, recipients: string[], body: string) =>
             Effect.gen(function* () {
@@ -323,67 +335,75 @@ export const TeamSpawnTool = Tool.define(
             })
 
           return yield* Effect.gen(function* () {
-          const latestMembers = yield* team.getMembers(teamID)
-          yield* notifyActiveDependencies(latestMembers)
-          const blocked = dependencyIDs.some(
-            (dependency) =>
-              !latestMembers.some(
-                (candidate) =>
-                  candidate.session_id === dependency &&
-                  candidate.status === "completed" &&
-                  candidate.lifecycle !== "daemon",
-              ),
-          )
-          if (blocked) {
-            yield* team.updateMemberStatus(member.id, "blocked")
-            yield* notifyLead(
-              member.session_id,
-              [
-                `Teammate ${member.name} (${member.agent_type}) is waiting on dependency teammate(s):`,
-                ...dependencyIDs.map((dependency) => {
-                  const match = latestMembers.find((candidate) => candidate.session_id === dependency)
-                  return `- ${match?.name ?? dependency} (${dependency})`
-                }),
-              ].join("\n"),
+            const latestMembers = yield* team.getMembers(teamID)
+            yield* notifyActiveDependencies(latestMembers)
+            const blocked = dependencyIDs.some(
+              (dependency) =>
+                !latestMembers.some(
+                  (candidate) =>
+                    candidate.session_id === dependency &&
+                    candidate.status === "completed" &&
+                    candidate.lifecycle !== "daemon",
+                ),
             )
-            return {
-              title: "Teammate Spawned",
-              output: `Teammate spawned: ${member.name} (${member.session_id}) [${member.agent_type}], waiting on ${dependencyIDs.length} dependency(ies)`,
-              metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
+            if (blocked) {
+              yield* team.updateMemberStatus(member.id, "blocked")
+              yield* notifyLead(
+                member.session_id,
+                [
+                  `Teammate ${member.name} (${member.agent_type}) is waiting on dependency teammate(s):`,
+                  ...dependencyIDs.map((dependency) => {
+                    const match = latestMembers.find((candidate) => candidate.session_id === dependency)
+                    return `- ${match?.name ?? dependency} (${dependency})`
+                  }),
+                ].join("\n"),
+              )
+              return {
+                title: "Teammate Spawned",
+                output: `Teammate spawned: ${member.name} (${member.session_id}) [${member.agent_type}], waiting on ${dependencyIDs.length} dependency(ies)`,
+                metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
+              }
             }
-          }
 
-          const runCancel = yield* EffectBridge.make()
-          const cancelMember = lifecycleReconciler
-            .isPaused([ctx.sessionID, member.session_id])
-            .pipe(
-              Effect.flatMap((paused) =>
-                paused
-                  ? Effect.void
-                  : lifecycleReconciler.cancelMember({ memberID: member.id, ops }).pipe(Effect.ignore),
-              ),
+            const runCancel = yield* EffectBridge.make()
+            const cancelMember = lifecycleReconciler.cancelMember({ memberID: member.id, ops }).pipe(Effect.ignore)
+            const cancelMemberUnlessPaused = interruptedByPause.pipe(
+              Effect.flatMap((paused) => (paused ? Effect.void : cancelMember)),
             )
-          function onAbort() {
-            runCancel.fork(cancelMember)
-          }
+            function onAbort() {
+              if (SessionControl.isPauseProvenance(ctx.abort.reason)) return
+              runCancel.fork(cancelMember)
+            }
 
-          return yield* Effect.acquireUseRelease(
-            Effect.sync(() => {
-              ctx.abort.addEventListener("abort", onAbort)
-              if (ctx.abort.aborted) onAbort()
-            }),
-            () =>
-              Effect.gen(function* () {
-                const result = yield* lifecycleReconciler.startMember({ memberID: member.id, ops })
-                const current = yield* team.getMemberBySession(member.session_id)
-                if (member.lifecycle === "daemon") {
-                  const failed = Option.isSome(current) && current.value.daemon_state === "error"
+            return yield* Effect.acquireUseRelease(
+              Effect.sync(() => {
+                ctx.abort.addEventListener("abort", onAbort)
+                if (ctx.abort.aborted) onAbort()
+              }),
+              () =>
+                Effect.gen(function* () {
+                  const result = yield* lifecycleReconciler.startMember({ memberID: member.id, ops })
+                  const current = yield* team.getMemberBySession(member.session_id)
+                  if (member.lifecycle === "daemon") {
+                    const failed = Option.isSome(current) && current.value.daemon_state === "error"
+                    return {
+                      title: failed ? "Daemon Teammate Initialization Failed" : "Daemon Teammate Initialized",
+                      output: [
+                        failed
+                          ? `Daemon teammate initialization failed: ${member.name} (${member.session_id}) [${member.agent_type}]`
+                          : `Daemon teammate initialized: ${member.name} (${member.session_id}) [${member.agent_type}]`,
+                        "",
+                        "<teammate_result>",
+                        result,
+                        "</teammate_result>",
+                      ].join("\n"),
+                      metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
+                    }
+                  }
                   return {
-                    title: failed ? "Daemon Teammate Initialization Failed" : "Daemon Teammate Initialized",
+                    title: "Teammate Completed",
                     output: [
-                      failed
-                        ? `Daemon teammate initialization failed: ${member.name} (${member.session_id}) [${member.agent_type}]`
-                        : `Daemon teammate initialized: ${member.name} (${member.session_id}) [${member.agent_type}]`,
+                      `Teammate completed: ${member.name} (${member.session_id}) [${member.agent_type}]`,
                       "",
                       "<teammate_result>",
                       result,
@@ -391,37 +411,31 @@ export const TeamSpawnTool = Tool.define(
                     ].join("\n"),
                     metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
                   }
-                }
-                return {
-                  title: "Teammate Completed",
-                  output: [
-                    `Teammate completed: ${member.name} (${member.session_id}) [${member.agent_type}]`,
-                    "",
-                    "<teammate_result>",
-                    result,
-                    "</teammate_result>",
-                  ].join("\n"),
-                  metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
-                }
-              }),
-            (_, exit) =>
-              Effect.gen(function* () {
-                if (Exit.hasInterrupts(exit)) yield* cancelMember
-              }).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    ctx.abort.removeEventListener("abort", onAbort)
-                  }),
+                }),
+              (_, exit) =>
+                Effect.gen(function* () {
+                  if (Exit.hasInterrupts(exit)) yield* cancelMemberUnlessPaused
+                }).pipe(
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      ctx.abort.removeEventListener("abort", onAbort)
+                    }),
+                  ),
                 ),
-              ),
-          )
+            )
           }).pipe(
-            // Terminalize on any non-success exit (failure, defect, or interruption) before the
-            // exit propagates, so a finite teammate never strands in `starting`/`blocked`.
+            // Terminalize every real failure and unpaused cancellation before the exit propagates,
+            // so a finite teammate never strands in `starting`/`blocked`.
             // Idempotent: the acquireUseRelease release handler or a prior settleMember may
             // already have cancelled the member, and a successful spawn (member completed,
             // cancelled, blocked, or daemon idle) never terminalizes here.
-            Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : terminalizeCancelled(exit.cause))),
+            Effect.onExit((exit) => {
+              if (Exit.isSuccess(exit)) return Effect.void
+              if (!Cause.hasInterruptsOnly(exit.cause)) return terminalizeCancelled(exit.cause)
+              return interruptedByPause.pipe(
+                Effect.flatMap((paused) => (paused ? Effect.void : terminalizeCancelled(exit.cause))),
+              )
+            }),
           )
         }).pipe(Effect.orDie),
     }

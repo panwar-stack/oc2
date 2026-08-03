@@ -1,9 +1,7 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./team_plan_decide.txt"
 import { Team } from "@/team/team"
-import { Session } from "@/session/session"
 import { Config } from "@/config/config"
-import { Permission } from "@/permission"
 import type { TaskPromptOps } from "./task"
 import { wakeTeamSessionBounded } from "./team_wake"
 import { Effect, Option, Schema } from "effect"
@@ -19,7 +17,6 @@ export const TeamPlanDecideTool = Tool.define(
   "team_plan_decide",
   Effect.gen(function* () {
     const team = yield* Team.Service
-    const sessions = yield* Session.Service
     const config = yield* Config.Service
     return {
       description: DESCRIPTION,
@@ -52,31 +49,26 @@ export const TeamPlanDecideTool = Tool.define(
           }
 
           if (params.decision === "approve") {
-            yield* team.approveMemberPlan(target.id)
             const targetSessionID = SessionID.make(target.session_id)
-            const session = yield* sessions.get(targetSessionID)
-            const newPermission = removePlanModePermissionOverlay(session.permission ?? [])
-            yield* sessions.setPermission({ sessionID: targetSessionID, permission: newPermission })
-            yield* team.sendMessage({
-              teamID: activeTeam.value.id,
+            const approved = yield* team.approveMemberPlan(target.id, {
               sender: ctx.sessionID,
-              recipients: [target.session_id],
               body: `PLAN APPROVED. Proceed with implementation.\n${params.feedback ?? ""}`,
-            })
-            yield* team.createUsageEvent({
-              teamID: activeTeam.value.id,
-              sessionID: ctx.sessionID,
-              memberID: target.id,
-              type: "plan_approved",
-              metadata: {
+              usageMetadata: {
                 member_name: target.name,
                 target_session_id: target.session_id,
                 feedback_provided: params.feedback !== undefined,
               },
             })
+            if (Option.isNone(approved)) {
+              return {
+                title: "Plan Decide Failed",
+                output: `Member '${params.member_name}' is no longer an active non-terminal plan-mode member.`,
+                metadata: {},
+              }
+            }
             const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
             if (promptOps) {
-              yield* wakeTeamSessionBounded(promptOps, targetSessionID).pipe(Effect.ignore)
+              yield* wakeTeamSessionBounded(promptOps, targetSessionID, undefined, team).pipe(Effect.ignore)
             }
             return { title: "Plan Approved", output: `Plan for ${params.member_name} approved.`, metadata: {} }
           }
@@ -99,32 +91,12 @@ export const TeamPlanDecideTool = Tool.define(
           })
           const promptOps = ctx.extra?.promptOps as TaskPromptOps | undefined
           if (promptOps) {
-            yield* wakeTeamSessionBounded(promptOps, SessionID.make(target.session_id)).pipe(Effect.ignore)
+            yield* wakeTeamSessionBounded(promptOps, SessionID.make(target.session_id), undefined, team).pipe(
+              Effect.ignore,
+            )
           }
           return { title: "Plan Rejected", output: `Plan for ${params.member_name} rejected.`, metadata: {} }
         }).pipe(Effect.orDie),
     }
   }),
 )
-
-function removePlanModePermissionOverlay(rules: Permission.Rule[]) {
-  const removed = new Set<string>()
-  return rules.reduceRight<Permission.Rule[]>((result, rule) => {
-    if (isPlanModePermissionRule(rule) && !removed.has(rule.permission)) {
-      removed.add(rule.permission)
-      return result
-    }
-    return [rule, ...result]
-  }, [])
-}
-
-function isPlanModePermissionRule(rule: Permission.Rule) {
-  return (
-    rule.action === "deny" &&
-    rule.pattern === "*" &&
-    (rule.permission === "bash" ||
-      rule.permission === "write" ||
-      rule.permission === "edit" ||
-      rule.permission === "apply_patch")
-  )
-}

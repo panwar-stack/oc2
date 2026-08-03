@@ -88,6 +88,7 @@ export function webSearchEnabled(_providerID: ProviderV2.ID, flags = { exa: fals
 type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 type TeamReportDef = Tool.InferDef<typeof TeamReportTool>
+type TeamTaskUpdateDef = Tool.InferDef<typeof TeamTaskUpdateTool>
 
 type State = {
   custom: Tool.Def[]
@@ -97,13 +98,14 @@ type State = {
   task: TaskDef
   read: ReadDef
   teamReport: TeamReportDef
+  teamTaskUpdate: TeamTaskUpdateDef
   worktree: string
 }
 
 export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
-  readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
+  readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef; teamTaskUpdate: TeamTaskUpdateDef }>
   readonly tools: (model: {
     providerID: ProviderV2.ID
     modelID: ModelV2.ID
@@ -362,6 +364,7 @@ export const layer: Layer.Layer<
           task: tool.task,
           read: tool.read,
           teamReport: tool.teamReport,
+          teamTaskUpdate: tool.teamTaskUpdate,
           worktree: ctx.worktree,
         }
       }),
@@ -439,7 +442,7 @@ export const layer: Layer.Layer<
 
     const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* () {
       const s = yield* InstanceState.get(state)
-      return { task: s.task, read: s.read }
+      return { task: s.task, read: s.read, teamTaskUpdate: s.teamTaskUpdate }
     })
 
     return Service.of({ ids, all, named, tools })

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageV2 } from "@/session/message-v2"
@@ -22,6 +22,7 @@ import { LifecycleReconciler } from "@/session/lifecycle-reconciler"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { SessionTable } from "@oc2-ai/core/session/sql"
 import { eq } from "drizzle-orm"
+import { Runner } from "@/effect/runner"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -131,12 +132,17 @@ function reply(input: SessionPrompt.PromptInput, text: string): MessageV2.WithPa
   }
 }
 
-function context(input: { lead: Session.Info; assistant: MessageV2.Assistant; promptOps?: TaskPromptOps }) {
+function context(input: {
+  lead: Session.Info
+  assistant: MessageV2.Assistant
+  promptOps?: TaskPromptOps
+  abort?: AbortSignal
+}) {
   return {
     sessionID: input.lead.id,
     messageID: input.assistant.id,
     agent: "build",
-    abort: new AbortController().signal,
+    abort: input.abort ?? new AbortController().signal,
     extra: input.promptOps ? { promptOps: input.promptOps } : undefined,
     messages: [],
     metadata: () => Effect.void,
@@ -579,12 +585,209 @@ describe("tool.team_spawn", () => {
     ),
   )
 
-  it.live("an interrupt after member creation terminalizes the member as notified cancelled", () =>
+  it.live("a released parent-pause interrupt preserves the new member while a real failure still terminalizes", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
+          const control = yield* SessionControl.Service
           const team = yield* Team.Service
           const { lead, assistant, info } = yield* seed()
+          const entered = yield* Deferred.make<void>()
+          const gate = yield* Deferred.make<void>()
+          const cleanupEntered = yield* Deferred.make<void>()
+          const cleanupGate = yield* Deferred.make<void>()
+          const scope = yield* Scope.Scope
+          let mode: "pause" | "failure" = "pause"
+          let modeCalls = 0
+          const controlledTeam = {
+            ...team,
+            getMembers: Effect.fn("Team.getMembers.pauseOrFailure")(function* (teamID: string) {
+              modeCalls += 1
+              if (modeCalls >= 2) {
+                if (mode === "failure") return yield* Effect.die(new Error("setup boom"))
+                yield* Deferred.succeed(entered, undefined)
+                yield* Deferred.await(gate).pipe(
+                  Effect.ensuring(
+                    Deferred.succeed(cleanupEntered, undefined).pipe(Effect.andThen(Deferred.await(cleanupGate))),
+                  ),
+                )
+              }
+              return yield* team.getMembers(teamID)
+            }),
+          }
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) => Effect.succeed(reply(input, "work complete")),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const tool = yield* TeamSpawnTool.pipe(Effect.provideService(Team.Service, controlledTeam))
+          const def = yield* tool.init()
+          const runner = Runner.make<unknown>(scope)
+          const pausedFiber = yield* runner
+            .ensureRunning(
+              def.execute(
+                { name: "paused-worker", agent_type: "general", role_prompt: "Do paused work" },
+                context({ lead, assistant, promptOps }),
+              ),
+            )
+            .pipe(Effect.forkScoped)
+          yield* awaitWithTimeout(Deferred.await(entered), "spawn did not reach the pause gate")
+          const paused = yield* control.pause({ rootSessionID: lead.id })
+          yield* runner.suspendWith({
+            _tag: "SessionControl.PauseProvenance",
+            rootSessionID: paused.rootSessionID,
+            cascadeID: paused.cascadeID,
+            generation: paused.generation,
+          })
+          yield* awaitWithTimeout(Deferred.await(cleanupEntered), "spawn cleanup did not start")
+          yield* control.release(lead.id)
+          expect((yield* control.state(lead.id)).paused).toBe(false)
+          yield* Deferred.succeed(cleanupGate, undefined)
+          yield* pollWithTimeout(
+            Effect.sync(() => (runner.state._tag === "Idle" ? true : undefined)),
+            "spawn target did not finish cleanup",
+          )
+          const pausedExit = yield* Fiber.await(pausedFiber)
+          expect(Exit.isFailure(pausedExit)).toBe(true)
+          if (Exit.isFailure(pausedExit)) expect(Cause.squash(pausedExit.cause)).toBeInstanceOf(Runner.Suspended)
+
+          const pausedMember = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "paused-worker")
+          expect(pausedMember?.status).toBe("starting")
+          expect(
+            (yield* team.getMessages(info.id)).filter(
+              (message) => message.id === `team:member:${pausedMember?.id}:terminal:cancelled`,
+            ),
+          ).toHaveLength(0)
+
+          mode = "failure"
+          modeCalls = 0
+          const failedExit = yield* def
+            .execute(
+              { name: "failed-worker", agent_type: "general", role_prompt: "Fail during setup" },
+              context({ lead, assistant, promptOps }),
+            )
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(failedExit)).toBe(true)
+          if (Exit.isFailure(failedExit)) expect(Cause.hasInterruptsOnly(failedExit.cause)).toBe(false)
+
+          const failedMember = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "failed-worker")
+          expect(failedMember?.status).toBe("cancelled")
+          expect(failedMember?.result).toBe("setup boom")
+          expect(
+            (yield* team.getMessages(info.id)).filter(
+              (message) => message.id === `team:member:${failedMember?.id}:terminal:cancelled`,
+            ),
+          ).toHaveLength(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("a pause committed before its delayed signal preserves a member created before that signal", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const control = yield* SessionControl.Service
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const beforeSnapshot = yield* Deferred.make<void>()
+          const allowSnapshot = yield* Deferred.make<void>()
+          const memberCreated = yield* Deferred.make<void>()
+          const memberGate = yield* Deferred.make<void>()
+          let getMembersCalls = 0
+          const controlledTeam = {
+            ...team,
+            getMembers: Effect.fn("Team.getMembers.commitBeforeSnapshot")(function* (teamID: string) {
+              getMembersCalls += 1
+              if (getMembersCalls === 1) {
+                yield* Deferred.succeed(beforeSnapshot, undefined)
+                yield* Deferred.await(allowSnapshot)
+              }
+              if (getMembersCalls === 2) {
+                yield* Deferred.succeed(memberCreated, undefined)
+                yield* Deferred.await(memberGate)
+              }
+              return yield* team.getMembers(teamID)
+            }),
+          }
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) => Effect.succeed(reply(input, "work complete")),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const controller = new AbortController()
+          const tool = yield* TeamSpawnTool.pipe(Effect.provideService(Team.Service, controlledTeam))
+          const def = yield* tool.init()
+          const spawnFiber = yield* def
+            .execute(
+              { name: "ordered-worker", agent_type: "general", role_prompt: "Do ordered work" },
+              context({ lead, assistant, promptOps, abort: controller.signal }),
+            )
+            .pipe(Effect.forkScoped)
+
+          yield* awaitWithTimeout(Deferred.await(beforeSnapshot), "spawn did not reach the pre-snapshot gate")
+          const signalEntered = yield* Deferred.make<void>()
+          const allowSignal = yield* Deferred.make<void>()
+          const unregister = yield* control.registerInterrupter((sessionIDs, provenance) =>
+            Effect.gen(function* () {
+              if (!sessionIDs.includes(lead.id)) return []
+              yield* Deferred.succeed(signalEntered, undefined)
+              yield* Deferred.await(allowSignal)
+              controller.abort(provenance)
+              yield* Fiber.interrupt(spawnFiber)
+              return [lead.id]
+            }),
+          )
+          const pauseFiber = yield* control.pause({ rootSessionID: lead.id }).pipe(Effect.forkScoped)
+
+          // SessionControl invokes interrupters only after the pause transaction commits.
+          yield* awaitWithTimeout(Deferred.await(signalEntered), "pause did not commit before the blocker snapshot")
+          yield* Deferred.succeed(allowSnapshot, undefined)
+          yield* awaitWithTimeout(Deferred.await(memberCreated), "pause signal did not wait for member creation")
+          yield* Deferred.succeed(allowSignal, undefined)
+          const pauseResult = yield* awaitWithTimeout(Fiber.join(pauseFiber), "pause signal did not finish")
+          expect(pauseResult.interruptionSignalledSessionIDs).toContain(lead.id)
+          expect(controller.signal.reason).toEqual({
+            _tag: "SessionControl.PauseProvenance",
+            rootSessionID: lead.id,
+            cascadeID: pauseResult.cascadeID,
+            generation: pauseResult.generation,
+          })
+
+          const spawnExit = yield* Fiber.await(spawnFiber)
+          expect(Exit.isFailure(spawnExit)).toBe(true)
+          if (Exit.isFailure(spawnExit)) expect(Cause.hasInterruptsOnly(spawnExit.cause)).toBe(true)
+          const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "ordered-worker")
+          expect(member?.status).toBe("starting")
+          expect(
+            (yield* team.getMessages(info.id)).filter(
+              (message) => message.id === `team:member:${member?.id}:terminal:cancelled`,
+            ),
+          ).toHaveLength(0)
+
+          yield* unregister
+          yield* control.release(lead.id)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("an ordinary abort wins over unrelated Runner provenance and historical pauses", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const control = yield* SessionControl.Service
+          const team = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { lead, assistant, info } = yield* seed()
+          yield* control.pause({ rootSessionID: lead.id })
+          yield* control.release(lead.id)
+          const unrelated = yield* sessions.create({ title: "Unrelated" })
+          const unrelatedPause = yield* control.pause({ rootSessionID: unrelated.id })
           // The second getMembers call (the post-addMember latest-members read) blocks on a
           // gate until the fiber is interrupted, simulating an abort between member creation
           // and start (before the acquireUseRelease release handler exists).
@@ -612,19 +815,37 @@ describe("tool.team_spawn", () => {
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
             run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
+          const controller = new AbortController()
+          const scope = yield* Scope.Scope
           const tool = yield* TeamSpawnTool.pipe(Effect.provideService(Team.Service, blockingTeam))
           const def = yield* tool.init()
-          const fiber = yield* def
-            .execute(
-              { name: "worker", agent_type: "general", role_prompt: "Do the work" },
-              context({ lead, assistant, promptOps }),
+          const runner = Runner.make<unknown>(scope)
+          const fiber = yield* runner
+            .ensureRunning(
+              def.execute(
+                { name: "worker", agent_type: "general", role_prompt: "Do the work" },
+                context({ lead, assistant, promptOps, abort: controller.signal }),
+              ),
             )
             .pipe(Effect.forkScoped)
           yield* awaitWithTimeout(Deferred.await(entered), "spawn did not reach the setup gate")
-          yield* Fiber.interrupt(fiber)
+          controller.abort(new DOMException("ordinary interrupt", "AbortError"))
+          yield* runner.suspendWith({
+            _tag: "SessionControl.PauseProvenance",
+            rootSessionID: unrelatedPause.rootSessionID,
+            cascadeID: unrelatedPause.cascadeID,
+            generation: unrelatedPause.generation,
+          })
           const exit = yield* Fiber.await(fiber)
           expect(Exit.isFailure(exit)).toBe(true)
-          if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+              return member?.status === "cancelled"
+            }),
+          )
 
           const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
           expect(member?.status).toBe("cancelled")
@@ -632,6 +853,7 @@ describe("tool.team_spawn", () => {
             (message) => message.id === `team:member:${member?.id}:terminal:cancelled`,
           )
           expect(notifications).toHaveLength(1)
+          yield* control.release(unrelated.id)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -1144,9 +1366,7 @@ describe("tool.team_spawn", () => {
           yield* lifecycle.reconcile
 
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
-          const completion = (yield* team.getMessages(info.id)).filter((message) =>
-            message.id.includes(":completed:"),
-          )
+          const completion = (yield* team.getMessages(info.id)).filter((message) => message.id.includes(":completed:"))
           expect(member?.status).toBe("completed")
           expect(member?.result).toBe("durable teammate result")
           expect(completion).toHaveLength(1)

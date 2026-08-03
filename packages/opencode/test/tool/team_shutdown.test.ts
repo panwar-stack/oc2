@@ -31,6 +31,11 @@ const it = testEffect(
   ),
 )
 
+const setLegacyProtocol = Effect.fnUntraced(function* (teamID: string) {
+  const { db } = yield* Database.Service
+  yield* db.update(TeamTable).set({ protocol_version: 0 }).where(eq(TeamTable.id, teamID)).run().pipe(Effect.orDie)
+})
+
 describe("tool.team_shutdown", () => {
   it.live("returns disabled message when agent teams are explicitly disabled", () =>
     provideTmpdirInstance(
@@ -76,6 +81,7 @@ describe("tool.team_shutdown", () => {
           const team = yield* Team.Service
           const lead = yield* sessions.create({ title: "Lead" })
           const info = yield* team.create({ name: "shutdown", goal: "Close", leadSessionID: lead.id })
+          yield* setLegacyProtocol(info.id)
           const tool = yield* TeamShutdownTool
           const def = yield* tool.init()
 
@@ -187,12 +193,7 @@ describe("tool.team_shutdown", () => {
           const forcedEvents = yield* db
             .select()
             .from(TeamUsageEventTable)
-            .where(
-              and(
-                eq(TeamUsageEventTable.team_id, info.id),
-                eq(TeamUsageEventTable.type, "forced_shutdown"),
-              ),
-            )
+            .where(and(eq(TeamUsageEventTable.team_id, info.id), eq(TeamUsageEventTable.type, "forced_shutdown")))
             .all()
             .pipe(Effect.orDie)
 
@@ -200,9 +201,7 @@ describe("tool.team_shutdown", () => {
           expect(Option.isSome(after)).toBe(true)
           if (Option.isSome(after)) expect(after.value.status).toBe("closed")
           expect(forcedEvents).toHaveLength(1)
-          expect(forcedEvents[0]?.metadata).toEqual(
-            expect.objectContaining({ reason: "team wedged", force: true }),
-          )
+          expect(forcedEvents[0]?.metadata).toEqual(expect.objectContaining({ reason: "team wedged", force: true }))
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -258,6 +257,7 @@ describe("tool.team_shutdown", () => {
           })
           yield* team.updateMemberStatus(active.id, "active")
           yield* team.updateMemberStatus(completed.id, "completed")
+          yield* setLegacyProtocol(info.id)
           const tool = yield* TeamShutdownTool
           const def = yield* tool.init()
 
@@ -290,6 +290,7 @@ describe("tool.team_shutdown", () => {
             daemonState: "idle",
           })
           yield* team.updateMemberStatus(daemon.id, "idle", { daemonState: "idle" })
+          yield* setLegacyProtocol(info.id)
           const tool = yield* TeamShutdownTool
           const def = yield* tool.init()
 
@@ -320,6 +321,7 @@ describe("tool.team_shutdown", () => {
             rolePrompt: "Fail",
           })
           yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
+          yield* setLegacyProtocol(info.id)
           const tool = yield* TeamShutdownTool
           const def = yield* tool.init()
 

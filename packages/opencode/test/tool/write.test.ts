@@ -543,7 +543,157 @@ describe("tool.write", () => {
         expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("old")
       }),
     )
+
+    it.instance("denies a non-owner write through a healed dangling symlink alias", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const futil = yield* FSUtil.Service
+        const lead = yield* sessions.create({ title: "Symlink Lease Lead" })
+        const ownerSession = yield* sessions.create({ parentID: lead.id, title: "Symlink Lease Owner" })
+        const otherSession = yield* sessions.create({ parentID: lead.id, title: "Symlink Lease Other" })
+        const info = yield* team.create({ name: "lease-write-symlink", goal: "Lease", leadSessionID: lead.id })
+        const owner = yield* team.addMember({
+          teamID: info.id,
+          sessionID: ownerSession.id,
+          name: "owner",
+          agentType: "general",
+          rolePrompt: "Own",
+        })
+        const other = yield* team.addMember({
+          teamID: info.id,
+          sessionID: otherSession.id,
+          name: "other",
+          agentType: "general",
+          rolePrompt: "Other",
+        })
+        yield* team.updateMemberStatus(owner.id, "active")
+        yield* team.updateMemberStatus(other.id, "active")
+
+        const target = path.join(test.directory, "reserved-target.txt")
+        const alias = path.join(test.directory, "reserved-alias.txt")
+        yield* Effect.promise(() => fs.symlink(target, alias))
+        const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), alias).pipe(
+          Effect.provideService(FSUtil.Service, futil),
+        )
+        yield* team.createTask({ teamID: info.id, description: "Reserve dangling alias", owned: [owned] })
+        const task = (yield* team.getTasks(info.id))[0]
+        if (!task) throw new Error("task missing")
+        yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+        yield* Effect.promise(() => fs.writeFile(target, "old"))
+        const asks: Array<Parameters<Tool.Context["ask"]>[0]> = []
+        const result = yield* run(
+          { filePath: alias, content: "sneaky" },
+          {
+            ...ctx,
+            sessionID: SessionID.make(otherSession.id),
+            ask: (request) =>
+              Effect.sync(() => {
+                asks.push(request)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Write Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* Effect.promise(() => fs.readFile(target, "utf-8"))).toBe("old")
+      }),
+    )
+
+    it.instance("denies a non-owner write to a reserved file external to the caller root", () =>
+      Effect.gen(function* () {
+        const reserved = yield* reserveExternalTarget("write-direct")
+        const asks: Array<Parameters<Tool.Context["ask"]>[0]> = []
+
+        const result = yield* run(
+          { filePath: reserved.target, content: "sneaky" },
+          {
+            ...ctx,
+            sessionID: SessionID.make(reserved.otherSessionID),
+            ask: (request) =>
+              Effect.sync(() => {
+                asks.push(request)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Write Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* Effect.promise(() => fs.readFile(reserved.target, "utf-8"))).toBe("old")
+      }),
+    )
+
+    it.instance("denies a non-owner write through a cross-root symlink", () =>
+      Effect.gen(function* () {
+        const reserved = yield* reserveExternalTarget("write-symlink")
+        const asks: Array<Parameters<Tool.Context["ask"]>[0]> = []
+
+        const result = yield* run(
+          { filePath: reserved.alias, content: "sneaky" },
+          {
+            ...ctx,
+            sessionID: SessionID.make(reserved.otherSessionID),
+            ask: (request) =>
+              Effect.sync(() => {
+                asks.push(request)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Write Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* Effect.promise(() => fs.readFile(reserved.target, "utf-8"))).toBe("old")
+      }),
+    )
   })
+})
+
+const reserveExternalTarget = Effect.fnUntraced(function* (name: string) {
+  const test = yield* TestInstance
+  const external = yield* tmpdirScoped()
+  const sessions = yield* Session.Service
+  const team = yield* Team.Service
+  const futil = yield* FSUtil.Service
+  const lead = yield* sessions.create({ title: `${name} Lead` })
+  const ownerSession = yield* sessions.create({ parentID: lead.id, title: `${name} Owner` })
+  const otherSession = yield* sessions.create({ parentID: lead.id, title: `${name} Other` })
+  yield* sessions.addRoot({ sessionID: ownerSession.id, directory: external })
+  const info = yield* team.create({ name, goal: "Lease", leadSessionID: lead.id })
+  const owner = yield* team.addMember({
+    teamID: info.id,
+    sessionID: ownerSession.id,
+    name: "owner",
+    agentType: "general",
+    rolePrompt: "Own",
+  })
+  const other = yield* team.addMember({
+    teamID: info.id,
+    sessionID: otherSession.id,
+    name: "other",
+    agentType: "general",
+    rolePrompt: "Other",
+  })
+  yield* team.updateMemberStatus(owner.id, "active")
+  yield* team.updateMemberStatus(other.id, "active")
+
+  const target = path.join(external, "reserved.txt")
+  yield* Effect.promise(() => fs.writeFile(target, "old"))
+  const aliasDirectory = path.join(test.directory, `${name}-alias`)
+  yield* Effect.promise(() => fs.symlink(external, aliasDirectory, process.platform === "win32" ? "junction" : "dir"))
+  const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), target).pipe(
+    Effect.provideService(FSUtil.Service, futil),
+  )
+  yield* team.createTask({ teamID: info.id, description: "Reserve external target", owned: [owned] })
+  const task = (yield* team.getTasks(info.id))[0]
+  if (!task) return yield* Effect.die(new Error("task missing"))
+  yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+  return { target, alias: path.join(aliasDirectory, "reserved.txt"), otherSessionID: otherSession.id }
 })
 
 function leaseContext(sessionID: string): Tool.Context {

@@ -431,7 +431,7 @@ Run a current final report immediately before normal shutdown. `team_shutdown` f
 
 ### Protocol Version
 
-New teams are created with `protocol_version = 0`. The protocol-v1 shutdown gate (normal shutdown requires `final_report_revision === revision`) and the final-report task gate exist in the runtime but apply only to protocol-1 teams. Version 1 is not enabled for new teams until the lead finalization barrier prerequisite is deployed.
+New teams are created with `protocol_version = 1`. For these teams, normal shutdown requires `final_report_revision === revision`, and the final-report task gate requires every shared task to be finished. Existing protocol-0 teams remain compatible: they skip both gates and keep the legacy shutdown behavior.
 
 ## Usage Metrics And Shallow Usage
 

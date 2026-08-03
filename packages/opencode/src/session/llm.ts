@@ -45,6 +45,7 @@ import { SessionRetry, type CacheUse } from "./retry"
 import { TuiEvent } from "@/server/tui-event"
 import { Database } from "@oc2-ai/core/database/database"
 import { SessionRunState } from "./run-state"
+import { Runner } from "@/effect/runner"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -156,7 +157,9 @@ const live: Layer.Layer<
     const { db } = yield* Database.Service
     const scope = yield* Scope.Scope
     const cacheChecker = CacheState.createRegressionChecker()
-    const cacheSelfHealing = CacheSelfHealing.createPolicy({ mode: flags.experimentalPromptCacheSelfHealing ? "observe" : "off" })
+    const cacheSelfHealing = CacheSelfHealing.createPolicy({
+      mode: flags.experimentalPromptCacheSelfHealing ? "observe" : "off",
+    })
 
     const runProvider = Effect.fn("LLM.runProvider")(function* (input: StreamRequest) {
       yield* SessionRunState.assertNotSuspended(db, SessionID.make(input.sessionID))
@@ -238,13 +241,13 @@ const live: Layer.Layer<
               })
               .pipe(Effect.ignore)
           }
-          yield* (input.cache?.onPrepared?.(
+          yield* input.cache?.onPrepared?.(
             SessionRetry.cacheUse({
               plan,
               requestFormat,
               promptVersion: CachePlanner.CACHE_PLANNER_VERSION,
             }),
-          ) ?? Effect.void)
+          ) ?? Effect.void
           return {
             checker: cacheChecker,
             plan,
@@ -661,7 +664,15 @@ const live: Layer.Layer<
             yield* SessionRunState.assertNotSuspended(db, SessionID.make(input.sessionID))
             const ctrl = yield* Effect.acquireRelease(
               Effect.sync(() => new AbortController()),
-              (ctrl) => Effect.sync(() => ctrl.abort()),
+              (ctrl) =>
+                Runner.currentSuspension.pipe(
+                  Effect.flatMap((suspension) =>
+                    Effect.sync(() => {
+                      if (Option.isSome(suspension)) ctrl.abort(suspension.value)
+                      else ctrl.abort()
+                    }),
+                  ),
+                ),
             )
 
             const result = yield* run({ ...input, abort: ctrl.signal, timing })

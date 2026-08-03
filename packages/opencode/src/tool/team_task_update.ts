@@ -86,12 +86,17 @@ export const TeamTaskUpdateTool = Tool.define(
             }
             handoffPathKeys = changed.map((entry) => entry.pathKey)
           }
+          const requestedAssignee = params.assignee?.trim()
+          const assignee =
+            requestedAssignee && !(current.value.owned_paths.length > 0 && requestedAssignee === current.value.assignee)
+              ? requestedAssignee
+              : undefined
           const result = yield* team.updateTask(
             context.value.team.id,
             params.task_id,
             {
               status: params.status,
-              assignee: params.assignee,
+              ...(assignee ? { assignee } : {}),
               ...(handoff ? { handoff, handoffPathKeys } : {}),
             },
             { sessionID: ctx.sessionID, isLead: context.value.team.lead_session_id === ctx.sessionID },

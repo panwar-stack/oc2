@@ -267,13 +267,13 @@ describe("team eval", () => {
           rolePrompt: "Receive message",
         })
 
-        yield* team.updateMemberStatus(member.id, "completed", "recipient result")
         yield* team.sendMessage({
           teamID: info.id,
           sender: info.lead_session_id,
           recipients: [member.session_id],
           body: "Pending when closed",
         })
+        yield* team.updateMemberStatus(member.id, "completed", "recipient result")
         yield* closeTeam(info.id)
 
         const report = yield* TeamEval.build(info.id, {

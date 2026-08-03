@@ -50,31 +50,36 @@ export class OwnedPathConflict extends Schema.TaggedErrorClass<OwnedPathConflict
   }
 }
 
-const caseFold = (p: string) =>
-  process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p
+const caseFold = (p: string) => (process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p)
 
 const normalizeSlashes = (p: string) => p.replaceAll("\\", "/")
 
-const realpathOrSelf =
-  (fs: FSUtil.Interface, p: string) =>
-    fs.realPath(p).pipe(Effect.catch(() => Effect.succeed(p)))
+const toPathKey = (p: string) => caseFold(normalizeSlashes(p))
+
+const mutationLockKey = (pathKey: string) => `mutation:${pathKey}`
 
 /**
- * Realpath `p`, or for a missing path realpath its nearest existing ancestor and
- * append the normalized missing segments. Returns the canonical absolute path.
+ * Follow symlinks without depending on their target's existence, then realpath
+ * the nearest existing path and append the normalized missing segments.
  */
-const nearestExisting = Effect.fn("Team.FileOwnership.nearestExisting")(function* (
-  fs: FSUtil.Interface,
-  p: string,
-) {
+const nearestExisting = Effect.fn("Team.FileOwnership.nearestExisting")(function* (fs: FSUtil.Interface, p: string) {
   let current = p
   const missing: string[] = []
+  const followedLinks = new Set<string>()
   for (;;) {
-    const exists = yield* fs.exists(current).pipe(Effect.catch(() => Effect.succeed(false)))
-    if (exists) {
-      const real = yield* realpathOrSelf(fs, current)
-      return path.join(real, ...missing)
+    const link = yield* fs.readLink(current).pipe(Effect.catch(() => Effect.succeed(undefined)))
+    if (link !== undefined) {
+      const source = path.resolve(current)
+      if (followedLinks.has(source)) {
+        return yield* new OwnedPathError({ target: p, detail: "symbolic link cycle is not allowed" })
+      }
+      followedLinks.add(source)
+      current = path.join(path.resolve(path.dirname(current), link), ...missing)
+      missing.length = 0
+      continue
     }
+    const real = yield* fs.realPath(current).pipe(Effect.catch(() => Effect.succeed(undefined)))
+    if (real !== undefined) return path.join(real, ...missing)
     const parent = path.dirname(current)
     if (parent === current) return p
     missing.unshift(path.basename(current))
@@ -83,14 +88,50 @@ const nearestExisting = Effect.fn("Team.FileOwnership.nearestExisting")(function
 })
 
 /**
- * Canonicalize an exact file target for reservation and mutation checks.
- * Shared by task creation and (in PR 6) the structured file tools.
+ * Canonical filesystem key used by both reservations and structured-mutation authorization.
+ * Root containment is intentionally not part of this lookup: it controls which paths callers may
+ * reserve and how those reservations are displayed, not whether an existing reservation applies.
+ */
+const canonicalFilesystemTarget = Effect.fn("Team.FileOwnership.canonicalFilesystemTarget")(function* (
+  fs: FSUtil.Interface,
+  target: string,
+) {
+  const canonical = yield* nearestExisting(fs, path.resolve(target))
+  return { canonical, pathKey: toPathKey(canonical) }
+})
+
+export const canonicalPathKey = Effect.fn("Team.FileOwnership.canonicalPathKey")(function* (
+  fs: FSUtil.Interface,
+  target: string,
+) {
+  return (yield* canonicalFilesystemTarget(fs, target)).pathKey
+})
+
+/**
+ * Stable in-process mutation lock keys for one resolved filesystem target. The lexical key makes
+ * repeated access through the same spelling serialize, while the canonical key makes symlink and
+ * direct aliases serialize with each other. These keys do not grant or deny ownership access.
+ */
+export const mutationLockKeys = Effect.fn("Team.FileOwnership.mutationLockKeys")(function* (
+  fs: FSUtil.Interface,
+  target: string,
+) {
+  const lexical = toPathKey(path.resolve(target))
+  const canonical = yield* canonicalPathKey(fs, target).pipe(
+    Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(lexical)),
+  )
+  return [...new Set([mutationLockKey(lexical), mutationLockKey(canonical)])]
+})
+
+/**
+ * Canonicalize an exact file target for reservation creation and display.
  *
  * Rules:
  * 1. Resolve with ToolPath.resolveWithSession, including registered-root selection.
  * 2. rootKey is the realpath'd selected root directory, case-folded.
  * 3. Existing targets use realpath.
- * 4. Missing targets realpath the nearest existing ancestor and append missing segments.
+ * 4. Missing targets follow dangling symlinks, then realpath the nearest existing ancestor and
+ *    append missing segments.
  * 5. The canonical target must stay inside the canonical root (symlink escape rejected).
  * 6. `.git` path segments are rejected.
  * 7. Separators are normalized to `/`.
@@ -108,32 +149,33 @@ export const canonicalize = Effect.fn("Team.FileOwnership.canonicalize")(functio
   const resolved = yield* ToolPath.resolveWithSession(session, ctx, target)
   const root = resolved.root
 
-  const canonicalRoot = yield* nearestExisting(fs, root.directory)
-  const rootKey = caseFold(normalizeSlashes(canonicalRoot))
+  const canonicalRoot = yield* canonicalFilesystemTarget(fs, root.directory)
+  const canonicalTarget = yield* canonicalFilesystemTarget(fs, resolved.path)
 
-  const canonicalTarget = yield* nearestExisting(fs, resolved.path)
-
-  if (!FSUtil.contains(canonicalRoot, canonicalTarget)) {
+  if (!FSUtil.contains(canonicalRoot.canonical, canonicalTarget.canonical)) {
     return yield* Effect.fail(new OwnedPathError({ target, detail: "path escapes the workspace root" }))
   }
 
-  const relative = path.relative(canonicalRoot, canonicalTarget)
+  const relative = path.relative(canonicalRoot.canonical, canonicalTarget.canonical)
   if (relative.split(/[\\/]/).some((segment) => segment === ".git")) {
     return yield* Effect.fail(new OwnedPathError({ target, detail: ".git path segments are not allowed" }))
   }
 
   if (/[*?[\]{}]/.test(target)) {
-    return yield* Effect.fail(new OwnedPathError({ target, detail: "glob patterns are not allowed; reserve exact files only" }))
+    return yield* Effect.fail(
+      new OwnedPathError({ target, detail: "glob patterns are not allowed; reserve exact files only" }),
+    )
   }
 
   const stat = yield* fs.stat(resolved.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
   if (stat && stat.type === "Directory") {
-    return yield* Effect.fail(new OwnedPathError({ target, detail: "directories cannot be reserved; reserve exact files only" }))
+    return yield* Effect.fail(
+      new OwnedPathError({ target, detail: "directories cannot be reserved; reserve exact files only" }),
+    )
   }
 
-  const pathKey = caseFold(normalizeSlashes(canonicalTarget))
   const displayPath = normalizeSlashes(relative)
-  return { rootKey, pathKey, displayPath }
+  return { rootKey: canonicalRoot.pathKey, pathKey: canonicalTarget.pathKey, displayPath }
 })
 
 /** Reject two distinct inputs that canonicalize to the same pathKey. */
@@ -289,9 +331,25 @@ export const withWriteLease = <A, E, R>(
   withPathLocks(pathKeys, assertLeaseAllowed(db, sessionID, pathKeys).pipe(Effect.andThen(effect)))
 
 /**
+ * Structured mutation lease: acquire reservation and filesystem-alias locks together in one sorted
+ * lock boundary. Ownership authorization remains based only on canonical reservation pathKeys.
+ */
+export const withMutationLease = <A, E, R>(
+  db: Pick<Database.Interface["db"], "select">,
+  sessionID: string,
+  pathKeys: readonly string[],
+  mutationKeys: readonly string[],
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | OwnedWriteDenied, R> =>
+  withPathLocks(
+    [...pathKeys, ...mutationKeys],
+    assertLeaseAllowed(db, sessionID, pathKeys).pipe(Effect.andThen(effect)),
+  )
+
+/**
  * Sorted path locks for the service on reservation mutation: task creation holds them from before
  * the conflict check through commit; release/cancellation holds them before changing reservation
- * state. Identical ordering to `withWriteLease`, so service and file tools never deadlock.
+ * state. Identical ordering to the write and mutation leases, so service and file tools never deadlock.
  */
 export const withReservationLocks = <A, E, R>(
   pathKeys: readonly string[],

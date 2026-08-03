@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Latch, Schema, Scope, SynchronizedRef } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Latch, Option, Schema, Scope, SynchronizedRef } from "effect"
 
 export interface Runner<A, E = never> {
   readonly state: State<A, E>
@@ -13,13 +13,14 @@ export interface Runner<A, E = never> {
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy | Suspended>
   readonly cancel: Effect.Effect<void>
   readonly suspend: Effect.Effect<void>
+  readonly suspendWith: (provenance: unknown) => Effect.Effect<void>
 }
 
 export class Cancelled extends Schema.TaggedErrorClass<Cancelled>()("RunnerCancelled", {}) {}
 export class Suspended extends Schema.TaggedErrorClass<Suspended>()("RunnerSuspended", {}) {}
 export class Busy extends Schema.TaggedErrorClass<Busy>()("RunnerBusy", {}) {}
 
-const suspendedFibers = new Set<number>()
+const suspendedFibers = new Map<number, Option.Option<unknown>>()
 
 /**
  * Keeps pause-specific suspension in the typed error channel and turns every other failure into a
@@ -33,6 +34,11 @@ export const keepSuspended = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.E
   )
 
 export const isSuspending = Effect.fiberId.pipe(Effect.map((id) => suspendedFibers.has(id)))
+
+/** Provenance attached to the suspension of the current target fiber, if one was supplied. */
+export const currentSuspension = Effect.fiberId.pipe(
+  Effect.map((id) => suspendedFibers.get(id) ?? Option.none<unknown>()),
+)
 
 interface RunHandle<A, E> {
   id: number
@@ -62,12 +68,21 @@ export type State<A, E> =
   | { readonly _tag: "Shell"; readonly shell: ShellHandle<A, E> }
   | { readonly _tag: "ShellThenRun"; readonly shell: ShellHandle<A, E>; readonly run: PendingHandle<A, E> }
   | { readonly _tag: "SuspendingRun"; readonly run: RunHandle<A, E> }
-  | { readonly _tag: "SuspendingRunThenRun"; readonly current: RunHandle<A, E>; readonly run: PendingHandle<A, E> }
+  | {
+      readonly _tag: "SuspendingRunThenRun"
+      readonly current: RunHandle<A, E>
+      readonly run: PendingHandle<A, E>
+      /** A later suspension that must block the queued handoff after the current run unwinds. */
+      readonly suspension?: Option.Option<unknown>
+    }
+  | { readonly _tag: "SuspendedRun"; readonly run: PendingHandle<A, E>; readonly suspension: Option.Option<unknown> }
   | { readonly _tag: "SuspendingShell"; readonly shell: ShellHandle<A, E> }
   | {
       readonly _tag: "SuspendingShellThenRun"
       readonly shell: ShellHandle<A, E>
       readonly run: PendingHandle<A, E>
+      /** A later suspension that must block the queued handoff after the shell unwinds. */
+      readonly suspension?: Option.Option<unknown>
     }
 
 export const make = <A, E = never>(
@@ -121,6 +136,9 @@ export const make = <A, E = never>(
           return [idle.pipe(Effect.andThen(complete(done, exit))), { _tag: "Idle" }] as const
         }
         if (st._tag === "SuspendingRunThenRun" && st.current.id === id) {
+          if (st.suspension !== undefined) {
+            return [complete(done, exit), { _tag: "SuspendedRun", run: st.run, suspension: st.suspension }] as const
+          }
           const run = yield* startRun(st.run.work, st.run.done)
           return [complete(done, exit).pipe(Effect.andThen(run.start.open)), { _tag: "Running", run }] as const
         }
@@ -155,6 +173,9 @@ export const make = <A, E = never>(
           return [idle, { _tag: "Idle" }] as const
         }
         if (st._tag === "SuspendingShellThenRun" && st.shell.id === id) {
+          if (st.suspension !== undefined) {
+            return [Effect.void, { _tag: "SuspendedRun", run: st.run, suspension: st.suspension }] as const
+          }
           const run = yield* startRun(st.run.work, st.run.done)
           return [run.start.open, { _tag: "Running", run }] as const
         }
@@ -178,8 +199,19 @@ export const make = <A, E = never>(
           case "ShellThenRun":
             return [awaitDone(st.run.done), st] as const
           case "SuspendingRunThenRun":
+            return [
+              awaitDone(st.run.done),
+              st.suspension === undefined ? st : { _tag: "SuspendingRunThenRun", current: st.current, run: st.run },
+            ] as const
           case "SuspendingShellThenRun":
-            return [awaitDone(st.run.done), st] as const
+            return [
+              awaitDone(st.run.done),
+              st.suspension === undefined ? st : { _tag: "SuspendingShellThenRun", shell: st.shell, run: st.run },
+            ] as const
+          case "SuspendedRun": {
+            const run = yield* startRun(st.run.work, st.run.done)
+            return [run.start.open.pipe(Effect.andThen(awaitDone(run.done))), { _tag: "Running", run }] as const
+          }
           case "SuspendingRun": {
             const run = {
               id: next(),
@@ -220,9 +252,21 @@ export const make = <A, E = never>(
         switch (st._tag) {
           case "Running":
           case "ShellThenRun":
-          case "SuspendingRunThenRun":
-          case "SuspendingShellThenRun":
             return [Effect.succeed(false), st] as const
+          case "SuspendingRunThenRun":
+            return [
+              Effect.succeed(false),
+              st.suspension === undefined ? st : { _tag: "SuspendingRunThenRun", current: st.current, run: st.run },
+            ] as const
+          case "SuspendingShellThenRun":
+            return [
+              Effect.succeed(false),
+              st.suspension === undefined ? st : { _tag: "SuspendingShellThenRun", shell: st.shell, run: st.run },
+            ] as const
+          case "SuspendedRun": {
+            const run = yield* startRun(st.run.work, st.run.done)
+            return [run.start.open.pipe(Effect.as(false)), { _tag: "Running", run }] as const
+          }
           case "Shell": {
             const run = {
               id: next(),
@@ -352,6 +396,14 @@ export const make = <A, E = never>(
           }),
           { _tag: "Idle" } as const,
         ] as const
+      case "SuspendedRun":
+        return [
+          Effect.gen(function* () {
+            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+            yield* idleIfCurrent()
+          }),
+          { _tag: "Idle" } as const,
+        ] as const
       case "SuspendingShell":
         return [
           Effect.gen(function* () {
@@ -376,53 +428,84 @@ export const make = <A, E = never>(
 
   // Interruption is forked into the runner scope so suspend returns without waiting for unwinding,
   // while the interrupt observer stays inside the runtime instead of a detached root fiber.
+  const latestSuspension = (
+    current: Option.Option<unknown> | undefined,
+    incoming: Option.Option<unknown>,
+  ): Option.Option<unknown> =>
+    // The observer path has no provenance. It must not erase provenance from the direct pause signal.
+    current !== undefined && Option.isSome(current) && Option.isNone(incoming) ? current : incoming
+
+  const recordSuspension = (fiber: Fiber.Fiber<A, E>, provenance: Option.Option<unknown>) =>
+    Effect.sync(() => {
+      const latest = latestSuspension(suspendedFibers.get(fiber.id), provenance)
+      suspendedFibers.set(fiber.id, latest)
+      return latest
+    })
+
   const interruptFork = (fiber: Fiber.Fiber<A, E>) =>
-    Effect.sync(() => suspendedFibers.add(fiber.id)).pipe(
-      Effect.andThen(
-        Fiber.interrupt(fiber).pipe(
-          Effect.ensuring(Effect.sync(() => suspendedFibers.delete(fiber.id))),
-          Effect.forkIn(scope),
-        ),
-      ),
+    Fiber.interrupt(fiber).pipe(
+      Effect.ensuring(Effect.sync(() => suspendedFibers.delete(fiber.id))),
+      Effect.forkIn(scope),
       Effect.asVoid,
     )
 
-  const suspend = SynchronizedRef.modify(ref, (st) => {
-    switch (st._tag) {
-      case "Idle":
-        return [Effect.void, st] as const
-      case "Running":
-        return [
-          Effect.gen(function* () {
-            yield* Deferred.fail(st.run.done, new Suspended()).pipe(Effect.asVoid)
-            yield* interruptFork(st.run.fiber)
-          }),
-          { _tag: "SuspendingRun", run: st.run } as const,
-        ] as const
-      case "Shell":
-        return [
-          Effect.gen(function* () {
-            yield* Deferred.fail(st.shell.suspended, new Suspended()).pipe(Effect.asVoid)
-            yield* interruptFork(st.shell.fiber)
-          }),
-          { _tag: "SuspendingShell", shell: st.shell } as const,
-        ] as const
-      case "ShellThenRun":
-        return [
-          Effect.gen(function* () {
-            yield* Deferred.fail(st.run.done, new Suspended()).pipe(Effect.asVoid)
-            yield* Deferred.fail(st.shell.suspended, new Suspended()).pipe(Effect.asVoid)
-            yield* interruptFork(st.shell.fiber)
-          }),
-          { _tag: "SuspendingShell", shell: st.shell } as const,
-        ] as const
-      case "SuspendingRun":
-      case "SuspendingRunThenRun":
-      case "SuspendingShell":
-      case "SuspendingShellThenRun":
-        return [Effect.void, st] as const
-    }
-  }).pipe(Effect.flatten)
+  const suspendWithOption = (provenance: Option.Option<unknown>) =>
+    SynchronizedRef.modifyEffect(
+      ref,
+      Effect.fnUntraced(function* (st) {
+        switch (st._tag) {
+          case "Idle":
+            return [Effect.void, st] as const
+          case "Running":
+            yield* recordSuspension(st.run.fiber, provenance)
+            return [
+              Deferred.fail(st.run.done, new Suspended()).pipe(
+                Effect.asVoid,
+                Effect.andThen(interruptFork(st.run.fiber)),
+              ),
+              { _tag: "SuspendingRun", run: st.run } as const,
+            ] as const
+          case "Shell":
+            yield* recordSuspension(st.shell.fiber, provenance)
+            return [
+              Deferred.fail(st.shell.suspended, new Suspended()).pipe(
+                Effect.asVoid,
+                Effect.andThen(interruptFork(st.shell.fiber)),
+              ),
+              { _tag: "SuspendingShell", shell: st.shell } as const,
+            ] as const
+          case "ShellThenRun":
+            yield* recordSuspension(st.shell.fiber, provenance)
+            return [
+              Effect.gen(function* () {
+                yield* Deferred.fail(st.run.done, new Suspended()).pipe(Effect.asVoid)
+                yield* Deferred.fail(st.shell.suspended, new Suspended()).pipe(Effect.asVoid)
+                yield* interruptFork(st.shell.fiber)
+              }),
+              { _tag: "SuspendingShell", shell: st.shell } as const,
+            ] as const
+          case "SuspendingRun":
+            yield* recordSuspension(st.run.fiber, provenance)
+            return [Effect.void, st] as const
+          case "SuspendingRunThenRun": {
+            const suspension = yield* recordSuspension(st.current.fiber, provenance)
+            return [Effect.void, { ...st, suspension }] as const
+          }
+          case "SuspendingShell":
+            yield* recordSuspension(st.shell.fiber, provenance)
+            return [Effect.void, st] as const
+          case "SuspendingShellThenRun": {
+            const suspension = yield* recordSuspension(st.shell.fiber, provenance)
+            return [Effect.void, { ...st, suspension }] as const
+          }
+          case "SuspendedRun":
+            return [Effect.void, { ...st, suspension: latestSuspension(st.suspension, provenance) }] as const
+        }
+      }),
+    ).pipe(Effect.flatten)
+
+  const suspend = suspendWithOption(Option.none())
+  const suspendWith = (provenance: unknown) => suspendWithOption(Option.some(provenance))
 
   return {
     get state() {
@@ -436,6 +519,7 @@ export const make = <A, E = never>(
     startShell,
     cancel,
     suspend,
+    suspendWith,
   }
 }
 

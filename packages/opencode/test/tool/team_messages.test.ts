@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option } from "effect"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -7,7 +7,8 @@ import { MessageV2 } from "@/session/message-v2"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { Team } from "@/team/team"
-import { TeamTable } from "@/team/team.sql"
+import { TeamMemberTable, TeamTable } from "@/team/team.sql"
+import { withTeamLifecycleLock } from "@/session/lifecycle-reconciler"
 import { eq } from "drizzle-orm"
 import { TeamBroadcastTool } from "@/tool/team_broadcast"
 import { TeamGetMessagesTool } from "@/tool/team_get_messages"
@@ -486,6 +487,51 @@ describe("tool.team_send_message", () => {
       { config: { experimental: { agent_teams: true } } },
     ),
   )
+
+  it.live("does not wake a finite member that settles after the message commit", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const baseTeam = yield* Team.Service
+          const { lead, assistant, info, member } = yield* seed()
+          const racingTeam = Team.Service.of({
+            ...baseTeam,
+            sendMessage: (input) =>
+              baseTeam
+                .sendMessage(input)
+                .pipe(Effect.tap(() => baseTeam.updateMemberStatus(member.id, "completed", "settled after send"))),
+          })
+          const tool = yield* TeamSendMessageTool.pipe(Effect.provideService(Team.Service, racingTeam))
+          const def = yield* tool.init()
+          const wakeCount = { value: 0 }
+
+          const result = yield* def.execute(
+            { recipient: member.session_id, body: "This message commits before settlement." },
+            context({
+              lead,
+              assistant,
+              extra: {
+                promptOps: promptOps({
+                  response: responseFor(assistant),
+                  wake: () =>
+                    Effect.sync(() => {
+                      wakeCount.value++
+                    }).pipe(Effect.as(responseFor(assistant))),
+                }),
+              },
+            }),
+          )
+
+          expect(result.title).toBe("Message Sent")
+          expect(wakeCount.value).toBe(0)
+          expect((yield* baseTeam.getMemberBySession(member.session_id)).pipe(Option.getOrThrow).status).toBe(
+            "completed",
+          )
+          expect(yield* baseTeam.getPendingMessages(member.session_id, info.id)).toHaveLength(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
 })
 
 describe("tool.team_plan_submit", () => {
@@ -630,6 +676,230 @@ describe("tool.team_plan_decide", () => {
     ),
   )
 
+  it.live("approval preserves permission denies committed after the tool precheck", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const baseTeam = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { assistant, lead, member } = yield* seed({ planMode: true, permission: planModePermission })
+          const concurrentDeny: Permission.Rule = {
+            permission: "read",
+            pattern: "secrets/**",
+            action: "deny",
+          }
+          const racingTeam = Team.Service.of({
+            ...baseTeam,
+            approveMemberPlan: (memberID, effects) =>
+              sessions
+                .setPermission({
+                  sessionID: SessionID.make(member.session_id),
+                  permission: [...planModePermission, concurrentDeny],
+                })
+                .pipe(Effect.andThen(baseTeam.approveMemberPlan(memberID, effects))),
+          })
+          const tool = yield* TeamPlanDecideTool.pipe(Effect.provideService(Team.Service, racingTeam))
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { member_name: member.session_id, decision: "approve", feedback: "Proceed." },
+            context({ lead, assistant }),
+          )
+
+          expect(result.title).toBe("Plan Approved")
+          expect((yield* sessions.get(SessionID.make(member.session_id))).permission).toEqual(
+            expectedPermission([...inheritedPermissionAfterApproval, concurrentDeny]),
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("approval rejection has no permission, message, usage, or wake side effects", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const { assistant, lead, info, member } = yield* seed({
+            planMode: true,
+            permission: planModePermission,
+          })
+          yield* team.updateMemberStatus(member.id, "completed", "already complete")
+          const messagesBefore = yield* team.getMessages(info.id)
+          const wakeCount = { value: 0 }
+          const tool = yield* TeamPlanDecideTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            { member_name: member.session_id, decision: "approve", feedback: "Proceed." },
+            context({
+              lead,
+              assistant,
+              extra: {
+                promptOps: promptOps({
+                  response: responseFor(assistant),
+                  wake: () =>
+                    Effect.sync(() => {
+                      wakeCount.value++
+                    }).pipe(Effect.as(responseFor(assistant))),
+                }),
+              },
+            }),
+          )
+
+          expect(result.title).toBe("Plan Decide Failed")
+          expect(result.output).toContain("no longer an active non-terminal plan-mode member")
+          expect((yield* sessions.get(SessionID.make(member.session_id))).permission).toEqual(
+            expectedPermission(planModePermission),
+          )
+          expect(yield* team.getMessages(info.id)).toHaveLength(messagesBefore.length)
+          expect(yield* team.getUsageEvents(info.id)).toEqual([])
+          expect(wakeCount.value).toBe(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("approval commits permission and audit effects before a racing terminal transition", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const baseTeam = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { assistant, lead, member } = yield* seed({ planMode: true, permission: planModePermission })
+          const permissionWrites = { value: 0 }
+          const observedSessions = Session.Service.of({
+            ...sessions,
+            setPermission: (input) =>
+              Effect.sync(() => {
+                permissionWrites.value++
+              }).pipe(Effect.andThen(sessions.setPermission(input))),
+          })
+          const racingTeam = Team.Service.of({
+            ...baseTeam,
+            approveMemberPlan: (memberID, effects) =>
+              baseTeam
+                .approveMemberPlan(memberID, effects)
+                .pipe(
+                  Effect.tap((approved) =>
+                    Option.isSome(approved)
+                      ? baseTeam.updateMemberStatus(memberID, "completed", "settled after approval")
+                      : Effect.void,
+                  ),
+                ),
+          })
+          const tool = yield* TeamPlanDecideTool.pipe(
+            Effect.provideService(Team.Service, racingTeam),
+            Effect.provideService(Session.Service, observedSessions),
+          )
+          const def = yield* tool.init()
+          const wakeCount = { value: 0 }
+
+          const result = yield* def.execute(
+            { member_name: member.session_id, decision: "approve", feedback: "Proceed." },
+            context({
+              lead,
+              assistant,
+              extra: {
+                promptOps: promptOps({
+                  response: responseFor(assistant),
+                  wake: () =>
+                    Effect.sync(() => {
+                      wakeCount.value++
+                    }).pipe(Effect.as(responseFor(assistant))),
+                }),
+              },
+            }),
+          )
+
+          expect(result.title).toBe("Plan Approved")
+          expect(permissionWrites.value).toBe(0)
+          expect(wakeCount.value).toBe(0)
+          expect((yield* baseTeam.getMemberBySession(member.session_id)).pipe(Option.getOrThrow).status).toBe(
+            "completed",
+          )
+          expect((yield* sessions.get(SessionID.make(member.session_id))).permission).toEqual(
+            expectedPermission(inheritedPermissionAfterApproval),
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("approval has no permission or wake effects after a racing team closure", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const baseTeam = yield* Team.Service
+          const sessions = yield* Session.Service
+          const { db } = yield* Database.Service
+          const { assistant, info, lead, member } = yield* seed({
+            planMode: true,
+            permission: planModePermission,
+          })
+          const permissionWrites = { value: 0 }
+          const observedSessions = Session.Service.of({
+            ...sessions,
+            setPermission: (input) =>
+              Effect.sync(() => {
+                permissionWrites.value++
+              }).pipe(Effect.andThen(sessions.setPermission(input))),
+          })
+          const racingTeam = Team.Service.of({
+            ...baseTeam,
+            approveMemberPlan: (memberID, effects) =>
+              baseTeam
+                .approveMemberPlan(memberID, effects)
+                .pipe(
+                  Effect.tap((approved) =>
+                    Option.isSome(approved)
+                      ? db
+                          .update(TeamTable)
+                          .set({ status: "closed" })
+                          .where(eq(TeamTable.id, info.id))
+                          .run()
+                          .pipe(Effect.orDie)
+                      : Effect.void,
+                  ),
+                ),
+          })
+          const tool = yield* TeamPlanDecideTool.pipe(
+            Effect.provideService(Team.Service, racingTeam),
+            Effect.provideService(Session.Service, observedSessions),
+          )
+          const def = yield* tool.init()
+          const wakeCount = { value: 0 }
+
+          const result = yield* def.execute(
+            { member_name: member.session_id, decision: "approve", feedback: "Proceed." },
+            context({
+              lead,
+              assistant,
+              extra: {
+                promptOps: promptOps({
+                  response: responseFor(assistant),
+                  wake: () =>
+                    Effect.sync(() => {
+                      wakeCount.value++
+                    }).pipe(Effect.as(responseFor(assistant))),
+                }),
+              },
+            }),
+          )
+
+          expect(result.title).toBe("Plan Approved")
+          expect(permissionWrites.value).toBe(0)
+          expect(wakeCount.value).toBe(0)
+          expect((yield* baseTeam.get(info.id)).pipe(Option.getOrThrow).status).toBe("closed")
+          expect((yield* sessions.get(SessionID.make(member.session_id))).permission).toEqual(
+            expectedPermission(inheritedPermissionAfterApproval),
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("rejection keeps plan-mode restrictions intact", () =>
     provideTmpdirInstance(
       () =>
@@ -659,6 +929,71 @@ describe("tool.team_plan_decide", () => {
 })
 
 describe("team message wake safety", () => {
+  it.live("serializes a terminal settlement attempted between wake validation and admission", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { db } = yield* Database.Service
+          const { assistant, member } = yield* seed()
+          const wakeEntered = yield* Deferred.make<void>()
+          const releaseWake = yield* Deferred.make<void>()
+          const settlementInvoked = yield* Deferred.make<void>()
+          const settlementEntered = yield* Deferred.make<void>()
+          let wakeCount = 0
+
+          const wakeFiber = yield* wakeTeamSession(
+            promptOps({
+              response: responseFor(assistant),
+              wake: () =>
+                Effect.gen(function* () {
+                  wakeCount++
+                  if (wakeCount === 1) {
+                    yield* Deferred.succeed(wakeEntered, undefined)
+                    yield* Deferred.await(releaseWake)
+                  }
+                  return responseFor(assistant)
+                }),
+            }),
+            member.session_id,
+            team,
+          ).pipe(Effect.forkChild)
+
+          yield* Deferred.await(wakeEntered)
+          const settlementFiber = yield* Effect.gen(function* () {
+            yield* Deferred.succeed(settlementInvoked, undefined)
+            yield* withTeamLifecycleLock(
+              member.team_id,
+              Effect.gen(function* () {
+                yield* Deferred.succeed(settlementEntered, undefined)
+                yield* db
+                  .update(TeamMemberTable)
+                  .set({ status: "completed", result: "settled during wake admission" })
+                  .where(eq(TeamMemberTable.id, member.id))
+                  .run()
+                  .pipe(Effect.orDie)
+              }),
+            )
+          }).pipe(Effect.forkChild)
+          yield* Deferred.await(settlementInvoked)
+
+          // The attempted terminal write is at the same serialized guard as the admitted wake,
+          // but it cannot enter until both nonblocking wake calls have crossed their run boundary.
+          expect(Option.isNone(yield* Deferred.poll(settlementEntered))).toBe(true)
+          expect((yield* team.getMemberBySession(member.session_id)).pipe(Option.getOrThrow).status).toBe("active")
+
+          yield* Deferred.succeed(releaseWake, undefined)
+          yield* Fiber.join(wakeFiber)
+          yield* Deferred.await(settlementEntered)
+          yield* Fiber.join(settlementFiber)
+
+          expect(wakeCount).toBe(2)
+          expect((yield* team.getMemberBySession(member.session_id)).pipe(Option.getOrThrow).status).toBe("completed")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("mailbox claims require an explicit durable acknowledgement", () =>
     provideTmpdirInstance(
       () =>

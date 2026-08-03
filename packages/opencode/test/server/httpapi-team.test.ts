@@ -1,13 +1,16 @@
 import { afterEach, describe, expect } from "bun:test"
+import { Database } from "@/storage/db"
 import { Team } from "@/team/team"
-import { Effect, Option } from "effect"
+import { TeamTable } from "@/team/team.sql"
+import { eq } from "drizzle-orm"
+import { Effect, Layer, Option } from "effect"
 import { Server } from "../../src/server/server"
 import { TeamPaths } from "../../src/server/routes/instance/httpapi/groups/team"
 import { resetDatabase } from "../fixture/db"
 import { TestInstance } from "../fixture/fixture"
 import { testEffectShared } from "../lib/effect"
 
-const it = testEffectShared(Team.defaultLayer)
+const it = testEffectShared(Layer.mergeAll(Team.defaultLayer, Database.defaultLayer))
 
 function request(path: string, init?: RequestInit) {
   return Effect.promise(async () => await Server.Default().app.request(path, init))
@@ -20,6 +23,11 @@ function responseJson(response: Response) {
 function withSession(path: string, sessionID: string) {
   return `${path}?sessionID=${encodeURIComponent(sessionID)}`
 }
+
+const setLegacyProtocol = Effect.fnUntraced(function* (teamID: string) {
+  const { db } = yield* Database.Service
+  yield* db.update(TeamTable).set({ protocol_version: 0 }).where(eq(TeamTable.id, teamID)).run().pipe(Effect.orDie)
+})
 
 afterEach(async () => {
   await resetDatabase()
@@ -294,7 +302,7 @@ describe("team HttpApi", () => {
     }),
   )
 
-  it.instance("allows authorized shutdown and returns stable counts", () =>
+  it.instance("allows authorized legacy shutdown and returns stable counts", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const team = yield* Team.Service
@@ -303,6 +311,7 @@ describe("team HttpApi", () => {
         goal: "Close cleanly",
         leadSessionID: "ses_shutdown_lead",
       })
+      yield* setLegacyProtocol(info.id)
       const member = yield* team.addMember({
         teamID: info.id,
         sessionID: "ses_shutdown_member",

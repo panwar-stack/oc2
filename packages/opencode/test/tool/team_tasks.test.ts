@@ -7,7 +7,7 @@ import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
-import { TeamTaskTable } from "@/team/team.sql"
+import { TeamTable, TeamTaskTable } from "@/team/team.sql"
 import { Team } from "@/team/team"
 import { TeamTaskClaimTool } from "@/tool/team_task_claim"
 import { TeamTaskCreateTool } from "@/tool/team_task_create"
@@ -213,6 +213,47 @@ describe("tool.team_tasks", () => {
     ),
   )
 
+  it.live("rejects a stale task update when the team closes after the tool precheck", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const seed = yield* seedTeam("tasks-close-race")
+          const baseTeam = yield* Team.Service
+          const { db } = yield* Database.Service
+          yield* insertTask({ id: "task_close_race", teamID: seed.info.id, description: "Must stay pending" })
+          const racingTeam = Team.Service.of({
+            ...baseTeam,
+            getTask: (teamID, taskID) =>
+              baseTeam
+                .getTask(teamID, taskID)
+                .pipe(
+                  Effect.tap(() =>
+                    db
+                      .update(TeamTable)
+                      .set({ status: "closed" })
+                      .where(eq(TeamTable.id, seed.info.id))
+                      .run()
+                      .pipe(Effect.orDie),
+                  ),
+                ),
+          })
+          const updateTool = yield* TeamTaskUpdateTool.pipe(Effect.provideService(Team.Service, racingTeam))
+          const updateDef = yield* updateTool.init()
+
+          const result = yield* updateDef.execute(
+            { task_id: "task_close_race", status: "completed" },
+            context(seed.lead.id),
+          )
+          const row = yield* getTask("task_close_race")
+
+          expect(result.title).toBe("Task Update Failed")
+          expect(result.output).toContain("not active")
+          expect(row?.status).toBe("pending")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("rejects nonexistent dependencies in create", () =>
     provideTmpdirInstance(
       () =>
@@ -410,10 +451,7 @@ describe("tool.team_tasks", () => {
           const claimTool = yield* TeamTaskClaimTool
           const claimDef = yield* claimTool.init()
 
-          yield* createDef.execute(
-            { description: "Claim owned", owned_paths: [a, b] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Claim owned", owned_paths: [a, b] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Claim owned")
           if (!task) throw new Error("owned task was not persisted")
 
@@ -449,19 +487,11 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "No direct complete", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
-          const task = (yield* getTasks(seed.info.id)).find(
-            (row) => row.description === "No direct complete",
-          )
+          yield* createDef.execute({ description: "No direct complete", owned_paths: [owned] }, context(seed.lead.id))
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "No direct complete")
           if (!task) throw new Error("owned task was not persisted")
 
-          const updated = yield* updateDef.execute(
-            { task_id: task.id, status: "completed" },
-            context(seed.lead.id),
-          )
+          const updated = yield* updateDef.execute({ task_id: task.id, status: "completed" }, context(seed.lead.id))
           const row = yield* getTask(task.id)
 
           expect(updated.title).toBe("Task Update Failed")
@@ -486,10 +516,7 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "No reassign", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "No reassign", owned_paths: [owned] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "No reassign")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
@@ -523,10 +550,7 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "Owner complete", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Owner complete", owned_paths: [owned] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Owner complete")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
@@ -542,6 +566,7 @@ describe("tool.team_tasks", () => {
             {
               task_id: task.id,
               status: "completed",
+              assignee: seed.worker.session_id,
               handoff: {
                 summary: "Completed the owned task",
                 changed_paths: [owned],
@@ -554,9 +579,7 @@ describe("tool.team_tasks", () => {
 
           expect(ownerComplete.title).toBe("Task Updated")
           expect(row?.status).toBe("completed")
-          expect(row?.metadata?.handoff).toEqual(
-            expect.objectContaining({ summary: "Completed the owned task" }),
-          )
+          expect(row?.metadata?.handoff).toEqual(expect.objectContaining({ summary: "Completed the owned task" }))
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -576,13 +599,8 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "Release on complete", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
-          const task = (yield* getTasks(seed.info.id)).find(
-            (row) => row.description === "Release on complete",
-          )
+          yield* createDef.execute({ description: "Release on complete", owned_paths: [owned] }, context(seed.lead.id))
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Release on complete")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
           const { db } = yield* Database.Service
@@ -634,18 +652,12 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "Cancel owned", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Cancel owned", owned_paths: [owned] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Cancel owned")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
 
-          const cancelled = yield* updateDef.execute(
-            { task_id: task.id, status: "cancelled" },
-            context(seed.lead.id),
-          )
+          const cancelled = yield* updateDef.execute({ task_id: task.id, status: "cancelled" }, context(seed.lead.id))
           const { db } = yield* Database.Service
           const rows = yield* db
             .select()
@@ -675,13 +687,8 @@ describe("tool.team_tasks", () => {
           const claimDef = yield* claimTool.init()
           const { db } = yield* Database.Service
 
-          yield* createDef.execute(
-            { description: "Foreign owner claim", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
-          const task = (yield* getTasks(seed.info.id)).find(
-            (row) => row.description === "Foreign owner claim",
-          )
+          yield* createDef.execute({ description: "Foreign owner claim", owned_paths: [owned] }, context(seed.lead.id))
+          const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Foreign owner claim")
           if (!task) throw new Error("owned task was not persisted")
           // Force the reservation to another owner while the task stays pending.
           yield* db
@@ -711,10 +718,7 @@ describe("tool.team_tasks", () => {
           yield* Effect.promise(() => fs.writeFile(owned, "x"))
           const createTool = yield* TeamTaskCreateTool
           const createDef = yield* createTool.init()
-          yield* createDef.execute(
-            { description: "Owned order", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Owned order", owned_paths: [owned] }, context(seed.lead.id))
           yield* createDef.execute({ description: "Plain order" }, context(seed.lead.id))
           const team = yield* Team.Service
 
@@ -744,10 +748,7 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "Needs handoff", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Needs handoff", owned_paths: [owned] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Needs handoff")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
@@ -780,10 +781,7 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "Handoff ok", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Handoff ok", owned_paths: [owned] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Handoff ok")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
@@ -841,10 +839,7 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "Subset check", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Subset check", owned_paths: [owned] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Subset check")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))
@@ -885,10 +880,7 @@ describe("tool.team_tasks", () => {
           const updateTool = yield* TeamTaskUpdateTool
           const updateDef = yield* updateTool.init()
 
-          yield* createDef.execute(
-            { description: "Blank summary", owned_paths: [owned] },
-            context(seed.lead.id),
-          )
+          yield* createDef.execute({ description: "Blank summary", owned_paths: [owned] }, context(seed.lead.id))
           const task = (yield* getTasks(seed.info.id)).find((row) => row.description === "Blank summary")
           if (!task) throw new Error("owned task was not persisted")
           yield* claimDef.execute({ task_id: task.id }, context(seed.worker.session_id))

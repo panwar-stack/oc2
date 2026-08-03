@@ -23,6 +23,7 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { Database } from "@oc2-ai/core/database/database"
 import { SessionRunState } from "./run-state"
+import { LLMRequestPrep } from "./llm/request"
 
 const log = Log.create({ service: "session.tools" })
 
@@ -78,20 +79,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         .pipe(Effect.orDie),
   })
 
-  const registryItems = yield* registry.tools({
-    modelID: ModelV2.ID.make(input.model.api.id),
-    providerID: input.model.providerID,
-    agent: input.agent,
-  })
-  for (const item of registryItems) {
+  const fromRegistry = (item: Tool.Def) => {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
-    tools[item.id] = tool({
+    return tool({
       description: item.description,
       inputSchema: jsonSchema(schema),
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
-            const ctx = context(args, options)
+            const ctx = context(args as Record<string, unknown>, options)
             yield* SessionRunState.assertNotSuspended(db, ctx.sessionID)
             yield* plugin.trigger(
               "tool.execute.before",
@@ -121,6 +117,21 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         )
       },
     })
+  }
+
+  const { teamTaskUpdate } = yield* registry.named()
+  const registryItems = yield* registry.tools({
+    modelID: ModelV2.ID.make(input.model.api.id),
+    providerID: input.model.providerID,
+    agent: input.agent,
+  })
+  let trustedTeamTaskUpdate: AITool | undefined
+  for (const item of registryItems) {
+    const resolved = fromRegistry(item)
+    // Registry definition transforms return fresh objects but preserve the built-in execute
+    // capability. Capture that identity before later plugin and MCP entries overwrite its name.
+    if (item.id === teamTaskUpdate.id && item.execute === teamTaskUpdate.execute) trustedTeamTaskUpdate = resolved
+    tools[item.id] = resolved
   }
 
   for (const [key, item] of Object.entries(yield* mcp.tools())) {
@@ -209,6 +220,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }),
       )
     tools[key] = item
+  }
+
+  const lastUser = input.messages.findLast((message) => message.info.role === "user")
+  const selection = lastUser?.info.role === "user" ? lastUser.info.tools : undefined
+  if (trustedTeamTaskUpdate && LLMRequestPrep.isCompletionOnlyToolSelection(selection)) {
+    // Normal prompts keep last-writer override behavior. Only the completion-only retry restores
+    // the captured built-in after every dynamic source has been merged.
+    tools[teamTaskUpdate.id] = trustedTeamTaskUpdate
   }
 
   return tools

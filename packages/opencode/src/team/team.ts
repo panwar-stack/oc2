@@ -1,13 +1,15 @@
 import { Database } from "@oc2-ai/core/database/database"
 import { SessionID } from "@/session/schema"
 import { SessionRunState } from "@/session/run-state"
+import { withTeamLifecycleLock } from "@/session/lifecycle-reconciler"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
 import { Context, Effect, Layer, Schema, Option, Cause } from "effect"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { eq, and, asc, desc, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Runner } from "@/effect/runner"
-import { SessionPauseBlockerTable, SessionPauseCascadeTable } from "@oc2-ai/core/session/sql"
+import { SessionPauseBlockerTable, SessionPauseCascadeTable, SessionTable } from "@oc2-ai/core/session/sql"
+import type { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import {
   TeamTable,
@@ -82,6 +84,31 @@ export type MemberStatus = TeamMemberRow["status"]
 export type MemberLifecycle = TeamMemberRow["lifecycle"]
 export type MemberDaemonState = NonNullable<TeamMemberRow["daemon_state"]>
 export type TaskStatus = TeamTaskRow["status"]
+
+export type PlanApprovalEffects = {
+  sender: string
+  body: string
+  usageMetadata: Record<string, unknown>
+}
+
+function removePlanModePermissionOverlay(rules: PermissionV1.Ruleset) {
+  const removed = new Set<string>()
+  return rules.reduceRight<PermissionV1.Rule[]>((result, rule) => {
+    if (
+      rule.action === "deny" &&
+      rule.pattern === "*" &&
+      (rule.permission === "bash" ||
+        rule.permission === "write" ||
+        rule.permission === "edit" ||
+        rule.permission === "apply_patch") &&
+      !removed.has(rule.permission)
+    ) {
+      removed.add(rule.permission)
+      return result
+    }
+    return [rule, ...result]
+  }, [])
+}
 
 /** Stable failure codes for terminal failed members. Only provider_error and dependency_failed are
  * produced in this slice; the remaining codes arrive with later retry and handoff slices. */
@@ -173,13 +200,10 @@ const safePublish = (effect: Effect.Effect<void>) =>
 /** Expected conflict when a lead session already has an active team. The database
  * partial unique index `team_active_lead_session_idx` is the final race guard; this
  * typed error is produced both by the precheck and by a lost insert race. */
-export class ActiveTeamConflict extends Schema.TaggedErrorClass<ActiveTeamConflict>()(
-  "Team.ActiveTeamConflict",
-  {
-    leadSessionID: Schema.String,
-    teamID: Schema.String,
-  },
-) {
+export class ActiveTeamConflict extends Schema.TaggedErrorClass<ActiveTeamConflict>()("Team.ActiveTeamConflict", {
+  leadSessionID: Schema.String,
+  teamID: Schema.String,
+}) {
   override get message() {
     return `Lead session ${this.leadSessionID} already has an active team (${this.teamID})`
   }
@@ -232,14 +256,60 @@ export class ShutdownReasonRequired extends Schema.TaggedErrorClass<ShutdownReas
 }
 
 /** Stable rejection when a message targets a team that is not active. */
-export class MessageToClosedTeam extends Schema.TaggedErrorClass<MessageToClosedTeam>()(
-  "Team.MessageToClosedTeam",
-  { teamID: Schema.String },
-) {
+export class MessageToClosedTeam extends Schema.TaggedErrorClass<MessageToClosedTeam>()("Team.MessageToClosedTeam", {
+  teamID: Schema.String,
+}) {
   override get message() {
     return `Cannot send messages to team ${this.teamID}: the team is not active.`
   }
 }
+
+/** Stable rejection when a member or task write targets a team that is no longer active. */
+export class TeamNotActive extends Schema.TaggedErrorClass<TeamNotActive>()("Team.NotActive", {
+  teamID: Schema.String,
+}) {
+  override get message() {
+    return `Team ${this.teamID} is not active.`
+  }
+}
+
+/** Stable rejection when a message targets a terminal finite teammate. */
+export class MessageToTerminalMember extends Schema.TaggedErrorClass<MessageToTerminalMember>()(
+  "Team.MessageToTerminalMember",
+  {
+    teamID: Schema.String,
+    recipients: Schema.Array(
+      Schema.Struct({
+        sessionID: Schema.String,
+        name: Schema.String,
+        status: Schema.Literals(["completed", "cancelled", "failed"]),
+      }),
+    ),
+  },
+) {
+  override get message() {
+    return this.recipients
+      .map((recipient) => `Recipient '${recipient.name}' is ${recipient.status} and cannot receive messages.`)
+      .join("\n")
+  }
+}
+
+export type FinalReportBlockedMember = {
+  name: string
+  agentType: string
+  status: MemberStatus
+  daemonState: MemberDaemonState | null
+}
+
+/** Atomic checkpoint admission result. Only `recorded` writes the checkpoint and usage event. */
+export type FinalReportRecordResult =
+  | { status: "recorded" }
+  | { status: "team_inactive" }
+  | { status: "not_authorized" }
+  | { status: "stale" }
+  | { status: "nonterminal_members"; members: FinalReportBlockedMember[] }
+  | { status: "active_daemons"; members: FinalReportBlockedMember[] }
+  | { status: "unfinished_tasks"; count: number }
 
 export type ShutdownResult = {
   /** Members transitioned from a nonterminal status to cancelled by this shutdown. */
@@ -304,13 +374,13 @@ export interface Interface {
     daemonState?: MemberDaemonState | null
     daemonLastActive?: number | null
     daemonError?: string | null
-  }) => Effect.Effect<Member>
+  }) => Effect.Effect<Member, TeamNotActive>
   updateMemberStatus: (
     memberID: string,
     status: MemberStatus,
     resultOrUpdate?: string | TeamMemberStatusUpdate,
   ) => Effect.Effect<Option.Option<Member>>
-  approveMemberPlan: (memberID: string) => Effect.Effect<Option.Option<Member>>
+  approveMemberPlan: (memberID: string, effects?: PlanApprovalEffects) => Effect.Effect<Option.Option<Member>>
   getMembers: (teamID: string) => Effect.Effect<Member[]>
   getMemberBySession: (sessionID: string) => Effect.Effect<Option.Option<Member>>
   getContext: (sessionID: string) => Effect.Effect<Option.Option<{ team: Info; member?: Member }>>
@@ -342,7 +412,11 @@ export interface Interface {
     sender: string
     recipients: string[]
     body: string
-  }) => Effect.Effect<Message, MessageToClosedTeam>
+  }) => Effect.Effect<Message, MessageToClosedTeam | MessageToTerminalMember>
+  /** Revalidates and admits an external wake under the same team lifecycle lock as terminal writes. */
+  admitWake: <E, R>(sessionID: string, wake: Effect.Effect<void, E, R>) => Effect.Effect<boolean, E, R>
+  /** Best-effort wake validation for inspection. Run admission must use `admitWake`. */
+  canWakeSession: (sessionID: string) => Effect.Effect<boolean>
   getMessages: (teamID: string) => Effect.Effect<Message[]>
   getPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[]>
   /**
@@ -351,10 +425,7 @@ export interface Interface {
    * claimable exactly once after resume.
    */
   hasPendingMailboxMessages: (recipientSession: string) => Effect.Effect<boolean>
-  claimPendingMessages: (
-    recipientSession: string,
-    teamID: string,
-  ) => Effect.Effect<Message[], Runner.Suspended>
+  claimPendingMessages: (recipientSession: string, teamID: string) => Effect.Effect<Message[], Runner.Suspended>
   releaseClaimedMessages: (messageIDs: readonly string[], recipientSession: string) => Effect.Effect<void>
   markMessageDelivered: (messageID: string, recipientSession?: string) => Effect.Effect<void>
   createUsageEvent: (input: {
@@ -371,19 +442,22 @@ export interface Interface {
    * the record makes the record fail (stale), so only a report that observed a stable state becomes
    * the final checkpoint.
    */
-  buildFinalReport: (teamID: string) => Effect.Effect<{ report: TeamEvalReport; revision: number }, TeamEval.NotFoundError>
+  buildFinalReport: (
+    teamID: string,
+  ) => Effect.Effect<{ report: TeamEvalReport; revision: number }, TeamEval.NotFoundError>
   /**
-   * Records the final-report checkpoint. In one immediate transaction it compares the team status
-   * (active) and the revision (unchanged since the build); on success it sets
+   * Records the final-report checkpoint. In one immediate transaction it checks lead authorization,
+   * active status, the revision captured by the build, finite members, daemons, and protocol-1 tasks.
+   * On success it sets
    * `final_report_revision = revision` and inserts the `report_generated` event with metadata
-   * `{ revision, final: true, stale: false }`. Returns true when the checkpoint was recorded and
-   * false when the CAS failed (stale report). Never bumps the revision.
+   * `{ revision, final: true, stale: false }`. Returns the exact admission outcome and never bumps
+   * the revision.
    */
   recordFinalReport: (input: {
     teamID: string
     revision: number
-    sessionID?: string
-  }) => Effect.Effect<boolean>
+    sessionID: string
+  }) => Effect.Effect<FinalReportRecordResult>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Team") {}
@@ -405,9 +479,7 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (existing) {
-        return yield* Effect.fail(
-          new ActiveTeamConflict({ leadSessionID: input.leadSessionID, teamID: existing.id }),
-        )
+        return yield* Effect.fail(new ActiveTeamConflict({ leadSessionID: input.leadSessionID, teamID: existing.id }))
       }
 
       const id = crypto.randomUUID()
@@ -426,6 +498,7 @@ export const layer = Layer.effect(
           goal: input.goal,
           lead_session_id: input.leadSessionID,
           status: "active",
+          protocol_version: 1,
           time_created: now,
           time_updated: now,
         })
@@ -463,7 +536,7 @@ export const layer = Layer.effect(
         goal: input.goal,
         lead_session_id: input.leadSessionID,
         status: "active",
-        protocol_version: 0,
+        protocol_version: 1,
         revision: 0,
         final_report_revision: null,
         time_created: now,
@@ -486,7 +559,11 @@ export const layer = Layer.effect(
         .select()
         .from(TeamTable)
         .where(eq(TeamTable.lead_session_id, leadSessionID))
-        .orderBy(asc(sql`case when ${TeamTable.status} = 'active' then 0 else 1 end`), desc(TeamTable.time_created), desc(TeamTable.id))
+        .orderBy(
+          asc(sql`case when ${TeamTable.status} = 'active' then 0 else 1 end`),
+          desc(TeamTable.time_created),
+          desc(TeamTable.id),
+        )
         .get()
         .pipe(Effect.orDie)
       return toOption(row)
@@ -515,127 +592,130 @@ export const layer = Layer.effect(
       // cancellation, reservation release, and (for forced shutdown) the audit event. The
       // checked revision covers all pre-shutdown work; this transaction must NOT bump the
       // revision. Unread mailbox rows are never touched.
-      const closed = yield* db
-        .transaction(
-          (tx) =>
-            Effect.gen(function* () {
-              const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, input.teamID)).get()
-              if (!team || team.status !== "active") {
-                return yield* Effect.fail(new ShutdownAlreadyClosed({ teamID: input.teamID }))
-              }
-              if (team.lead_session_id !== input.sessionID) {
-                return yield* Effect.fail(new ShutdownNotAuthorized({ teamID: input.teamID }))
-              }
-              // Protocol-1 gate: normal shutdown requires the final-report checkpoint to cover
-              // the current revision. Protocol-0 teams skip this gate. Forced shutdown bypasses
-              // it for a wedged or explicitly abandoned team.
-              if (team.protocol_version === 1 && !force && team.final_report_revision !== team.revision) {
-                return yield* Effect.fail(
-                  new ShutdownFinalReportRequired({
-                    teamID: input.teamID,
-                    revision: team.revision,
-                    finalReportRevision: team.final_report_revision,
-                  }),
+      const closed = yield* withTeamLifecycleLock(
+        input.teamID,
+        db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, input.teamID)).get()
+                if (!team || team.status !== "active") {
+                  return yield* Effect.fail(new ShutdownAlreadyClosed({ teamID: input.teamID }))
+                }
+                if (team.lead_session_id !== input.sessionID) {
+                  return yield* Effect.fail(new ShutdownNotAuthorized({ teamID: input.teamID }))
+                }
+                // Protocol-1 gate: normal shutdown requires the final-report checkpoint to cover
+                // the current revision. Protocol-0 teams skip this gate. Forced shutdown bypasses
+                // it for a wedged or explicitly abandoned team.
+                if (team.protocol_version === 1 && !force && team.final_report_revision !== team.revision) {
+                  return yield* Effect.fail(
+                    new ShutdownFinalReportRequired({
+                      teamID: input.teamID,
+                      revision: team.revision,
+                      finalReportRevision: team.final_report_revision,
+                    }),
+                  )
+                }
+                yield* tx
+                  .update(TeamTable)
+                  .set({ status: "closed", time_updated: now })
+                  .where(eq(TeamTable.id, input.teamID))
+                  .run()
+                const members = yield* tx
+                  .select()
+                  .from(TeamMemberTable)
+                  .where(eq(TeamMemberTable.team_id, input.teamID))
+                  .all()
+                const nonterminal = members.filter(
+                  (member) =>
+                    member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed",
                 )
-              }
-              yield* tx
-                .update(TeamTable)
-                .set({ status: "closed", time_updated: now })
-                .where(eq(TeamTable.id, input.teamID))
-                .run()
-              const members = yield* tx
-                .select()
-                .from(TeamMemberTable)
-                .where(eq(TeamMemberTable.team_id, input.teamID))
-                .all()
-              const nonterminal = members.filter(
-                (member) =>
-                  member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed",
-              )
-              yield* Effect.forEach(
-                nonterminal,
-                (member) =>
-                  tx
-                    .update(TeamMemberTable)
-                    .set({
-                      status: "cancelled",
-                      time_updated: now,
-                      ...(member.lifecycle === "daemon"
-                        ? { daemon_state: "cancelled" as const, daemon_last_active: now }
-                        : {}),
-                    })
-                    .where(eq(TeamMemberTable.id, member.id))
-                    .run(),
-                { concurrency: "unbounded", discard: true },
-              )
-              const pendingTasks = yield* tx
-                .select({ id: TeamTaskTable.id })
-                .from(TeamTaskTable)
-                .where(
-                  and(
-                    eq(TeamTaskTable.team_id, input.teamID),
-                    inArray(TeamTaskTable.status, ["pending", "in_progress"]),
-                  ),
+                yield* Effect.forEach(
+                  nonterminal,
+                  (member) =>
+                    tx
+                      .update(TeamMemberTable)
+                      .set({
+                        status: "cancelled",
+                        time_updated: now,
+                        ...(member.lifecycle === "daemon"
+                          ? { daemon_state: "cancelled" as const, daemon_last_active: now }
+                          : {}),
+                      })
+                      .where(eq(TeamMemberTable.id, member.id))
+                      .run(),
+                  { concurrency: "unbounded", discard: true },
                 )
-                .all()
-              yield* Effect.forEach(
-                pendingTasks,
-                (task) =>
-                  tx
-                    .update(TeamTaskTable)
-                    .set({ status: "cancelled", time_updated: now })
-                    .where(eq(TeamTaskTable.id, task.id))
-                    .run(),
-                { concurrency: "unbounded", discard: true },
-              )
-              // Release reservations of the tasks cancelled above. Rows are kept for audit; only
-              // the release time is set, so a later owned task can re-reserve the path.
-              let releasedReservations = 0
-              if (pendingTasks.length > 0) {
-                const released = yield* tx
-                  .update(TeamFileOwnershipTable)
-                  .set({ time_released: now, time_updated: now })
+                const pendingTasks = yield* tx
+                  .select({ id: TeamTaskTable.id })
+                  .from(TeamTaskTable)
                   .where(
                     and(
-                      eq(TeamFileOwnershipTable.team_id, input.teamID),
-                      inArray(
-                        TeamFileOwnershipTable.task_id,
-                        pendingTasks.map((task) => task.id),
-                      ),
-                      isNull(TeamFileOwnershipTable.time_released),
+                      eq(TeamTaskTable.team_id, input.teamID),
+                      inArray(TeamTaskTable.status, ["pending", "in_progress"]),
                     ),
                   )
-                  .returning({ id: TeamFileOwnershipTable.id })
-                  .run()
-                releasedReservations = released.length
-              }
-              if (force) {
-                yield* tx
-                  .insert(TeamUsageEventTable)
-                  .values({
-                    id: crypto.randomUUID(),
-                    team_id: input.teamID,
-                    session_id: input.sessionID,
-                    member_id: null,
-                    type: "forced_shutdown",
-                    metadata: { reason: input.reason, force: true, forced_at: now },
-                    time_created: now,
-                  })
-                  .run()
-              }
-              return { members, nonterminal, pendingTasks, releasedReservations }
-            }),
-          { behavior: "immediate" },
-        )
-        .pipe(
-          Effect.catch((error) =>
-            error instanceof ShutdownAlreadyClosed ||
-            error instanceof ShutdownNotAuthorized ||
-            error instanceof ShutdownFinalReportRequired
-              ? Effect.fail(error)
-              : Effect.die(error),
+                  .all()
+                yield* Effect.forEach(
+                  pendingTasks,
+                  (task) =>
+                    tx
+                      .update(TeamTaskTable)
+                      .set({ status: "cancelled", time_updated: now })
+                      .where(eq(TeamTaskTable.id, task.id))
+                      .run(),
+                  { concurrency: "unbounded", discard: true },
+                )
+                // Release reservations of the tasks cancelled above. Rows are kept for audit; only
+                // the release time is set, so a later owned task can re-reserve the path.
+                let releasedReservations = 0
+                if (pendingTasks.length > 0) {
+                  const released = yield* tx
+                    .update(TeamFileOwnershipTable)
+                    .set({ time_released: now, time_updated: now })
+                    .where(
+                      and(
+                        eq(TeamFileOwnershipTable.team_id, input.teamID),
+                        inArray(
+                          TeamFileOwnershipTable.task_id,
+                          pendingTasks.map((task) => task.id),
+                        ),
+                        isNull(TeamFileOwnershipTable.time_released),
+                      ),
+                    )
+                    .returning({ id: TeamFileOwnershipTable.id })
+                    .run()
+                  releasedReservations = released.length
+                }
+                if (force) {
+                  yield* tx
+                    .insert(TeamUsageEventTable)
+                    .values({
+                      id: crypto.randomUUID(),
+                      team_id: input.teamID,
+                      session_id: input.sessionID,
+                      member_id: null,
+                      type: "forced_shutdown",
+                      metadata: { reason: input.reason, force: true, forced_at: now },
+                      time_created: now,
+                    })
+                    .run()
+                }
+                return { members, nonterminal, pendingTasks, releasedReservations }
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(
+            Effect.catch((error) =>
+              error instanceof ShutdownAlreadyClosed ||
+              error instanceof ShutdownNotAuthorized ||
+              error instanceof ShutdownFinalReportRequired
+                ? Effect.fail(error)
+                : Effect.die(error),
+            ),
           ),
-        )
+      )
       // AFTER commit only: publish member and team events, and cancel each cancelled member's
       // session run. Cancellation failures are collected as a stable count and never reopen the
       // durable closed team state.
@@ -704,6 +784,14 @@ export const layer = Layer.effect(
         .transaction(
           (tx) =>
             Effect.gen(function* () {
+              const team = yield* tx
+                .select({ status: TeamTable.status })
+                .from(TeamTable)
+                .where(eq(TeamTable.id, input.teamID))
+                .get()
+              if (!team || team.status !== "active") {
+                return yield* Effect.fail(new TeamNotActive({ teamID: input.teamID }))
+              }
               yield* tx
                 .insert(TeamMemberTable)
                 .values({
@@ -731,7 +819,7 @@ export const layer = Layer.effect(
             }),
           { behavior: "immediate" },
         )
-        .pipe(Effect.orDie)
+        .pipe(Effect.catch((error) => (error instanceof TeamNotActive ? Effect.fail(error) : Effect.die(error))))
       return {
         id,
         team_id: input.teamID,
@@ -772,27 +860,27 @@ export const layer = Layer.effect(
 
       const terminalStatuses: MemberStatus[] = ["completed", "cancelled", "failed"]
       const terminalTarget = terminalStatuses.includes(status)
+      const terminalMember = terminalTarget
+        ? yield* db
+            .select({ teamID: TeamMemberTable.team_id })
+            .from(TeamMemberTable)
+            .where(eq(TeamMemberTable.id, memberID))
+            .get()
+            .pipe(Effect.orDie)
+        : undefined
 
       // A terminal status and its canonical lead notification persist in ONE immediate
       // transaction with ONE revision bump. Repeated terminal updates are idempotent: an
       // already-terminal member is a no-op (no write, no new notification, no bump).
-      const outcome = yield* db
+      const statusTransaction = db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
-              const member = yield* tx
-                .select()
-                .from(TeamMemberTable)
-                .where(eq(TeamMemberTable.id, memberID))
-                .get()
+              const member = yield* tx.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get()
               if (!member) return { found: false } as const
               const alreadyTerminal = terminalStatuses.includes(member.status)
               if (alreadyTerminal) return { found: true, wrote: false, messageID: undefined } as const
-              yield* tx
-                .update(TeamMemberTable)
-                .set(setData)
-                .where(eq(TeamMemberTable.id, memberID))
-                .run()
+              yield* tx.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run()
               let messageID: string | undefined
               if (terminalTarget) {
                 const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get()
@@ -814,6 +902,9 @@ export const layer = Layer.effect(
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
+      const outcome = yield* terminalMember
+        ? withTeamLifecycleLock(terminalMember.teamID, statusTransaction)
+        : statusTransaction
       if (!outcome.found) return Option.none()
       // After commit: publish member and message events uninterruptibly so the commit -> publish
       // section cannot be interrupted mid-way.
@@ -849,7 +940,12 @@ export const layer = Layer.effect(
           // Daemon idle notifications are not terminal handoffs and keep their existing behavior:
           // the status transaction already committed and the notification persists separately.
           if (row.status === "idle") {
-            const team = yield* db.select().from(TeamTable).where(eq(TeamTable.id, row.team_id)).get().pipe(Effect.orDie)
+            const team = yield* db
+              .select()
+              .from(TeamTable)
+              .where(eq(TeamTable.id, row.team_id))
+              .get()
+              .pipe(Effect.orDie)
             if (team) {
               yield* sendMessage({
                 teamID: row.team_id,
@@ -860,6 +956,7 @@ export const layer = Layer.effect(
                 // A terminal transition racing a team close must not fail the status update: the
                 // team is closed, so the automatic notification is moot.
                 Effect.catchTag("Team.MessageToClosedTeam", () => Effect.void),
+                Effect.catchTag("Team.MessageToTerminalMember", () => Effect.void),
               )
               yield* safePublish(
                 events.publish(TuiEvent.ToastShow, {
@@ -897,26 +994,80 @@ export const layer = Layer.effect(
       )
     })
 
-    const approveMemberPlan = Effect.fn("Team.approveMemberPlan")(function* (memberID: string) {
+    const approveMemberPlan = Effect.fn("Team.approveMemberPlan")(function* (
+      memberID: string,
+      approvalEffects?: PlanApprovalEffects,
+    ) {
       const now = Date.now()
-      const teamID = yield* db
+      const messageID = approvalEffects ? crypto.randomUUID() : undefined
+      const usageEventID = approvalEffects ? crypto.randomUUID() : undefined
+      // The plan transition and all durable approval effects share one admission decision.
+      // A terminal transition or shutdown can run before or after this transaction, but it
+      // cannot interleave between approval and the permission, mailbox, or audit writes.
+      const outcome = yield* db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
               const member = yield* tx.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get()
-              if (!member) return Option.none<string>()
+              if (!member) return Option.none<{ teamID: string; messageID?: string }>()
+              const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get()
+              if (!team || team.status !== "active") {
+                return Option.none<{ teamID: string; messageID?: string }>()
+              }
+              if (!member.plan_mode) return Option.none<{ teamID: string; messageID?: string }>()
+              if (member.status === "completed" || member.status === "cancelled" || member.status === "failed") {
+                return Option.none<{ teamID: string; messageID?: string }>()
+              }
+              if (approvalEffects) {
+                const session = yield* tx
+                  .select({ id: SessionTable.id, permission: SessionTable.permission })
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, SessionID.make(member.session_id)))
+                  .get()
+                if (!session) return Option.none<{ teamID: string; messageID?: string }>()
+                yield* tx
+                  .update(SessionTable)
+                  .set({
+                    permission: removePlanModePermissionOverlay(session.permission ?? []),
+                    time_updated: now,
+                  })
+                  .where(eq(SessionTable.id, SessionID.make(member.session_id)))
+                  .run()
+              }
               yield* tx
                 .update(TeamMemberTable)
                 .set({ status: "active", plan_mode: false, work_mode: "implement", time_updated: now })
                 .where(eq(TeamMemberTable.id, memberID))
                 .run()
+              if (approvalEffects && messageID && usageEventID) {
+                yield* insertMessageRows(tx, {
+                  id: messageID,
+                  teamID: member.team_id,
+                  sender: approvalEffects.sender,
+                  recipients: [member.session_id],
+                  body: approvalEffects.body,
+                  now,
+                })
+                yield* tx
+                  .insert(TeamUsageEventTable)
+                  .values({
+                    id: usageEventID,
+                    team_id: member.team_id,
+                    session_id: approvalEffects.sender,
+                    member_id: member.id,
+                    type: "plan_approved",
+                    metadata: approvalEffects.usageMetadata,
+                    time_created: now,
+                  })
+                  .run()
+              }
               yield* bumpTeamRevision(tx, member.team_id)
-              return Option.some(member.team_id)
+              return Option.some({ teamID: member.team_id, ...(messageID ? { messageID } : {}) })
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
-      if (Option.isNone(teamID)) return Option.none()
+      if (Option.isNone(outcome)) return Option.none()
       const row = yield* db
         .select()
         .from(TeamMemberTable)
@@ -931,6 +1082,13 @@ export const layer = Layer.effect(
         lifecycle: row.lifecycle,
         daemonState: row.daemon_state ?? undefined,
       })
+      if (outcome.value.messageID) {
+        yield* events.publish(MessageReceived, {
+          messageID: outcome.value.messageID,
+          teamID: outcome.value.teamID,
+          sender: approvalEffects?.sender ?? row.session_id,
+        })
+      }
       return Option.some({
         id: row.id,
         team_id: row.team_id,
@@ -1055,6 +1213,14 @@ export const layer = Layer.effect(
           .transaction(
             (tx) =>
               Effect.gen(function* () {
+                const team = yield* tx
+                  .select({ status: TeamTable.status })
+                  .from(TeamTable)
+                  .where(eq(TeamTable.id, input.teamID))
+                  .get()
+                if (!team || team.status !== "active") {
+                  return yield* Effect.fail(new TeamNotActive({ teamID: input.teamID }))
+                }
                 yield* tx
                   .insert(TeamTaskTable)
                   .values({
@@ -1073,7 +1239,7 @@ export const layer = Layer.effect(
               }),
             { behavior: "immediate" },
           )
-          .pipe(Effect.orDie)
+          .pipe(Effect.catch((error) => (error instanceof TeamNotActive ? Effect.fail(error) : Effect.die(error))))
         return {
           id,
           team_id: input.teamID,
@@ -1100,6 +1266,14 @@ export const layer = Layer.effect(
         db.transaction(
           (tx) =>
             Effect.gen(function* () {
+              const team = yield* tx
+                .select({ status: TeamTable.status })
+                .from(TeamTable)
+                .where(eq(TeamTable.id, input.teamID))
+                .get()
+              if (!team || team.status !== "active") {
+                return yield* Effect.fail(new TeamNotActive({ teamID: input.teamID }))
+              }
               yield* assertNoActivePathConflicts(tx, owned)
               yield* tx
                 .insert(TeamTaskTable)
@@ -1144,18 +1318,17 @@ export const layer = Layer.effect(
             }),
           { behavior: "immediate" },
         ),
+      ).pipe(
+        Effect.catchTag("EffectDrizzleQueryError", (error) => {
+          // The partial unique index is the final race guard; a lost insert
+          // race surfaces here. Map it to the same stable conflict error.
+          const cause = Cause.findErrorOption(error.cause as Cause.Cause<unknown>)
+          const isUniqueViolation =
+            Option.isSome(cause) && cause.value instanceof SqlError && cause.value.reason._tag === "UniqueViolation"
+          if (!isUniqueViolation) return Effect.die(error)
+          return Effect.fail(new OwnedPathConflict({ displayPath: owned[0]?.displayPath ?? "" }))
+        }),
       )
-        .pipe(
-          Effect.catchTag("EffectDrizzleQueryError", (error) => {
-            // The partial unique index is the final race guard; a lost insert
-            // race surfaces here. Map it to the same stable conflict error.
-            const cause = Cause.findErrorOption(error.cause as Cause.Cause<unknown>)
-            const isUniqueViolation =
-              Option.isSome(cause) && cause.value instanceof SqlError && cause.value.reason._tag === "UniqueViolation"
-            if (!isUniqueViolation) return Effect.die(error)
-            return Effect.fail(new OwnedPathConflict({ displayPath: owned[0]?.displayPath ?? "" }))
-          }),
-        )
     })
 
     const getTask = Effect.fn("Team.getTask")(function* (teamID: string, taskID: string) {
@@ -1171,12 +1344,7 @@ export const layer = Layer.effect(
       const reservations = yield* db
         .select()
         .from(TeamFileOwnershipTable)
-        .where(
-          and(
-            eq(TeamFileOwnershipTable.team_id, teamID),
-            eq(TeamFileOwnershipTable.task_id, resolved.value),
-          ),
-        )
+        .where(and(eq(TeamFileOwnershipTable.team_id, teamID), eq(TeamFileOwnershipTable.task_id, resolved.value)))
         .all()
         .pipe(Effect.orDie)
       return Option.some({
@@ -1224,6 +1392,14 @@ export const layer = Layer.effect(
         db.transaction(
           (tx) =>
             Effect.gen(function* () {
+              const team = yield* tx
+                .select({ status: TeamTable.status })
+                .from(TeamTable)
+                .where(eq(TeamTable.id, teamID))
+                .get()
+              if (!team || team.status !== "active") {
+                return yield* Effect.fail(new TeamNotActive({ teamID }))
+              }
               const current = yield* tx
                 .select()
                 .from(TeamTaskTable)
@@ -1234,10 +1410,7 @@ export const layer = Layer.effect(
                 .select()
                 .from(TeamFileOwnershipTable)
                 .where(
-                  and(
-                    eq(TeamFileOwnershipTable.team_id, teamID),
-                    eq(TeamFileOwnershipTable.task_id, resolved.value),
-                  ),
+                  and(eq(TeamFileOwnershipTable.team_id, teamID), eq(TeamFileOwnershipTable.task_id, resolved.value)),
                 )
                 .all()
               const isOwned = reservations.length > 0
@@ -1272,15 +1445,11 @@ export const layer = Layer.effect(
                     // changed pathKeys are a subset of this task's reserved pathKeys.
                     if (!update.handoff) {
                       return yield* Effect.fail(
-                        new Error(
-                          "Completing an owned task requires a structured handoff with a nonblank summary.",
-                        ),
+                        new Error("Completing an owned task requires a structured handoff with a nonblank summary."),
                       )
                     }
                     if (typeof update.handoff.summary !== "string" || update.handoff.summary.trim() === "") {
-                      return yield* Effect.fail(
-                        new Error("Owned-task completion requires a nonblank handoff summary."),
-                      )
+                      return yield* Effect.fail(new Error("Owned-task completion requires a nonblank handoff summary."))
                     }
                     if (
                       !Array.isArray(update.handoff.verification) ||
@@ -1292,17 +1461,13 @@ export const layer = Layer.effect(
                       )
                     ) {
                       return yield* Effect.fail(
-                        new Error(
-                          "Owned-task completion requires verification entries with a valid status.",
-                        ),
+                        new Error("Owned-task completion requires verification entries with a valid status."),
                       )
                     }
                     const reservedKeySet = new Set(reservations.map((reservation) => reservation.path_key))
                     for (const pathKey of update.handoffPathKeys ?? []) {
                       if (!reservedKeySet.has(pathKey)) {
-                        return yield* Effect.fail(
-                          new Error("Handoff changed path is not reserved by this task."),
-                        )
+                        return yield* Effect.fail(new Error("Handoff changed path is not reserved by this task."))
                       }
                     }
                     setData.status = "completed"
@@ -1320,9 +1485,7 @@ export const layer = Layer.effect(
                     setData.status = "cancelled"
                     material = true
                   } else if (target === "in_progress") {
-                    return yield* Effect.fail(
-                      new Error("Only team_task_claim may start an owned task."),
-                    )
+                    return yield* Effect.fail(new Error("Only team_task_claim may start an owned task."))
                   } else {
                     return yield* Effect.fail(new Error(`Invalid transition to ${target} for an owned task.`))
                   }
@@ -1374,10 +1537,7 @@ export const layer = Layer.effect(
                 .select()
                 .from(TeamFileOwnershipTable)
                 .where(
-                  and(
-                    eq(TeamFileOwnershipTable.team_id, teamID),
-                    eq(TeamFileOwnershipTable.task_id, resolved.value),
-                  ),
+                  and(eq(TeamFileOwnershipTable.team_id, teamID), eq(TeamFileOwnershipTable.task_id, resolved.value)),
                 )
                 .all()
               if (!row) return null
@@ -1389,12 +1549,9 @@ export const layer = Layer.effect(
           { behavior: "immediate" },
         ),
       ).pipe(
-        // Expected validation failures are Error instances; only database
-        // query failures should become defects.
-        Effect.catchIf(
-          (error): error is Error => !(error instanceof Error),
-          (error) => Effect.die(error),
-        ),
+        // Expected validation failures stay typed. A database query failure is an
+        // infrastructure defect and must not be rendered as a user validation message.
+        Effect.catchTag("EffectDrizzleQueryError", (error) => Effect.die(error)),
       )
       if (!result) return Option.none()
       return Option.some({
@@ -1443,16 +1600,12 @@ export const layer = Layer.effect(
                 .select()
                 .from(TeamFileOwnershipTable)
                 .where(
-                  and(
-                    eq(TeamFileOwnershipTable.team_id, teamID),
-                    eq(TeamFileOwnershipTable.task_id, resolved.value),
-                  ),
+                  and(eq(TeamFileOwnershipTable.team_id, teamID), eq(TeamFileOwnershipTable.task_id, resolved.value)),
                 )
                 .all()
               if (reservations.length > 0) {
                 const foreignOwner = reservations.find(
-                  (reservation) =>
-                    reservation.owner_session_id !== null && reservation.owner_session_id !== assignee,
+                  (reservation) => reservation.owner_session_id !== null && reservation.owner_session_id !== assignee,
                 )
                 if (foreignOwner) return null
                 yield* tx
@@ -1482,10 +1635,7 @@ export const layer = Layer.effect(
                 .select()
                 .from(TeamFileOwnershipTable)
                 .where(
-                  and(
-                    eq(TeamFileOwnershipTable.team_id, teamID),
-                    eq(TeamFileOwnershipTable.task_id, resolved.value),
-                  ),
+                  and(eq(TeamFileOwnershipTable.team_id, teamID), eq(TeamFileOwnershipTable.task_id, resolved.value)),
                 )
                 .all()
               return row ? { row, reservations: updatedReservations } : null
@@ -1524,7 +1674,7 @@ export const layer = Layer.effect(
         .where(eq(TeamFileOwnershipTable.team_id, teamID))
         .all()
         .pipe(Effect.orDie)
-      const byTask = new Map<string, typeof TeamFileOwnershipTable.$inferSelect[]>()
+      const byTask = new Map<string, (typeof TeamFileOwnershipTable.$inferSelect)[]>()
       for (const reservation of reservations) {
         const list = byTask.get(reservation.task_id) ?? []
         list.push(reservation)
@@ -1592,6 +1742,30 @@ export const layer = Layer.effect(
               if (!team || team.status !== "active") {
                 return yield* Effect.fail(new MessageToClosedTeam({ teamID: input.teamID }))
               }
+              const members =
+                recipients.length === 0
+                  ? []
+                  : yield* tx
+                      .select()
+                      .from(TeamMemberTable)
+                      .where(
+                        and(eq(TeamMemberTable.team_id, input.teamID), inArray(TeamMemberTable.session_id, recipients)),
+                      )
+                      .all()
+              const terminalRecipients = members.flatMap((member) => {
+                if (
+                  member.lifecycle !== "task" ||
+                  (member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed")
+                ) {
+                  return []
+                }
+                return [{ sessionID: member.session_id, name: member.name, status: member.status }]
+              })
+              if (terminalRecipients.length > 0) {
+                return yield* Effect.fail(
+                  new MessageToTerminalMember({ teamID: input.teamID, recipients: terminalRecipients }),
+                )
+              }
               yield* insertMessageRows(tx, {
                 id,
                 teamID: input.teamID,
@@ -1606,7 +1780,9 @@ export const layer = Layer.effect(
         )
         .pipe(
           Effect.catch((error) =>
-            error instanceof MessageToClosedTeam ? Effect.fail(error) : Effect.die(error),
+            error instanceof MessageToClosedTeam || error instanceof MessageToTerminalMember
+              ? Effect.fail(error)
+              : Effect.die(error),
           ),
         )
       yield* events.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender })
@@ -1620,6 +1796,88 @@ export const layer = Layer.effect(
         time_created: now,
         time_updated: now,
       } satisfies Message
+    })
+
+    const canWakeSession = Effect.fn("Team.canWakeSession")(function* (sessionID: string) {
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const member = yield* tx
+                .select()
+                .from(TeamMemberTable)
+                .where(eq(TeamMemberTable.session_id, sessionID))
+                .get()
+              if (member) {
+                const team = yield* tx
+                  .select({ status: TeamTable.status })
+                  .from(TeamTable)
+                  .where(eq(TeamTable.id, member.team_id))
+                  .get()
+                if (!team || team.status !== "active") return false
+                return member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed"
+              }
+              const leadTeam = yield* tx
+                .select({ id: TeamTable.id })
+                .from(TeamTable)
+                .where(and(eq(TeamTable.lead_session_id, sessionID), eq(TeamTable.status, "active")))
+                .get()
+              return leadTeam !== undefined
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
+    const canWakeSessionForTeam = Effect.fn("Team.canWakeSessionForTeam")(function* (
+      teamID: string,
+      sessionID: string,
+    ) {
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get()
+              if (!team || team.status !== "active") return false
+              const member = yield* tx
+                .select()
+                .from(TeamMemberTable)
+                .where(eq(TeamMemberTable.session_id, sessionID))
+                .get()
+              if (!member) return team.lead_session_id === sessionID
+              if (member.team_id !== teamID) return false
+              return member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed"
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
+    const admitWake: Interface["admitWake"] = Effect.fn("Team.admitWake")(function* (sessionID, wake) {
+      const member = yield* db
+        .select({ teamID: TeamMemberTable.team_id })
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      const leadTeam = member
+        ? undefined
+        : yield* db
+            .select({ teamID: TeamTable.id })
+            .from(TeamTable)
+            .where(and(eq(TeamTable.lead_session_id, sessionID), eq(TeamTable.status, "active")))
+            .get()
+            .pipe(Effect.orDie)
+      const teamID = member?.teamID ?? leadTeam?.teamID
+      if (!teamID) return false
+      return yield* withTeamLifecycleLock(
+        teamID,
+        Effect.gen(function* () {
+          if (!(yield* canWakeSessionForTeam(teamID, sessionID))) return false
+          yield* wake
+          return true
+        }),
+      )
     })
 
     const getMessages = Effect.fn("Team.getMessages")(function* (teamID: string) {
@@ -1747,11 +2005,7 @@ export const layer = Layer.effect(
             }),
           { behavior: "immediate" },
         )
-        .pipe(
-          Effect.catch((error) =>
-            error instanceof Runner.Suspended ? Effect.fail(error) : Effect.die(error),
-          ),
-        )
+        .pipe(Effect.catch((error) => (error instanceof Runner.Suspended ? Effect.fail(error) : Effect.die(error))))
       return rows.map((row) => ({
         id: row.id,
         team_id: row.team_id,
@@ -1881,7 +2135,7 @@ export const layer = Layer.effect(
     const recordFinalReport = Effect.fn("Team.recordFinalReport")(function* (input: {
       teamID: string
       revision: number
-      sessionID?: string
+      sessionID: string
     }) {
       const now = Date.now()
       const eventID = crypto.randomUUID()
@@ -1890,7 +2144,53 @@ export const layer = Layer.effect(
           (tx) =>
             Effect.gen(function* () {
               const row = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, input.teamID)).get()
-              if (!row || row.status !== "active" || row.revision !== input.revision) return false
+              if (!row || row.status !== "active") return { status: "team_inactive" } as const
+              if (row.lead_session_id !== input.sessionID) return { status: "not_authorized" } as const
+              if (row.revision !== input.revision) return { status: "stale" } as const
+              const members = yield* tx
+                .select()
+                .from(TeamMemberTable)
+                .where(eq(TeamMemberTable.team_id, input.teamID))
+                .all()
+              const blockedMember = (member: TeamMemberRow): FinalReportBlockedMember => ({
+                name: member.name,
+                agentType: member.agent_type,
+                status: member.status,
+                daemonState: member.daemon_state,
+              })
+              const nonterminalMembers = members.filter(
+                (member) =>
+                  member.lifecycle !== "daemon" &&
+                  member.status !== "completed" &&
+                  member.status !== "cancelled" &&
+                  member.status !== "failed",
+              )
+              if (nonterminalMembers.length > 0) {
+                return {
+                  status: "nonterminal_members",
+                  members: nonterminalMembers.map(blockedMember),
+                } as const
+              }
+              const activeDaemons = members.filter(
+                (member) =>
+                  member.lifecycle === "daemon" &&
+                  (member.status === "starting" ||
+                    member.status === "active" ||
+                    member.daemon_state === "initializing" ||
+                    member.daemon_state === "running"),
+              )
+              if (activeDaemons.length > 0) {
+                return { status: "active_daemons", members: activeDaemons.map(blockedMember) } as const
+              }
+              if (row.protocol_version === 1) {
+                const tasks = yield* tx
+                  .select({ status: TeamTaskTable.status })
+                  .from(TeamTaskTable)
+                  .where(eq(TeamTaskTable.team_id, input.teamID))
+                  .all()
+                const unfinished = tasks.filter((task) => task.status === "pending" || task.status === "in_progress")
+                if (unfinished.length > 0) return { status: "unfinished_tasks", count: unfinished.length } as const
+              }
               yield* tx
                 .update(TeamTable)
                 .set({ final_report_revision: input.revision, time_updated: now })
@@ -1901,14 +2201,14 @@ export const layer = Layer.effect(
                 .values({
                   id: eventID,
                   team_id: input.teamID,
-                  session_id: input.sessionID ?? null,
+                  session_id: input.sessionID,
                   member_id: null,
                   type: "report_generated",
                   metadata: { revision: input.revision, final: true, stale: false, generated_at: now },
                   time_created: now,
                 })
                 .run()
-              return true
+              return { status: "recorded" } as const
             }),
           { behavior: "immediate" },
         )
@@ -1934,6 +2234,8 @@ export const layer = Layer.effect(
       claimTask,
       getTasks,
       sendMessage,
+      admitWake,
+      canWakeSession,
       getMessages,
       getPendingMessages,
       hasPendingMailboxMessages,

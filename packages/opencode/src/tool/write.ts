@@ -16,7 +16,7 @@ import * as Bom from "@/util/bom"
 import { ToolPath } from "./path"
 import { Session } from "@/session/session"
 import { Database } from "@oc2-ai/core/database/database"
-import { canonicalize, withWriteLease } from "@/team/file-ownership"
+import { canonicalPathKey, mutationLockKeys, withMutationLease } from "@/team/file-ownership"
 import * as LSPClient from "@/lsp/client"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -51,22 +51,18 @@ export const WriteTool = Tool.define(
         Effect.gen(function* () {
           const resolved = yield* ToolPath.resolveWithSession(session, ctx, params.filePath)
           const filepath = resolved.path
-          yield* assertExternalDirectoryWithSession(session, ctx, filepath)
 
-          // Canonicalize the target (read-only realpath I/O), then acquire the write lease: the
-          // sorted path lock is held through the ownership check, the permission ask, and the full
-          // mutation. A reservation owned by another session denies the write before any ask or I/O.
-          // Paths that cannot canonicalize (scratch outside the workspace, directories, .git) can
-          // never be reserved, so the lease is skipped for them and the existing permission flow
-          // applies unchanged.
-          const owned = yield* canonicalize(session, ctx, params.filePath)
-            .pipe(Effect.provideService(FSUtil.Service, fs))
-            .pipe(Effect.catchTag("Team.OwnedPathError", () => Effect.succeed(undefined)))
-          const { exists } = yield* withWriteLease(
+          // Authorization always uses the canonical filesystem key, even when this caller sees the
+          // target as external. Root containment limits reservation creation, not lease lookup.
+          const pathKey = yield* canonicalPathKey(fs, filepath)
+          const lockKeys = yield* mutationLockKeys(fs, filepath)
+          const { exists } = yield* withMutationLease(
             db,
             String(ctx.sessionID),
-            owned ? [owned.pathKey] : [],
+            [pathKey],
+            lockKeys,
             Effect.gen(function* () {
+              yield* assertExternalDirectoryWithSession(session, ctx, filepath)
               const exists = yield* fs.existsSafe(filepath)
               const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
               const next = Bom.split(params.content)

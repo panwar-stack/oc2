@@ -858,7 +858,98 @@ describe("tool.edit", () => {
         expect(yield* load(filepath)).toBe("old\n")
       }),
     )
+
+    it.instance("denies a non-owner edit to a reserved file external to the caller root", () =>
+      Effect.gen(function* () {
+        const reserved = yield* reserveExternalTarget("edit-direct")
+        const asks: Array<Parameters<Tool.Context["ask"]>[0]> = []
+
+        const result = yield* run(
+          { filePath: reserved.target, oldString: "old", newString: "sneaky" },
+          {
+            ...ctx,
+            sessionID: SessionID.make(reserved.otherSessionID),
+            ask: (request) =>
+              Effect.sync(() => {
+                asks.push(request)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Edit Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* load(reserved.target)).toBe("old\n")
+      }),
+    )
+
+    it.instance("denies a non-owner edit through a cross-root symlink", () =>
+      Effect.gen(function* () {
+        const reserved = yield* reserveExternalTarget("edit-symlink")
+        const asks: Array<Parameters<Tool.Context["ask"]>[0]> = []
+
+        const result = yield* run(
+          { filePath: reserved.alias, oldString: "old", newString: "sneaky" },
+          {
+            ...ctx,
+            sessionID: SessionID.make(reserved.otherSessionID),
+            ask: (request) =>
+              Effect.sync(() => {
+                asks.push(request)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Edit Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* load(reserved.target)).toBe("old\n")
+      }),
+    )
   })
+})
+
+const reserveExternalTarget = Effect.fnUntraced(function* (name: string) {
+  const test = yield* TestInstance
+  const external = yield* tmpdirScoped()
+  const sessions = yield* Session.Service
+  const team = yield* Team.Service
+  const futil = yield* FSUtil.Service
+  const lead = yield* sessions.create({ title: `${name} Lead` })
+  const ownerSession = yield* sessions.create({ parentID: lead.id, title: `${name} Owner` })
+  const otherSession = yield* sessions.create({ parentID: lead.id, title: `${name} Other` })
+  yield* sessions.addRoot({ sessionID: ownerSession.id, directory: external })
+  const info = yield* team.create({ name, goal: "Lease", leadSessionID: lead.id })
+  const owner = yield* team.addMember({
+    teamID: info.id,
+    sessionID: ownerSession.id,
+    name: "owner",
+    agentType: "general",
+    rolePrompt: "Own",
+  })
+  const other = yield* team.addMember({
+    teamID: info.id,
+    sessionID: otherSession.id,
+    name: "other",
+    agentType: "general",
+    rolePrompt: "Other",
+  })
+  yield* team.updateMemberStatus(owner.id, "active")
+  yield* team.updateMemberStatus(other.id, "active")
+
+  const target = path.join(external, "reserved.txt")
+  yield* put(target, "old\n")
+  const aliasDirectory = path.join(test.directory, `${name}-alias`)
+  yield* Effect.promise(() => fs.symlink(external, aliasDirectory, process.platform === "win32" ? "junction" : "dir"))
+  const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), target).pipe(
+    Effect.provideService(FSUtil.Service, futil),
+  )
+  yield* team.createTask({ teamID: info.id, description: "Reserve external target", owned: [owned] })
+  const task = (yield* team.getTasks(info.id))[0]
+  if (!task) return yield* Effect.die(new Error("task missing"))
+  yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+  return { target, alias: path.join(aliasDirectory, "reserved.txt"), otherSessionID: otherSession.id }
 })
 
 function leaseContext(sessionID: string): Tool.Context {

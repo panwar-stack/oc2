@@ -164,9 +164,7 @@ export const TeamReportTool = Tool.define<
                 metadata: {},
                 output: [
                   "Final report rejected: finite teammate(s) are still non-terminal.",
-                  ...nonterminalFinite.map(
-                    (member) => `- ${member.name} (${member.agent_type}, ${member.status})`,
-                  ),
+                  ...nonterminalFinite.map((member) => `- ${member.name} (${member.agent_type}, ${member.status})`),
                 ].join("\n"),
               }
             }
@@ -186,19 +184,14 @@ export const TeamReportTool = Tool.define<
                 metadata: {},
                 output: [
                   "Final report rejected: daemon teammate(s) are still starting or running.",
-                  ...activeDaemons.map(
-                    (member) => `- ${member.name} (${member.daemon_state ?? member.status})`,
-                  ),
+                  ...activeDaemons.map((member) => `- ${member.name} (${member.daemon_state ?? member.status})`),
                 ].join("\n"),
               }
             }
-            // Protocol-v1 task gate: pending or in-progress tasks block the final report. Protocol-0
-            // teams do not use this shutdown gate (all teams are protocol 0 today, so this is
-            // unreachable until PR 8 switches new teams to protocol 1).
+            // Protocol-v1 task gate: pending or in-progress tasks block the final report. Legacy
+            // protocol-0 teams do not use this shutdown gate.
             if (teams.protocol_version === 1) {
-              const unfinishedTasks = tasks.filter(
-                (task) => task.status === "pending" || task.status === "in_progress",
-              )
+              const unfinishedTasks = tasks.filter((task) => task.status === "pending" || task.status === "in_progress")
               if (unfinishedTasks.length > 0) {
                 return {
                   title: "Team Report",
@@ -295,8 +288,7 @@ export const TeamReportTool = Tool.define<
             })
           }
           const evalReport =
-            finalEvalReport ??
-            (yield* TeamEval.build(teams.id).pipe(Effect.provideService(Database.Service, database)))
+            finalEvalReport ?? (yield* TeamEval.build(teams.id).pipe(Effect.provideService(Database.Service, database)))
           const rollupReports = yield* Effect.forEach(
             yield* db.select().from(TeamTable).all().pipe(Effect.orDie),
             (row) => TeamEval.build(row.id).pipe(Effect.provideService(Database.Service, database)),
@@ -412,12 +404,45 @@ export const TeamReportTool = Tool.define<
           // compares the team status and the revision captured at build time; if any material
           // mutation happened during construction the record fails and the report is stale.
           if (finalState) {
-            const recorded = yield* team.recordFinalReport({
+            const recordResult = yield* team.recordFinalReport({
               teamID: teams.id,
               revision: finalState.revision,
               sessionID: ctx.sessionID,
             })
-            finalState.stale = !recorded
+            if (recordResult.status === "stale") {
+              finalState.stale = true
+            } else if (recordResult.status !== "recorded") {
+              const output =
+                recordResult.status === "team_inactive"
+                  ? "Final report rejected: the team is not active."
+                  : recordResult.status === "not_authorized"
+                    ? "Final reports are lead-only. Run team_report({ final: true }) from the lead session of this team."
+                    : recordResult.status === "nonterminal_members"
+                      ? [
+                          "Final report rejected: finite teammate(s) are still non-terminal.",
+                          ...recordResult.members.map(
+                            (member) => `- ${member.name} (${member.agentType}, ${member.status})`,
+                          ),
+                        ].join("\n")
+                      : recordResult.status === "active_daemons"
+                        ? [
+                            "Final report rejected: daemon teammate(s) are still starting or running.",
+                            ...recordResult.members.map(
+                              (member) => `- ${member.name} (${member.daemonState ?? member.status})`,
+                            ),
+                          ].join("\n")
+                        : `Final report rejected: ${recordResult.count} task(s) are pending or in_progress.`
+              return {
+                title: "Team Report",
+                metadata: {
+                  revision: finalState.revision,
+                  final: false,
+                  stale: false,
+                  rejection: recordResult.status,
+                },
+                output,
+              }
+            }
           }
 
           const output = [

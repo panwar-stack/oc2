@@ -122,95 +122,211 @@ it.instance("suspend signals the runner without cancelling background jobs", () 
   ),
 )
 
-it.instance(
-  "pause persists a durable running resume intent only for the sessions it signals",
-  () =>
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const state = yield* SessionRunState.Service
-        const control = yield* SessionControl.Service
-        const sessions = yield* SessionV2.Service
-        const running = yield* sessions.create({ location })
-        const idle = yield* sessions.create({ location, parentID: running.id })
+it.instance("pause persists a durable running resume intent only for the sessions it signals", () =>
+  provideTmpdirInstance(() =>
+    Effect.gen(function* () {
+      const state = yield* SessionRunState.Service
+      const control = yield* SessionControl.Service
+      const sessions = yield* SessionV2.Service
+      const running = yield* sessions.create({ location })
+      const idle = yield* sessions.create({ location, parentID: running.id })
 
-        const started = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      const observedSuspension = yield* Deferred.make<SessionControl.PauseProvenance>()
+      const caller = yield* state
+        .ensureRunning(
+          running.id,
+          Effect.die("suspension must not use cancellation fallback"),
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(
+              Runner.currentSuspension.pipe(
+                Effect.flatMap((current) =>
+                  current._tag === "Some" && SessionControl.isPauseProvenance(current.value)
+                    ? Deferred.succeed(observedSuspension, current.value)
+                    : Effect.die("missing pause provenance"),
+                ),
+              ),
+            ),
+          ),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+
+      const paused = yield* control.pause({ rootSessionID: running.id })
+      expect([...paused.interruptionSignalledSessionIDs]).toEqual([running.id])
+      expect([...paused.affectedSessionIDs].sort()).toEqual([idle.id, running.id].sort())
+      expect(yield* Deferred.await(observedSuspension).pipe(Effect.timeout("100 millis"))).toEqual({
+        _tag: "SessionControl.PauseProvenance",
+        rootSessionID: running.id,
+        cascadeID: paused.cascadeID,
+        generation: paused.generation,
+      })
+
+      // The signalled session carries a durable "running" intent; the idle child does not.
+      const released = yield* control.release(running.id)
+      expect(released.resumableSessionIDs).toEqual([running.id])
+      expect(released.resumeTickets).toEqual([{ sessionID: running.id, generation: 1, reason: "running" }])
+      // The ticket is finishable now that the blocker is gone, exactly like a start schedules it.
+      expect(yield* control.finishResume(released.resumeTickets[0]!)).toBe(true)
+      expect(yield* control.runnableResumeTickets([running.id, idle.id])).toEqual([])
+
+      // The suspended caller resolves with the typed suspended error.
+      const exit = yield* Fiber.await(caller).pipe(Effect.timeout("100 millis"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+    }),
+  ),
+)
+
+it.instance("a second pause keeps queued replacement work blocked until its release", () =>
+  provideTmpdirInstance(() =>
+    Effect.gen(function* () {
+      const state = yield* SessionRunState.Service
+      const control = yield* SessionControl.Service
+      const sessions = yield* SessionV2.Service
+      const running = yield* sessions.create({ location })
+      const started = yield* Deferred.make<void>()
+      const finalizerStarted = yield* Deferred.make<void>()
+      const inspectSuspension = yield* Deferred.make<void>()
+      const observedSuspension = yield* Deferred.make<SessionControl.PauseProvenance>()
+      const releaseFinalizer = yield* Deferred.make<void>()
+      const finalizerFinished = yield* Deferred.make<void>()
+      const replacementStarted = yield* Deferred.make<void>()
+
+      yield* Effect.gen(function* () {
         const caller = yield* state
           .ensureRunning(
             running.id,
             Effect.die("suspension must not use cancellation fallback"),
-            Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(finalizerStarted, undefined)
+                  yield* Deferred.await(inspectSuspension)
+                  yield* Runner.currentSuspension.pipe(
+                    Effect.flatMap((current) =>
+                      current._tag === "Some" && SessionControl.isPauseProvenance(current.value)
+                        ? Deferred.succeed(observedSuspension, current.value)
+                        : Effect.die("missing pause provenance"),
+                    ),
+                  )
+                  yield* Deferred.await(releaseFinalizer)
+                  yield* Deferred.succeed(finalizerFinished, undefined)
+                }),
+              ),
+            ),
           )
           .pipe(Effect.forkChild)
         yield* Deferred.await(started)
 
-        const paused = yield* control.pause({ rootSessionID: running.id })
-        expect([...paused.interruptionSignalledSessionIDs]).toEqual([running.id])
-        expect([...paused.affectedSessionIDs].sort()).toEqual([idle.id, running.id].sort())
+        const pauseA = yield* control.pause({ rootSessionID: running.id })
+        yield* Deferred.await(finalizerStarted)
+        const callerExit = yield* Fiber.await(caller)
+        expect(Exit.isFailure(callerExit)).toBe(true)
+        if (Exit.isFailure(callerExit)) expect(Cause.squash(callerExit.cause)).toBeInstanceOf(Runner.Suspended)
 
-        // The signalled session carries a durable "running" intent; the idle child does not.
-        const released = yield* control.release(running.id)
-        expect(released.resumableSessionIDs).toEqual([running.id])
-        expect(released.resumeTickets).toEqual([
-          { sessionID: running.id, generation: 1, reason: "running" },
-        ])
-        // The ticket is finishable now that the blocker is gone, exactly like a start schedules it.
-        expect(yield* control.finishResume(released.resumeTickets[0]!)).toBe(true)
-        expect(yield* control.runnableResumeTickets([running.id, idle.id])).toEqual([])
+        const releaseA = yield* control.release(running.id)
+        expect(releaseA.resumeTickets).toHaveLength(1)
+        const ticketA = releaseA.resumeTickets[0]!
+        expect(
+          yield* state.wake(
+            running.id,
+            Effect.die("suspension must not use cancellation fallback"),
+            control
+              .finishResume(ticketA)
+              .pipe(
+                Effect.ignore,
+                Effect.andThen(Deferred.succeed(replacementStarted, undefined)),
+                Effect.andThen(Effect.never),
+              ),
+          ),
+        ).toBe(true)
 
-        // The suspended caller resolves with the typed suspended error.
-        const exit = yield* Fiber.await(caller).pipe(Effect.timeout("100 millis"))
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
-      }),
-    ),
+        const pauseB = yield* control.pause({ rootSessionID: running.id })
+        expect(pauseB.cascadeID).not.toBe(pauseA.cascadeID)
+        expect(pauseB.generation).toBe(pauseA.generation + 1)
+        expect(pauseB.interruptionSignalledSessionIDs).toEqual([running.id])
+
+        yield* Deferred.succeed(inspectSuspension, undefined)
+        expect(yield* Deferred.await(observedSuspension)).toEqual({
+          _tag: "SessionControl.PauseProvenance",
+          rootSessionID: running.id,
+          cascadeID: pauseB.cascadeID,
+          generation: pauseB.generation,
+        })
+        yield* Deferred.succeed(releaseFinalizer, undefined)
+        yield* Deferred.await(finalizerFinished)
+        expect(yield* Deferred.isDone(replacementStarted)).toBe(false)
+        expect(yield* control.state(running.id)).toMatchObject({ paused: true })
+
+        const releaseB = yield* control.release(running.id)
+        expect(releaseB.resumeTickets).toHaveLength(1)
+        const ticketB = releaseB.resumeTickets[0]!
+        const accepted = yield* state.wake(
+          running.id,
+          Effect.die("suspension must not use cancellation fallback"),
+          Effect.die("the existing queued run must be resumed"),
+        )
+        expect(accepted).toBe(false)
+        expect(yield* control.finishResume(ticketB)).toBe(true)
+        yield* Deferred.await(replacementStarted)
+      }).pipe(
+        Effect.ensuring(
+          Effect.all([Deferred.succeed(inspectSuspension, undefined), Deferred.succeed(releaseFinalizer, undefined)], {
+            discard: true,
+          }).pipe(Effect.ignore, Effect.andThen(state.cancel(running.id))),
+        ),
+      )
+    }),
+  ),
 )
 
-it.instance(
-  "pause persists a durable team-wake resume intent for an idle session with a pending mailbox row",
-  () =>
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const state = yield* SessionRunState.Service
-        const control = yield* SessionControl.Service
-        const sessions = yield* SessionV2.Service
-        const { db } = yield* Database.Service
-        const idle = yield* sessions.create({ location })
+it.instance("pause persists a durable team-wake resume intent for an idle session with a pending mailbox row", () =>
+  provideTmpdirInstance(() =>
+    Effect.gen(function* () {
+      const state = yield* SessionRunState.Service
+      const control = yield* SessionControl.Service
+      const sessions = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const idle = yield* sessions.create({ location })
 
-        const now = Date.now()
-        yield* db
-          .insert(TeamMessageRecipientTable)
-          .values({
-            id: "tmr_team_wake",
-            message_id: "tmsg_team_wake",
-            team_id: "team_wake",
-            recipient: idle.id,
-            delivery_status: "pending",
-            time_created: now,
-            time_updated: now,
-          })
-          .run()
-          .pipe(Effect.orDie)
+      const now = Date.now()
+      yield* db
+        .insert(TeamMessageRecipientTable)
+        .values({
+          id: "tmr_team_wake",
+          message_id: "tmsg_team_wake",
+          team_id: "team_wake",
+          recipient: idle.id,
+          delivery_status: "pending",
+          time_created: now,
+          time_updated: now,
+        })
+        .run()
+        .pipe(Effect.orDie)
 
-        const paused = yield* control.pause({ rootSessionID: idle.id })
-        // The idle session was not interruption-signalled; only its durable intent matters.
-        expect([...paused.interruptionSignalledSessionIDs]).toEqual([])
+      const paused = yield* control.pause({ rootSessionID: idle.id })
+      // The idle session was not interruption-signalled; only its durable intent matters.
+      expect([...paused.interruptionSignalledSessionIDs]).toEqual([])
 
-        // The mailbox row is still pending — the probe never claims it.
-        expect(
-          (yield* db
-            .select({ status: TeamMessageRecipientTable.delivery_status })
-            .from(TeamMessageRecipientTable)
-            .where(eq(TeamMessageRecipientTable.id, "tmr_team_wake"))
-            .get()
-            .pipe(Effect.orDie))?.status,
-        ).toBe("pending")
+      // The mailbox row is still pending — the probe never claims it.
+      expect(
+        (yield* db
+          .select({ status: TeamMessageRecipientTable.delivery_status })
+          .from(TeamMessageRecipientTable)
+          .where(eq(TeamMessageRecipientTable.id, "tmr_team_wake"))
+          .get()
+          .pipe(Effect.orDie))?.status,
+      ).toBe("pending")
 
-        // The durable team-wake intent lands and release() turns it into a resume ticket.
-        const released = yield* control.release(idle.id)
-        expect(released.resumableSessionIDs).toEqual([idle.id])
-        expect(released.resumeTickets).toEqual([{ sessionID: idle.id, generation: 1, reason: "team-wake" }])
-        // The ticket is finishable now that the blocker is gone, exactly like a start schedules it.
-        expect(yield* control.finishResume(released.resumeTickets[0]!)).toBe(true)
-      }),
-    ),
+      // The durable team-wake intent lands and release() turns it into a resume ticket.
+      const released = yield* control.release(idle.id)
+      expect(released.resumableSessionIDs).toEqual([idle.id])
+      expect(released.resumeTickets).toEqual([{ sessionID: idle.id, generation: 1, reason: "team-wake" }])
+      // The ticket is finishable now that the blocker is gone, exactly like a start schedules it.
+      expect(yield* control.finishResume(released.resumeTickets[0]!)).toBe(true)
+    }),
+  ),
 )

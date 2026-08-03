@@ -1,4 +1,5 @@
 import { Database } from "@oc2-ai/core/database/database"
+import { KeyedMutex } from "@oc2-ai/core/effect/keyed-mutex"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { ProviderV2 } from "@oc2-ai/core/provider"
 import { SessionControl } from "@oc2-ai/core/session/control"
@@ -103,6 +104,11 @@ type WriteDatabase = Pick<DatabaseService, "insert" | "select" | "update">
 const metadataKey = "lifecycleReconciler"
 const memberMetadataKey = "lifecycleTeamMember"
 const terminalMemberStatuses = ["completed", "cancelled", "failed"] as const
+const lifecycleLocks = KeyedMutex.makeUnsafe<string>()
+
+/** Serializes a team run admission with terminal member and team transitions. */
+export const withTeamLifecycleLock = <A, E, R>(teamID: string, effect: Effect.Effect<A, E, R>) =>
+  lifecycleLocks.withLock(teamID)(effect)
 // Reconciliation is poll driven so it also covers work that no live fiber owns after a restart.
 // The interval is a deliberate trade-off between resume latency and idle query cost; see the
 // "polling cost" note in the persistent-session-pause spec follow-ups.
@@ -184,52 +190,14 @@ const NestedTeamTools = {
 }
 
 /**
- * Tools denied for the completion-only retry prompt. The prompt `tools` map is a permission delta
- * only (prompt.ts merges each entry into the session permission rules as allow/deny), so an empty
- * map would change nothing: the model-facing tool set comes from the full registry + MCP, filtered
- * only by session permission. Every general-mutation, shell, work-creation, web, and team tool is
- * therefore denied explicitly. MCP and plugin tools are instance-dynamic and cannot be statically
- * denied here; they are covered by the member's inherited session permissions and the RetryGuidance
- * prompt text, consistent with the codebase's plan-mode precedent. The only enabled tool is
- * team_task_update, so a member that still owns unfinished work can submit the structured handoff
- * before producing final text.
+ * Tool allow-list for the completion-only retry prompt. LLM request preparation applies the
+ * wildcard deny to the complete runtime registry, including plugin and MCP tools, then admits only
+ * explicit `true` exceptions. The member can therefore submit an owned-task handoff and produce
+ * final text, but cannot call any other tool even when its name is not known here.
  */
 const RetryPromptTools = {
-  bash: false,
-  shell: false,
-  write: false,
-  edit: false,
-  apply_patch: false,
-  read: false,
-  glob: false,
-  grep: false,
-  opengrep: false,
-  task: false,
-  local_fusion: false,
-  webfetch: false,
-  websearch: false,
-  skill: false,
-  todowrite: false,
-  question: false,
-  lsp: false,
-  plan_exit: false,
-  team_create: false,
-  team_spawn: false,
-  team_get_messages: false,
-  team_send_message: false,
-  team_broadcast: false,
-  team_task_create: false,
-  team_task_list: false,
-  team_task_claim: false,
+  "*": false,
   team_task_update: true,
-  team_plan_submit: false,
-  team_plan_decide: false,
-  team_shutdown: false,
-  team_report: false,
-  memory_search_commit: false,
-  memory_examine_commit: false,
-  memory_search_summary: false,
-  memory_view_summary: false,
 }
 
 function backgroundMetadata(row: SessionRow): BackgroundMetadata | undefined {
@@ -284,7 +252,11 @@ function backgroundWatchKey(sessionID: string, generation: number) {
   return `${sessionID}:${generation}`
 }
 
-function memberMessageID(memberID: string, kind: "started" | "completed" | "idle" | "cancelled" | "failed", generation: number) {
+function memberMessageID(
+  memberID: string,
+  kind: "started" | "completed" | "idle" | "cancelled" | "failed",
+  generation: number,
+) {
   // Generation-scoped so a stale attempt can never reuse or overwrite a notification of another
   // generation, and never-admitted descendants (generation 0) get their own stable ID.
   return `lifecycle:member:${memberID}:${kind}:${generation}`
@@ -440,8 +412,7 @@ export function assistantResult(
   }
   const text = parts
     .filter(
-      (part): part is SessionV1.TextPart =>
-        part.type === "text" && part.synthetic !== true && part.ignored !== true,
+      (part): part is SessionV1.TextPart => part.type === "text" && part.synthetic !== true && part.ignored !== true,
     )
     .map((part) => part.text)
     .join("\n")
@@ -607,11 +578,7 @@ export const layer = Layer.effect(
         .join("\n\n")
     }
 
-    /**
-     * Completion-only retry prompt. It runs in the same child session as the original prompt and
-     * denies every general tool (`RetryPromptTools`), so the model can only produce final text. The
-     * structured task-handoff tool arrives with PR 6; until then the handoff requirement is disabled.
-     */
+    /** Completion-only retry prompt with only final text and `team_task_update` available. */
     const memberRetryPrompt = (team: TeamRow, member: TeamMemberRow) =>
       [
         `You are teammate "${member.name}" in team "${team.name}".`,
@@ -785,10 +752,7 @@ export const layer = Layer.effect(
       }
       const descendants = members
         .filter(
-          (member) =>
-            member.id !== failedMember.id &&
-            member.status === "blocked" &&
-            reached.has(member.session_id),
+          (member) => member.id !== failedMember.id && member.status === "blocked" && reached.has(member.session_id),
         )
         .sort((a, b) => a.id.localeCompare(b.id))
       for (const member of descendants) {
@@ -798,9 +762,7 @@ export const layer = Layer.effect(
             status: "cancelled",
             failure_code: "dependency_failed" as const,
             time_updated: now,
-            ...(member.lifecycle === "daemon"
-              ? { daemon_state: "cancelled" as const, daemon_last_active: now }
-              : {}),
+            ...(member.lifecycle === "daemon" ? { daemon_state: "cancelled" as const, daemon_last_active: now } : {}),
           })
           .where(eq(TeamMemberTable.id, member.id))
           .run()
@@ -826,7 +788,13 @@ export const layer = Layer.effect(
       generation?: number
       allowWhilePaused?: boolean
     }) {
-      const settled = yield* db
+      const memberTeam = yield* db
+        .select({ teamID: TeamMemberTable.team_id })
+        .from(TeamMemberTable)
+        .where(eq(TeamMemberTable.id, input.memberID))
+        .get()
+        .pipe(Effect.orDie)
+      const settleTransaction = db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
@@ -972,14 +940,14 @@ export const layer = Layer.effect(
               const noMaterialChange = (() => {
                 if (member.status !== effectiveState) return false
                 if (effectiveState === "completed" && member.result !== input.output) return false
-                if ((effectiveState === "failed" || effectiveState === "cancelled") && member.failure_code !== (effectiveCode ?? null)) return false
+                if (
+                  (effectiveState === "failed" || effectiveState === "cancelled") &&
+                  member.failure_code !== (effectiveCode ?? null)
+                )
+                  return false
                 if (member.lifecycle === "daemon") {
                   const targetDaemonState =
-                    effectiveState === "idle"
-                      ? "idle"
-                      : input.error === "cancelled"
-                        ? "cancelled"
-                        : "error"
+                    effectiveState === "idle" ? "idle" : input.error === "cancelled" ? "cancelled" : "error"
                   if (member.daemon_state !== targetDaemonState) return false
                   if (member.daemon_error !== (input.error ?? null)) return false
                 }
@@ -1060,9 +1028,9 @@ export const layer = Layer.effect(
                     ].join("\n")
                   : effectiveState === "idle"
                     ? `Daemon teammate ${member.name} (${member.agent_type}) initialized and is idle.`
-                  : effectiveState === "failed"
-                    ? `Teammate ${member.name} (${member.agent_type}) failed: ${input.error ?? effectiveCode ?? "provider error"}`
-                    : `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${input.error ?? effectiveCode ?? "cancelled"}`
+                    : effectiveState === "failed"
+                      ? `Teammate ${member.name} (${member.agent_type}) failed: ${input.error ?? effectiveCode ?? "provider error"}`
+                      : `Teammate ${member.name} (${member.agent_type}) stopped before completing: ${input.error ?? effectiveCode ?? "cancelled"}`
               yield* sendMemberMessage(tx, { team, member, generation, kind, body })
               // A failure that surfaces as `cancelled` (provider error, empty_result,
               // missing_task_handoff) keeps the old `failed` cleanup semantics: cancel the member's
@@ -1107,6 +1075,9 @@ export const layer = Layer.effect(
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
+      const settled = yield* memberTeam
+        ? withTeamLifecycleLock(memberTeam.teamID, settleTransaction)
+        : settleTransaction
       if (!settled) return undefined
       if (settled.kind === "paused") {
         yield* setIntent(settled.team.lead_session_id, "team-wake")
@@ -1483,8 +1454,7 @@ export const layer = Layer.effect(
           },
           variant: model.variant,
           agent: member.agent_type,
-          // Completion-only retry: deny every general tool in this slice. The structured
-          // task-handoff tool arrives with PR 6; the model may only produce final text here.
+          // Request preparation applies this allow-list to the complete dynamic tool registry.
           tools: RetryPromptTools,
           parts,
         })
@@ -1593,13 +1563,11 @@ export const layer = Layer.effect(
             variant: model.variant,
             agent: prepared.member.agent_type,
             tools: prepared.retry
-              ? // Completion-only retry: deny every general tool. PR 6 adds the task-handoff tool.
+              ? // Completion-only retry: allow only the task-handoff tool.
                 RetryPromptTools
               : {
                   ...NestedTeamTools,
-                  ...(prepared.member.plan_mode
-                    ? { bash: false, write: false, edit: false, apply_patch: false }
-                    : {}),
+                  ...(prepared.member.plan_mode ? { bash: false, write: false, edit: false, apply_patch: false } : {}),
                 },
             parts,
           })
@@ -1637,14 +1605,11 @@ export const layer = Layer.effect(
         const settled = yield* settleMember({
           memberID: prepared.member.id,
           state:
-            terminal.state === "error"
-              ? "cancelled"
-              : prepared.member.lifecycle === "daemon"
-                ? "idle"
-                : "completed",
+            terminal.state === "error" ? "cancelled" : prepared.member.lifecycle === "daemon" ? "idle" : "completed",
           output,
           error: terminal.state === "error" ? output : undefined,
-          failureCode: terminal.state === "error" && prepared.member.lifecycle !== "daemon" ? "provider_error" : undefined,
+          failureCode:
+            terminal.state === "error" && prepared.member.lifecycle !== "daemon" ? "provider_error" : undefined,
           promptMessageID: prepared.promptMessageID,
           generation: prepared.generation,
         })
@@ -2095,16 +2060,14 @@ export const layer = Layer.effect(
             .where(eq(PartTable.message_id, terminal.messageID))
             .orderBy(PartTable.id)
             .all()
-            .pipe(Effect.orDie, Effect.map((rows) => rows.map(partRowToPart)))
+            .pipe(
+              Effect.orDie,
+              Effect.map((rows) => rows.map(partRowToPart)),
+            )
           const text = assistantResult(info, parts)?.text ?? ""
           const settled = yield* settleMember({
             memberID: member.id,
-            state:
-              terminal.state === "error"
-                ? "cancelled"
-                : member.lifecycle === "daemon"
-                  ? "idle"
-                  : "completed",
+            state: terminal.state === "error" ? "cancelled" : member.lifecycle === "daemon" ? "idle" : "completed",
             output: text,
             error: terminal.state === "error" ? text : undefined,
             failureCode: terminal.state === "error" && member.lifecycle !== "daemon" ? "provider_error" : undefined,
@@ -2140,7 +2103,10 @@ export const layer = Layer.effect(
               .where(eq(PartTable.message_id, terminal.messageID))
               .orderBy(PartTable.id)
               .all()
-              .pipe(Effect.orDie, Effect.map((rows) => rows.map(partRowToPart)))
+              .pipe(
+                Effect.orDie,
+                Effect.map((rows) => rows.map(partRowToPart)),
+              )
             const text = assistantResult(info, parts)?.text ?? ""
             yield* settleBackgroundOnce({
               sessionID: session.id,

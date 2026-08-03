@@ -54,9 +54,19 @@ describe("tool.team_create", () => {
           const def = yield* tool.init()
 
           const result = yield* def.execute({ name: "primary", goal: "Coordinate work" }, context(lead.id))
+          const active = yield* team.getActive(lead.id)
+          const { db } = yield* Database.Service
+          const stored = yield* db
+            .select({ protocolVersion: TeamTable.protocol_version })
+            .from(TeamTable)
+            .where(eq(TeamTable.lead_session_id, lead.id))
+            .get()
+            .pipe(Effect.orDie)
 
           expect(result.title).toBe("Team Created")
-          expect(Option.isSome(yield* team.getActive(lead.id))).toBe(true)
+          expect(Option.isSome(active)).toBe(true)
+          if (Option.isSome(active)) expect(active.value.protocol_version).toBe(1)
+          expect(stored?.protocolVersion).toBe(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

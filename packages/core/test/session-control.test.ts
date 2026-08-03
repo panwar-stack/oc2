@@ -469,10 +469,12 @@ describe("SessionControl", () => {
       const grandchild = yield* sessions.create({ location, parentID: child.id })
       const observed: (readonly SessionV2.ID[])[] = []
       const barrierCommitted: boolean[] = []
+      const provenances: SessionControl.PauseProvenance[] = []
 
-      const unregister = yield* control.registerInterrupter((sessionIDs) =>
+      const unregister = yield* control.registerInterrupter((sessionIDs, provenance) =>
         Effect.gen(function* () {
           observed.push(sessionIDs)
+          provenances.push(provenance)
           // The durable barrier must already be visible when interruption is signalled.
           barrierCommitted.push((yield* control.state(root.id).pipe(Effect.orDie)).paused)
           return sessionIDs.filter((sessionID) => sessionID !== grandchild.id)
@@ -483,6 +485,16 @@ describe("SessionControl", () => {
 
       expect(observed).toHaveLength(1)
       expect(barrierCommitted).toEqual([true])
+      expect(provenances).toEqual([
+        {
+          _tag: "SessionControl.PauseProvenance",
+          rootSessionID: root.id,
+          cascadeID: paused.cascadeID,
+          generation: paused.generation,
+        },
+      ])
+      expect(SessionControl.isPauseProvenance(provenances[0])).toBeTrue()
+      expect(SessionControl.isPauseProvenance({ ...provenances[0], generation: "1" })).toBeFalse()
       // Descendants are signalled before their root.
       expect(observed[0]?.indexOf(grandchild.id)).toBeLessThan(observed[0]!.indexOf(root.id))
       expect(observed[0]?.indexOf(child.id)).toBeLessThan(observed[0]!.indexOf(root.id))

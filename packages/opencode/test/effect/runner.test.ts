@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Fiber, Latch, Ref, Scope } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Latch, Option, Ref, Scope } from "effect"
 import { Runner } from "@/effect/runner"
 import { it } from "../lib/effect"
 
@@ -246,6 +246,131 @@ describe("Runner", () => {
         expect(yield* Fiber.join(replacement).pipe(Effect.timeout("100 millis"))).toBe("replacement")
         expect(runner.busy).toBe(false)
       }).pipe(Effect.ensuring(Deferred.succeed(releaseFinalizer, undefined).pipe(Effect.ignore)))
+    }),
+  )
+
+  it.live(
+    "suspendWith keeps exact provenance until the target fiber finishes unwinding",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const observed = yield* Deferred.make<Option.Option<unknown>>()
+      const release = yield* Deferred.make<void>()
+      const provenance = { source: "pause", generation: 7 }
+      const runner = Runner.make<string>(s)
+      const caller = yield* runner
+        .ensureRunning(
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(
+              Runner.currentSuspension.pipe(
+                Effect.tap((current) => Deferred.succeed(observed, current)),
+                Effect.andThen(Deferred.await(release)),
+              ),
+            ),
+            Effect.as("never"),
+          ),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+
+      yield* runner.suspendWith(provenance)
+
+      const current = yield* Deferred.await(observed).pipe(Effect.timeout("100 millis"))
+      expect(Option.isSome(current)).toBe(true)
+      if (Option.isSome(current)) expect(current.value).toBe(provenance)
+      expect(runner.state._tag).toBe("SuspendingRun")
+
+      yield* Deferred.succeed(release, undefined)
+      yield* waitForState(runner, "Idle")
+      expect(Option.isNone(yield* Runner.currentSuspension)).toBe(true)
+      const exit = yield* Fiber.await(caller)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Runner.Suspended)
+    }),
+  )
+
+  it.live(
+    "a newer suspension blocks queued work after the interrupted run unwinds",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const finalizerStarted = yield* Deferred.make<void>()
+      const inspectSuspension = yield* Deferred.make<void>()
+      const observed = yield* Deferred.make<Option.Option<unknown>>()
+      const releaseFinalizer = yield* Deferred.make<void>()
+      const replacementStarted = yield* Deferred.make<void>()
+      const releaseReplacement = yield* Deferred.make<void>()
+      const pauseA = { source: "pause-a", generation: 1 }
+      const pauseB = { source: "pause-b", generation: 2 }
+
+      yield* Effect.gen(function* () {
+        const runner = Runner.make<string>(s)
+        const caller = yield* runner
+          .ensureRunning(
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(finalizerStarted, undefined)
+                  yield* Deferred.await(inspectSuspension)
+                  yield* Runner.currentSuspension.pipe(Effect.tap((current) => Deferred.succeed(observed, current)))
+                  yield* Deferred.await(releaseFinalizer)
+                }),
+              ),
+              Effect.as("never"),
+            ),
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+
+        yield* runner.suspendWith(pauseA)
+        yield* Deferred.await(finalizerStarted)
+        const callerExit = yield* Fiber.await(caller)
+        expect(Exit.isFailure(callerExit)).toBe(true)
+        if (Exit.isFailure(callerExit)) expect(Cause.squash(callerExit.cause)).toBeInstanceOf(Runner.Suspended)
+
+        expect(
+          yield* runner.wake(
+            Deferred.succeed(replacementStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseReplacement)),
+              Effect.as("replacement"),
+            ),
+          ),
+        ).toBe(true)
+        expect(runner.state._tag).toBe("SuspendingRunThenRun")
+
+        yield* runner.suspendWith(pauseB)
+        // The observer event for the same durable pause has no provenance and must not erase pause B.
+        yield* runner.suspend
+        yield* Deferred.succeed(inspectSuspension, undefined)
+        const current = yield* Deferred.await(observed)
+        expect(Option.isSome(current)).toBe(true)
+        if (Option.isSome(current)) expect(current.value).toBe(pauseB)
+
+        yield* Deferred.succeed(releaseFinalizer, undefined)
+        yield* waitForState(runner, "SuspendedRun")
+        expect(yield* Deferred.isDone(replacementStarted)).toBe(false)
+
+        // A wake admitted after pause B is released resumes the already queued run and drops its new work.
+        expect(yield* runner.wake(Effect.die("replacement work must not be replaced"))).toBe(false)
+        yield* Deferred.await(replacementStarted)
+        expect(runner.state._tag).toBe("Running")
+
+        yield* Deferred.succeed(releaseReplacement, undefined)
+        yield* waitForState(runner, "Idle")
+      }).pipe(
+        Effect.ensuring(
+          Effect.all(
+            [
+              Deferred.succeed(inspectSuspension, undefined),
+              Deferred.succeed(releaseFinalizer, undefined),
+              Deferred.succeed(releaseReplacement, undefined),
+            ],
+            { discard: true },
+          ).pipe(Effect.ignore),
+        ),
+      )
     }),
   )
 

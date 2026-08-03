@@ -2,8 +2,11 @@ import { describe, expect } from "bun:test"
 import { PermissionV1 } from "@oc2-ai/core/v1/permission"
 import path from "path"
 import * as fs from "fs/promises"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { ApplyPatchTool } from "../../src/tool/apply_patch"
+import { EditTool } from "../../src/tool/edit"
+import { WriteTool } from "../../src/tool/write"
+import * as Tool from "../../src/tool/tool"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@oc2-ai/core/fs-util"
@@ -14,7 +17,7 @@ import { Truncate } from "@/tool/truncate"
 import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Session } from "@/session/session"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { Permission } from "../../src/permission"
 import { SessionCompoundToolPolicy } from "../../src/session/compound/tool-policy"
 import { Database } from "@oc2-ai/core/database/database"
@@ -49,8 +52,8 @@ const baseCtx = {
 
 type AskInput = {
   permission: string
-  patterns: string[]
-  always: string[]
+  patterns: readonly string[]
+  always: readonly string[]
   metadata: {
     diff: string
     filepath: string
@@ -72,6 +75,24 @@ type ToolCtx = typeof baseCtx & {
 
 const execute = Effect.fn("ApplyPatchToolTest.execute")(function* (params: { patchText: string }, ctx: ToolCtx) {
   const info = yield* ApplyPatchTool
+  const tool = yield* info.init()
+  return yield* tool.execute(params, ctx)
+})
+
+const executeEdit = Effect.fn("ApplyPatchToolTest.executeEdit")(function* (
+  params: Tool.InferParameters<typeof EditTool>,
+  ctx: Tool.Context,
+) {
+  const info = yield* EditTool
+  const tool = yield* info.init()
+  return yield* tool.execute(params, ctx)
+})
+
+const executeWrite = Effect.fn("ApplyPatchToolTest.executeWrite")(function* (
+  params: Tool.InferParameters<typeof WriteTool>,
+  ctx: Tool.Context,
+) {
+  const info = yield* WriteTool
   const tool = yield* info.init()
   return yield* tool.execute(params, ctx)
 })
@@ -117,6 +138,148 @@ const expectFailure = <A, E, R>(effect: Effect.Effect<A, E, R>, message?: string
   })
 
 const expectReadFailure = (filepath: string) => expectFailure(readText(filepath))
+
+const expectConcurrentPatchesPreserved = Effect.fnUntraced(function* (target: string, patchTarget = target) {
+  const realFs = yield* FSUtil.Service
+  yield* writeText(target, "top = 0\nmiddle = keep\nbottom = 0\n")
+
+  const firstAsk = yield* Deferred.make<void>()
+  const releaseFirst = yield* Deferred.make<void>()
+  let firstWaiting = false
+  let applyPatchAsks = 0
+  let targetRealPaths = 0
+  let targetReads = 0
+  const observedFs = FSUtil.Service.of({
+    ...realFs,
+    realPath: (file) =>
+      realFs.realPath(file).pipe(
+        Effect.tap(() => {
+          if (!firstWaiting || String(file) !== patchTarget) return Effect.void
+          targetRealPaths++
+          // The second matching call belongs to the independent mutation-key lookup. At this
+          // point the fixed implementation can safely wait for the first patch's lock.
+          return targetRealPaths === 2 ? Deferred.succeed(releaseFirst, undefined) : Effect.void
+        }),
+      ),
+    readFile: (file) =>
+      Effect.gen(function* () {
+        const content = yield* realFs.readFile(file)
+        if (firstWaiting && String(file) === patchTarget && ++targetReads === 1) {
+          // The old implementation reaches this read before it takes a lease. Release the first
+          // patch only after the stale bytes are captured, so the lost update is deterministic.
+          yield* Deferred.succeed(releaseFirst, undefined)
+        }
+        return content
+      }),
+  })
+  const concurrentCtx: ToolCtx = {
+    ...baseCtx,
+    ask: (input) =>
+      Effect.gen(function* () {
+        if (input.permission !== "apply_patch" || ++applyPatchAsks !== 1) return
+        firstWaiting = true
+        yield* Deferred.succeed(firstAsk, undefined)
+        yield* Deferred.await(releaseFirst)
+      }),
+  }
+  const runObserved = (patchText: string) =>
+    execute({ patchText }, concurrentCtx).pipe(Effect.provideService(FSUtil.Service, observedFs))
+
+  const first = yield* runObserved(
+    ["*** Begin Patch", `*** Update File: ${patchTarget}`, "@@", "-top = 0", "+top = 1", "*** End Patch"].join("\n"),
+  ).pipe(Effect.forkScoped)
+  yield* awaitWithTimeout(Deferred.await(firstAsk), "first patch did not reach permission")
+
+  const second = yield* runObserved(
+    ["*** Begin Patch", `*** Update File: ${patchTarget}`, "@@", "-bottom = 0", "+bottom = 2", "*** End Patch"].join(
+      "\n",
+    ),
+  ).pipe(Effect.forkScoped)
+
+  yield* awaitWithTimeout(Effect.all([Fiber.join(first), Fiber.join(second)]), "concurrent patches did not complete")
+  expect(applyPatchAsks).toBe(2)
+  expect(yield* readText(target)).toBe("top = 1\nmiddle = keep\nbottom = 2\n")
+})
+
+const expectMixedMutationPreserved = Effect.fnUntraced(function* (
+  mutation: "edit" | "write",
+  target: string,
+  patchTarget = target,
+) {
+  const realFs = yield* FSUtil.Service
+  yield* writeText(target, "top = 0\nmiddle = keep\nbottom = 0\n")
+
+  const firstAsk = yield* Deferred.make<void>()
+  const releaseFirst = yield* Deferred.make<void>()
+  const secondReady = yield* Deferred.make<void>()
+  const releasePatch = yield* Deferred.make<void>()
+  let firstWaiting = false
+  let mutationAsks = 0
+  let patchAsks = 0
+  let patchTargetRealPaths = 0
+  const observedFs = FSUtil.Service.of({
+    ...realFs,
+    realPath: (file) =>
+      realFs.realPath(file).pipe(
+        Effect.tap(() => {
+          if (!firstWaiting || String(file) !== patchTarget) return Effect.void
+          patchTargetRealPaths++
+          return patchTargetRealPaths === 2 ? Deferred.succeed(secondReady, undefined) : Effect.void
+        }),
+      ),
+  })
+  const mutationCtx: Tool.Context = {
+    ...baseCtx,
+    ask: (input) =>
+      Effect.gen(function* () {
+        if (input.permission !== "edit" || ++mutationAsks !== 1) return
+        firstWaiting = true
+        yield* Deferred.succeed(firstAsk, undefined)
+        yield* Deferred.await(releaseFirst)
+      }),
+  }
+  const patchCtx: ToolCtx = {
+    ...baseCtx,
+    ask: (input) =>
+      Effect.gen(function* () {
+        if (input.permission !== "apply_patch") return
+        patchAsks++
+        yield* Deferred.await(releasePatch)
+      }),
+  }
+  const firstEffect =
+    mutation === "edit"
+      ? executeEdit({ filePath: target, oldString: "top = 0", newString: "top = 1" }, mutationCtx).pipe(Effect.asVoid)
+      : executeWrite({ filePath: target, content: "top = 1\nmiddle = keep\nbottom = 0\n" }, mutationCtx).pipe(
+          Effect.asVoid,
+        )
+  const first = yield* firstEffect.pipe(Effect.provideService(FSUtil.Service, observedFs), Effect.forkScoped)
+  yield* awaitWithTimeout(Deferred.await(firstAsk), `${mutation} did not reach permission`)
+
+  const patch = yield* execute(
+    {
+      patchText: [
+        "*** Begin Patch",
+        `*** Update File: ${patchTarget}`,
+        "@@",
+        "-bottom = 0",
+        "+bottom = 2",
+        "*** End Patch",
+      ].join("\n"),
+    },
+    patchCtx,
+  ).pipe(Effect.provideService(FSUtil.Service, observedFs), Effect.forkScoped)
+
+  yield* awaitWithTimeout(Deferred.await(secondReady), "apply_patch did not finish mutation-key derivation")
+  yield* Deferred.succeed(releaseFirst, undefined)
+  yield* awaitWithTimeout(Fiber.join(first), `${mutation} did not complete`)
+  yield* Deferred.succeed(releasePatch, undefined)
+  yield* awaitWithTimeout(Fiber.join(patch), "apply_patch did not complete")
+
+  expect(mutationAsks).toBe(1)
+  expect(patchAsks).toBe(1)
+  expect(yield* readText(target)).toBe("top = 1\nmiddle = keep\nbottom = 2\n")
+})
 
 describe("tool.apply_patch freeform", () => {
   it.live("applies absolute patch paths inside a registered secondary root", () =>
@@ -787,6 +950,69 @@ EOF`
     }),
   )
 
+  describe("concurrent patching", () => {
+    it.instance("preserves concurrent patches to different sections of the same file", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const target = path.join(test.directory, "concurrent.txt")
+        yield* expectConcurrentPatchesPreserved(target)
+      }),
+    )
+
+    it.instance("preserves concurrent patches to an external file", () =>
+      Effect.gen(function* () {
+        const external = yield* tmpdirScoped()
+        const target = path.join(external, "concurrent.txt")
+        yield* expectConcurrentPatchesPreserved(target)
+      }),
+    )
+
+    it.instance("preserves concurrent patches through a symlink that escapes the workspace", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const external = yield* tmpdirScoped()
+        const target = path.join(external, "concurrent.txt")
+        const linked = path.join(test.directory, "linked-external")
+        yield* Effect.promise(() => fs.symlink(external, linked, process.platform === "win32" ? "junction" : "dir"))
+        yield* expectConcurrentPatchesPreserved(target, path.join(linked, "concurrent.txt"))
+      }),
+    )
+  })
+
+  describe("mixed-tool concurrent mutation", () => {
+    const expectExternalMutationPreserved = Effect.fnUntraced(function* (
+      mutation: "edit" | "write",
+      throughAlias: boolean,
+    ) {
+      const test = yield* TestInstance
+      const external = yield* tmpdirScoped()
+      const target = path.join(external, "mixed.txt")
+      if (!throughAlias) return yield* expectMixedMutationPreserved(mutation, target)
+
+      const aliasDirectory = path.join(test.directory, `mixed-${mutation}-alias`)
+      yield* Effect.promise(() =>
+        fs.symlink(external, aliasDirectory, process.platform === "win32" ? "junction" : "dir"),
+      )
+      yield* expectMixedMutationPreserved(mutation, target, path.join(aliasDirectory, "mixed.txt"))
+    })
+
+    it.instance("serializes apply_patch with edit on an external target", () =>
+      expectExternalMutationPreserved("edit", false),
+    )
+
+    it.instance("serializes apply_patch through an alias with edit on its external target", () =>
+      expectExternalMutationPreserved("edit", true),
+    )
+
+    it.instance("serializes apply_patch with write on an external target", () =>
+      expectExternalMutationPreserved("write", false),
+    )
+
+    it.instance("serializes apply_patch through an alias with write on its external target", () =>
+      expectExternalMutationPreserved("write", true),
+    )
+  })
+
   describe("reservation lease", () => {
     it.instance("allows the owning teammate to patch a reserved path", () =>
       Effect.gen(function* () {
@@ -966,7 +1192,116 @@ EOF`
         yield* expectReadFailure(destination)
       }),
     )
+
+    it.instance("denies a non-owner patch to a reserved file external to the caller root", () =>
+      Effect.gen(function* () {
+        const reserved = yield* reserveExternalTarget("patch-direct")
+        const asks: AskInput[] = []
+
+        const result = yield* execute(
+          {
+            patchText: [
+              "*** Begin Patch",
+              `*** Update File: ${reserved.target}`,
+              "@@",
+              "-old",
+              "+sneaky",
+              "*** End Patch",
+            ].join("\n"),
+          },
+          {
+            ...baseCtx,
+            sessionID: SessionID.make(reserved.otherSessionID),
+            ask: (input) =>
+              Effect.sync(() => {
+                asks.push(input)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Patch Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* readText(reserved.target)).toBe("old\n")
+      }),
+    )
+
+    it.instance("denies a non-owner patch through a cross-root symlink", () =>
+      Effect.gen(function* () {
+        const reserved = yield* reserveExternalTarget("patch-symlink")
+        const asks: AskInput[] = []
+
+        const result = yield* execute(
+          {
+            patchText: [
+              "*** Begin Patch",
+              `*** Update File: ${reserved.alias}`,
+              "@@",
+              "-old",
+              "+sneaky",
+              "*** End Patch",
+            ].join("\n"),
+          },
+          {
+            ...baseCtx,
+            sessionID: SessionID.make(reserved.otherSessionID),
+            ask: (input) =>
+              Effect.sync(() => {
+                asks.push(input)
+              }),
+          },
+        )
+
+        expect(result.title).toBe("Patch Failed")
+        expect(result.output).toContain("reserved")
+        expect(asks).toHaveLength(0)
+        expect(yield* readText(reserved.target)).toBe("old\n")
+      }),
+    )
   })
+})
+
+const reserveExternalTarget = Effect.fnUntraced(function* (name: string) {
+  const test = yield* TestInstance
+  const external = yield* tmpdirScoped()
+  const sessions = yield* Session.Service
+  const team = yield* Team.Service
+  const futil = yield* FSUtil.Service
+  const lead = yield* sessions.create({ title: `${name} Lead` })
+  const ownerSession = yield* sessions.create({ parentID: lead.id, title: `${name} Owner` })
+  const otherSession = yield* sessions.create({ parentID: lead.id, title: `${name} Other` })
+  yield* sessions.addRoot({ sessionID: ownerSession.id, directory: external })
+  const info = yield* team.create({ name, goal: "Lease", leadSessionID: lead.id })
+  const owner = yield* team.addMember({
+    teamID: info.id,
+    sessionID: ownerSession.id,
+    name: "owner",
+    agentType: "general",
+    rolePrompt: "Own",
+  })
+  const other = yield* team.addMember({
+    teamID: info.id,
+    sessionID: otherSession.id,
+    name: "other",
+    agentType: "general",
+    rolePrompt: "Other",
+  })
+  yield* team.updateMemberStatus(owner.id, "active")
+  yield* team.updateMemberStatus(other.id, "active")
+
+  const target = path.join(external, "reserved.txt")
+  yield* writeText(target, "old\n")
+  const aliasDirectory = path.join(test.directory, `${name}-alias`)
+  yield* Effect.promise(() => fs.symlink(external, aliasDirectory, process.platform === "win32" ? "junction" : "dir"))
+  const owned = yield* canonicalize(sessions, leaseContext(ownerSession.id), target).pipe(
+    Effect.provideService(FSUtil.Service, futil),
+  )
+  yield* team.createTask({ teamID: info.id, description: "Reserve external target", owned: [owned] })
+  const task = (yield* team.getTasks(info.id))[0]
+  if (!task) return yield* Effect.die(new Error("task missing"))
+  yield* team.claimTask(info.id, task.id, ownerSession.id)
+
+  return { target, alias: path.join(aliasDirectory, "reserved.txt"), otherSessionID: otherSession.id }
 })
 
 function leaseContext(sessionID: string): ToolCtx {

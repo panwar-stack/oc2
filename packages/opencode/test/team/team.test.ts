@@ -1,7 +1,14 @@
 import { describe, expect } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Latch, Layer, Option } from "effect"
 import { Team } from "@/team/team"
-import { TeamMessageRecipientTable, TeamMessageTable, TeamTable, TeamUsageEventTable } from "@/team/team.sql"
+import {
+  TeamMemberTable,
+  TeamMessageRecipientTable,
+  TeamMessageTable,
+  TeamTable,
+  TeamTaskTable,
+  TeamUsageEventTable,
+} from "@/team/team.sql"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import { and, eq, inArray, isNull } from "drizzle-orm"
 import { Bus } from "@/bus"
@@ -26,6 +33,7 @@ import type { TaskPromptOps } from "@/tool/task"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Database } from "@oc2-ai/core/database/database"
 import { Permission } from "@/permission"
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core/errors"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 
@@ -80,6 +88,11 @@ function unwrap<T>(opt: Option.Option<T>): T {
   if (Option.isNone(opt)) throw new Error("Option is None")
   return opt.value
 }
+
+const setLegacyProtocol = Effect.fnUntraced(function* (teamID: string) {
+  const { db } = yield* Database.Service
+  yield* db.update(TeamTable).set({ protocol_version: 0 }).where(eq(TeamTable.id, teamID)).run().pipe(Effect.orDie)
+})
 
 describe("team", () => {
   it.live("create team and enforce one active team per lead", () =>
@@ -163,6 +176,7 @@ describe("team", () => {
         const leadSessionID = "ses_test_lead_recreate"
 
         const first = yield* team.create({ name: "first-team", goal: "First goal", leadSessionID })
+        yield* setLegacyProtocol(first.id)
         yield* team.shutdown({ teamID: first.id, sessionID: leadSessionID })
 
         const second = yield* team.create({ name: "second-team", goal: "Second goal", leadSessionID })
@@ -195,16 +209,15 @@ describe("team", () => {
         Date.now = () => 123
         crypto.randomUUID = () => "ffffffff-ffff-4fff-8fff-ffffffffffff"
 
-        yield* Effect.acquireRelease(
-          Effect.void,
-          () =>
-            Effect.sync(() => {
-              Date.now = originalNow
-              crypto.randomUUID = originalRandomUUID
-            }),
+        yield* Effect.acquireRelease(Effect.void, () =>
+          Effect.sync(() => {
+            Date.now = originalNow
+            crypto.randomUUID = originalRandomUUID
+          }),
         )
 
         const first = yield* team.create({ name: "first-team", goal: "First goal", leadSessionID })
+        yield* setLegacyProtocol(first.id)
         yield* team.shutdown({ teamID: first.id, sessionID: leadSessionID })
         crypto.randomUUID = () => "00000000-0000-4000-8000-000000000000"
         yield* team.create({ name: "second-team", goal: "Second goal", leadSessionID })
@@ -224,6 +237,7 @@ describe("team", () => {
         const leadSessionID = "ses_test_lead_closed_lookup"
 
         const created = yield* team.create({ name: "closed-team", goal: "Goal", leadSessionID })
+        yield* setLegacyProtocol(created.id)
         yield* team.shutdown({ teamID: created.id, sessionID: leadSessionID })
 
         const active = yield* team.getActive(leadSessionID)
@@ -265,6 +279,7 @@ describe("team", () => {
 
         yield* team.updateMemberStatus(completed.id, "completed")
         yield* team.updateMemberStatus(active.id, "active")
+        yield* setLegacyProtocol(created.id)
 
         const unsubscribe = yield* bus.subscribeAllCallback((event) => {
           if (event.type !== "team.member.updated") return
@@ -340,6 +355,57 @@ describe("team", () => {
         const memberContext = yield* team.getContext("ses_test_child_1")
         expect(Option.isSome(memberContext)).toBe(true)
         expect(unwrap(memberContext).member?.id).toBe(member.id)
+      }),
+    ),
+  )
+
+  it.live("rejects member and task inserts after the team is no longer active", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const { db } = yield* Database.Service
+        const info = yield* team.create({
+          name: "closed-admission",
+          goal: "Reject late writes",
+          leadSessionID: "ses_closed_admission_lead",
+        })
+        yield* db.update(TeamTable).set({ status: "closed" }).where(eq(TeamTable.id, info.id)).run().pipe(Effect.orDie)
+
+        const memberError = yield* team
+          .addMember({
+            teamID: info.id,
+            sessionID: "ses_closed_admission_member",
+            name: "late-member",
+            agentType: "general",
+            rolePrompt: "Too late",
+          })
+          .pipe(Effect.flip)
+        const taskError = yield* team.createTask({ teamID: info.id, description: "Late plain task" }).pipe(Effect.flip)
+        const ownedTaskError = yield* team
+          .createTask({
+            teamID: info.id,
+            description: "Late owned task",
+            owned: [{ rootKey: "/work", pathKey: "/work/late.txt", displayPath: "late.txt" }],
+          })
+          .pipe(Effect.flip)
+
+        expect(memberError).toBeInstanceOf(Team.TeamNotActive)
+        expect(taskError).toBeInstanceOf(Team.TeamNotActive)
+        expect(ownedTaskError).toBeInstanceOf(Team.TeamNotActive)
+        expect(
+          yield* db.select().from(TeamMemberTable).where(eq(TeamMemberTable.team_id, info.id)).all().pipe(Effect.orDie),
+        ).toHaveLength(0)
+        expect(
+          yield* db.select().from(TeamTaskTable).where(eq(TeamTaskTable.team_id, info.id)).all().pipe(Effect.orDie),
+        ).toHaveLength(0)
+        expect(
+          yield* db
+            .select()
+            .from(TeamFileOwnershipTable)
+            .where(eq(TeamFileOwnershipTable.team_id, info.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
       }),
     ),
   )
@@ -535,9 +601,9 @@ describe("team", () => {
         const claimed = yield* team.claimTask(info.id, task.id, "ses_owned_worker")
         expect(Option.isSome(claimed)).toBe(true)
         expect(unwrap(claimed).status).toBe("in_progress")
-        expect(unwrap(claimed).reservations.every((reservation) => reservation.ownerSessionID === "ses_owned_worker")).toBe(
-          true,
-        )
+        expect(
+          unwrap(claimed).reservations.every((reservation) => reservation.ownerSessionID === "ses_owned_worker"),
+        ).toBe(true)
 
         // A foreign session cannot complete.
         const foreign = yield* team
@@ -727,6 +793,42 @@ describe("team", () => {
     ),
   )
 
+  it.live("sendMessage atomically rejects terminal finite recipients", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({
+          name: "terminal-message-admission",
+          goal: "Reject terminal delivery",
+          leadSessionID: "ses_terminal_message_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_terminal_message_member",
+          name: "done",
+          agentType: "general",
+          rolePrompt: "Finish",
+        })
+        yield* team.updateMemberStatus(member.id, "completed", "done")
+        const before = yield* team.getMessages(info.id)
+
+        const error = yield* team
+          .sendMessage({
+            teamID: info.id,
+            sender: info.lead_session_id,
+            recipients: [member.session_id],
+            body: "Do more work",
+          })
+          .pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(Team.MessageToTerminalMember)
+        expect(error.message).toContain("completed")
+        expect(yield* team.getMessages(info.id)).toHaveLength(before.length)
+        expect(yield* team.getPendingMessages(member.session_id, info.id)).toHaveLength(0)
+      }),
+    ),
+  )
+
   it.live("hasPendingMailboxMessages reports pending rows without claiming them", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
@@ -777,6 +879,7 @@ describe("team", () => {
           rolePrompt: "Work",
         })
 
+        yield* setLegacyProtocol(teamInfo.id)
         yield* team.shutdown({ teamID: teamInfo.id, sessionID: leadSessionID })
 
         const active = yield* team.getActive(leadSessionID)
@@ -1055,6 +1158,69 @@ describe("team", () => {
     ),
   )
 
+  it.live("plan approval rejects terminal members without changing their plan state", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({
+          name: "terminal-plan",
+          goal: "Reject terminal approval",
+          leadSessionID: "ses_terminal_plan_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_terminal_plan_member",
+          name: "planner",
+          agentType: "general",
+          rolePrompt: "Plan",
+          planMode: true,
+          workMode: "plan",
+        })
+        yield* team.updateMemberStatus(member.id, "completed", "already done")
+
+        const approved = yield* team.approveMemberPlan(member.id)
+        const current = unwrap(yield* team.getMemberBySession(member.session_id))
+
+        expect(Option.isNone(approved)).toBe(true)
+        expect(current.status).toBe("completed")
+        expect(current.plan_mode).toBe(true)
+        expect(current.work_mode).toBe("plan")
+      }),
+    ),
+  )
+
+  it.live("plan approval rejects a nonterminal member after team closure", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const { db } = yield* Database.Service
+        const info = yield* team.create({
+          name: "closed-plan",
+          goal: "Reject closed approval",
+          leadSessionID: "ses_closed_plan_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_closed_plan_member",
+          name: "planner",
+          agentType: "general",
+          rolePrompt: "Plan",
+          planMode: true,
+          workMode: "plan",
+        })
+        yield* db.update(TeamTable).set({ status: "closed" }).where(eq(TeamTable.id, info.id)).run().pipe(Effect.orDie)
+
+        const approved = yield* team.approveMemberPlan(member.id)
+        const current = unwrap(yield* team.getMemberBySession(member.session_id))
+
+        expect(Option.isNone(approved)).toBe(true)
+        expect(current.status).toBe("starting")
+        expect(current.plan_mode).toBe(true)
+        expect(current.work_mode).toBe("plan")
+      }),
+    ),
+  )
+
   it.live("broadcast sends message to all active members", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
@@ -1116,12 +1282,25 @@ describe("team", () => {
     ),
   )
 
-  it.live("new teams start on protocol 0", () =>
+  it.live("new teams persist protocol 1", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const team = yield* Team.Service
-        const created = yield* team.create({ name: "protocol-zero", goal: "Stay on protocol 0", leadSessionID: "ses_test_lead_protocol_0" })
-        expect(created.protocol_version).toBe(0)
+        const { db } = yield* Database.Service
+        const created = yield* team.create({
+          name: "protocol-one",
+          goal: "Use protocol 1",
+          leadSessionID: "ses_test_lead_protocol_1",
+        })
+        const stored = yield* db
+          .select({ protocolVersion: TeamTable.protocol_version })
+          .from(TeamTable)
+          .where(eq(TeamTable.id, created.id))
+          .get()
+          .pipe(Effect.orDie)
+
+        expect(created.protocol_version).toBe(1)
+        expect(stored?.protocolVersion).toBe(1)
       }),
     ),
   )
@@ -1141,6 +1320,7 @@ describe("team", () => {
         })
         yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
 
+        yield* setLegacyProtocol(info.id)
         yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
 
         const members = yield* team.getMembers(info.id)
@@ -1173,6 +1353,7 @@ describe("team", () => {
         yield* team.updateMemberStatus(failed.id, "failed", { failureCode: "provider_error" })
         yield* team.updateMemberStatus(active.id, "active")
 
+        yield* setLegacyProtocol(info.id)
         yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
 
         const members = yield* team.getMembers(info.id)
@@ -1297,6 +1478,48 @@ describe("team", () => {
       expect(filtered.find((r) => r.permission === "apply_patch")).toBeUndefined()
     }),
   )
+
+  it.live("maps an updateTask database query failure to a defect", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const database = yield* Database.Service
+        const events = yield* EventV2Bridge.Service
+        const runState = yield* SessionRunState.Service
+        const info = yield* team.create({ name: "db-failure", goal: "Fail update", leadSessionID: "ses_db_lead" })
+        const task = yield* team.createTask({ teamID: info.id, description: "Stay pending" })
+        const failure = new EffectDrizzleQueryError({
+          query: "UPDATE team_task",
+          params: [],
+          cause: Cause.fail(new Error("injected database failure")),
+        })
+        const failingDb = new Proxy(database.db, {
+          get(target, property, receiver) {
+            if (property === "transaction") return () => Effect.fail(failure)
+            return Reflect.get(target, property, receiver)
+          },
+        })
+        const failingLayer = Team.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(Database.Service, Database.Service.of({ db: failingDb })),
+              Layer.succeed(EventV2Bridge.Service, events),
+              Layer.succeed(SessionRunState.Service, runState),
+            ),
+          ),
+        )
+        const failingTeam = yield* Team.Service.pipe(Effect.provide(Layer.fresh(failingLayer)))
+
+        const exit = yield* failingTeam.updateTask(info.id, task.id, { status: "completed" }).pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) throw new Error("Expected updateTask to fail")
+        expect(Cause.hasDies(exit.cause)).toBe(true)
+        expect(Cause.hasFails(exit.cause)).toBe(false)
+        expect((yield* team.getTask(info.id, task.id)).pipe(Option.getOrThrow).status).toBe("pending")
+      }),
+    ),
+  )
 })
 
 describe("team revision", () => {
@@ -1313,7 +1536,11 @@ describe("team revision", () => {
             .get()
             .pipe(Effect.orDie)
 
-        const info = yield* team.create({ name: "revision-team", goal: "Track revisions", leadSessionID: "ses_rev_lead" })
+        const info = yield* team.create({
+          name: "revision-team",
+          goal: "Track revisions",
+          leadSessionID: "ses_rev_lead",
+        })
         expect((yield* revisionOf(info.id))?.revision).toBe(0)
 
         const member = yield* team.addMember({
@@ -1388,8 +1615,18 @@ describe("team terminal handoff atomicity", () => {
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const team = yield* Team.Service
-        const info = yield* team.create({ name: "handoff-atomic", goal: "Atomic", leadSessionID: "ses_handoff_atomic_lead" })
-        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_atomic_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        const info = yield* team.create({
+          name: "handoff-atomic",
+          goal: "Atomic",
+          leadSessionID: "ses_handoff_atomic_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_handoff_atomic_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
         const before = (yield* revisionOf(info.id)) ?? -1
 
         yield* team.updateMemberStatus(member.id, "completed", "done result")
@@ -1411,8 +1648,18 @@ describe("team terminal handoff atomicity", () => {
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const team = yield* Team.Service
-        const info = yield* team.create({ name: "handoff-idempotent", goal: "Idempotent", leadSessionID: "ses_handoff_idem_lead" })
-        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_idem_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        const info = yield* team.create({
+          name: "handoff-idempotent",
+          goal: "Idempotent",
+          leadSessionID: "ses_handoff_idem_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_handoff_idem_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
         const before = (yield* revisionOf(info.id)) ?? -1
 
         yield* team.updateMemberStatus(member.id, "completed", "first")
@@ -1432,8 +1679,18 @@ describe("team terminal handoff atomicity", () => {
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const team = yield* Team.Service
-        const info = yield* team.create({ name: "handoff-cancelled", goal: "Cancelled", leadSessionID: "ses_handoff_cancel_lead" })
-        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_cancel_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        const info = yield* team.create({
+          name: "handoff-cancelled",
+          goal: "Cancelled",
+          leadSessionID: "ses_handoff_cancel_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_handoff_cancel_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
 
         yield* team.updateMemberStatus(member.id, "cancelled", { failureCode: "provider_error", result: "boom" })
 
@@ -1454,8 +1711,18 @@ describe("team terminal handoff atomicity", () => {
       Effect.gen(function* () {
         const team = yield* Team.Service
         const { db } = yield* Database.Service
-        const info = yield* team.create({ name: "handoff-rollback", goal: "Rollback", leadSessionID: "ses_handoff_rb_lead" })
-        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_rb_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        const info = yield* team.create({
+          name: "handoff-rollback",
+          goal: "Rollback",
+          leadSessionID: "ses_handoff_rb_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_handoff_rb_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
         // Force the in-transaction notification insert to conflict on the deterministic message
         // primary key: the status write must roll back with it.
         yield* db
@@ -1488,8 +1755,18 @@ describe("team terminal handoff atomicity", () => {
       Effect.gen(function* () {
         const team = yield* Team.Service
         const bus = yield* Bus.Service
-        const info = yield* team.create({ name: "handoff-events", goal: "Events", leadSessionID: "ses_handoff_evt_lead" })
-        const member = yield* team.addMember({ teamID: info.id, sessionID: "ses_handoff_evt_member", name: "worker", agentType: "general", rolePrompt: "Work" })
+        const info = yield* team.create({
+          name: "handoff-events",
+          goal: "Events",
+          leadSessionID: "ses_handoff_evt_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_handoff_evt_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
 
         const seen: string[] = []
         const bothReceived = yield* Deferred.make<void>()
@@ -1579,99 +1856,105 @@ describe("team shutdown admission", () => {
     ),
   )
 
-  it.live("protocol-0 normal shutdown closes atomically, releases tasks, preserves mail, and does not bump revision", () =>
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const team = yield* Team.Service
-        const info = yield* team.create({ name: "protocol-0-close", goal: "Close", leadSessionID })
-        const active = yield* team.addMember({
-          teamID: info.id,
-          sessionID: "ses_p0_active",
-          name: "active",
-          agentType: "general",
-          rolePrompt: "Work",
-        })
-        const completed = yield* team.addMember({
-          teamID: info.id,
-          sessionID: "ses_p0_completed",
-          name: "done",
-          agentType: "general",
-          rolePrompt: "Finish",
-        })
-        yield* team.updateMemberStatus(active.id, "active")
-        yield* team.updateMemberStatus(completed.id, "completed")
-        const pendingTask = yield* team.createTask({ teamID: info.id, description: "Pending task" })
-        const ownedTask = yield* team.createTask({
-          teamID: info.id,
-          description: "Owned task",
-          owned: [
-            { rootKey: "/work", pathKey: "/work/p0-a.txt", displayPath: "p0-a.txt" },
-            { rootKey: "/work", pathKey: "/work/p0-b.txt", displayPath: "p0-b.txt" },
-          ],
-        })
-        yield* team.claimTask(info.id, ownedTask.id, "ses_p0_active")
-        // Unread mailbox row: must survive shutdown untouched.
-        yield* team.sendMessage({
-          teamID: info.id,
-          sender: leadSessionID,
-          recipients: [active.session_id],
-          body: "Read this later",
-        })
-        const before = (yield* revisionOf(info.id)) ?? -1
-        const { db } = yield* Database.Service
-        const recipientBefore = yield* db
-          .select()
-          .from(TeamMessageRecipientTable)
-          .where(and(eq(TeamMessageRecipientTable.team_id, info.id), eq(TeamMessageRecipientTable.recipient, active.session_id)))
-          .all()
-          .pipe(Effect.orDie)
-        // One unread recipient row for the explicit message (the completed-member auto-notification
-        // targets the lead and is separate). It must survive shutdown untouched.
-        expect(recipientBefore).toHaveLength(1)
-        expect(recipientBefore[0]?.delivery_status).toBe("pending")
-        const totalRecipientsBefore = (
-          yield* db
+  it.live(
+    "protocol-0 normal shutdown closes atomically, releases tasks, preserves mail, and does not bump revision",
+    () =>
+      provideTmpdirInstance(() =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const info = yield* team.create({ name: "protocol-0-close", goal: "Close", leadSessionID })
+          yield* setLegacyProtocol(info.id)
+          const active = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_p0_active",
+            name: "active",
+            agentType: "general",
+            rolePrompt: "Work",
+          })
+          const completed = yield* team.addMember({
+            teamID: info.id,
+            sessionID: "ses_p0_completed",
+            name: "done",
+            agentType: "general",
+            rolePrompt: "Finish",
+          })
+          yield* team.updateMemberStatus(active.id, "active")
+          yield* team.updateMemberStatus(completed.id, "completed")
+          const pendingTask = yield* team.createTask({ teamID: info.id, description: "Pending task" })
+          const ownedTask = yield* team.createTask({
+            teamID: info.id,
+            description: "Owned task",
+            owned: [
+              { rootKey: "/work", pathKey: "/work/p0-a.txt", displayPath: "p0-a.txt" },
+              { rootKey: "/work", pathKey: "/work/p0-b.txt", displayPath: "p0-b.txt" },
+            ],
+          })
+          yield* team.claimTask(info.id, ownedTask.id, "ses_p0_active")
+          // Unread mailbox row: must survive shutdown untouched.
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: leadSessionID,
+            recipients: [active.session_id],
+            body: "Read this later",
+          })
+          const before = (yield* revisionOf(info.id)) ?? -1
+          const { db } = yield* Database.Service
+          const recipientBefore = yield* db
+            .select()
+            .from(TeamMessageRecipientTable)
+            .where(
+              and(
+                eq(TeamMessageRecipientTable.team_id, info.id),
+                eq(TeamMessageRecipientTable.recipient, active.session_id),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          // One unread recipient row for the explicit message (the completed-member auto-notification
+          // targets the lead and is separate). It must survive shutdown untouched.
+          expect(recipientBefore).toHaveLength(1)
+          expect(recipientBefore[0]?.delivery_status).toBe("pending")
+          const totalRecipientsBefore = (yield* db
+            .select()
+            .from(TeamMessageRecipientTable)
+            .where(eq(TeamMessageRecipientTable.team_id, info.id))
+            .all()
+            .pipe(Effect.orDie)).length
+
+          const result = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
+
+          expect(result.cancelledMembers).toBe(1)
+          expect(result.cancelledTasks).toBe(2)
+          expect(result.releasedReservations).toBe(2)
+          expect(result.sessionCancellationFailures).toBe(0)
+
+          const after = unwrap(yield* team.get(info.id))
+          expect(after.status).toBe("closed")
+          expect(yield* revisionOf(info.id)).toBe(before)
+
+          const members = yield* team.getMembers(info.id)
+          expect(members.find((member) => member.id === active.id)?.status).toBe("cancelled")
+          expect(members.find((member) => member.id === completed.id)?.status).toBe("completed")
+
+          const tasks = yield* team.getTasks(info.id)
+          expect(tasks.find((task) => task.id === pendingTask.id)?.status).toBe("cancelled")
+          const cancelledOwned = tasks.find((task) => task.id === ownedTask.id)
+          expect(cancelledOwned?.status).toBe("cancelled")
+          expect(cancelledOwned?.reservations.every((reservation) => reservation.timeReleased !== null)).toBe(true)
+
+          const recipientAfter = yield* db
             .select()
             .from(TeamMessageRecipientTable)
             .where(eq(TeamMessageRecipientTable.team_id, info.id))
             .all()
             .pipe(Effect.orDie)
-        ).length
-
-        const result = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
-
-        expect(result.cancelledMembers).toBe(1)
-        expect(result.cancelledTasks).toBe(2)
-        expect(result.releasedReservations).toBe(2)
-        expect(result.sessionCancellationFailures).toBe(0)
-
-        const after = unwrap(yield* team.get(info.id))
-        expect(after.status).toBe("closed")
-        expect((yield* revisionOf(info.id))).toBe(before)
-
-        const members = yield* team.getMembers(info.id)
-        expect(members.find((member) => member.id === active.id)?.status).toBe("cancelled")
-        expect(members.find((member) => member.id === completed.id)?.status).toBe("completed")
-
-        const tasks = yield* team.getTasks(info.id)
-        expect(tasks.find((task) => task.id === pendingTask.id)?.status).toBe("cancelled")
-        const cancelledOwned = tasks.find((task) => task.id === ownedTask.id)
-        expect(cancelledOwned?.status).toBe("cancelled")
-        expect(cancelledOwned?.reservations.every((reservation) => reservation.timeReleased !== null)).toBe(true)
-
-        const recipientAfter = yield* db
-          .select()
-          .from(TeamMessageRecipientTable)
-          .where(eq(TeamMessageRecipientTable.team_id, info.id))
-          .all()
-          .pipe(Effect.orDie)
-        // Unread mailbox rows are preserved: the same recipient rows exist with the same state.
-        expect(recipientAfter).toHaveLength(totalRecipientsBefore)
-        const explicitAfter = recipientAfter.find((row) => row.recipient === active.session_id)
-        expect(explicitAfter?.delivery_status).toBe("pending")
-        expect((yield* team.getMessages(info.id))).toHaveLength(2)
-      }),
-    ),
+          // Unread mailbox rows are preserved: the same recipient rows exist with the same state.
+          expect(recipientAfter).toHaveLength(totalRecipientsBefore)
+          const explicitAfter = recipientAfter.find((row) => row.recipient === active.session_id)
+          expect(explicitAfter?.delivery_status).toBe("pending")
+          expect(yield* team.getMessages(info.id)).toHaveLength(2)
+        }),
+      ),
   )
 
   it.live("protocol-1 normal shutdown without a current final report is rejected", () =>
@@ -1779,9 +2062,7 @@ describe("team shutdown admission", () => {
           .all()
           .pipe(Effect.orDie)
         expect(events).toHaveLength(1)
-        expect(events[0]?.metadata).toEqual(
-          expect.objectContaining({ reason: "lead abandoned the team", force: true }),
-        )
+        expect(events[0]?.metadata).toEqual(expect.objectContaining({ reason: "lead abandoned the team", force: true }))
       }),
     ),
   )
@@ -1837,6 +2118,7 @@ describe("team shutdown admission", () => {
       Effect.gen(function* () {
         const team = yield* Team.Service
         const info = yield* team.create({ name: "double-close", goal: "Close", leadSessionID })
+        yield* setLegacyProtocol(info.id)
         yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
 
         const error = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID }).pipe(Effect.flip)
@@ -1858,6 +2140,7 @@ describe("team shutdown admission", () => {
           agentType: "general",
           rolePrompt: "Work",
         })
+        yield* setLegacyProtocol(info.id)
         yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
 
         const error = yield* team
@@ -1895,9 +2178,7 @@ describe("team shutdown session cancellation", () => {
     assertNotBusy: () => Effect.void,
     assertNotSuspended: () => Effect.void,
     cancel: (sessionID) =>
-      sessionID === SessionID.make(failSessionID)
-        ? Effect.die(new Error("simulated cancel failure"))
-        : Effect.void,
+      sessionID === SessionID.make(failSessionID) ? Effect.die(new Error("simulated cancel failure")) : Effect.void,
     suspend: () => Effect.succeed(false),
     ensureRunning: () => Effect.void as unknown as Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
     wake: () => Effect.succeed(false),
@@ -1952,6 +2233,7 @@ describe("team shutdown session cancellation", () => {
         })
         yield* team.updateMemberStatus(ok.id, "active")
 
+        yield* setLegacyProtocol(info.id)
         const result = yield* team.shutdown({ teamID: info.id, sessionID: leadSessionID })
 
         expect(result.cancelledMembers).toBe(2)

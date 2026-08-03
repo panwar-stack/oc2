@@ -119,20 +119,27 @@ export const layer = Layer.effect(
       )
     })
 
-    const suspend = Effect.fn("SessionRunState.suspend")(function* (sessionID: SessionID) {
+    const suspendWith = Effect.fn("SessionRunState.suspendWith")(function* (
+      sessionID: SessionID,
+      provenance?: SessionControl.PauseProvenance,
+    ) {
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
       const substitution = data.substitutions.get(sessionID)
       const signalled = (existing?.busy ?? false) || (substitution?.busy ?? false)
+      const signal = (target: Pick<Runner.Runner<never, never>, "suspend" | "suspendWith">) =>
+        provenance === undefined ? target.suspend : target.suspendWith(provenance)
       if (!existing) {
-        if (substitution) yield* substitution.suspend
+        if (substitution) yield* signal(substitution)
         else yield* status.set(sessionID, { type: "idle" })
         return signalled
       }
-      yield* existing.suspend
-      if (substitution) yield* substitution.suspend
+      yield* signal(existing)
+      if (substitution) yield* signal(substitution)
       return signalled
     })
+
+    const suspend = Effect.fn("SessionRunState.suspend")((sessionID: SessionID) => suspendWith(sessionID))
 
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
       sessionID: SessionID,
@@ -200,11 +207,11 @@ export const layer = Layer.effect(
     // interrupted turn. Idle sessions that are still owed team mailbox work get a durable
     // "team-wake" intent so /unpause actually wakes them; the mailbox probe is non-destructive
     // and never claims the rows.
-    const unregisterInterrupter = yield* control.registerInterrupter((sessionIDs) =>
+    const unregisterInterrupter = yield* control.registerInterrupter((sessionIDs, provenance) =>
       Effect.forEach(
         sessionIDs,
         (sessionID) =>
-          suspend(sessionID).pipe(
+          suspendWith(sessionID, provenance).pipe(
             Effect.flatMap((hit) =>
               hit
                 ? control.setResumeIntent({ sessionID, reason: "running" }).pipe(

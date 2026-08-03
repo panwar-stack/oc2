@@ -27,7 +27,7 @@ import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
-import { TeamMessageRecipientTable } from "@/team/team.sql"
+import { TeamMessageRecipientTable, TeamTable, TeamUsageEventTable } from "@/team/team.sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@oc2-ai/core/fs-util"
@@ -438,6 +438,11 @@ const parkLeadOnWorker = Effect.fnUntraced(function* (input: {
     })
   }
   return { prompt, sessions, team, lead, worker, info, member }
+})
+
+const setLegacyTeamProtocol = Effect.fnUntraced(function* (teamID: string) {
+  const { db } = yield* Database.Service
+  yield* db.update(TeamTable).set({ protocol_version: 0 }).where(eq(TeamTable.id, teamID)).run().pipe(Effect.orDie)
 })
 
 const user = Effect.fn("test.user")(function* (sessionID: SessionID, text: string) {
@@ -1464,94 +1469,90 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
   ),
 )
 
-it.live(
-  "does not duplicate team message injection when delivery is suspended mid-way",
-  () =>
-    provideTmpdirServer(
-      Effect.fnUntraced(function* ({ llm }) {
-        const prompt = yield* SessionPrompt.Service
-        const sessions = yield* Session.Service
-        const team = yield* Team.Service
-        const control = yield* SessionControl.Service
-        const { db } = yield* Database.Service
-        const lead = yield* sessions.create({ title: "Lead" })
-        const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
-        const info = yield* team.create({ name: "mid-delivery", goal: "Coordinate work", leadSessionID: lead.id })
-        const workerMember = yield* team.addMember({
-          teamID: info.id,
-          sessionID: worker.id,
-          name: "worker",
-          agentType: "build",
-          rolePrompt: "Report progress",
-        })
-        // Complete the worker so the finalization barrier does not park the lead indefinitely.
-        // The canonical completion notification is harmless to this test's assertions.
-        yield* team.updateMemberStatus(workerMember.id, "completed")
-        yield* prompt.prompt({
-          sessionID: lead.id,
-          agent: "build",
-          model: ref,
-          noReply: true,
-          parts: [{ type: "text", text: "start coordinating" }],
-        })
-        yield* team.sendMessage({
-          teamID: info.id,
-          sender: worker.id,
-          recipients: [lead.id],
-          body: "Worker is ready.",
-        })
-        yield* llm.text("done")
+it.live("does not duplicate team message injection when delivery is suspended mid-way", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const team = yield* Team.Service
+      const control = yield* SessionControl.Service
+      const { db } = yield* Database.Service
+      const lead = yield* sessions.create({ title: "Lead" })
+      const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+      const info = yield* team.create({ name: "mid-delivery", goal: "Coordinate work", leadSessionID: lead.id })
+      const workerMember = yield* team.addMember({
+        teamID: info.id,
+        sessionID: worker.id,
+        name: "worker",
+        agentType: "build",
+        rolePrompt: "Report progress",
+      })
+      // Complete the worker so the finalization barrier does not park the lead indefinitely.
+      // The canonical completion notification is harmless to this test's assertions.
+      yield* team.updateMemberStatus(workerMember.id, "completed")
+      yield* prompt.prompt({
+        sessionID: lead.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "start coordinating" }],
+      })
+      yield* team.sendMessage({
+        teamID: info.id,
+        sender: worker.id,
+        recipients: [lead.id],
+        body: "Worker is ready.",
+      })
+      yield* llm.text("done")
 
-        const loop = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+      const loop = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
 
-        // Wait until the delivery claim is visible (the row is no longer "pending"), then suspend
-        // the session so the delivery is interrupted either between the claim and the marker, in
-        // the marker-to-write window, or while the loop is mid-dispatch. The poll is tight because
-        // the claim-to-marker window is only a few database writes.
-        yield* Effect.gen(function* () {
-          let status: string | undefined
-          while (status === undefined || status === "pending") {
-            status = (yield* db
-              .select({ status: TeamMessageRecipientTable.delivery_status })
-              .from(TeamMessageRecipientTable)
-              .where(eq(TeamMessageRecipientTable.team_id, info.id))
-              .get()
-              .pipe(Effect.orDie))?.status
-            if (status === undefined || status === "pending") yield* Effect.sleep("1 millis")
-          }
-        }).pipe(Effect.timeout("5 seconds"))
-        const paused = yield* control.pause({ rootSessionID: lead.id })
-        expect(paused.interruptionSignalledSessionIDs).toContain(lead.id)
-        yield* control.release(lead.id)
-        yield* prompt.wake(lead.id)
-        yield* awaitWithTimeout(Fiber.await(loop), "timed out waiting for the resumed loop")
-
-        // Exactly one injection: the interrupted delivery either finished before the pause or was
-        // re-run cleanly; it must never be injected twice.
-        const teamMessageParts = (yield* sessions.messages({ sessionID: lead.id }))
-          .flatMap((message) => message.parts)
-          .filter(
-            (part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Worker is ready."),
-          )
-        expect(teamMessageParts).toHaveLength(1)
-        expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
-        expect(
-          (yield* db
+      // Wait until the delivery claim is visible (the row is no longer "pending"), then suspend
+      // the session so the delivery is interrupted either between the claim and the marker, in
+      // the marker-to-write window, or while the loop is mid-dispatch. The poll is tight because
+      // the claim-to-marker window is only a few database writes.
+      yield* Effect.gen(function* () {
+        let status: string | undefined
+        while (status === undefined || status === "pending") {
+          status = (yield* db
             .select({ status: TeamMessageRecipientTable.delivery_status })
             .from(TeamMessageRecipientTable)
             .where(eq(TeamMessageRecipientTable.team_id, info.id))
             .get()
-            .pipe(Effect.orDie))?.status,
-        ).toBe("delivered")
+            .pipe(Effect.orDie))?.status
+          if (status === undefined || status === "pending") yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("5 seconds"))
+      const paused = yield* control.pause({ rootSessionID: lead.id })
+      expect(paused.interruptionSignalledSessionIDs).toContain(lead.id)
+      yield* control.release(lead.id)
+      yield* prompt.wake(lead.id)
+      yield* awaitWithTimeout(Fiber.await(loop), "timed out waiting for the resumed loop")
+
+      // Exactly one injection: the interrupted delivery either finished before the pause or was
+      // re-run cleanly; it must never be injected twice.
+      const teamMessageParts = (yield* sessions.messages({ sessionID: lead.id }))
+        .flatMap((message) => message.parts)
+        .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Worker is ready."))
+      expect(teamMessageParts).toHaveLength(1)
+      expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
+      expect(
+        (yield* db
+          .select({ status: TeamMessageRecipientTable.delivery_status })
+          .from(TeamMessageRecipientTable)
+          .where(eq(TeamMessageRecipientTable.team_id, info.id))
+          .get()
+          .pipe(Effect.orDie))?.status,
+      ).toBe("delivered")
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: { agent_teams: true },
       }),
-      {
-        git: true,
-        config: (url) => ({
-          ...providerCfg(url),
-          experimental: { agent_teams: true },
-        }),
-      },
-    ),
+    },
+  ),
 )
 
 it.live(
@@ -1630,95 +1631,97 @@ it.live(
   10_000,
 )
 
-it.live("team lead starts multiple teammates from one assistant step in parallel", () =>
-  provideTmpdirServer(
-    Effect.fnUntraced(function* ({ llm }) {
-      let releaseRoutes = () => {}
-      let releaseCli = () => {}
-      const routesReleased = new Promise<void>((resolve) => {
-        releaseRoutes = resolve
-      })
-      const cliReleased = new Promise<void>((resolve) => {
-        releaseCli = resolve
-      })
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const team = yield* Team.Service
-      const lead = yield* sessions.create({
-        title: "Lead",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-      yield* team.create({ name: "parallel-team", goal: "Check workflows", leadSessionID: lead.id })
-      yield* prompt.prompt({
-        sessionID: lead.id,
-        agent: "build",
-        model: ref,
-        noReply: true,
-        parts: [{ type: "text", text: "check workflow routes and cli" }],
-      })
+it.live(
+  "team lead starts multiple teammates from one assistant step in parallel",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        let releaseRoutes = () => {}
+        let releaseCli = () => {}
+        const routesReleased = new Promise<void>((resolve) => {
+          releaseRoutes = resolve
+        })
+        const cliReleased = new Promise<void>((resolve) => {
+          releaseCli = resolve
+        })
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const lead = yield* sessions.create({
+          title: "Lead",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        yield* team.create({ name: "parallel-team", goal: "Check workflows", leadSessionID: lead.id })
+        yield* prompt.prompt({
+          sessionID: lead.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "check workflow routes and cli" }],
+        })
 
-      yield* llm.push(
-        reply()
-          .tool("team_spawn", {
-            name: "routes",
-            agent_type: "general",
-            role_prompt: "Review workflow routes",
-          })
-          .tool("team_spawn", {
-            name: "cli",
-            agent_type: "general",
-            role_prompt: "Review workflow CLI",
-          }),
-      )
-      yield* llm.pushMatch(
-        (hit) => JSON.stringify(hit.body).includes("Review workflow routes"),
-        reply().wait(routesReleased).text("routes done").stop(),
-      )
-      yield* llm.pushMatch(
-        (hit) => JSON.stringify(hit.body).includes("Review workflow CLI"),
-        reply().wait(cliReleased).text("cli done").stop(),
-      )
-      yield* llm.text("lead done")
+        yield* llm.push(
+          reply()
+            .tool("team_spawn", {
+              name: "routes",
+              agent_type: "general",
+              role_prompt: "Review workflow routes",
+            })
+            .tool("team_spawn", {
+              name: "cli",
+              agent_type: "general",
+              role_prompt: "Review workflow CLI",
+            }),
+        )
+        yield* llm.pushMatch(
+          (hit) => JSON.stringify(hit.body).includes("Review workflow routes"),
+          reply().wait(routesReleased).text("routes done").stop(),
+        )
+        yield* llm.pushMatch(
+          (hit) => JSON.stringify(hit.body).includes("Review workflow CLI"),
+          reply().wait(cliReleased).text("cli done").stop(),
+        )
+        yield* llm.text("lead done")
 
-      const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
-      yield* Effect.promise(async () => {
-        const end = Date.now() + 15_000
-        while (Date.now() < end) {
-          const bodies = (await Effect.runPromise(llm.inputs)).map((input) => JSON.stringify(input))
-          if (
-            bodies.some((body) => body.includes("Review workflow routes")) &&
-            bodies.some((body) => body.includes("Review workflow CLI"))
-          ) {
-            return
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* Effect.promise(async () => {
+          const end = Date.now() + 15_000
+          while (Date.now() < end) {
+            const bodies = (await Effect.runPromise(llm.inputs)).map((input) => JSON.stringify(input))
+            if (
+              bodies.some((body) => body.includes("Review workflow routes")) &&
+              bodies.some((body) => body.includes("Review workflow CLI"))
+            ) {
+              return
+            }
+            await new Promise((done) => setTimeout(done, 20))
           }
-          await new Promise((done) => setTimeout(done, 20))
-        }
-        throw new Error("timed out waiting for both teammate prompts")
-      })
-      releaseRoutes()
-      releaseCli()
+          throw new Error("timed out waiting for both teammate prompts")
+        })
+        releaseRoutes()
+        releaseCli()
 
-      const result = yield* Fiber.join(fiber)
-      expect(result.info.role).toBe("assistant")
-      expect(result.parts.some((part) => part.type === "text" && part.text === "lead done")).toBe(true)
-      const active = yield* team.getActive(lead.id)
-      if (Option.isNone(active)) throw new Error("expected active team")
-      const members = yield* team.getMembers(active.value.id)
-      expect(members.filter((member) => member.status === "completed")).toHaveLength(2)
-    }),
-    {
-      git: true,
-      config: (url) => ({
-        ...providerCfg(url),
-        experimental: { agent_teams: true },
+        const result = yield* Fiber.join(fiber)
+        expect(result.info.role).toBe("assistant")
+        expect(result.parts.some((part) => part.type === "text" && part.text === "lead done")).toBe(true)
+        const active = yield* team.getActive(lead.id)
+        if (Option.isNone(active)) throw new Error("expected active team")
+        const members = yield* team.getMembers(active.value.id)
+        expect(members.filter((member) => member.status === "completed")).toHaveLength(2)
       }),
-    },
-  ),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
   30_000,
 )
 
 it.live(
-  "canceling a team lead shuts down and interrupts active members",
+  "canceling a protocol-1 team lead force-closes without a final checkpoint and releases work",
   () =>
     provideTmpdirServer(
       Effect.fnUntraced(function* ({ llm }) {
@@ -1726,6 +1729,7 @@ it.live(
         const sessions = yield* Session.Service
         const team = yield* Team.Service
         const status = yield* SessionStatus.Service
+        const { db } = yield* Database.Service
 
         yield* llm.hang
 
@@ -1740,6 +1744,11 @@ it.live(
           rolePrompt: "Keep working until cancelled",
         })
         yield* team.updateMemberStatus(member.id, "active")
+        const task = yield* team.createTask({
+          teamID: info.id,
+          description: "Reserved work",
+          owned: [{ rootKey: "/work", pathKey: "/work/cancelled.txt", displayPath: "cancelled.txt" }],
+        })
         yield* prompt.prompt({
           sessionID: worker.id,
           agent: "build",
@@ -1754,13 +1763,34 @@ it.live(
 
         yield* prompt.cancel(lead.id)
         const exit = yield* Fiber.await(workerFiber)
+        const cancelledTask = yield* team.getTask(info.id, task.id)
+        const forcedEvents = yield* db
+          .select()
+          .from(TeamUsageEventTable)
+          .where(eq(TeamUsageEventTable.team_id, info.id))
+          .all()
+          .pipe(Effect.orDie)
 
         expect(Exit.isSuccess(exit)).toBe(true)
         expect(Option.isNone(yield* team.getActive(lead.id))).toBe(true)
         const closed = yield* team.get(info.id)
         expect(Option.isSome(closed)).toBe(true)
-        if (Option.isSome(closed)) expect(closed.value.status).toBe("closed")
+        if (Option.isSome(closed)) {
+          expect(closed.value.status).toBe("closed")
+          expect(closed.value.protocol_version).toBe(1)
+          expect(closed.value.final_report_revision).toBeNull()
+        }
         expect((yield* team.getMembers(info.id))[0]?.status).toBe("cancelled")
+        expect(Option.isSome(cancelledTask)).toBe(true)
+        if (Option.isSome(cancelledTask)) {
+          expect(cancelledTask.value.status).toBe("cancelled")
+          expect(cancelledTask.value.reservations[0]?.timeReleased).toBeNumber()
+        }
+        expect(forcedEvents).toHaveLength(1)
+        expect(forcedEvents[0]).toMatchObject({
+          type: "forced_shutdown",
+          metadata: { reason: "Lead session cancelled", force: true, forced_at: expect.any(Number) },
+        })
         expect((yield* status.get(worker.id)).type).toBe("idle")
       }),
       {
@@ -2043,7 +2073,9 @@ it.live(
         expect(result.info.role).toBe("assistant")
         const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
           .flatMap((message) => message.parts)
-          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Progress while active"))
+          .filter(
+            (part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Progress while active"),
+          )
         expect(mailParts).toHaveLength(1)
       }),
       {
@@ -2067,6 +2099,7 @@ it.live(
         const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
         yield* llm.wait(1)
         yield* assertLoopParked(fiber, "lead should park before team closure")
+        yield* setLegacyTeamProtocol(info.id)
         yield* team.shutdown({ teamID: info.id, sessionID: lead.id })
         const result = yield* awaitWithTimeout(Fiber.join(fiber), "lead did not exit after team closure", "5 seconds")
         expect(result.info.role).toBe("assistant")
@@ -2097,6 +2130,7 @@ it.live(
         // The loop is parked: neither exit condition holds (team active, member nonterminal), so
         // it would never finalize on its own. Only the lead cancellation can release it.
         yield* assertLoopParked(fiber, "lead should be parked before cancellation")
+        yield* setLegacyTeamProtocol(info.id)
         yield* prompt.cancel(lead.id)
         const result = yield* awaitWithTimeout(
           Fiber.join(fiber),
@@ -2208,11 +2242,7 @@ it.live(
         })
         yield* team.updateMemberStatus(member.id, "completed")
         turn1Gate.resolve(undefined)
-        const result = yield* awaitWithTimeout(
-          Fiber.join(fiber),
-          "structured loop did not exit",
-          "10 seconds",
-        )
+        const result = yield* awaitWithTimeout(Fiber.join(fiber), "structured loop did not exit", "10 seconds")
         expect(result.info.role).toBe("assistant")
         // The committed structured value is the second candidate, proving the first was discarded
         // when the barrier required a continuation turn.
@@ -2220,7 +2250,9 @@ it.live(
         expect(structured).toEqual({ value: "second" })
         const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
           .flatMap((message) => message.parts)
-          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Structured handoff mail"))
+          .filter(
+            (part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Structured handoff mail"),
+          )
         expect(mailParts).toHaveLength(1)
         // Two model calls (turn 1 + turn 2) prove the loop continued after the mail handoff and
         // produced a fresh candidate. A stale-reuse bug would commit after the first turn.
@@ -2247,7 +2279,10 @@ it.instance(
       const chat = yield* sessions.create({ title: "Pinned" })
       yield* llm.text("done")
       yield* user(chat.id, "hello")
-      const result = yield* awaitWithTimeout(prompt.loop({ sessionID: chat.id }), "finished-assistant loop did not exit")
+      const result = yield* awaitWithTimeout(
+        prompt.loop({ sessionID: chat.id }),
+        "finished-assistant loop did not exit",
+      )
       expect(result.info.role).toBe("assistant")
       expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
     }),
@@ -2272,10 +2307,7 @@ it.instance(
       const chat = yield* sessions.create({ title: "Pinned" })
       yield* llm.tool("read", { filePath: "/tmp/nonexistent" })
       yield* user(chat.id, "hello")
-      const result = yield* awaitWithTimeout(
-        prompt.loop({ sessionID: chat.id }),
-        "processor-stop loop did not exit",
-      )
+      const result = yield* awaitWithTimeout(prompt.loop({ sessionID: chat.id }), "processor-stop loop did not exit")
       expect(result.info.role).toBe("assistant")
       const failedParts = (yield* sessions.messages({ sessionID: chat.id }))
         .flatMap((message) => message.parts)
@@ -2331,9 +2363,7 @@ it.live(
         // bare wake there is no mail and no newer user message, so the loop reaches the
         // finished-assistant exit: an errored finalization must break immediately without calling
         // the model and without parking on the nonterminal worker.
-        const lastUser = (yield* sessions.messages({ sessionID: lead.id })).findLast(
-          (m) => m.info.role === "user",
-        )
+        const lastUser = (yield* sessions.messages({ sessionID: lead.id })).findLast((m) => m.info.role === "user")
         if (!lastUser || lastUser.info.role !== "user") throw new Error("expected lead user message")
         const errored: SessionV1.Assistant = {
           id: MessageID.ascending(),
@@ -2693,7 +2723,10 @@ it.instance(
           .messages({ sessionID: chat.id })
           .pipe(
             Effect.map((msgs) =>
-              msgs.some((msg) => msg.info.role === "assistant" && msg.parts.some((p) => p.type === "text" && p.text === "second"))
+              msgs.some(
+                (msg) =>
+                  msg.info.role === "assistant" && msg.parts.some((p) => p.type === "text" && p.text === "second"),
+              )
                 ? true
                 : undefined,
             ),
