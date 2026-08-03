@@ -1175,3 +1175,30 @@ it.instance(
   }),
   { git: true },
 )
+
+it.effect(
+  "tracks changes when the instance directory is a subdirectory of the worktree",
+  () =>
+    Effect.gen(function* () {
+      const repo = yield* tmpdirScoped({ git: true }).pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
+      yield* mkdirp(path.join(repo, "sub"))
+      yield* write(path.join(repo, "sub", "file.txt"), "SUB")
+      yield* write(path.join(repo, "root.txt"), "ROOT")
+
+      return yield* provideInstance(path.join(repo, "sub"))(
+        Effect.gen(function* () {
+          const snapshot = yield* Snapshot.Service
+          const before = yield* snapshot.track()
+          expect(before).toBeTruthy()
+
+          yield* write(path.join(repo, "sub", "file.txt"), "MODIFIED")
+          yield* write(path.join(repo, "sub", "new.txt"), "NEW")
+          const patch = yield* snapshot.patch(before!)
+          expect(patch.files).toContain(fwd(path.join(repo, "sub", "file.txt")))
+          expect(patch.files).toContain(fwd(path.join(repo, "sub", "new.txt")))
+          expect(patch.files).not.toContain(fwd(path.join(repo, "root.txt")))
+          return Effect.void
+        }),
+      )
+    }),
+)

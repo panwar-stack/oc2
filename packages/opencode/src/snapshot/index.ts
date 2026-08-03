@@ -100,6 +100,13 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
         const args = (cmd: string[]) => ["--git-dir", state.gitdir, "--work-tree", state.worktree, ...cmd]
 
+        // Session directory relative to the worktree root, used as the git pathspec
+        // so listings stay scoped to the primary root. git resolves pathspecs and
+        // reports paths relative to the working tree top, so every git call runs
+        // with cwd=worktree and this scope keeps the results consistent even when
+        // the session directory is a subdirectory of the worktree.
+        const scope = path.relative(state.worktree, state.directory).replaceAll("\\", "/") || "."
+
         const feed = (list: string[]) => list.join("\0") + "\0"
 
         const git = Effect.fnUntraced(
@@ -138,7 +145,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               "-z",
             ],
             {
-              cwd: state.directory,
+              cwd: state.worktree,
               stdin: feed(files),
             },
           )
@@ -154,7 +161,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               ...args(["rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"]),
             ],
             {
-              cwd: state.directory,
+              cwd: state.worktree,
               stdin: feed(files),
             },
           )
@@ -165,7 +172,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           const result = yield* git(
             [...cfg, ...args(["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"])],
             {
-              cwd: state.directory,
+              cwd: state.worktree,
               stdin: feed(files),
             },
           )
@@ -213,11 +220,11 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           yield* sync()
           const [diff, other] = yield* Effect.all(
             [
-              git([...quote, ...args(["diff-files", "--name-only", "-z", "--", "."])], {
-                cwd: state.directory,
+              git([...quote, ...args(["diff-files", "--name-only", "-z", "--", scope])], {
+                cwd: state.worktree,
               }),
-              git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", "."])], {
-                cwd: state.directory,
+              git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", scope])], {
+                cwd: state.worktree,
               }),
             ],
             { concurrency: 2 },
@@ -255,7 +262,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             (yield* Effect.all(
               allow.map((item) =>
                 fs
-                  .stat(path.join(state.directory, item))
+                  .stat(path.join(state.worktree, item))
                   .pipe(Effect.catch(() => Effect.void))
                   .pipe(
                     Effect.map((stat) => {
@@ -282,7 +289,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             Effect.gen(function* () {
               if (!(yield* enabled())) return
               if (!(yield* exists(state.gitdir))) return
-              const result = yield* git(args(["gc", `--prune=${prune}`]), { cwd: state.directory })
+              const result = yield* git(args(["gc", `--prune=${prune}`]), { cwd: state.worktree })
               if (result.code !== 0) {
                 log.warn("cleanup failed", {
                   exitCode: result.code,
@@ -312,9 +319,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 log.info("initialized")
               }
               const candidates = yield* add()
-              const result = yield* git(args(["write-tree"]), { cwd: state.directory })
+              const result = yield* git(args(["write-tree"]), { cwd: state.worktree })
               const hash = result.text.trim()
-              log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
+              log.info("tracking", { hash, cwd: state.worktree, git: state.gitdir })
               return { hash, candidates }
             }),
           )
@@ -330,9 +337,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             Effect.gen(function* () {
               yield* add()
               const result = yield* git(
-                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])],
+                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", scope])],
                 {
-                  cwd: state.directory,
+                  cwd: state.worktree,
                 },
               )
               if (result.code !== 0) {
@@ -363,9 +370,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             Effect.gen(function* () {
               if (!prepared.hash) return { hash, files: [] }
               const result = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--name-only", hash, prepared.hash, "--", "."])],
+                [...quote, ...args(["diff", "--no-ext-diff", "--name-only", hash, prepared.hash, "--", scope])],
                 {
-                  cwd: state.directory,
+                  cwd: state.worktree,
                 },
               )
               if (result.code !== 0) {
@@ -536,7 +543,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           return yield* locked(
             Effect.gen(function* () {
               yield* add()
-              const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", "."])], {
+              const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", scope])], {
                 cwd: state.worktree,
               })
               if (result.code !== 0) {
@@ -612,7 +619,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
                   const batch = yield* appProcess.run(
                     ChildProcess.make("git", [...cfg, ...args(["cat-file", "--batch"])], {
-                      cwd: state.directory,
+                      cwd: state.worktree,
                       extendEnv: true,
                     }),
                     { stdin: refs.map((item) => item.ref).join("\n") + "\n" },
@@ -692,8 +699,8 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               const status = new Map<string, "added" | "deleted" | "modified">()
 
               const statuses = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", "."])],
-                { cwd: state.directory },
+                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", scope])],
+                { cwd: state.worktree },
               )
 
               for (const line of statuses.text.trim().split("\n")) {
@@ -704,9 +711,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               }
 
               const numstat = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", "."])],
+                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", scope])],
                 {
-                  cwd: state.directory,
+                  cwd: state.worktree,
                 },
               )
 
