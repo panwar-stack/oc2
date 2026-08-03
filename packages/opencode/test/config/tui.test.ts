@@ -12,6 +12,7 @@ import { TuiConfig } from "../../src/config/tui"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { NpmTest } from "../fake/npm"
+import { Npm } from "@oc2-ai/core/npm"
 
 const it = testEffect(Layer.mergeAll(Config.defaultLayer, FSUtil.defaultLayer))
 const winIt = process.platform === "win32" ? it.instance : it.instance.skip
@@ -1002,6 +1003,42 @@ it.instance("missing tui.json - silently treated as empty (ENOENT path)", () =>
       const config = yield* getTuiConfig(test.directory)
       expect(config).toBeDefined()
       expect(config.theme).toBeUndefined()
+    }),
+  ),
+)
+
+it.instance("does not request an implicit package for plugin dependencies", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      yield* fs.writeWithDirs(
+        path.join(test.directory, ".oc2", "tui.json"),
+        JSON.stringify({ plugin: ["local.plugin@1.0.0"] }),
+      )
+
+      const recorded: { dir: string; input?: Parameters<Npm.Interface["install"]>[1] }[] = []
+      const recordingNpm = Layer.mock(Npm.Service)({
+        install: (dir, input) =>
+          Effect.sync(() => {
+            recorded.push({ dir, input })
+          }),
+      })
+
+      yield* TuiConfig.Service.use((svc) => svc.get().pipe(Effect.andThen(svc.waitForDependencies()))).pipe(
+        Effect.provide(
+          TuiConfig.layer.pipe(
+            Layer.provide(recordingNpm),
+            Layer.provide(FSUtil.defaultLayer),
+            Layer.provide(Layer.succeed(CurrentWorkingDirectory, test.directory)),
+          ),
+        ),
+      )
+
+      expect(recorded.length).toBeGreaterThan(0)
+      for (const call of recorded) {
+        expect(call.input?.add).toBeUndefined()
+      }
     }),
   ),
 )

@@ -8,7 +8,6 @@ import { Global } from "@oc2-ai/core/global"
 import { Flag } from "@oc2-ai/core/flag/flag"
 import { Auth } from "../auth"
 import { applyEdits, findNodeAtLocation, modify, parseTree } from "jsonc-parser"
-import { InstallationLocal, InstallationVersion } from "@oc2-ai/core/installation/version"
 import { existsSync } from "fs"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@oc2-ai/core/v1/config/console-state"
@@ -521,15 +520,10 @@ export const layer = Layer.effect(
 
           yield* ensureGitignore(dir).pipe(Effect.orDie)
 
+          // Only user-declared config dependencies are installed here. Requesting an implicit
+          // companion package would fail for every non-registry build form and surface a warning.
           const dep = yield* npmSvc
-            .install(dir, {
-              add: [
-                {
-                  name: "@oc2-ai/plugin",
-                  version: InstallationLocal ? undefined : InstallationVersion,
-                },
-              ],
-            })
+            .install(dir)
             .pipe(
               Effect.exit,
               Effect.tap((exit) =>

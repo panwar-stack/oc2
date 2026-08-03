@@ -42,6 +42,38 @@ describe("Npm.sanitize", () => {
   })
 })
 
+describe("Npm.InstallFailedError", () => {
+  test("surfaces git stderr in a plain string render", () => {
+    // `@npmcli/git` throws this shape: generic message, real detail on `.stderr`.
+    const cause = Object.assign(new Error("An unknown git error occurred"), {
+      stderr: "fatal: repository 'https://github.com/opencode/missing.git' not found\n",
+      code: 128,
+    })
+
+    const error = new Npm.InstallFailedError({
+      dir: "/tmp/pkg",
+      add: ["missing@git+https://github.com/opencode/missing.git"],
+      cause,
+      ...Npm.diagnostics(cause),
+    })
+
+    expect(error.stderr).toBe("fatal: repository 'https://github.com/opencode/missing.git' not found")
+    expect(error.code).toBe(128)
+    expect(String(error)).toContain("fatal: repository 'https://github.com/opencode/missing.git' not found")
+    expect(String(error)).toContain("An unknown git error occurred")
+    expect(String(error)).toContain("/tmp/pkg")
+  })
+
+  test("truncates huge stderr and ignores unusable causes", () => {
+    const long = "x".repeat(10_000)
+    const { stderr } = Npm.diagnostics(Object.assign(new Error("boom"), { stderr: long }))
+    expect(stderr?.length).toBeLessThan(long.length)
+    expect(stderr?.endsWith("... (truncated)")).toBe(true)
+    expect(Npm.diagnostics("not an object")).toEqual({})
+    expect(Npm.diagnostics(new Error("no stderr"))).toEqual({ stderr: undefined, code: undefined })
+  })
+})
+
 describe("Npm.add", () => {
   test("reifies when package cache directory exists without the package installed", async () => {
     await using tmp = await tmpdir()

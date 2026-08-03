@@ -41,6 +41,7 @@ import { ConfigPlugin } from "@/config/plugin"
 import { ConfigPluginV1 } from "@oc2-ai/core/v1/config/plugin"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
+import { Npm } from "@oc2-ai/core/npm"
 
 /** Infra layer that provides FileSystem, Path, ChildProcessSpawner for test fixtures */
 const infra = CrossSpawnSpawner.defaultLayer.pipe(
@@ -93,13 +94,14 @@ const configLayer = (
   options: {
     auth?: Layer.Layer<Auth.Service>
     client?: HttpClient.HttpClient
+    npm?: Layer.Layer<Npm.Service>
   } = {},
 ) =>
   Config.layer.pipe(
     Layer.provide(testFlock),
     Layer.provide(options.auth ?? AuthTest.empty),
     Layer.provideMerge(infra),
-    Layer.provide(NpmTest.noop),
+    Layer.provide(options.npm ?? NpmTest.noop),
     Layer.provide(Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)),
     Layer.provideMerge(FSUtil.defaultLayer),
   )
@@ -1421,6 +1423,38 @@ it.effect("installs dependencies in writable OC2_CONFIG_DIR", () =>
 
     expect(yield* FSUtil.use.readFileString(path.join(configDir, ".gitignore"))).toContain("package-lock.json")
   }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+)
+
+const configRecordedInstalls: { dir: string; input?: Parameters<Npm.Interface["install"]>[1] }[] = []
+const configRecordingNpm = Layer.mock(Npm.Service)({
+  install: (dir, input) =>
+    Effect.sync(() => {
+      configRecordedInstalls.push({ dir, input })
+    }),
+})
+
+configIt({ npm: configRecordingNpm }).effect(
+  "does not request an implicit package for config dependencies",
+  () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const configDir = path.join(dir, "configdir")
+      yield* FSUtil.use.ensureDir(configDir)
+      configRecordedInstalls.length = 0
+
+      yield* withProcessEnv(
+        "OC2_CONFIG_DIR",
+        configDir,
+        Config.Service.use((svc) => svc.get().pipe(Effect.andThen(svc.waitForDependencies()))).pipe(
+          provideInstanceEffect(dir),
+        ),
+      )
+
+      expect(configRecordedInstalls.some((call) => call.dir === configDir)).toBe(true)
+      for (const call of configRecordedInstalls) {
+        expect(call.input?.add).toBeUndefined()
+      }
+    }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
 )
 
 // Note: deduplication and serialization of npm installs is now handled by the

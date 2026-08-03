@@ -10,11 +10,47 @@ import { EffectFlock } from "./util/effect-flock"
 import { makeRuntime } from "./effect/runtime"
 import { NpmConfig } from "./npm-config"
 
+const STDERR_LIMIT = 4000
+
+// `@npmcli/git` (used by arborist for git specs) throws a generic
+// "An unknown git error occurred" and puts the real diagnostic on `.stderr`,
+// so capture it here or the reason for the failure is lost in logs.
+export function diagnostics(cause: unknown): { stderr?: string; code?: string | number } {
+  if (typeof cause !== "object" || cause === null) return {}
+  const record = cause as { stderr?: unknown; code?: unknown }
+  const raw =
+    typeof record.stderr === "string"
+      ? record.stderr
+      : record.stderr instanceof Uint8Array
+        ? new TextDecoder().decode(record.stderr)
+        : undefined
+  const trimmed = raw?.trim()
+  const stderr = trimmed
+    ? trimmed.length > STDERR_LIMIT
+      ? `${trimmed.slice(0, STDERR_LIMIT)}... (truncated)`
+      : trimmed
+    : undefined
+  const code = typeof record.code === "string" || typeof record.code === "number" ? record.code : undefined
+  return { stderr, code }
+}
+
 export class InstallFailedError extends Schema.TaggedErrorClass<InstallFailedError>()("NpmInstallFailedError", {
   add: Schema.Array(Schema.String).pipe(Schema.optional),
   dir: Schema.String,
   cause: Schema.optional(Schema.Defect),
-}) {}
+  stderr: Schema.optional(Schema.String),
+  code: Schema.optional(Schema.Union([Schema.String, Schema.Number])),
+}) {
+  override get message() {
+    const parts = [`npm install failed in ${this.dir}`]
+    if (this.add && this.add.length > 0) parts.push(`add: ${this.add.join(", ")}`)
+    if (this.code !== undefined) parts.push(`code: ${this.code}`)
+    if (this.cause !== undefined)
+      parts.push(this.cause instanceof Error ? `${this.cause.name}: ${this.cause.message}` : String(this.cause))
+    if (this.stderr) parts.push(`stderr: ${this.stderr}`)
+    return parts.join(" | ")
+  }
+}
 
 export interface EntryPoint {
   readonly directory: string
@@ -102,6 +138,7 @@ export const layer = Layer.effect(
               cause,
               add,
               dir: input.dir,
+              ...diagnostics(cause),
             }),
         }) as Effect.Effect<ArboristTree, InstallFailedError>
       }).pipe(
