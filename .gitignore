@@ -35,3 +35,5 @@ tsconfig.tsbuildinfo
 .claude
 /openspec
 scratch.md
+jobs
+__pycache__

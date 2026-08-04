@@ -1,3 +1,10 @@
+# PYTHONPATH="$PWD" harbor run \
+#   --dataset terminal-bench/terminal-bench-2-1 \
+#   --agent benchmark.oc2_agent:OC2Agent \
+#   --model openai/gpt-5.4 \
+#   --agent-env OPENAI_API_KEY="$OPENAI_API_KEY" \
+#   --n-concurrent 1 \
+#   --n-tasks 1
 from harbor.agents.installed.node_install import nvm_node_install_snippet
 from harbor.agents.installed.opencode import OpenCode
 from harbor.environments.base import BaseEnvironment
