@@ -22,6 +22,7 @@ OC2 is an independent project based on and inspired by [opencode](https://github
 
 ## Release Highlights Since v0.0.7
 
+- **v0.0.16 — MCP server removal.** The `oc2 mcp` command can now remove a configured server (`oc2 mcp remove <name>`, alias `rm`) from project or global config files, and clears its stored OAuth credentials.
 - **v0.0.15 — Benchmark tooling.** The OC2 agent moves into the benchmark package with a terminal bench agent for performance runs.
 - **v0.0.14 — Subdirectory snapshot fixes.** Snapshot and revert paths are worktree-relative, so sessions rooted in a subdirectory are covered correctly.
 - **v0.0.13 — Hardened agent teams.** Team sessions gain failed-member state with dependency-failed propagation, exact-file task reservations with structured write leases, atomic terminal handoffs, revision-bound final reports, shutdown admission and forced abort, and a private finalization barrier for active team leads.

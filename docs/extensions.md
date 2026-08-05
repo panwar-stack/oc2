@@ -65,6 +65,7 @@ For example, tool `search.docs` from server `team-api` becomes
 | `auth [name]`           | Run OAuth authentication                     |
 | `auth list` (`auth ls`) | Show OAuth status                            |
 | `logout [name]`         | Remove stored OAuth credentials              |
+| `remove [name]` (`rm`)  | Remove a configured server                   |
 | `debug <name>`          | Diagnose a remote server's OAuth connection  |
 
 Non-interactive `add` accepts exactly one of `--url <url>` or a command after
