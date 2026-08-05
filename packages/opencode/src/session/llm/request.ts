@@ -401,10 +401,27 @@ function cacheHintFromMessagePart(model: Provider.Model, part: Exclude<ModelMess
   return cacheHintFromProviderOptions(model, outputProviderOptions)
 }
 
+// Provider IDs served by Alibaba Cloud Model Studio (DashScope). Mirrors the
+// alibaba family normalization in @oc2-ai/llm cache capability/guardrails.
+const ALIBABA_PROVIDER_IDS = new Set([
+  "alibaba",
+  "alibaba-cn",
+  "alibaba-coding-plan",
+  "alibaba-coding-plan-cn",
+  "dashscope",
+])
+
+const isAlibabaProvider = (providerID: string): boolean =>
+  ALIBABA_PROVIDER_IDS.has(providerID.toLowerCase())
+
 function cacheHintFromProviderOptions(model: Provider.Model, value: unknown) {
-  if (model.api.npm !== "@ai-sdk/anthropic" && model.api.npm !== "@ai-sdk/google-vertex/anthropic") return undefined
+  const supportsCacheHints =
+    model.api.npm === "@ai-sdk/anthropic" ||
+    model.api.npm === "@ai-sdk/google-vertex/anthropic" ||
+    isAlibabaProvider(model.providerID)
+  if (!supportsCacheHints) return undefined
   if (!isRecord(value)) return undefined
-  for (const key of new Set(["anthropic", String(model.providerID)])) {
+  for (const key of new Set(["anthropic", "alibaba", "alibaba-cn", String(model.providerID)])) {
     const options = value[key]
     if (!isRecord(options)) continue
     const cache = options.cacheControl ?? options.cache_control

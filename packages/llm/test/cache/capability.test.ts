@@ -12,12 +12,13 @@ import {
 } from "@oc2-ai/llm/cache/capability"
 
 describe("cache capability registry", () => {
-  test("publishes versioned records for the PR1 providers", () => {
+  test("publishes versioned records for the supported cache providers", () => {
     expect([...new Set(cacheCapabilityRecords.map((record) => record.provider))]).toEqual([
       "openai",
       "anthropic",
       "moonshot",
       "deepseek",
+      "alibaba",
     ])
     expect(cacheCapabilityRecords.every((record) => record.version === CACHE_CAPABILITY_VERSION)).toBe(true)
   })
@@ -273,6 +274,47 @@ describe("cache capability registry", () => {
       responseUsageFields: ["prompt_cache_hit_tokens", "prompt_cache_miss_tokens"],
       conclusiveVerification: false,
     })
+  })
+
+  test("Alibaba DashScope Qwen models support explicit cache control", () => {
+    const capabilities = getCacheCapabilities("alibaba", "qwen3.8-max")
+
+    expect(capabilities).toMatchObject({
+      provider: "alibaba",
+      status: "known",
+      promptCaching: "explicit",
+      supportsCacheKey: false,
+      supportsBreakpoints: true,
+      supportsDuration: false,
+      maximumBreakpoints: 4,
+      minimumPrefixTokens: 1024,
+      requestFields: ["cache_control"],
+      retention: { policy: "fixed", seconds: 300 },
+      supportedModes: ["explicit"],
+      supportedBreakpointContentTypes: ["system", "message"],
+      conclusiveVerification: true,
+    })
+    expect(capabilities.supportedBreakpointContentTypes).toContain("system")
+    expect(capabilities.supportedBreakpointContentTypes).toContain("message")
+    expect(capabilities.supportedBreakpointContentTypes).not.toContain("tool")
+  })
+
+  test("Alibaba provider aliases normalize to the alibaba capability", () => {
+    for (const provider of ["alibaba-cn", "alibaba-coding-plan", "alibaba-coding-plan-cn", "dashscope"]) {
+      const capabilities = getCacheCapabilities(provider, "qwen-plus")
+
+      expect(capabilities.provider).toBe("alibaba")
+      expect(capabilities.promptCaching).toBe("explicit")
+      expect(capabilities.status).toBe("known")
+    }
+  })
+
+  test("Non-Qwen models on alibaba stay conservative", () => {
+    const capabilities = getCacheCapabilities("alibaba", "some-other-model")
+
+    expect(capabilities.status).toBe("unknown")
+    expect(capabilities.promptCaching).toBe("unsupported")
+    expect(capabilities.supportsBreakpoints).toBe(false)
   })
 
   test("unknown models are conservative", () => {

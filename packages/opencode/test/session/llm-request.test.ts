@@ -180,6 +180,13 @@ describe("session.llm.request", () => {
           expectsPromptCacheKey: false,
         },
         {
+          providerID: "alibaba",
+          modelID: "qwen-plus",
+          npm: "@ai-sdk/openai-compatible",
+          expectedMode: "explicit",
+          expectsPromptCacheKey: false,
+        },
+        {
           providerID: "minimax",
           modelID: "minimax-m2",
           npm: "@ai-sdk/anthropic",

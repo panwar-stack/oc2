@@ -119,6 +119,31 @@ describe("cache guardrails", () => {
     }
   })
 
+  test("skips provider field leakage when the provider owns the field", () => {
+    const owners = [
+      { provider: "anthropic", model: "claude-3-5-sonnet-20241022" },
+      { provider: "alibaba", model: "qwen-plus" },
+      { provider: "alibaba-cn", model: "qwen-plus" },
+    ]
+    for (const item of owners) {
+      expect(checkProviderFieldLeakage({ ...item, fields: ["cache_control"] })).toMatchObject({
+        valid: true,
+        errors: [],
+      })
+    }
+
+    const leakages = [
+      { provider: "openai", model: "gpt-4o" },
+      { provider: "deepseek", model: "deepseek-chat" },
+    ]
+    for (const item of leakages) {
+      expect(checkProviderFieldLeakage({ ...item, fields: ["cache_control"] })).toMatchObject({
+        valid: false,
+        errors: [{ code: "provider_field_leakage", severity: "error", field: "cache_control" }],
+      })
+    }
+  })
+
   test("fails incompatible cache key reuse", () => {
     const result = checkIncompatibleCacheKeyReuse({
       previous: {

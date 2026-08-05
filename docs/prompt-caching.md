@@ -6,16 +6,44 @@ prefixes without leaking provider-specific cache controls across SDKs.
 
 ## Provider Behavior
 
-| Provider        | Models                                               | Cache mode                          | Request fields                            | Usage telemetry                | Notes                                                                                         |
-| --------------- | ---------------------------------------------------- | ----------------------------------- | ----------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------- |
-| OpenAI          | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with explicit routing key | `prompt_cache_key`                        | Cached read and write tokens   | OC2 derives the key from the stable-prefix fingerprint and ignores manual keys.               |
-| Anthropic       | `claude-*`                                           | Automatic plus explicit breakpoints | top-level and block-level `cache_control` | Cache creation and read tokens | Defaults to the lower-write-cost `5m` ephemeral TTL. `1h` is opt-in.                          |
-| Moonshot / Kimi | `kimi*`, `moonshot*`                                 | Provider-managed automatic          | none                                      | unavailable                    | OC2 does not send OpenAI or Anthropic cache fields because verification is not conclusive.    |
-| DeepSeek        | `deepseek-*`                                         | Provider-managed automatic          | none                                      | Hit and miss tokens            | OC2 uses telemetry for diagnostics but does not send explicit OpenAI-compatible cache fields. |
-| Unknown         | unmatched provider/model                             | disabled                            | none                                      | unavailable                    | OC2 keeps fingerprints for diagnostics but treats caching as unsupported.                     |
+| Provider                                      | Models                                               | Cache mode                          | Request fields                                 | Usage telemetry                | Notes                                                                                                            |
+| --------------------------------------------- | ---------------------------------------------------- | ----------------------------------- | ---------------------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| OpenAI                                        | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with explicit routing key | `prompt_cache_key`                             | Cached read and write tokens   | OC2 derives the key from the stable-prefix fingerprint and ignores manual keys.                                  |
+| Anthropic                                     | `claude-*`                                           | Automatic plus explicit breakpoints | top-level and block-level `cache_control`      | Cache creation and read tokens | Defaults to the lower-write-cost `5m` ephemeral TTL. `1h` is opt-in.                                             |
+| Moonshot / Kimi                               | `kimi*`, `moonshot*`                                 | Provider-managed automatic          | none                                           | unavailable                    | OC2 does not send OpenAI or Anthropic cache fields because verification is not conclusive.                       |
+| DeepSeek                                      | `deepseek-*`                                         | Provider-managed automatic          | none                                           | Hit and miss tokens            | OC2 uses telemetry for diagnostics but does not send explicit OpenAI-compatible cache fields.                    |
+| Alibaba Cloud Model Studio / DashScope (Qwen) | `qwen*`                                              | Explicit breakpoints                | block-level `cache_control` on message content | Cache creation and read tokens | Max 4 markers per request, 1024-token minimum, fixed 5-minute TTL; writes at 1.25x and reads at 0.1x base input. |
+| Unknown                                       | unmatched provider/model                             | disabled                            | none                                           | unavailable                    | OC2 keeps fingerprints for diagnostics but treats caching as unsupported.                                        |
 
 See [Providers And Models](providers.md#prompt-caching-compatibility) for the
 same compatibility matrix in the provider guide.
+
+### Alibaba Cloud Model Studio (DashScope) Qwen
+
+Qwen models on the `alibaba`, `alibaba-cn`, `alibaba-coding-plan`, and
+`alibaba-coding-plan-cn` providers cache explicitly. OC2 adds
+`"cache_control": { "type": "ephemeral" }` to the stable system prompt
+(system message) content. User and tool messages may also receive markers
+when targeted by a cache policy. Assistant messages are not marked. Tool
+definitions take no markers; DashScope caches them as part of the system
+message.
+
+- At most 4 markers take effect per request; only the last 4 count.
+- The cacheable prefix must be at least 1024 tokens.
+- A backward prefix search looks up to 20 preceding content blocks.
+- Cache validity is fixed at 5 minutes and resets on each hit.
+- Cache creation tokens bill at 125% of the standard input price; cache hits
+  bill at 10%.
+
+Usage telemetry reports `prompt_tokens_details.cached_tokens` (read) and
+`prompt_tokens_details.cache_creation_input_tokens` (write) on the
+OpenAI-compatible shape, or `cache_read_input_tokens` and
+`cache_creation_input_tokens` on the Anthropic-compatible shape. OC2 surfaces
+cache reads and writes in session usage and cost accounting.
+
+DashScope also caches implicitly for supported models. Implicit caching is
+automatic, cannot be disabled, and needs no OC2 configuration; OC2 sends no
+fields for it.
 
 ## Planning And Fingerprints
 
@@ -51,6 +79,8 @@ OC2 lowers the shared plan into provider-local wire fields:
   pre-existing manual `CacheHint`s. Anthropic permits four cache controls per
   request, so OC2 preserves four explicit breakpoints and omits the automatic
   control when no slot remains.
+- Alibaba/DashScope Qwen models receive block-level `cache_control` markers on
+  planned explicit breakpoints in message content blocks.
 - Moonshot/Kimi, DeepSeek, and unknown models receive no explicit prompt cache
   fields.
 

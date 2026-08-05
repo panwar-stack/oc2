@@ -305,6 +305,41 @@ export const cacheCapabilityRecords = [
     routingKeyTrafficLimit: null,
     conclusiveVerification: false,
   },
+  {
+    version: CACHE_CAPABILITY_VERSION,
+    provider: "alibaba",
+    modelPattern: "qwen*",
+    status: "known",
+    promptCaching: "explicit",
+    supportsCacheKey: false,
+    supportsBreakpoints: true,
+    supportsDuration: false,
+    supportsPromptCacheOptions: false,
+    supportsPromptCacheBreakpoints: false,
+    supportsPromptCacheRetention: false,
+    minimumPrefixTokens: 1024,
+    maximumBreakpoints: 4,
+    reportsCacheReadTokens: true,
+    reportsCacheWriteTokens: true,
+    reportsCacheMissTokens: false,
+    telemetryUnavailable: false,
+    cacheWriteHasAdditionalCost: true,
+    cacheReadReceivesDiscount: true,
+    warmup: { policy: "first_request", requests: 1 },
+    retention: { policy: "fixed", seconds: 300 },
+    supportedModes: ["explicit"],
+    supportedBreakpointContentTypes: ["system", "message"],
+    supportedDurations: [],
+    requestFields: ["cache_control"],
+    responseUsageFields: [
+      "prompt_tokens_details.cached_tokens",
+      "prompt_tokens_details.cache_creation_input_tokens",
+      "cache_read_input_tokens",
+      "cache_creation_input_tokens",
+    ],
+    routingKeyTrafficLimit: null,
+    conclusiveVerification: true,
+  },
 ] as const satisfies ReadonlyArray<CacheCapabilities>
 
 const openAICapabilities = cacheCapabilityRecords[0]
@@ -354,7 +389,17 @@ const matchesPattern = (value: string, pattern: string) => {
   return pattern.endsWith("*") || offset === value.length
 }
 
-const normalizeProvider = (provider: string) =>
-  provider.toLowerCase() === "kimi" || provider.toLowerCase() === "moonshot-ai" || provider.toLowerCase() === "moonshotai"
-    ? "moonshot"
-    : provider.toLowerCase()
+const normalizeProvider = (provider: string) => {
+  const lower = provider.toLowerCase()
+  if (lower === "kimi" || lower === "moonshot-ai" || lower === "moonshotai") return "moonshot"
+  if (
+    lower === "alibaba" ||
+    lower === "alibaba-cn" ||
+    lower === "alibaba-coding-plan" ||
+    lower === "alibaba-coding-plan-cn" ||
+    lower === "dashscope"
+  ) {
+    return "alibaba"
+  }
+  return lower
+}

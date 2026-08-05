@@ -702,6 +702,77 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("parses DashScope Alibaba cache creation tokens from provider usage", () =>
+    Effect.gen(function* () {
+      const alibabaModel = OpenAICompatible.configure({
+        provider: "alibaba",
+        baseURL: "https://api.dashscope.test/v1",
+        apiKey: "test",
+      }).model("qwen-plus")
+
+      for (const fixture of [
+        { prompt: 3019, cached: 2048, creation: 0, fresh: 971 },
+        { prompt: 4000, cached: 2048, creation: 1605, fresh: 347 },
+      ]) {
+        const response = yield* LLMClient.generate(
+          LLM.updateRequest(request, { model: alibabaModel }),
+        ).pipe(
+          Effect.provide(
+            fixedResponse(
+              sseEvents(
+                deltaChunk({}, "stop"),
+                usageChunk({
+                  prompt_tokens: fixture.prompt,
+                  completion_tokens: 104,
+                  total_tokens: fixture.prompt + 104,
+                  prompt_tokens_details: {
+                    cached_tokens: fixture.cached,
+                    cache_creation_input_tokens: fixture.creation,
+                  },
+                }),
+              ),
+            ),
+          ),
+        )
+
+        expect(response.usage).toMatchObject({
+          inputTokens: fixture.prompt,
+          outputTokens: 104,
+          nonCachedInputTokens: fixture.fresh,
+          cacheReadInputTokens: fixture.cached,
+          cacheWriteInputTokens: fixture.creation,
+          totalTokens: fixture.prompt + 104,
+          providerTotalTokens: fixture.prompt + 104,
+        })
+        expect(response.usage?.cacheTelemetry).toMatchObject({
+          provider: "alibaba",
+          cacheReadTokens: fixture.cached,
+          cacheWriteTokens: fixture.creation,
+          providerRawUsageFieldNames: [
+            "prompt_tokens",
+            "prompt_tokens_details.cached_tokens",
+            "prompt_tokens_details.cache_creation_input_tokens",
+          ],
+        })
+      }
+    }),
+  )
+
+  it.effect("does not emit cache_control for OpenAI Chat", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model,
+          system: [{ type: "text", text: "Stable system", metadata: { cache: { stable: true, version: 1 } } }],
+          prompt: "hi",
+          cache: "auto",
+        }),
+      )
+
+      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+    }),
+  )
+
   it.effect("does not count inherited OpenAI-compatible cache writes without an explicit profile", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(

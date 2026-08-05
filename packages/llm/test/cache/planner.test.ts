@@ -277,6 +277,46 @@ describe("cache planner", () => {
     expect(planned.plan.requestCacheControl).toBeUndefined()
   })
 
+  test("plans explicit breakpoints for Alibaba Qwen models", () => {
+    const planned = planCache({
+      provider: "alibaba",
+      model: "qwen-plus",
+      protocolID: "openai-chat",
+      cachePolicy: { system: true, tools: true, messages: "latest-user-message" },
+      system: [{ type: "text", text: "SYS", metadata: { cache: { stable: true } } }],
+      messages: [{ role: "user", content: [{ type: "text", text: "Q" }] }],
+      tools: [],
+    })
+
+    expect(planned.plan).toMatchObject({
+      provider: "alibaba",
+      model: "qwen-plus",
+      mode: "explicit",
+      eligible: true,
+      minimumPrefixTokens: 1024,
+    })
+    expect(planned.plan.breakpoints).toEqual([{ component: "system", contentType: "system", index: 0 }])
+    expect(planned.plan.requestCacheControl).toBeUndefined()
+    expect(planned.plan.duration).toBeNull()
+    expect(planned.plan.cacheKey).toBeNull()
+  })
+
+  test("unknown provider plans stay disabled", () => {
+    const planned = planCache({
+      provider: "alibaba",
+      model: "non-qwen-model",
+      protocolID: "openai-chat",
+      cachePolicy: { system: true, tools: true, messages: "latest-user-message" },
+      system: [{ type: "text", text: "SYS", metadata: { cache: { stable: true } } }],
+      messages: [{ role: "user", content: [{ type: "text", text: "Q" }] }],
+      tools: [],
+    })
+
+    expect(planned.plan.mode).toBe("disabled")
+    expect(planned.plan.eligible).toBe(false)
+    expect(planned.plan.breakpoints).toEqual([])
+  })
+
   test("unknown models are conservative but still get non-content fingerprints", () => {
     const planned = planCache({
       provider: "unknown-provider",

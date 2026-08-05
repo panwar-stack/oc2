@@ -324,6 +324,20 @@ function normalizeMessages(
 
 const ANTHROPIC_CACHE_HINT_CAP = 4
 
+// Provider IDs served by Alibaba Cloud Model Studio (DashScope). Mirrors the
+// alibaba family normalization in @oc2-ai/llm cache capability/guardrails.
+const ALIBABA_PROVIDER_IDS = new Set([
+  "alibaba",
+  "alibaba-cn",
+  "alibaba-coding-plan",
+  "alibaba-coding-plan-cn",
+  "dashscope",
+])
+
+function isAlibabaProvider(providerID: string): boolean {
+  return ALIBABA_PROVIDER_IDS.has(providerID.toLowerCase())
+}
+
 function applyCaching(
   msgs: ModelMessage[],
   model: Provider.Model,
@@ -350,7 +364,8 @@ function applyCaching(
     targets.push(...unique([...system.slice(0, 2), ...messages.slice(-2)]))
   }
 
-  for (const msg of targets) {
+  for (const original of targets) {
+    let msg = original
     if (remaining <= 0) break
     if (plan && model.api.npm === "@ai-sdk/anthropic" && msg.role !== "system") {
       if (Array.isArray(msg.content)) {
@@ -370,6 +385,33 @@ function applyCaching(
       }
       remaining--
       continue
+    }
+    // DashScope explicit-cache markers must sit on a message content block.
+    // The OpenAI-compatible SDK passes system content through verbatim, so a
+    // converted block must carry cache_control directly on the part; the
+    // @ai-sdk/alibaba SDK wraps message-level cacheControl into the block
+    // shape itself, so its string system content stays as-is.
+    if (isAlibabaProvider(model.providerID) && msg.role === "system" && typeof msg.content === "string") {
+      if (model.api.npm === "@ai-sdk/alibaba") {
+        if (hasProviderCacheHint(msg.providerOptions, providerOptions)) continue
+        msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, providerOptions)
+        remaining--
+        continue
+      }
+      const cacheControl =
+        isRecord(providerOptions) && isRecord(providerOptions.openaiCompatible)
+          ? providerOptions.openaiCompatible.cache_control
+          : undefined
+      if (cacheControl) {
+        const converted = {
+          ...msg,
+          content: [{ type: "text" as const, text: msg.content, ...(cacheControl ? { cache_control: cacheControl } : {}) }],
+        } as unknown as ModelMessage
+        const targetIndex = msgs.indexOf(original)
+        if (targetIndex !== -1) msgs[targetIndex] = converted
+        remaining--
+        continue
+      }
     }
     const useMessageLevelOptions =
       model.providerID === "anthropic" ||
@@ -573,7 +615,8 @@ export function message(
       model.id.includes("anthropic") ||
       model.id.includes("claude") ||
       model.api.npm === "@ai-sdk/anthropic" ||
-      model.api.npm === "@ai-sdk/alibaba") &&
+      model.api.npm === "@ai-sdk/alibaba" ||
+      isAlibabaProvider(model.providerID)) &&
     model.api.npm !== "@ai-sdk/gateway"
   ) {
     if (config.caching !== false) msgs = applyCaching(msgs, model, cachePlan, options)

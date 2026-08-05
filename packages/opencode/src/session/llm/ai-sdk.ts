@@ -13,7 +13,27 @@ export type UsageIdentity = {
   readonly apiPackage: string
 }
 
-type UsageProfile = "standard" | "xai" | "deepinfra" | "deepinfra-exclusive" | "deepseek" | "openrouter"
+type UsageProfile =
+  | "standard"
+  | "xai"
+  | "deepinfra"
+  | "deepinfra-exclusive"
+  | "deepseek"
+  | "openrouter"
+  | "alibaba"
+
+// Provider IDs served by Alibaba Cloud Model Studio (DashScope). Mirrors the
+// alibaba family normalization in @oc2-ai/llm cache capability/guardrails.
+const ALIBABA_PROVIDER_IDS = new Set([
+  "alibaba",
+  "alibaba-cn",
+  "alibaba-coding-plan",
+  "alibaba-coding-plan-cn",
+  "dashscope",
+])
+
+const isAlibabaProvider = (providerID: string): boolean =>
+  ALIBABA_PROVIDER_IDS.has(providerID.toLowerCase())
 
 const usageProfile = (identity: UsageIdentity | undefined): UsageProfile => {
   if (!identity?.modelID) return "standard"
@@ -26,6 +46,7 @@ const usageProfile = (identity: UsageIdentity | undefined): UsageProfile => {
   }
   if (identity.providerID === "deepseek") return "deepseek"
   if (identity.providerID === "openrouter") return "openrouter"
+  if (isAlibabaProvider(identity.providerID)) return "alibaba"
   return "standard"
 }
 
@@ -336,6 +357,9 @@ function profileUsage(profile: UsageProfile, value: unknown): ProfileUsageObserv
   const inputDetails = isRecord(inputDetailsValue) ? inputDetailsValue : undefined
   const outputDetails = isRecord(outputDetailsValue) ? outputDetailsValue : undefined
   const allowNullCacheWrite = profile === "openrouter" || profile === "xai"
+  // DashScope reports cache writes as cache_creation_input_tokens (Anthropic
+  // naming), not the OpenAI-compatible cache_write_tokens field.
+  const cacheWriteField = profile === "alibaba" ? "cache_creation_input_tokens" : "cache_write_tokens"
   const inputTokens = token(value, "input_tokens")
   const promptTokens = token(value, "prompt_tokens")
   const outputTokens = token(value, "output_tokens")
@@ -349,7 +373,7 @@ function profileUsage(profile: UsageProfile, value: unknown): ProfileUsageObserv
     observation.status === "valid"
       ? [
           token(observation.value, "cached_tokens"),
-          token(observation.value, "cache_write_tokens", allowNullCacheWrite),
+          token(observation.value, cacheWriteField, allowNullCacheWrite),
         ]
       : [],
   )
@@ -369,9 +393,7 @@ function profileUsage(profile: UsageProfile, value: unknown): ProfileUsageObserv
   if (rawInput === undefined || reportedOutput === undefined) return { status: "incomplete" }
   const detailsCacheRead = inputDetails ? token(inputDetails, "cached_tokens").value : undefined
   const cacheRead = profile === "deepseek" ? (promptCacheHit.value ?? detailsCacheRead) : detailsCacheRead
-  const cacheWrite = inputDetails
-    ? token(inputDetails, "cache_write_tokens", allowNullCacheWrite).value
-    : undefined
+  const cacheWrite = inputDetails ? token(inputDetails, cacheWriteField, allowNullCacheWrite).value : undefined
   const reasoning = outputDetails ? token(outputDetails, "reasoning_tokens").value : undefined
   const deepinfraExclusive = profile === "deepinfra-exclusive"
   const reportedTotal = totalTokens.value
@@ -387,7 +409,10 @@ function profileUsage(profile: UsageProfile, value: unknown): ProfileUsageObserv
     "cost_in_usd_ticks",
   ])
   if (typeof value.is_byok === "boolean") sanitized.is_byok = value.is_byok
-  const sanitizedInputDetails = pickUsageNumbers(inputDetails, ["cached_tokens", "cache_write_tokens"])
+  const sanitizedInputDetails = pickUsageNumbers(inputDetails, [
+    "cached_tokens",
+    ...(profile === "alibaba" ? ["cache_creation_input_tokens"] : ["cache_write_tokens"]),
+  ])
   const sanitizedOutputDetails = pickUsageNumbers(outputDetails, ["reasoning_tokens"])
   const costDetails = pickUsageNumbers(value.cost_details, [
     "upstream_inference_cost",
@@ -594,7 +619,9 @@ function cacheTelemetryFieldNames(profile: UsageProfile, usage: UsageTuple) {
     ...(usage.reported.cacheRead
       ? [profile === "deepseek" ? "prompt_cache_hit_tokens" : `${inputField}_details.cached_tokens`]
       : []),
-    ...(usage.reported.cacheWrite ? [`${inputField}_details.cache_write_tokens`] : []),
+    ...(usage.reported.cacheWrite
+      ? [`${inputField}_details.${profile === "alibaba" ? "cache_creation_input_tokens" : "cache_write_tokens"}`]
+      : []),
     ...(usage.reported.cacheMiss ? ["prompt_cache_miss_tokens"] : []),
   ]
 }

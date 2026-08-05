@@ -1628,6 +1628,79 @@ describe("ProviderTransform.message - DeepSeek reasoning content", () => {
   })
 })
 
+describe("ProviderTransform.message - Alibaba DashScope cache control", () => {
+  const alibabaModel = {
+    id: "alibaba/qwen-plus",
+    providerID: "alibaba",
+    api: {
+      id: "qwen-plus",
+      url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      npm: "@ai-sdk/openai-compatible",
+    },
+    name: "Qwen Plus",
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: true },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    cost: { input: 0.001, output: 0.002, cache: { read: 0.0001, write: 0.0002 } },
+    limit: { context: 128000, output: 8192 },
+    status: "active",
+    options: {},
+    headers: {},
+  } as any
+
+  const explicitPlan: CachePlan = {
+    provider: "alibaba",
+    model: "qwen-plus",
+    mode: "explicit",
+    cacheKey: null,
+    trafficPartition: null,
+    stablePrefixFingerprint: "sha256:stable-prefix",
+    componentFingerprints: {},
+    prefixTokenCount: null,
+    minimumPrefixTokens: 1024,
+    eligible: true,
+    breakpoints: [{ component: "system", contentType: "system", index: 0 }],
+    duration: null,
+  }
+
+  test("places DashScope cache_control markers on Alibaba Qwen system content", () => {
+    const result = ProviderTransform.message(
+      [{ role: "system", content: "SYS" }] as any[],
+      alibabaModel,
+      { cachePlan: explicitPlan },
+    ) as any[]
+
+    expect(result[0].content).toEqual([{ type: "text", text: "SYS", cache_control: { type: "ephemeral" } }])
+  })
+
+  test("does not add cache_control for non-alibaba openai-compatible models", () => {
+    const model = {
+      ...alibabaModel,
+      id: "deepseek/deepseek-chat",
+      providerID: "deepseek",
+      api: {
+        id: "deepseek-chat",
+        url: "https://api.deepseek.com",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+    const result = ProviderTransform.message(
+      [{ role: "system", content: "SYS" }] as any[],
+      model,
+      { cachePlan: explicitPlan },
+    ) as any[]
+
+    expect(JSON.stringify(result)).not.toContain("cache_control")
+    expect(JSON.stringify(result)).not.toContain("cacheControl")
+  })
+})
+
 describe("ProviderTransform.message - surrogate sanitization", () => {
   const model = {
     id: "test/test-model",

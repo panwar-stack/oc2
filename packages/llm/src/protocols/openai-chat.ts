@@ -19,6 +19,8 @@ import {
 } from "../schema"
 import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { CacheTelemetry } from "../cache/telemetry"
+import { CacheLowering } from "../cache/lowering"
+import { getCacheCapabilities, type CacheCapabilities, type CachePlan } from "../cache/capability"
 import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolStream } from "./utils/tool-stream"
@@ -56,16 +58,26 @@ const OpenAIChatAssistantToolCall = Schema.Struct({
 })
 type OpenAIChatAssistantToolCall = Schema.Schema.Type<typeof OpenAIChatAssistantToolCall>
 
+const OpenAIChatCacheControl = Schema.Struct({ type: Schema.Literal("ephemeral") })
+
 const OpenAIChatUserContent = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("text"),
+    text: Schema.String,
+    cache_control: Schema.optional(OpenAIChatCacheControl),
+  }),
   Schema.Struct({
     type: Schema.Literal("image_url"),
     image_url: Schema.Struct({ url: Schema.String }),
   }),
 ])
+type OpenAIChatUserContent = Schema.Schema.Type<typeof OpenAIChatUserContent>
 
 const OpenAIChatMessage = Schema.Union([
-  Schema.Struct({ role: Schema.Literal("system"), content: Schema.String }),
+  Schema.Struct({
+    role: Schema.Literal("system"),
+    content: Schema.Union([Schema.String, Schema.Array(OpenAIChatUserContent)]),
+  }),
   Schema.Struct({
     role: Schema.Literal("user"),
     content: Schema.Union([Schema.String, Schema.Array(OpenAIChatUserContent)]),
@@ -76,7 +88,11 @@ const OpenAIChatMessage = Schema.Union([
     tool_calls: optionalArray(OpenAIChatAssistantToolCall),
     reasoning_content: Schema.optional(Schema.String),
   }),
-  Schema.Struct({ role: Schema.Literal("tool"), tool_call_id: Schema.String, content: Schema.String }),
+  Schema.Struct({
+    role: Schema.Literal("tool"),
+    tool_call_id: Schema.String,
+    content: Schema.Union([Schema.String, Schema.Array(OpenAIChatUserContent)]),
+  }),
 ]).pipe(Schema.toTaggedUnion("role"))
 type OpenAIChatMessage = Schema.Schema.Type<typeof OpenAIChatMessage>
 
@@ -129,6 +145,7 @@ const OpenAIChatUsage = Schema.Struct({
     Schema.Struct({
       cached_tokens: Schema.optional(Schema.Number),
       cache_write_tokens: optionalNull(Schema.Number),
+      cache_creation_input_tokens: optionalNull(Schema.Number),
     }),
   ),
   completion_tokens_details: optionalNull(
@@ -192,6 +209,7 @@ interface OpenAIChatUsageProfile {
   readonly cacheRead: "prompt-details" | "deepseek"
   readonly cacheInput: "inclusive" | "xai-conditional"
   readonly cacheWrite: boolean
+  readonly cacheWriteField?: "cache_write_tokens" | "cache_creation_input_tokens"
   readonly metadataShape: "direct" | "usage"
 }
 
@@ -241,12 +259,32 @@ const OPENROUTER_USAGE_PROFILE: OpenAIChatUsageProfile = {
   metadataShape: "usage",
 }
 
+// DashScope (Alibaba) reports cache writes as
+// `prompt_tokens_details.cache_creation_input_tokens` rather than
+// `cache_write_tokens`; cache reads still arrive as `cached_tokens`.
+const ALIBABA_USAGE_PROFILE: OpenAIChatUsageProfile = {
+  ...OPENAI_COMPATIBLE_USAGE_PROFILE,
+  providerMetadata: "alibaba",
+  cacheProvider: "alibaba",
+  cacheWrite: true,
+  cacheWriteField: "cache_creation_input_tokens",
+}
+
 const openAIChatUsageProfile = (request: LLMRequest): OpenAIChatUsageProfile => {
   const provider = String(request.model.provider)
   const model = String(request.model.id)
   if (provider === "xai") return { ...XAI_USAGE_PROFILE, model }
   if (provider === "deepseek") return { ...DEEPSEEK_USAGE_PROFILE, model }
   if (provider === "openrouter") return { ...OPENROUTER_USAGE_PROFILE, model }
+  const normalizedProvider = provider.toLowerCase()
+  if (
+    normalizedProvider === "alibaba" ||
+    normalizedProvider === "alibaba-cn" ||
+    normalizedProvider === "alibaba-coding-plan" ||
+    normalizedProvider === "alibaba-coding-plan-cn" ||
+    normalizedProvider === "dashscope"
+  )
+    return { ...ALIBABA_USAGE_PROFILE, model }
   if (provider !== "deepinfra")
     return {
       ...(provider === "openai" ? OPENAI_USAGE_PROFILE : OPENAI_COMPATIBLE_USAGE_PROFILE),
@@ -434,13 +472,73 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
   }
 })
 
+// DashScope (Alibaba) exposes explicit context caching through
+// `cache_control: { type: "ephemeral" }` markers on content blocks — at most 4
+// per request. The marker sits on the last text block of the targeted message
+// content array; tool definitions take no markers. Only providers whose
+// capability record lists `cache_control` in `requestFields` may receive these
+// markers (OpenAI, DeepSeek, xAI, OpenRouter, and friends are never touched).
+const DASHSCOPE_EPHEMERAL = { type: "ephemeral" as const }
+
+const dashScopeBreakpointLowering = (plan: CachePlan | undefined, capabilities: CacheCapabilities): boolean =>
+  capabilities.requestFields.includes("cache_control") &&
+  capabilities.supportsBreakpoints &&
+  plan?.eligible === true &&
+  plan.mode === "explicit" &&
+  plan.breakpoints.length > 0
+
+const withDashScopeMarker = (
+  content: ReadonlyArray<OpenAIChatUserContent>,
+): ReadonlyArray<OpenAIChatUserContent> => {
+  let lastTextIndex = -1
+  for (let index = 0; index < content.length; index++) {
+    if (content[index]!.type === "text") lastTextIndex = index
+  }
+  if (lastTextIndex < 0) return content
+  return content.map((part, index) =>
+    index === lastTextIndex ? { ...part, cache_control: DASHSCOPE_EPHEMERAL } : part,
+  )
+}
+
+const withDashScopeMessageMarker = (message: OpenAIChatMessage): OpenAIChatMessage => {
+  if (message.role === "assistant") return message
+  const content: ReadonlyArray<OpenAIChatUserContent> =
+    typeof message.content === "string"
+      ? [{ type: "text", text: message.content, cache_control: DASHSCOPE_EPHEMERAL }]
+      : withDashScopeMarker(message.content)
+  if (message.role === "system") return { ...message, content }
+  if (message.role === "tool") return { ...message, content }
+  return { ...message, content }
+}
+
+const applyDashScopeBreakpoints = (messages: OpenAIChatMessage[], plan: CachePlan): OpenAIChatMessage[] => {
+  const systemMarked = plan.breakpoints.some(
+    (breakpoint) => breakpoint.component === "system" && breakpoint.contentType === "system",
+  )
+  const messageMarkers = new Set(
+    plan.breakpoints
+      .filter((breakpoint) => breakpoint.component === "messages" && breakpoint.contentType === "message")
+      .map((breakpoint) => breakpoint.index),
+  )
+  let nonSystemIndex = -1
+  return messages.map((message) => {
+    if (message.role === "system") return systemMarked ? withDashScopeMessageMarker(message) : message
+    nonSystemIndex += 1
+    return messageMarkers.has(nonSystemIndex) ? withDashScopeMessageMarker(message) : message
+  })
+}
+
 const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMRequest) {
   // `fromRequest` returns the provider body only. Endpoint, auth, framing,
   // validation, and HTTP execution are composed by `Route.make`.
   const generation = request.generation
+  const plan = CacheLowering.requestCachePlan(request)
+  const capabilities = getCacheCapabilities(String(request.model.provider), String(request.model.id))
+  const messages = yield* lowerMessages(request)
+  const lowerCacheControl = plan !== undefined && dashScopeBreakpointLowering(plan, capabilities)
   return {
     model: request.model.id,
-    messages: yield* lowerMessages(request),
+    messages: lowerCacheControl ? applyDashScopeBreakpoints(messages, plan) : messages,
     tools: request.tools.length === 0 ? undefined : request.tools.map(lowerTool),
     tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
     stream: true as const,
@@ -477,7 +575,10 @@ const mapUsage = (profile: OpenAIChatUsageProfile, usage: OpenAIChatEvent["usage
     profile.cacheRead === "deepseek"
       ? (usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens)
       : usage.prompt_tokens_details?.cached_tokens
-  const cacheWrite = profile.cacheWrite ? (usage.prompt_tokens_details?.cache_write_tokens ?? undefined) : undefined
+  const cacheWriteField = profile.cacheWriteField ?? "cache_write_tokens"
+  const cacheWrite = profile.cacheWrite
+    ? (usage.prompt_tokens_details?.[cacheWriteField] ?? undefined)
+    : undefined
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
   const freshInput =
     profile.cacheInput === "xai-conditional" && cached !== undefined && cached > usage.prompt_tokens
@@ -505,9 +606,9 @@ const mapUsage = (profile: OpenAIChatUsageProfile, usage: OpenAIChatEvent["usage
                   ...(usage.prompt_tokens_details.cached_tokens === undefined
                     ? {}
                     : { cached_tokens: usage.prompt_tokens_details.cached_tokens }),
-                  ...(usage.prompt_tokens_details.cache_write_tokens == null
+                  ...(usage.prompt_tokens_details[cacheWriteField] == null
                     ? {}
-                    : { cache_write_tokens: usage.prompt_tokens_details.cache_write_tokens }),
+                    : { [cacheWriteField]: usage.prompt_tokens_details[cacheWriteField] }),
                 },
         }),
     ...(usage.completion_tokens_details === undefined
@@ -573,7 +674,7 @@ const mapUsage = (profile: OpenAIChatUsageProfile, usage: OpenAIChatEvent["usage
             : [profile.cacheRead === "deepseek" && usage.prompt_cache_hit_tokens !== undefined
                 ? "prompt_cache_hit_tokens"
                 : "prompt_tokens_details.cached_tokens"]),
-          ...(cacheWrite === undefined ? [] : ["prompt_tokens_details.cache_write_tokens"]),
+          ...(cacheWrite === undefined ? [] : [`prompt_tokens_details.${cacheWriteField}`]),
           ...(usage.prompt_cache_miss_tokens === undefined ? [] : ["prompt_cache_miss_tokens"]),
         ],
       }),

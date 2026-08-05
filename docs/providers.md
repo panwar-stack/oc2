@@ -140,13 +140,14 @@ OC2 plans prompt caching per provider and only sends request fields that the
 selected provider supports. See [Prompt Caching](prompt-caching.md) for the
 planner, telemetry, diagnostics, guardrails, lifecycle, and cost details.
 
-| Provider                    | Models                                               | Cache mode                             | Request fields                            | Usage telemetry                | Verification |
-| --------------------------- | ---------------------------------------------------- | -------------------------------------- | ----------------------------------------- | ------------------------------ | ------------ |
-| OpenAI                      | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with OC2-derived routing key | `prompt_cache_key`                        | cached read and write tokens   | conclusive   |
-| Anthropic                   | `claude-*`                                           | Automatic plus explicit breakpoints    | top-level and block-level `cache_control` | cache creation and read tokens | conclusive   |
-| Moonshot / Kimi             | `kimi*`, `moonshot*`                                 | Provider-managed automatic             | none                                      | unavailable                    | best effort  |
-| DeepSeek                    | `deepseek-*`                                         | Provider-managed automatic             | none                                      | hit and miss tokens            | best effort  |
-| Unknown providers or models | unmatched                                            | disabled                               | none                                      | unavailable                    | unavailable  |
+| Provider                               | Models                                               | Cache mode                             | Request fields                                 | Usage telemetry                | Verification |
+| -------------------------------------- | ---------------------------------------------------- | -------------------------------------- | ---------------------------------------------- | ------------------------------ | ------------ |
+| OpenAI                                 | `gpt-4.1*`, `gpt-4o*`, `gpt-5*`, `o1*`, `o3*`, `o4*` | Automatic with OC2-derived routing key | `prompt_cache_key`                             | cached read and write tokens   | conclusive   |
+| Anthropic                              | `claude-*`                                           | Automatic plus explicit breakpoints    | top-level and block-level `cache_control`      | cache creation and read tokens | conclusive   |
+| Moonshot / Kimi                        | `kimi*`, `moonshot*`                                 | Provider-managed automatic             | none                                           | unavailable                    | best effort  |
+| DeepSeek                               | `deepseek-*`                                         | Provider-managed automatic             | none                                           | hit and miss tokens            | best effort  |
+| Alibaba Cloud Model Studio / DashScope | `qwen*`                                              | Explicit breakpoints                   | block-level `cache_control` on message content | cache creation and read tokens | conclusive   |
+| Unknown providers or models            | unmatched                                            | disabled                               | none                                           | unavailable                    | unavailable  |
 
 Provider-specific cache fields are not portable. For example, OC2 will not send
 OpenAI `prompt_cache_key` to Kimi or DeepSeek OpenAI-compatible endpoints, and
@@ -166,3 +167,14 @@ default OpenAI `prompt_cache_options`, `prompt_cache_breakpoint`, or legacy
 `prompt_cache_retention` fields. GPT-5.6+ cache writes can be billable, so
 explicit breakpoints are not enabled by default. Use session stats output to see
 reported cache read and write tokens.
+
+Alibaba Cloud Model Studio (DashScope) Qwen models cache explicitly. OC2 adds
+block-level `cache_control` markers to stable-prefix message content for `qwen*`
+models on the alibaba providers and parses cache creation and read tokens from
+usage telemetry. At most 4 markers take effect per request, the cacheable prefix
+must be at least 1024 tokens, and cache validity is fixed at 5 minutes. Tool
+definitions cannot take cache markers; they are cached as part of the system
+message. The OpenAI-compatible endpoint is
+`https://dashscope-intl.aliyuncs.com/compatible-mode/v1` for international
+regions and `https://dashscope.aliyuncs.com/compatible-mode/v1` for China, with
+`DASHSCOPE_API_KEY` as the credential.

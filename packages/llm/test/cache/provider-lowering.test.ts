@@ -1,6 +1,8 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { CacheHint, LLM, Message } from "../../src"
+import { getCacheCapabilities, type CachePlan } from "../../src/cache/capability"
+import { CacheLowering } from "../../src/cache/lowering"
 import { Auth, LLMClient } from "../../src/route"
 import * as AnthropicMessages from "../../src/protocols/anthropic-messages"
 import * as OpenAIChat from "../../src/protocols/openai-chat"
@@ -44,6 +46,12 @@ const unknownModel = OpenAICompatible.configure({
   baseURL: "https://api.future.test/v1",
   apiKey: "test",
 }).model("future-model")
+
+const alibabaModel = OpenAICompatible.configure({
+  provider: "alibaba",
+  baseURL: "https://api.dashscope.test/v1",
+  apiKey: "test",
+}).model("qwen-plus")
 
 describe("provider cache lowering", () => {
   it.effect("OpenAI derives prompt_cache_key from the CachePlan", () =>
@@ -215,6 +223,61 @@ describe("provider cache lowering", () => {
       expect(prepared.body).toMatchObject({
         system: [{ type: "text", text: "Stable system", cache_control: { type: "ephemeral", ttl: "1h" } }],
       })
+    }),
+  )
+})
+
+describe("Alibaba DashScope cache lowering", () => {
+  it.effect("lowers cache_control breakpoints into DashScope content blocks", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: alibabaModel,
+          system: [{ type: "text", text: "Stable system", metadata: { cache: { stable: true, version: 1 } } }],
+          tools: [{ name: "t1", description: "t1", inputSchema: { type: "object", properties: {} } }],
+          prompt: "hi",
+          cache: "auto",
+        }),
+      )
+
+      expect(prepared.body.messages[0]).toMatchObject({
+        role: "system",
+        content: [{ type: "text", text: "Stable system", cache_control: { type: "ephemeral" } }],
+      })
+      expect(JSON.stringify(prepared.body.tools)).not.toContain("cache_control")
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_key")
+    }),
+  )
+
+  it.effect("only lowers supported DashScope breakpoint content types", () =>
+    Effect.gen(function* () {
+      const capabilities = getCacheCapabilities("alibaba", "qwen-plus")
+      const plan: CachePlan = {
+        provider: "alibaba",
+        model: "qwen-plus",
+        mode: "explicit",
+        cacheKey: null,
+        trafficPartition: null,
+        stablePrefixFingerprint: "sha256:stable-prefix",
+        componentFingerprints: {},
+        prefixTokenCount: null,
+        minimumPrefixTokens: 1024,
+        eligible: true,
+        breakpoints: [
+          { component: "system", contentType: "system", index: 0 },
+          { component: "messages", contentType: "message", index: 0 },
+          { component: "tools", contentType: "tool", index: 0 },
+        ],
+        duration: null,
+      }
+      const supported = new Set(capabilities.supportedBreakpointContentTypes)
+
+      expect(CacheLowering.planHasBreakpoint(plan, "system", 0, supported, capabilities.maximumBreakpoints ?? 0)).toBe(true)
+      expect(CacheLowering.planHasBreakpoint(plan, "messages", 0, supported, capabilities.maximumBreakpoints ?? 0)).toBe(
+        true,
+      )
+      // Tool definitions cannot take DashScope markers; the content type is not advertised.
+      expect(CacheLowering.planHasBreakpoint(plan, "tools", 0, supported, capabilities.maximumBreakpoints ?? 0)).toBe(false)
     }),
   )
 })

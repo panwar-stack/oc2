@@ -47,6 +47,7 @@ const providerFields = new Map([
   ["openai", new Set(["prompt_cache_key", "prompt_cache_options", "prompt_cache_breakpoint", "prompt_cache_retention"])],
   ["anthropic", new Set(["cache_control"])],
   ["bedrock", new Set(["cachePoint"])],
+  ["alibaba", new Set(["cache_control"])],
 ])
 
 export const checkUnsupportedFields = (input: {
@@ -142,7 +143,10 @@ export const checkProviderFieldLeakage = (input: {
   const normalizedProvider = normalizeProvider(input.provider, input.model)
   return result(
     input.fields.flatMap((field) => {
-      const owner = [...providerFields.entries()].find(([provider, fields]) => provider !== normalizedProvider && fields.has(field))
+      const ownsField = providerFields.get(normalizedProvider)?.has(field) ?? false
+      const owner = ownsField
+        ? undefined
+        : [...providerFields.entries()].find(([provider, fields]) => provider !== normalizedProvider && fields.has(field))
       if (!owner) return []
       return [
         issue({
@@ -223,6 +227,15 @@ const normalizeProvider = (provider: string, model?: string) => {
   const lower = provider.toLowerCase()
   if (lower === "amazon-bedrock" || lower === "bedrock-converse") return "bedrock"
   if (lower === "moonshot-ai" || lower === "moonshotai" || lower === "kimi") return "moonshot"
+  if (
+    lower === "alibaba" ||
+    lower === "alibaba-cn" ||
+    lower === "alibaba-coding-plan" ||
+    lower === "alibaba-coding-plan-cn" ||
+    lower === "dashscope"
+  ) {
+    return "alibaba"
+  }
   if (model && getCacheCapabilities(provider, model).requestFields.includes("prompt_cache_key")) return "openai"
   return lower
 }
