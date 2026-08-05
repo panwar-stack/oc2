@@ -22,10 +22,15 @@ OC2 is an independent project based on and inspired by [opencode](https://github
 
 ## Release Highlights Since v0.0.7
 
-- **v0.0.7 — Smoother provider setup.** After the first provider connection, OC2 opens model selection automatically, while canceled provider dialogs no longer fire stale callbacks.
-- **v0.0.8 — Observable OpenAI prompt caching.** Provider-aware planning and guardrails add stable cache keys, cache-aware cost accounting, and cache status in the CLI and TUI. See [Prompt Caching](./docs/prompt-caching.md).
-- **v0.0.9 — Anthropic caching and regression diagnostics.** Automatic Anthropic cache controls join runtime cache-regression checks, durable status events, and bounded opt-in self-healing.
+- **v0.0.15 — Benchmark tooling.** The OC2 agent moves into the benchmark package with a terminal bench agent for performance runs.
+- **v0.0.14 — Subdirectory snapshot fixes.** Snapshot and revert paths are worktree-relative, so sessions rooted in a subdirectory are covered correctly.
+- **v0.0.13 — Hardened agent teams.** Team sessions gain failed-member state with dependency-failed propagation, exact-file task reservations with structured write leases, atomic terminal handoffs, revision-bound final reports, shutdown admission and forced abort, and a private finalization barrier for active team leads.
+- **v0.0.12 — Lower interaction latency.** The harness responds faster for ordinary interactions, and team orchestration is specified as deterministic.
+- **v0.0.11 — Persistent pause and resume.** Pause a session and start it again later from the TUI or API; pause state persists across restarts, interrupted runs resume, and paused sessions resume descendants before the lead.
 - **v0.0.10 — More robust OpenAI WebSockets.** Separate connection, response-silence, heartbeat, pong, and pool-idle limits improve health detection and fallback behavior.
+- **v0.0.9 — Anthropic caching and regression diagnostics.** Automatic Anthropic cache controls join runtime cache-regression checks, durable status events, and bounded opt-in self-healing.
+- **v0.0.8 — Observable OpenAI prompt caching.** Provider-aware planning and guardrails add stable cache keys, cache-aware cost accounting, and cache status in the CLI and TUI. See [Prompt Caching](./docs/prompt-caching.md).
+- **v0.0.7 — Smoother provider setup.** After the first provider connection, OC2 opens model selection automatically, while canceled provider dialogs no longer fire stale callbacks.
 
 ## From One Prompt To A Coordinated Job
 
