@@ -31,6 +31,7 @@ Commands:
   oc2 mcp list           list MCP servers and their status                             [aliases: ls]
   oc2 mcp auth [name]    authenticate with an OAuth-enabled MCP server
   oc2 mcp logout [name]  remove OAuth credentials for an MCP server
+  oc2 mcp remove [name]  remove an MCP server                                          [aliases: rm]
   oc2 mcp debug <name>   debug OAuth connection for an MCP server
 
 Options:
@@ -447,6 +448,22 @@ exports[`oc2 CLI help-text snapshots every documented command emits stable help 
 "oc2 mcp logout [name]
 
 remove OAuth credentials for an MCP server
+
+Positionals:
+  name  name of the MCP server                                                              [string]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`oc2 CLI help-text snapshots every documented command emits stable help text: oc2 mcp remove --help 1`] = `
+"oc2 mcp remove [name]
+
+remove an MCP server
 
 Positionals:
   name  name of the MCP server                                                              [string]

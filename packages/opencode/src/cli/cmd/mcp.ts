@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import { ConfigV1 } from "@oc2-ai/core/v1/config/config"
-import { effectCmd } from "../effect-cmd"
+import { effectCmd, fail } from "../effect-cmd"
 import { Cause } from "effect"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -11,6 +11,8 @@ import { MCP } from "../../mcp"
 import { McpAuth } from "../../mcp/auth"
 import { McpOAuthProvider } from "../../mcp/oauth-provider"
 import { Config } from "@/config/config"
+import { ConfigParse } from "@/config/parse"
+import { ConfigPaths } from "@/config/paths"
 import { ConfigMCPV1 } from "@oc2-ai/core/v1/config/mcp"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstallationVersion } from "@oc2-ai/core/installation/version"
@@ -20,6 +22,8 @@ import { modify, applyEdits } from "jsonc-parser"
 import { Filesystem } from "@/util/filesystem"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@oc2-ai/core/event"
+import { Flag } from "@oc2-ai/core/flag/flag"
+import { FSUtil } from "@oc2-ai/core/fs-util"
 import { Effect } from "effect"
 import { Naming } from "@oc2-ai/core/naming"
 
@@ -103,6 +107,7 @@ export const McpCommand = cmd({
       .command(McpListCommand)
       .command(McpAuthCommand)
       .command(McpLogoutCommand)
+      .command(McpRemoveCommand)
       .command(McpDebugCommand)
       .demandCommand(),
   async handler() {},
@@ -437,6 +442,20 @@ async function addMcpToConfig(name: string, mcpConfig: ConfigMCPV1.Info, configP
   return configPath
 }
 
+async function removeMcpFromConfig(name: string, configPath: string) {
+  const text = await Filesystem.readText(configPath)
+
+  // Use jsonc-parser to remove the entry while preserving comments
+  const edits = modify(text, ["mcp", name], undefined, {
+    formattingOptions: { tabSize: 2, insertSpaces: true },
+  })
+  const result = applyEdits(text, edits)
+
+  await Filesystem.write(configPath, result)
+
+  return configPath
+}
+
 export const McpAddCommand = effectCmd({
   command: "add [name]",
   describe: "add an MCP server",
@@ -664,6 +683,114 @@ export const McpAddCommand = effectCmd({
 
       prompts.outro("MCP server added successfully")
     })
+  }),
+})
+
+export const McpRemoveCommand = effectCmd({
+  command: "remove [name]",
+  aliases: ["rm"],
+  describe: "remove an MCP server",
+  builder: (yargs) =>
+    yargs.positional("name", {
+      describe: "name of the MCP server",
+      type: "string",
+    }),
+  handler: Effect.fn("Cli.mcp.remove")(function* (args) {
+    const maybeCtx = yield* InstanceRef
+    if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
+    const ctx = maybeCtx
+
+    const config = yield* Config.Service.use((cfg) => cfg.get())
+
+    // Non-interactive: fail fast with a clean error when the server is not configured.
+    if (args.name) {
+      const entry = config.mcp?.[args.name]
+      if (!entry || typeof entry !== "object" || entry === null || !("type" in entry)) {
+        return yield* fail(`MCP server not found: ${args.name}`)
+      }
+    }
+
+    let serverName = args.name
+    if (!serverName) {
+      UI.empty()
+      prompts.intro("Remove MCP server")
+
+      const servers = configuredServers(config)
+      if (servers.length === 0) {
+        prompts.log.warn("No MCP servers configured")
+        prompts.outro("Done")
+        return
+      }
+
+      const selected = yield* Effect.promise(() =>
+        prompts.select({
+          message: "Select MCP server to remove",
+          options: servers.map(([name, serverConfig]) => {
+            const hint = serverConfig.type === "remote" ? serverConfig.url : serverConfig.command.join(" ")
+            return {
+              label: name,
+              value: name,
+              hint,
+            }
+          }),
+        }),
+      )
+      if (prompts.isCancel(selected)) throw new UI.CancelledError()
+
+      const confirm = yield* Effect.promise(() =>
+        prompts.confirm({
+          message: `Remove MCP server "${selected}"?`,
+          initialValue: false,
+        }),
+      )
+      if (prompts.isCancel(confirm) || !confirm) {
+        prompts.outro("Cancelled")
+        return
+      }
+      serverName = selected
+    }
+
+    // Find every config file that defines the server using the same discovery
+    // the config loader uses, so project files, .oc2/ dirs, nested configs,
+    // and the global config are all found, and remove it from ALL of them so a
+    // lower-precedence copy can't silently become effective.
+    const plan = yield* ConfigPaths.plan(ctx.directory, ctx.worktree).pipe(Effect.orDie)
+    const candidates = [
+      ...plan.direct,
+      ...plan.directories.flatMap((dir) => Naming.configFileLoadOrder.map((file) => path.join(dir, file))),
+      ...(Flag.OC2_CONFIG ? [Flag.OC2_CONFIG] : []),
+    ]
+    const definingFiles = yield* Effect.filter(candidates, (file) =>
+      Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const text = yield* fs.readFileStringSafe(file).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (text === undefined) return false
+        try {
+          const parsed = ConfigParse.jsonc(text, file)
+          const record = parsed as Record<string, any> | null | undefined
+          return (
+            !!record && typeof record.mcp === "object" && record.mcp !== null && record.mcp[serverName] !== undefined
+          )
+        } catch {
+          return false
+        }
+      }),
+    )
+    if (definingFiles.length === 0) {
+      return yield* fail(
+        `MCP server "${serverName}" is injected (OC2_CONFIG_CONTENT or managed config) and cannot be removed`,
+      )
+    }
+    for (const file of definingFiles) {
+      yield* Effect.promise(() => removeMcpFromConfig(serverName, file))
+    }
+    prompts.log.success(`MCP server "${serverName}" removed from ${definingFiles.join(", ")}`)
+    prompts.outro("Done")
+
+    const stored = yield* McpAuth.Service.use((auth) => auth.get(serverName))
+    if (stored) {
+      yield* MCP.Service.use((mcp) => mcp.removeAuth(serverName))
+    }
   }),
 })
 
