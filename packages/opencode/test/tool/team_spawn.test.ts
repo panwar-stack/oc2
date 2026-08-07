@@ -191,6 +191,8 @@ describe("tool.team_spawn", () => {
             context({ lead, assistant, promptOps }),
           )
 
+          // The member starts on the reconciler poll (up to 500 ms), not inside the tool call.
+          yield* waitUntil(() => Effect.sync(() => calls.length > 0))
           const child = (yield* sessions.children(lead.id))[0]
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
           expect(calls[0]?.model).toEqual(ref)
@@ -234,6 +236,7 @@ describe("tool.team_spawn", () => {
             context({ lead, assistant, promptOps }),
           )
 
+          yield* waitUntil(() => Effect.sync(() => calls.length > 0))
           const child = (yield* sessions.children(lead.id))[0]
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
           expect(calls[0]?.model).toEqual(explicitRef)
@@ -287,9 +290,10 @@ describe("tool.team_spawn", () => {
             context({ lead, assistant, promptOps }),
           )
 
+          yield* waitUntil(() => Effect.sync(() => calls.length > 0))
           const child = (yield* sessions.children(lead.id))[0]
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
-          expect(result.title).toBe("Teammate Completed")
+          expect(result.title).toBe("Teammate Started")
           expect(calls[0]?.model).toEqual(ref)
           expect(calls[0]?.variant).toBe("low")
           expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "low" })
@@ -371,9 +375,10 @@ describe("tool.team_spawn", () => {
             context({ lead, assistant, promptOps }),
           )
 
+          yield* waitUntil(() => Effect.sync(() => calls.length > 0))
           const child = (yield* sessions.children(lead.id))[0]
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
-          expect(result.title).toBe("Teammate Completed")
+          expect(result.title).toBe("Teammate Started")
           expect(calls[0]?.model).toEqual(explicitRef)
           expect(calls[0]?.variant).toBe("agent-low")
           expect(child?.model).toEqual({ id: ref.modelID, providerID: ref.providerID, variant: "lead-variant" })
@@ -514,9 +519,15 @@ describe("tool.team_spawn", () => {
             context({ lead, assistant, promptOps }),
           )
 
+          // The spawn returns a started handle; the failing member run happens on the reconciler.
+          expect(result.title).toBe("Teammate Started")
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+              return member?.status === "cancelled"
+            }),
+          )
           const member = (yield* team.getMembers(info.id)).find((member) => member.name === "worker")
-          expect(result.title).toBe("Teammate Completed")
-          expect(result.output).toContain("boom")
           expect(member?.status).toBe("cancelled")
           expect(member?.failure_code).toBe("provider_error")
           const cancelled = (yield* team.getMessages(info.id)).find(
@@ -1170,7 +1181,12 @@ describe("tool.team_spawn", () => {
               Effect.forkChild,
             )
           yield* waitUntil(() => Effect.sync(() => calls.length === 1))
-          expect(architectDone).toBe(false)
+          // The spawn returned immediately (the forked tool call finished) while the member runs
+          // in the background on the reconciler: the member is active, not completed.
+          expect(architectDone).toBe(true)
+          const architectRunning = (yield* team.getMembers(info.id)).find((member) => member.name === "architect")
+          expect(architectRunning?.status).toBe("active")
+          expect(architectRunning?.result).toBeNull()
           const architectPrompt = calls[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
           expect(architectPrompt).toContain("Proactive communication requirements:")
           expect(architectPrompt).toContain("Never ask the user questions directly")
@@ -1218,8 +1234,8 @@ describe("tool.team_spawn", () => {
           expect(calls[1]?.tools).toEqual({ team_create: false, team_spawn: false, local_fusion: false })
           const architectResult = yield* Fiber.join(architectFiber)
           expect(architectDone).toBe(true)
-          expect(architectResult.title).toBe("Teammate Completed")
-          expect(architectResult.output).toContain("architecture ready")
+          expect(architectResult.title).toBe("Teammate Started")
+          expect(architectResult.output).toContain("running in background")
           expect(calls[1]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")).toContain(
             "architecture ready",
           )
@@ -1278,7 +1294,7 @@ describe("tool.team_spawn", () => {
           )
 
           yield* waitUntil(() => Effect.sync(() => observedCompletionWakeStatuses.length > 0))
-          expect(result.title).toBe("Teammate Completed")
+          expect(result.title).toBe("Teammate Started")
           expect(observedCompletionWakeStatuses).toContain("completed")
           expect(observedCompletionWakeStatuses).not.toContain("active")
           expect((yield* team.getMembers(info.id)).find((member) => member.name === "worker")?.status).toBe("completed")
@@ -1408,7 +1424,8 @@ describe("tool.team_spawn", () => {
             wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
             run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
           }
-          const { lead, assistant } = yield* seed()
+          const { lead, assistant, info } = yield* seed()
+          const team = yield* Team.Service
           const tool = yield* TeamSpawnTool
           const def = yield* tool.init()
 
@@ -1439,9 +1456,165 @@ describe("tool.team_spawn", () => {
 
           const results = yield* Effect.all([Fiber.join(first), Fiber.join(second)], { concurrency: "unbounded" })
 
-          expect(results.map((result) => result.title)).toEqual(["Teammate Completed", "Teammate Completed"])
-          expect(results.map((result) => result.output).join("\n")).toContain("routes done")
-          expect(results.map((result) => result.output).join("\n")).toContain("cli done")
+          expect(results.map((result) => result.title)).toEqual(["Teammate Started", "Teammate Started"])
+          expect(results.map((result) => result.output)).toEqual([
+            expect.stringContaining("running in background"),
+            expect.stringContaining("running in background"),
+          ])
+          // The spawn results no longer embed the member results; completion arrives via the
+          // mailbox auto-notification once the background runs finish.
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              const members = yield* team.getMembers(info.id)
+              return members.filter((member) => member.status === "completed").length === 2
+            }),
+          )
+          const pendingLead = yield* team.getPendingMessages(lead.id, info.id)
+          expect(pendingLead.some((message) => message.body.includes("routes done"))).toBe(true)
+          expect(pendingLead.some((message) => message.body.includes("cli done"))).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("returns a started handle immediately and delivers completion via the mailbox", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          let release = () => {}
+          const gate = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.promise(async () => {
+                calls.push(input)
+                await gate
+                return reply(input, "background result")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Do background work",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+          const memberRow = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+          expect(result.title).toBe("Teammate Started")
+          expect(result.output).toContain("running in background")
+          expect(result.metadata).toMatchObject({
+            memberID: memberRow?.id,
+            sessionID: memberRow?.session_id,
+            dependencyIDs: [],
+          })
+
+          // The member starts on the reconciler poll (up to 500 ms) and runs in the background
+          // after the spawn call has already returned.
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+              return member?.status === "active"
+            }),
+          )
+          const activeMember = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+          expect(activeMember?.status).toBe("active")
+          expect(activeMember?.result).toBeNull()
+
+          release()
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              const current = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+              return current?.status === "completed"
+            }),
+          )
+          const completed = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+          expect(completed?.status).toBe("completed")
+          expect(completed?.result).toBe("background result")
+          // Completion is observed via the durable mailbox, not the spawn tool result.
+          const pendingLead = yield* team.getPendingMessages(lead.id, info.id)
+          expect(pendingLead.some((message) => message.body.includes("background result"))).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("starts a task member exactly once while the reconciler poll and manual reconciles overlap", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { lead, assistant, info } = yield* seed()
+          let release = () => {}
+          const gate = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          const calls: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.promise(async () => {
+                calls.push(input)
+                await gate
+                return reply(input, "single run")
+              }),
+            wake: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+            run: (sessionID) => Effect.sync(() => reply({ sessionID, parts: [] }, "looped")),
+          }
+          const tool = yield* TeamSpawnTool
+          const def = yield* tool.init()
+
+          yield* def.execute(
+            {
+              name: "worker",
+              agent_type: "general",
+              role_prompt: "Run once",
+            },
+            context({ lead, assistant, promptOps }),
+          )
+
+          // Wait until the member is running (its prompt was called once), then force additional
+          // reconcile passes while the run is still in flight: the runningMembers guard must
+          // suppress every re-start.
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              const member = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+              return member?.status === "active"
+            }),
+          )
+          expect(calls).toHaveLength(1)
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+          expect(calls).toHaveLength(1)
+
+          release()
+          yield* waitUntil(() =>
+            Effect.gen(function* () {
+              const current = (yield* team.getMembers(info.id)).find((candidate) => candidate.name === "worker")
+              return current?.status === "completed"
+            }),
+          )
+          // After completion the member is terminal, so neither the poll nor manual reconciles
+          // can start it again.
+          yield* lifecycle.reconcile
+          yield* lifecycle.reconcile
+          expect(calls).toHaveLength(1)
+          expect(
+            (yield* team.getMessages(info.id)).filter((message) => message.id.includes(":completed:")),
+          ).toHaveLength(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

@@ -142,7 +142,7 @@ The flow is:
 7. Insert a `team_member` row with status `starting`.
 8. Notify active dependency teammates if someone is waiting on them.
 9. If dependencies are incomplete, mark the new teammate `blocked`.
-10. If dependencies are complete, start the teammate and wait for its current run to finish.
+10. If dependencies are complete, return a "Teammate Started" handle immediately; the lifecycle reconciler starts the teammate on its next poll (for task members) or the spawn tool initializes it inline (for daemon members).
 
 Starting a teammate means building a prompt that includes:
 
@@ -160,26 +160,25 @@ Then `ops.prompt` runs the child session with the selected agent and model.
 
 ## Lead Waiting And Parallel Spawn
 
-Running teammates block the lead's current assistant step.
+Task teammates no longer block the lead's current assistant step.
 
-`team_spawn` waits for the teammate's current run and returns the teammate result to the lead. This matches the older `task` tool strategy: while delegated work is running, the lead session stays busy instead of continuing to reason over unknown future outputs.
+`team_spawn` returns immediately with a "Teammate Started" handle once the member and child session are created. The teammate's run is claimed by the lifecycle reconciler poll on its own fiber (each member runs on its own session's `Runner`, so cross-session concurrency already works); the lead session is free to keep reasoning while teammates work in the background. The member's final result is no longer embedded in the spawn tool result — completion arrives through the durable mailbox auto-notification, which the lead's finalization barrier delivers and the lead consumes (see [Lead Finalization Barrier](#lead-finalization-barrier)).
 
-The lead can still start multiple teammates in parallel by emitting multiple `team_spawn` tool calls in the same assistant step. The AI SDK executes sibling tool calls concurrently, so each `team_spawn` call waits for its own teammate while the overall step remains blocked until all sibling calls complete.
+The lead can still start multiple teammates in parallel by emitting multiple `team_spawn` tool calls in the same assistant step. Each call returns its handle immediately, so the whole step is not blocked on any teammate.
 
 Inside the teammate run:
 
-1. Member status becomes `active`.
-2. Lead gets an automatic "teammate started" message.
-3. The child session receives its assignment prompt.
-4. The teammate runs through the normal session prompt pipeline.
-5. When the teammate finishes, the canonical terminal result is extracted (see [Canonical Final Results And Empty-Result Handling](#canonical-final-results-and-empty-result-handling)).
-6. The lead gets an automatic completion message containing the result.
-7. Member status becomes `completed` — or `failed` with a deterministic `failure_code` after a blank retry, a provider error, or a missing owned-task handoff.
-8. Any blocked teammates that depended on this session are checked and possibly started.
+1. The reconcile poll claims the new `starting` member and runs it (single-winner: the in-memory `runningMembers` set guarantees a member starts exactly once, whether claimed by the poll or by `claimReadyDependents`).
+2. Member status becomes `active`.
+3. Lead gets an automatic "teammate started" message.
+4. The child session receives its assignment prompt.
+5. The teammate runs through the normal session prompt pipeline.
+6. When the teammate finishes, the canonical terminal result is extracted (see [Canonical Final Results And Empty-Result Handling](#canonical-final-results-and-empty-result-handling)).
+7. The lead gets an automatic completion message containing the result.
+8. Member status becomes `completed` — or `failed` with a deterministic `failure_code` after a blank retry, a provider error, or a missing owned-task handoff.
+9. Any blocked teammates that depended on this session are checked and possibly started.
 
-When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. The lead resumes after the relevant running teammates finish, then it can integrate results and decide the next coordination step.
-
-Once the lead's own assistant step completes, successful finalization does not exit the session while finite teammates remain nonterminal. The lead finalization barrier parks the exit and resumes the model loop on mail delivery; it releases the exit when every finite teammate is terminal. See [Lead Finalization Barrier](#lead-finalization-barrier).
+When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. Because the spawn call returns before the member finishes, a teammate started in the same step may still be nonterminal when the lead's own assistant step completes. Successful finalization therefore does not exit the session while finite teammates remain nonterminal: the lead finalization barrier parks the exit and resumes the model loop on mail delivery or a new user message; it releases the exit when every finite teammate is terminal. See [Lead Finalization Barrier](#lead-finalization-barrier).
 
 ## Daemon Teammates
 
@@ -295,6 +294,8 @@ When the lead attempts to finalize, the prompt loop runs a private finalization 
 5. Parks while any finite (task-lifecycle) member is not terminal.
 6. Rechecks durable mail and member state after every signal.
 7. Permits exit when every finite member is terminal, the team is closed, or the session is no longer the active lead.
+
+Because task teammates spawn asynchronously and complete on their own fibers, the barrier is how the lead observes teammate completion: the completion auto-notification arrives as pending mail, the mail delivery wakes the parked lead, and the loop continues to integrate the result. A new user message can also wake a parked lead so it can act while teammates continue in the background.
 
 Listeners only signal the parked fiber. Durable database state remains authoritative; the barrier never polls the database, sleeps, or invokes the LLM while parked.
 

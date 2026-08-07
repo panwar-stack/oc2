@@ -1,7 +1,7 @@
 Spawn a teammate agent as part of the current team.
 The teammate runs as a child session with its own agent type, prompt, and permissions.
-The spawn call waits for the teammate's current run to finish, keeping the lead session busy the same way task subagents do.
-The teammate receives team context and its final result is posted back to the lead automatically.
+The spawn call returns immediately with a started handle and does not block the lead: the teammate runs in the background, and the lead's finalization parks automatically until every finite teammate is terminal.
+The teammate receives team context and its final result is posted back to the lead automatically as a team message.
 Teammates are instructed to send proactive kickoff, progress, handoff, and blocker updates through the team mailbox.
 The lead receives automatic started/waiting updates, and active dependency teammates are notified when someone is waiting on their work.
 Use this when you need multiple agents working in parallel on different aspects of the team's goal.

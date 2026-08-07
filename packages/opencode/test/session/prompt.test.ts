@@ -1673,24 +1673,41 @@ it.live(
               role_prompt: "Review workflow CLI",
             }),
         )
+        // The members run in the background on the reconciler poll, so their prompt requests
+        // interleave with the lead's turns. Match each member on its prompt identity (present only
+        // in the member request) instead of the role prompt, which the lead's tool-call history
+        // also echoes. The identity string contains raw quotes, so match on the parsed message
+        // content rather than JSON.stringify(hit.body), which escapes them.
+        const teammateContent = (hit: { body?: Record<string, unknown> }) =>
+          (((hit.body as Record<string, unknown> | undefined)?.messages as Array<{ content?: string }> | undefined) ??
+            [])
+            .map((message) => message.content ?? "")
+            .join("\n")
+        const bodyContent = (body: Record<string, unknown>) =>
+          ((body.messages as Array<{ content?: string }> | undefined) ?? [])
+            .map((message) => message.content ?? "")
+            .join("\n")
         yield* llm.pushMatch(
-          (hit) => JSON.stringify(hit.body).includes("Review workflow routes"),
+          (hit) => teammateContent(hit).includes('You are teammate "routes" in team "parallel-team"'),
           reply().wait(routesReleased).text("routes done").stop(),
         )
         yield* llm.pushMatch(
-          (hit) => JSON.stringify(hit.body).includes("Review workflow CLI"),
+          (hit) => teammateContent(hit).includes('You are teammate "cli" in team "parallel-team"'),
           reply().wait(cliReleased).text("cli done").stop(),
         )
-        yield* llm.text("lead done")
+        // The lead's turn after the spawn tool calls returns starts immediately (the spawn does
+        // not wait for the members), so it is served before any member request.
+        yield* llm.textMatch((hit) => !teammateContent(hit).includes('You are teammate "'), "lead done")
 
         const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
         yield* Effect.promise(async () => {
           const end = Date.now() + 15_000
           while (Date.now() < end) {
-            const bodies = (await Effect.runPromise(llm.inputs)).map((input) => JSON.stringify(input))
+            const bodies = await Effect.runPromise(llm.inputs)
+            const contents = bodies.map((body) => bodyContent(body as Record<string, unknown>))
             if (
-              bodies.some((body) => body.includes("Review workflow routes")) &&
-              bodies.some((body) => body.includes("Review workflow CLI"))
+              contents.some((content) => content.includes('You are teammate "routes"')) &&
+              contents.some((content) => content.includes('You are teammate "cli"'))
             ) {
               return
             }
@@ -1702,12 +1719,27 @@ it.live(
         releaseCli()
 
         const result = yield* Fiber.join(fiber)
+        // The lead produced its own finalization text in the tool-results turn, then parked at the
+        // finalization barrier while the teammates ran in the background. Completion mail wakes the
+        // parked lead and the loop continues through a mail-continuation turn before exiting, so the
+        // final turn is a plain text stop rather than the earlier "lead done" message.
         expect(result.info.role).toBe("assistant")
-        expect(result.parts.some((part) => part.type === "text" && part.text === "lead done")).toBe(true)
+        expect(result.info.role === "assistant" && result.info.finish).toBe("stop")
+        expect(result.parts.some((part) => part.type === "text")).toBe(true)
+        const leadHistory = yield* sessions.messages({ sessionID: lead.id })
+        expect(
+          leadHistory.some(
+            (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "lead done"),
+          ),
+        ).toBe(true)
         const active = yield* team.getActive(lead.id)
         if (Option.isNone(active)) throw new Error("expected active team")
         const members = yield* team.getMembers(active.value.id)
         expect(members.filter((member) => member.status === "completed")).toHaveLength(2)
+        // Completion reaches the lead through the mailbox auto-notification, not the spawn result.
+        expect(
+          leadHistory.some((m) => m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.synthetic)),
+        ).toBe(true)
       }),
       {
         git: true,

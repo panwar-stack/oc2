@@ -256,10 +256,11 @@ export const TeamSpawnTool = Tool.define(
 
           // Every failure after member creation must terminalize the member as a notified
           // cancelled transition so a finite teammate never strands in `starting`. This includes
-          // interrupts: an interrupt before acquireUseRelease (which owns the release-handler
-          // cancellation) would otherwise leave the member in `starting`/`blocked` forever. The
-          // terminalization is idempotent, so when the release handler also cancels (interrupt
-          // inside acquireUseRelease) no duplicate notification is produced.
+          // interrupts: an interrupt before the result is returned (daemon members additionally
+          // hold the acquireUseRelease release-handler cancellation) would otherwise leave the
+          // member in `starting`/`blocked` forever. The terminalization is idempotent, so when the
+          // release handler also cancels (interrupt inside acquireUseRelease) no duplicate
+          // notification is produced.
           const terminalizeCancelled = (cause: Cause.Cause<unknown>) =>
             Effect.gen(function* () {
               const error = Cause.squash(cause)
@@ -365,26 +366,31 @@ export const TeamSpawnTool = Tool.define(
               }
             }
 
-            const runCancel = yield* EffectBridge.make()
-            const cancelMember = lifecycleReconciler.cancelMember({ memberID: member.id, ops }).pipe(Effect.ignore)
-            const cancelMemberUnlessPaused = interruptedByPause.pipe(
-              Effect.flatMap((paused) => (paused ? Effect.void : cancelMember)),
-            )
-            function onAbort() {
-              if (SessionControl.isPauseProvenance(ctx.abort.reason)) return
-              runCancel.fork(cancelMember)
-            }
+            // Daemon members keep the inline startMember await: initialization is bounded and
+            // settles to `idle`, so the tool still runs it and owns its abort-to-cancel. Task
+            // members start in the background instead — the spawn tool returns immediately and the
+            // lifecycle reconciler claims the member on its next poll (single-winner via the
+            // in-memory `runningMembers` set), so the tool no longer owns member cancellation.
+            if (member.lifecycle === "daemon") {
+              const runCancel = yield* EffectBridge.make()
+              const cancelMember = lifecycleReconciler.cancelMember({ memberID: member.id, ops }).pipe(Effect.ignore)
+              const cancelMemberUnlessPaused = interruptedByPause.pipe(
+                Effect.flatMap((paused) => (paused ? Effect.void : cancelMember)),
+              )
+              function onAbort() {
+                if (SessionControl.isPauseProvenance(ctx.abort.reason)) return
+                runCancel.fork(cancelMember)
+              }
 
-            return yield* Effect.acquireUseRelease(
-              Effect.sync(() => {
-                ctx.abort.addEventListener("abort", onAbort)
-                if (ctx.abort.aborted) onAbort()
-              }),
-              () =>
-                Effect.gen(function* () {
-                  const result = yield* lifecycleReconciler.startMember({ memberID: member.id, ops })
-                  const current = yield* team.getMemberBySession(member.session_id)
-                  if (member.lifecycle === "daemon") {
+              return yield* Effect.acquireUseRelease(
+                Effect.sync(() => {
+                  ctx.abort.addEventListener("abort", onAbort)
+                  if (ctx.abort.aborted) onAbort()
+                }),
+                () =>
+                  Effect.gen(function* () {
+                    const result = yield* lifecycleReconciler.startMember({ memberID: member.id, ops })
+                    const current = yield* team.getMemberBySession(member.session_id)
                     const failed = Option.isSome(current) && current.value.daemon_state === "error"
                     return {
                       title: failed ? "Daemon Teammate Initialization Failed" : "Daemon Teammate Initialized",
@@ -399,36 +405,35 @@ export const TeamSpawnTool = Tool.define(
                       ].join("\n"),
                       metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
                     }
-                  }
-                  return {
-                    title: "Teammate Completed",
-                    output: [
-                      `Teammate completed: ${member.name} (${member.session_id}) [${member.agent_type}]`,
-                      "",
-                      "<teammate_result>",
-                      result,
-                      "</teammate_result>",
-                    ].join("\n"),
-                    metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
-                  }
-                }),
-              (_, exit) =>
-                Effect.gen(function* () {
-                  if (Exit.hasInterrupts(exit)) yield* cancelMemberUnlessPaused
-                }).pipe(
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      ctx.abort.removeEventListener("abort", onAbort)
-                    }),
+                  }),
+                (_, exit) =>
+                  Effect.gen(function* () {
+                    if (Exit.hasInterrupts(exit)) yield* cancelMemberUnlessPaused
+                  }).pipe(
+                    Effect.ensuring(
+                      Effect.sync(() => {
+                        ctx.abort.removeEventListener("abort", onAbort)
+                      }),
+                    ),
                   ),
-                ),
-            )
+              )
+            }
+
+            // Task members: return a `started` handle immediately. The member's final result is no
+            // longer embedded here; it is delivered through the durable mailbox auto-notification,
+            // which the lead's finalization barrier consumes. The reconcile poll starts the member
+            // on its next tick; the in-memory `runningMembers` set guarantees a single start.
+            return {
+              title: "Teammate Started",
+              output: `Teammate started: ${member.name} (${member.session_id}) [${member.agent_type}]; running in background`,
+              metadata: { memberID: member.id, sessionID: member.session_id, dependencyIDs } as Metadata,
+            }
           }).pipe(
             // Terminalize every real failure and unpaused cancellation before the exit propagates,
             // so a finite teammate never strands in `starting`/`blocked`.
-            // Idempotent: the acquireUseRelease release handler or a prior settleMember may
-            // already have cancelled the member, and a successful spawn (member completed,
-            // cancelled, blocked, or daemon idle) never terminalizes here.
+            // Idempotent: the daemon acquireUseRelease release handler or a prior settleMember may
+            // already have cancelled the member, and a successful spawn (started, blocked, or
+            // daemon idle) never terminalizes here.
             Effect.onExit((exit) => {
               if (Exit.isSuccess(exit)) return Effect.void
               if (!Cause.hasInterruptsOnly(exit.cause)) return terminalizeCancelled(exit.cause)
