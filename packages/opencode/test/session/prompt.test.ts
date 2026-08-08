@@ -2387,10 +2387,23 @@ it.live(
           llm,
           memberStatus: "active",
         })
-        yield* llm.text("done")
+        // Settle the worker to terminal BEFORE the lead's loop starts. The canonical completion
+        // notification is committed as pending lead mail before any barrier exists, so it is
+        // guaranteed to be pending when the lead enters the barrier: a terminal commit can no
+        // longer land between the barrier's deliver() and exitPermitted() checks (the pre-existing
+        // race that could leave the notification undelivered after the lead exited).
+        yield* team.updateMemberStatus(member.id, "completed")
+        // Hold turn 1 so the loop is demonstrably parked while the mail is staged. Releasing the
+        // gate lets the barrier deliver the staged mail through the same durable read a parked
+        // lead uses; the Prompted subscription stays registered and does not disturb delivery.
+        const gate = yield* Deferred.make<void>()
+        yield* llm.hold("done", deferredAsPromise(gate))
         yield* llm.text("done again")
         const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
-        yield* assertLoopParked(fiber, "lead should park before mail staging")
+        // The turn is in flight once the provider dispatch hits the server (the stream is held).
+        // A titled session skips the title request, so this is the turn's own dispatch.
+        yield* llm.wait(1)
+        yield* assertLoopParked(fiber, "lead should stay parked before mail staging")
         yield* team.sendMessage({
           teamID: info.id,
           sender: worker.id,
@@ -2398,6 +2411,7 @@ it.live(
           body: "Mail while parked",
         })
         // Mail is claimed and delivered exactly as before the Prompted subscription existed.
+        yield* Deferred.succeed(gate, void 0)
         yield* pollWithTimeout(
           Effect.gen(function* () {
             const msgs = yield* sessions.messages({ sessionID: lead.id })
@@ -2408,8 +2422,6 @@ it.live(
           "mail while parked was never delivered",
           "5 seconds",
         )
-        yield* assertLoopParked(fiber, "lead should re-park after delivering mail")
-        yield* team.updateMemberStatus(member.id, "completed")
         const result = yield* awaitWithTimeout(
           Fiber.join(fiber),
           "lead did not exit after the worker completed",
