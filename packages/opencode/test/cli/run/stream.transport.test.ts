@@ -221,7 +221,7 @@ function assistantMessage(input: { sessionID: string; id: string; parts: Session
 
 // A finished assistant response to a user message: message.updated with a finish reason. This
 // is the signal a parked team lead produces before re-entering the finalization barrier.
-function finishedAssistant(id: string, finish = "stop"): SdkEvent {
+function finishedAssistant(id: string, finish = "stop", parentID = "msg-user-1"): SdkEvent {
   return {
     id: `evt-${id}-finished`,
     type: "message.updated",
@@ -229,6 +229,7 @@ function finishedAssistant(id: string, finish = "stop"): SdkEvent {
       sessionID: "session-1",
       info: {
         ...assistantMessage({ sessionID: "session-1", id, parts: [] }).info,
+        parentID,
         finish,
       } as SessionMessage["info"],
     },
@@ -2408,6 +2409,49 @@ describe("run stream transport", () => {
           model: undefined,
           variant: undefined,
           prompt: { text: "hello", parts: [] },
+          files: [],
+          includeFiles: false,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("turn timed out while parked")), 1_000)),
+      ])
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("completes a parked team-lead turn when the lead's response parent is a synthetic mail message", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async () => {
+          queueMicrotask(() => {
+            src.push(busy())
+            // The barrier delivers pending team mail before processing the user's message, so the
+            // lead responds to the synthetic mail message (a user message created after the
+            // prompt, hence a newer id), not to the prompt itself.
+            src.push(finishedAssistant("msg-1", "stop", "user-0002"))
+          })
+          return ok(undefined)
+        },
+        status: async () => ok({ "session-1": { type: "busy" } }),
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+      isParkedTeamLead: async () => true,
+    })
+
+    try {
+      await Promise.race([
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "hello", parts: [], messageID: "user-0001" },
           files: [],
           includeFiles: false,
         }),

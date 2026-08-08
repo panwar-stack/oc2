@@ -2,6 +2,20 @@ import { describe, expect, test } from "bun:test"
 import { runPromptQueue } from "@/cli/cmd/run/runtime.queue"
 import type { FooterApi, FooterEvent, RunPrompt, StreamCommit } from "@/cli/cmd/run/types"
 
+async function waitFor<T>(check: () => T | undefined, timeout = 1_000): Promise<T> {
+  const start = Date.now()
+  for (;;) {
+    const value = check()
+    if (value !== undefined) {
+      return value
+    }
+    if (Date.now() - start > timeout) {
+      throw new Error("waitFor timed out")
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 function footer() {
   const prompts = new Set<(input: RunPrompt) => void>()
   const queuedRemoves = new Set<(messageID: string) => void>()
@@ -498,6 +512,51 @@ describe("run runtime queue", () => {
     expect(event?.type === "queued.prompts" ? event.prompts : []).toEqual([])
 
     wake?.()
+    await task
+    expect(seen).toEqual(["one", "two"])
+  })
+
+  test("does not strand a prompt when isParkedTeamLead resolves false after the active turn completes", async () => {
+    const ui = footer()
+    const seen: string[] = []
+    let releaseTurn: (() => void) | undefined
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve
+    })
+    let releasePredicate: ((parked: boolean) => void) | undefined
+    const predicateGate = new Promise<boolean>((resolve) => {
+      releasePredicate = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      isParkedTeamLead: () => predicateGate,
+      run: async (input) => {
+        seen.push(input.text)
+        if (seen.length === 1) {
+          await turnGate
+          return
+        }
+
+        ui.api.close()
+      },
+    })
+
+    ui.submit("one")
+    await Promise.resolve()
+    expect(seen).toEqual(["one"])
+
+    // Prompt "two" arrives while turn "one" is active; the parked predicate is still
+    // resolving over the network.
+    ui.submit("two")
+    await Promise.resolve()
+
+    // The active turn completes and the drain loop exits while the predicate is pending.
+    releaseTurn?.()
+    await waitFor(() => ui.events.findLast((item) => item.type === "turn.idle"))
+
+    // The predicate then resolves false (no team). The prompt must still be sent.
+    releasePredicate?.(false)
     await task
     expect(seen).toEqual(["one", "two"])
   })

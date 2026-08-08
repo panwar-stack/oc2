@@ -237,6 +237,13 @@ function active(event: Event, sessionID: string): boolean {
 // Detects the lead's finished assistant response to the current turn's message. The lead's
 // loop produces this message before parking at the finalization barrier, so observing it is
 // the signal that completes a parked team-lead turn.
+//
+// The parentID is the newest user message the lead responded to. While parked, the finalization
+// barrier may deliver pending team mail before processing the user's prompt (deliver() runs
+// before hasNewUserMessage()), creating a synthetic user message with a newer id that becomes
+// the response's parent. So instead of requiring an exact match, reject only responses to
+// strictly older messages (MessageIDs are monotonic); responses to the prompt itself or to a
+// newer synthetic mail message both complete the turn.
 function isLeadResponse(event: Event, sessionID: string, messageID: string | undefined): boolean {
   if (event.type !== "message.updated") {
     return false
@@ -255,7 +262,7 @@ function isLeadResponse(event: Event, sessionID: string, messageID: string | und
     return false
   }
 
-  if (messageID !== undefined && info.parentID !== messageID) {
+  if (messageID !== undefined && info.parentID !== undefined && info.parentID < messageID) {
     return false
   }
 

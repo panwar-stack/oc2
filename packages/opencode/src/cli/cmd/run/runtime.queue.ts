@@ -299,10 +299,12 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
               return
             }
             queueClientSide(prompt)
+            drain()
           },
           () => {
             if (state.closed) return
             queueClientSide(prompt)
+            drain()
           },
         )
         return
