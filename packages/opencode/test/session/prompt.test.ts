@@ -4,9 +4,13 @@ import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Database } from "@oc2-ai/core/database/database"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { SessionEvent } from "@oc2-ai/core/session/event"
+import { SessionMessage } from "@oc2-ai/core/session/message"
+import { Prompt } from "@oc2-ai/core/session/prompt"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option } from "effect"
+import * as DateTime from "effect/DateTime"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@oc2-ai/core/util/error"
@@ -2220,6 +2224,275 @@ it.live(
         )
         expect(result.info.role).toBe("assistant")
         expect(Option.isSome(yield* team.getActive(lead.id))).toBe(true)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "a new user message wakes a parked lead, the lead processes it, then re-parks while the teammate stays nonterminal",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+        })
+        yield* llm.text("done")
+        yield* llm.text("acknowledged")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        // The lead parks deterministically on the nonterminal worker.
+        yield* assertLoopParked(fiber, "lead should park before user input")
+        // A mid-park user message is admitted via promptAsync and must wake the parked barrier
+        // (SessionEvent.Prompted is published inside createUserMessage).
+        const promptFiber = yield* prompt
+          .prompt({
+            sessionID: lead.id,
+            agent: "build",
+            model: ref,
+            parts: [{ type: "text", text: "new user message" }],
+          })
+          .pipe(Effect.forkChild)
+        // The wake produces a new assistant turn that addresses the new message.
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const ack = msgs.some(
+              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "acknowledged"),
+            )
+            const prompt = msgs.some(
+              (m) => m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.text === "new user message"),
+            )
+            return ack && prompt ? (true as const) : undefined
+          }),
+          "lead did not process the new user message",
+          "5 seconds",
+        )
+        // The teammate is still nonterminal, so the lead parks again after processing.
+        yield* assertLoopParked(fiber, "lead should re-park after processing the user message")
+        // Completing the worker releases the barrier; both fibers settle.
+        yield* team.updateMemberStatus(member.id, "completed")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after the worker completed",
+          "5 seconds",
+        )
+        yield* Fiber.join(promptFiber)
+        expect(result.info.role).toBe("assistant")
+        // Two model calls prove the lead took a turn for the mid-park user message (turn 1 was
+        // the initial prompt; a stale-park bug would never produce the second turn).
+        expect((yield* llm.calls) >= 2).toBe(true)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "a teammate's prompt does not wake the lead's parked barrier; only the lead's own prompt does",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+        })
+        const events = yield* EventV2Bridge.Service
+        yield* llm.text("done")
+        yield* llm.text("acknowledged")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* assertLoopParked(fiber, "lead should park before the teammate prompt")
+        // Publish exactly what a teammate's createUserMessage would publish for ITS session. The
+        // lead's barrier must filter it out by sessionID and take no additional turn.
+        const publishWorkerPrompt = () =>
+          events.publish(SessionEvent.Prompted, {
+            sessionID: worker.id,
+            messageID: SessionMessage.ID.create(),
+            timestamp: DateTime.makeUnsafe(Date.now()),
+            delivery: "steer",
+            prompt: new Prompt({ text: "teammate followup" }),
+          })
+        yield* publishWorkerPrompt()
+        yield* publishWorkerPrompt()
+        yield* assertLoopParked(fiber, "lead should stay parked after the teammate prompt")
+        // A real lead prompt (durable message + Prompted event on the lead's session) still wakes
+        // the barrier and produces a new assistant turn.
+        yield* user(lead.id, "lead followup")
+        yield* events.publish(SessionEvent.Prompted, {
+          sessionID: lead.id,
+          messageID: SessionMessage.ID.create(),
+          timestamp: DateTime.makeUnsafe(Date.now()),
+          delivery: "steer",
+          prompt: new Prompt({ text: "lead followup" }),
+        })
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            return msgs.some(
+              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "acknowledged"),
+            )
+              ? (true as const)
+              : undefined
+          }),
+          "lead did not process its own followup",
+          "5 seconds",
+        )
+        yield* assertLoopParked(fiber, "lead should re-park after its own followup")
+        // The teammate prompts never produced a lead turn: before the worker completes, the
+        // lead's assistant history contains only the two expected responses.
+        const assistantTexts = (yield* sessions.messages({ sessionID: lead.id }))
+          .filter((m) => m.info.role === "assistant")
+          .flatMap((m) => m.parts)
+          .filter((p): p is MessageV2.TextPart => p.type === "text")
+          .map((p) => p.text)
+        expect(assistantTexts).toEqual(["done", "acknowledged"])
+        yield* team.updateMemberStatus(member.id, "completed")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after the worker completed",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "team mail delivered while parked is unaffected by the Prompted subscription",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+        })
+        yield* llm.text("done")
+        yield* llm.text("done again")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* assertLoopParked(fiber, "lead should park before mail staging")
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Mail while parked",
+        })
+        // Mail is claimed and delivered exactly as before the Prompted subscription existed.
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            return msgs.some((m) => m.parts.some((p) => p.type === "text" && p.text.includes("Mail while parked")))
+              ? (true as const)
+              : undefined
+          }),
+          "mail while parked was never delivered",
+          "5 seconds",
+        )
+        yield* assertLoopParked(fiber, "lead should re-park after delivering mail")
+        yield* team.updateMemberStatus(member.id, "completed")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after the worker completed",
+          "5 seconds",
+        )
+        expect(result.info.role).toBe("assistant")
+        const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Mail while parked"))
+        expect(mailParts).toHaveLength(1)
+        expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "a user message does not reorder pending team mail: mail is delivered before the resumed turn",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info, member } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+        })
+        yield* llm.text("done")
+        yield* llm.text("integrated")
+        const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* assertLoopParked(fiber, "lead should park before mail and user input")
+        // Stage team mail AND a mid-park user message while the lead is parked.
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "Ordered handoff",
+        })
+        const promptFiber = yield* prompt
+          .prompt({
+            sessionID: lead.id,
+            agent: "build",
+            model: ref,
+            parts: [{ type: "text", text: "mid-park user message" }],
+          })
+          .pipe(Effect.forkChild)
+        // The mailbox rows are claimed and delivered before the user message is processed: by the
+        // time the resumed turn completes, the synthetic mail message, the user message, and the
+        // continuation response are all present, and the mail is delivered exactly once.
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* sessions.messages({ sessionID: lead.id })
+            const mail = msgs.some((m) => m.parts.some((p) => p.type === "text" && p.text.includes("Ordered handoff")))
+            const userMsg = msgs.some(
+              (m) => m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.text === "mid-park user message"),
+            )
+            const resumed = msgs.some(
+              (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "integrated"),
+            )
+            return mail && userMsg && resumed ? (true as const) : undefined
+          }),
+          "mail was not delivered before the resumed turn completed",
+          "5 seconds",
+        )
+        yield* assertLoopParked(fiber, "lead should re-park while the worker stays nonterminal")
+        yield* team.updateMemberStatus(member.id, "completed")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(fiber),
+          "lead did not exit after the worker completed",
+          "5 seconds",
+        )
+        yield* Fiber.join(promptFiber)
+        expect(result.info.role).toBe("assistant")
+        const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Ordered handoff"))
+        expect(mailParts).toHaveLength(1)
+        expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
       }),
       {
         git: true,

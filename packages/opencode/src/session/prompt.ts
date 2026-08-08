@@ -1230,21 +1230,22 @@ export const layer = Layer.effect(
           synthetic: [] as string[],
         },
       )
-      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-      if (flags.experimentalEventSystem) {
-        yield* events.publish(SessionEvent.Prompted, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          delivery: "steer",
-          prompt: new Prompt({
-            text: nextPrompt.text.join("\n"),
-            files: nextPrompt.files,
-            agents: nextPrompt.agents,
-            references: nextPrompt.references,
-          }),
-        })
-      }
+      // Published unconditionally on the shared event bridge: the finalization barrier subscribes
+      // to SessionEvent.Prompted so a parked team lead wakes on new user input (PR 2). The
+      // event-system flag gates the experimental v2 dual-write (Synthetic below), not this signal;
+      // the flag defaults off, so gating it here would break the wake in production.
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: input.sessionID,
+        messageID: SessionMessage.ID.create(),
+        timestamp: DateTime.makeUnsafe(info.time.created),
+        delivery: "steer",
+        prompt: new Prompt({
+          text: nextPrompt.text.join("\n"),
+          files: nextPrompt.files,
+          agents: nextPrompt.agents,
+          references: nextPrompt.references,
+        }),
+      })
       for (const text of nextPrompt.synthetic) {
         // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
         if (flags.experimentalEventSystem) {
@@ -1422,6 +1423,16 @@ export const layer = Layer.effect(
           const members = yield* team.getMembers(teamID)
           return !nonterminalFinite(members)
         })
+      // A new durable user message for this session since the barrier was entered. The message is
+      // persisted BEFORE SessionEvent.Prompted publishes (createUserMessage), so re-reading the
+      // durable state on wake is authoritative; the event itself only wakes the parked fiber.
+      const hasNewUserMessage = () =>
+        sessions
+          .findMessage(input.session.id, (m) => m.info.role === "user")
+          .pipe(
+            Effect.map((match) => Option.isSome(match) && match.value.info.id > input.lastUser.id),
+            Effect.orDie,
+          )
 
       let signal = yield* Deferred.make<void>()
       const unsubscribes: Array<() => void> = []
@@ -1445,18 +1456,33 @@ export const layer = Layer.effect(
             ),
           { concurrency: "unbounded", discard: true },
         )
+        yield* events
+          .subscribeCallback(SessionEvent.Prompted, (event) => {
+            // Filter by sessionID so a teammate's prompt does not spuriously wake this lead's park.
+            if (event.data.sessionID === input.session.id) Deferred.doneUnsafe(signal, Effect.void)
+          })
+          .pipe(
+            Effect.map((off) => {
+              unsubscribes.push(off)
+            }),
+          )
         while (true) {
           // (a) Deliver pending lead mail; a delivery resumes the model loop.
           if (yield* deliver()) return true
           // (b) Permit exit when the team is closed or the session is no longer the active lead.
           if (yield* exitPermitted()) return false
-          // (c) Park. Swap to a fresh signal, then re-run the full check once more so a
+          // (c) Resume the model loop on a new user message for this session (PR 2): the signal
+          // fires only when the durable message already exists, and the re-read at the top of the
+          // run loop picks it up.
+          if (yield* hasNewUserMessage()) return true
+          // (d) Park. Swap to a fresh signal, then re-run the full check once more so a
           // transition that fired between the previous check and this point is not lost: the
           // fresh signal is only set by events that arrive after the swap.
           const parked = yield* Deferred.make<void>()
           signal = parked
           if (yield* deliver()) return true
           if (yield* exitPermitted()) return false
+          if (yield* hasNewUserMessage()) return true
           yield* Deferred.await(parked)
         }
       }).pipe(Effect.ensuring(Effect.suspend(cleanup)))
