@@ -21,3 +21,4 @@ Store implementation-ready proposals under `specs/proposals/`. A proposal must d
 ## Proposed Specifications
 
 - [Deterministic Agent-Team Orchestration](./proposals/deterministic-agent-team-orchestration.md)
+- [Event-Driven Lead Waiting](./proposals/event-driven-lead-waiting.md)
