@@ -462,4 +462,79 @@ describe("run runtime queue", () => {
     ui.submit("one")
     await expect(task).rejects.toThrow("boom")
   })
+
+  test("submits a queued message immediately via promptAsync while the lead is parked", async () => {
+    const ui = footer()
+    const seen: string[] = []
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      isParkedTeamLead: () => true,
+      run: async (input) => {
+        seen.push(input.text)
+        if (seen.length === 1) {
+          await gate
+          return
+        }
+
+        ui.api.close()
+      },
+    })
+
+    ui.submit("one")
+    await Promise.resolve()
+    expect(seen).toEqual(["one"])
+
+    ui.submit("two")
+    await Promise.resolve()
+    await Promise.resolve()
+    // A parked team lead submits the prompt immediately instead of exposing it client-side
+    // for edit/removal until the active turn completes.
+    const event = ui.events.findLast((item) => item.type === "queued.prompts")
+    expect(event?.type === "queued.prompts" ? event.prompts : []).toEqual([])
+
+    wake?.()
+    await task
+    expect(seen).toEqual(["one", "two"])
+  })
+
+  test("still queues a message until the turn completes when not a parked team lead", async () => {
+    const ui = footer()
+    const seen: string[] = []
+    let wake: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      wake = resolve
+    })
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      run: async (input) => {
+        seen.push(input.text)
+        if (seen.length === 1) {
+          await gate
+          return
+        }
+
+        ui.api.close()
+      },
+    })
+
+    ui.submit("one")
+    await Promise.resolve()
+    expect(seen).toEqual(["one"])
+
+    ui.submit("two")
+    await Promise.resolve()
+    // The non-team path holds the prompt client-side until the active turn completes.
+    const event = ui.events.findLast((item) => item.type === "queued.prompts")
+    expect(event?.type === "queued.prompts" ? event.prompts.map((item) => item.prompt.text) : []).toEqual(["two"])
+
+    wake?.()
+    await task
+    expect(seen).toEqual(["one", "two"])
+  })
 })

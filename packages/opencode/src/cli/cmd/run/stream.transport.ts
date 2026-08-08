@@ -78,12 +78,20 @@ type StreamInput = {
   footer: FooterApi
   trace?: Trace
   signal?: AbortSignal
+  // When the session is a team lead parked at the finalization barrier with nonterminal finite
+  // members, the turn completes on the lead's response to the message instead of waiting for
+  // session idle (the session stays busy while teammates run).
+  isParkedTeamLead?: () => Promise<boolean>
 }
 
 type Wait = {
   tick: number
   armed: boolean
   live: boolean
+  messageID?: string
+  // Set when the turn is a parked team-lead turn and the lead's response to the message has
+  // been observed. Parked turns then complete without waiting for session idle.
+  responded: boolean
   onVisibleOutput?: (anchor: LocalReplayAnchor) => void
   done: Deferred.Deferred<void, unknown>
 }
@@ -224,6 +232,34 @@ function active(event: Event, sessionID: string): boolean {
   }
 
   return event.properties.status.type !== "idle"
+}
+
+// Detects the lead's finished assistant response to the current turn's message. The lead's
+// loop produces this message before parking at the finalization barrier, so observing it is
+// the signal that completes a parked team-lead turn.
+function isLeadResponse(event: Event, sessionID: string, messageID: string | undefined): boolean {
+  if (event.type !== "message.updated") {
+    return false
+  }
+
+  if (event.properties.sessionID !== sessionID) {
+    return false
+  }
+
+  const info = event.properties.info as { role?: string; parentID?: string; finish?: string }
+  if (info.role !== "assistant") {
+    return false
+  }
+
+  if (typeof info.finish !== "string" || info.finish === "tool-calls") {
+    return false
+  }
+
+  if (messageID !== undefined && info.parentID !== messageID) {
+    return false
+  }
+
+  return true
 }
 
 // Races the turn's deferred completion against an abort signal.
@@ -836,7 +872,10 @@ function createLayer(input: StreamInput) {
             return
           }
 
-          if (!(yield* idle(fallback)) || state.wait !== next) {
+          // A parked team-lead turn completes when the lead's response to that message is
+          // observed; the session never reports idle while teammates run, so the idle check
+          // would stall the turn. Non-parked turns keep idle-based completion unchanged.
+          if (!next.responded && (!(yield* idle(fallback)) || state.wait !== next)) {
             return
           }
 
@@ -946,6 +985,25 @@ function createLayer(input: StreamInput) {
 
           touch(event)
           yield* mark(event)
+
+          // Parked team-lead turn: the lead's response to the current message completes the
+          // turn once the response is observed, without waiting for session idle (the session
+          // stays busy while teammates run). The parked state is evaluated at response time
+          // because the team may only exist once the lead has processed the message.
+          const wait = state.wait
+          const isParkedTeamLead = input.isParkedTeamLead
+          if (
+            wait &&
+            !wait.responded &&
+            isLeadResponse(event, input.sessionID, wait.messageID) &&
+            isParkedTeamLead
+          ) {
+            const parked = yield* Effect.promise(() => isParkedTeamLead()).pipe(Effect.orElseSucceed(() => false))
+            if (parked && state.wait === wait && !wait.responded) {
+              wait.responded = true
+              yield* complete(wait, true)
+            }
+          }
         })
 
         const drainBuffered = Effect.fn("RunStreamTransport.drainBuffered")(function* () {
@@ -1199,6 +1257,8 @@ function createLayer(input: StreamInput) {
             tick: state.tick,
             armed: false,
             live: false,
+            messageID: next.prompt.messageID,
+            responded: false,
             onVisibleOutput: next.onVisibleOutput,
             done: yield* Deferred.make<void, unknown>(),
           }

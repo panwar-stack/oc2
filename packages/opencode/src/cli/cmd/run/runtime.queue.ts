@@ -29,6 +29,11 @@ export type QueueInput = {
   onSend?: (prompt: RunPrompt) => void
   onNewSession?: () => void | Promise<void>
   run: (prompt: RunPrompt, signal: AbortSignal) => Promise<void>
+  // When true, the session is a team lead parked at the finalization barrier with nonterminal
+  // finite members. While parked, prompts are submitted immediately (their own loop iteration)
+  // instead of being held client-side until the active turn completes, because the lead's
+  // session never goes idle while teammates run.
+  isParkedTeamLead?: () => boolean | Promise<boolean>
 }
 
 type State = {
@@ -250,6 +255,17 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     })()
   }
 
+  const queueClientSide = (prompt: RunPrompt) => {
+    const queued: FooterQueuedPrompt = {
+      messageID: MessageID.ascending(),
+      partID: PartID.ascending(),
+      prompt,
+    }
+    state.queued = [...state.queued, queued]
+    state.queue.push(prompt)
+    syncQueue()
+  }
+
   const submit = (prompt: RunPrompt) => {
     if (!prompt.text.trim() || state.closed) {
       return
@@ -269,14 +285,30 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       !prompt.command &&
       !isNewCommand(prompt.text)
     ) {
-      const queued: FooterQueuedPrompt = {
-        messageID: MessageID.ascending(),
-        partID: PartID.ascending(),
-        prompt,
+      // Parked team leads never go idle while teammates run, so holding the prompt client-side
+      // until the active turn completes would stall it. Submit it immediately (its own drain
+      // iteration, which the response-based turn completion releases promptly) instead.
+      if (input.isParkedTeamLead) {
+        void Promise.resolve(input.isParkedTeamLead()).then(
+          (parked) => {
+            if (state.closed) return
+            if (parked) {
+              state.queue.push(prompt)
+              syncQueue()
+              drain()
+              return
+            }
+            queueClientSide(prompt)
+          },
+          () => {
+            if (state.closed) return
+            queueClientSide(prompt)
+          },
+        )
+        return
       }
-      state.queued = [...state.queued, queued]
-      state.queue.push(prompt)
-      syncQueue()
+
+      queueClientSide(prompt)
       return
     }
 

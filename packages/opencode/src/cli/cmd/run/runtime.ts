@@ -489,6 +489,31 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       })
 
       const streamTask = deps.streamTransport ?? import("./stream.transport")
+      // The session is a team lead parked at the finalization barrier when it leads an active
+      // team (the server team.get endpoint only returns an active team led by this session) and
+      // its own session status is busy, which the lead's Runner keeps while finite teammates
+      // run. This drives response-based turn completion and immediate prompt submission while
+      // the lead parks.
+      const isParkedTeamLead = async (): Promise<boolean> => {
+        if (!state.sessionID) {
+          return false
+        }
+
+        const team = await ctx.sdk.team
+          .get({ sessionID: state.sessionID })
+          .then((result) => result.data)
+          .catch(() => undefined)
+        if (!team || team.lead_session_id !== state.sessionID) {
+          return false
+        }
+
+        const status = await ctx.sdk.session
+          .status()
+          .then((result) => result.data?.[state.sessionID!])
+          .catch(() => undefined)
+        return !!status && status.type !== "idle"
+      }
+
       const ensureStream = () => {
         if (state.stream) {
           return state.stream
@@ -518,6 +543,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
             providers: () => state.providers,
             footer,
             trace: log,
+            isParkedTeamLead,
           })
           if (footer.isClosed) {
             await handle.close()
@@ -581,6 +607,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           footer,
           initialInput: input.initialInput,
           trace: log,
+          isParkedTeamLead,
           onSend: (prompt) => {
             state.shown = true
             state.history.push(prompt)

@@ -219,6 +219,22 @@ function assistantMessage(input: { sessionID: string; id: string; parts: Session
   }
 }
 
+// A finished assistant response to a user message: message.updated with a finish reason. This
+// is the signal a parked team lead produces before re-entering the finalization barrier.
+function finishedAssistant(id: string, finish = "stop"): SdkEvent {
+  return {
+    id: `evt-${id}-finished`,
+    type: "message.updated",
+    properties: {
+      sessionID: "session-1",
+      info: {
+        ...assistantMessage({ sessionID: "session-1", id, parts: [] }).info,
+        finish,
+      } as SessionMessage["info"],
+    },
+  }
+}
+
 function runningTool(input: {
   sessionID: string
   messageID: string
@@ -2356,6 +2372,99 @@ describe("run stream transport", () => {
 
       ctrl.abort()
       await task
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("completes a parked team-lead turn on the lead's response instead of session idle", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async () => {
+          queueMicrotask(() => {
+            src.push(busy())
+            // The lead's response to the message: a finished assistant message.
+            src.push(finishedAssistant("msg-1"))
+          })
+          return ok(undefined)
+        },
+        status: async () => ok({ "session-1": { type: "busy" } }),
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+      isParkedTeamLead: async () => true,
+    })
+
+    try {
+      await Promise.race([
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "hello", parts: [] },
+          files: [],
+          includeFiles: false,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("turn timed out while parked")), 1_000)),
+      ])
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("keeps idle-based completion for a non-team turn even after an assistant response", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const trace = mock((_type: string, _data?: unknown) => {})
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async () => {
+          queueMicrotask(() => {
+            src.push(busy())
+            src.push(finishedAssistant("msg-1"))
+          })
+          return ok(undefined)
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+      trace: { write: trace },
+    })
+
+    try {
+      const turn = transport.runPromptTurn({
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        prompt: { text: "hello", parts: [] },
+        files: [],
+        includeFiles: false,
+      })
+
+      // The assistant response must be processed without ending the turn: observe the
+      // message.updated event, then confirm no turn.end was emitted yet.
+      await waitFor(() =>
+        trace.mock.calls.some(
+          (call) => call[0] === "recv.event" && (call[1] as { type?: string } | undefined)?.type === "message.updated",
+        )
+          ? true
+          : undefined,
+      )
+      expect(trace.mock.calls.some((call) => call[0] === "turn.end")).toBe(false)
+
+      src.push(idle())
+      await turn
+      expect(trace.mock.calls.some((call) => call[0] === "turn.end")).toBe(true)
     } finally {
       src.close()
       await transport.close()
