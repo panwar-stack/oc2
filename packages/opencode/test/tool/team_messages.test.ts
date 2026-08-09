@@ -22,6 +22,7 @@ import { wakeTeamSession } from "@/tool/team_wake"
 import { Permission } from "@/permission"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { Runner } from "@/effect/runner"
+import { SessionRunState } from "@/session/run-state"
 import { Database } from "@oc2-ai/core/database/database"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { ModelID, ProviderID } from "@/provider/schema"
@@ -44,11 +45,14 @@ const it = testEffect(
     CrossSpawnSpawner.defaultLayer,
     Database.defaultLayer,
     Session.defaultLayer,
+    SessionRunState.defaultLayer,
     Team.defaultLayer,
     SessionControl.defaultLayer,
     Truncate.defaultLayer,
   ),
 )
+
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
 const seed = Effect.fn("TeamMessagesTest.seed")(function* (input?: {
   planMode?: boolean
@@ -981,6 +985,133 @@ describe("tool.team_plan_decide", () => {
 })
 
 describe("team message wake safety", () => {
+  it.live("direct message wakes recheck terminal teammates while the lead remains admissible", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const runState = yield* SessionRunState.Service
+          const { db } = yield* Database.Service
+          const { lead, info, worker, member } = yield* seed()
+          const messageCommitted = yield* Deferred.make<void>()
+          const releaseMessage = yield* Deferred.make<void>()
+          const mutableDb = db as Mutable<Database.Interface["db"]>
+          const mutableRunState = runState as Mutable<SessionRunState.Interface>
+          const originalTransaction = db.transaction
+          const originalWakeRegistered = runState.wakeRegistered
+          const wakeSessionIDs: SessionID[] = []
+          let transactionCalls = 0
+
+          mutableDb.transaction = ((...args: Parameters<typeof originalTransaction>) => {
+            transactionCalls++
+            const transaction = originalTransaction(...args)
+            if (transactionCalls !== 1) return transaction
+            return Effect.gen(function* () {
+              const result = yield* transaction as Effect.Effect<unknown, unknown, unknown>
+              yield* Deferred.succeed(messageCommitted, undefined)
+              yield* Deferred.await(releaseMessage)
+              return result
+            })
+          }) as typeof db.transaction
+          mutableRunState.wakeRegistered = ((sessionID) =>
+            Effect.sync(() => {
+              wakeSessionIDs.push(sessionID)
+              return false
+            })) as SessionRunState.Interface["wakeRegistered"]
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableDb.transaction = originalTransaction
+              mutableRunState.wakeRegistered = originalWakeRegistered
+            }).pipe(Effect.andThen(Deferred.succeed(releaseMessage, undefined).pipe(Effect.ignore))),
+          )
+
+          const sender = yield* team
+            .sendMessage({
+              teamID: info.id,
+              sender: lead.id,
+              recipients: [lead.id, worker.id],
+              body: "Committed before terminal settlement.",
+            })
+            .pipe(Effect.forkChild)
+          yield* Deferred.await(messageCommitted)
+
+          yield* team.updateMemberStatus(member.id, "completed", "settled before direct wake admission")
+          expect(wakeSessionIDs).toEqual([lead.id])
+          wakeSessionIDs.length = 0
+
+          yield* Deferred.succeed(releaseMessage, undefined)
+          yield* Fiber.join(sender)
+
+          expect(wakeSessionIDs).toEqual([lead.id])
+          expect((yield* team.getMemberBySession(worker.id)).pipe(Option.getOrThrow).status).toBe("completed")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("direct plan approval wake does not start a teammate settled after approval commits", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const runState = yield* SessionRunState.Service
+          const { db } = yield* Database.Service
+          const { lead, worker, member } = yield* seed({ planMode: true, permission: planModePermission })
+          const approvalCommitted = yield* Deferred.make<void>()
+          const releaseApproval = yield* Deferred.make<void>()
+          const mutableDb = db as Mutable<Database.Interface["db"]>
+          const mutableRunState = runState as Mutable<SessionRunState.Interface>
+          const originalTransaction = db.transaction
+          const originalWakeRegistered = runState.wakeRegistered
+          const wakeSessionIDs: SessionID[] = []
+          let transactionCalls = 0
+
+          mutableDb.transaction = ((...args: Parameters<typeof originalTransaction>) => {
+            transactionCalls++
+            const transaction = originalTransaction(...args)
+            if (transactionCalls !== 1) return transaction
+            return Effect.gen(function* () {
+              const result = yield* transaction as Effect.Effect<unknown, unknown, unknown>
+              yield* Deferred.succeed(approvalCommitted, undefined)
+              yield* Deferred.await(releaseApproval)
+              return result
+            })
+          }) as typeof db.transaction
+          mutableRunState.wakeRegistered = ((sessionID) =>
+            Effect.sync(() => {
+              wakeSessionIDs.push(sessionID)
+              return false
+            })) as SessionRunState.Interface["wakeRegistered"]
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableDb.transaction = originalTransaction
+              mutableRunState.wakeRegistered = originalWakeRegistered
+            }).pipe(Effect.andThen(Deferred.succeed(releaseApproval, undefined).pipe(Effect.ignore))),
+          )
+
+          const approval = yield* team
+            .approveMemberPlan(member.id, {
+              sender: lead.id,
+              body: "Approved before terminal settlement.",
+              usageMetadata: {},
+            })
+            .pipe(Effect.forkChild)
+          yield* Deferred.await(approvalCommitted)
+
+          yield* team.updateMemberStatus(member.id, "completed", "settled before approval wake admission")
+          expect(wakeSessionIDs).toEqual([lead.id])
+          wakeSessionIDs.length = 0
+
+          yield* Deferred.succeed(releaseApproval, undefined)
+          expect(Option.isSome(yield* Fiber.join(approval))).toBe(true)
+
+          expect(wakeSessionIDs).toEqual([])
+          expect((yield* team.getMemberBySession(worker.id)).pipe(Option.getOrThrow).status).toBe("completed")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("serializes a terminal settlement attempted between wake validation and admission", () =>
     provideTmpdirInstance(
       () =>

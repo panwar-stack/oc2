@@ -11,6 +11,8 @@ import { SessionControl } from "@oc2-ai/core/session/control"
 import { EventV2 } from "@oc2-ai/core/event"
 import { SessionEvent } from "@oc2-ai/core/session/event"
 import { PendingMailbox } from "@/team/pending-mailbox"
+import { SessionTable } from "@oc2-ai/core/session/sql"
+import { eq } from "drizzle-orm"
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
@@ -47,6 +49,7 @@ export interface Interface {
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
     work: Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
+    attached?: Latch.Latch,
   ) => Effect.Effect<SessionV1.WithParts, Runner.Suspended>
   readonly wake: (
     sessionID: SessionID,
@@ -311,9 +314,10 @@ export const layer = Layer.effect(
       sessionID: SessionID,
       onInterrupt: Effect.Effect<SessionV1.WithParts>,
       work: Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
+      attached?: Latch.Latch,
     ) {
       yield* assertNotSuspended(db, sessionID)
-      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work)
+      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work, attached)
     })
 
     const wake = Effect.fn("SessionRunState.wake")(function* (
@@ -329,6 +333,16 @@ export const layer = Layer.effect(
     const wakeRegistered = Effect.fn("SessionRunState.wakeRegistered")(function* (sessionID: SessionID) {
       const target = wakeTarget?.make(sessionID)
       if (!target) return yield* signalPark(sessionID)
+      const data = yield* InstanceState.get(state)
+      if (!data.runners.has(sessionID) && !data.parks.has(sessionID)) {
+        const owner = yield* db
+          .select({ directory: SessionTable.directory })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (owner?.directory !== (yield* InstanceState.directory)) return false
+      }
       return yield* wake(sessionID, target.onInterrupt, target.work).pipe(
         // A durable producer must not fail after commit when the target is paused. The existing
         // resume-intent path remains authoritative and will schedule the same registered work.

@@ -21,7 +21,7 @@ import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import { TeamEvents } from "@/team/events"
 import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Schedule, Scope } from "effect"
+import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Scope } from "effect"
 
 import type { SessionPrompt } from "./prompt"
 
@@ -84,6 +84,7 @@ type MemberMetadata = {
 type State = {
   readonly projectID: SessionRow["project_id"]
   readonly runningMembers: Set<string>
+  readonly memberAdmissions: Map<string, Deferred.Deferred<MemberAdmissionOutcome>>
   readonly launchingBackground: Set<string>
   readonly watchedBackground: Set<string>
   readonly scope: Scope.Scope
@@ -100,6 +101,10 @@ type PartRow = typeof PartTable.$inferSelect
 type DatabaseService = Database.Interface["db"]
 type QueryDatabase = Pick<DatabaseService, "select">
 type WriteDatabase = Pick<DatabaseService, "insert" | "select" | "update">
+
+type MemberAdmissionOutcome =
+  | { readonly _tag: "admitted"; readonly generation: number }
+  | { readonly _tag: "not-admitted"; readonly reason: "blocked" | "failed" }
 
 const metadataKey = "lifecycleReconciler"
 const memberMetadataKey = "lifecycleTeamMember"
@@ -469,6 +474,7 @@ export const layer = Layer.effect(
         return {
           projectID: ctx.project.id,
           runningMembers: new Set<string>(),
+          memberAdmissions: new Map<string, Deferred.Deferred<MemberAdmissionOutcome>>(),
           launchingBackground: new Set<string>(),
           watchedBackground: new Set<string>(),
           scope: yield* Scope.Scope,
@@ -1084,9 +1090,10 @@ export const layer = Layer.effect(
         return undefined
       }
       if (settled.kind === "retry") return settled
-      // Directly wake the lead after commit and before best-effort event publication. The durable
-      // status and canonical mail are authoritative, so a blocked or failed publisher must not
-      // keep a same-process lead parked. Keep commit -> wake -> publish uninterruptible.
+      // Ready dependents are claimed and, when local prompt ops exist, their active state and
+      // started mail are durable before the direct lead wake. The durable rows stay authoritative,
+      // so a blocked or failed publisher cannot hide either the settlement or the newly admitted
+      // work. Keep dependent admission -> wake -> best-effort publish uninterruptible.
       const safePublish = (effect: Effect.Effect<void>) =>
         effect.pipe(
           Effect.catchCause((cause) =>
@@ -1095,10 +1102,48 @@ export const layer = Layer.effect(
             }),
           ),
         )
-      const current = yield* InstanceState.get(state)
       yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          yield* wakeWithIntent(current.ops, settled.team.lead_session_id, "team-wake")
+          const current = yield* InstanceState.get(state)
+          // The terminal commit must always reach the lead, even when dependent discovery or
+          // admission defects. When local prompt operations exist, do not claim a dependent until
+          // this process can wait for its active state and started mail to commit.
+          yield* Effect.gen(function* () {
+            if (settled.state !== "completed" || !current.ops) return
+            const claimed = yield* claimReadyDependents(settled.team.id)
+            yield* Effect.forEach(
+              claimed,
+              (memberID) =>
+                Effect.gen(function* () {
+                  const admitted = yield* Deferred.make<MemberAdmissionOutcome>()
+                  const failedAdmission = { _tag: "not-admitted", reason: "failed" } as const
+                  const child = yield* Effect.uninterruptibleMask((restore) =>
+                    // Install the fallback completion while interruption is masked, then restore
+                    // interruption for InstanceState lookup, prior-admission waits, and model work.
+                    // Closing the child scope at any of those points can no longer strand the
+                    // settlement parent on Deferred.await below.
+                    restore(startMemberWithAdmission({ memberID, ops: current.ops!, admitted })).pipe(
+                      Effect.ensuring(Deferred.succeed(admitted, failedAdmission).pipe(Effect.asVoid)),
+                    ),
+                  ).pipe(
+                    // Only admission completion is uninterruptible. The dependent's model work
+                    // stays cancellable after its active state and started mail are durable.
+                    Effect.forkIn(current.scope),
+                  )
+                  // A fork into a scope that closed before the child started cannot install its
+                  // own finalizer. Observe that pre-start exit as a second completion source so the
+                  // settlement parent still cannot wait forever.
+                  yield* Effect.raceFirst(
+                    Deferred.await(admitted),
+                    Fiber.await(child).pipe(
+                      Effect.andThen(Deferred.succeed(admitted, failedAdmission)),
+                      Effect.andThen(Deferred.await(admitted)),
+                    ),
+                  )
+                }),
+              { discard: true },
+            )
+          }).pipe(Effect.ensuring(wakeWithIntent(current.ops, settled.team.lead_session_id, "team-wake")))
           const member = yield* db
             .select()
             .from(TeamMemberTable)
@@ -1143,16 +1188,6 @@ export const layer = Layer.effect(
           }
         }),
       )
-      if (settled.state === "completed") {
-        const claimed = yield* claimReadyDependents(settled.team.id)
-        if (current.ops) {
-          yield* Effect.forEach(
-            claimed,
-            (memberID) => startMember({ memberID, ops: current.ops! }).pipe(Effect.forkIn(current.scope)),
-            { discard: true },
-          )
-        }
-      }
       return settled
     })
 
@@ -1498,16 +1533,51 @@ export const layer = Layer.effect(
       return output || "(no text result)"
     })
 
-    const startMember: Interface["startMember"] = Effect.fn("LifecycleReconciler.startMember")(function* (input) {
+    const startMemberWithAdmission: (input: {
+      memberID: string
+      ops: PromptOps
+      admitted?: Deferred.Deferred<MemberAdmissionOutcome>
+    }) => Effect.Effect<string> = Effect.fn("LifecycleReconciler.startMember")(function* (input) {
       const current = yield* InstanceState.get(state)
       current.ops = input.ops
-      if (current.runningMembers.has(input.memberID)) return "Teammate is already running."
+      while (current.runningMembers.has(input.memberID)) {
+        const existing = current.memberAdmissions.get(input.memberID)
+        if (!existing) {
+          yield* Effect.yieldNow
+          continue
+        }
+        const outcome = yield* Deferred.await(existing)
+        if (outcome._tag === "admitted") {
+          if (input.admitted) yield* Deferred.succeed(input.admitted, outcome)
+          return "Teammate is already running."
+        }
+        // A blocked or failed older attempt removes its identity before completing this Deferred.
+        // Retry acquisition so it cannot release a newer claimed start without a durable admission.
+      }
+      const admission = Deferred.makeUnsafe<MemberAdmissionOutcome>()
+      let admissionOutcome: MemberAdmissionOutcome = { _tag: "not-admitted", reason: "failed" }
       current.runningMembers.add(input.memberID)
+      current.memberAdmissions.set(input.memberID, admission)
+      const notifyAdmission = (outcome: MemberAdmissionOutcome) =>
+        Effect.all(
+          [
+            Deferred.succeed(admission, outcome),
+            input.admitted ? Deferred.succeed(input.admitted, outcome) : Effect.void,
+          ],
+          { discard: true },
+        )
       return yield* Effect.gen(function* () {
         const prepared = yield* prepareMember(input.memberID)
-        if (prepared.action === "terminal") return "Teammate is already in a terminal state."
-        if (prepared.action === "blocked") return "Teammate is waiting for dependencies."
+        if (prepared.action === "terminal") {
+          admissionOutcome = { _tag: "not-admitted", reason: "blocked" }
+          return "Teammate is already in a terminal state."
+        }
+        if (prepared.action === "blocked") {
+          admissionOutcome = { _tag: "not-admitted", reason: "blocked" }
+          return "Teammate is waiting for dependencies."
+        }
         if (prepared.action === "settle") {
+          admissionOutcome = { _tag: "not-admitted", reason: "blocked" }
           const settled = yield* settleMember({
             memberID: prepared.member.id,
             state: prepared.lifecycle.state as Exclude<MemberMetadata["state"], "running">,
@@ -1527,9 +1597,15 @@ export const layer = Layer.effect(
           return prepared.lifecycle.output ?? prepared.lifecycle.error ?? "Teammate settlement restored."
         }
         if (prepared.action === "paused") {
+          admissionOutcome = { _tag: "not-admitted", reason: "blocked" }
           yield* setIntent(prepared.member.session_id, "team-wake")
           return "Teammate is suspended and will resume after the pause is released."
         }
+        // prepareMember committed the member's active status, generation metadata, and canonical
+        // started mail. A predecessor settlement may now wake the lead without waiting for this
+        // member's model work to finish.
+        admissionOutcome = { _tag: "admitted", generation: prepared.generation }
+        yield* notifyAdmission(admissionOutcome)
         if (!prepared.member.model) {
           yield* settleMember({
             memberID: prepared.member.id,
@@ -1624,10 +1700,14 @@ export const layer = Layer.effect(
         Effect.ensuring(
           Effect.sync(() => {
             current.runningMembers.delete(input.memberID)
-          }),
+            if (current.memberAdmissions.get(input.memberID) === admission)
+              current.memberAdmissions.delete(input.memberID)
+          }).pipe(Effect.andThen(Effect.suspend(() => notifyAdmission(admissionOutcome)))),
         ),
       )
     })
+
+    const startMember: Interface["startMember"] = (input) => startMemberWithAdmission(input)
 
     const registerBackground: Interface["registerBackground"] = Effect.fn("LifecycleReconciler.registerBackground")(
       function* (input) {

@@ -22,6 +22,7 @@ import { provideInstanceEffect, provideTmpdirInstance, tmpdirScoped } from "../f
 import { testEffect } from "../lib/effect"
 
 import { SessionProjector } from "@oc2-ai/core/session/projector"
+import { InstanceState } from "@/effect/instance-state"
 
 let backgroundLists = 0
 let backgroundCancels = 0
@@ -399,7 +400,11 @@ it.instance("a rejected retiring signal falls through to the queued runner wake"
 it.instance("a registered direct wake starts fresh work after retirement settles", () =>
   Effect.gen(function* () {
     const state = yield* SessionRunState.Service
-    const sessionID = SessionID.make("ses_run_state_settled_direct_wake")
+    const sessions = yield* SessionV2.Service
+    const session = yield* sessions.create({
+      location: Location.Ref.make({ directory: AbsolutePath.make(yield* InstanceState.directory) }),
+    })
+    const sessionID = session.id
     const handoffDone = yield* Deferred.make<void>()
     const replacementStarted = yield* Deferred.make<void>()
     const unregisterWakeTarget = yield* state.registerWakeTarget(() => ({

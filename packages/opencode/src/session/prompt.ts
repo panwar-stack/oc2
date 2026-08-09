@@ -749,7 +749,10 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
+      input: PromptInput,
+      session: Session.Info,
+    ) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -1162,19 +1165,6 @@ export const layer = Layer.effect(
         })
       })
 
-      yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          yield* sessions.updateMessage(info)
-          for (const part of parts) yield* sessions.updatePart(part)
-          // A same-process parked lead observes its exact durable input directly. If finalization
-          // retirement already settled, the registered Prompt target starts a new safe loop instead.
-          // Do not schedule ordinary noReply input: only an active team lead owns this finalization
-          // contract, while an exact non-lead park can still receive its low-level signal.
-          const activeLead = yield* team.getActive(input.sessionID)
-          if (Option.isSome(activeLead)) yield* state.wakeRegistered(input.sessionID)
-          else yield* state.signalPark(input.sessionID)
-        }),
-      )
       const nextPrompt = parts.reduce(
         (result, part) => {
           if (part.type === "text") {
@@ -1241,22 +1231,53 @@ export const layer = Layer.effect(
           synthetic: [] as string[],
         },
       )
-      // Published unconditionally on the shared event bridge: the finalization barrier subscribes
-      // to SessionEvent.Prompted so a parked team lead wakes on new user input (PR 2). The
-      // event-system flag gates the experimental v2 dual-write (Synthetic below), not this signal;
-      // the flag defaults off, so gating it here would break the wake in production.
-      yield* events.publish(SessionEvent.Prompted, {
-        sessionID: input.sessionID,
-        messageID: SessionMessage.ID.create(),
-        timestamp: DateTime.makeUnsafe(info.time.created),
-        delivery: "steer",
-        prompt: new Prompt({
-          text: nextPrompt.text.join("\n"),
-          files: nextPrompt.files,
-          agents: nextPrompt.agents,
-          references: nextPrompt.references,
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* sessions.updateMessage(info)
+          for (const part of parts) yield* sessions.updatePart(part)
+          yield* sessions.touch(input.sessionID)
+
+          const permissions: PermissionV1.Rule[] = []
+          const pathScopedEdit = hasPathScopedEditPermission(session.permission ?? [])
+          for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+            if (pathScopedEdit && (t === "*" || (enabled && t === "edit"))) continue
+            permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+          }
+          if (permissions.length > 0) {
+            // Merge so per-call tool rules don't clobber inherited session rules
+            // (e.g. external_directory allows from the parent session).
+            const merged = Permission.merge(session.permission ?? [], permissions)
+            session.permission = merged
+            yield* sessions.setPermission({ sessionID: session.id, permission: merged })
+          }
+
+          // A same-process parked lead observes its exact durable input directly. If finalization
+          // retirement already settled, the registered Prompt target starts a new safe loop instead.
+          // Do not schedule ordinary noReply input: only an active team lead owns this finalization
+          // contract, while an exact non-lead park can still receive its low-level signal. The full
+          // input, including per-call tool permissions, is durable before either wake path runs.
+          const activeLead = yield* team.getActive(input.sessionID)
+          if (Option.isSome(activeLead)) yield* state.wakeRegistered(input.sessionID)
+          else yield* state.signalPark(input.sessionID)
+
+          // Published unconditionally on the shared event bridge: the finalization barrier
+          // subscribes to SessionEvent.Prompted so a parked team lead wakes on new user input. The
+          // event-system flag gates the experimental v2 dual-write (Synthetic below), not this
+          // signal; the flag defaults off, so gating it here would break the wake in production.
+          yield* events.publish(SessionEvent.Prompted, {
+            sessionID: input.sessionID,
+            messageID: SessionMessage.ID.create(),
+            timestamp: DateTime.makeUnsafe(info.time.created),
+            delivery: "steer",
+            prompt: new Prompt({
+              text: nextPrompt.text.join("\n"),
+              files: nextPrompt.files,
+              agents: nextPrompt.agents,
+              references: nextPrompt.references,
+            }),
+          })
         }),
-      })
+      )
       for (const text of nextPrompt.synthetic) {
         // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
         if (flags.experimentalEventSystem) {
@@ -1275,24 +1296,13 @@ export const layer = Layer.effect(
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error | Runner.Suspended> =
       Effect.fn("SessionPrompt.prompt")(function* (input: PromptInput) {
         const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+        const directory = yield* InstanceState.directory
+        if (session.directory !== directory) {
+          return yield* Effect.die(new Error(`Session ${input.sessionID} belongs to a different project instance`))
+        }
         const suspendedAtAdmission = yield* SessionRunState.isSuspended(db, input.sessionID)
         if (!suspendedAtAdmission) yield* revert.cleanup(session)
-        const message = yield* createUserMessage(input)
-        yield* sessions.touch(input.sessionID)
-
-        const permissions: PermissionV1.Rule[] = []
-        const pathScopedEdit = hasPathScopedEditPermission(session.permission ?? [])
-        for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-          if (pathScopedEdit && (t === "*" || (enabled && t === "edit"))) continue
-          permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-        }
-        if (permissions.length > 0) {
-          // Merge so per-call tool rules don't clobber inherited session rules
-          // (e.g. external_directory allows from the parent session).
-          const merged = Permission.merge(session.permission ?? [], permissions)
-          session.permission = merged
-          yield* sessions.setPermission({ sessionID: session.id, permission: merged })
-        }
+        const message = yield* createUserMessage(input, session)
 
         if (suspendedAtAdmission || (yield* SessionRunState.isSuspended(db, input.sessionID))) {
           const request = yield* control
@@ -1507,7 +1517,14 @@ export const layer = Layer.effect(
         while (true) {
           const decision = yield* recheck()
           if (Option.isSome(decision)) {
-            if (yield* handoff()) return decision.value
+            if (decision.value) {
+              // Material durable work continues in this same loop. Remove the active park instead
+              // of installing a Runner retirement that could later start a duplicate continuation.
+              yield* park.unregister
+              park = undefined
+              return true
+            }
+            if (yield* handoff()) return false
             continue
           }
           // Park. Swap to a fresh signal, then re-run the full check once more so a
@@ -1518,7 +1535,12 @@ export const layer = Layer.effect(
           park = yield* state.registerPark(input.session.id, parked, input.continuation)
           const parkedDecision = yield* recheck()
           if (Option.isSome(parkedDecision)) {
-            if (yield* handoff()) return parkedDecision.value
+            if (parkedDecision.value) {
+              yield* park.unregister
+              park = undefined
+              return true
+            }
+            if (yield* handoff()) return false
             continue
           }
           yield* Deferred.await(parked)
@@ -1846,6 +1868,23 @@ Teammates report material progress, blockers, questions, and results without a l
             toolChoice: format.type === "json_schema" ? "required" : undefined,
           })
 
+          const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
+          // A processor stop, assistant error, or error finish is not a successful candidate.
+          // Interrupted processing exits through onInterrupt below, so it also never reaches the
+          // finalization barrier.
+          if (result === "stop" || handle.message.error || handle.message.finish === "error") {
+            return "break-error" as const
+          }
+          if (finished && format.type === "json_schema" && structured === undefined) {
+            handle.message.error = new SessionV1.StructuredOutputError({
+              message: "Model did not produce structured output",
+              retries: 0,
+            }).toObject()
+            yield* sessions.updateMessage(handle.message)
+            // Structured-output errors bypass the finalization barrier.
+            return "break-error" as const
+          }
+
           if (structured !== undefined) {
             // Successful structured finalization still honors the barrier: if pending mail or
             // nonterminal teammates require another turn, discard the preliminary candidate so a
@@ -1860,23 +1899,6 @@ Teammates report material progress, blockers, questions, and results without a l
             return "break-structured" as const
           }
 
-          const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
-          if (finished && !handle.message.error) {
-            if (format.type === "json_schema") {
-              handle.message.error = new SessionV1.StructuredOutputError({
-                message: "Model did not produce structured output",
-                retries: 0,
-              }).toObject()
-              yield* sessions.updateMessage(handle.message)
-              // Structured-output errors bypass the finalization barrier.
-              return "break-error" as const
-            }
-          }
-
-          // A processor "stop" is an error/blocked termination (a message error or a denied
-          // tool that stops the turn), not a successful finalization: it bypasses the barrier.
-          // Clean finishes are already handled by the finished-assistant exit above.
-          if (result === "stop") return "break-error" as const
           if (result === "compact") {
             yield* compaction.create({
               sessionID,

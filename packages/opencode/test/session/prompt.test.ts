@@ -9,7 +9,7 @@ import { SessionMessage } from "@oc2-ai/core/session/message"
 import { Prompt } from "@oc2-ai/core/session/prompt"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Scope } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Latch, Layer, Option, Queue, Scope } from "effect"
 import * as DateTime from "effect/DateTime"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
@@ -1658,6 +1658,43 @@ it.live("does not duplicate team message injection when delivery is suspended mi
       const team = yield* Team.Service
       const control = yield* SessionControl.Service
       const { db } = yield* Database.Service
+      const deliveryClaimed = yield* Deferred.make<void>()
+      const holdClaimedDelivery = yield* Deferred.make<void>()
+      const messageInjected = yield* Deferred.make<void>()
+      const mutableTeam = team as Mutable<Team.Interface>
+      const mutableSessions = sessions as Mutable<Session.Interface>
+      const originalClaimPendingMessages = team.claimPendingMessages
+      const originalUpdatePart = sessions.updatePart
+      let heldFirstClaim = false
+      mutableTeam.claimPendingMessages = ((recipientSession, teamID) =>
+        originalClaimPendingMessages(recipientSession, teamID).pipe(
+          Effect.tap((messages) => {
+            if (heldFirstClaim || !messages.some((message) => message.body === "Worker is ready.")) return Effect.void
+            heldFirstClaim = true
+            return Deferred.succeed(deliveryClaimed, undefined).pipe(
+              Effect.andThen(Deferred.await(holdClaimedDelivery)),
+            )
+          }),
+        )) as Team.Interface["claimPendingMessages"]
+      mutableSessions.updatePart = ((part) =>
+        originalUpdatePart(part).pipe(
+          Effect.tap(() =>
+            part.type === "text" && part.text.includes("Worker is ready.")
+              ? Deferred.succeed(messageInjected, undefined)
+              : Effect.void,
+          ),
+        )) as Session.Interface["updatePart"]
+      yield* Effect.addFinalizer(() =>
+        Deferred.succeed(holdClaimedDelivery, undefined).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            Effect.sync(() => {
+              mutableTeam.claimPendingMessages = originalClaimPendingMessages
+              mutableSessions.updatePart = originalUpdatePart
+            }),
+          ),
+        ),
+      )
       const lead = yield* sessions.create({ title: "Lead" })
       const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
       const info = yield* team.create({ name: "mid-delivery", goal: "Coordinate work", leadSessionID: lead.id })
@@ -1688,39 +1725,17 @@ it.live("does not duplicate team message injection when delivery is suspended mi
 
       const loop = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
 
-      // Wait until the delivery claim is visible (the row is no longer "pending"), then suspend
-      // the session so the delivery is interrupted either between the claim and the marker, in
-      // the marker-to-write window, or while the loop is mid-dispatch. The poll is tight because
-      // the claim-to-marker window is only a few database writes.
-      yield* Effect.gen(function* () {
-        let status: string | undefined
-        while (status === undefined || status === "pending") {
-          status = (yield* db
-            .select({ status: TeamMessageRecipientTable.delivery_status })
-            .from(TeamMessageRecipientTable)
-            .where(eq(TeamMessageRecipientTable.team_id, info.id))
-            .get()
-            .pipe(Effect.orDie))?.status
-          if (status === undefined || status === "pending") yield* Effect.sleep("1 millis")
-        }
-      }).pipe(Effect.timeout("5 seconds"))
+      // Hold the delivery after its durable claim and before marker or prompt writes. This latch
+      // makes the suspension boundary deterministic without polling the recipient row.
+      yield* awaitWithTimeout(Deferred.await(deliveryClaimed), "delivery was not claimed", "5 seconds")
       const paused = yield* control.pause({ rootSessionID: lead.id })
       expect(paused.interruptionSignalledSessionIDs).toContain(lead.id)
+      yield* awaitWithTimeout(Fiber.await(loop), "timed out waiting for the claimed delivery interruption")
+      yield* Deferred.succeed(holdClaimedDelivery, undefined)
       yield* control.release(lead.id)
       yield* prompt.wake(lead.id)
-      yield* awaitWithTimeout(Fiber.await(loop), "timed out waiting for the resumed loop")
-      yield* pollWithTimeout(
-        sessions
-          .messages({ sessionID: lead.id })
-          .pipe(
-            Effect.map((messages) =>
-              messages.some((message) =>
-                message.parts.some((part) => part.type === "text" && part.text.includes("Worker is ready.")),
-              )
-                ? (true as const)
-                : undefined,
-            ),
-          ),
+      yield* awaitWithTimeout(
+        Deferred.await(messageInjected),
         "resumed delivery did not inject the team message",
         "5 seconds",
       )
@@ -2046,8 +2061,11 @@ it.live(
         const { prompt, sessions, team, lead, info, member } = yield* parkLeadOnWorker({ llm })
         const barrier = yield* instrumentFinalizationParks()
         const mutableTeam = team as Mutable<Team.Interface>
+        const mutableRun = barrier.run as Mutable<SessionRunState.Interface>
         const originalGetMembers = team.getMembers
+        const originalHandoffPark = barrier.run.handoffPark
         let committed = false
+        let handoffCalls = 0
         mutableTeam.getMembers = ((teamID) =>
           Effect.gen(function* () {
             if (!committed && teamID === info.id) {
@@ -2056,9 +2074,16 @@ it.live(
             }
             return yield* originalGetMembers(teamID)
           })) as Team.Interface["getMembers"]
+        mutableRun.handoffPark = ((sessionID, signal, replacement) =>
+          Effect.sync(() => {
+            handoffCalls++
+          }).pipe(
+            Effect.andThen(originalHandoffPark(sessionID, signal, replacement)),
+          )) as SessionRunState.Interface["handoffPark"]
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             mutableTeam.getMembers = originalGetMembers
+            mutableRun.handoffPark = originalHandoffPark
           }),
         )
 
@@ -2072,6 +2097,9 @@ it.live(
 
         expect(committed).toBe(true)
         expect(yield* llm.calls).toBe(2)
+        // The true durable recheck continued this loop without retirement. Only the later false
+        // successful-exit decision handed off, so no stale continuation can start after this run.
+        expect(handoffCalls).toBe(1)
         expect(result.parts.some((part) => part.type === "text" && part.text === "integrated handoff")).toBe(true)
         const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
           .flatMap((message) => message.parts)
@@ -2456,6 +2484,218 @@ it.live(
 )
 
 it.live(
+  "a normal prompt runs only in the session's owning instance",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const sessions = yield* Session.Service
+        const prompt = yield* SessionPrompt.Service
+        const instanceStore = yield* InstanceStore.Service
+        const session = yield* sessions.create({ title: "Owned prompt" })
+        const otherInstance = yield* tmpdirScoped()
+
+        const foreign = yield* instanceStore
+          .provide(
+            { directory: otherInstance },
+            prompt.prompt({
+              sessionID: session.id,
+              agent: "build",
+              model: ref,
+              parts: [{ type: "text", text: "foreign prompt must not persist" }],
+            }),
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(foreign)).toBe(true)
+        if (Exit.isSuccess(foreign)) throw new Error("Foreign prompt unexpectedly succeeded")
+        expect(String(Cause.squash(foreign.cause))).toContain("different project instance")
+        expect(yield* sessions.messages({ sessionID: session.id })).toHaveLength(0)
+        expect(yield* llm.calls).toBe(0)
+
+        yield* llm.text("owner response")
+        const response = yield* prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "owner prompt" }],
+        })
+
+        expect(response.parts).toContainEqual(expect.objectContaining({ type: "text", text: "owner response" }))
+        expect(yield* llm.calls).toBe(1)
+        expect(JSON.stringify((yield* llm.inputs)[0])).toContain("owner prompt")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "lead input stores tool permissions before its direct wake can start the continuation",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, member } = yield* parkLeadOnWorker({ llm, memberStatus: "active" })
+        const barrier = yield* instrumentFinalizationParks()
+        const wakeEntered = yield* Deferred.make<void>()
+        const releaseWake = yield* Deferred.make<void>()
+        const mutableRun = barrier.run as Mutable<SessionRunState.Interface>
+        const originalWakeRegistered = barrier.run.wakeRegistered
+        mutableRun.wakeRegistered = ((sessionID) =>
+          Deferred.succeed(wakeEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseWake)),
+            Effect.andThen(originalWakeRegistered(sessionID)),
+          )) as SessionRunState.Interface["wakeRegistered"]
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(releaseWake, undefined).pipe(
+            Effect.ignore,
+            Effect.andThen(
+              Effect.sync(() => {
+                mutableRun.wakeRegistered = originalWakeRegistered
+              }),
+            ),
+          ),
+        )
+
+        yield* llm.text("initial finalization")
+        yield* llm.text("permission-aware continuation")
+        const loopFiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* llm.wait(1)
+        yield* barrier.next("initial permission barrier registration")
+        yield* barrier.next("stable permission barrier registration")
+
+        const inputFiber = yield* prompt
+          .prompt({
+            sessionID: lead.id,
+            agent: "build",
+            model: ref,
+            noReply: true,
+            tools: { read: false },
+            parts: [{ type: "text", text: "continue without read" }],
+          })
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(wakeEntered)
+
+        expect((yield* sessions.get(lead.id)).permission).toContainEqual({
+          permission: "read",
+          action: "deny",
+          pattern: "*",
+        })
+        expect(yield* llm.calls).toBe(1)
+
+        yield* Deferred.succeed(releaseWake, undefined)
+        expect((yield* Fiber.join(inputFiber)).info.role).toBe("user")
+        yield* llm.wait(2)
+        yield* barrier.next("permission continuation barrier registration")
+        yield* barrier.next("permission continuation re-park")
+        expect(yield* llm.calls).toBe(2)
+
+        yield* team.updateMemberStatus(member.id, "completed")
+        yield* awaitWithTimeout(Fiber.join(loopFiber), "permission-aware lead did not exit", "5 seconds")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "foreign instances reject durable team producers before commit",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* () {
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const instanceStore = yield* InstanceStore.Service
+        const lead = yield* sessions.create({ title: "Owner lead" })
+        const memberSession = yield* sessions.create({ parentID: lead.id, title: "Owner member" })
+        const info = yield* team.create({ name: "owner-team", goal: "Keep mutations local", leadSessionID: lead.id })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: memberSession.id,
+          name: "planner",
+          agentType: "general",
+          model: ref,
+          rolePrompt: "Plan locally",
+          planMode: true,
+          workMode: "plan",
+        })
+        const otherInstance = yield* tmpdirScoped()
+        const initialRevision = Option.getOrThrow(yield* team.get(info.id)).revision
+        const assertForeignFailure = <A, E>(result: Exit.Exit<A, E>) => {
+          expect(Exit.isFailure(result)).toBe(true)
+          if (Exit.isSuccess(result)) throw new Error("Foreign team mutation unexpectedly succeeded")
+          expect(String(Cause.squash(result.cause))).toContain("different project instance")
+        }
+
+        const foreignMail = yield* instanceStore
+          .provide(
+            { directory: otherInstance },
+            team.sendMessage({
+              teamID: info.id,
+              sender: memberSession.id,
+              recipients: [lead.id],
+              body: "must not commit",
+            }),
+          )
+          .pipe(Effect.exit)
+        const foreignStatus = yield* instanceStore
+          .provide({ directory: otherInstance }, team.updateMemberStatus(member.id, "completed", "must not commit"))
+          .pipe(Effect.exit)
+        const foreignApproval = yield* instanceStore
+          .provide(
+            { directory: otherInstance },
+            team.approveMemberPlan(member.id, {
+              sender: lead.id,
+              body: "must not commit",
+              usageMetadata: {},
+            }),
+          )
+          .pipe(Effect.exit)
+        const foreignShutdown = yield* instanceStore
+          .provide(
+            { directory: otherInstance },
+            team.shutdown({ teamID: info.id, sessionID: lead.id, force: true, reason: "ownership test" }),
+          )
+          .pipe(Effect.exit)
+
+        assertForeignFailure(foreignMail)
+        assertForeignFailure(foreignStatus)
+        assertForeignFailure(foreignApproval)
+        assertForeignFailure(foreignShutdown)
+        expect(Option.getOrThrow(yield* team.get(info.id))).toMatchObject({
+          status: "active",
+          revision: initialRevision,
+        })
+        expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)).toMatchObject({
+          status: "starting",
+          plan_mode: true,
+          work_mode: "plan",
+        })
+        expect(yield* team.getMessages(info.id)).toHaveLength(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
   "material input and daemon mail after successful handoff queue one continuation after the current run",
   () =>
     provideTmpdirServer(
@@ -2513,6 +2753,90 @@ it.live(
             .filter((part) => part.type === "text" && part.text.includes("daemon mail after successful handoff")),
         ).toHaveLength(1)
         expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "a normal prompt after successful handoff returns the continuation assistant",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, lead } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+          lifecycle: "daemon",
+          daemonState: "running",
+        })
+        const barrier = yield* instrumentFinalizationParks()
+        const promptScope = yield* Scope.make()
+        const ensureRunningAttached = yield* Latch.make()
+        const mutableRun = barrier.run as Mutable<SessionRunState.Interface>
+        const originalEnsureRunning = barrier.run.ensureRunning
+        let normalPrompt: Fiber.Fiber<SessionV1.WithParts, Image.Error | Runner.Suspended> | undefined
+        yield* Effect.addFinalizer(() =>
+          Scope.close(promptScope, Exit.void).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                mutableRun.ensureRunning = originalEnsureRunning
+              }),
+            ),
+          ),
+        )
+
+        yield* barrier.afterNextHandoff(
+          Effect.gen(function* () {
+            // Hold the handoff hook until Runner opens the latch from its locked state transition,
+            // proving the nested normal prompt attached to the signalled retirement.
+            mutableRun.ensureRunning = ((sessionID, onInterrupt, work) =>
+              originalEnsureRunning(
+                sessionID,
+                onInterrupt,
+                work,
+                ensureRunningAttached,
+              )) as SessionRunState.Interface["ensureRunning"]
+            normalPrompt = yield* prompt
+              .prompt({
+                sessionID: lead.id,
+                agent: "build",
+                model: ref,
+                parts: [{ type: "text", text: "normal input after successful handoff" }],
+              })
+              .pipe(Effect.forkIn(promptScope))
+            yield* awaitWithTimeout(
+              ensureRunningAttached.await,
+              "normal prompt did not attach to the retiring run",
+              "5 seconds",
+            )
+          }).pipe(Effect.orDie),
+        )
+
+        yield* llm.text("old assistant")
+        yield* llm.text("continuation assistant")
+        const initial = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "initial lead run did not settle",
+          "10 seconds",
+        )
+        if (!normalPrompt) throw new Error("normal prompt did not start after handoff")
+        const result = yield* awaitWithTimeout(
+          Fiber.join(normalPrompt),
+          "normal prompt did not return its continuation result",
+          "10 seconds",
+        )
+
+        expect(initial.parts).toContainEqual(expect.objectContaining({ type: "text", text: "old assistant" }))
+        expect(result.parts).toContainEqual(expect.objectContaining({ type: "text", text: "continuation assistant" }))
+        expect(result.parts).not.toContainEqual(expect.objectContaining({ type: "text", text: "old assistant" }))
+        expect(yield* llm.calls).toBe(2)
       }),
       {
         git: true,
@@ -3396,6 +3720,95 @@ it.live(
         // Two model calls (turn 1 + turn 2) prove the loop continued after the mail handoff and
         // produced a fresh candidate. A stale-reuse bug would commit after the first turn.
         expect((yield* llm.calls) >= 2).toBe(true)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "a structured candidate followed by a rejected tool bypasses the finalization barrier",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const registry = yield* ToolRegistry.Service
+        const sessions = yield* Session.Service
+        const { read } = yield* registry.named()
+        const originalRead = read.execute
+        const originalUpdatePart = sessions.updatePart
+        const mutableSessions = sessions as Mutable<Session.Interface>
+        const candidateCompleted = yield* Deferred.make<void>()
+
+        // Hold the failing tool until the StructuredOutput tool has completed. Its success callback
+        // has captured the candidate by then, so this is one deterministic candidate-then-failure
+        // turn rather than a scheduler-order assumption.
+        mutableSessions.updatePart = ((part) =>
+          originalUpdatePart(part).pipe(
+            Effect.tap(() =>
+              part.type === "tool" && part.tool === "StructuredOutput" && part.state.status === "completed"
+                ? Deferred.succeed(candidateCompleted, undefined)
+                : Effect.void,
+            ),
+          )) as Session.Interface["updatePart"]
+        read.execute = (() =>
+          Deferred.await(candidateCompleted).pipe(
+            Effect.andThen(Effect.fail(new Question.RejectedError())),
+          )) as unknown as typeof read.execute
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            read.execute = originalRead
+            mutableSessions.updatePart = originalUpdatePart
+          }),
+        )
+
+        const { prompt, team, lead, info, member } = yield* parkLeadOnWorker({
+          llm,
+          leadPrompt: false,
+          memberStatus: "active",
+        })
+        yield* prompt.prompt({
+          sessionID: lead.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "produce structured output and read a file" }],
+          format: {
+            type: "json_schema",
+            schema: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+            retryCount: 0,
+          },
+        })
+        yield* llm.push(
+          reply()
+            .tool("StructuredOutput", { value: "candidate before failure" })
+            .tool("read", { filePath: "/tmp/rejected" }),
+        )
+
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "lead parked after a structured candidate was followed by a rejected tool",
+          "5 seconds",
+        )
+
+        expect(yield* Deferred.isDone(candidateCompleted)).toBe(true)
+        expect(result.info.role).toBe("assistant")
+        if (result.info.role === "assistant") expect(result.info.structured).toBeUndefined()
+        const failedRead = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "read")
+        expect(failedRead).toHaveLength(1)
+        expect(failedRead[0]?.state.status).toBe("error")
+        expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)?.status).toBe("active")
       }),
       {
         git: true,

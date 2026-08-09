@@ -28,8 +28,8 @@ import { Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
 import { eq, isNull } from "drizzle-orm"
 import fs from "fs/promises"
 import path from "path"
-import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
-import { pollWithTimeout, testEffect } from "../lib/effect"
+import { disposeAllInstances, disposeAllInstancesEffect, provideTmpdirInstance } from "../fixture/fixture"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { FSUtil } from "@oc2-ai/core/fs-util"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import { canonicalize } from "@/team/file-ownership"
@@ -119,7 +119,9 @@ const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
   readonly text?: string
   readonly result?: (sessionID: SessionID, parentID: MessageID) => SessionV1.WithParts
   readonly onPrompt?: (promptInput: SessionPrompt.PromptInput) => Effect.Effect<void, Runner.Suspended>
+  readonly onPromptPersisted?: (promptInput: SessionPrompt.PromptInput) => Effect.Effect<void, Runner.Suspended>
   readonly onRun?: (sessionID: SessionID) => Effect.Effect<void, Runner.Suspended>
+  readonly onWake?: Effect.Effect<void>
   readonly wakeFails?: boolean
 }) {
   const sessions = yield* Session.Service
@@ -151,10 +153,13 @@ const spyOps = Effect.fn("LifecycleReconcilerTest.spyOps")(function* (input?: {
           time: { created: Date.now() },
         })
         if (input?.onPrompt) yield* input.onPrompt(promptInput)
-        return yield* persist(resultFor(promptInput.sessionID, messageID))
+        const result = yield* persist(resultFor(promptInput.sessionID, messageID))
+        if (input?.onPromptPersisted) yield* input.onPromptPersisted(promptInput)
+        return result
       }),
     wake: () =>
       Ref.update(wakes, (count) => count + 1).pipe(
+        Effect.andThen(input?.onWake ?? Effect.void),
         Effect.andThen(input?.wakeFails ? Effect.fail(new Runner.Suspended()) : Effect.void),
       ),
     run: (sessionID) =>
@@ -1068,10 +1073,11 @@ describe("session.lifecycle-reconciler", () => {
     ),
   )
 
-  it.live("a valid generation-1 result completes the member, unblocks dependents, and wakes the lead", () =>
+  it.live("a valid result admits dependent state and started mail before waking the lead", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
+          const { db } = yield* Database.Service
           const sessions = yield* Session.Service
           const team = yield* Team.Service
           const lifecycle = yield* LifecycleReconciler.Service
@@ -1087,9 +1093,103 @@ describe("session.lifecycle-reconciler", () => {
             dependencyIDs: [memberSession.id],
           })
           yield* team.updateMemberStatus(dependent.id, "blocked")
-          const spy = yield* spyOps({ text: "worker done" })
+          const upstreamPromptEntered = yield* Deferred.make<void>()
+          const releaseUpstreamPrompt = yield* Deferred.make<void>()
+          const olderBlockedPrepared = yield* Deferred.make<void>()
+          const releaseOlderBlocked = yield* Deferred.make<void>()
+          const dependentClaimed = yield* Deferred.make<void>()
+          const dependentPromptEntered = yield* Deferred.make<void>()
+          const releaseDependentPrompt = yield* Deferred.make<void>()
+          yield* Effect.addFinalizer(() =>
+            Effect.all(
+              [
+                Deferred.succeed(releaseUpstreamPrompt, undefined),
+                Deferred.succeed(releaseOlderBlocked, undefined),
+                Deferred.succeed(releaseDependentPrompt, undefined),
+              ],
+              { discard: true },
+            ),
+          )
+          const completionWakeObservations: Array<{ status: string; startedMail: boolean }> = []
+          const spy = yield* spyOps({
+            text: "worker done",
+            onPrompt: (input) =>
+              input.sessionID === memberSession.id
+                ? Deferred.succeed(upstreamPromptEntered, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseUpstreamPrompt)),
+                  )
+                : input.sessionID === dependentSession.id
+                  ? Deferred.succeed(dependentPromptEntered, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseDependentPrompt)),
+                    )
+                  : Effect.void,
+            onWake: Effect.gen(function* () {
+              const pending = yield* team.getPendingMessages(lead.id, info.id)
+              if (!pending.some((message) => message.id === `lifecycle:member:${member.id}:completed:1`)) return
+              const members = yield* team.getMembers(info.id)
+              const messages = yield* team.getMessages(info.id)
+              completionWakeObservations.push({
+                status: members.find((candidate) => candidate.id === dependent.id)?.status ?? "missing",
+                startedMail: messages.some((message) => message.id === `lifecycle:member:${dependent.id}:started:1`),
+              })
+            }),
+          })
 
-          yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })
+          const upstream = yield* lifecycle
+            .startMember({ memberID: member.id, ops: spy.ops })
+            .pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Deferred.await(upstreamPromptEntered)
+
+          // Let the older dependent preparation transaction observe unresolved dependencies and
+          // commit its blocked outcome, but hold that outcome before startMember can release its
+          // admission identity. The predecessor then settles and claims the dependent, forcing the
+          // newer start to wait for an explicit not-admitted result and retry acquisition.
+          const mutableDb = db as Mutable<Database.Interface["db"]>
+          const originalTransaction = db.transaction
+          let transactionCalls = 0
+          mutableDb.transaction = ((...args: Parameters<typeof originalTransaction>) => {
+            transactionCalls++
+            const call = transactionCalls
+            const transaction = originalTransaction(...args)
+            if (call === 1) {
+              return Effect.gen(function* () {
+                const result = yield* transaction as Effect.Effect<unknown, unknown, unknown>
+                yield* Deferred.succeed(olderBlockedPrepared, undefined)
+                yield* Deferred.await(releaseOlderBlocked)
+                return result
+              })
+            }
+            if (call === 3)
+              return Effect.gen(function* () {
+                const result = yield* transaction as Effect.Effect<unknown, unknown, unknown>
+                yield* Deferred.succeed(dependentClaimed, undefined)
+                return result
+              })
+            return transaction
+          }) as typeof db.transaction
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableDb.transaction = originalTransaction
+            }),
+          )
+
+          yield* lifecycle.reconcile
+          yield* Deferred.await(olderBlockedPrepared)
+          yield* Deferred.succeed(releaseUpstreamPrompt, undefined)
+          yield* Deferred.await(dependentClaimed)
+
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === dependent.id)?.status).toBe(
+            "starting",
+          )
+          expect(completionWakeObservations).toEqual([])
+          expect(upstream.pollUnsafe()).toBeUndefined()
+
+          yield* Deferred.succeed(releaseOlderBlocked, undefined)
+          yield* Deferred.await(dependentPromptEntered)
+          expect(yield* Fiber.join(upstream)).toBe("worker done")
+
+          expect(completionWakeObservations).toEqual([{ status: "active", startedMail: true }])
+          yield* Deferred.succeed(releaseDependentPrompt, undefined)
 
           yield* pollWithTimeout(
             Effect.gen(function* () {
@@ -1106,6 +1206,176 @@ describe("session.lifecycle-reconciler", () => {
           expect(yield* Ref.get(spy.prompts)).toBe(2)
           expect(yield* Ref.get(spy.wakes)).toBeGreaterThan(0)
           expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("terminal settlement wakes the lead when dependent claim or admission defects", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const mutableDb = db as Mutable<Database.Interface["db"]>
+          const originalTransaction = db.transaction
+
+          const runCase = (defectAt: 2 | 3) =>
+            Effect.gen(function* () {
+              const { lead, info, member, memberSession } = yield* seedTeam()
+              const dependentSession = yield* sessions.create({ parentID: lead.id, title: `Dependent ${defectAt}` })
+              const dependent = yield* team.addMember({
+                teamID: info.id,
+                sessionID: dependentSession.id,
+                name: `dependent-${defectAt}`,
+                agentType: "general",
+                model: ref,
+                rolePrompt: "Wait for worker",
+                dependencyIDs: [memberSession.id],
+              })
+              yield* team.updateMemberStatus(dependent.id, "blocked")
+              const upstreamPromptEntered = yield* Deferred.make<void>()
+              const releaseUpstreamPrompt = yield* Deferred.make<void>()
+              const leadWoken = yield* Deferred.make<void>()
+              const spy = yield* spyOps({
+                text: `worker done before defect ${defectAt}`,
+                onPromptPersisted: (input) =>
+                  input.sessionID === memberSession.id
+                    ? Deferred.succeed(upstreamPromptEntered, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseUpstreamPrompt)),
+                      )
+                    : Effect.void,
+                onWake: Deferred.succeed(leadWoken, undefined),
+              })
+              const upstream = yield* lifecycle
+                .startMember({ memberID: member.id, ops: spy.ops })
+                .pipe(Effect.forkChild({ startImmediately: true }))
+              yield* Deferred.await(upstreamPromptEntered)
+
+              let transactionCalls = 0
+              mutableDb.transaction = ((...args: Parameters<typeof originalTransaction>) => {
+                transactionCalls++
+                if (transactionCalls === defectAt) {
+                  return Effect.die(new Error(`dependent transaction defect ${defectAt}`))
+                }
+                return originalTransaction(...args)
+              }) as typeof db.transaction
+
+              yield* Deferred.succeed(releaseUpstreamPrompt, undefined)
+              yield* awaitWithTimeout(
+                Deferred.await(leadWoken),
+                `lead wake was skipped after dependent defect ${defectAt}`,
+                "5 seconds",
+              )
+              yield* awaitWithTimeout(
+                Fiber.await(upstream),
+                `upstream settlement did not finish after dependent defect ${defectAt}`,
+                "5 seconds",
+              )
+
+              const upstreamMember = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+              if (upstreamMember?.status !== "completed") {
+                throw new Error(
+                  `upstream after dependent defect ${defectAt} and ${transactionCalls} transactions: ${JSON.stringify(upstreamMember)}`,
+                )
+              }
+              expect(yield* Ref.get(spy.wakes)).toBe(1)
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  mutableDb.transaction = originalTransaction
+                }),
+              ),
+            )
+
+          yield* runCase(2)
+          yield* runCase(3)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("an immediately interrupted dependent child completes admission and wakes the lead", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { lead, info, member, memberSession } = yield* seedTeam()
+          const dependentSession = yield* sessions.create({ parentID: lead.id, title: "Interrupted dependent" })
+          const dependent = yield* team.addMember({
+            teamID: info.id,
+            sessionID: dependentSession.id,
+            name: "interrupted-dependent",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Wait for worker",
+            dependencyIDs: [memberSession.id],
+          })
+          yield* team.updateMemberStatus(dependent.id, "blocked")
+
+          const upstreamPromptPersisted = yield* Deferred.make<void>()
+          const releaseUpstreamPrompt = yield* Deferred.make<void>()
+          const childScopeDisposed = yield* Deferred.make<void>()
+          const leadWoken = yield* Deferred.make<void>()
+          const spy = yield* spyOps({
+            text: "worker done before dependent interruption",
+            onPromptPersisted: (input) =>
+              input.sessionID === memberSession.id
+                ? Deferred.succeed(upstreamPromptPersisted, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseUpstreamPrompt)),
+                  )
+                : Effect.void,
+            onWake: Deferred.succeed(leadWoken, undefined),
+          })
+          const upstream = yield* lifecycle
+            .startMember({ memberID: member.id, ops: spy.ops })
+            .pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Deferred.await(upstreamPromptPersisted)
+
+          const mutableDb = db as Mutable<Database.Interface["db"]>
+          const originalTransaction = db.transaction
+          let transactionCalls = 0
+          mutableDb.transaction = ((...args: Parameters<typeof originalTransaction>) => {
+            transactionCalls++
+            const transaction = originalTransaction(...args)
+            if (transactionCalls !== 2) return transaction
+            return Effect.gen(function* () {
+              const result = yield* transaction as Effect.Effect<unknown, unknown, unknown>
+              // Call 2 is the durable dependent claim. Dispose the instance state before the
+              // settlement parent forks the admission child, so that child is interrupted as soon
+              // as it enters the already-closed scope.
+              yield* disposeAllInstancesEffect
+              yield* Deferred.succeed(childScopeDisposed, undefined)
+              return result
+            })
+          }) as typeof db.transaction
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableDb.transaction = originalTransaction
+            }).pipe(Effect.andThen(Deferred.succeed(releaseUpstreamPrompt, undefined).pipe(Effect.ignore))),
+          )
+
+          yield* Deferred.succeed(releaseUpstreamPrompt, undefined)
+          yield* Deferred.await(childScopeDisposed)
+          yield* awaitWithTimeout(
+            Deferred.await(leadWoken),
+            "lead wake was stranded by immediate dependent interruption",
+            "5 seconds",
+          )
+          expect(yield* awaitWithTimeout(Fiber.join(upstream), "upstream settlement did not finish", "5 seconds")).toBe(
+            "worker done before dependent interruption",
+          )
+
+          const members = yield* team.getMembers(info.id)
+          expect(members.find((candidate) => candidate.id === member.id)?.status).toBe("completed")
+          // The claim committed before disposal, but the child never reached durable admission.
+          expect(members.find((candidate) => candidate.id === dependent.id)?.status).toBe("starting")
+          expect(yield* Ref.get(spy.wakes)).toBe(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

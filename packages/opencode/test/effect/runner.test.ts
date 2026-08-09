@@ -161,6 +161,59 @@ describe("Runner", () => {
   )
 
   it.live(
+    "ensureRunning returns the signalled retirement continuation result",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const currentStarted = yield* Deferred.make<void>()
+      const releaseCurrent = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const releaseContinuation = yield* Deferred.make<void>()
+      const unexpectedWorkStarted = yield* Deferred.make<void>()
+      const attachedCompleted = yield* Deferred.make<string>()
+      const attachment = yield* Latch.make()
+      const current = yield* runner
+        .ensureRunning(
+          Deferred.succeed(currentStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseCurrent)),
+            Effect.as("current"),
+          ),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(currentStarted)
+
+      const retirement = yield* runner.retire(
+        Deferred.succeed(continuationStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseContinuation)),
+          Effect.as("continuation"),
+        ),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+      expect(yield* retirement.signal).toBe(true)
+
+      const attached = yield* runner
+        .ensureRunning(
+          Deferred.succeed(unexpectedWorkStarted, undefined).pipe(Effect.as("unexpected replacement work")),
+          attachment,
+        )
+        .pipe(Effect.tap((result) => Deferred.succeed(attachedCompleted, result)))
+        .pipe(Effect.forkChild)
+      yield* attachment.await
+      yield* Deferred.succeed(releaseCurrent, undefined)
+      yield* Deferred.await(continuationStarted)
+
+      expect(yield* Deferred.isDone(attachedCompleted)).toBe(false)
+      expect(yield* Deferred.isDone(unexpectedWorkStarted)).toBe(false)
+      expect(yield* Fiber.join(current)).toBe("current")
+
+      yield* Deferred.succeed(releaseContinuation, undefined)
+      expect(yield* Fiber.join(attached)).toBe("continuation")
+      yield* waitForState(runner, "Idle")
+    }),
+  )
+
+  it.live(
     "cancelling the current run suppresses its signalled retirement",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
@@ -234,6 +287,8 @@ describe("Runner", () => {
       const s = yield* Scope.Scope
       const releaseCurrent = yield* Deferred.make<void>()
       const continuationStarted = yield* Deferred.make<void>()
+      const unexpectedWorkStarted = yield* Deferred.make<void>()
+      const attachment = yield* Latch.make()
       const runner = Runner.make<string, string>(s)
       const current = yield* runner
         .ensureRunning(Deferred.await(releaseCurrent).pipe(Effect.andThen(Effect.fail("boom"))))
@@ -246,11 +301,20 @@ describe("Runner", () => {
       expect(retirement).toBeDefined()
       if (!retirement) return
       expect(yield* retirement.signal).toBe(true)
+      const attached = yield* runner
+        .ensureRunning(
+          Deferred.succeed(unexpectedWorkStarted, undefined).pipe(Effect.as("unexpected replacement work")),
+          attachment,
+        )
+        .pipe(Effect.flip, Effect.forkChild)
+      yield* attachment.await
 
       yield* Deferred.succeed(releaseCurrent, undefined)
       expect(Exit.isFailure(yield* Fiber.await(current))).toBe(true)
+      expect(yield* Fiber.join(attached)).toBe("boom")
       yield* waitForState(runner, "Idle")
       expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+      expect(yield* Deferred.isDone(unexpectedWorkStarted)).toBe(false)
       expect(yield* retirement.signal).toBe(false)
     }),
   )
@@ -306,6 +370,49 @@ describe("Runner", () => {
       yield* waitForState(runner, "Idle")
       expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
       expect(yield* retirement.signal).toBe(false)
+    }),
+  )
+
+  it.live(
+    "suspension reaches callers attached to a signalled retirement",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const currentStarted = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const unexpectedWorkStarted = yield* Deferred.make<void>()
+      const attachment = yield* Latch.make()
+      const runner = Runner.make<string>(s)
+      const current = yield* runner
+        .ensureRunning(
+          Deferred.succeed(currentStarted, undefined).pipe(Effect.andThen(Effect.never), Effect.as("current")),
+        )
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(currentStarted)
+
+      const retirement = yield* runner.retire(
+        Deferred.succeed(continuationStarted, undefined).pipe(Effect.as("continuation")),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+      expect(yield* retirement.signal).toBe(true)
+      const attached = yield* runner
+        .ensureRunning(
+          Deferred.succeed(unexpectedWorkStarted, undefined).pipe(Effect.as("unexpected replacement work")),
+          attachment,
+        )
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* attachment.await
+
+      yield* runner.suspend
+      const [currentExit, attachedExit] = yield* Effect.all([Fiber.join(current), Fiber.join(attached)])
+      expect(Exit.isFailure(currentExit)).toBe(true)
+      expect(Exit.isFailure(attachedExit)).toBe(true)
+      if (Exit.isFailure(currentExit)) expect(Cause.squash(currentExit.cause)).toBeInstanceOf(Runner.Suspended)
+      if (Exit.isFailure(attachedExit)) expect(Cause.squash(attachedExit.cause)).toBeInstanceOf(Runner.Suspended)
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+      expect(yield* Deferred.isDone(unexpectedWorkStarted)).toBe(false)
+      expect(yield* retirement.signal).toBe(false)
+      yield* waitForState(runner, "Idle")
     }),
   )
 

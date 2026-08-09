@@ -3,7 +3,9 @@ import { Cause, Deferred, Effect, Exit, Fiber, Latch, Option, Schema, Scope, Syn
 export interface Runner<A, E = never> {
   readonly state: State<A, E>
   readonly busy: boolean
-  readonly ensureRunning: (work: Effect.Effect<A, E>) => Effect.Effect<A, E | Suspended>
+  /** Joins current work, or its queued continuation when retirement was already signalled.
+   * The optional latch opens while the runner state is locked after this caller has attached. */
+  readonly ensureRunning: (work: Effect.Effect<A, E>, attached?: Latch.Latch) => Effect.Effect<A, E | Suspended>
   /**
    * Schedules `work` for execution and reports whether a run that will execute it is now in
    * flight: `true` when a new run is started or queued, `false` when the wake attached to an
@@ -134,11 +136,18 @@ export const make = <A, E = never>(
   const awaitDone = (done: Deferred.Deferred<A, E | Cancelled | Suspended>) =>
     Deferred.await(done).pipe(Effect.catchTag("RunnerCancelled", (e) => onInterrupt ?? Effect.die(e)))
 
-  const cancelRetirement = (run: RunHandle<A, E>) => {
+  const failRetirement = (run: RunHandle<A, E>, error: Cancelled | Suspended = new Cancelled()) => {
     const retirement = run.retirement
     if (!retirement || retirement.cancelled || retirement.settled) return Effect.void
     retirement.cancelled = true
-    return Deferred.fail(retirement.done, new Cancelled()).pipe(Effect.asVoid)
+    return Deferred.fail(retirement.done, error).pipe(Effect.asVoid)
+  }
+
+  const completeFailedRetirement = (run: RunHandle<A, E>, exit: Exit.Exit<A, E>) => {
+    const retirement = run.retirement
+    if (!retirement || retirement.cancelled || retirement.settled) return Effect.void
+    retirement.cancelled = true
+    return complete(retirement.done, exit)
   }
 
   const idleIfCurrent = () =>
@@ -170,7 +179,7 @@ export const make = <A, E = never>(
             const run = yield* startRun(retirement.work, retirement.done)
             return [complete(done, exit).pipe(Effect.andThen(run.start.open)), { _tag: "Running", run }] as const
           }
-          const cancel = retirement && Exit.isFailure(exit) ? cancelRetirement(st.run) : Effect.void
+          const cancel = retirement && Exit.isFailure(exit) ? completeFailedRetirement(st.run, exit) : Effect.void
           if (retirement) retirement.settled = true
           return [cancel.pipe(Effect.andThen(idle), Effect.andThen(complete(done, exit))), { _tag: "Idle" }] as const
         }
@@ -232,26 +241,38 @@ export const make = <A, E = never>(
       yield* Fiber.interrupt(shell.fiber)
     })
 
-  const ensureRunning = (work: Effect.Effect<A, E>) =>
+  const ensureRunning = (work: Effect.Effect<A, E>, attached?: Latch.Latch) =>
     SynchronizedRef.modifyEffect(
       ref,
       Effect.fnUntraced(function* (st) {
+        const acknowledge = attached ? attached.open : Effect.void
         switch (st._tag) {
-          case "Running":
-          case "ShellThenRun":
+          case "Running": {
+            const done = st.run.retirement?.signalled ? st.run.retirement.done : st.run.done
+            yield* acknowledge
+            return [awaitDone(done), st] as const
+          }
+          case "ShellThenRun": {
+            yield* acknowledge
             return [awaitDone(st.run.done), st] as const
-          case "SuspendingRunThenRun":
+          }
+          case "SuspendingRunThenRun": {
+            yield* acknowledge
             return [
               awaitDone(st.run.done),
               st.suspension === undefined ? st : { _tag: "SuspendingRunThenRun", current: st.current, run: st.run },
             ] as const
-          case "SuspendingShellThenRun":
+          }
+          case "SuspendingShellThenRun": {
+            yield* acknowledge
             return [
               awaitDone(st.run.done),
               st.suspension === undefined ? st : { _tag: "SuspendingShellThenRun", shell: st.shell, run: st.run },
             ] as const
+          }
           case "SuspendedRun": {
             const run = yield* startRun(st.run.work, st.run.done)
+            yield* acknowledge
             return [run.start.open.pipe(Effect.andThen(awaitDone(run.done))), { _tag: "Running", run }] as const
           }
           case "SuspendingRun": {
@@ -260,6 +281,7 @@ export const make = <A, E = never>(
               done: yield* Deferred.make<A, E | Cancelled | Suspended>(),
               work,
             } satisfies PendingHandle<A, E>
+            yield* acknowledge
             return [awaitDone(run.done), { _tag: "SuspendingRunThenRun", current: st.run, run }] as const
           }
           case "SuspendingShell": {
@@ -268,6 +290,7 @@ export const make = <A, E = never>(
               done: yield* Deferred.make<A, E | Cancelled | Suspended>(),
               work,
             } satisfies PendingHandle<A, E>
+            yield* acknowledge
             return [awaitDone(run.done), { _tag: "SuspendingShellThenRun", shell: st.shell, run }] as const
           }
           case "Shell": {
@@ -276,11 +299,13 @@ export const make = <A, E = never>(
               done: yield* Deferred.make<A, E | Cancelled | Suspended>(),
               work,
             } satisfies PendingHandle<A, E>
+            yield* acknowledge
             return [awaitDone(run.done), { _tag: "ShellThenRun", shell: st.shell, run }] as const
           }
           case "Idle": {
             const done = yield* Deferred.make<A, E | Cancelled | Suspended>()
             const run = yield* startRun(work, done)
+            yield* acknowledge
             return [run.start.open.pipe(Effect.andThen(awaitDone(done))), { _tag: "Running", run }] as const
           }
         }
@@ -429,7 +454,7 @@ export const make = <A, E = never>(
       case "Running":
         return [
           Effect.gen(function* () {
-            yield* cancelRetirement(st.run)
+            yield* failRetirement(st.run)
             yield* Fiber.interrupt(st.run.fiber)
             yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
             yield* idleIfCurrent()
@@ -456,7 +481,7 @@ export const make = <A, E = never>(
       case "SuspendingRun":
         return [
           Effect.gen(function* () {
-            yield* cancelRetirement(st.run)
+            yield* failRetirement(st.run)
             yield* cancelFiber(st.run.fiber)
             yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
             yield* idleIfCurrent()
@@ -532,16 +557,15 @@ export const make = <A, E = never>(
         switch (st._tag) {
           case "Idle":
             return [Effect.void, st] as const
-          case "Running":
-            yield* cancelRetirement(st.run)
+          case "Running": {
+            const suspended = new Suspended()
+            yield* failRetirement(st.run, suspended)
             yield* recordSuspension(st.run.fiber, provenance)
             return [
-              Deferred.fail(st.run.done, new Suspended()).pipe(
-                Effect.asVoid,
-                Effect.andThen(interruptFork(st.run.fiber)),
-              ),
+              Deferred.fail(st.run.done, suspended).pipe(Effect.asVoid, Effect.andThen(interruptFork(st.run.fiber))),
               { _tag: "SuspendingRun", run: st.run } as const,
             ] as const
+          }
           case "Shell":
             yield* recordSuspension(st.shell.fiber, provenance)
             return [

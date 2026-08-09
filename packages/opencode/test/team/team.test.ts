@@ -1839,17 +1839,37 @@ describe("team terminal handoff atomicity", () => {
     ),
   )
 
-  it.live("committed mail directly signals the recipient when event publication fails", () =>
+  it.live("a current lead stays wakeable over historical membership when event publication fails", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const team = yield* Team.Service
         const database = yield* Database.Service
         const events = yield* EventV2Bridge.Service
         const runState = yield* SessionRunState.Service
+        const leadSessionID = "ses_mail_publish_failure_lead"
+        const historical = yield* team.create({
+          name: "historical-member-team",
+          goal: "Retain old membership",
+          leadSessionID: "ses_historical_member_team_lead",
+        })
+        yield* team.addMember({
+          teamID: historical.id,
+          sessionID: leadSessionID,
+          name: "historical-member",
+          agentType: "general",
+          model: ref,
+          rolePrompt: "Historical membership only",
+        })
+        yield* database.db
+          .update(TeamTable)
+          .set({ status: "closed" })
+          .where(eq(TeamTable.id, historical.id))
+          .run()
+          .pipe(Effect.orDie)
         const info = yield* team.create({
           name: "mail-publish-failure",
           goal: "Wake after failed publication",
-          leadSessionID: "ses_mail_publish_failure_lead",
+          leadSessionID,
         })
         const signal = yield* Deferred.make<void>()
         const park = yield* runState.registerPark(
@@ -1873,6 +1893,18 @@ describe("team terminal handoff atomicity", () => {
           ),
         )
         const failingTeam = yield* Team.Service.pipe(Effect.provide(Layer.fresh(failingLayer)))
+
+        expect(yield* failingTeam.canWakeSession(leadSessionID)).toBe(true)
+        let genericWakeAdmitted = false
+        expect(
+          yield* failingTeam.admitWake(
+            leadSessionID,
+            Effect.sync(() => {
+              genericWakeAdmitted = true
+            }),
+          ),
+        ).toBe(true)
+        expect(genericWakeAdmitted).toBe(true)
 
         const message = yield* failingTeam.sendMessage({
           teamID: info.id,

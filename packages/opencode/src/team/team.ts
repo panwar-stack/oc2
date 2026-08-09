@@ -23,6 +23,7 @@ import { TeamCreated, TeamClosed, MemberUpdated, MessageReceived } from "./event
 import { bumpTeamRevision } from "./revision"
 import { TeamEval, type TeamEvalReport } from "./eval"
 import { PendingMailbox } from "./pending-mailbox"
+import { InstanceState } from "@/effect/instance-state"
 import {
   OwnedPathConflict,
   assertNoActivePathConflicts,
@@ -126,6 +127,25 @@ type TeamMemberStatusUpdate = {
 }
 
 type MessageTx = Pick<Database.Interface["db"], "insert">
+type SessionOwnershipTx = Pick<Database.Interface["db"], "select">
+
+/** Reject a durable producer running outside the stored sessions' project instance. Historical
+ * team rows without matching sessions keep their legacy behavior. */
+const assertSessionsOwned = Effect.fn("Team.assertSessionsOwned")(function* (
+  tx: SessionOwnershipTx,
+  sessionIDs: readonly string[],
+  directory: string,
+) {
+  const ids = [...new Set(sessionIDs)].map((sessionID) => SessionID.make(sessionID))
+  if (ids.length === 0) return
+  const sessions = yield* tx
+    .select({ id: SessionTable.id, directory: SessionTable.directory })
+    .from(SessionTable)
+    .where(inArray(SessionTable.id, ids))
+    .all()
+  const foreign = sessions.find((session) => session.directory !== directory)
+  if (foreign) return yield* Effect.die(new Error(`Session ${foreign.id} belongs to a different project instance`))
+})
 
 /** Insert a team message row and one recipient row per recipient inside an already-open
  * immediate transaction. Callers own the active-team check and the single revision bump. */
@@ -582,6 +602,7 @@ export const layer = Layer.effect(
     }) {
       const now = Date.now()
       const force = input.force === true
+      const directory = yield* InstanceState.directory
       // Forced shutdown is the explicit abort path for a wedged or abandoned team. It must
       // never become the normal completion path: it requires a nonblank reason and records a
       // deterministic forced_shutdown usage event inside the close transaction.
@@ -605,6 +626,7 @@ export const layer = Layer.effect(
                 if (team.lead_session_id !== input.sessionID) {
                   return yield* Effect.fail(new ShutdownNotAuthorized({ teamID: input.teamID }))
                 }
+                yield* assertSessionsOwned(tx, [input.sessionID], directory)
                 // Protocol-1 gate: normal shutdown requires the final-report checkpoint to cover
                 // the current revision. Protocol-0 teams skip this gate. Forced shutdown bypasses
                 // it for a wedged or explicitly abandoned team.
@@ -859,6 +881,7 @@ export const layer = Layer.effect(
       resultOrUpdate?: string | TeamMemberStatusUpdate,
     ) {
       const now = Date.now()
+      const directory = yield* InstanceState.directory
       const update = typeof resultOrUpdate === "string" ? { result: resultOrUpdate } : resultOrUpdate
       const setData: Partial<TeamMemberInsert> = { status, time_updated: now }
       if (update?.result !== undefined) setData.result = update.result
@@ -891,12 +914,13 @@ export const layer = Layer.effect(
               if (alreadyTerminal) {
                 return { found: true, wrote: false, messageID: undefined, leadSessionID: undefined } as const
               }
-              yield* tx.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run()
               let messageID: string | undefined
               let leadSessionID: string | undefined
+              yield* assertSessionsOwned(tx, [member.session_id], directory)
               if (terminalTarget) {
                 const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get()
                 if (team) {
+                  yield* assertSessionsOwned(tx, [team.lead_session_id], directory)
                   leadSessionID = team.lead_session_id
                   messageID = `team:member:${memberID}:terminal:${status}`
                   yield* insertMessageRows(tx, {
@@ -909,6 +933,7 @@ export const layer = Layer.effect(
                   })
                 }
               }
+              yield* tx.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run()
               yield* bumpTeamRevision(tx, member.team_id)
               return { found: true, wrote: true, messageID, leadSessionID } as const
             }),
@@ -1015,6 +1040,7 @@ export const layer = Layer.effect(
       approvalEffects?: PlanApprovalEffects,
     ) {
       const now = Date.now()
+      const directory = yield* InstanceState.directory
       const messageID = approvalEffects ? crypto.randomUUID() : undefined
       const usageEventID = approvalEffects ? crypto.randomUUID() : undefined
       // The plan transition and all durable approval effects share one admission decision.
@@ -1034,12 +1060,17 @@ export const layer = Layer.effect(
               if (member.status === "completed" || member.status === "cancelled" || member.status === "failed") {
                 return Option.none<{ teamID: string; sessionID: string; messageID?: string }>()
               }
+              const session = yield* tx
+                .select({ id: SessionTable.id, directory: SessionTable.directory, permission: SessionTable.permission })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, SessionID.make(member.session_id)))
+                .get()
+              yield* assertSessionsOwned(
+                tx,
+                [member.session_id, ...(approvalEffects ? [approvalEffects.sender] : [])],
+                directory,
+              )
               if (approvalEffects) {
-                const session = yield* tx
-                  .select({ id: SessionTable.id, permission: SessionTable.permission })
-                  .from(SessionTable)
-                  .where(eq(SessionTable.id, SessionID.make(member.session_id)))
-                  .get()
                 if (!session) return Option.none<{ teamID: string; sessionID: string; messageID?: string }>()
                 yield* tx
                   .update(SessionTable)
@@ -1089,10 +1120,16 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
       if (Option.isNone(outcome)) return Option.none()
       // The approval state, permission update, recipient mail, and audit row are durable now.
-      // Wake the exact recipient before any best-effort event publication or later read can fail.
-      // Real plan members are idle after submission, so this must schedule their registered Prompt
-      // loop when no active park exists. A later tool wake only attaches to that run.
-      yield* Effect.uninterruptible(runState.wakeRegistered(SessionID.make(outcome.value.sessionID)))
+      // Revalidate the teammate under the lifecycle lock before scheduling its registered Prompt:
+      // a terminal settlement can commit after approval but before this direct wake. Lead wakes use
+      // the same admission and remain valid while the team is active.
+      yield* Effect.uninterruptible(
+        admitWakeForTeam(
+          outcome.value.teamID,
+          outcome.value.sessionID,
+          runState.wakeRegistered(SessionID.make(outcome.value.sessionID)),
+        ),
+      )
       const row = yield* db
         .select()
         .from(TeamMemberTable)
@@ -1765,6 +1802,7 @@ export const layer = Layer.effect(
       const id = crypto.randomUUID()
       const now = Date.now()
       const recipients = [...new Set(input.recipients)]
+      const directory = yield* InstanceState.directory
       // Reject messages to a closed or cancelled team in the same immediate transaction as the
       // insert, so no message or recipient rows are ever created for a non-active team.
       yield* db
@@ -1775,6 +1813,7 @@ export const layer = Layer.effect(
               if (!team || team.status !== "active") {
                 return yield* Effect.fail(new MessageToClosedTeam({ teamID: input.teamID }))
               }
+              yield* assertSessionsOwned(tx, [input.sender, ...recipients], directory)
               const members =
                 recipients.length === 0
                   ? []
@@ -1820,10 +1859,12 @@ export const layer = Layer.effect(
         )
       yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          yield* Effect.forEach(recipients, (recipient) => runState.wakeRegistered(SessionID.make(recipient)), {
-            concurrency: "unbounded",
-            discard: true,
-          })
+          yield* Effect.forEach(
+            recipients,
+            (recipient) =>
+              admitWakeForTeam(input.teamID, recipient, runState.wakeRegistered(SessionID.make(recipient))),
+            { concurrency: "unbounded", discard: true },
+          )
           yield* safePublish(
             events.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender }),
           )
@@ -1846,6 +1887,12 @@ export const layer = Layer.effect(
         .transaction(
           (tx) =>
             Effect.gen(function* () {
+              const leadTeam = yield* tx
+                .select({ id: TeamTable.id })
+                .from(TeamTable)
+                .where(and(eq(TeamTable.lead_session_id, sessionID), eq(TeamTable.status, "active")))
+                .get()
+              if (leadTeam) return true
               const member = yield* tx
                 .select()
                 .from(TeamMemberTable)
@@ -1860,12 +1907,7 @@ export const layer = Layer.effect(
                 if (!team || team.status !== "active") return false
                 return member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed"
               }
-              const leadTeam = yield* tx
-                .select({ id: TeamTable.id })
-                .from(TeamTable)
-                .where(and(eq(TeamTable.lead_session_id, sessionID), eq(TeamTable.status, "active")))
-                .get()
-              return leadTeam !== undefined
+              return false
             }),
           { behavior: "immediate" },
         )
@@ -1882,12 +1924,13 @@ export const layer = Layer.effect(
             Effect.gen(function* () {
               const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get()
               if (!team || team.status !== "active") return false
+              if (team.lead_session_id === sessionID) return true
               const member = yield* tx
                 .select()
                 .from(TeamMemberTable)
                 .where(eq(TeamMemberTable.session_id, sessionID))
                 .get()
-              if (!member) return team.lead_session_id === sessionID
+              if (!member) return false
               if (member.team_id !== teamID) return false
               return member.status !== "completed" && member.status !== "cancelled" && member.status !== "failed"
             }),
@@ -1896,23 +1939,11 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
-    const admitWake: Interface["admitWake"] = Effect.fn("Team.admitWake")(function* (sessionID, wake) {
-      const member = yield* db
-        .select({ teamID: TeamMemberTable.team_id })
-        .from(TeamMemberTable)
-        .where(eq(TeamMemberTable.session_id, sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      const leadTeam = member
-        ? undefined
-        : yield* db
-            .select({ teamID: TeamTable.id })
-            .from(TeamTable)
-            .where(and(eq(TeamTable.lead_session_id, sessionID), eq(TeamTable.status, "active")))
-            .get()
-            .pipe(Effect.orDie)
-      const teamID = member?.teamID ?? leadTeam?.teamID
-      if (!teamID) return false
+    const admitWakeForTeam = Effect.fn("Team.admitWakeForTeam")(function* <E, R>(
+      teamID: string,
+      sessionID: string,
+      wake: Effect.Effect<void, E, R>,
+    ) {
       return yield* withTeamLifecycleLock(
         teamID,
         Effect.gen(function* () {
@@ -1921,6 +1952,26 @@ export const layer = Layer.effect(
           return true
         }),
       )
+    })
+
+    const admitWake: Interface["admitWake"] = Effect.fn("Team.admitWake")(function* (sessionID, wake) {
+      const leadTeam = yield* db
+        .select({ teamID: TeamTable.id })
+        .from(TeamTable)
+        .where(and(eq(TeamTable.lead_session_id, sessionID), eq(TeamTable.status, "active")))
+        .get()
+        .pipe(Effect.orDie)
+      const member = leadTeam
+        ? undefined
+        : yield* db
+            .select({ teamID: TeamMemberTable.team_id })
+            .from(TeamMemberTable)
+            .where(eq(TeamMemberTable.session_id, sessionID))
+            .get()
+            .pipe(Effect.orDie)
+      const teamID = leadTeam?.teamID ?? member?.teamID
+      if (!teamID) return false
+      return yield* admitWakeForTeam(teamID, sessionID, wake)
     })
 
     const getMessages = Effect.fn("Team.getMessages")(function* (teamID: string) {
