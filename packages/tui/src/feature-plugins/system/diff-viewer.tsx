@@ -171,33 +171,19 @@ function DiffViewer(props: { api: TuiPluginApi }) {
   const [pendingPatchScrollFileIndex, setPendingPatchScrollFileIndex] = createSignal<number | undefined>()
   const [patchFillerHeight, setPatchFillerHeight] = createSignal(0)
   const [patchScrollTop, setPatchScrollTop] = createSignal(0)
-  let patchScrollFrame: number | undefined
+  let detachPatchScrollSync: (() => void) | undefined
 
   onCleanup(() => props.api.ui.dialog.clear())
 
-  onCleanup(() => {
-    if (patchScrollFrame !== undefined) cancelAnimationFrame(patchScrollFrame)
-  })
-
-  const syncPatchScrollTop = () => {
-    if (scroll && !scroll.isDestroyed) setPatchScrollTop(scroll.scrollTop)
+  const bindPatchScroll = (element: ScrollBoxRenderable) => {
+    detachPatchScrollSync?.()
+    scroll = element
+    const sync = () => setPatchScrollTop(element.scrollTop)
+    element.verticalScrollBar.on("change", sync)
+    detachPatchScrollSync = () => element.verticalScrollBar.off("change", sync)
+    sync()
   }
-
-  const startPatchScrollSync = () => {
-    if (patchScrollFrame !== undefined) return
-    const tick = () => {
-      syncPatchScrollTop()
-      patchScrollFrame = requestAnimationFrame(tick)
-    }
-    patchScrollFrame = requestAnimationFrame(tick)
-  }
-
-  const stopPatchScrollSync = () => {
-    if (patchScrollFrame === undefined) return
-    cancelAnimationFrame(patchScrollFrame)
-    patchScrollFrame = undefined
-    syncPatchScrollTop()
-  }
+  onCleanup(() => detachPatchScrollSync?.())
 
   createEffect(() => {
     setExpandedFileNodes(allExpandedFileTreeDirectories(fileTree()))
@@ -891,9 +877,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                   <Separator axis="x" start={showFileTree() ? "edge-out" : undefined} />
                   <scrollbox
                     id="diff-viewer-patches"
-                    ref={(element: ScrollBoxRenderable) => (scroll = element)}
-                    onMouseOver={startPatchScrollSync}
-                    onMouseOut={stopPatchScrollSync}
+                    ref={bindPatchScroll}
                     flexGrow={1}
                     minHeight={0}
                     scrollAcceleration={patchScrollAcceleration()}

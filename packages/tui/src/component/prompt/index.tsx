@@ -755,6 +755,7 @@ export function Prompt(props: PromptProps) {
   }
 
   function syncExtmarksWithPromptParts() {
+    if (store.prompt.parts.length === 0 && store.extmarkToPartIndex.size === 0) return
     const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
     setStore(
       produce((draft) => {

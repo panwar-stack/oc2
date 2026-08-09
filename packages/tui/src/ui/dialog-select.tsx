@@ -464,25 +464,16 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   let scroll: ScrollBoxRenderable | undefined
-  let scrollSyncFrame: number | undefined
-  const syncScrollTop = () => {
-    if (scroll && !scroll.isDestroyed) setScrollTop(scroll.scrollTop)
+  let detachScrollSync: (() => void) | undefined
+  const bindScroll = (element: ScrollBoxRenderable) => {
+    detachScrollSync?.()
+    scroll = element
+    const sync = () => setScrollTop(element.scrollTop)
+    element.verticalScrollBar.on("change", sync)
+    detachScrollSync = () => element.verticalScrollBar.off("change", sync)
+    sync()
   }
-  const startScrollSync = () => {
-    if (scrollSyncFrame !== undefined) return
-    const tick = () => {
-      syncScrollTop()
-      scrollSyncFrame = requestAnimationFrame(tick)
-    }
-    scrollSyncFrame = requestAnimationFrame(tick)
-  }
-  const stopScrollSync = () => {
-    if (scrollSyncFrame === undefined) return
-    cancelAnimationFrame(scrollSyncFrame)
-    scrollSyncFrame = undefined
-    syncScrollTop()
-  }
-  onCleanup(stopScrollSync)
+  onCleanup(() => detachScrollSync?.())
   const ref: DialogSelectRef<T> = {
     get filter() {
       return store.filter
@@ -613,9 +604,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
             paddingRight={1}
             scrollbarOptions={{ visible: false }}
             scrollAcceleration={scrollAcceleration()}
-            ref={(r: ScrollBoxRenderable) => (scroll = r)}
-            onMouseOver={startScrollSync}
-            onMouseOut={stopScrollSync}
+            ref={bindScroll}
             maxHeight={height()}
           >
             <Show when={virtualRows().topSpacer > 0}>

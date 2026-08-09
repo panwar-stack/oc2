@@ -491,25 +491,16 @@ export function Session() {
     setTimelineScrollTop(scroll.scrollTop)
   }
 
-  let timelineScrollSyncFrame: number | undefined
-  const syncTimelineScrollTop = () => {
-    if (scroll && !scroll.isDestroyed) setTimelineScrollTop(scroll.scrollTop)
+  let detachTimelineScrollSync: (() => void) | undefined
+  const bindTimelineScroll = (element: ScrollBoxRenderable) => {
+    detachTimelineScrollSync?.()
+    scroll = element
+    const sync = () => setTimelineScrollTop(element.scrollTop)
+    element.verticalScrollBar.on("change", sync)
+    detachTimelineScrollSync = () => element.verticalScrollBar.off("change", sync)
+    sync()
   }
-  const startTimelineScrollSync = () => {
-    if (timelineScrollSyncFrame !== undefined) return
-    const tick = () => {
-      syncTimelineScrollTop()
-      timelineScrollSyncFrame = requestAnimationFrame(tick)
-    }
-    timelineScrollSyncFrame = requestAnimationFrame(tick)
-  }
-  const stopTimelineScrollSync = () => {
-    if (timelineScrollSyncFrame === undefined) return
-    cancelAnimationFrame(timelineScrollSyncFrame)
-    timelineScrollSyncFrame = undefined
-    syncTimelineScrollTop()
-  }
-  onCleanup(stopTimelineScrollSync)
+  onCleanup(() => detachTimelineScrollSync?.())
 
   function currentTimelineMessageIndex() {
     const ids = new Map(messages().map((message, index) => [message.id, index]))
@@ -1379,9 +1370,7 @@ export function Session() {
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
               <scrollbox
-                ref={(r) => (scroll = r)}
-                onMouseOver={startTimelineScrollSync}
-                onMouseOut={stopTimelineScrollSync}
+                ref={bindTimelineScroll}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
