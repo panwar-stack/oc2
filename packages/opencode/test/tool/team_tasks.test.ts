@@ -5,7 +5,8 @@ import path from "path"
 import { eq, isNull } from "drizzle-orm"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
-import { MessageID, SessionID } from "@/session/schema"
+import { MessageV2 } from "@/session/message-v2"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { TeamTable, TeamTaskTable } from "@/team/team.sql"
 import { Team } from "@/team/team"
@@ -19,6 +20,7 @@ import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Database } from "@oc2-ai/core/database/database"
 import { FSUtil } from "@oc2-ai/core/fs-util"
+import { ModelID, ProviderID } from "@/provider/schema"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -79,6 +81,184 @@ describe("tool.team_tasks", () => {
           expect(updated.title).toBe("Task Updated")
           expect(row?.status).toBe("completed")
           expect(row?.assignee).toBe(seed.worker.session_id)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("blocks an unchanged same-turn task-list repeat before retrieval without team writes", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const baseTeam = yield* Team.Service
+          const seed = yield* seedTeam("tasks-poll-block")
+          const turn = yield* startTurn({ session: seed.lead, text: "Inspect the current tasks.", synthetic: false })
+          const retrievals = { value: 0 }
+          const observedTeam = Team.Service.of({
+            ...baseTeam,
+            getTasks: (teamID) =>
+              Effect.sync(() => {
+                retrievals.value++
+              }).pipe(Effect.andThen(baseTeam.getTasks(teamID))),
+          })
+          const listTool = yield* TeamTaskListTool.pipe(Effect.provideService(Team.Service, observedTeam))
+          const listDef = yield* listTool.init()
+
+          const first = yield* listDef.execute(
+            {},
+            context(seed.lead.id, {
+              assistant: turn.assistant,
+              callID: "task-list-first",
+              messages: yield* sessions.messages({ sessionID: seed.lead.id }),
+            }),
+          )
+          expect(first.title).toBe("Team Tasks")
+          expect(first.output).toBe("No tasks found.")
+          expect(first.metadata).toEqual(expect.objectContaining({ revision: expect.any(Number), repeated: false }))
+          expect(retrievals.value).toBe(1)
+
+          yield* storeTaskListRead({
+            assistant: turn.assistant,
+            callID: "task-list-first",
+            result: first,
+          })
+          const continuation = yield* createAssistant(seed.lead, turn.user.id)
+          const before = yield* getTeamRow(seed.info.id)
+
+          const blocked = yield* listDef.execute(
+            {},
+            context(seed.lead.id, {
+              assistant: continuation,
+              callID: "task-list-repeat",
+              messages: yield* sessions.messages({ sessionID: seed.lead.id }),
+            }),
+          )
+          const after = yield* getTeamRow(seed.info.id)
+
+          expect(blocked.title).toBe("Team Tasks (Polling Blocked)")
+          expect(blocked.output).toContain("Repeated unchanged task-list read suppressed")
+          expect(blocked.output).toContain("finish the current response normally")
+          expect(blocked.metadata).toEqual(
+            expect.objectContaining({ revision: first.metadata.revision, repeated: true }),
+          )
+          expect(retrievals.value).toBe(1)
+          expect(after).toEqual(before)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("allows a same-turn task-list read after the team revision changes", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const seed = yield* seedTeam("tasks-poll-revision")
+          const turn = yield* startTurn({ session: seed.lead, text: "Plan the task work.", synthetic: false })
+          const listTool = yield* TeamTaskListTool
+          const listDef = yield* listTool.init()
+          const first = yield* listDef.execute(
+            {},
+            context(seed.lead.id, {
+              assistant: turn.assistant,
+              callID: "task-list-before-change",
+              messages: yield* sessions.messages({ sessionID: seed.lead.id }),
+            }),
+          )
+          yield* storeTaskListRead({
+            assistant: turn.assistant,
+            callID: "task-list-before-change",
+            result: first,
+          })
+
+          yield* team.createTask({ teamID: seed.info.id, description: "Material revision change" }).pipe(Effect.orDie)
+          const continuation = yield* createAssistant(seed.lead, turn.user.id)
+          const result = yield* listDef.execute(
+            {},
+            context(seed.lead.id, {
+              assistant: continuation,
+              callID: "task-list-after-change",
+              messages: yield* sessions.messages({ sessionID: seed.lead.id }),
+            }),
+          )
+          const current = yield* getTeamRow(seed.info.id)
+
+          expect(result.title).toBe("Team Tasks")
+          expect(result.output).toContain("Material revision change")
+          expect(result.metadata).toEqual(expect.objectContaining({ revision: current?.revision, repeated: false }))
+          expect(result.metadata.revision).toBe(first.metadata.revision + 1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("allows unchanged task-list reads in new real and synthetic user turns", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const seed = yield* seedTeam("tasks-poll-turns")
+          yield* team.createTask({ teamID: seed.info.id, description: "Stable task" }).pipe(Effect.orDie)
+          const listTool = yield* TeamTaskListTool
+          const listDef = yield* listTool.init()
+
+          const initialTurn = yield* startTurn({ session: seed.lead, text: "List tasks.", synthetic: false })
+          const initial = yield* listDef.execute(
+            {},
+            context(seed.lead.id, {
+              assistant: initialTurn.assistant,
+              callID: "task-list-initial-turn",
+              messages: yield* sessions.messages({ sessionID: seed.lead.id }),
+            }),
+          )
+          yield* storeTaskListRead({
+            assistant: initialTurn.assistant,
+            callID: "task-list-initial-turn",
+            result: initial,
+          })
+
+          const realTurn = yield* startTurn({ session: seed.lead, text: "List tasks again.", synthetic: false })
+          const real = yield* listDef.execute(
+            {},
+            context(seed.lead.id, {
+              assistant: realTurn.assistant,
+              callID: "task-list-real-turn",
+              messages: yield* sessions.messages({ sessionID: seed.lead.id }),
+            }),
+          )
+          yield* storeTaskListRead({
+            assistant: realTurn.assistant,
+            callID: "task-list-real-turn",
+            result: real,
+          })
+
+          const syntheticTurn = yield* startTurn({
+            session: seed.lead,
+            text: "<team-messages>New coordination input.</team-messages>",
+            synthetic: true,
+          })
+          const synthetic = yield* listDef.execute(
+            {},
+            context(seed.lead.id, {
+              assistant: syntheticTurn.assistant,
+              callID: "task-list-synthetic-turn",
+              messages: yield* sessions.messages({ sessionID: seed.lead.id }),
+            }),
+          )
+
+          expect(real.title).toBe("Team Tasks")
+          expect(real.output).toContain("Stable task")
+          expect(real.metadata).toEqual(
+            expect.objectContaining({ revision: initial.metadata.revision, repeated: false }),
+          )
+          expect(synthetic.title).toBe("Team Tasks")
+          expect(synthetic.output).toContain("Stable task")
+          expect(synthetic.metadata).toEqual(
+            expect.objectContaining({ revision: initial.metadata.revision, repeated: false }),
+          )
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -936,17 +1116,101 @@ describe("tool.team_tasks", () => {
   )
 })
 
-function context(sessionID: string): Context {
+function context(
+  sessionID: string,
+  input?: { assistant?: MessageV2.Assistant; callID?: string; messages?: MessageV2.WithParts[] },
+): Context {
   return {
     sessionID: SessionID.make(sessionID),
-    messageID: MessageID.ascending(),
+    messageID: input?.assistant?.id ?? MessageID.ascending(),
+    callID: input?.callID,
     agent: "build",
     abort: new AbortController().signal,
-    messages: [],
+    messages: input?.messages ?? [],
     metadata: () => Effect.void,
     ask: () => Effect.void,
   }
 }
+
+const turnRef = {
+  providerID: ProviderID.make("test"),
+  modelID: ModelID.make("test-model"),
+}
+
+const createAssistant = Effect.fn("TeamTasksTest.createAssistant")(function* (
+  session: Session.Info,
+  parentID: MessageV2.User["id"],
+) {
+  const sessions = yield* Session.Service
+  const assistant: MessageV2.Assistant = {
+    id: MessageID.ascending(),
+    role: "assistant",
+    parentID,
+    sessionID: session.id,
+    mode: "build",
+    agent: "build",
+    cost: 0,
+    path: { cwd: "/tmp", root: "/tmp" },
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    modelID: turnRef.modelID,
+    providerID: turnRef.providerID,
+    time: { created: Date.now() },
+  }
+  yield* sessions.updateMessage(assistant)
+  return assistant
+})
+
+const startTurn = Effect.fn("TeamTasksTest.startTurn")(function* (input: {
+  session: Session.Info
+  text: string
+  synthetic: boolean
+}) {
+  const sessions = yield* Session.Service
+  const user: MessageV2.User = {
+    id: MessageID.ascending(),
+    role: "user",
+    sessionID: input.session.id,
+    agent: "build",
+    model: turnRef,
+    time: { created: Date.now() },
+  }
+  yield* sessions.updateMessage(user)
+  yield* sessions.updatePart({
+    id: PartID.ascending(),
+    messageID: user.id,
+    sessionID: input.session.id,
+    type: "text",
+    text: input.text,
+    synthetic: input.synthetic,
+  } satisfies MessageV2.TextPart)
+  const assistant = yield* createAssistant(input.session, user.id)
+  return { user, assistant }
+})
+
+const storeTaskListRead = Effect.fn("TeamTasksTest.storeTaskListRead")(function* (input: {
+  assistant: MessageV2.Assistant
+  callID: string
+  result: { title: string; output: string; metadata: { revision: number; repeated: boolean } }
+}) {
+  const sessions = yield* Session.Service
+  const now = Date.now()
+  yield* sessions.updatePart({
+    id: PartID.ascending(),
+    messageID: input.assistant.id,
+    sessionID: input.assistant.sessionID,
+    type: "tool",
+    callID: input.callID,
+    tool: "team_task_list",
+    state: {
+      status: "completed",
+      input: {},
+      output: input.result.output,
+      title: input.result.title,
+      metadata: input.result.metadata,
+      time: { start: now, end: now },
+    },
+  } satisfies MessageV2.ToolPart)
+})
 
 const seedTeam = Effect.fn("TeamTasksTest.seedTeam")(function* (name: string) {
   const sessions = yield* Session.Service
@@ -1009,4 +1273,9 @@ const getTask = Effect.fn("TeamTasksTest.getTask")(function* (id: string) {
 const getTasks = Effect.fn("TeamTasksTest.getTasks")(function* (teamID: string) {
   const { db } = yield* Database.Service
   return yield* db.select().from(TeamTaskTable).where(eq(TeamTaskTable.team_id, teamID)).all().pipe(Effect.orDie)
+})
+
+const getTeamRow = Effect.fn("TeamTasksTest.getTeamRow")(function* (teamID: string) {
+  const { db } = yield* Database.Service
+  return yield* db.select().from(TeamTable).where(eq(TeamTable.id, teamID)).get().pipe(Effect.orDie)
 })
