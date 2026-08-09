@@ -23,6 +23,7 @@ export function usePromptWorkspace(sessionID?: string) {
   const [creating, setCreating] = createSignal(false)
   const [creatingDots, setCreatingDots] = createSignal(3)
   const [notice, setNotice] = createSignal<string>()
+  let noticeTimer: Timer | undefined
 
   async function create(selection: Extract<WorkspaceSelection, { type: "new" }>) {
     setCreating(true)
@@ -94,11 +95,24 @@ export function usePromptWorkspace(sessionID?: string) {
   }
 
   function showNotice(name: string) {
+    clearNoticeTimer()
     setNotice(`Warped to ${name}`)
-    setTimeout(() => setNotice(undefined), 4000)
+    const timer = setTimeout(() => {
+      if (noticeTimer !== timer) return
+      noticeTimer = undefined
+      setNotice(undefined)
+    }, 4000)
+    noticeTimer = timer
+  }
+
+  function clearNoticeTimer() {
+    if (!noticeTimer) return
+    clearTimeout(noticeTimer)
+    noticeTimer = undefined
   }
 
   function clearNotice() {
+    clearNoticeTimer()
     setNotice(undefined)
   }
 
@@ -114,6 +128,8 @@ export function usePromptWorkspace(sessionID?: string) {
     const timer = setInterval(() => setCreatingDots((dots) => (dots % 3) + 1), 1000)
     onCleanup(() => clearInterval(timer))
   })
+
+  onCleanup(clearNoticeTimer)
 
   const label = createMemo<
     | { type: "new"; workspaceType: string }

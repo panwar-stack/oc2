@@ -26,8 +26,10 @@ export function currentContextMessage(messages: readonly Message[]): AssistantMe
   )
 }
 
-export function formatCacheStatus(messages: readonly Message[]): string | undefined {
-  const last = currentContextMessage(messages)
+export function formatCacheStatus(
+  messages: readonly Message[],
+  last: AssistantMessage | undefined = currentContextMessage(messages),
+): string | undefined {
   if (!last) return undefined
 
   const totals = messages.reduce(

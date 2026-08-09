@@ -295,23 +295,25 @@ export const {
       }
       const buffers = [...streamingPartBuffers.values()]
       streamingPartBuffers.clear()
-      for (const buffer of buffers) {
-        const parts = store.part[buffer.messageID]
-        if (!parts) continue
-        const result = search(parts, buffer.partID, (part) => part.id)
-        if (!result.found) continue
-        const part = parts[result.index]
-        if (part.type !== "text" && part.type !== "reasoning") continue
-        setStore(
-          "part",
-          buffer.messageID,
-          produce((draft) => {
-            const part = draft.find((item) => item.id === buffer.partID)
-            if (part?.type !== "text" && part?.type !== "reasoning") return
-            part.text += buffer.text
-          }),
-        )
-      }
+      batch(() => {
+        for (const buffer of buffers) {
+          const parts = store.part[buffer.messageID]
+          if (!parts) continue
+          const result = search(parts, buffer.partID, (part) => part.id)
+          if (!result.found) continue
+          const part = parts[result.index]
+          if (part.type !== "text" && part.type !== "reasoning") continue
+          setStore(
+            "part",
+            buffer.messageID,
+            produce((draft) => {
+              const part = draft.find((item) => item.id === buffer.partID)
+              if (part?.type !== "text" && part?.type !== "reasoning") return
+              part.text += buffer.text
+            }),
+          )
+        }
+      })
     }
 
     function flushStreamingPart(sessionID: string, messageID: string, partID: string) {

@@ -10,7 +10,7 @@ import type {
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
-import { onCleanup } from "solid-js"
+import { batch, onCleanup } from "solid-js"
 
 type CacheRegressionEvent = Extract<Event, { type: "session.next.cache.regression" }>
 
@@ -307,7 +307,9 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       }
       const buffers = [...streamingContentBuffers.values()]
       streamingContentBuffers.clear()
-      for (const buffer of buffers) flushStreamingContent(buffer)
+      batch(() => {
+        for (const buffer of buffers) flushStreamingContent(buffer)
+      })
     }
 
     function flushStreamingContentItem(

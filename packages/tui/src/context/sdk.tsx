@@ -52,6 +52,21 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const retryDelay = 1000
     const maxRetryDelay = 30000
 
+    const waitForRetry = (delay: number, signal: AbortSignal) =>
+      new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve()
+          return
+        }
+        const done = () => {
+          clearTimeout(timer)
+          signal.removeEventListener("abort", done)
+          resolve()
+        }
+        const timer = setTimeout(done, delay)
+        signal.addEventListener("abort", done, { once: true })
+      })
+
     const flush = () => {
       if (queue.length === 0) return
       const events = queue
@@ -112,7 +127,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
           // Exponential backoff
           const backoff = Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)
-          await new Promise((resolve) => setTimeout(resolve, backoff))
+          await waitForRetry(backoff, ctrl.signal)
         }
       })().catch(() => {})
     }

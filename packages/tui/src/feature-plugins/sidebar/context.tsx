@@ -31,7 +31,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return {
       tokens,
       percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : null,
-      cacheStatus: formatCacheStatus(msg()),
+      cacheStatus: formatCacheStatus(msg(), last),
     }
   })
 
