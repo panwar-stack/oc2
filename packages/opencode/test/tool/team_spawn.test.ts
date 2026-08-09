@@ -160,6 +160,33 @@ const waitUntil = Effect.fn("TeamSpawnTest.waitUntil")(function* (predicate: () 
 })
 
 describe("tool.team_spawn", () => {
+  it.live("uses the lead wait contract in its description", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const tool = yield* TeamSpawnTool
+          const description = (yield* tool.init()).description
+
+          expect(description).toContain("Continue useful decomposition, integration, review, or decision work.")
+          expect(description).toContain("When no useful work remains, finish the current response normally.")
+          expect(description).toContain(
+            "The runtime parks successful finalization while finite teammates remain active.",
+          )
+          expect(description).toContain(
+            "Do not sleep, repeatedly read team state, ask for routine updates, or send filler.",
+          )
+          expect(description).toContain(
+            "Teammates must send material progress, blockers, questions, and results without a lead status request.",
+          )
+          expect(description).toContain("Relevant teammate or user events wake the lead.")
+          expect(description).not.toContain("Do not finalize while finite teammates remain nonterminal.")
+          expect(description).not.toContain("Ask for periodic updates.")
+          expect(description).not.toContain("An empty mailbox does not require ending this turn.")
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("inherits lead model and variant for teammates without explicit model", () =>
     provideTmpdirInstance(
       () =>

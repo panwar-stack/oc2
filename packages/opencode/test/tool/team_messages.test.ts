@@ -15,6 +15,7 @@ import { TeamGetMessagesTool } from "@/tool/team_get_messages"
 import { TeamPlanDecideTool } from "@/tool/team_plan_decide"
 import { TeamPlanSubmitTool } from "@/tool/team_plan_submit"
 import { TeamSendMessageTool } from "@/tool/team_send_message"
+import { TeamTaskListTool } from "@/tool/team_task_list"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { wakeTeamSession } from "@/tool/team_wake"
@@ -129,6 +130,37 @@ function promptOps(input: {
 
 const responseFor = (assistant: MessageV2.Assistant): SessionV1.WithParts => ({ info: assistant, parts: [] })
 
+const expectLeadWaitContract = (text: string) => {
+  expect(text).toContain("Continue useful decomposition, integration, review, or decision work.")
+  expect(text).toContain("When no useful work remains, finish the current response normally.")
+  expect(text).toContain("The runtime parks successful finalization while finite teammates remain active.")
+  expect(text).toContain("Do not sleep, repeatedly read team state, ask for routine updates, or send filler.")
+  expect(text).toContain(
+    "Teammates must send material progress, blockers, questions, and results without a lead status request.",
+  )
+  expect(text).toContain("Relevant teammate or user events wake the lead.")
+}
+
+const expectNoForbiddenLeadWaitGuidance = (text: string) => {
+  const normalized = text.toLowerCase()
+  for (const phrase of [
+    "Do not finalize while finite teammates remain nonterminal",
+    "Ask for periodic updates",
+    "An empty mailbox does not require ending this turn",
+  ]) {
+    expect(normalized).not.toContain(phrase.toLowerCase())
+  }
+}
+
+const expectNoRepeatedTeamStateReadGuidance = (text: string) => {
+  expect(text).not.toMatch(
+    /\b(?:call|check|read|use|invoke)\s+(?:the\s+)?(?:team_get_messages|team_task_list|mailbox|task[- ]list)\b/i,
+  )
+  expect(text).not.toMatch(
+    /\b(?:another|next)\s+(?:team_get_messages|team_task_list|mailbox|task[- ]list|status)(?:\s+(?:call|check|read))?\b/i,
+  )
+}
+
 const planModePermission: Permission.Ruleset = [
   { permission: "bash", pattern: "*", action: "deny" },
   { permission: "external_directory", pattern: "/tmp/*", action: "deny" },
@@ -169,7 +201,25 @@ const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.As
   )
 
 describe("tool.team_get_messages", () => {
-  it.live("tells the lead that finalization parks automatically when the mailbox is empty", () =>
+  it.live("uses the lead wait contract in team-state tool descriptions", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const getMessages = yield* TeamGetMessagesTool
+          const taskList = yield* TeamTaskListTool
+          const descriptions = [(yield* getMessages.init()).description, (yield* taskList.init()).description]
+
+          for (const description of descriptions) {
+            expect(description).toContain("For the active team lead:")
+            expectLeadWaitContract(description)
+            expectNoForbiddenLeadWaitGuidance(description)
+          }
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("tells the lead to finish normally when the mailbox is empty", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -181,8 +231,8 @@ describe("tool.team_get_messages", () => {
 
           expect(result.title).toBe("Team Messages")
           expect(result.output).toContain("No pending messages.")
-          expect(result.output).toContain("finalization parks automatically")
-          expect(result.output).toContain("does not require ending this turn")
+          expectLeadWaitContract(result.output)
+          expectNoForbiddenLeadWaitGuidance(result.output)
           expect(result.output).toContain("worker (general, active, session")
           expect(result.metadata.count).toBe(0)
           expect(result.metadata.repeated).toBe(false)
@@ -220,7 +270,9 @@ describe("tool.team_get_messages", () => {
 
           expect(result.title).toBe("Team Messages (Polling Blocked)")
           expect(result.output).toContain("Repeated empty mailbox check suppressed")
-          expect(result.output).toContain("Do not send routine status-check broadcasts")
+          expect(result.output).toContain("finish the current response normally")
+          expectNoForbiddenLeadWaitGuidance(result.output)
+          expectNoRepeatedTeamStateReadGuidance(result.output)
           expect(result.metadata.count).toBe(0)
           expect(result.metadata.repeated).toBe(true)
         }),
@@ -1127,6 +1179,9 @@ describe("team message wake safety", () => {
 
           expect(result.title).toBe("Message Sent")
           expect(result.output).toContain("wake waits are bounded")
+          expectLeadWaitContract(result.output)
+          expectNoForbiddenLeadWaitGuidance(result.output)
+          expect(result.output).not.toContain("Check team_get_messages")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -1155,6 +1210,9 @@ describe("team message wake safety", () => {
 
           expect(result.title).toBe("Broadcast Sent")
           expect(result.output).toContain("wake waits are bounded")
+          expectLeadWaitContract(result.output)
+          expectNoForbiddenLeadWaitGuidance(result.output)
+          expect(result.output).not.toContain("Check team_get_messages")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

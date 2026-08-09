@@ -1257,20 +1257,38 @@ it.live("injects team orchestration guidance for primary lead sessions when agen
         parts: [{ type: "text", text: "refactor auth and routes" }],
       })
 
-      const bodies = (yield* llm.inputs).map((input) => JSON.stringify(input))
-      expect(
-        bodies.some(
-          (body) =>
-            body.includes("Agent team orchestration is enabled") &&
-            body.includes("team_create") &&
-            body.includes("team_spawn") &&
-            body.includes("Current teammate model: test/test-model") &&
-            body.includes("The current teammate model exposes no teammate variants") &&
-            body.includes("Omit team_spawn.variant for default behavior") &&
-            body.includes("Lead role") &&
-            body.includes("run a final team report"),
-        ),
-      ).toBe(true)
+      const systemMessages = (yield* llm.inputs).flatMap((input) =>
+        ((input.messages as Array<{ role?: string; content?: unknown }> | undefined) ?? [])
+          .filter((message) => message.role === "system")
+          .map((message) => JSON.stringify(message.content)),
+      )
+      const leadGuidance = systemMessages.find(
+        (body) =>
+          body.includes("Agent team orchestration is enabled") &&
+          body.includes("team_create") &&
+          body.includes("team_spawn") &&
+          body.includes("Current teammate model: test/test-model") &&
+          body.includes("The current teammate model exposes no teammate variants") &&
+          body.includes("Omit team_spawn.variant for default behavior") &&
+          body.includes("Lead role") &&
+          body.includes("run a final team report"),
+      )
+      expect(leadGuidance).toBeDefined()
+      expect(leadGuidance).toContain("Continue useful decomposition, integration, review, or decision work.")
+      expect(leadGuidance).toContain("When no useful work remains, finish the current response normally.")
+      expect(leadGuidance).toContain(
+        "The runtime parks successful finalization while finite teammates remain active.",
+      )
+      expect(leadGuidance).toContain(
+        "Do not sleep, repeatedly read team state, ask for routine updates, or send filler.",
+      )
+      expect(leadGuidance).toContain(
+        "Teammates must send material progress, blockers, questions, and results without a lead status request.",
+      )
+      expect(leadGuidance).toContain("Relevant teammate or user events wake the lead.")
+      expect(leadGuidance).not.toContain("Do not finalize while finite teammates remain nonterminal.")
+      expect(leadGuidance).not.toContain("Ask for periodic updates.")
+      expect(leadGuidance).not.toContain("An empty mailbox does not require ending this turn.")
     }),
     {
       git: true,

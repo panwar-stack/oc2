@@ -35,9 +35,23 @@ describe("command", () => {
           expect(useTeam.source).toBe("command")
           expect(useTeam.description).toBe("use agent team to accomplish the task")
           expect(useTeam.hints).toEqual(["$ARGUMENTS"])
-          expect(yield* Effect.promise(() => Promise.resolve(useTeam.template))).toContain(
-            "Use an agent team for this work:",
+          const useTeamTemplate = yield* Effect.promise(() => Promise.resolve(useTeam.template))
+          expect(useTeamTemplate).toContain("Use an agent team for this work:")
+          expect(useTeamTemplate).toContain("Continue useful decomposition, integration, review, or decision work.")
+          expect(useTeamTemplate).toContain("When no useful work remains, finish the current response normally.")
+          expect(useTeamTemplate).toContain(
+            "The runtime parks successful finalization while finite teammates remain active.",
           )
+          expect(useTeamTemplate).toContain(
+            "Do not sleep, repeatedly read team state, ask for routine updates, or send filler.",
+          )
+          expect(useTeamTemplate).toContain(
+            "Teammates must send material progress, blockers, questions, and results without a lead status request.",
+          )
+          expect(useTeamTemplate).toContain("Relevant teammate or user events wake the lead.")
+          expect(useTeamTemplate).not.toContain("Do not finalize while finite teammates remain nonterminal.")
+          expect(useTeamTemplate).not.toContain("Ask for periodic updates.")
+          expect(useTeamTemplate).not.toContain("An empty mailbox does not require ending this turn.")
 
           const spawn = yield* command.get("spawn")
           if (!spawn) throw new Error("spawn command not found")

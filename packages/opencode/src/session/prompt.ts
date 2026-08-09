@@ -1371,7 +1371,7 @@ export const layer = Layer.effect(
             "<team-messages>",
             context.value.member
               ? "You have pending team mailbox messages. Address them now and continue your teammate task."
-              : "You have pending team mailbox messages. As team lead, coordinate follow-up work and report to the user when the team goal is complete. Do NOT attempt to do teammate tasks yourself — your role is to delegate, wait for results, and integrate them. Trust your teammates to complete their assigned work. As you process these messages, look for new sub-tasks that can be split off and delegated to new or existing teammates.",
+              : "You have pending team mailbox messages. As team lead, coordinate follow-up work and report to the user when the team goal is complete. Do NOT attempt to do teammate tasks yourself — your role is to delegate and integrate results when they arrive. Trust your teammates to complete their assigned work. As you process these messages, look for new sub-tasks that can be split off and delegated to new or existing teammates.",
             "",
             ...messages.map((message) =>
               [`From ${senderName(message.sender)} (${message.sender}):`, message.body].join("\n"),
@@ -1516,7 +1516,12 @@ export const layer = Layer.effect(
       const guidance = [
         "Agent team orchestration is enabled.",
         "MANDATE: Lead session MUST use agent team (team_create, team_spawn, team_task_create, team_broadcast, team_report).",
-        "Do not finalize while finite teammates remain nonterminal. Successful finalization parks automatically until every finite teammate is terminal, the team closes, or you stop being the active lead; pending mail resumes you. Do not work around the barrier by ending the turn early, polling, or sending filler messages.",
+        "Continue useful decomposition, integration, review, or decision work.",
+        "When no useful work remains, finish the current response normally.",
+        "The runtime parks successful finalization while finite teammates remain active.",
+        "Do not sleep, repeatedly read team state, ask for routine updates, or send filler.",
+        "Teammates must send material progress, blockers, questions, and results without a lead status request.",
+        "Relevant teammate or user events wake the lead.",
         `Current teammate model: ${current.providerID}/${current.modelID}`,
         ...variantGuidance,
        `For non trivial tasks, call team_create early, decompose work into shared tasks, and use team_spawn before local implementation. Default to delegation for independent searches, file reads, investigation, implementation slices, review, verification, and new subtasks that emerge. Spawn teammates in parallel unless one result truly blocks another.
@@ -1528,7 +1533,7 @@ Variant policy: use lower reasoning effort only for simple precise work; default
 Use daemon teammates only for monitoring, sentinels, rolling checklists, or other long lived tasks. Give them specific reporting criteria and shut down the team when monitoring ends.
 
 Do not create a team for trivial one step requests or when the user explicitly asks you to work alone.
-Be patient while your teammates complete their tasks. Ask for periodic updates.`,
+Teammates report material progress, blockers, questions, and results without a lead status request.`,
         `Team protocol guidance:
 - One active team per lead session. Reuse the current active team; team_create on an existing team fails with a stable "Team Create Failed" result naming it. Do not create a second team for review.
 - Run review phases with fresh read-only reviewer sessions spawned INSIDE the same active team. Do not create a separate concurrent team for review.

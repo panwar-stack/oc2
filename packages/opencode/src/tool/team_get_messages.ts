@@ -32,7 +32,8 @@ export const TeamGetMessagesTool = Tool.define(
           const messages = yield* team.claimPendingMessages(ctx.sessionID, context.value.team.id)
           // Members are needed for both empty-mailbox status summaries and sender labels below.
           const members = yield* team.getMembers(context.value.team.id)
-          // Include member status in empty-mailbox guidance so the lead can see work is still active without polling.
+          // Include member status in empty-mailbox guidance so the lead can make one useful
+          // coordination decision, then finish normally instead of polling.
           const status = members.map(
             (member) => `- ${member.name} (${member.agent_type}, ${member.status}, session ${member.session_id})`,
           )
@@ -57,18 +58,17 @@ export const TeamGetMessagesTool = Tool.define(
               part.state.metadata.count === 0,
           ).length
           if (messages.length === 0) {
-            // An empty mailbox is not a wait primitive. For the lead, successful finalization parks
-            // automatically while finite teammates remain nonterminal, so no special waiting action
-            // is required; teammates continue their assigned work.
+            // An empty mailbox is not a wait primitive. The lead finishes normally when useful
+            // coordination is done, and the runtime parks successful finalization when necessary.
             const lead = ctx.sessionID === context.value.team.lead_session_id
             const guidance = lead
               ? [
                   "No pending messages.",
                   previousEmptyChecks > 0
-                    ? "Repeated empty mailbox check suppressed. Do not poll for mail; finalization parks automatically until every finite teammate is terminal or mail arrives."
-                    : "Check complete. If finite teammates are still active, finalization parks automatically and resumes you when mail arrives or every finite teammate is terminal; an empty mailbox does not require ending this turn.",
+                    ? "Repeated empty mailbox check suppressed. Do not poll for mail. When no useful work remains, finish the current response normally. The runtime parks successful finalization while finite teammates remain active."
+                    : "Check complete. Continue useful decomposition, integration, review, or decision work. When no useful work remains, finish the current response normally. The runtime parks successful finalization while finite teammates remain active.",
                   "Team messages are delivered asynchronously; busy teammates can only process broadcasts or direct messages at their next prompt boundary.",
-                  "Do not send routine status-check broadcasts just because the mailbox is empty. Teammates will wake you when they have progress, blockers, or results.",
+                  "Do not sleep, repeatedly read team state, ask for routine updates, or send filler. Teammates must send material progress, blockers, questions, and results without a lead status request. Relevant teammate or user events wake the lead.",
                 ]
               : [
                   "No pending messages.",

@@ -178,7 +178,7 @@ Inside the teammate run:
 8. Member status becomes `completed` — or `failed` with a deterministic `failure_code` after a blank retry, a provider error, or a missing owned-task handoff.
 9. Any blocked teammates that depended on this session are checked and possibly started.
 
-When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. Because the spawn call returns before the member finishes, a teammate started in the same step may still be nonterminal when the lead's own assistant step completes. Successful finalization therefore does not exit the session while finite teammates remain nonterminal: the lead finalization barrier parks the exit and resumes the model loop on mail delivery or a new user message; it releases the exit when every finite teammate is terminal. See [Lead Finalization Barrier](#lead-finalization-barrier).
+When a completed teammate unblocks multiple dependents, those newly ready teammates are started concurrently. Because the spawn call returns before the member finishes, a teammate started in the same step may still be nonterminal when the lead's own assistant step completes. The lead must finish its response normally when no useful coordination work remains. The lead finalization barrier then parks successful finalization while finite teammates remain active, resumes the model loop on relevant mail or user input, and releases the exit when every finite teammate is terminal. See [Lead Finalization Barrier](#lead-finalization-barrier).
 
 ## Daemon Teammates
 
@@ -277,9 +277,22 @@ The actual delivery happens in `SessionPrompt.deliverTeamMessages`:
 5. Mark those recipient rows delivered.
 6. Continue the prompt loop.
 
-So a teammate does not need to poll forever. If another participant sends a message, the recipient is woken and sees the message as a normal prompt input on the next loop.
+So a teammate does not poll for messages. If another participant sends a message, the recipient is woken and sees the message as a normal prompt input on the next loop.
 
 Lead-initiated wake waits are bounded. Lead tools briefly wait for woken teammate runs, while teammate-initiated delivery remains asynchronous so teammate work is not blocked.
+
+## Lead Wait Contract
+
+All lead-facing guidance uses this contract:
+
+1. Continue useful decomposition, integration, review, or decision work.
+2. When no useful work remains, finish the current response normally.
+3. The runtime parks successful finalization while finite teammates remain active.
+4. Do not sleep, repeatedly read team state, ask for routine updates, or send filler.
+5. Teammates must send material progress, blockers, questions, and results without a lead status request.
+6. Relevant teammate or user events wake the lead.
+
+A mailbox read at a real coordination boundary is valid. Task-list reads for planning, dependencies, ownership, and integration are also valid. Neither tool is a wait primitive. Daemon teammates do not block successful lead finalization.
 
 ## Lead Finalization Barrier
 
@@ -295,7 +308,7 @@ When the lead attempts to finalize, the prompt loop runs a private finalization 
 6. Rechecks durable mail and member state after every signal.
 7. Permits exit when every finite member is terminal, the team is closed, or the session is no longer the active lead.
 
-Because task teammates spawn asynchronously and complete on their own fibers, the barrier is how the lead observes teammate completion: the completion auto-notification arrives as pending mail, the mail delivery wakes the parked lead, and the loop continues to integrate the result. A new user message can also wake a parked lead so it can act while teammates continue in the background.
+Because task teammates spawn asynchronously and complete on their own fibers, the lead finishes its response normally after useful coordination work. The barrier observes teammate completion without model or tool calls: the completion auto-notification arrives as pending mail, the mail delivery wakes the parked lead, and the loop continues to integrate the result. A new user message can also wake a parked lead so it can act while teammates continue in the background.
 
 Listeners only signal the parked fiber. Durable database state remains authoritative; the barrier never polls the database, sleeps, or invokes the LLM while parked.
 
@@ -612,11 +625,15 @@ team_spawn creates child session + team_member row
 if dependencies incomplete:
   member status = blocked
 else:
-  run child session and wait for teammate result
+  return a started handle; lifecycle reconciliation runs the child session
   |
 teammate runs normal prompt loop
   |
 teammate sends mailbox updates / uses shared tasks / submits plans
+  |
+lead finishes normally when no useful coordination work remains
+  |
+runtime parks successful lead finalization while finite teammates remain active
   |
 messages wake recipient sessions and inject <team-messages>
   |
