@@ -9,7 +9,7 @@ import { SessionMessage } from "@oc2-ai/core/session/message"
 import { Prompt } from "@oc2-ai/core/session/prompt"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Scope } from "effect"
 import * as DateTime from "effect/DateTime"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
@@ -32,6 +32,7 @@ import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { SessionMessageTable, SessionTable } from "@oc2-ai/core/session/sql"
 import { TeamMessageRecipientTable, TeamTable, TeamUsageEventTable } from "@/team/team.sql"
+import { MessageReceived } from "@/team/events"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@oc2-ai/core/fs-util"
@@ -63,7 +64,7 @@ import { Opengrep } from "@oc2-ai/core/filesystem/opengrep"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
-import { provideTmpdirInstance, provideTmpdirServer, TestInstance } from "../fixture/fixture"
+import { provideTmpdirInstance, provideTmpdirServer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -71,6 +72,7 @@ import { ProviderV2 } from "@oc2-ai/core/provider"
 import { ModelV2 } from "@oc2-ai/core/model"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { Runner } from "@/effect/runner"
+import { InstanceStore } from "@/project/instance-store"
 
 void Log.init({ print: false })
 
@@ -399,6 +401,121 @@ const assertLoopParked = (fiber: Fiber.Fiber<SessionV1.WithParts, Runner.Suspend
     }
   })
 
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
+const instrumentFinalizationParks = Effect.fnUntraced(function* (input?: { fallbackCallbacks?: boolean }) {
+  const run = yield* SessionRunState.Service
+  const events = yield* EventV2Bridge.Service
+  const registrations = yield* Queue.unbounded<{ sessionID: SessionID; signal: Deferred.Deferred<void> }>()
+  const mutableRun = run as Mutable<SessionRunState.Interface>
+  const mutableEvents = events as Mutable<EventV2Bridge.Interface>
+  const originalRegisterPark = run.registerPark
+  const originalHandoffPark = run.handoffPark
+  const originalSubscribeCallback = events.subscribeCallback
+  const subscribeFallback = originalSubscribeCallback as (
+    type: string | object,
+    callback: (event: { type: string; properties: unknown; data: Record<string, unknown> }) => void,
+  ) => Effect.Effect<() => void>
+  const originalPublish = events.publish
+  let beforeNextHandoff: Effect.Effect<void> | undefined
+  let afterNextHandoff: Effect.Effect<void> | undefined
+  let activeFallbacks = 0
+
+  mutableRun.registerPark = ((sessionID, signal, continuation) =>
+    originalRegisterPark(sessionID, signal, continuation).pipe(
+      Effect.tap(() => Queue.offer(registrations, { sessionID, signal })),
+    )) as SessionRunState.Interface["registerPark"]
+  mutableRun.handoffPark = ((sessionID, signal, replacement) =>
+    Effect.suspend(() => {
+      const before = beforeNextHandoff
+      beforeNextHandoff = undefined
+      return Effect.gen(function* () {
+        if (before) yield* before
+        const result = yield* originalHandoffPark(sessionID, signal, replacement)
+        if (result) {
+          const after = afterNextHandoff
+          afterNextHandoff = undefined
+          if (after) yield* after
+        }
+        return result
+      })
+    })) as SessionRunState.Interface["handoffPark"]
+  mutableEvents.subscribeCallback = ((
+    type: string | object,
+    callback: (event: { type: string; properties: unknown; data: Record<string, unknown> }) => void,
+  ) => {
+    if (input?.fallbackCallbacks) {
+      return subscribeFallback(type, callback).pipe(
+        Effect.map((off) => {
+          activeFallbacks += 1
+          let active = true
+          return () => {
+            if (!active) return
+            active = false
+            activeFallbacks -= 1
+            off()
+          }
+        }),
+      )
+    }
+    // Simulate an unavailable fallback bridge: registrations succeed, but no event callback is
+    // retained. The real barrier must therefore make progress only through direct park signals.
+    return Effect.sync(() => {
+      activeFallbacks += 1
+      let active = true
+      return () => {
+        if (!active) return
+        active = false
+        activeFallbacks -= 1
+      }
+    })
+  }) as EventV2Bridge.Interface["subscribeCallback"]
+
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      mutableRun.registerPark = originalRegisterPark
+      mutableRun.handoffPark = originalHandoffPark
+      mutableEvents.subscribeCallback = originalSubscribeCallback
+      mutableEvents.publish = originalPublish
+    }),
+  )
+
+  return {
+    run,
+    next: (label: string) => awaitWithTimeout(Queue.take(registrations), `timed out waiting for ${label}`, "5 seconds"),
+    beforeNextHandoff: (effect: Effect.Effect<void>) =>
+      Effect.sync(() => {
+        beforeNextHandoff = effect
+      }),
+    afterNextHandoff: (effect: Effect.Effect<void>) =>
+      Effect.sync(() => {
+        afterNextHandoff = effect
+      }),
+    activeFallbacks: () => activeFallbacks,
+    failPublish: Effect.sync(() => {
+      mutableEvents.publish = ((definition, data, options) =>
+        definition.type === "team.message.received"
+          ? Effect.die(new Error("simulated unavailable event publication"))
+          : originalPublish(definition, data, options)) as EventV2Bridge.Interface["publish"]
+    }),
+    gatePublish: Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      mutableEvents.publish = ((definition, data, options) =>
+        definition.type === "team.message.received"
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(originalPublish(definition, data, options)),
+            )
+          : originalPublish(definition, data, options)) as EventV2Bridge.Interface["publish"]
+      return { entered, release }
+    }),
+    restorePublish: Effect.sync(() => {
+      mutableEvents.publish = originalPublish
+    }),
+  }
+})
+
 // Sets up an active team whose lead has one worker member in the requested status/lifecycle and
 // returns the services and handles the tests drive.
 const parkLeadOnWorker = Effect.fnUntraced(function* (input: {
@@ -550,6 +667,50 @@ noLLMServer.instance(
         ),
       ).toBe(true)
       expect(yield* control.release(chat.id)).toMatchObject({ resumableSessionIDs: [chat.id] })
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "durable prompt input directly signals only the exact parked session",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const run = yield* SessionRunState.Service
+      const sessions = yield* Session.Service
+      const lead = yield* sessions.create({ title: "Lead" })
+      const worker = yield* sessions.create({ parentID: lead.id, title: "Worker" })
+      const leadSignal = yield* Deferred.make<void>()
+      const leadPark = yield* run.registerPark(lead.id, leadSignal, Effect.die("unexpected park continuation"))
+      yield* Effect.addFinalizer(() => leadPark.unregister)
+
+      yield* prompt.prompt({
+        sessionID: lead.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "lead input" }],
+      })
+
+      expect(yield* Deferred.isDone(leadSignal)).toBe(true)
+      expect(
+        (yield* sessions.messages({ sessionID: lead.id })).some((message) =>
+          message.parts.some((part) => part.type === "text" && part.text === "lead input"),
+        ),
+      ).toBe(true)
+
+      const replacement = yield* Deferred.make<void>()
+      const replacementPark = yield* run.registerPark(lead.id, replacement, Effect.die("unexpected park continuation"))
+      yield* Effect.addFinalizer(() => replacementPark.unregister)
+      yield* prompt.prompt({
+        sessionID: worker.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "worker input" }],
+      })
+
+      expect(yield* Deferred.isDone(replacement)).toBe(false)
     }),
   { config: cfg },
 )
@@ -1276,9 +1437,7 @@ it.live("injects team orchestration guidance for primary lead sessions when agen
       expect(leadGuidance).toBeDefined()
       expect(leadGuidance).toContain("Continue useful decomposition, integration, review, or decision work.")
       expect(leadGuidance).toContain("When no useful work remains, finish the current response normally.")
-      expect(leadGuidance).toContain(
-        "The runtime parks successful finalization while finite teammates remain active.",
-      )
+      expect(leadGuidance).toContain("The runtime parks successful finalization while finite teammates remain active.")
       expect(leadGuidance).toContain(
         "Do not sleep, repeatedly read team state, ask for routine updates, or send filler.",
       )
@@ -1550,6 +1709,21 @@ it.live("does not duplicate team message injection when delivery is suspended mi
       yield* control.release(lead.id)
       yield* prompt.wake(lead.id)
       yield* awaitWithTimeout(Fiber.await(loop), "timed out waiting for the resumed loop")
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: lead.id })
+          .pipe(
+            Effect.map((messages) =>
+              messages.some((message) =>
+                message.parts.some((part) => part.type === "text" && part.text.includes("Worker is ready.")),
+              )
+                ? (true as const)
+                : undefined,
+            ),
+          ),
+        "resumed delivery did not inject the team message",
+        "5 seconds",
+      )
 
       // Exactly one injection: the interrupted delivery either finished before the pause or was
       // re-run cleanly; it must never be injected twice.
@@ -1701,8 +1875,10 @@ it.live(
         // also echoes. The identity string contains raw quotes, so match on the parsed message
         // content rather than JSON.stringify(hit.body), which escapes them.
         const teammateContent = (hit: { body?: Record<string, unknown> }) =>
-          (((hit.body as Record<string, unknown> | undefined)?.messages as Array<{ content?: string }> | undefined) ??
-            [])
+          (
+            ((hit.body as Record<string, unknown> | undefined)?.messages as Array<{ content?: string }> | undefined) ??
+            []
+          )
             .map((message) => message.content ?? "")
             .join("\n")
         const bodyContent = (body: Record<string, unknown>) =>
@@ -1861,6 +2037,631 @@ it.live(
 // ---------------------------------------------------------------------------
 // PR 2: private finalization barrier
 // ---------------------------------------------------------------------------
+
+it.live(
+  "finalization rechecks a terminal handoff committed between its mailbox and member reads",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, info, member } = yield* parkLeadOnWorker({ llm })
+        const barrier = yield* instrumentFinalizationParks()
+        const mutableTeam = team as Mutable<Team.Interface>
+        const originalGetMembers = team.getMembers
+        let committed = false
+        mutableTeam.getMembers = ((teamID) =>
+          Effect.gen(function* () {
+            if (!committed && teamID === info.id) {
+              committed = true
+              yield* team.updateMemberStatus(member.id, "completed", "handoff committed during exit check")
+            }
+            return yield* originalGetMembers(teamID)
+          })) as Team.Interface["getMembers"]
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            mutableTeam.getMembers = originalGetMembers
+          }),
+        )
+
+        yield* llm.text("done")
+        yield* llm.text("integrated handoff")
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "lead did not integrate the terminal handoff",
+          "10 seconds",
+        )
+
+        expect(committed).toBe(true)
+        expect(yield* llm.calls).toBe(2)
+        expect(result.parts.some((part) => part.type === "text" && part.text === "integrated handoff")).toBe(true)
+        const mailParts = (yield* sessions.messages({ sessionID: lead.id }))
+          .flatMap((message) => message.parts)
+          .filter(
+            (part): part is MessageV2.TextPart =>
+              part.type === "text" && part.text.includes("handoff committed during exit check"),
+          )
+        expect(mailParts).toHaveLength(1)
+        expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+        const registration = yield* barrier.next("terminal-race barrier registration")
+        expect(registration.sessionID).toBe(lead.id)
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(false)
+        expect(barrier.activeFallbacks()).toBe(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "finalization handoff rechecks daemon mail committed after its final durable read",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+          lifecycle: "daemon",
+          daemonState: "running",
+        })
+        const barrier = yield* instrumentFinalizationParks()
+        const stagedMessageID = yield* Deferred.make<string>()
+        yield* barrier.beforeNextHandoff(
+          Effect.gen(function* () {
+            const message = yield* team.sendMessage({
+              teamID: info.id,
+              sender: worker.id,
+              recipients: [lead.id],
+              body: "daemon mail at final handoff",
+            })
+            // A duplicate match remains attached to the same old registration. The atomic handoff
+            // must still replace it and force a durable recheck instead of starting another run.
+            expect(yield* barrier.run.signalPark(lead.id)).toBe(true)
+            yield* Deferred.succeed(stagedMessageID, message.id)
+          }).pipe(Effect.orDie),
+        )
+
+        yield* llm.text("initial finalization")
+        yield* llm.text("daemon mail integrated")
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "lead did not continue after the final handoff signal",
+          "10 seconds",
+        )
+        const messageID = yield* Deferred.await(stagedMessageID)
+
+        expect(yield* llm.calls).toBe(2)
+        expect(JSON.stringify((yield* llm.inputs)[1])).toContain("daemon mail at final handoff")
+        expect(result.parts.some((part) => part.type === "text" && part.text === "daemon mail integrated")).toBe(true)
+        expect((yield* team.getPendingMessages(lead.id, info.id)).map((message) => message.id)).not.toContain(messageID)
+        expect(
+          (yield* sessions.messages({ sessionID: lead.id }))
+            .flatMap((message) => message.parts)
+            .filter((part) => part.type === "text" && part.text.includes("daemon mail at final handoff")),
+        ).toHaveLength(1)
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(false)
+        expect(barrier.activeFallbacks()).toBe(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "direct mail signal survives final handoff while event publication is blocked",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+          lifecycle: "daemon",
+          daemonState: "running",
+        })
+        const barrier = yield* instrumentFinalizationParks()
+        const publication = yield* barrier.gatePublish
+        const senderScope = yield* Scope.make()
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(publication.release, undefined).pipe(Effect.andThen(Scope.close(senderScope, Exit.void))),
+        )
+        const sender =
+          yield* Deferred.make<Fiber.Fiber<Team.Message, Team.MessageToClosedTeam | Team.MessageToTerminalMember>>()
+
+        yield* barrier.beforeNextHandoff(
+          Effect.gen(function* () {
+            const fiber = yield* team
+              .sendMessage({
+                teamID: info.id,
+                sender: worker.id,
+                recipients: [lead.id],
+                body: "mail committed before blocked publication",
+              })
+              .pipe(Effect.forkIn(senderScope))
+            yield* Deferred.succeed(sender, fiber)
+            yield* awaitWithTimeout(
+              Deferred.await(publication.entered),
+              "mail publication did not reach the gate",
+              "5 seconds",
+            )
+          }).pipe(Effect.orDie),
+        )
+
+        yield* llm.text("initial finalization")
+        yield* llm.text("blocked-publication mail integrated")
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "lead did not continue while mail publication was blocked",
+          "10 seconds",
+        )
+        const senderFiber = yield* Deferred.await(sender)
+
+        expect(yield* Deferred.isDone(publication.release)).toBe(false)
+        expect(yield* llm.calls).toBe(2)
+        expect(JSON.stringify((yield* llm.inputs)[1])).toContain("mail committed before blocked publication")
+        expect(
+          result.parts.some((part) => part.type === "text" && part.text === "blocked-publication mail integrated"),
+        ).toBe(true)
+        expect(
+          (yield* sessions.messages({ sessionID: lead.id }))
+            .flatMap((message) => message.parts)
+            .filter((part) => part.type === "text" && part.text.includes("mail committed before blocked publication")),
+        ).toHaveLength(1)
+        expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+
+        yield* Deferred.succeed(publication.release, undefined)
+        const message = yield* awaitWithTimeout(
+          Fiber.join(senderFiber),
+          "mail sender did not finish after publication release",
+          "5 seconds",
+        )
+        expect((yield* team.getMessages(info.id)).map((item) => item.id)).toContain(message.id)
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(false)
+        expect(barrier.activeFallbacks()).toBe(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "direct mail starts a new Prompt run after retirement and fallback cleanup settle",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, team, lead, worker, info } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+          lifecycle: "daemon",
+          daemonState: "running",
+        })
+        const barrier = yield* instrumentFinalizationParks({ fallbackCallbacks: true })
+
+        yield* llm.text("initial finalization")
+        yield* llm.text("post-retirement mail integrated")
+        const initial = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "initial lead run did not settle",
+          "10 seconds",
+        )
+
+        expect(initial.parts.some((part) => part.type === "text" && part.text === "initial finalization")).toBe(true)
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(false)
+        expect(barrier.activeFallbacks()).toBe(0)
+
+        const publication = yield* barrier.gatePublish
+        yield* Effect.addFinalizer(() => Deferred.succeed(publication.release, undefined).pipe(Effect.ignore))
+        const sender = yield* team
+          .sendMessage({
+            teamID: info.id,
+            sender: worker.id,
+            recipients: [lead.id],
+            body: "mail after retirement settled",
+          })
+          .pipe(Effect.forkChild)
+        yield* awaitWithTimeout(
+          Deferred.await(publication.entered),
+          "post-retirement mail publication did not reach the gate",
+          "5 seconds",
+        )
+        yield* llm.wait(2)
+
+        expect(yield* Deferred.isDone(publication.release)).toBe(false)
+        expect(JSON.stringify((yield* llm.inputs)[1])).toContain("mail after retirement settled")
+        expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+        expect(barrier.activeFallbacks()).toBe(0)
+
+        yield* Deferred.succeed(publication.release, undefined)
+        yield* awaitWithTimeout(Fiber.join(sender), "post-retirement mail sender did not finish", "5 seconds")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "plan approval starts the real idle planner before event publication",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const team = yield* Team.Service
+        const events = yield* EventV2Bridge.Service
+        const lead = yield* sessions.create({ title: "Approval lead" })
+        const planner = yield* sessions.create({ title: "Planner", parentID: lead.id })
+        yield* seed(planner.id, { finish: "stop" })
+        const info = yield* team.create({
+          name: "approval-publish-gate",
+          goal: "Wake the real planner before publication",
+          leadSessionID: lead.id,
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: planner.id,
+          name: "planner",
+          agentType: "build",
+          rolePrompt: "Plan first",
+          planMode: true,
+          workMode: "plan",
+        })
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const mutableEvents = events as Mutable<EventV2Bridge.Interface>
+        const originalPublish = events.publish
+        mutableEvents.publish = ((definition, data, options) =>
+          definition.type === "team.member.updated"
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(originalPublish(definition, data, options)),
+              )
+            : originalPublish(definition, data, options)) as EventV2Bridge.Interface["publish"]
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(release, undefined).pipe(
+            Effect.ignore,
+            Effect.andThen(
+              Effect.sync(() => {
+                mutableEvents.publish = originalPublish
+              }),
+            ),
+          ),
+        )
+
+        yield* llm.text("implementation resumed")
+        const approval = yield* team
+          .approveMemberPlan(member.id, {
+            sender: lead.id,
+            body: "PLAN APPROVED. Proceed with implementation.",
+            usageMetadata: { member_name: member.name },
+          })
+          .pipe(Effect.forkChild)
+        yield* awaitWithTimeout(
+          Deferred.await(entered),
+          "plan approval publication did not reach the gate",
+          "5 seconds",
+        )
+        yield* llm.wait(1)
+
+        expect(yield* Deferred.isDone(release)).toBe(false)
+        expect(JSON.stringify((yield* llm.inputs)[0])).toContain("PLAN APPROVED. Proceed with implementation.")
+        expect(yield* team.getPendingMessages(planner.id, info.id)).toHaveLength(0)
+        expect((yield* team.getUsageEvents(info.id)).filter((event) => event.type === "plan_approved")).toHaveLength(1)
+
+        // The tool-level wake runs after approveMemberPlan returns. Repeated full wakes attach to
+        // the current run or execute a no-op finished-loop pass; neither can start another model turn.
+        yield* prompt.wake(planner.id)
+        yield* prompt.wake(planner.id)
+        expect(yield* llm.calls).toBe(1)
+
+        yield* Deferred.succeed(release, undefined)
+        const approved = yield* awaitWithTimeout(Fiber.join(approval), "plan approval did not finish", "5 seconds")
+        expect(Option.isSome(approved)).toBe(true)
+        expect(Option.getOrThrow(approved)).toMatchObject({
+          status: "active",
+          plan_mode: false,
+          work_mode: "implement",
+        })
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "fallback from another instance notifies the retiring park across final handoff",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, lead, worker, info } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+          lifecycle: "daemon",
+          daemonState: "running",
+        })
+        const events = yield* EventV2Bridge.Service
+        const instanceStore = yield* InstanceStore.Service
+        const barrier = yield* instrumentFinalizationParks({ fallbackCallbacks: true })
+        const otherInstance = yield* tmpdirScoped()
+        const continuationFinalized = yield* Deferred.make<void>()
+
+        yield* barrier.afterNextHandoff(
+          instanceStore.provide(
+            { directory: otherInstance },
+            Effect.gen(function* () {
+              // The publishing instance has no matching direct registration. Only the fallback
+              // callback retained by this barrier can notify its identity-bound retiring handle.
+              expect(yield* barrier.run.signalPark(lead.id)).toBe(false)
+              expect(barrier.activeFallbacks()).toBe(4)
+              yield* events.publish(MessageReceived, {
+                messageID: `msg_fallback_${crypto.randomUUID()}`,
+                teamID: info.id,
+                sender: worker.id,
+              })
+              yield* barrier.afterNextHandoff(Deferred.succeed(continuationFinalized, undefined))
+            }),
+          ),
+        )
+
+        yield* llm.text("initial finalization")
+        const result = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "initial run did not settle after the fallback handoff signal",
+          "10 seconds",
+        )
+        yield* awaitWithTimeout(
+          Deferred.await(continuationFinalized),
+          "fallback handoff did not start and finalize its queued continuation",
+          "10 seconds",
+        )
+
+        expect(result.parts.some((part) => part.type === "text" && part.text === "initial finalization")).toBe(true)
+        expect(yield* llm.calls).toBe(1)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "material input and daemon mail after successful handoff queue one continuation after the current run",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+          lifecycle: "daemon",
+          daemonState: "running",
+        })
+        const barrier = yield* instrumentFinalizationParks()
+        const continuationFinalized = yield* Deferred.make<void>()
+        yield* barrier.afterNextHandoff(
+          Effect.gen(function* () {
+            // Both durable writes occur after handoffPark has retired the active registration but
+            // before this Runner can settle. Their matching signals must coalesce on one queued run.
+            yield* prompt.prompt({
+              sessionID: lead.id,
+              agent: "build",
+              model: ref,
+              noReply: true,
+              parts: [{ type: "text", text: "lead input after successful handoff" }],
+            })
+            yield* team.sendMessage({
+              teamID: info.id,
+              sender: worker.id,
+              recipients: [lead.id],
+              body: "daemon mail after successful handoff",
+            })
+            yield* barrier.afterNextHandoff(Deferred.succeed(continuationFinalized, undefined))
+          }).pipe(Effect.orDie),
+        )
+
+        yield* llm.text("initial finalization")
+        yield* llm.text("post-handoff material integrated")
+        const initial = yield* awaitWithTimeout(
+          prompt.loop({ sessionID: lead.id }),
+          "initial lead run did not settle after successful handoff",
+          "10 seconds",
+        )
+        yield* awaitWithTimeout(
+          Deferred.await(continuationFinalized),
+          "retired handoff did not run its queued continuation",
+          "10 seconds",
+        )
+
+        expect(initial.parts.some((part) => part.type === "text" && part.text === "initial finalization")).toBe(true)
+        expect(yield* llm.calls).toBe(2)
+        const continuationInput = JSON.stringify((yield* llm.inputs)[1])
+        expect(continuationInput).toContain("lead input after successful handoff")
+        expect(continuationInput).toContain("daemon mail after successful handoff")
+        expect(
+          (yield* sessions.messages({ sessionID: lead.id }))
+            .flatMap((message) => message.parts)
+            .filter((part) => part.type === "text" && part.text.includes("daemon mail after successful handoff")),
+        ).toHaveLength(1)
+        expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
+
+it.live(
+  "real barrier uses direct material wakes without fallback events or idle model and tool calls",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const { prompt, sessions, team, lead, worker, info } = yield* parkLeadOnWorker({
+          llm,
+          memberStatus: "active",
+        })
+        const barrier = yield* instrumentFinalizationParks()
+        const mailClaimed = yield* Deferred.make<void>()
+        const mutableTeam = team as Mutable<Team.Interface>
+        const originalClaimPendingMessages = team.claimPendingMessages
+        mutableTeam.claimPendingMessages = ((recipientSession, teamID) =>
+          originalClaimPendingMessages(recipientSession, teamID).pipe(
+            Effect.tap((messages) =>
+              messages.some((message) => message.body === "direct material wake")
+                ? Deferred.succeed(mailClaimed, undefined)
+                : Effect.void,
+            ),
+          )) as Team.Interface["claimPendingMessages"]
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            mutableTeam.claimPendingMessages = originalClaimPendingMessages
+          }),
+        )
+        const toolCalls = () =>
+          sessions
+            .messages({ sessionID: lead.id })
+            .pipe(
+              Effect.map(
+                (messages) =>
+                  messages.flatMap((message) => message.parts).filter((part) => part.type === "tool").length,
+              ),
+            )
+
+        yield* llm.text("parked")
+        yield* llm.text("mail handled")
+        yield* llm.text("user handled")
+        const loopFiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
+        yield* llm.wait(1)
+        const initial = yield* barrier.next("initial barrier registration")
+        const parked = yield* barrier.next("stable barrier registration")
+        expect(initial.sessionID).toBe(lead.id)
+        expect(parked.sessionID).toBe(lead.id)
+        expect(barrier.activeFallbacks()).toBe(4)
+        const parkedCalls = yield* llm.calls
+        expect(parkedCalls).toBe(1)
+        expect(yield* toolCalls()).toBe(0)
+
+        // Durable teammate input and unrelated direct signals target only the teammate session.
+        // The current lead park remains incomplete without any timing window or negative timeout.
+        yield* prompt.prompt({
+          sessionID: worker.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "teammate-only input" }],
+        })
+        expect(yield* barrier.run.signalPark(worker.id)).toBe(false)
+        expect(yield* barrier.run.signalPark(worker.id)).toBe(false)
+        expect(yield* Deferred.isDone(parked.signal)).toBe(false)
+        expect((yield* llm.calls) - parkedCalls).toBe(0)
+        expect(yield* toolCalls()).toBe(0)
+
+        // Duplicate matching signals can trigger durable rechecks, but they cannot schedule a
+        // model turn when no durable lead input changed.
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(true)
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(true)
+        expect(yield* Deferred.isDone(parked.signal)).toBe(true)
+        const reparked = yield* barrier.next("re-park after duplicate signals")
+        expect(reparked.sessionID).toBe(lead.id)
+        expect((yield* llm.calls) - parkedCalls).toBe(0)
+        expect(yield* toolCalls()).toBe(0)
+
+        // The fallback publish fails after durable team mail commits. Team's post-commit direct
+        // signal must still complete the real barrier signal, deliver the mail, take exactly one
+        // model turn, and re-park.
+        yield* barrier.failPublish
+        const message = yield* team.sendMessage({
+          teamID: info.id,
+          sender: worker.id,
+          recipients: [lead.id],
+          body: "direct material wake",
+        })
+        yield* barrier.restorePublish
+        expect(yield* Deferred.isDone(reparked.signal)).toBe(true)
+        yield* awaitWithTimeout(Deferred.await(mailClaimed), "directly signalled mail was not claimed", "5 seconds")
+        yield* llm.wait(2)
+        yield* barrier.next("mail decision replacement")
+        yield* barrier.next("mail continuation barrier registration")
+        yield* barrier.next("mail continuation re-park")
+        expect(yield* llm.calls).toBe(2)
+        expect(yield* toolCalls()).toBe(0)
+        expect((yield* team.getPendingMessages(lead.id, info.id)).map((item) => item.id)).not.toContain(message.id)
+
+        // Lead input is durable before its direct signal. It resumes one turn and reaches a fresh
+        // stable registration while the finite teammate remains active.
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(true)
+        const leadInputPark = yield* barrier.next("confirmed lead-input park")
+        expect((yield* llm.calls) - 2).toBe(0)
+        yield* prompt.prompt({
+          sessionID: lead.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "lead material input" }],
+        })
+        expect(yield* Deferred.isDone(leadInputPark.signal)).toBe(true)
+        yield* llm.wait(3)
+        yield* barrier.next("lead-input continuation barrier registration")
+        const afterLeadInput = yield* barrier.next("lead-input continuation re-park")
+        expect(afterLeadInput.sessionID).toBe(lead.id)
+        expect(yield* llm.calls).toBe(3)
+        expect(yield* toolCalls()).toBe(0)
+        expect(JSON.stringify((yield* llm.inputs)[2])).toContain("lead material input")
+        expect(barrier.activeFallbacks()).toBe(4)
+
+        // Interruption removes the current park registration and all fallback cleanup handles.
+        yield* setLegacyTeamProtocol(info.id)
+        yield* prompt.cancel(lead.id)
+        yield* awaitWithTimeout(Fiber.join(loopFiber), "cancelled lead loop did not settle", "5 seconds")
+        expect(yield* barrier.run.signalPark(lead.id)).toBe(false)
+        expect(barrier.activeFallbacks()).toBe(0)
+        expect(yield* llm.calls).toBe(3)
+        expect(yield* toolCalls()).toBe(0)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: { agent_teams: true },
+        }),
+      },
+    ),
+  30_000,
+)
 
 it.live(
   "finalization barrier delivers mail that arrives after the initial mailbox check and resumes the lead",
@@ -2178,6 +2979,7 @@ it.live(
     provideTmpdirServer(
       Effect.fnUntraced(function* ({ llm }) {
         const { prompt, team, lead, info } = yield* parkLeadOnWorker({ llm, memberStatus: "active" })
+        const run = yield* SessionRunState.Service
         yield* llm.text("done")
         const fiber = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.forkChild)
         yield* llm.wait(1)
@@ -2199,6 +3001,7 @@ it.live(
         const closed = yield* team.get(info.id)
         if (Option.isSome(closed)) expect(closed.value.status).toBe("closed")
         expect((yield* team.getMembers(info.id))[0]?.status).toBe("cancelled")
+        expect(yield* run.signalPark(lead.id)).toBe(false)
       }),
       {
         git: true,
@@ -2499,7 +3302,8 @@ it.live(
             const msgs = yield* sessions.messages({ sessionID: lead.id })
             const mail = msgs.some((m) => m.parts.some((p) => p.type === "text" && p.text.includes("Ordered handoff")))
             const userMsg = msgs.some(
-              (m) => m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.text === "mid-park user message"),
+              (m) =>
+                m.info.role === "user" && m.parts.some((p) => p.type === "text" && p.text === "mid-park user message"),
             )
             const resumed = msgs.some(
               (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "integrated"),

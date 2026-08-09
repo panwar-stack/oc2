@@ -113,6 +113,202 @@ describe("Runner", () => {
     }),
   )
 
+  it.live(
+    "a signalled retirement starts one continuation only after the current run exits",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const currentStarted = yield* Deferred.make<void>()
+      const releaseCurrent = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const releaseContinuation = yield* Deferred.make<void>()
+      const continuationFinished = yield* Deferred.make<void>()
+      const calls = yield* Ref.make(0)
+      const current = yield* runner
+        .ensureRunning(
+          Deferred.succeed(currentStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseCurrent)),
+            Effect.as("current"),
+          ),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(currentStarted)
+
+      const retirement = yield* runner.retire(
+        Effect.gen(function* () {
+          yield* Ref.update(calls, (count) => count + 1)
+          yield* Deferred.succeed(continuationStarted, undefined)
+          yield* Deferred.await(releaseContinuation)
+          yield* Deferred.succeed(continuationFinished, undefined)
+          return "continuation"
+        }),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+      expect(yield* retirement.signal).toBe(true)
+      expect(yield* retirement.signal).toBe(true)
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+
+      yield* Deferred.succeed(releaseCurrent, undefined)
+      expect(yield* Fiber.join(current)).toBe("current")
+      yield* Deferred.await(continuationStarted)
+      expect(yield* Ref.get(calls)).toBe(1)
+      yield* Deferred.succeed(releaseContinuation, undefined)
+      yield* Deferred.await(continuationFinished)
+      yield* waitForState(runner, "Idle")
+      expect(yield* Ref.get(calls)).toBe(1)
+    }),
+  )
+
+  it.live(
+    "cancelling the current run suppresses its signalled retirement",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const currentStarted = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const current = yield* runner
+        .ensureRunning(
+          Deferred.succeed(currentStarted, undefined).pipe(Effect.andThen(Effect.never), Effect.as("current")),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(currentStarted)
+
+      const retirement = yield* runner.retire(
+        Deferred.succeed(continuationStarted, undefined).pipe(Effect.as("continuation")),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+      expect(yield* retirement.signal).toBe(true)
+
+      yield* runner.cancel
+      yield* Fiber.await(current)
+      expect(runner.state._tag).toBe("Idle")
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+      expect(yield* retirement.signal).toBe(false)
+    }),
+  )
+
+  it.live(
+    "a retirement signal after settlement does not swallow a wake before idle cleanup",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const cleanupStarted = yield* Deferred.make<void>()
+      const releaseCleanup = yield* Deferred.make<void>()
+      const releaseCurrent = yield* Deferred.make<void>()
+      const replacementStarted = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s, {
+        onIdle: Deferred.succeed(cleanupStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseCleanup))),
+      })
+      const current = yield* runner
+        .ensureRunning(Deferred.await(releaseCurrent).pipe(Effect.as("current")))
+        .pipe(Effect.forkChild)
+      yield* waitForState(runner, "Running")
+
+      const retirement = yield* runner.retire(
+        Deferred.succeed(continuationStarted, undefined).pipe(Effect.as("continuation")),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+
+      yield* Deferred.succeed(releaseCurrent, undefined)
+      yield* Deferred.await(cleanupStarted)
+      expect(runner.state._tag).toBe("Idle")
+      expect(yield* retirement.signal).toBe(false)
+      expect(yield* runner.wake(Deferred.succeed(replacementStarted, undefined).pipe(Effect.as("replacement")))).toBe(
+        true,
+      )
+      yield* Deferred.await(replacementStarted)
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+
+      yield* Deferred.succeed(releaseCleanup, undefined)
+      expect(yield* Fiber.join(current)).toBe("current")
+      yield* waitForState(runner, "Idle")
+    }),
+  )
+
+  it.live(
+    "a typed failure suppresses a signalled retirement",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const releaseCurrent = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const runner = Runner.make<string, string>(s)
+      const current = yield* runner
+        .ensureRunning(Deferred.await(releaseCurrent).pipe(Effect.andThen(Effect.fail("boom"))))
+        .pipe(Effect.forkChild)
+      yield* waitForState(runner, "Running")
+
+      const retirement = yield* runner.retire(
+        Deferred.succeed(continuationStarted, undefined).pipe(Effect.as("continuation")),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+      expect(yield* retirement.signal).toBe(true)
+
+      yield* Deferred.succeed(releaseCurrent, undefined)
+      expect(Exit.isFailure(yield* Fiber.await(current))).toBe(true)
+      yield* waitForState(runner, "Idle")
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+      expect(yield* retirement.signal).toBe(false)
+    }),
+  )
+
+  it.live(
+    "a defect suppresses a signalled retirement",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const releaseCurrent = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s)
+      const current = yield* runner
+        .ensureRunning(Deferred.await(releaseCurrent).pipe(Effect.andThen(Effect.die("boom"))))
+        .pipe(Effect.forkChild)
+      yield* waitForState(runner, "Running")
+
+      const retirement = yield* runner.retire(
+        Deferred.succeed(continuationStarted, undefined).pipe(Effect.as("continuation")),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+      expect(yield* retirement.signal).toBe(true)
+
+      yield* Deferred.succeed(releaseCurrent, undefined)
+      expect(Exit.isFailure(yield* Fiber.await(current))).toBe(true)
+      yield* waitForState(runner, "Idle")
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+      expect(yield* retirement.signal).toBe(false)
+    }),
+  )
+
+  it.live(
+    "an interrupted exit suppresses a signalled retirement",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const releaseCurrent = yield* Deferred.make<void>()
+      const continuationStarted = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s)
+      const current = yield* runner
+        .ensureRunning(Deferred.await(releaseCurrent).pipe(Effect.andThen(Effect.interrupt)))
+        .pipe(Effect.forkChild)
+      yield* waitForState(runner, "Running")
+
+      const retirement = yield* runner.retire(
+        Deferred.succeed(continuationStarted, undefined).pipe(Effect.as("continuation")),
+      )
+      expect(retirement).toBeDefined()
+      if (!retirement) return
+      expect(yield* retirement.signal).toBe(true)
+
+      yield* Deferred.succeed(releaseCurrent, undefined)
+      expect(Exit.isFailure(yield* Fiber.await(current))).toBe(true)
+      yield* waitForState(runner, "Idle")
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+      expect(yield* retirement.signal).toBe(false)
+    }),
+  )
+
   // --- cancel semantics ---
 
   it.live(

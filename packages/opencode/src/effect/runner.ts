@@ -10,6 +10,12 @@ export interface Runner<A, E = never> {
    * already running loop and the passed `work` was dropped (the in-flight run covers the work).
    */
   readonly wake: (work: Effect.Effect<A, E>) => Effect.Effect<boolean, Suspended>
+  /**
+   * Installs one conditional continuation on the current run. Signals coalesce, and a signalled
+   * continuation starts only after the current work exits successfully. Failure, cancellation, or
+   * suspension suppresses the continuation. Returns undefined when there is no current run to retire.
+   */
+  readonly retire: (work: Effect.Effect<A, E>) => Effect.Effect<Retirement | undefined>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy | Suspended>
   readonly cancel: Effect.Effect<void>
   readonly suspend: Effect.Effect<void>
@@ -19,6 +25,11 @@ export interface Runner<A, E = never> {
 export class Cancelled extends Schema.TaggedErrorClass<Cancelled>()("RunnerCancelled", {}) {}
 export class Suspended extends Schema.TaggedErrorClass<Suspended>()("RunnerSuspended", {}) {}
 export class Busy extends Schema.TaggedErrorClass<Busy>()("RunnerBusy", {}) {}
+
+export interface Retirement {
+  /** Records one post-handoff signal. Duplicate signals match but schedule no additional work. */
+  readonly signal: Effect.Effect<boolean>
+}
 
 const suspendedFibers = new Map<number, Option.Option<unknown>>()
 
@@ -45,6 +56,16 @@ interface RunHandle<A, E> {
   done: Deferred.Deferred<A, E | Cancelled | Suspended>
   start: Latch.Latch
   fiber: Fiber.Fiber<A, E>
+  retirement?: RetirementHandle<A, E>
+}
+
+interface RetirementHandle<A, E> {
+  work: Effect.Effect<A, E>
+  done: Deferred.Deferred<A, E | Cancelled | Suspended>
+  registration: Retirement
+  signalled: boolean
+  settled: boolean
+  cancelled: boolean
 }
 
 interface ShellHandle<A, E> {
@@ -113,6 +134,13 @@ export const make = <A, E = never>(
   const awaitDone = (done: Deferred.Deferred<A, E | Cancelled | Suspended>) =>
     Deferred.await(done).pipe(Effect.catchTag("RunnerCancelled", (e) => onInterrupt ?? Effect.die(e)))
 
+  const cancelRetirement = (run: RunHandle<A, E>) => {
+    const retirement = run.retirement
+    if (!retirement || retirement.cancelled || retirement.settled) return Effect.void
+    retirement.cancelled = true
+    return Deferred.fail(retirement.done, new Cancelled()).pipe(Effect.asVoid)
+  }
+
   const idleIfCurrent = () =>
     SynchronizedRef.modify(ref, (st) => [st._tag === "Idle" ? idle : Effect.void, st] as const).pipe(Effect.flatten)
 
@@ -130,7 +158,21 @@ export const make = <A, E = never>(
       ref,
       Effect.fnUntraced(function* (st) {
         if (st._tag === "Running" && st.run.id === id) {
-          return [idle.pipe(Effect.andThen(complete(done, exit))), { _tag: "Idle" }] as const
+          const retirement = st.run.retirement
+          if (
+            retirement &&
+            Exit.isSuccess(exit) &&
+            retirement.signalled &&
+            !retirement.cancelled &&
+            !retirement.settled
+          ) {
+            retirement.settled = true
+            const run = yield* startRun(retirement.work, retirement.done)
+            return [complete(done, exit).pipe(Effect.andThen(run.start.open)), { _tag: "Running", run }] as const
+          }
+          const cancel = retirement && Exit.isFailure(exit) ? cancelRetirement(st.run) : Effect.void
+          if (retirement) retirement.settled = true
+          return [cancel.pipe(Effect.andThen(idle), Effect.andThen(complete(done, exit))), { _tag: "Idle" }] as const
         }
         if (st._tag === "SuspendingRun" && st.run.id === id) {
           return [idle.pipe(Effect.andThen(complete(done, exit))), { _tag: "Idle" }] as const
@@ -300,6 +342,38 @@ export const make = <A, E = never>(
       }),
     ).pipe(Effect.flatten)
 
+  const retire = (work: Effect.Effect<A, E>) =>
+    SynchronizedRef.modifyEffect(
+      ref,
+      Effect.fnUntraced(function* (st) {
+        if (st._tag !== "Running") return [Effect.succeed<Retirement | undefined>(undefined), st] as const
+        if (st.run.retirement) {
+          return [Effect.succeed<Retirement | undefined>(st.run.retirement.registration), st] as const
+        }
+        const done = yield* Deferred.make<A, E | Cancelled | Suspended>()
+        let retirement!: RetirementHandle<A, E>
+        const registration: Retirement = {
+          signal: Effect.sync(() => {
+            if (retirement.cancelled || retirement.settled) return false
+            retirement.signalled = true
+            return true
+          }),
+        }
+        retirement = {
+          work,
+          done,
+          registration,
+          signalled: false,
+          settled: false,
+          cancelled: false,
+        }
+        return [
+          Effect.succeed<Retirement | undefined>(retirement.registration),
+          { _tag: "Running", run: { ...st.run, retirement } },
+        ] as const
+      }),
+    ).pipe(Effect.flatten)
+
   const startShell = (work: Effect.Effect<A, E>, ready?: Latch.Latch): Effect.Effect<A, E | Busy | Suspended> =>
     SynchronizedRef.modifyEffect(
       ref,
@@ -355,6 +429,7 @@ export const make = <A, E = never>(
       case "Running":
         return [
           Effect.gen(function* () {
+            yield* cancelRetirement(st.run)
             yield* Fiber.interrupt(st.run.fiber)
             yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
             yield* idleIfCurrent()
@@ -381,6 +456,7 @@ export const make = <A, E = never>(
       case "SuspendingRun":
         return [
           Effect.gen(function* () {
+            yield* cancelRetirement(st.run)
             yield* cancelFiber(st.run.fiber)
             yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
             yield* idleIfCurrent()
@@ -457,6 +533,7 @@ export const make = <A, E = never>(
           case "Idle":
             return [Effect.void, st] as const
           case "Running":
+            yield* cancelRetirement(st.run)
             yield* recordSuspension(st.run.fiber, provenance)
             return [
               Deferred.fail(st.run.done, new Suspended()).pipe(
@@ -516,6 +593,7 @@ export const make = <A, E = never>(
     },
     ensureRunning,
     wake,
+    retire,
     startShell,
     cancel,
     suspend,

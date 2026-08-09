@@ -1792,6 +1792,101 @@ describe("team terminal handoff atomicity", () => {
       }),
     ),
   )
+
+  it.live("terminal settlement and shutdown directly signal the parked lead after commit", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const runState = yield* SessionRunState.Service
+        const info = yield* team.create({
+          name: "handoff-direct-signal",
+          goal: "Signal after commit",
+          leadSessionID: "ses_handoff_signal_lead",
+        })
+        const member = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_handoff_signal_member",
+          name: "worker",
+          agentType: "general",
+          rolePrompt: "Work",
+        })
+        const settlementSignal = yield* Deferred.make<void>()
+        const settlementPark = yield* runState.registerPark(
+          SessionID.make(info.lead_session_id),
+          settlementSignal,
+          Effect.die("unexpected park continuation"),
+        )
+
+        yield* team.updateMemberStatus(member.id, "completed", "done")
+
+        expect(yield* Deferred.isDone(settlementSignal)).toBe(true)
+        expect((yield* team.getPendingMessages(info.lead_session_id, info.id)).length).toBe(1)
+        yield* settlementPark.unregister
+
+        const closureSignal = yield* Deferred.make<void>()
+        const closurePark = yield* runState.registerPark(
+          SessionID.make(info.lead_session_id),
+          closureSignal,
+          Effect.die("unexpected park continuation"),
+        )
+        yield* Effect.addFinalizer(() => closurePark.unregister)
+        yield* setLegacyProtocol(info.id)
+        yield* team.shutdown({ teamID: info.id, sessionID: info.lead_session_id })
+
+        expect(yield* Deferred.isDone(closureSignal)).toBe(true)
+        expect(unwrap(yield* team.get(info.id)).status).toBe("closed")
+      }),
+    ),
+  )
+
+  it.live("committed mail directly signals the recipient when event publication fails", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const database = yield* Database.Service
+        const events = yield* EventV2Bridge.Service
+        const runState = yield* SessionRunState.Service
+        const info = yield* team.create({
+          name: "mail-publish-failure",
+          goal: "Wake after failed publication",
+          leadSessionID: "ses_mail_publish_failure_lead",
+        })
+        const signal = yield* Deferred.make<void>()
+        const park = yield* runState.registerPark(
+          SessionID.make(info.lead_session_id),
+          signal,
+          Effect.die("unexpected park continuation"),
+        )
+        yield* Effect.addFinalizer(() => park.unregister)
+        const failingEvents: EventV2Bridge.Interface = {
+          ...events,
+          publish: (() =>
+            Effect.die(new Error("simulated event publication failure"))) as EventV2Bridge.Interface["publish"],
+        }
+        const failingLayer = Team.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(Database.Service, database),
+              Layer.succeed(EventV2Bridge.Service, failingEvents),
+              Layer.succeed(SessionRunState.Service, runState),
+            ),
+          ),
+        )
+        const failingTeam = yield* Team.Service.pipe(Effect.provide(Layer.fresh(failingLayer)))
+
+        const message = yield* failingTeam.sendMessage({
+          teamID: info.id,
+          sender: "ses_mail_publish_failure_sender",
+          recipients: [info.lead_session_id],
+          body: "durable before signal",
+        })
+
+        expect(yield* Deferred.isDone(signal)).toBe(true)
+        const pending = yield* team.getPendingMessages(info.lead_session_id, info.id)
+        expect(pending.map((item) => item.id)).toEqual([message.id])
+      }),
+    ),
+  )
 })
 
 describe("team shutdown admission", () => {
@@ -2180,6 +2275,11 @@ describe("team shutdown session cancellation", () => {
     cancel: (sessionID) =>
       sessionID === SessionID.make(failSessionID) ? Effect.die(new Error("simulated cancel failure")) : Effect.void,
     suspend: () => Effect.succeed(false),
+    registerPark: () => Effect.succeed({ notify: () => false, unregister: Effect.void }),
+    handoffPark: () => Effect.succeed(true),
+    signalPark: () => Effect.succeed(false),
+    registerWakeTarget: () => Effect.succeed(Effect.void),
+    wakeRegistered: () => Effect.succeed(false),
     ensureRunning: () => Effect.void as unknown as Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
     wake: () => Effect.succeed(false),
     startShell: () =>

@@ -186,8 +186,8 @@ const terminalNotificationBody = (member: TeamMemberRow, status: MemberStatus, u
   return head
 }
 
-/** Publish a team event, logging instead of failing on a broken event bus so a committed
- * terminal transition or a wake can never be failed by an in-memory publish defect. */
+/** Publish a team event, logging instead of failing on a broken event bus so a committed team
+ * write or its later direct park signal can never be failed by an in-memory publish defect. */
 const safePublish = (effect: Effect.Effect<void>) =>
   effect.pipe(
     Effect.catchCause((cause) =>
@@ -716,31 +716,40 @@ export const layer = Layer.effect(
             ),
           ),
       )
-      // AFTER commit only: publish member and team events, and cancel each cancelled member's
-      // session run. Cancellation failures are collected as a stable count and never reopen the
-      // durable closed team state.
-      yield* Effect.forEach(
-        closed.members,
-        (member) =>
-          events.publish(MemberUpdated, {
-            memberID: member.id,
-            sessionID: member.session_id,
-            status:
-              member.status === "completed" || member.status === "cancelled" || member.status === "failed"
-                ? member.status
-                : "cancelled",
-            lifecycle: member.lifecycle,
-            daemonState: member.lifecycle === "daemon" ? "cancelled" : (member.daemon_state ?? undefined),
-          }),
-        { concurrency: "unbounded", discard: true },
+      // AFTER commit only: directly signal the lead before best-effort event publication, then
+      // cancel each cancelled member's session run. Cancellation failures are collected as a
+      // stable count and never reopen the durable closed team state.
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* runState.wakeRegistered(SessionID.make(input.sessionID))
+          yield* Effect.forEach(
+            closed.members,
+            (member) =>
+              safePublish(
+                events.publish(MemberUpdated, {
+                  memberID: member.id,
+                  sessionID: member.session_id,
+                  status:
+                    member.status === "completed" || member.status === "cancelled" || member.status === "failed"
+                      ? member.status
+                      : "cancelled",
+                  lifecycle: member.lifecycle,
+                  daemonState: member.lifecycle === "daemon" ? "cancelled" : (member.daemon_state ?? undefined),
+                }),
+              ),
+            { concurrency: "unbounded", discard: true },
+          )
+          yield* safePublish(events.publish(TeamClosed, { teamID: input.teamID }))
+          yield* safePublish(
+            events.publish(TuiEvent.ToastShow, {
+              title: "Team Shut Down",
+              message: "The team has been closed and all active members cancelled.",
+              variant: "info",
+              duration: 5000,
+            }),
+          )
+        }),
       )
-      yield* events.publish(TeamClosed, { teamID: input.teamID })
-      yield* events.publish(TuiEvent.ToastShow, {
-        title: "Team Shut Down",
-        message: "The team has been closed and all active members cancelled.",
-        variant: "info",
-        duration: 5000,
-      })
       const cancelOutcomes = yield* Effect.forEach(
         closed.nonterminal,
         (member) =>
@@ -879,12 +888,16 @@ export const layer = Layer.effect(
               const member = yield* tx.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get()
               if (!member) return { found: false } as const
               const alreadyTerminal = terminalStatuses.includes(member.status)
-              if (alreadyTerminal) return { found: true, wrote: false, messageID: undefined } as const
+              if (alreadyTerminal) {
+                return { found: true, wrote: false, messageID: undefined, leadSessionID: undefined } as const
+              }
               yield* tx.update(TeamMemberTable).set(setData).where(eq(TeamMemberTable.id, memberID)).run()
               let messageID: string | undefined
+              let leadSessionID: string | undefined
               if (terminalTarget) {
                 const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get()
                 if (team) {
+                  leadSessionID = team.lead_session_id
                   messageID = `team:member:${memberID}:terminal:${status}`
                   yield* insertMessageRows(tx, {
                     id: messageID,
@@ -897,7 +910,7 @@ export const layer = Layer.effect(
                 }
               }
               yield* bumpTeamRevision(tx, member.team_id)
-              return { found: true, wrote: true, messageID } as const
+              return { found: true, wrote: true, messageID, leadSessionID } as const
             }),
           { behavior: "immediate" },
         )
@@ -906,10 +919,13 @@ export const layer = Layer.effect(
         ? withTeamLifecycleLock(terminalMember.teamID, statusTransaction)
         : statusTransaction
       if (!outcome.found) return Option.none()
-      // After commit: publish member and message events uninterruptibly so the commit -> publish
-      // section cannot be interrupted mid-way.
+      // After commit: directly signal terminal mail before best-effort event publication. Keep the
+      // post-commit section uninterruptible so it cannot stop between the direct signal and events.
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
+          if (outcome.wrote && outcome.messageID && outcome.leadSessionID) {
+            yield* runState.wakeRegistered(SessionID.make(outcome.leadSessionID))
+          }
           const row = yield* db
             .select()
             .from(TeamMemberTable)
@@ -1009,14 +1025,14 @@ export const layer = Layer.effect(
           (tx) =>
             Effect.gen(function* () {
               const member = yield* tx.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get()
-              if (!member) return Option.none<{ teamID: string; messageID?: string }>()
+              if (!member) return Option.none<{ teamID: string; sessionID: string; messageID?: string }>()
               const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get()
               if (!team || team.status !== "active") {
-                return Option.none<{ teamID: string; messageID?: string }>()
+                return Option.none<{ teamID: string; sessionID: string; messageID?: string }>()
               }
-              if (!member.plan_mode) return Option.none<{ teamID: string; messageID?: string }>()
+              if (!member.plan_mode) return Option.none<{ teamID: string; sessionID: string; messageID?: string }>()
               if (member.status === "completed" || member.status === "cancelled" || member.status === "failed") {
-                return Option.none<{ teamID: string; messageID?: string }>()
+                return Option.none<{ teamID: string; sessionID: string; messageID?: string }>()
               }
               if (approvalEffects) {
                 const session = yield* tx
@@ -1024,7 +1040,7 @@ export const layer = Layer.effect(
                   .from(SessionTable)
                   .where(eq(SessionTable.id, SessionID.make(member.session_id)))
                   .get()
-                if (!session) return Option.none<{ teamID: string; messageID?: string }>()
+                if (!session) return Option.none<{ teamID: string; sessionID: string; messageID?: string }>()
                 yield* tx
                   .update(SessionTable)
                   .set({
@@ -1062,12 +1078,21 @@ export const layer = Layer.effect(
                   .run()
               }
               yield* bumpTeamRevision(tx, member.team_id)
-              return Option.some({ teamID: member.team_id, ...(messageID ? { messageID } : {}) })
+              return Option.some({
+                teamID: member.team_id,
+                sessionID: member.session_id,
+                ...(messageID ? { messageID } : {}),
+              })
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
       if (Option.isNone(outcome)) return Option.none()
+      // The approval state, permission update, recipient mail, and audit row are durable now.
+      // Wake the exact recipient before any best-effort event publication or later read can fail.
+      // Real plan members are idle after submission, so this must schedule their registered Prompt
+      // loop when no active park exists. A later tool wake only attaches to that run.
+      yield* Effect.uninterruptible(runState.wakeRegistered(SessionID.make(outcome.value.sessionID)))
       const row = yield* db
         .select()
         .from(TeamMemberTable)
@@ -1075,20 +1100,28 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (!row) return Option.none()
-      yield* events.publish(MemberUpdated, {
-        memberID: row.id,
-        sessionID: row.session_id,
-        status: row.status,
-        lifecycle: row.lifecycle,
-        daemonState: row.daemon_state ?? undefined,
-      })
-      if (outcome.value.messageID) {
-        yield* events.publish(MessageReceived, {
-          messageID: outcome.value.messageID,
-          teamID: outcome.value.teamID,
-          sender: approvalEffects?.sender ?? row.session_id,
-        })
-      }
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* safePublish(
+            events.publish(MemberUpdated, {
+              memberID: row.id,
+              sessionID: row.session_id,
+              status: row.status,
+              lifecycle: row.lifecycle,
+              daemonState: row.daemon_state ?? undefined,
+            }),
+          )
+          if (outcome.value.messageID) {
+            yield* safePublish(
+              events.publish(MessageReceived, {
+                messageID: outcome.value.messageID,
+                teamID: outcome.value.teamID,
+                sender: approvalEffects?.sender ?? row.session_id,
+              }),
+            )
+          }
+        }),
+      )
       return Option.some({
         id: row.id,
         team_id: row.team_id,
@@ -1785,7 +1818,17 @@ export const layer = Layer.effect(
               : Effect.die(error),
           ),
         )
-      yield* events.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender })
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* Effect.forEach(recipients, (recipient) => runState.wakeRegistered(SessionID.make(recipient)), {
+            concurrency: "unbounded",
+            discard: true,
+          })
+          yield* safePublish(
+            events.publish(MessageReceived, { messageID: id, teamID: input.teamID, sender: input.sender }),
+          )
+        }),
+      )
       return {
         id,
         team_id: input.teamID,

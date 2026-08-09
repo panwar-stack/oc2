@@ -15,9 +15,10 @@ import { SessionV2 } from "@oc2-ai/core/session"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { SessionExecution } from "@oc2-ai/core/session/execution"
 import { SessionStore } from "@oc2-ai/core/session/store"
+import { SessionV1 } from "@oc2-ai/core/v1/session"
 
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
-import { provideTmpdirInstance } from "../fixture/fixture"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref } from "effect"
+import { provideInstanceEffect, provideTmpdirInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 import { SessionProjector } from "@oc2-ai/core/session/projector"
@@ -94,6 +95,103 @@ const it = testEffect(
   ),
 )
 
+it.instance("wake signals the current park and duplicate wakes do not run replacement work", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses_run_state_park_wake")
+    const signal = yield* Deferred.make<void>()
+    const park = yield* state.registerPark(sessionID, signal, Effect.die("unexpected park continuation"))
+    yield* Effect.addFinalizer(() => park.unregister)
+    let workRuns = 0
+    const replacement = Effect.sync(() => {
+      workRuns += 1
+    }).pipe(Effect.andThen(Effect.die("park wake must not schedule replacement work")))
+
+    expect(yield* state.wake(sessionID, Effect.die("unexpected interrupt fallback"), replacement)).toBe(false)
+    expect(yield* Deferred.isDone(signal)).toBe(true)
+    expect(yield* state.wake(sessionID, Effect.die("unexpected interrupt fallback"), replacement)).toBe(false)
+    expect(workRuns).toBe(0)
+  }),
+)
+
+it.instance("park handoff rearms a completed match before removing an idle registration", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses_run_state_park_handoff")
+    const first = yield* Deferred.make<void>()
+    const firstPark = yield* state.registerPark(sessionID, first, Effect.die("unexpected park continuation"))
+    yield* Effect.addFinalizer(() => firstPark.unregister)
+
+    expect(yield* state.signalPark(sessionID)).toBe(true)
+    expect(yield* state.signalPark(sessionID)).toBe(true)
+    const replacement = yield* Deferred.make<void>()
+    expect(yield* state.handoffPark(sessionID, first, replacement)).toBe(false)
+    // The identity-bound handle was atomically rearmed and now notifies the replacement.
+    expect(firstPark.notify()).toBe(true)
+    expect(yield* Deferred.isDone(replacement)).toBe(true)
+
+    const stable = yield* Deferred.make<void>()
+    expect(yield* state.handoffPark(sessionID, replacement, stable)).toBe(false)
+    const unused = yield* Deferred.make<void>()
+    expect(yield* state.handoffPark(sessionID, stable, unused)).toBe(true)
+    expect(yield* state.signalPark(sessionID)).toBe(false)
+
+    // After the exact registration is removed, wake falls through to normal runner scheduling.
+    const started = yield* Deferred.make<void>()
+    yield* Effect.addFinalizer(() => state.cancel(sessionID))
+    expect(
+      yield* state.wake(
+        sessionID,
+        Effect.die("unexpected interrupt fallback"),
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      ),
+    ).toBe(true)
+    yield* Deferred.await(started)
+  }),
+)
+
+it.instance("park cleanup is identity-safe after registration replacement", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses_run_state_park_replace")
+    const first = yield* Deferred.make<void>()
+    const second = yield* Deferred.make<void>()
+    const firstPark = yield* state.registerPark(sessionID, first, Effect.die("unexpected park continuation"))
+    const secondPark = yield* state.registerPark(sessionID, second, Effect.die("unexpected park continuation"))
+    yield* Effect.addFinalizer(() => secondPark.unregister)
+
+    yield* firstPark.unregister
+    expect(yield* state.signalPark(sessionID)).toBe(true)
+    expect(yield* Deferred.isDone(first)).toBe(false)
+    expect(yield* Deferred.isDone(second)).toBe(true)
+
+    yield* secondPark.unregister
+    expect(yield* state.signalPark(sessionID)).toBe(false)
+  }),
+)
+
+it.instance("park registrations are isolated by instance", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const otherInstance = yield* tmpdirScoped()
+    const sessionID = SessionID.make("ses_run_state_park_isolation")
+    const currentSignal = yield* Deferred.make<void>()
+    const otherSignal = yield* Deferred.make<void>()
+    const currentPark = yield* state.registerPark(sessionID, currentSignal, Effect.die("unexpected park continuation"))
+    const otherPark = yield* state
+      .registerPark(sessionID, otherSignal, Effect.die("unexpected park continuation"))
+      .pipe(provideInstanceEffect(otherInstance))
+    yield* Effect.addFinalizer(() => Effect.all([currentPark.unregister, otherPark.unregister], { discard: true }))
+
+    expect(yield* state.signalPark(sessionID).pipe(provideInstanceEffect(otherInstance))).toBe(true)
+    expect(yield* Deferred.isDone(otherSignal)).toBe(true)
+    expect(yield* Deferred.isDone(currentSignal)).toBe(false)
+
+    expect(yield* state.signalPark(sessionID)).toBe(true)
+    expect(yield* Deferred.isDone(currentSignal)).toBe(true)
+  }),
+)
+
 it.instance("suspend signals the runner without cancelling background jobs", () =>
   provideTmpdirInstance(() =>
     Effect.gen(function* () {
@@ -120,6 +218,220 @@ it.instance("suspend signals the runner without cancelling background jobs", () 
       expect(backgroundCancels).toBe(0)
     }),
   ),
+)
+
+it.instance("pause invalidates an active park before release queues its replacement run", () =>
+  provideTmpdirInstance(() =>
+    Effect.gen(function* () {
+      const state = yield* SessionRunState.Service
+      const control = yield* SessionControl.Service
+      const sessions = yield* SessionV2.Service
+      const session = yield* sessions.create({ location })
+      const signal = yield* Deferred.make<void>()
+      const parked = yield* Deferred.make<void>()
+      const finalizerStarted = yield* Deferred.make<void>()
+      const releaseFinalizer = yield* Deferred.make<void>()
+      const replacementStarted = yield* Deferred.make<void>()
+
+      yield* Effect.gen(function* () {
+        yield* state
+          .ensureRunning(
+            session.id,
+            Effect.die("suspension must not use cancellation fallback"),
+            Effect.gen(function* () {
+              yield* state.registerPark(session.id, signal, Effect.die("stale park must not continue"))
+              yield* Deferred.succeed(parked, undefined)
+              yield* Deferred.await(signal)
+              return undefined as unknown as SessionV1.WithParts
+            }).pipe(
+              Effect.ensuring(
+                Deferred.succeed(finalizerStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFinalizer))),
+              ),
+            ),
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(parked)
+
+        const paused = yield* control.pause({ rootSessionID: session.id })
+        expect(paused.interruptionSignalledSessionIDs).toEqual([session.id])
+        yield* Deferred.await(finalizerStarted)
+        expect(yield* Deferred.isDone(signal)).toBe(false)
+        expect(yield* state.signalPark(session.id)).toBe(false)
+
+        const released = yield* control.release(session.id)
+        expect(released.resumeTickets).toEqual([{ sessionID: session.id, generation: 1, reason: "running" }])
+        const ticket = released.resumeTickets[0]!
+        const accepted = yield* state.wake(
+          session.id,
+          Effect.die("suspension must not use cancellation fallback"),
+          Effect.gen(function* () {
+            expect(yield* control.finishResume(ticket)).toBe(true)
+            yield* Deferred.succeed(replacementStarted, undefined)
+            return yield* Effect.never
+          }),
+        )
+        expect(accepted).toBe(true)
+        expect(yield* control.runnableResumeTickets([session.id])).toEqual([ticket])
+        expect(yield* Deferred.isDone(replacementStarted)).toBe(false)
+
+        yield* Deferred.succeed(releaseFinalizer, undefined)
+        yield* Deferred.await(replacementStarted)
+        expect(yield* control.runnableResumeTickets([session.id])).toEqual([])
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(releaseFinalizer, undefined).pipe(Effect.ignore, Effect.andThen(state.cancel(session.id))),
+        ),
+      )
+    }),
+  ),
+)
+
+it.instance("a retiring park coalesces signals and continues only after its current run settles", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses_run_state_retiring_park")
+    const signal = yield* Deferred.make<void>()
+    const handoffDone = yield* Deferred.make<void>()
+    const releaseCurrent = yield* Deferred.make<void>()
+    const continuationStarted = yield* Deferred.make<void>()
+    const continuationRuns = yield* Ref.make(0)
+    const continuation = Effect.gen(function* () {
+      yield* Ref.update(continuationRuns, (count) => count + 1)
+      yield* Deferred.succeed(continuationStarted, undefined)
+      return yield* Effect.never
+    })
+    const current = yield* state
+      .ensureRunning(
+        sessionID,
+        Effect.die("unexpected interrupt fallback"),
+        Effect.gen(function* () {
+          const park = yield* state.registerPark(sessionID, signal, continuation)
+          const replacement = yield* Deferred.make<void>()
+          expect(yield* state.handoffPark(sessionID, signal, replacement)).toBe(true)
+          yield* Deferred.succeed(handoffDone, undefined)
+          yield* Deferred.await(releaseCurrent)
+          yield* park.unregister
+          return undefined as unknown as SessionV1.WithParts
+        }),
+      )
+      .pipe(Effect.forkChild)
+    yield* Effect.addFinalizer(() => state.cancel(sessionID))
+    yield* Deferred.await(handoffDone)
+
+    expect(yield* state.signalPark(sessionID)).toBe(true)
+    expect(yield* state.signalPark(sessionID)).toBe(true)
+    expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+
+    yield* Deferred.succeed(releaseCurrent, undefined)
+    yield* Fiber.join(current)
+    yield* Deferred.await(continuationStarted)
+    expect(yield* Ref.get(continuationRuns)).toBe(1)
+
+    yield* state.cancel(sessionID)
+    expect(yield* state.signalPark(sessionID)).toBe(false)
+    expect(yield* Ref.get(continuationRuns)).toBe(1)
+  }),
+)
+
+it.instance("a rejected retiring signal falls through to the queued runner wake", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses_run_state_rejected_retirement")
+    const signal = yield* Deferred.make<void>()
+    const handoffDone = yield* Deferred.make<void>()
+    const finalizerStarted = yield* Deferred.make<void>()
+    const releaseFinalizer = yield* Deferred.make<void>()
+    const replacementStarted = yield* Deferred.make<void>()
+    const continuationStarted = yield* Deferred.make<void>()
+
+    yield* Effect.gen(function* () {
+      const current = yield* state
+        .ensureRunning(
+          sessionID,
+          Effect.die("suspension must not use cancellation fallback"),
+          Effect.gen(function* () {
+            const park = yield* state.registerPark(
+              sessionID,
+              signal,
+              Deferred.succeed(continuationStarted, undefined).pipe(
+                Effect.andThen(Effect.die("cancelled retirement must not continue")),
+              ),
+            )
+            const replacement = yield* Deferred.make<void>()
+            expect(yield* state.handoffPark(sessionID, signal, replacement)).toBe(true)
+            yield* Deferred.succeed(handoffDone, undefined)
+            yield* Effect.never
+            yield* park.unregister
+            return undefined as unknown as SessionV1.WithParts
+          }).pipe(
+            Effect.ensuring(
+              Deferred.succeed(finalizerStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFinalizer))),
+            ),
+          ),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(handoffDone)
+
+      expect(yield* state.suspend(sessionID)).toBe(true)
+      yield* Deferred.await(finalizerStarted)
+      expect(
+        yield* state.wake(
+          sessionID,
+          Effect.die("unexpected interrupt fallback"),
+          Deferred.succeed(replacementStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        ),
+      ).toBe(true)
+      expect(yield* Deferred.isDone(replacementStarted)).toBe(false)
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+
+      yield* Deferred.succeed(releaseFinalizer, undefined)
+      expect(Exit.isFailure(yield* Fiber.await(current))).toBe(true)
+      yield* Deferred.await(replacementStarted)
+      expect(yield* Deferred.isDone(continuationStarted)).toBe(false)
+    }).pipe(
+      Effect.ensuring(
+        Deferred.succeed(releaseFinalizer, undefined).pipe(Effect.ignore, Effect.andThen(state.cancel(sessionID))),
+      ),
+    )
+  }),
+)
+
+it.instance("a registered direct wake starts fresh work after retirement settles", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses_run_state_settled_direct_wake")
+    const handoffDone = yield* Deferred.make<void>()
+    const replacementStarted = yield* Deferred.make<void>()
+    const unregisterWakeTarget = yield* state.registerWakeTarget(() => ({
+      onInterrupt: Effect.die("unexpected interrupt fallback"),
+      work: Deferred.succeed(replacementStarted, undefined).pipe(Effect.andThen(Effect.never)),
+    }))
+    yield* Effect.addFinalizer(() => unregisterWakeTarget)
+
+    const current = yield* state
+      .ensureRunning(
+        sessionID,
+        Effect.die("unexpected interrupt fallback"),
+        Effect.gen(function* () {
+          const signal = yield* Deferred.make<void>()
+          const park = yield* state.registerPark(sessionID, signal, Effect.die("unnotified retirement must not run"))
+          const replacement = yield* Deferred.make<void>()
+          expect(yield* state.handoffPark(sessionID, signal, replacement)).toBe(true)
+          yield* Deferred.succeed(handoffDone, undefined)
+          yield* park.unregister
+          return undefined as unknown as SessionV1.WithParts
+        }),
+      )
+      .pipe(Effect.forkChild)
+    yield* Effect.addFinalizer(() => state.cancel(sessionID))
+
+    yield* Deferred.await(handoffDone)
+    yield* Fiber.join(current)
+    expect(yield* state.signalPark(sessionID)).toBe(false)
+
+    expect(yield* state.wakeRegistered(sessionID)).toBe(true)
+    yield* Deferred.await(replacementStarted)
+  }),
 )
 
 it.instance("pause persists a durable running resume intent only for the sessions it signals", () =>

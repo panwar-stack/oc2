@@ -109,6 +109,8 @@ type OpsSpy = {
   readonly runs: Ref.Ref<number>
 }
 
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
 /**
  * Builds prompt ops that count every entry point separately, so a test can prove which contract the
  * reconciler used. `wake` is deliberately non-blocking and answers no result.
@@ -1016,6 +1018,51 @@ describe("session.lifecycle-reconciler", () => {
           const messages = yield* team.getMessages(info.id)
           expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:started:1`)).toBe(true)
           expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:completed:1`)).toBe(true)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("terminal settlement wakes the lead before blocked publication that later fails", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const events = yield* EventV2Bridge.Service
+          const { info, member } = yield* seedTeam()
+          const spy = yield* spyOps({ text: "committed before publication" })
+          const entered = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const mutableEvents = events as Mutable<EventV2Bridge.Interface>
+          const originalPublish = events.publish
+          mutableEvents.publish = ((definition, data, options) =>
+            definition.type === "team.member.updated"
+              ? Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(Effect.die(new Error("simulated lifecycle publication failure"))),
+                )
+              : originalPublish(definition, data, options)) as EventV2Bridge.Interface["publish"]
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableEvents.publish = originalPublish
+            }).pipe(Effect.andThen(Deferred.succeed(release, undefined)), Effect.asVoid),
+          )
+
+          const settlement = yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops }).pipe(Effect.forkChild)
+          yield* Deferred.await(entered)
+
+          // The transaction and direct wake complete before the first publication can make progress.
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)?.status).toBe(
+            "completed",
+          )
+          expect((yield* team.getMessages(info.id)).some(memberMessage("completed"))).toBe(true)
+          expect(yield* Ref.get(spy.wakes)).toBe(1)
+          expect(settlement.pollUnsafe()).toBeUndefined()
+
+          yield* Deferred.succeed(release, undefined)
+          expect(yield* Fiber.join(settlement)).toBe("committed before publication")
+          expect(yield* Ref.get(spy.wakes)).toBe(1)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

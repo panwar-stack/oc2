@@ -1084,10 +1084,9 @@ export const layer = Layer.effect(
         return undefined
       }
       if (settled.kind === "retry") return settled
-      // Publish the terminal member and canonical-message events only after commit, wrapped
-      // uninterruptibly so the commit -> publish section cannot be interrupted mid-way. A publish
-      // defect is logged, never fatal: the terminal facts already committed and the wake below
-      // must still run.
+      // Directly wake the lead after commit and before best-effort event publication. The durable
+      // status and canonical mail are authoritative, so a blocked or failed publisher must not
+      // keep a same-process lead parked. Keep commit -> wake -> publish uninterruptible.
       const safePublish = (effect: Effect.Effect<void>) =>
         effect.pipe(
           Effect.catchCause((cause) =>
@@ -1096,8 +1095,10 @@ export const layer = Layer.effect(
             }),
           ),
         )
+      const current = yield* InstanceState.get(state)
       yield* Effect.uninterruptible(
         Effect.gen(function* () {
+          yield* wakeWithIntent(current.ops, settled.team.lead_session_id, "team-wake")
           const member = yield* db
             .select()
             .from(TeamMemberTable)
@@ -1142,7 +1143,6 @@ export const layer = Layer.effect(
           }
         }),
       )
-      const current = yield* InstanceState.get(state)
       if (settled.state === "completed") {
         const claimed = yield* claimReadyDependents(settled.team.id)
         if (current.ops) {
@@ -1153,7 +1153,6 @@ export const layer = Layer.effect(
           )
         }
       }
-      yield* wakeWithIntent(current.ops, settled.team.lead_session_id, "team-wake")
       return settled
     })
 

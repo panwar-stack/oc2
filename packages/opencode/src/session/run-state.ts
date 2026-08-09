@@ -2,7 +2,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
-import { Effect, Latch, Layer, Scope, Context, Schema } from "effect"
+import { Deferred, Effect, Latch, Layer, Scope, Context, Schema } from "effect"
 import { Session } from "./session"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
@@ -18,6 +18,31 @@ export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   /** Signals pause-specific suspension. Resolves to true when live work was actually signalled. */
   readonly suspend: (sessionID: SessionID) => Effect.Effect<boolean>
+  /** Registers the current same-process finalization park and returns identity-safe cleanup. */
+  readonly registerPark: (
+    sessionID: SessionID,
+    signal: Deferred.Deferred<void>,
+    continuation: Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
+  ) => Effect.Effect<ParkHandle>
+  /**
+   * Atomically retires an unnotified park at successful finalization so a signal before Runner
+   * settlement can queue one continuation. A notified matching park is replaced instead and
+   * returns false so the barrier must recheck durable state.
+   */
+  readonly handoffPark: (
+    sessionID: SessionID,
+    signal: Deferred.Deferred<void>,
+    replacement: Deferred.Deferred<void>,
+  ) => Effect.Effect<boolean>
+  /** Signals an active park, or records one continuation signal on a retiring park. */
+  readonly signalPark: (sessionID: SessionID) => Effect.Effect<boolean>
+  /** Registers the Prompt continuation used when a direct durable wake has no live park. */
+  readonly registerWakeTarget: (make: (sessionID: SessionID) => WakeTarget) => Effect.Effect<Effect.Effect<void>>
+  /**
+   * Signals an active or retiring park and otherwise schedules the registered Prompt continuation.
+   * This is the direct durable-producer entry point; it never fails when the session is paused.
+   */
+  readonly wakeRegistered: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
@@ -42,6 +67,30 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionRunState") {}
 
+export interface ParkHandle {
+  /** Atomically notifies this exact registration in either its active or retiring phase. */
+  readonly notify: () => boolean
+  readonly unregister: Effect.Effect<void>
+}
+
+export interface WakeTarget {
+  readonly onInterrupt: Effect.Effect<SessionV1.WithParts>
+  readonly work: Effect.Effect<SessionV1.WithParts, Runner.Suspended>
+}
+
+type WakeTargetRegistration = {
+  readonly make: (sessionID: SessionID) => WakeTarget
+}
+
+type Park = {
+  phase: "active" | "retiring"
+  signal: Deferred.Deferred<void>
+  readonly continuation: Effect.Effect<SessionV1.WithParts, Runner.Suspended>
+  retirement?: Runner.Retirement
+  notified: boolean
+  readonly notify: () => boolean
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -50,12 +99,14 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
     const events = yield* EventV2.Service
     const control = yield* SessionControl.Service
+    let wakeTarget: WakeTargetRegistration | undefined
 
     const state = yield* InstanceState.make(
       Effect.fn("SessionRunState.state")(function* () {
         const scope = yield* Scope.Scope
         const runners = new Map<SessionID, Runner.Runner<SessionV1.WithParts, Runner.Suspended>>()
         const substitutions = new Map<SessionID, Runner.Runner<string[]>>()
+        const parks = new Map<SessionID, Park>()
         yield* Effect.addFinalizer(
           Effect.fnUntraced(function* () {
             yield* Effect.forEach(runners.values(), (runner) => runner.cancel, {
@@ -68,9 +119,10 @@ export const layer = Layer.effect(
             })
             runners.clear()
             substitutions.clear()
+            parks.clear()
           }),
         )
-        return { runners, substitutions, scope }
+        return { runners, substitutions, parks, scope }
       }),
     )
 
@@ -81,10 +133,19 @@ export const layer = Layer.effect(
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
       if (existing) return existing
-      const next = Runner.make<SessionV1.WithParts, Runner.Suspended>(data.scope, {
+      let next!: Runner.Runner<SessionV1.WithParts, Runner.Suspended>
+      next = Runner.make<SessionV1.WithParts, Runner.Suspended>(data.scope, {
         onIdle: Effect.gen(function* () {
-          data.runners.delete(sessionID)
-          yield* status.set(sessionID, { type: "idle" })
+          const removed = yield* Effect.sync(() => {
+            // A stale retirement wake can reuse this Runner after finishRun enters Idle but before
+            // this cleanup runs. Do not remove the Runner when that wake made it busy again.
+            if (data.runners.get(sessionID) !== next || next.busy) return false
+            data.runners.delete(sessionID)
+            const park = data.parks.get(sessionID)
+            if (park?.phase === "retiring") data.parks.delete(sessionID)
+            return true
+          })
+          if (removed) yield* status.set(sessionID, { type: "idle" })
         }),
         onBusy: status.set(sessionID, { type: "busy" }),
         onInterrupt,
@@ -111,6 +172,7 @@ export const layer = Layer.effect(
         (id) => {
           const existing = data.runners.get(id)
           const substitution = data.substitutions.get(id)
+          data.parks.delete(id)
           return Effect.all([existing?.cancel ?? Effect.void, substitution?.cancel ?? Effect.void], {
             discard: true,
           }).pipe(Effect.andThen(status.set(id, { type: "idle" })))
@@ -127,6 +189,10 @@ export const layer = Layer.effect(
       const existing = data.runners.get(sessionID)
       const substitution = data.substitutions.get(sessionID)
       const signalled = (existing?.busy ?? false) || (substitution?.busy ?? false)
+      // Invalidate the exact active or retiring park before Runner begins asynchronous fiber
+      // interruption. A release wake can now only attach to or queue replacement work; it cannot
+      // complete a stale park and consume a resume ticket without starting that replacement.
+      data.parks.delete(sessionID)
       const signal = (target: Pick<Runner.Runner<never, never>, "suspend" | "suspendWith">) =>
         provenance === undefined ? target.suspend : target.suspendWith(provenance)
       if (!existing) {
@@ -140,6 +206,106 @@ export const layer = Layer.effect(
     })
 
     const suspend = Effect.fn("SessionRunState.suspend")((sessionID: SessionID) => suspendWith(sessionID))
+
+    const registerPark = Effect.fn("SessionRunState.registerPark")(function* (
+      sessionID: SessionID,
+      signal: Deferred.Deferred<void>,
+      continuation: Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
+    ) {
+      const data = yield* InstanceState.get(state)
+      let park!: Park
+      const notify = () => {
+        if (data.parks.get(sessionID) !== park) return false
+        if (park.phase === "active") {
+          Deferred.doneUnsafe(park.signal, Effect.void)
+          return true
+        }
+        park.notified = true
+        if (!park.retirement) return true
+        if (Effect.runSync(park.retirement.signal)) return true
+        if (data.parks.get(sessionID) === park) data.parks.delete(sessionID)
+        return false
+      }
+      park = { phase: "active", signal, continuation, notified: false, notify }
+      data.parks.set(sessionID, park)
+      return {
+        notify,
+        unregister: Effect.sync(() => {
+          // A successful handoff owns cleanup until Runner settlement. Ordinary interruption still
+          // removes the active registration here, while cleanup from an older park cannot remove a
+          // replacement registration.
+          if (data.parks.get(sessionID) === park && park.phase === "active") data.parks.delete(sessionID)
+        }),
+      }
+    })
+
+    const handoffPark = Effect.fn("SessionRunState.handoffPark")(function* (
+      sessionID: SessionID,
+      signal: Deferred.Deferred<void>,
+      replacement: Deferred.Deferred<void>,
+    ) {
+      const data = yield* InstanceState.get(state)
+      const prepared = yield* Effect.sync(() => {
+        const park = data.parks.get(sessionID)
+        if (park?.phase !== "active" || park.signal !== signal) {
+          return { kind: "done" as const, value: true }
+        }
+        if (Deferred.isDoneUnsafe(signal)) {
+          // Keep the exact handle identity while rearming. A fallback callback that runs before the
+          // barrier observes this return value will notify the replacement instead of the old signal.
+          park.signal = replacement
+          return { kind: "done" as const, value: false }
+        }
+        park.phase = "retiring"
+        park.notified = false
+        return { kind: "retire" as const, park, runner: data.runners.get(sessionID) }
+      })
+      if (prepared.kind === "done") return prepared.value
+
+      // This is the only Running -> queued-continuation path. The Runner retirement is installed
+      // while the current run is still executing handoffPark, so a later matching signal can only
+      // start the continuation after that current run exits.
+      const continuation = Effect.sync(() => {
+        if (data.parks.get(sessionID) === prepared.park) data.parks.delete(sessionID)
+      }).pipe(Effect.andThen(prepared.park.continuation))
+      const retirement = prepared.runner ? yield* prepared.runner.retire(continuation) : undefined
+      if (!retirement) {
+        yield* Effect.sync(() => {
+          if (data.parks.get(sessionID) === prepared.park) data.parks.delete(sessionID)
+        })
+        return true
+      }
+      const notified = yield* Effect.sync(() => {
+        if (data.parks.get(sessionID) !== prepared.park) return false
+        prepared.park.retirement = retirement
+        return prepared.park.notified
+      })
+      if (notified) prepared.park.notify()
+      return true
+    })
+
+    const signalPark = Effect.fn("SessionRunState.signalPark")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      while (true) {
+        const park = data.parks.get(sessionID)
+        if (!park) return false
+        if (park.notify()) return true
+        if (data.parks.get(sessionID) === park) return false
+
+        // A new registration replaced the settled retirement while its signal was checked. Retry
+        // against that exact registration instead of reporting a wake that it did not receive.
+      }
+    })
+
+    const registerWakeTarget = Effect.fn("SessionRunState.registerWakeTarget")(function* (
+      make: (sessionID: SessionID) => WakeTarget,
+    ) {
+      const registration = { make } satisfies WakeTargetRegistration
+      wakeTarget = registration
+      return Effect.sync(() => {
+        if (wakeTarget === registration) wakeTarget = undefined
+      })
+    })
 
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
       sessionID: SessionID,
@@ -156,7 +322,18 @@ export const layer = Layer.effect(
       work: Effect.Effect<SessionV1.WithParts, Runner.Suspended>,
     ) {
       yield* assertNotSuspended(db, sessionID)
+      if (yield* signalPark(sessionID)) return false
       return yield* (yield* runner(sessionID, onInterrupt)).wake(work)
+    })
+
+    const wakeRegistered = Effect.fn("SessionRunState.wakeRegistered")(function* (sessionID: SessionID) {
+      const target = wakeTarget?.make(sessionID)
+      if (!target) return yield* signalPark(sessionID)
+      return yield* wake(sessionID, target.onInterrupt, target.work).pipe(
+        // A durable producer must not fail after commit when the target is paused. The existing
+        // resume-intent path remains authoritative and will schedule the same registered work.
+        Effect.catchTag("RunnerSuspended", () => Effect.succeed(false)),
+      )
     })
 
     const startShell = Effect.fn("SessionRunState.startShell")(function* (
@@ -250,6 +427,11 @@ export const layer = Layer.effect(
       assertNotSuspended: assertActive,
       cancel,
       suspend,
+      registerPark,
+      handoffPark,
+      signalPark,
+      registerWakeTarget,
+      wakeRegistered,
       ensureRunning,
       wake,
       startShell,
