@@ -326,7 +326,7 @@ export function Prompt(props: PromptProps) {
     const cost = session?.cost ?? 0
     return {
       context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
-      cacheStatus: formatCacheStatus(last.cacheStatus, last.tokens),
+      cacheStatus: formatCacheStatus(msg),
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
