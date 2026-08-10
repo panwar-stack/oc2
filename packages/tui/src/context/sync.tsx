@@ -267,6 +267,10 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
+    const refreshingSessions = new Map<
+      string,
+      { pending?: { generation: number; aggregatesOnly: boolean } }
+    >()
     const sessionAuthority = createSessionAuthority()
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string>; cancelled: boolean }>()
     const touchMessage = (sessionID: string, messageID: string) => {
@@ -436,10 +440,12 @@ export const {
       }, EVENT_BATCH_FLUSH_MS)
     }
 
-    async function refreshSession(sessionID: string, options?: { aggregatesOnly?: boolean }) {
-      const generation = sessionAuthority.beginSession(sessionID)
+    async function applySessionRefresh(
+      sessionID: string,
+      request: { generation: number; aggregatesOnly: boolean },
+    ) {
       const response = await sdk.client.session.get({ sessionID }, { throwOnError: true })
-      if (!sessionAuthority.accepts(sessionID, generation)) return
+      if (!sessionAuthority.accepts(sessionID, request.generation)) return
       const session = response.data
       if (session?.id !== sessionID) return
       setStore(
@@ -449,12 +455,48 @@ export const {
           if (match.found) {
             const current = draft[match.index]
             if (!current) return
-            draft[match.index] = options?.aggregatesOnly ? mergeSessionAggregates(current, session) : session
+            draft[match.index] = request.aggregatesOnly ? mergeSessionAggregates(current, session) : session
             return
           }
-          if (!options?.aggregatesOnly) draft.splice(match.index, 0, session)
+          if (!request.aggregatesOnly) draft.splice(match.index, 0, session)
         }),
       )
+    }
+
+    function refreshSession(sessionID: string, options?: { aggregatesOnly?: boolean }) {
+      const request = {
+        generation: sessionAuthority.beginSession(sessionID),
+        aggregatesOnly: options?.aggregatesOnly === true,
+      }
+      const active = refreshingSessions.get(sessionID)
+      if (active) {
+        active.pending = request
+        return
+      }
+
+      const state: { pending?: typeof request } = {}
+      refreshingSessions.set(sessionID, state)
+      void (async () => {
+        let current = request
+        while (true) {
+          if (!sessionAuthority.deleted(sessionID)) {
+            try {
+              await applySessionRefresh(sessionID, current)
+            } catch (error) {
+              if (!sessionAuthority.deleted(sessionID)) console.error("Failed to refresh session aggregates", error)
+            }
+          }
+
+          const pending = state.pending
+          state.pending = undefined
+          if (pending) {
+            current = pending
+            continue
+          }
+          if (refreshingSessions.get(sessionID) === state) refreshingSessions.delete(sessionID)
+          return
+        }
+      })()
     }
 
     event.subscribe((event, { workspace }) => {
@@ -464,12 +506,7 @@ export const {
       if (updatedID) sessionAuthority.update(updatedID)
       const refreshID =
         updatedID && !sessionAuthority.deleted(updatedID) ? updatedID : aggregateRefreshSessionID(event)
-      if (refreshID) {
-        void refreshSession(refreshID, { aggregatesOnly: refreshID === updatedID }).catch((error) => {
-          if (sessionAuthority.deleted(refreshID)) return
-          console.error("Failed to refresh session aggregates", error)
-        })
-      }
+      if (refreshID) refreshSession(refreshID, { aggregatesOnly: refreshID === updatedID })
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()

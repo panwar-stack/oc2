@@ -369,9 +369,11 @@ describe("tui sync", () => {
           properties: { sessionID, info: sessionInfo(sessionID, 0, 0, "Updated during removal") },
         }),
       )
-      await wait(() => gets.length === 6)
+      await Bun.sleep(30)
+      expect(gets).toHaveLength(5)
       await wait(() => sync.session.get(sessionID)?.title === "Updated during removal")
       gets[4]!.resolve(json(sessionInfo(sessionID, 2.5, 250, "Old removal GET")))
+      await wait(() => gets.length === 6)
       await Bun.sleep(30)
       expect(sync.session.get(sessionID)?.cost).toBe(4)
       expect(sync.session.get(sessionID)?.tokens).toEqual({
@@ -427,8 +429,10 @@ describe("tui sync", () => {
           properties: { sessionID, info: sessionInfo(sessionID, 0, 0, "Repeated update 2") },
         }),
       )
-      await wait(() => gets.length === 9)
+      await Bun.sleep(30)
+      expect(gets).toHaveLength(8)
       gets[7]!.resolve(json(sessionInfo(sessionID, 99, 9_900, "First replacement")))
+      await wait(() => gets.length === 9)
       await Bun.sleep(30)
       expect(sync.session.get(sessionID)?.cost).toBe(1)
       expect(sync.session.get(sessionID)?.title).toBe("Repeated update 2")
