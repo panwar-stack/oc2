@@ -20,11 +20,14 @@ import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@oc2-ai/core/cross-spawn-spawner"
 import { Database } from "@oc2-ai/core/database/database"
 import { ModelV2 } from "@oc2-ai/core/model"
+import { ProjectV2 } from "@oc2-ai/core/project"
+import { ProjectTable } from "@oc2-ai/core/project/sql"
 import { ProviderV2 } from "@oc2-ai/core/provider"
+import { AbsolutePath } from "@oc2-ai/core/schema"
 import { SessionControl } from "@oc2-ai/core/session/control"
 import { SessionTable } from "@oc2-ai/core/session/sql"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
-import { Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref } from "effect"
 import { eq, isNull } from "drizzle-orm"
 import fs from "fs/promises"
 import path from "path"
@@ -289,6 +292,28 @@ function isTaskNotification(message: SessionV1.WithParts) {
     message.info.role === "user" &&
     message.parts.some((part) => part.type === "text" && part.synthetic === true && part.text.startsWith("<task id="))
   )
+}
+
+function taskNotificationText(message: SessionV1.WithParts | undefined) {
+  const part = message?.parts.find((candidate) => candidate.type === "text" && candidate.synthetic === true)
+  return part?.type === "text" ? part.text : undefined
+}
+
+function expectedTaskOutput(input: {
+  sessionID: string
+  state: "completed" | "error"
+  description: string
+  text: string
+}) {
+  const tag = input.state === "error" ? "task_error" : "task_result"
+  return [
+    `<task id="${input.sessionID}" state="${input.state}">`,
+    `<summary>Background task ${input.state}: ${input.description}</summary>`,
+    `<${tag}>`,
+    input.text,
+    `</${tag}>`,
+    "</task>",
+  ].join("\n")
 }
 
 /** Matches a generation-scoped member lifecycle notification like `lifecycle:member:<id>:<kind>:<gen>`. */
@@ -591,6 +616,348 @@ describe("session.lifecycle-reconciler", () => {
         expect(notifications[0]?.info.id).toBe(first)
         expect(yield* backgroundState(child.id)).toMatchObject({ notification: "delivered" })
         expect(yield* Ref.get(retry.wakes)).toBe(1)
+      }),
+    ),
+  )
+
+  it.live("keeps a below-bound background completion render byte-for-byte unchanged", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const lifecycle = yield* LifecycleReconciler.Service
+        const parent = yield* sessions.create({ title: "Parent" })
+        const child = yield* sessions.create({ parentID: parent.id, title: "Child" })
+        const spy = yield* spyOps()
+        const description = "preserve exact render"
+        const output = "first line\nsecond line"
+
+        const registration = yield* lifecycle.registerBackground({
+          sessionID: child.id,
+          parentSessionID: parent.id,
+          description,
+          agent: "build",
+          model: ref,
+          notifyParent: true,
+          ops: spy.ops,
+        })
+        yield* lifecycle.settleBackground({
+          sessionID: child.id,
+          generation: registration.generation,
+          state: "completed",
+          text: output,
+          ops: spy.ops,
+        })
+
+        const notifications = (yield* MessageV2.stream(parent.id)).filter(isTaskNotification)
+        expect(notifications).toHaveLength(1)
+        expect(taskNotificationText(notifications[0])).toBe(
+          expectedTaskOutput({ sessionID: child.id, state: "completed", description, text: output }),
+        )
+        expect(yield* backgroundState(child.id)).toMatchObject({
+          state: "completed",
+          output,
+          notification: "delivered",
+        })
+        expect(yield* Ref.get(spy.wakes)).toBe(1)
+      }),
+    ),
+  )
+
+  it.live("bounds large completed and error renders while keeping exact durable and artifact text", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const lifecycle = yield* LifecycleReconciler.Service
+        const parent = yield* sessions.create({ title: "Parent" })
+        const spy = yield* spyOps()
+
+        for (const state of ["completed", "error"] as const) {
+          const child = yield* sessions.create({ parentID: parent.id, title: `Child ${state}` })
+          const description = `large ${state} delivery`
+          const large =
+            state === "completed"
+              ? "x".repeat(Truncate.MAX_BYTES + 16_000)
+              : Array.from({ length: Truncate.MAX_LINES + 400 }, (_, index) => `error line ${index}`).join("\n")
+          const registration = yield* lifecycle.registerBackground({
+            sessionID: child.id,
+            parentSessionID: parent.id,
+            description,
+            agent: "build",
+            model: ref,
+            notifyParent: true,
+            ops: spy.ops,
+          })
+          yield* lifecycle.settleBackground({
+            sessionID: child.id,
+            generation: registration.generation,
+            state,
+            text: large,
+            ops: spy.ops,
+          })
+
+          const notification = (yield* MessageV2.stream(parent.id))
+            .filter(isTaskNotification)
+            .find((message) => taskNotificationText(message)?.includes(`state="${state}"`))
+          const rendered = taskNotificationText(notification)
+          expect(rendered).toBeDefined()
+          if (!rendered) throw new Error(`Missing ${state} notification text`)
+          expect(Buffer.byteLength(rendered, "utf-8")).toBeLessThanOrEqual(Truncate.MAX_BYTES)
+          expect(rendered.split("\n").length).toBeLessThanOrEqual(Truncate.MAX_LINES)
+          expect(rendered).toContain("Use the Task tool to have explore agent process this file")
+
+          const pathMatch = rendered.match(/Full output saved to: (.+)\n/)
+          expect(pathMatch?.[1]).toBeDefined()
+          const artifactPath = pathMatch?.[1]
+          if (!artifactPath) throw new Error(`Missing ${state} artifact path`)
+          const exact = expectedTaskOutput({ sessionID: child.id, state, description, text: large })
+          expect(yield* Effect.promise(() => fs.readFile(artifactPath, "utf8"))).toBe(exact)
+
+          const markerIndex = rendered.indexOf("\n\n...")
+          expect(markerIndex).toBeGreaterThan(-1)
+          const preview = rendered.slice(0, markerIndex)
+          if (state === "completed") {
+            const removed = Buffer.byteLength(exact, "utf-8") - Buffer.byteLength(preview, "utf-8")
+            expect(rendered).toContain(`...${removed} bytes truncated...`)
+          } else {
+            const previewNewlines = preview.split("\n").length - 1
+            const previewLines = preview.length === 0 ? 0 : previewNewlines + (exact[preview.length] === "\n" ? 1 : 0)
+            const removed = exact.split("\n").length - previewLines
+            expect(rendered).toContain(`...${removed} lines truncated...`)
+          }
+          expect(yield* backgroundState(child.id)).toMatchObject({
+            state,
+            ...(state === "completed" ? { output: large } : { error: large }),
+            notification: "delivered",
+          })
+        }
+      }),
+    ),
+  )
+
+  it.live("leaves a failed completion render pending and retries it without a duplicate", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const lifecycle = yield* LifecycleReconciler.Service
+        const truncate = yield* Truncate.Service
+        const parent = yield* sessions.create({ title: "Parent" })
+        const child = yield* sessions.create({ parentID: parent.id, title: "Child" })
+        const spy = yield* spyOps()
+        const mutableTruncate = truncate as Mutable<Truncate.Interface>
+        const originalOutputStrict = truncate.outputStrict
+        mutableTruncate.outputStrict = () => Effect.die(new Error("simulated completion artifact failure"))
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            mutableTruncate.outputStrict = originalOutputStrict
+          }),
+        )
+
+        const registration = yield* lifecycle.registerBackground({
+          sessionID: child.id,
+          parentSessionID: parent.id,
+          description: "retry rendering",
+          agent: "build",
+          model: ref,
+          notifyParent: true,
+          ops: spy.ops,
+        })
+        const first = yield* lifecycle
+          .settleBackground({
+            sessionID: child.id,
+            generation: registration.generation,
+            state: "completed",
+            text: "exact durable result",
+            ops: spy.ops,
+          })
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(first)).toBe(true)
+        expect(yield* backgroundState(child.id)).toMatchObject({
+          state: "completed",
+          output: "exact durable result",
+          notification: "pending",
+        })
+        expect((yield* MessageV2.stream(parent.id)).filter(isTaskNotification)).toHaveLength(0)
+        expect(yield* Ref.get(spy.wakes)).toBe(0)
+
+        mutableTruncate.outputStrict = originalOutputStrict
+        yield* lifecycle.reconcile
+        yield* lifecycle.reconcile
+
+        const notifications = (yield* MessageV2.stream(parent.id)).filter(isTaskNotification)
+        expect(notifications).toHaveLength(1)
+        expect(taskNotificationText(notifications[0])).toContain("exact durable result")
+        expect(yield* backgroundState(child.id)).toMatchObject({ notification: "delivered" })
+        expect(yield* Ref.get(spy.wakes)).toBe(1)
+      }),
+    ),
+  )
+
+  it.live("keeps agent lookup failures pending, then retries each delivery with agent-aware guidance", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const lifecycle = yield* LifecycleReconciler.Service
+        const agent = yield* Agent.Service
+        const parent = yield* sessions.create({ title: "Parent" })
+        const spy = yield* spyOps()
+        const cases = [
+          {
+            name: "absent service",
+            agent: "build",
+            expectedCause: "Agent service is required for background completion delivery",
+          },
+          {
+            name: "get failure",
+            agent: "build",
+            expectedCause: "simulated Agent.get failure",
+          },
+          {
+            name: "missing agent",
+            agent: "missing-background-agent",
+            expectedCause: "Background agent not found: missing-background-agent",
+          },
+        ] as const
+
+        for (const scenario of cases) {
+          const child = yield* sessions.create({ parentID: parent.id, title: `Child ${scenario.name}` })
+          const large = `${scenario.name}:` + "x".repeat(Truncate.MAX_BYTES + 16_000)
+          const registration = yield* lifecycle.registerBackground({
+            sessionID: child.id,
+            parentSessionID: parent.id,
+            description: scenario.name,
+            agent: scenario.agent,
+            model: ref,
+            notifyParent: true,
+            ops: spy.ops,
+          })
+          const delivery = lifecycle.settleBackground({
+            sessionID: child.id,
+            generation: registration.generation,
+            state: "completed",
+            text: large,
+            ops: spy.ops,
+          })
+          const wakesBefore = yield* Ref.get(spy.wakes)
+          const first = yield* (
+            scenario.name === "absent service"
+              ? delivery.pipe(Effect.updateContext(Context.omit(Agent.Service)))
+              : scenario.name === "get failure"
+                ? delivery.pipe(
+                    Effect.provideService(
+                      Agent.Service,
+                      Agent.Service.of({
+                        ...agent,
+                        get: () => Effect.die(new Error("simulated Agent.get failure")),
+                      }),
+                    ),
+                  )
+                : delivery
+          ).pipe(Effect.exit)
+
+          expect(Exit.isFailure(first)).toBe(true)
+          if (Exit.isSuccess(first)) throw new Error(`Expected ${scenario.name} delivery to fail`)
+          expect(Cause.pretty(first.cause)).toContain(scenario.expectedCause)
+          expect(yield* backgroundState(child.id)).toMatchObject({
+            state: "completed",
+            output: large,
+            notification: "pending",
+          })
+          const parentParts = (yield* MessageV2.stream(parent.id)).flatMap((message) => message.parts)
+          expect(
+            parentParts.filter(
+              (part) => part.type === "text" && part.synthetic === true && part.text.includes(`id="${child.id}"`),
+            ),
+          ).toHaveLength(0)
+          expect(yield* Ref.get(spy.wakes)).toBe(wakesBefore)
+
+          const retryAgent =
+            scenario.name === "missing agent"
+              ? Agent.Service.of({
+                  ...agent,
+                  get: (name) => (name === scenario.agent ? agent.get("build") : agent.get(name)),
+                })
+              : agent
+          yield* lifecycle.reconcile.pipe(Effect.provideService(Agent.Service, retryAgent))
+          yield* lifecycle.reconcile.pipe(Effect.provideService(Agent.Service, retryAgent))
+
+          const notifications = (yield* MessageV2.stream(parent.id)).filter((message) =>
+            taskNotificationText(message)?.startsWith(`<task id="${child.id}"`),
+          )
+          expect(notifications).toHaveLength(1)
+          const rendered = taskNotificationText(notifications[0])
+          expect(rendered).toContain("Use the Task tool to have explore agent process this file")
+          expect(Buffer.byteLength(rendered ?? "", "utf-8")).toBeLessThanOrEqual(Truncate.MAX_BYTES)
+          expect(yield* backgroundState(child.id)).toMatchObject({
+            state: "completed",
+            output: large,
+            notification: "delivered",
+          })
+          expect(yield* Ref.get(spy.wakes)).toBe(wakesBefore + 1)
+        }
+      }),
+    ),
+  )
+
+  it.live("default layer privately provides truncation for a bounded background completion", () =>
+    provideTmpdirInstance((directory) =>
+      Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const sessions = yield* Session.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          yield* db
+            .insert(ProjectTable)
+            .values({
+              id: ProjectV2.ID.make("global"),
+              worktree: AbsolutePath.make(directory),
+              vcs: null,
+              name: null,
+              time_created: Date.now(),
+              time_updated: Date.now(),
+              sandboxes: [],
+            })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          const parent = yield* sessions.create({ title: "Parent" })
+          const child = yield* sessions.create({ parentID: parent.id, title: "Child" })
+          const spy = yield* spyOps()
+          const large = "default-layer-result:" + "x".repeat(Truncate.MAX_BYTES + 16_000)
+          const registration = yield* lifecycle.registerBackground({
+            sessionID: child.id,
+            parentSessionID: parent.id,
+            description: "private truncation dependency",
+            agent: "build",
+            model: ref,
+            notifyParent: true,
+            ops: spy.ops,
+          })
+          yield* lifecycle.settleBackground({
+            sessionID: child.id,
+            generation: registration.generation,
+            state: "completed",
+            text: large,
+            ops: spy.ops,
+          })
+
+          const notifications = (yield* sessions.messages({ sessionID: parent.id })).filter(isTaskNotification)
+          expect(notifications).toHaveLength(1)
+          const rendered = taskNotificationText(notifications[0])
+          expect(Buffer.byteLength(rendered ?? "", "utf-8")).toBeLessThanOrEqual(Truncate.MAX_BYTES)
+          expect(rendered).toContain("Use the Task tool to have explore agent process this file")
+          expect((yield* sessions.get(child.id)).metadata?.lifecycleReconciler).toMatchObject({
+            state: "completed",
+            output: large,
+            notification: "delivered",
+          })
+          expect(yield* Ref.get(spy.wakes)).toBe(1)
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(Layer.mergeAll(Database.defaultLayer, Session.defaultLayer, LifecycleReconciler.defaultLayer)),
+          ),
+          Effect.updateContext(Context.omit(Truncate.Service)),
+        )
       }),
     ),
   )

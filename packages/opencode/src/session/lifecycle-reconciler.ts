@@ -11,6 +11,7 @@ import {
   SessionTable,
 } from "@oc2-ai/core/session/sql"
 import { SessionV1 } from "@oc2-ai/core/v1/session"
+import type { Interface as AgentInterface } from "@/agent/agent"
 import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -20,6 +21,7 @@ import { bumpTeamRevision } from "@/team/revision"
 import { TeamFileOwnershipTable } from "@oc2-ai/core/team/ownership.sql"
 import { TeamEvents } from "@/team/events"
 import type { MemberFailureCode, MemberRunPhase } from "@/team/team"
+import { Truncate } from "@/tool/truncate"
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Scope } from "effect"
 
@@ -108,6 +110,9 @@ type MemberAdmissionOutcome =
 
 const metadataKey = "lifecycleReconciler"
 const memberMetadataKey = "lifecycleTeamMember"
+// The string is the Effect service identity. A local key avoids a runtime Agent -> Plugin ->
+// lifecycle import cycle while still resolving the parent agent from the active Effect context.
+const AgentService = Context.Service<AgentInterface>("@opencode/Agent")
 const terminalMemberStatuses = ["completed", "cancelled", "failed"] as const
 const lifecycleLocks = KeyedMutex.makeUnsafe<string>()
 
@@ -467,6 +472,7 @@ export const layer = Layer.effect(
     const { db } = database
     const control = yield* SessionControl.Service
     const events = yield* EventV2Bridge.Service
+    const truncate = yield* Truncate.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("LifecycleReconciler.state")(function* (ctx) {
@@ -1799,6 +1805,55 @@ export const layer = Layer.effect(
     ) {
       const current = yield* InstanceState.get(state)
       const token = `${current.owner}:${crypto.randomUUID()}`
+      // Prepare the exact parent render before claiming delivery. Rendering or artifact storage can
+      // fail, and that failure must leave the notification pending with no parent message or wake.
+      // Check pause and parent existence first so polling does not create unused artifacts.
+      const prepared = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, SessionID.make(sessionID)))
+        .get()
+        .pipe(Effect.orDie)
+      const preparedLifecycle = prepared ? backgroundMetadata(prepared) : undefined
+      if (
+        !prepared ||
+        !preparedLifecycle ||
+        preparedLifecycle.generation !== generation ||
+        preparedLifecycle.notification !== "pending" ||
+        (preparedLifecycle.state !== "completed" && preparedLifecycle.state !== "error")
+      )
+        return false
+      if (yield* activePause(db, [prepared.id, preparedLifecycle.parentSessionID])) {
+        yield* setIntent(preparedLifecycle.parentSessionID, "background-result")
+        return false
+      }
+      const parent = yield* db
+        .select({ id: SessionTable.id })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, SessionID.make(preparedLifecycle.parentSessionID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!parent) return false
+      const agentService = yield* Effect.serviceOption(AgentService)
+      if (Option.isNone(agentService)) {
+        return yield* Effect.die(new Error("Agent service is required for background completion delivery"))
+      }
+      const activeAgent = yield* agentService.value.get(preparedLifecycle.agent)
+      if (!activeAgent) {
+        return yield* Effect.die(new Error(`Background agent not found: ${preparedLifecycle.agent}`))
+      }
+      const preparedText =
+        preparedLifecycle.state === "completed" ? (preparedLifecycle.output ?? "") : (preparedLifecycle.error ?? "")
+      const rendered = yield* truncate.outputStrict(
+        renderTaskOutput({
+          sessionID: prepared.id,
+          state: preparedLifecycle.state,
+          description: preparedLifecycle.description,
+          text: preparedText,
+        }),
+        { maxLines: Truncate.MAX_LINES, maxBytes: Truncate.MAX_BYTES },
+        activeAgent,
+      )
       const claimed = yield* db
         .transaction(
           (tx) =>
@@ -1814,7 +1869,12 @@ export const layer = Layer.effect(
                 !lifecycle ||
                 lifecycle.generation !== generation ||
                 lifecycle.notification !== "pending" ||
-                (lifecycle.state !== "completed" && lifecycle.state !== "error")
+                (lifecycle.state !== "completed" && lifecycle.state !== "error") ||
+                lifecycle.state !== preparedLifecycle.state ||
+                lifecycle.description !== preparedLifecycle.description ||
+                lifecycle.output !== preparedLifecycle.output ||
+                lifecycle.error !== preparedLifecycle.error ||
+                lifecycle.agent !== preparedLifecycle.agent
               )
                 return
               if (yield* activePause(tx, [row.id, lifecycle.parentSessionID])) return { paused: lifecycle }
@@ -1866,19 +1926,13 @@ export const layer = Layer.effect(
                   ...(lifecycle.variant ? { variant: lifecycle.variant } : {}),
                 },
               }
-              const text = lifecycle.state === "completed" ? (lifecycle.output ?? "") : (lifecycle.error ?? "")
               const part: SessionV1.TextPart = {
                 id: partID,
                 messageID,
                 sessionID: message.sessionID,
                 type: "text",
                 synthetic: true,
-                text: renderTaskOutput({
-                  sessionID: row.id,
-                  state: lifecycle.state,
-                  description: lifecycle.description,
-                  text,
-                }),
+                text: rendered.content,
               }
 
               yield* tx
@@ -2328,6 +2382,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(Truncate.defaultLayer),
   Layer.provide(SessionControl.defaultLayer),
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(Database.defaultLayer),

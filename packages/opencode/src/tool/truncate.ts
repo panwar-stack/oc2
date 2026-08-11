@@ -26,9 +26,39 @@ export interface Options {
   direction?: "head" | "tail"
 }
 
+export interface StrictOptions {
+  maxLines: number
+  maxBytes: number
+}
+
 function hasTaskTool(agent?: Agent.Info) {
   if (!agent?.permission) return false
   return evaluate("task", "*", agent.permission).action !== "deny"
+}
+
+function hint(file: string, agent?: Agent.Info) {
+  return hasTaskTool(agent)
+    ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
+    : `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
+}
+
+function lineCount(text: string) {
+  let count = 1
+  for (const char of text) {
+    if (char === "\n") count++
+  }
+  return count
+}
+
+function strictUnit(text: string, options: StrictOptions) {
+  const lines = text.split("\n")
+  let bytes = 0
+  for (let i = 0; i < lines.length && i < options.maxLines; i++) {
+    const size = Buffer.byteLength(lines[i], "utf-8") + (i > 0 ? 1 : 0)
+    if (bytes + size > options.maxBytes) return "bytes" as const
+    bytes += size
+  }
+  return "lines" as const
 }
 
 export interface Interface {
@@ -39,6 +69,11 @@ export interface Interface {
    * to the truncation directory and returns a preview plus a hint to inspect the saved file.
    */
   readonly output: (text: string, options?: Options, agent?: Agent.Info) => Effect.Effect<Result>
+  /**
+   * Uses required caller limits for the complete rendered result, including the omission marker and hint.
+   * The full input is saved before a bounded preview is returned.
+   */
+  readonly outputStrict: (text: string, options: StrictOptions, agent?: Agent.Info) => Effect.Effect<Result>
   /**
    * Resolved truncation limits: values from `tool_output` in opencode config, or MAX_LINES / MAX_BYTES if unset.
    */
@@ -127,15 +162,78 @@ export const layer = Layer.effect(
       const preview = out.join("\n")
       const file = yield* write(text)
 
-      const hint = hasTaskTool(agent)
-        ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
-        : `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
+      const guidance = hint(file, agent)
 
       return {
         content:
           direction === "head"
-            ? `${preview}\n\n...${removed} ${unit} truncated...\n\n${hint}`
-            : `...${removed} ${unit} truncated...\n\n${hint}\n\n${preview}`,
+            ? `${preview}\n\n...${removed} ${unit} truncated...\n\n${guidance}`
+            : `...${removed} ${unit} truncated...\n\n${guidance}\n\n${preview}`,
+        truncated: true,
+        outputPath: file,
+      } as const
+    })
+
+    const outputStrict = Effect.fn("Truncate.outputStrict")(function* (
+      text: string,
+      options: StrictOptions,
+      agent?: Agent.Info,
+    ) {
+      const totalBytes = Buffer.byteLength(text, "utf-8")
+      const totalLines = lineCount(text)
+      if (totalLines <= options.maxLines && totalBytes <= options.maxBytes) {
+        return { content: text, truncated: false } as const
+      }
+
+      const file = yield* write(text)
+      const guidance = hint(file, agent)
+      const unit = strictUnit(text, options)
+      const boundaries = [0]
+      const prefixBytes = [0]
+      const prefixNewlines = [0]
+      for (const point of text) {
+        boundaries.push(boundaries[boundaries.length - 1] + point.length)
+        prefixBytes.push(prefixBytes[prefixBytes.length - 1] + Buffer.byteLength(point, "utf-8"))
+        prefixNewlines.push(prefixNewlines[prefixNewlines.length - 1] + (point === "\n" ? 1 : 0))
+      }
+
+      const footer = (index: number) => {
+        const removed =
+          unit === "bytes"
+            ? totalBytes - prefixBytes[index]
+            : totalLines -
+              (index === 0
+                ? 0
+                : prefixNewlines[index] +
+                  (boundaries[index] === text.length || text[boundaries[index]] === "\n" ? 1 : 0))
+        return `\n\n...${removed} ${unit} truncated...\n\n${guidance}`
+      }
+      const fits = (index: number) => {
+        const suffix = footer(index)
+        return (
+          prefixBytes[index] + Buffer.byteLength(suffix, "utf-8") <= options.maxBytes &&
+          prefixNewlines[index] + lineCount(suffix) <= options.maxLines
+        )
+      }
+
+      if (!fits(0)) {
+        yield* Effect.die(
+          new Error(
+            `Strict truncation footer exceeds caller limits of ${options.maxBytes} bytes and ${options.maxLines} lines`,
+          ),
+        )
+      }
+
+      let low = 0
+      let high = boundaries.length - 1
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2)
+        if (fits(middle)) low = middle
+        else high = middle - 1
+      }
+
+      return {
+        content: `${text.slice(0, boundaries[low])}${footer(low)}`,
         truncated: true,
         outputPath: file,
       } as const
@@ -151,7 +249,7 @@ export const layer = Layer.effect(
       Effect.forkScoped,
     )
 
-    return Service.of({ cleanup, write, output, limits })
+    return Service.of({ cleanup, write, output, outputStrict, limits })
   }),
 )
 

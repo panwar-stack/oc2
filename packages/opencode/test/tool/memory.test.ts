@@ -39,6 +39,7 @@ const truncateLayer = Layer.succeed(
     write: () => Effect.succeed("/tmp/opencode-memory-test-output"),
     limits: () => Effect.succeed({ maxLines: 2000, maxBytes: 51200 }),
     output: (text) => Effect.succeed({ content: text, truncated: false }),
+    outputStrict: (text) => Effect.succeed({ content: text, truncated: false }),
   }),
 )
 
