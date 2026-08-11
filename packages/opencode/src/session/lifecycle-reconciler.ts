@@ -387,6 +387,14 @@ export type PrepareResult =
   | { action: "paused"; member: TeamMemberRow; team: TeamRow }
   | { action: "settle"; member: TeamMemberRow; lifecycle: MemberMetadata }
   | {
+      action: "prepare"
+      member: TeamMemberRow
+      team: TeamRow
+      members: TeamMemberRow[]
+      promptMessageID: MessageID
+      expectedGeneration: number
+    }
+  | {
       action: "prompt" | "resume"
       member: TeamMemberRow
       team: TeamRow
@@ -395,6 +403,7 @@ export type PrepareResult =
       generation: number
       retry: boolean
       phase: MemberRunPhase
+      dependencyContext?: string
     }
 
 /**
@@ -564,7 +573,12 @@ export const layer = Layer.effect(
       ].join("\n")
     }
 
-    const memberPrompt = (team: TeamRow, member: TeamMemberRow, members: TeamMemberRow[]) => {
+    const memberPrompt = (
+      team: TeamRow,
+      member: TeamMemberRow,
+      members: TeamMemberRow[],
+      dependencyContext: string,
+    ) => {
       const teammates = members
         .filter((candidate) => candidate.session_id !== member.session_id)
         .map(
@@ -582,12 +596,32 @@ export const layer = Layer.effect(
           : "No other teammates are registered yet.",
         CommunicationGuidance,
         member.lifecycle === "daemon" ? DaemonGuidance : [TaskWorkGuidance, TaskCompletionGuidance].join("\n\n"),
-        dependencyResults(members, member.dependency_ids ?? []),
+        dependencyContext,
         member.role_prompt,
       ]
         .filter(Boolean)
         .join("\n\n")
     }
+
+    const prepareDependencyContext = Effect.fn("LifecycleReconciler.prepareDependencyContext")(function* (
+      member: TeamMemberRow,
+      members: TeamMemberRow[],
+    ) {
+      const exact = dependencyResults(members, member.dependency_ids ?? [])
+      if (!exact) return ""
+      const agentService = yield* Effect.serviceOption(AgentService)
+      if (Option.isNone(agentService)) {
+        return yield* Effect.die(new Error("Agent service is required for dependency result rendering"))
+      }
+      const activeAgent = yield* agentService.value.get(member.agent_type)
+      if (!activeAgent) return yield* Effect.die(new Error(`Member agent not found: ${member.agent_type}`))
+      const rendered = yield* truncate.outputStrict(
+        exact,
+        { maxLines: Truncate.MAX_LINES, maxBytes: Truncate.MAX_BYTES },
+        activeAgent,
+      )
+      return rendered.content
+    })
 
     /** Completion-only retry prompt with only final text and `team_task_update` available. */
     const memberRetryPrompt = (team: TeamRow, member: TeamMemberRow) =>
@@ -1196,12 +1230,23 @@ export const layer = Layer.effect(
       return settled
     })
 
-    const prepareMember = Effect.fn("LifecycleReconciler.prepareMember")(function* (memberID: string) {
+    const prepareMember = Effect.fn("LifecycleReconciler.prepareMember")(function* (input: {
+      memberID: string
+      prepared?: {
+        expectedGeneration: number
+        promptMessageID: MessageID
+        dependencyContext: string
+      }
+    }) {
       return yield* db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
-              const member = yield* tx.select().from(TeamMemberTable).where(eq(TeamMemberTable.id, memberID)).get()
+              const member = yield* tx
+                .select()
+                .from(TeamMemberTable)
+                .where(eq(TeamMemberTable.id, input.memberID))
+                .get()
               if (!member || terminalMemberStatuses.includes(member.status as (typeof terminalMemberStatuses)[number]))
                 return { action: "terminal" as const }
               const team = yield* tx.select().from(TeamTable).where(eq(TeamTable.id, member.team_id)).get()
@@ -1241,7 +1286,8 @@ export const layer = Layer.effect(
               if (persisted?.memberID === member.id && persisted.state !== "running") {
                 return { action: "settle" as const, member, lifecycle: persisted }
               }
-              if (member.status === "blocked") {
+              let status = member.status
+              if (status === "blocked" && dependencies.length > 0) {
                 const claim = yield* tx
                   .update(TeamMemberTable)
                   .set({ status: "starting", time_updated: Date.now() })
@@ -1249,31 +1295,25 @@ export const layer = Layer.effect(
                   .returning({ id: TeamMemberTable.id })
                   .get()
                 if (!claim) return { action: "terminal" as const }
+                status = "starting"
+                // The claim is now a separate durable transition from activation. If prompt
+                // preparation fails, reconciliation can retry this starting member.
+                yield* bumpTeamRevision(tx, team.id)
               }
               // Resolve the run generation this activation uses. New and legacy members are adopted
               // 0 -> 1 in this same immediate transaction with their persisted prompt ID; retry
               // members stay on generation 2. Stale metadata (generation mismatch) is never acted on.
-              let generation = persisted?.generation
-              if (generation === undefined) {
-                if (member.run_generation === 0) {
-                  const adopted = yield* tx
-                    .update(TeamMemberTable)
-                    .set({ run_generation: 1, time_updated: Date.now() })
-                    .where(and(eq(TeamMemberTable.id, member.id), eq(TeamMemberTable.run_generation, 0)))
-                    .returning({ id: TeamMemberTable.id })
-                    .get()
-                  if (!adopted) return { action: "terminal" as const }
-                }
-                generation = member.run_generation === 0 ? 1 : member.run_generation
-              } else if (generation !== member.run_generation) {
+              const generation = persisted?.generation ?? (member.run_generation === 0 ? 1 : member.run_generation)
+              if (persisted?.generation !== undefined && persisted.generation !== member.run_generation) {
                 return { action: "terminal" as const }
               }
               const promptID =
-                persisted?.memberID === member.id && persisted.promptMessageID
+                input.prepared?.promptMessageID ??
+                (persisted?.memberID === member.id && persisted.promptMessageID
                   ? MessageID.make(persisted.promptMessageID)
                   : // Message IDs must stay monotonic; restart safety comes from persisting the
                     // generated ID in session metadata below.
-                    MessageID.ascending()
+                    MessageID.ascending())
               const existing = yield* tx
                 .select({ id: MessageTable.id })
                 .from(MessageTable)
@@ -1288,6 +1328,42 @@ export const layer = Layer.effect(
               let phase: MemberRunPhase = persisted?.phase ?? "running"
               if (retry && existing) phase = "retry_running"
 
+              if (
+                status === "starting" &&
+                (member.dependency_ids?.length ?? 0) > 0 &&
+                !existing &&
+                !retry &&
+                !input.prepared
+              ) {
+                return {
+                  action: "prepare" as const,
+                  member,
+                  team,
+                  members,
+                  promptMessageID: promptID,
+                  expectedGeneration: member.run_generation,
+                }
+              }
+              if (
+                input.prepared &&
+                (status !== "starting" || input.prepared.expectedGeneration !== member.run_generation)
+              ) {
+                return { action: "terminal" as const }
+              }
+
+              // Active legacy/resume paths keep their prior generation adoption. A new starting
+              // member adopts generation 1 in the guarded activation update below, after prompt
+              // rendering succeeds.
+              if (status !== "starting" && persisted?.generation === undefined && member.run_generation === 0) {
+                const adopted = yield* tx
+                  .update(TeamMemberTable)
+                  .set({ run_generation: 1, time_updated: Date.now() })
+                  .where(and(eq(TeamMemberTable.id, member.id), eq(TeamMemberTable.run_generation, 0)))
+                  .returning({ id: TeamMemberTable.id })
+                  .get()
+                if (!adopted) return { action: "terminal" as const }
+              }
+
               // Re-activation guard. Every resume of an already-active member (and every
               // reconcile poll with live ops) used to rewrite status "active", the same session
               // metadata, and the same idempotent started message, then bump the revision for
@@ -1296,7 +1372,7 @@ export const layer = Layer.effect(
               // active, 0 -> 1 admission, daemon re-arming, retry_admitted -> retry_running, or
               // a newly created started message) still activate and bump exactly as before.
               const noOpResume = (() => {
-                if (member.status !== "active") return false
+                if (status !== "active") return false
                 if (member.run_generation === 0) return false
                 if (
                   member.lifecycle === "daemon" &&
@@ -1338,16 +1414,23 @@ export const layer = Layer.effect(
                 .update(TeamMemberTable)
                 .set({
                   status: "active",
+                  ...(status === "starting" ? { run_generation: generation } : {}),
                   time_updated: Date.now(),
                   ...(member.lifecycle === "daemon"
                     ? { daemon_state: "running" as const, daemon_last_active: Date.now(), daemon_error: null }
                     : {}),
                 })
                 .where(
-                  and(
-                    eq(TeamMemberTable.id, member.id),
-                    notInArray(TeamMemberTable.status, [...terminalMemberStatuses]),
-                  ),
+                  status === "starting"
+                    ? and(
+                        eq(TeamMemberTable.id, member.id),
+                        eq(TeamMemberTable.status, "starting"),
+                        eq(TeamMemberTable.run_generation, input.prepared?.expectedGeneration ?? member.run_generation),
+                      )
+                    : and(
+                        eq(TeamMemberTable.id, member.id),
+                        notInArray(TeamMemberTable.status, [...terminalMemberStatuses]),
+                      ),
                 )
                 .returning({ id: TeamMemberTable.id })
                 .get()
@@ -1394,6 +1477,7 @@ export const layer = Layer.effect(
                 generation,
                 retry,
                 phase,
+                ...(input.prepared ? { dependencyContext: input.prepared.dependencyContext } : {}),
               }
             }),
           { behavior: "immediate" },
@@ -1569,7 +1653,25 @@ export const layer = Layer.effect(
           { discard: true },
         )
       return yield* Effect.gen(function* () {
-        const prepared = yield* prepareMember(input.memberID)
+        const initial = yield* prepareMember({ memberID: input.memberID })
+        let prepared: Exclude<PrepareResult, { action: "prepare" }>
+        if (initial.action === "prepare") {
+          const candidate = initial
+          const dependencyContext = yield* prepareDependencyContext(candidate.member, candidate.members)
+          const activated = yield* prepareMember({
+            memberID: input.memberID,
+            prepared: {
+              expectedGeneration: candidate.expectedGeneration,
+              promptMessageID: candidate.promptMessageID,
+              dependencyContext,
+            },
+          })
+          if (activated.action === "prepare") {
+            admissionOutcome = { _tag: "not-admitted", reason: "failed" }
+            return "Teammate prompt preparation did not commit."
+          }
+          prepared = activated
+        } else prepared = initial
         if (prepared.action === "terminal") {
           admissionOutcome = { _tag: "not-admitted", reason: "blocked" }
           return "Teammate is already in a terminal state."
@@ -1625,10 +1727,14 @@ export const layer = Layer.effect(
           // `run` awaits the loop. `wake` must never be used here: it returns as soon as work is
           // scheduled, so its value would settle the member against a stale turn.
           if (prepared.action === "resume") return yield* input.ops.run(SessionID.make(prepared.member.session_id))
+          const dependencyContext =
+            prepared.retry || prepared.dependencyContext !== undefined
+              ? (prepared.dependencyContext ?? "")
+              : yield* prepareDependencyContext(prepared.member, prepared.members)
           const parts = yield* input.ops.resolvePromptParts(
             prepared.retry
               ? memberRetryPrompt(prepared.team, prepared.member)
-              : memberPrompt(prepared.team, prepared.member, prepared.members),
+              : memberPrompt(prepared.team, prepared.member, prepared.members, dependencyContext),
           )
           return yield* input.ops.prompt({
             messageID: prepared.promptMessageID,

@@ -1400,6 +1400,417 @@ describe("session.lifecycle-reconciler", () => {
     ),
   )
 
+  it.live("admits a blocked member without dependencies with one team revision bump", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const { info, member, memberSession } = yield* seedTeam()
+          yield* team.updateMemberStatus(member.id, "blocked")
+          const baseline = yield* teamRevision(info.id)
+          const spy = yield* spyOps({
+            result: (sessionID, parentID) => {
+              const base = assistant(sessionID, parentID, "")
+              return { info: { ...base.info, finish: "tool-calls" }, parts: [] }
+            },
+          })
+
+          expect(yield* lifecycle.startMember({ memberID: member.id, ops: spy.ops })).toBe("Teammate did not finish.")
+
+          const admitted = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
+          expect(admitted?.status).toBe("active")
+          expect(admitted?.run_generation).toBe(1)
+          expect((yield* memberState(memberSession.id))?.state).toBe("running")
+          expect(yield* Ref.get(spy.prompts)).toBe(1)
+          expect(
+            (yield* team.getMessages(info.id)).filter(
+              (message) => message.id === `lifecycle:member:${member.id}:started:1`,
+            ),
+          ).toHaveLength(1)
+          expect(yield* teamRevision(info.id)).toBe(baseline + 1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("keeps an ordered below-bound dependency aggregate exact and limits it once", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const truncate = yield* Truncate.Service
+          const { lead, info, member, memberSession } = yield* seedTeam()
+          const secondSession = yield* sessions.create({ parentID: lead.id, title: "Second dependency" })
+          const second = yield* team.addMember({
+            teamID: info.id,
+            sessionID: secondSession.id,
+            name: "second",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Finish second",
+          })
+          const firstResult = "first exact result\nwith another line"
+          const secondResult = "second exact result"
+          for (const [id, result] of [
+            [member.id, firstResult],
+            [second.id, secondResult],
+          ] as const) {
+            yield* db
+              .update(TeamMemberTable)
+              .set({ status: "completed", result, time_updated: Date.now() })
+              .where(eq(TeamMemberTable.id, id))
+              .run()
+              .pipe(Effect.orDie)
+          }
+          const dependentSession = yield* sessions.create({ parentID: lead.id, title: "Ordered dependent" })
+          const dependent = yield* team.addMember({
+            teamID: info.id,
+            sessionID: dependentSession.id,
+            name: "ordered-dependent",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Use both exact dependency results",
+            dependencyIDs: [secondSession.id, memberSession.id],
+          })
+          yield* team.updateMemberStatus(dependent.id, "blocked")
+
+          const calls: Array<{ text: string; options: Truncate.StrictOptions }> = []
+          const mutableTruncate = truncate as Mutable<Truncate.Interface>
+          const originalOutputStrict = truncate.outputStrict
+          mutableTruncate.outputStrict = (text, options, agent) =>
+            Effect.sync(() => calls.push({ text, options })).pipe(
+              Effect.andThen(originalOutputStrict(text, options, agent)),
+            )
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableTruncate.outputStrict = originalOutputStrict
+            }),
+          )
+          const prompts: SessionPrompt.PromptInput[] = []
+          const spy = yield* spyOps({
+            text: "dependent exact result",
+            onPrompt: (input) => Effect.sync(() => prompts.push(input)),
+          })
+
+          expect(yield* lifecycle.startMember({ memberID: dependent.id, ops: spy.ops })).toBe("dependent exact result")
+
+          const exact = [
+            "Dependency results:",
+            `- second (${secondSession.id})`,
+            secondResult,
+            `- worker (${memberSession.id})`,
+            firstResult,
+          ].join("\n")
+          expect(calls).toEqual([
+            { text: exact, options: { maxLines: Truncate.MAX_LINES, maxBytes: Truncate.MAX_BYTES } },
+          ])
+          const prompt = prompts[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
+          expect(prompt).toContain(`${exact}\n\nUse both exact dependency results`)
+          expect(prompt?.indexOf(secondResult)).toBeLessThan(prompt?.indexOf(firstResult) ?? -1)
+          const members = yield* team.getMembers(info.id)
+          expect(members.find((candidate) => candidate.id === member.id)?.result).toBe(firstResult)
+          expect(members.find((candidate) => candidate.id === second.id)?.result).toBe(secondResult)
+          expect(members.find((candidate) => candidate.id === dependent.id)?.result).toBe("dependent exact result")
+          const completion = (yield* team.getMessages(info.id)).find(
+            (message) => message.id === `lifecycle:member:${dependent.id}:completed:1`,
+          )
+          expect(completion?.body).toBe(
+            [
+              "Teammate ordered-dependent (general) completed and returned this result:",
+              "",
+              "<teammate_result>",
+              "dependent exact result",
+              "</teammate_result>",
+            ].join("\n"),
+          )
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("bounds one exact dependency artifact with agent-aware guidance", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const truncate = yield* Truncate.Service
+          const { lead, info, member, memberSession } = yield* seedTeam()
+          const large = Array.from({ length: Truncate.MAX_LINES + 300 }, (_, index) => `dependency line ${index}`).join(
+            "\n",
+          )
+          yield* db
+            .update(TeamMemberTable)
+            .set({ status: "completed", result: large, time_updated: Date.now() })
+            .where(eq(TeamMemberTable.id, member.id))
+            .run()
+            .pipe(Effect.orDie)
+
+          const calls: Array<{ text: string; result: Truncate.Result }> = []
+          const mutableTruncate = truncate as Mutable<Truncate.Interface>
+          const originalOutputStrict = truncate.outputStrict
+          mutableTruncate.outputStrict = (text, options, agent) =>
+            originalOutputStrict(text, options, agent).pipe(
+              Effect.tap((result) => Effect.sync(() => calls.push({ text, result }))),
+            )
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableTruncate.outputStrict = originalOutputStrict
+            }),
+          )
+
+          for (const scenario of [
+            { agentType: "build", hint: "Use the Task tool to have explore agent process this file" },
+            { agentType: "explore", hint: "Use Grep to search the full content or Read with offset/limit" },
+          ] as const) {
+            const dependentSession = yield* sessions.create({ parentID: lead.id, title: scenario.agentType })
+            const dependent = yield* team.addMember({
+              teamID: info.id,
+              sessionID: dependentSession.id,
+              name: `${scenario.agentType}-dependent`,
+              agentType: scenario.agentType,
+              model: ref,
+              rolePrompt: `Use the ${scenario.agentType} dependency context`,
+              dependencyIDs: [memberSession.id],
+            })
+            yield* team.updateMemberStatus(dependent.id, "blocked")
+            const prompts: SessionPrompt.PromptInput[] = []
+            const spy = yield* spyOps({
+              text: `${scenario.agentType} result`,
+              onPrompt: (input) => Effect.sync(() => prompts.push(input)),
+            })
+
+            yield* lifecycle.startMember({ memberID: dependent.id, ops: spy.ops })
+
+            const call = calls.at(-1)
+            expect(call).toBeDefined()
+            if (!call) throw new Error(`Missing ${scenario.agentType} truncation call`)
+            const exact = ["Dependency results:", `- worker (${memberSession.id})`, large].join("\n")
+            expect(call.text).toBe(exact)
+            const result = call.result
+            expect(result.truncated).toBe(true)
+            expect(Buffer.byteLength(result.content, "utf-8")).toBeLessThanOrEqual(Truncate.MAX_BYTES)
+            expect(result.content.split("\n").length).toBeLessThanOrEqual(Truncate.MAX_LINES)
+            expect(result.content).toContain(scenario.hint)
+            if (!result.truncated) throw new Error(`Missing ${scenario.agentType} dependency artifact`)
+            const outputPath = result.outputPath
+            expect(yield* Effect.promise(() => fs.readFile(outputPath, "utf8"))).toBe(exact)
+            const prompt = prompts[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
+            expect(prompt).toContain(result.content)
+          }
+
+          expect(calls).toHaveLength(2)
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)?.result).toBe(large)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("retries dependency rendering, artifact write, and agent failures from starting", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const truncate = yield* Truncate.Service
+          const agent = yield* Agent.Service
+          const futil = yield* FSUtil.Service
+          const { lead, info, member, memberSession } = yield* seedTeam()
+
+          for (const failure of ["rendering", "artifact", "agent"] as const) {
+            const dependencyResult =
+              failure === "artifact"
+                ? "managed artifact dependency:" + "x".repeat(Truncate.MAX_BYTES + 16_000)
+                : "exact durable dependency"
+            yield* db
+              .update(TeamMemberTable)
+              .set({ status: "completed", result: dependencyResult, time_updated: Date.now() })
+              .where(eq(TeamMemberTable.id, member.id))
+              .run()
+              .pipe(Effect.orDie)
+            const dependentSession = yield* sessions.create({ parentID: lead.id, title: `${failure} retry` })
+            const dependent = yield* team.addMember({
+              teamID: info.id,
+              sessionID: dependentSession.id,
+              name: `${failure}-dependent`,
+              agentType: "general",
+              model: ref,
+              rolePrompt: `Retry after ${failure} failure`,
+              dependencyIDs: [memberSession.id],
+            })
+            yield* team.updateMemberStatus(dependent.id, "blocked")
+            const prompts: SessionPrompt.PromptInput[] = []
+            const spy = yield* spyOps({
+              text: `${failure} recovered`,
+              onPrompt: (input) => Effect.sync(() => prompts.push(input)),
+            })
+            const mutableTruncate = truncate as Mutable<Truncate.Interface>
+            const originalOutputStrict = truncate.outputStrict
+            const mutableFutil = futil as Mutable<FSUtil.Interface>
+            const originalWriteFileString = futil.writeFileString
+            const failedStart = Effect.gen(function* () {
+              const lifecycle = yield* LifecycleReconciler.Service
+              return yield* lifecycle.startMember({ memberID: dependent.id, ops: spy.ops })
+            })
+            const first = yield* (
+              failure === "rendering"
+                ? Effect.sync(() => {
+                    mutableTruncate.outputStrict = () => Effect.die(new Error("simulated dependency rendering failure"))
+                  }).pipe(Effect.andThen(failedStart))
+                : failure === "artifact"
+                  ? Effect.sync(() => {
+                      mutableFutil.writeFileString = () =>
+                        Effect.die(new Error("simulated managed dependency artifact write failure"))
+                    }).pipe(Effect.andThen(failedStart))
+                  : failedStart.pipe(
+                      Effect.provideService(
+                        Agent.Service,
+                        Agent.Service.of({
+                          ...agent,
+                          get: () => Effect.die(new Error("simulated dependency Agent.get failure")),
+                        }),
+                      ),
+                    )
+            ).pipe(Effect.exit)
+            mutableTruncate.outputStrict = originalOutputStrict
+            mutableFutil.writeFileString = originalWriteFileString
+
+            expect(Exit.isFailure(first)).toBe(true)
+            const afterFailure = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === dependent.id)
+            expect(afterFailure?.status).toBe("starting")
+            expect(afterFailure?.run_generation).toBe(0)
+            expect(yield* memberState(dependentSession.id)).toBeUndefined()
+            expect(
+              (yield* team.getMessages(info.id)).filter(
+                (message) => message.id === `lifecycle:member:${dependent.id}:started:1`,
+              ),
+            ).toHaveLength(0)
+            expect(prompts).toHaveLength(0)
+            expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)?.result).toBe(
+              dependencyResult,
+            )
+
+            expect(
+              yield* afterRestart(
+                Effect.flatMap(LifecycleReconciler.Service, (lifecycle) =>
+                  lifecycle.startMember({ memberID: dependent.id, ops: spy.ops }),
+                ),
+              ),
+            ).toBe(`${failure} recovered`)
+            const recovered = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === dependent.id)
+            expect(recovered?.status).toBe("completed")
+            expect(recovered?.run_generation).toBe(1)
+            expect(prompts).toHaveLength(1)
+            expect(
+              (yield* team.getMessages(info.id)).filter(
+                (message) => message.id === `lifecycle:member:${dependent.id}:started:1`,
+              ),
+            ).toHaveLength(1)
+          }
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("concurrent dependency preparation after a failure admits and prompts exactly once", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const sessions = yield* Session.Service
+          const team = yield* Team.Service
+          const lifecycle = yield* LifecycleReconciler.Service
+          const truncate = yield* Truncate.Service
+          const { lead, info, member, memberSession } = yield* seedTeam()
+          yield* db
+            .update(TeamMemberTable)
+            .set({ status: "completed", result: "dependency before concurrent retry", time_updated: Date.now() })
+            .where(eq(TeamMemberTable.id, member.id))
+            .run()
+            .pipe(Effect.orDie)
+          const dependentSession = yield* sessions.create({ parentID: lead.id, title: "Concurrent dependent" })
+          const dependent = yield* team.addMember({
+            teamID: info.id,
+            sessionID: dependentSession.id,
+            name: "concurrent-dependent",
+            agentType: "general",
+            model: ref,
+            rolePrompt: "Retry once under concurrency",
+            dependencyIDs: [memberSession.id],
+          })
+          yield* team.updateMemberStatus(dependent.id, "blocked")
+
+          let renderCalls = 0
+          const mutableTruncate = truncate as Mutable<Truncate.Interface>
+          const originalOutputStrict = truncate.outputStrict
+          mutableTruncate.outputStrict = (text, options, agent) =>
+            Effect.gen(function* () {
+              renderCalls++
+              if (renderCalls === 1) return yield* Effect.die(new Error("simulated first dependency render failure"))
+              return yield* originalOutputStrict(text, options, agent)
+            })
+          const promptEntered = yield* Deferred.make<void>()
+          const releasePrompt = yield* Deferred.make<void>()
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              mutableTruncate.outputStrict = originalOutputStrict
+            }).pipe(Effect.andThen(Deferred.succeed(releasePrompt, undefined)), Effect.asVoid),
+          )
+          const spy = yield* spyOps({
+            text: "concurrent retry result",
+            onPrompt: () =>
+              Deferred.succeed(promptEntered, undefined).pipe(Effect.andThen(Deferred.await(releasePrompt))),
+          })
+
+          const failed = yield* lifecycle.startMember({ memberID: dependent.id, ops: spy.ops }).pipe(Effect.exit)
+          expect(Exit.isFailure(failed)).toBe(true)
+          expect(renderCalls).toBe(1)
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === dependent.id)?.status).toBe(
+            "starting",
+          )
+
+          const retries = yield* Effect.all(
+            [
+              lifecycle.startMember({ memberID: dependent.id, ops: spy.ops }),
+              lifecycle.startMember({ memberID: dependent.id, ops: spy.ops }),
+              lifecycle.startMember({ memberID: dependent.id, ops: spy.ops }),
+            ],
+            { concurrency: "unbounded" },
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* awaitWithTimeout(Deferred.await(promptEntered), "concurrent retry prompt did not start", "5 seconds")
+
+          expect(renderCalls).toBe(2)
+          expect(yield* Ref.get(spy.prompts)).toBe(1)
+          const active = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === dependent.id)
+          expect(active?.status).toBe("active")
+          expect(active?.run_generation).toBe(1)
+          expect(
+            (yield* team.getMessages(info.id)).filter(
+              (message) => message.id === `lifecycle:member:${dependent.id}:started:1`,
+            ),
+          ).toHaveLength(1)
+
+          yield* Deferred.succeed(releasePrompt, undefined)
+          const outcomes = yield* Fiber.join(retries)
+          expect(outcomes.filter((outcome) => outcome === "concurrent retry result")).toHaveLength(1)
+          expect(outcomes.filter((outcome) => outcome === "Teammate is already running.")).toHaveLength(2)
+          expect((yield* team.getMembers(info.id)).find((candidate) => candidate.id === dependent.id)?.status).toBe(
+            "completed",
+          )
+          expect(yield* Ref.get(spy.prompts)).toBe(1)
+          expect(renderCalls).toBe(2)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
   it.live("terminal settlement wakes the lead before blocked publication that later fails", () =>
     provideTmpdirInstance(
       () =>
