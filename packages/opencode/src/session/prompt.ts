@@ -1114,9 +1114,50 @@ export const layer = Layer.effect(
         }
       }
 
-      const resolvedParts = yield* Effect.forEach(submittedParts, resolvePart, {
+      const resolvedGroups = yield* Effect.forEach(submittedParts, resolvePart, {
         concurrency: PROMPT_REFERENCE_CONCURRENCY,
-      }).pipe(Effect.map((x) => x.flat().map(assign)))
+      })
+
+      const mcpText = resolvedGroups
+        .flatMap((group, index) => {
+          const submitted = submittedParts[index]
+          if (submitted.type !== "file" || submitted.source?.type !== "resource") return []
+          return group.flatMap((part) => (part.type === "text" ? [part.text] : []))
+        })
+        .join("")
+
+      if (mcpText) {
+        const rendered = yield* truncate.outputStrict(
+          mcpText,
+          { maxLines: Truncate.MAX_LINES, maxBytes: Truncate.MAX_BYTES },
+          ag,
+        )
+        if (rendered.truncated) {
+          let remaining = rendered.content
+          for (let index = 0; index < resolvedGroups.length; index++) {
+            const submitted = submittedParts[index]
+            if (submitted.type !== "file" || submitted.source?.type !== "resource") continue
+            const group: Draft<SessionV1.Part>[] = []
+            for (const part of resolvedGroups[index]) {
+              if (part.type !== "text") {
+                group.push(part)
+                continue
+              }
+              if (!remaining) continue
+              if (remaining.startsWith(part.text)) {
+                remaining = remaining.slice(part.text.length)
+                group.push(part)
+                continue
+              }
+              group.push({ ...part, text: remaining })
+              remaining = ""
+            }
+            resolvedGroups[index] = group
+          }
+        }
+      }
+
+      const resolvedParts = resolvedGroups.flat().map(assign)
 
       yield* plugin.trigger(
         "chat.message",

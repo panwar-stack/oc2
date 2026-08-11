@@ -5694,6 +5694,292 @@ noLLMServer.instance(
 )
 
 noLLMServer.instance(
+  "keeps MCP resource parts exact below the aggregate bound",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const mcpService = yield* MCP.Service
+      const truncate = yield* Truncate.Service
+      const session = yield* sessions.create({})
+      const mutableMcp = mcpService as Mutable<MCP.Interface>
+      const mutableTruncate = truncate as Mutable<Truncate.Interface>
+      const originalReadResource = mcpService.readResource
+      const originalOutputStrict = truncate.outputStrict
+      const readsReady = yield* Deferred.make<void>()
+      const renderCalls: Array<{
+        text: string
+        options: Truncate.StrictOptions
+        agent: AgentSvc.Info | undefined
+      }> = []
+      let activeReads = 0
+
+      const readResource: MCP.Interface["readResource"] = (_clientName, uri) =>
+        Effect.gen(function* () {
+          activeReads++
+          if (activeReads === 2) yield* Deferred.succeed(readsReady, void 0)
+          yield* awaitWithTimeout(Deferred.await(readsReady), "MCP resource reads did not run concurrently").pipe(
+            Effect.orDie,
+          )
+          return uri === "mcp://first"
+            ? {
+                contents: [
+                  { uri, text: "first text" },
+                  { uri, blob: "AA==", mimeType: "application/octet-stream" },
+                ],
+              }
+            : { contents: [{ uri, text: "second text" }] }
+        })
+      mutableMcp.readResource = readResource
+      mutableTruncate.outputStrict = ((text, options, agent) => {
+        renderCalls.push({ text, options, agent })
+        return originalOutputStrict(text, options, agent)
+      }) as Truncate.Interface["outputStrict"]
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          mutableMcp.readResource = originalReadResource
+          mutableTruncate.outputStrict = originalOutputStrict
+        }),
+      )
+
+      const first = {
+        type: "file" as const,
+        mime: "text/plain",
+        url: "mcp://first",
+        filename: "first.txt",
+        source: {
+          type: "resource" as const,
+          clientName: "server-a",
+          uri: "mcp://first",
+          text: { value: "@first", start: 0, end: 6 },
+        },
+      }
+      const second = {
+        type: "file" as const,
+        mime: "text/markdown",
+        url: "mcp://second",
+        filename: "second.md",
+        source: {
+          type: "resource" as const,
+          clientName: "server-b",
+          uri: "mcp://second",
+          text: { value: "@second", start: 20, end: 27 },
+        },
+      }
+      const message = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [first, { type: "text", text: "between resources" }, second],
+      })
+      const stored = yield* MessageV2.get({ sessionID: session.id, messageID: message.info.id })
+
+      expect(renderCalls).toHaveLength(1)
+      expect(renderCalls[0].text).toBe(
+        "Reading MCP resource: first.txt (mcp://first)" +
+          "first text" +
+          "[Binary content: application/octet-stream]" +
+          "Reading MCP resource: second.md (mcp://second)" +
+          "second text",
+      )
+      expect(renderCalls[0].options).toEqual({ maxLines: Truncate.MAX_LINES, maxBytes: Truncate.MAX_BYTES })
+      expect(renderCalls[0].agent?.name).toBe("build")
+      expect(
+        stored.parts.map((part) =>
+          part.type === "text"
+            ? { type: part.type, text: part.text, synthetic: part.synthetic }
+            : part.type === "file"
+              ? { type: part.type, mime: part.mime, url: part.url, filename: part.filename, source: part.source }
+              : { type: part.type },
+        ),
+      ).toEqual([
+        { type: "text", text: "Reading MCP resource: first.txt (mcp://first)", synthetic: true },
+        { type: "text", text: "first text", synthetic: true },
+        { type: "text", text: "[Binary content: application/octet-stream]", synthetic: true },
+        first,
+        { type: "text", text: "between resources", synthetic: undefined },
+        { type: "text", text: "Reading MCP resource: second.md (mcp://second)", synthetic: true },
+        { type: "text", text: "second text", synthetic: true },
+        second,
+      ])
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "bounds all MCP resource text once and preserves managed resource files",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const mcpService = yield* MCP.Service
+      const truncate = yield* Truncate.Service
+      const session = yield* sessions.create({})
+      const mutableMcp = mcpService as Mutable<MCP.Interface>
+      const mutableTruncate = truncate as Mutable<Truncate.Interface>
+      const originalReadResource = mcpService.readResource
+      const originalOutputStrict = truncate.outputStrict
+      const calls: Array<{ text: string; agent: AgentSvc.Info | undefined }> = []
+      const large = `large-start-${"界".repeat(Truncate.MAX_BYTES)}-large-end`
+      const contents = new Map([
+        ["mcp://early", "early body"],
+        ["mcp://large", large],
+        ["mcp://omitted", "omitted body"],
+      ])
+
+      const readResource: MCP.Interface["readResource"] = (_clientName, uri) =>
+        Effect.succeed({ contents: [{ uri, text: contents.get(uri) ?? "" }] })
+      mutableMcp.readResource = readResource
+      mutableTruncate.outputStrict = ((text, options, agent) => {
+        calls.push({ text, agent })
+        return originalOutputStrict(text, options, agent)
+      }) as Truncate.Interface["outputStrict"]
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          mutableMcp.readResource = originalReadResource
+          mutableTruncate.outputStrict = originalOutputStrict
+        }),
+      )
+
+      const resource = (name: string, uri: string, start: number) => ({
+        type: "file" as const,
+        mime: "text/plain",
+        url: uri,
+        filename: `${name}.txt`,
+        source: {
+          type: "resource" as const,
+          clientName: "server",
+          uri,
+          text: { value: `@${name}`, start, end: start + name.length + 1 },
+        },
+      })
+      const early = resource("early", "mcp://early", 0)
+      const largeResource = resource("large", "mcp://large", 10)
+      const omitted = resource("omitted", "mcp://omitted", 20)
+      const expected =
+        "Reading MCP resource: early.txt (mcp://early)" +
+        "early body" +
+        "Reading MCP resource: large.txt (mcp://large)" +
+        large +
+        "Reading MCP resource: omitted.txt (mcp://omitted)" +
+        "omitted body"
+
+      const message = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [early, { type: "text", text: "interleaved" }, largeResource, omitted],
+      })
+      const stored = yield* MessageV2.get({ sessionID: session.id, messageID: message.info.id })
+      const synthetic = stored.parts.filter(
+        (part): part is SessionV1.TextPart => part.type === "text" && part.synthetic === true,
+      )
+      const inserted = synthetic.map((part) => part.text).join("")
+      const files = stored.parts.filter((part): part is SessionV1.FilePart => part.type === "file")
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0].text).toBe(expected)
+      expect(calls[0].agent?.name).toBe("build")
+      expect(Buffer.byteLength(inserted, "utf-8")).toBeLessThanOrEqual(Truncate.MAX_BYTES)
+      expect(inserted.split("\n").length).toBeLessThanOrEqual(Truncate.MAX_LINES)
+      expect(inserted.match(/Full output saved to:/g)).toHaveLength(1)
+      expect(inserted).toContain("Use the Task tool")
+      expect(synthetic[0].text).toBe("Reading MCP resource: early.txt (mcp://early)")
+      expect(synthetic[1].text).toBe("early body")
+      expect(files.map(({ mime, url, filename, source }) => ({ mime, url, filename, source }))).toEqual(
+        [early, largeResource, omitted].map(({ type: _type, ...part }) => part),
+      )
+      const fileIndexes = files.map((file) => stored.parts.indexOf(file))
+      const interleaved = stored.parts.findIndex((part) => part.type === "text" && part.text === "interleaved")
+      expect(fileIndexes[0]).toBeLessThan(interleaved)
+      expect(interleaved).toBeLessThan(fileIndexes[1])
+      expect(fileIndexes[1]).toBeLessThan(fileIndexes[2])
+
+      const outputPath = inserted.match(/Full output saved to: ([^\n]+)/)?.[1]
+      expect(typeof outputPath).toBe("string")
+      if (!outputPath) throw new Error("expected managed MCP aggregate path")
+      const artifact = yield* Effect.promise(() => Bun.file(outputPath).text())
+      expect(artifact).toBe(expected)
+      expect(artifact).toContain("Reading MCP resource: omitted.txt (mcp://omitted)")
+      expect(artifact).toContain("omitted body")
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "retries MCP resource aggregation after one render failure",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const mcpService = yield* MCP.Service
+      const truncate = yield* Truncate.Service
+      const session = yield* sessions.create({})
+      const mutableMcp = mcpService as Mutable<MCP.Interface>
+      const mutableTruncate = truncate as Mutable<Truncate.Interface>
+      const originalReadResource = mcpService.readResource
+      const originalOutputStrict = truncate.outputStrict
+      let reads = 0
+      let renders = 0
+
+      const readResource: MCP.Interface["readResource"] = (_clientName, uri) => {
+        reads++
+        return Effect.succeed({ contents: [{ uri, text: "retry body" }] })
+      }
+      mutableMcp.readResource = readResource
+      mutableTruncate.outputStrict = ((...args) => {
+        renders++
+        return renders === 1
+          ? Effect.die(new Error("simulated MCP aggregate render failure"))
+          : originalOutputStrict(...args)
+      }) as Truncate.Interface["outputStrict"]
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          mutableMcp.readResource = originalReadResource
+          mutableTruncate.outputStrict = originalOutputStrict
+        }),
+      )
+
+      const input = {
+        sessionID: session.id,
+        agent: "build",
+        noReply: true as const,
+        parts: [
+          {
+            type: "file" as const,
+            mime: "text/plain",
+            url: "mcp://retry",
+            filename: "retry.txt",
+            source: {
+              type: "resource" as const,
+              clientName: "server",
+              uri: "mcp://retry",
+              text: { value: "@retry", start: 0, end: 6 },
+            },
+          },
+        ],
+      }
+
+      const failed = yield* prompt.prompt(input).pipe(Effect.exit)
+      expect(Exit.isFailure(failed)).toBe(true)
+
+      const message = yield* prompt.prompt(input)
+      const stored = yield* MessageV2.get({ sessionID: session.id, messageID: message.info.id })
+      expect(renders).toBe(2)
+      expect(reads).toBe(2)
+      expect(stored.parts.some((part) => part.type === "text" && part.text === "retry body")).toBe(true)
+      expect(stored.parts.some((part) => part.type === "file" && part.url === "mcp://retry")).toBe(true)
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
   "resolves configured reference mentions to one root directory attachment",
   () =>
     Effect.gen(function* () {
