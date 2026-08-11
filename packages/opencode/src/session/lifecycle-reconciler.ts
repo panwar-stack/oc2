@@ -168,7 +168,6 @@ const TaskWorkGuidance = [
   "- Stop on an ownership conflict or unexpected concurrent change. Notify the lead and the affected teammate before doing more mutation.",
   "- Do not overwrite or revert another participant's work.",
   "- Complete owned tasks with structured handoff evidence: call team_task_update with a handoff containing a nonblank summary, the changed paths within your reserved owned_paths, and verification entries for the checks you ran.",
-  "- Send a mailbox summary of the completed work to the lead and return a nonblank final result.",
 ].join("\n")
 
 const RetryGuidance =
@@ -1370,10 +1369,7 @@ export const layer = Layer.effect(
                   generation,
                   kind: "started",
                   body: [
-                    `Teammate ${member.name} (${member.agent_type}) started.`,
-                    "",
-                    "Assignment:",
-                    member.role_prompt,
+                    `Teammate ${member.name} (${member.agent_type}) started. State: active. Session: ${member.session_id}.`,
                     ...(dependencies.length > 0
                       ? ["", "Dependency context was provided in this teammate's prompt."]
                       : []),

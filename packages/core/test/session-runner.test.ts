@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import {
+  CachePlanner,
   LLMClient,
   LLMError,
   LLMEvent,
@@ -120,6 +121,7 @@ const recoveryModel = Model.make({
   provider: "fake",
   route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
 })
+const cacheModel = Model.make({ id: "gpt-5-mini", provider: "openai", route: OpenAIChat.route })
 const authorizations: Tool.Context[] = []
 const executions: string[] = []
 const permission = Layer.succeed(
@@ -1214,6 +1216,39 @@ describe("SessionRunnerLLM", () => {
       expect(request?.system[1]?.cache?.type).toBe("ephemeral")
       expect(request?.system[2]?.cache).toBeUndefined()
       expect(request?.cache).toEqual({ tools: true, system: true, messages: "latest-user-message" })
+    }),
+  )
+
+  it.effect("keeps stable cache plan components across adjacent user turns", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentModel = cacheModel
+      const session = yield* SessionV2.Service
+      requests.length = 0
+
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First cache tail" }), resume: false })
+      yield* session.resume(sessionID)
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second cache tail" }), resume: false })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const [first, second] = requests
+      if (!first || !second) throw new Error("Expected two captured LLM requests")
+      const firstPlan = CachePlanner.planCacheRequest(first).plan
+      const secondPlan = CachePlanner.planCacheRequest(second).plan
+
+      expect(userTexts(first)).toEqual(["First cache tail"])
+      expect(userTexts(second)).toEqual(["First cache tail", "Second cache tail"])
+      expect(first.tools.map((tool) => tool.name)).toEqual(["defect", "echo"])
+      expect(second.tools.map((tool) => tool.name)).toEqual(["defect", "echo"])
+      expect(firstPlan.cacheKey).toMatch(/^oc2-v1-[0-9a-f]{64}$/)
+      expect(firstPlan.stablePrefixFingerprint).toBeTruthy()
+      expect(firstPlan.componentFingerprints.system).toBeTruthy()
+      expect(firstPlan.componentFingerprints.tools).toBeTruthy()
+      expect(secondPlan.cacheKey).toBe(firstPlan.cacheKey)
+      expect(secondPlan.stablePrefixFingerprint).toBe(firstPlan.stablePrefixFingerprint)
+      expect(secondPlan.componentFingerprints.system).toBe(firstPlan.componentFingerprints.system)
+      expect(secondPlan.componentFingerprints.tools).toBe(firstPlan.componentFingerprints.tools)
     }),
   )
 

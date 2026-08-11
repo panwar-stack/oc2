@@ -2079,6 +2079,7 @@ export const layer = Layer.effect(
                     eq(TeamMessageRecipientTable.delivery_status, "pending"),
                   ),
                 )
+                .orderBy(asc(TeamMessageTable.time_created), asc(TeamMessageTable.id))
                 .all()
               if (pending.length > 0) {
                 yield* tx

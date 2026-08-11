@@ -1611,10 +1611,9 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
         name: "worker",
         agentType: "build",
         rolePrompt: "Report progress",
+        lifecycle: "daemon",
       })
-      // Complete the worker so the finalization barrier does not park the lead indefinitely.
-      // The canonical completion notification is harmless to this test's assertions.
-      yield* team.updateMemberStatus(workerMember.id, "completed")
+      expect(workerMember.lifecycle).toBe("daemon")
       yield* prompt.prompt({
         sessionID: lead.id,
         agent: "build",
@@ -1637,8 +1636,168 @@ it.live("injects team mailbox messages into prompts and consumes the pending del
         .flatMap((message) => message.parts)
         .filter((part): part is MessageV2.TextPart => part.type === "text" && part.text.includes("Worker is ready."))
       expect(teamMessageParts).toHaveLength(1)
-      expect(teamMessageParts[0].text).toContain("<team-messages>")
+      expect(teamMessageParts[0].synthetic).toBe(true)
+      expect(teamMessageParts[0].text).toBe(
+        [
+          "<team-messages>",
+          "Review these messages and coordinate the next team action.",
+          "",
+          `From worker (${worker.id}):`,
+          "Worker is ready.",
+          "</team-messages>",
+        ].join("\n"),
+      )
       expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("Worker is ready."))).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: { agent_teams: true },
+      }),
+    },
+  ),
+)
+
+it.live("bounds prompt mailbox rendering and preserves the exact managed artifact before commit", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const team = yield* Team.Service
+      const lead = yield* sessions.create({ title: "Lead" })
+      const sender = yield* sessions.create({ parentID: lead.id, title: "Sender" })
+      const info = yield* team.create({ name: "bounded-mailbox", goal: "Bound mailbox input", leadSessionID: lead.id })
+      const mutableTeam = team as Mutable<Team.Interface>
+      const originalMarkMessageDelivered = team.markMessageDelivered
+      const committed: string[] = []
+      mutableTeam.markMessageDelivered = ((messageID, recipientSession) =>
+        Effect.sync(() => committed.push(messageID)).pipe(
+          Effect.andThen(originalMarkMessageDelivered(messageID, recipientSession)),
+        )) as Team.Interface["markMessageDelivered"]
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          mutableTeam.markMessageDelivered = originalMarkMessageDelivered
+        }),
+      )
+      yield* prompt.prompt({
+        sessionID: lead.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "start coordinating" }],
+      })
+      const body = `large-start-${"y".repeat(800)}-large-end`
+      const message = yield* team.sendMessage({
+        teamID: info.id,
+        sender: sender.id,
+        recipients: [lead.id],
+        body,
+      })
+      const expected = [
+        "<team-messages>",
+        "Review these messages and coordinate the next team action.",
+        "",
+        `From ${sender.id} (${sender.id}):`,
+        body,
+        "</team-messages>",
+      ].join("\n")
+      yield* llm.text("done")
+
+      yield* prompt.loop({ sessionID: lead.id })
+
+      const managedParts = (yield* sessions.messages({ sessionID: lead.id }))
+        .flatMap((sessionMessage) => sessionMessage.parts)
+        .filter(
+          (part): part is MessageV2.TextPart =>
+            part.type === "text" && part.synthetic === true && part.text.includes("Full output saved to:"),
+        )
+      expect(managedParts).toHaveLength(1)
+      expect(managedParts[0].text).toContain("bytes truncated")
+      expect(managedParts[0].text).not.toContain("large-end")
+      const outputPath = managedParts[0].text.match(/Full output saved to: ([^\n]+)/)?.[1]
+      expect(typeof outputPath).toBe("string")
+      if (!outputPath) throw new Error("expected managed output path")
+      expect(yield* Effect.promise(() => Bun.file(outputPath).text())).toBe(expected)
+      expect(committed).toEqual([message.id])
+      expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: { agent_teams: true },
+        tool_output: { max_lines: 1_000, max_bytes: 160 },
+      }),
+    },
+  ),
+)
+
+it.live("releases prompt mailbox claims after render failure and retries without loss", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const team = yield* Team.Service
+      const truncate = yield* Truncate.Service
+      const lead = yield* sessions.create({ title: "Lead" })
+      const sender = yield* sessions.create({ parentID: lead.id, title: "Sender" })
+      const info = yield* team.create({ name: "retry-mailbox", goal: "Retry mailbox input", leadSessionID: lead.id })
+      const mutableTeam = team as Mutable<Team.Interface>
+      const mutableTruncate = truncate as Mutable<Truncate.Interface>
+      const originalMarkMessageDelivered = team.markMessageDelivered
+      const originalOutput = truncate.output
+      let renderAttempts = 0
+      let commits = 0
+      mutableTeam.markMessageDelivered = ((messageID, recipientSession) =>
+        Effect.sync(() => {
+          commits++
+        }).pipe(
+          Effect.andThen(originalMarkMessageDelivered(messageID, recipientSession)),
+        )) as Team.Interface["markMessageDelivered"]
+      mutableTruncate.output = ((...args) => {
+        renderAttempts++
+        return renderAttempts === 1 ? Effect.die(new Error("simulated prompt render failure")) : originalOutput(...args)
+      }) as Truncate.Interface["output"]
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          mutableTeam.markMessageDelivered = originalMarkMessageDelivered
+          mutableTruncate.output = originalOutput
+        }),
+      )
+      yield* prompt.prompt({
+        sessionID: lead.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "start coordinating" }],
+      })
+      yield* team.sendMessage({
+        teamID: info.id,
+        sender: sender.id,
+        recipients: [lead.id],
+        body: "Retry prompt mailbox delivery.",
+      })
+
+      const failed = yield* prompt.loop({ sessionID: lead.id }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(failed)).toBe(true)
+      expect(commits).toBe(0)
+      expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(1)
+
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: lead.id })
+
+      const delivered = (yield* sessions.messages({ sessionID: lead.id }))
+        .flatMap((sessionMessage) => sessionMessage.parts)
+        .filter(
+          (part): part is MessageV2.TextPart =>
+            part.type === "text" && part.synthetic === true && part.text.includes("Retry prompt mailbox delivery."),
+        )
+      expect(delivered).toHaveLength(1)
+      expect(renderAttempts).toBe(2)
+      expect(commits).toBe(1)
+      expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
     }),
     {
       git: true,

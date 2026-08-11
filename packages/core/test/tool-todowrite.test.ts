@@ -78,10 +78,10 @@ describe("TodoWriteTool", () => {
 
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual([TodoWriteTool.name])
       expect(yield* settleTool(registry, call(todoList))).toEqual({
-        result: { type: "text", value: JSON.stringify(todoList, null, 2) },
+        result: { type: "text", value: "Todos updated." },
         output: {
           structured: { todos: todoList },
-          content: [{ type: "text", text: JSON.stringify(todoList, null, 2) }],
+          content: [{ type: "text", text: "Todos updated." }],
         },
       })
       expect(assertions).toMatchObject([{ sessionID, action: "todowrite", resources: ["*"], save: ["*"] }])

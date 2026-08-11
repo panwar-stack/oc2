@@ -1214,16 +1214,20 @@ describe("tool.team_spawn", () => {
           const architectRunning = (yield* team.getMembers(info.id)).find((member) => member.name === "architect")
           expect(architectRunning?.status).toBe("active")
           expect(architectRunning?.result).toBeNull()
+          expect(architectRunning?.role_prompt).toBe("Design the architecture")
           const architectPrompt = calls[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
+          expect(architectPrompt).toContain("Design the architecture")
           expect(architectPrompt).toContain("Proactive communication requirements:")
           expect(architectPrompt).toContain("Never ask the user questions directly")
           expect(architectPrompt).toContain("If a child subagent needs user input")
           expect(architectPrompt).toContain('team_send_message recipient "lead"')
           expect(calls[0]?.tools).toEqual({ team_create: false, team_spawn: false, local_fusion: false })
           const pendingLeadAfterStart = yield* team.getPendingMessages(lead.id, info.id)
-          expect(pendingLeadAfterStart.some((message) => message.body.includes("architect (general) started"))).toBe(
-            true,
+          const architectStarted = pendingLeadAfterStart.find((message) => message.id.includes(":started:"))
+          expect(architectStarted?.body).toBe(
+            `Teammate architect (general) started. State: active. Session: ${architectRunning?.session_id}.`,
           )
+          expect(architectStarted?.body).not.toContain("Design the architecture")
 
           yield* def.execute(
             {
@@ -1238,6 +1242,7 @@ describe("tool.team_spawn", () => {
           const blocked = (yield* team.getMembers(info.id)).find((member) => member.name === "implementer")
           expect(blocked?.status).toBe("blocked")
           expect(blocked?.model).toEqual({ ...ref, variant: "lead-variant" })
+          expect(blocked?.role_prompt).toBe("Implement after architecture is ready")
           expect(calls).toHaveLength(1)
           const architect = (yield* team.getMembers(info.id)).find((member) => member.name === "architect")
           expect(architect).toBeDefined()
@@ -1263,9 +1268,20 @@ describe("tool.team_spawn", () => {
           expect(architectDone).toBe(true)
           expect(architectResult.title).toBe("Teammate Started")
           expect(architectResult.output).toContain("running in background")
-          expect(calls[1]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")).toContain(
-            "architecture ready",
+          const implementerPrompt = calls[1]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
+          expect(implementerPrompt).toContain("Implement after architecture is ready")
+          expect(implementerPrompt).toContain("Dependency results:")
+          expect(implementerPrompt).toContain("architecture ready")
+          const implementer = (yield* team.getMembers(info.id)).find((member) => member.name === "implementer")
+          expect(implementer?.role_prompt).toBe("Implement after architecture is ready")
+          const implementerStarted = (yield* team.getMessages(info.id)).find(
+            (message) => message.id === `lifecycle:member:${implementer?.id}:started:1`,
           )
+          expect(implementerStarted?.body).toBe(
+            `Teammate implementer (general) started. State: active. Session: ${implementer?.session_id}.\n\nDependency context was provided in this teammate's prompt.`,
+          )
+          expect(implementerStarted?.body).not.toContain("Implement after architecture is ready")
+          expect(implementerStarted?.body).not.toContain("Design the architecture")
           expect(completionWakeDependentStatuses.length).toBeGreaterThan(0)
           expect(completionWakeDependentStatuses).not.toContain("blocked")
           expect(completionWakeDependentStatuses).not.toContain("missing")

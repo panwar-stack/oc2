@@ -205,18 +205,35 @@ const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.As
   )
 
 describe("tool.team_get_messages", () => {
-  it.live("uses the lead wait contract in team-state tool descriptions", () =>
+  it.live("keeps team-state tool purpose and no-poll contracts without generic lead policy", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
           const getMessages = yield* TeamGetMessagesTool
           const taskList = yield* TeamTaskListTool
-          const descriptions = [(yield* getMessages.init()).description, (yield* taskList.init()).description]
+          const getMessagesDescription = (yield* getMessages.init()).description
+          const taskListDescription = (yield* taskList.init()).description
 
-          for (const description of descriptions) {
-            expect(description).toContain("For the active team lead:")
-            expectLeadWaitContract(description)
-            expectNoForbiddenLeadWaitGuidance(description)
+          expect(getMessagesDescription).toContain("Read pending messages addressed to the current team session.")
+          expect(getMessagesDescription).toContain("Messages are marked delivered after this tool returns them.")
+          expect(getMessagesDescription).toContain("Do NOT call this repeatedly in a loop waiting for messages.")
+          expect(getMessagesDescription).toContain("If the mailbox is empty, do not poll.")
+          expect(taskListDescription).toContain("List all shared tasks for the current team.")
+          expect(taskListDescription).toContain(
+            "Shows task descriptions, statuses, assignees, dependencies, and reserved file paths.",
+          )
+          expect(taskListDescription).toContain(
+            "Use task-list reads for planning, dependencies, ownership, and integration.",
+          )
+          expect(taskListDescription).toContain("Do not repeatedly read unchanged team state.")
+
+          for (const description of [getMessagesDescription, taskListDescription]) {
+            expect(description).not.toContain("For the active team lead:")
+            expect(description).not.toContain("Continue useful decomposition, integration, review, or decision work.")
+            expect(description).not.toContain(
+              "The runtime parks successful finalization while finite teammates remain active.",
+            )
+            expect(description).not.toContain("Remember: your role is to coordinate and integrate teammate results.")
           }
         }),
       { config: { experimental: { agent_teams: true } } },
@@ -305,6 +322,161 @@ describe("tool.team_get_messages", () => {
           expect(result.title).toBe("Team Messages")
           expect(result.output).toContain("Implementation is complete.")
           expect(result.metadata.count).toBe(1)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("renders the exact small aggregate and acknowledges each message once", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const baseTeam = yield* Team.Service
+          const { lead, assistant, info, member } = yield* seed()
+          const committed: string[] = []
+          const observedTeam = Team.Service.of({
+            ...baseTeam,
+            markMessageDelivered: (messageID, recipientSession) =>
+              Effect.sync(() => committed.push(messageID)).pipe(
+                Effect.andThen(baseTeam.markMessageDelivered(messageID, recipientSession)),
+              ),
+          })
+          const first = yield* baseTeam.sendMessage({
+            teamID: info.id,
+            sender: member.session_id,
+            recipients: [lead.id],
+            body: "First update.",
+          })
+          const second = yield* baseTeam.sendMessage({
+            teamID: info.id,
+            sender: member.session_id,
+            recipients: [lead.id],
+            body: "Second update.",
+          })
+          const tool = yield* TeamGetMessagesTool.pipe(Effect.provideService(Team.Service, observedTeam))
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({}, context({ lead, assistant, callID: "bounded-small" }))
+          const repeated = yield* def.execute({}, context({ lead, assistant, callID: "bounded-small-repeat" }))
+
+          expect(result.output).toBe(
+            [
+              `From worker (${member.session_id}):`,
+              "First update.",
+              "",
+              "---",
+              "",
+              `From worker (${member.session_id}):`,
+              "Second update.",
+            ].join("\n"),
+          )
+          expect(result.metadata).toMatchObject({ count: 2, repeated: false, truncated: false })
+          expect("outputPath" in result.metadata).toBe(false)
+          expect(committed).toEqual([first.id, second.id])
+          expect(repeated.metadata.count).toBe(0)
+          expect(committed).toEqual([first.id, second.id])
+          expect(yield* baseTeam.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("bounds a large aggregate and preserves the exact managed artifact", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info, member } = yield* seed()
+          const body = `large-start-${"x".repeat(600)}-large-end`
+          const expected = [`From worker (${member.session_id}):`, body].join("\n")
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: member.session_id,
+            recipients: [lead.id],
+            body,
+          })
+          const tool = yield* TeamGetMessagesTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute({}, context({ lead, assistant, callID: "bounded-large" }))
+          const metadata = result.metadata as {
+            count: number
+            repeated: boolean
+            truncated?: boolean
+            outputPath?: string
+          }
+
+          expect(metadata).toMatchObject({ count: 1, repeated: false, truncated: true })
+          expect(typeof metadata.outputPath).toBe("string")
+          if (!metadata.outputPath) throw new Error("expected managed output path")
+          expect(result.output).toContain("bytes truncated")
+          expect(result.output).toContain(metadata.outputPath)
+          expect(result.output).toContain(
+            "Use the Task tool to have explore agent process this file with Grep and Read",
+          )
+          expect(result.output).not.toContain("Use Grep to search the full content")
+          expect(result.output).not.toContain("large-end")
+          expect(Buffer.byteLength(result.output, "utf-8")).toBeLessThan(Buffer.byteLength(expected, "utf-8"))
+          expect(yield* Effect.promise(() => Bun.file(metadata.outputPath!).text())).toBe(expected)
+          expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
+        }),
+      {
+        config: {
+          experimental: { agent_teams: true },
+          tool_output: { max_lines: 1_000, max_bytes: 120 },
+        },
+      },
+    ),
+  )
+
+  it.live("releases a claim when managed rendering fails and retries without loss", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const baseTeam = yield* Team.Service
+          const truncate = yield* Truncate.Service
+          const { lead, assistant, info, member } = yield* seed()
+          let commits = 0
+          const observedTeam = Team.Service.of({
+            ...baseTeam,
+            markMessageDelivered: (messageID, recipientSession) =>
+              Effect.sync(() => {
+                commits++
+              }).pipe(Effect.andThen(baseTeam.markMessageDelivered(messageID, recipientSession))),
+          })
+          const failingTruncate = Truncate.Service.of({
+            ...truncate,
+            output: () => Effect.die(new Error("simulated managed rendering failure")),
+          })
+          yield* baseTeam.sendMessage({
+            teamID: info.id,
+            sender: member.session_id,
+            recipients: [lead.id],
+            body: "Retry this exact message.",
+          })
+          const failingTool = yield* TeamGetMessagesTool.pipe(
+            Effect.provideService(Team.Service, observedTeam),
+            Effect.provideService(Truncate.Service, failingTruncate),
+          )
+
+          const failed = yield* (yield* failingTool.init())
+            .execute({}, context({ lead, assistant, callID: "render-failure" }))
+            .pipe(Effect.exit)
+
+          expect(Exit.isFailure(failed)).toBe(true)
+          expect(commits).toBe(0)
+          expect(yield* baseTeam.getPendingMessages(lead.id, info.id)).toHaveLength(1)
+
+          const retryTool = yield* TeamGetMessagesTool.pipe(Effect.provideService(Team.Service, observedTeam))
+          const retried = yield* (yield* retryTool.init()).execute(
+            {},
+            context({ lead, assistant, callID: "render-retry" }),
+          )
+
+          expect(retried.output).toContain("Retry this exact message.")
+          expect(retried.metadata.count).toBe(1)
+          expect(commits).toBe(1)
+          expect(yield* baseTeam.getPendingMessages(lead.id, info.id)).toHaveLength(0)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -1309,10 +1481,10 @@ describe("team message wake safety", () => {
           )
 
           expect(result.title).toBe("Message Sent")
-          expect(result.output).toContain("wake waits are bounded")
-          expectLeadWaitContract(result.output)
-          expectNoForbiddenLeadWaitGuidance(result.output)
-          expect(result.output).not.toContain("Check team_get_messages")
+          expect(result.output).toBe(
+            "Sent to 1 recipient(s).\nLead session waited briefly for woken teammate run(s) to finish; wake waits are bounded.",
+          )
+          expect(result.metadata.messageID).toBeDefined()
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -1340,10 +1512,40 @@ describe("team message wake safety", () => {
           )
 
           expect(result.title).toBe("Broadcast Sent")
-          expect(result.output).toContain("wake waits are bounded")
-          expectLeadWaitContract(result.output)
-          expectNoForbiddenLeadWaitGuidance(result.output)
-          expect(result.output).not.toContain("Check team_get_messages")
+          expect(result.output).toBe(
+            "Sent to 1 recipient(s).\nLead session waited briefly for woken teammate run(s) to finish; wake waits are bounded.",
+          )
+          expect(result.metadata.messageID).toBeDefined()
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("preserves asynchronous delivery facts for teammate send and broadcast results", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { assistant, worker } = yield* seed()
+          const send = yield* (yield* TeamSendMessageTool).init()
+          const broadcast = yield* (yield* TeamBroadcastTool).init()
+          const teammateContext = context({ lead: worker, assistant })
+
+          const sendResult = yield* send.execute(
+            { recipient: "lead", body: "Implementation is complete." },
+            teammateContext,
+          )
+          const broadcastResult = yield* broadcast.execute({ body: "Review is ready." }, teammateContext)
+
+          expect(sendResult.title).toBe("Message Sent")
+          expect(sendResult.output).toBe(
+            "Sent to 1 recipient(s).\nDelivery is asynchronous. Busy recipients will only see this when their current run reaches the next prompt boundary.\nContinue your assigned work unless this message reports a blocker.",
+          )
+          expect(sendResult.metadata.messageID).toBeDefined()
+          expect(broadcastResult.title).toBe("Broadcast Sent")
+          expect(broadcastResult.output).toBe(
+            "Sent to 1 recipient(s).\nDelivery is asynchronous. Busy recipients will only see this when their current run reaches the next prompt boundary.\nContinue your assigned work unless this broadcast reports a blocker.",
+          )
+          expect(broadcastResult.metadata.messageID).toBeDefined()
         }),
       { config: { experimental: { agent_teams: true } } },
     ),

@@ -407,6 +407,43 @@ describe("team eval", () => {
     ),
   )
 
+  it.live("does not count lifecycle started mail as daemon activity", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const info = yield* team.create({
+          name: "eval-daemon-started-mail",
+          goal: "Ignore automatic daemon mail",
+          leadSessionID: "ses_eval_daemon_started_mail_lead",
+        })
+        const daemon = yield* team.addMember({
+          teamID: info.id,
+          sessionID: "ses_eval_daemon_started_mail",
+          name: "sentinel",
+          agentType: "general",
+          rolePrompt: "Monitor",
+          lifecycle: "daemon",
+          daemonState: "running",
+        })
+        const daemonLastActive = Date.now() - 1_000
+        yield* team.updateMemberStatus(daemon.id, "active", {
+          daemonState: "running",
+          daemonLastActive,
+        })
+        yield* team.sendMessage({
+          teamID: info.id,
+          sender: daemon.session_id,
+          recipients: [info.lead_session_id],
+          body: `Teammate sentinel (general) started. State: active. Session: ${daemon.session_id}.`,
+        })
+
+        const report = yield* TeamEval.build(info.id)
+
+        expect(finding(report, "daemon_without_activity", node("member", daemon.session_id))).toBeDefined()
+      }),
+    ),
+  )
+
   it.live("detects daemon final result messages without counting automatic idle messages as activity", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {

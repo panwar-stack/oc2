@@ -2,4 +2,3 @@ List all shared tasks for the current team.
 Shows task descriptions, statuses, assignees, dependencies, and reserved file paths.
 Use this to understand what work is pending, in progress, or completed across the team.
 Use task-list reads for planning, dependencies, ownership, and integration. Do not repeatedly read unchanged team state.
-For the active team lead: Continue useful decomposition, integration, review, or decision work. When no useful work remains, finish the current response normally. The runtime parks successful finalization while finite teammates remain active. Do not sleep, repeatedly read team state, ask for routine updates, or send filler. Teammates must send material progress, blockers, questions, and results without a lead status request. Relevant teammate or user events wake the lead.

@@ -46,7 +46,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, Metadata, Todo.Servi
 
           return {
             title: `${params.todos.filter((x) => x.status !== "completed").length} todos`,
-            output: JSON.stringify(params.todos, null, 2),
+            output: "Todos updated.",
             metadata: {
               todos: params.todos,
             },

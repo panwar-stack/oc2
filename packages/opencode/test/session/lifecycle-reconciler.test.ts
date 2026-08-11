@@ -1016,12 +1016,17 @@ describe("session.lifecycle-reconciler", () => {
           expect(settled?.status).toBe("completed")
           expect(settled?.result).toBe("work complete")
           expect(settled?.run_generation).toBe(1)
+          expect(settled?.role_prompt).toBe("Do durable work")
           expect((yield* memberState(memberSession.id))?.generation).toBe(1)
           expect((yield* memberState(memberSession.id))?.phase).toBe("terminal")
           // The initial prompt ID is persisted and reused, and the started notification is gen-scoped.
           expect(admitted?.messageID).toBeDefined()
+          const initialPrompt = admitted?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
+          expect(initialPrompt).toContain("Do durable work")
           const messages = yield* team.getMessages(info.id)
-          expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:started:1`)).toBe(true)
+          const started = messages.find((message) => message.id === `lifecycle:member:${member.id}:started:1`)
+          expect(started?.body).toBe(`Teammate worker (general) started. State: active. Session: ${memberSession.id}.`)
+          expect(started?.body).not.toContain("Do durable work")
           expect(messages.some((message) => message.id === `lifecycle:member:${member.id}:completed:1`)).toBe(true)
         }),
       { config: { experimental: { agent_teams: true } } },
@@ -1111,18 +1116,23 @@ describe("session.lifecycle-reconciler", () => {
             ),
           )
           const completionWakeObservations: Array<{ status: string; startedMail: boolean }> = []
+          const prompts: SessionPrompt.PromptInput[] = []
           const spy = yield* spyOps({
             text: "worker done",
             onPrompt: (input) =>
-              input.sessionID === memberSession.id
-                ? Deferred.succeed(upstreamPromptEntered, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseUpstreamPrompt)),
-                  )
-                : input.sessionID === dependentSession.id
-                  ? Deferred.succeed(dependentPromptEntered, undefined).pipe(
-                      Effect.andThen(Deferred.await(releaseDependentPrompt)),
-                    )
-                  : Effect.void,
+              Effect.sync(() => prompts.push(input)).pipe(
+                Effect.andThen(
+                  input.sessionID === memberSession.id
+                    ? Deferred.succeed(upstreamPromptEntered, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseUpstreamPrompt)),
+                      )
+                    : input.sessionID === dependentSession.id
+                      ? Deferred.succeed(dependentPromptEntered, undefined).pipe(
+                          Effect.andThen(Deferred.await(releaseDependentPrompt)),
+                        )
+                      : Effect.void,
+                ),
+              ),
             onWake: Effect.gen(function* () {
               const pending = yield* team.getPendingMessages(lead.id, info.id)
               if (!pending.some((message) => message.id === `lifecycle:member:${member.id}:completed:1`)) return
@@ -1189,6 +1199,19 @@ describe("session.lifecycle-reconciler", () => {
           expect(yield* Fiber.join(upstream)).toBe("worker done")
 
           expect(completionWakeObservations).toEqual([{ status: "active", startedMail: true }])
+          const dependentStarted = (yield* team.getMessages(info.id)).find(
+            (message) => message.id === `lifecycle:member:${dependent.id}:started:1`,
+          )
+          expect(dependentStarted?.body).toBe(
+            `Teammate dependent (general) started. State: active. Session: ${dependentSession.id}.\n\nDependency context was provided in this teammate's prompt.`,
+          )
+          expect(dependentStarted?.body).not.toContain("Wait for worker")
+          const dependentPrompt = prompts.find((prompt) => prompt.sessionID === dependentSession.id)
+          const dependentPromptText = dependentPrompt?.parts
+            .map((part) => (part.type === "text" ? part.text : ""))
+            .join("\n")
+          expect(dependentPromptText).toContain("Wait for worker")
+          expect(dependentPromptText).toContain("worker done")
           yield* Deferred.succeed(releaseDependentPrompt, undefined)
 
           yield* pollWithTimeout(
@@ -1539,6 +1562,11 @@ describe("session.lifecycle-reconciler", () => {
 
           expect(outcome).toBe("plain result")
           expect(prompts).toHaveLength(1)
+          const initialPrompt = prompts[0]?.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n")
+          expect(initialPrompt).toContain(
+            "When your assigned work is complete, put the concrete result in your final answer so it can be sent back to the lead automatically.",
+          )
+          expect(initialPrompt).not.toContain("Send a mailbox summary of the completed work to the lead")
           const settled = (yield* team.getMembers(info.id)).find((candidate) => candidate.id === member.id)
           expect(settled?.status).toBe("completed")
           expect(settled?.result).toBe("plain result")

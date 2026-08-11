@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { LLMEvent, ToolFailure } from "@oc2-ai/llm"
+import { CachePlanner, LLMEvent, LLMRequest, ToolFailure } from "@oc2-ai/llm"
 import type { CachePlan } from "@oc2-ai/llm/cache/planner"
 import { LLMClient, RequestExecutor, WebSocketExecutor, type LLMClientShape } from "@oc2-ai/llm/route"
 import { jsonSchema, tool, type ModelMessage, type Tool } from "ai"
@@ -8,6 +8,7 @@ import { LLMNative } from "@/session/llm/native-request"
 import { LLMNativeRuntime } from "@/session/llm/native-runtime"
 import { ProviderTimingLifecycle } from "@/session/llm/provider-timing"
 import type { Provider } from "@/provider/provider"
+import { isRecord } from "@/util/record"
 
 import { OAUTH_DUMMY_KEY } from "@/auth"
 import { testEffect } from "../lib/effect"
@@ -438,6 +439,173 @@ describe("session.llm-native.request", () => {
 
       expect(prepared.body).toMatchObject({ prompt_cache_key: expect.stringMatching(/^oc2-v1-/) })
       expect((prepared.body as { prompt_cache_key?: string }).prompt_cache_key).not.toBe("manual-key")
+    }),
+  )
+
+  it.effect("rotates native OpenAI cache keys only when stable system context changes", () =>
+    Effect.gen(function* () {
+      const requests: LLMRequest[] = []
+      const tools = {
+        bash: tool({
+          description: "Run a command",
+          inputSchema: jsonSchema({ type: "object", properties: { command: { type: "string" } } }),
+        }),
+        lookup: tool({
+          description: "Look up a value",
+          inputSchema: jsonSchema({ type: "object", properties: { key: { type: "string" } } }),
+        }),
+      }
+      const captureClient: LLMClientShape = {
+        prepare: () => Effect.die("unused"),
+        stream: (request) => {
+          requests.push(request)
+          return Stream.fromIterable([
+            LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+            LLMEvent.finish({ reason: "stop" }),
+          ])
+        },
+        generate: () => Effect.die("unused"),
+      }
+      const validatedPlan = (system: string, tail: string) => {
+        const request = LLMNative.request({
+          model: baseModel,
+          apiKey: "test-openai-key",
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: tail },
+          ],
+          tools,
+        })
+        return CachePlanner.planCacheRequest(
+          LLMRequest.update(request, {
+            cache: { tools: true, system: true, messages: "latest-user-message" },
+            system: request.system.map((part) => ({
+              ...part,
+              metadata: { cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION } },
+            })),
+          }),
+        ).plan
+      }
+      const invoke = (system: string, tail: string) => {
+        const cachePlan = validatedPlan(system, tail)
+        const native = LLMNativeRuntime.stream({
+          model: baseModel,
+          provider: providerInfo,
+          auth: undefined,
+          llmClient: captureClient,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: tail },
+          ],
+          tools,
+          cachePlan,
+          headers: {},
+          abort: new AbortController().signal,
+        })
+        if (native.type === "unsupported") throw new Error(native.reason)
+        return native.stream.pipe(Stream.runDrain, Effect.as(cachePlan))
+      }
+
+      const plans = [
+        yield* invoke("Stable system A", "tail one"),
+        yield* invoke("Stable system A", "tail two"),
+        yield* invoke("Stable system B", "tail three"),
+      ]
+      expect(requests.map((request) => request.tools.map((item) => item.name))).toEqual([
+        ["bash", "lookup"],
+        ["bash", "lookup"],
+        ["bash", "lookup"],
+      ])
+      expect(plans[0]?.componentFingerprints.tools).toBeDefined()
+      expect(plans[1]?.componentFingerprints.tools).toBe(plans[0]?.componentFingerprints.tools)
+      expect(plans[2]?.componentFingerprints.tools).toBe(plans[0]?.componentFingerprints.tools)
+      expect(plans[1]?.componentFingerprints.system).toBe(plans[0]?.componentFingerprints.system)
+      expect(plans[1]?.stablePrefixFingerprint).toBe(plans[0]?.stablePrefixFingerprint)
+      expect(plans[2]?.componentFingerprints.system).not.toBe(plans[0]?.componentFingerprints.system)
+      expect(plans[2]?.stablePrefixFingerprint).not.toBe(plans[0]?.stablePrefixFingerprint)
+      expect(plans[1]?.cacheKey).toBe(plans[0]?.cacheKey)
+      expect(plans[2]?.cacheKey).not.toBe(plans[0]?.cacheKey)
+
+      const client = yield* LLMClient.Service
+      const prepared = yield* Effect.all(requests.map((request) => client.prepare(request)))
+      const bodies = prepared.map((item) => {
+        if (!isRecord(item.body)) throw new Error("Expected an OpenAI request body")
+        if (typeof item.body.prompt_cache_key !== "string") throw new Error("Expected an OpenAI prompt cache key")
+        if (!Array.isArray(item.body.tools)) throw new Error("Expected ordered OpenAI tools")
+        return {
+          cacheKey: item.body.prompt_cache_key,
+          tools: item.body.tools.map((tool) => (isRecord(tool) && typeof tool.name === "string" ? tool.name : undefined)),
+        }
+      })
+      expect(bodies.map((body) => body.cacheKey)).toEqual([
+        expect.stringMatching(/^oc2-v1-/),
+        expect.stringMatching(/^oc2-v1-/),
+        expect.stringMatching(/^oc2-v1-/),
+      ])
+      expect(bodies[1]?.cacheKey).toBe(bodies[0]?.cacheKey)
+      expect(bodies[2]?.cacheKey).not.toBe(bodies[0]?.cacheKey)
+      expect(bodies.map((body) => body.tools)).toEqual([
+        ["bash", "lookup"],
+        ["bash", "lookup"],
+        ["bash", "lookup"],
+      ])
+    }),
+  )
+
+  it.effect("keeps explicit cache breakpoint fallback when stable system matching fails", () =>
+    Effect.gen(function* () {
+      const requests: LLMRequest[] = []
+      const base = LLMNative.request({
+        model: baseModel,
+        apiKey: "test-openai-key",
+        messages: [
+          { role: "system", content: "Stable system" },
+          { role: "user", content: "tail" },
+        ],
+      })
+      const plan = CachePlanner.planCacheRequest(
+        LLMRequest.update(base, {
+          cache: { system: true },
+          system: base.system.map((part) => ({
+            ...part,
+            metadata: { cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION } },
+          })),
+        }),
+      ).plan
+      const native = LLMNativeRuntime.stream({
+        model: baseModel,
+        provider: providerInfo,
+        auth: undefined,
+        llmClient: {
+          prepare: () => Effect.die("unused"),
+          stream: (request) => {
+            requests.push(request)
+            return Stream.fromIterable([
+              LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+              LLMEvent.finish({ reason: "stop" }),
+            ])
+          },
+          generate: () => Effect.die("unused"),
+        },
+        messages: [
+          { role: "system", content: "Stable system" },
+          { role: "user", content: "tail" },
+        ],
+        tools: {},
+        cachePlan: {
+          ...plan,
+          componentFingerprints: { ...plan.componentFingerprints, system: "no-matching-system-fingerprint" },
+          breakpoints: [{ component: "system", contentType: "system", index: 0 }],
+        },
+        headers: {},
+        abort: new AbortController().signal,
+      })
+      if (native.type === "unsupported") throw new Error(native.reason)
+
+      yield* native.stream.pipe(Stream.runDrain)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.system[0]?.metadata).toEqual({ cache: { stable: true } })
     }),
   )
 

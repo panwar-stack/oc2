@@ -242,22 +242,45 @@ export function stream(input: StreamInput): StreamResult {
 }
 
 function reconcilePreparedCachePlan(request: LLMRequest, plan: CachePlan) {
-  const seeded = LLMRequest.update(request, {
-    cache:
-      plan.mode === "disabled" || !plan.eligible
-        ? "none"
-        : {
-            tools: true,
-            system: true,
-            messages: "latest-user-message",
-            ttlSeconds: plan.duration === "1h" ? 3600 : 300,
-          },
-    system: request.system.map((part, index) =>
+  const cache =
+    plan.mode === "disabled" || !plan.eligible
+      ? ("none" as const)
+      : {
+          tools: true as const,
+          system: true as const,
+          messages: "latest-user-message" as const,
+          ttlSeconds: plan.duration === "1h" ? 3600 : 300,
+        }
+  const seed = (system: LLMRequest["system"]) => LLMRequest.update(request, { cache, system })
+  let seeded = seed(
+    request.system.map((part, index) =>
       plan.breakpoints.some((breakpoint) => breakpoint.component === "system" && breakpoint.index === index)
         ? { ...part, metadata: { ...part.metadata, cache: { stable: true } } }
         : part,
     ),
-  })
+  )
+  for (let prefixLength = request.system.length; prefixLength >= 0; prefixLength--) {
+    const candidate = seed(
+      request.system.map((part, index) =>
+        index < prefixLength
+          ? {
+              ...part,
+              metadata: {
+                ...part.metadata,
+                cache: { stable: true, version: CachePlanner.CACHE_PLANNER_VERSION },
+              },
+            }
+          : part,
+      ),
+    )
+    if (
+      CachePlanner.planCacheRequest(candidate).plan.componentFingerprints.system ===
+      plan.componentFingerprints.system
+    ) {
+      seeded = candidate
+      break
+    }
+  }
   const boundary = CachePlanner.planCacheRequest(seeded)
   const fresh = boundary.plan
   return LLMRequest.update(seeded, {

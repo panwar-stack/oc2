@@ -1355,6 +1355,19 @@ export const layer = Layer.effect(
           if (sender === context.value.team.lead_session_id) return "lead"
           return members.find((member) => member.session_id === sender)?.name ?? sender
         }
+        const rendered = yield* truncate.output(
+          [
+            "<team-messages>",
+            context.value.member
+              ? "You have pending team mailbox messages. Address them now and continue your teammate task."
+              : "Review these messages and coordinate the next team action.",
+            "",
+            ...messages.map((message) =>
+              [`From ${senderName(message.sender)} (${message.sender}):`, message.body].join("\n"),
+            ),
+            "</team-messages>",
+          ].join("\n"),
+        )
         // The delivery marker is persisted BEFORE the synthetic message write. If this delivery is
         // suspended in between, the ensuring below cannot revert the claim (only "read" rows are
         // reverted), so a resumed loop never claims these messages again and never injects a
@@ -1385,17 +1398,7 @@ export const layer = Layer.effect(
           sessionID: input.session.id,
           type: "text",
           synthetic: true,
-          text: [
-            "<team-messages>",
-            context.value.member
-              ? "You have pending team mailbox messages. Address them now and continue your teammate task."
-              : "You have pending team mailbox messages. As team lead, coordinate follow-up work and report to the user when the team goal is complete. Do NOT attempt to do teammate tasks yourself — your role is to delegate and integrate results when they arrive. Trust your teammates to complete their assigned work. As you process these messages, look for new sub-tasks that can be split off and delegated to new or existing teammates.",
-            "",
-            ...messages.map((message) =>
-              [`From ${senderName(message.sender)} (${message.sender}):`, message.body].join("\n"),
-            ),
-            "</team-messages>",
-          ].join("\n"),
+          text: rendered.content,
         } satisfies SessionV1.TextPart)
         acknowledged = true
         yield* sessions.touch(input.session.id)

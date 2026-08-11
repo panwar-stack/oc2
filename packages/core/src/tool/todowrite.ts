@@ -18,7 +18,7 @@ export const Output = Schema.Struct({
 })
 export type Output = typeof Output.Type
 
-export const toModelOutput = (output: Output) => JSON.stringify(output.todos, null, 2)
+export const toModelOutput = (_output: Output) => "Todos updated."
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {

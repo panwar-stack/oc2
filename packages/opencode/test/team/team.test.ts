@@ -1029,6 +1029,62 @@ describe("team", () => {
     ),
   )
 
+  it.live("claims pending messages by creation time then message ID", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const team = yield* Team.Service
+        const { db } = yield* Database.Service
+        const recipient = "ses_fifo_claim_recipient"
+        const info = yield* team.create({
+          name: "fifo-claims",
+          goal: "Claim in deterministic order",
+          leadSessionID: "ses_fifo_claim_lead",
+        })
+        const messages = [
+          { id: "message-z", body: "latest", created: 200 },
+          { id: "message-b", body: "tie second", created: 100 },
+          { id: "message-a", body: "tie first", created: 100 },
+        ]
+
+        yield* db
+          .insert(TeamMessageTable)
+          .values(
+            messages.map((message) => ({
+              id: message.id,
+              team_id: info.id,
+              sender: info.lead_session_id,
+              recipients: [recipient],
+              body: message.body,
+              delivery_status: "pending" as const,
+              time_created: message.created,
+              time_updated: message.created,
+            })),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(TeamMessageRecipientTable)
+          .values(
+            messages.map((message, index) => ({
+              id: `recipient-${index}`,
+              message_id: message.id,
+              team_id: info.id,
+              recipient,
+              delivery_status: "pending" as const,
+              time_created: message.created,
+              time_updated: message.created,
+            })),
+          )
+          .run()
+          .pipe(Effect.orDie)
+
+        const claimed = yield* team.claimPendingMessages(recipient, info.id)
+
+        expect(claimed.map((message) => message.id)).toEqual(["message-a", "message-b", "message-z"])
+      }),
+    ),
+  )
+
   it.live("auto-notification on member status creates pending mailbox delivery for lead", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {

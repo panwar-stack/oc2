@@ -70,15 +70,16 @@ export const TeamBroadcastTool = Tool.define(
           }
           return {
             title: "Broadcast Sent",
-            output: [
-              `Sent to ${recipients.length} recipient(s).`,
-              lead
-                ? "Lead session waited briefly for woken teammate run(s) to finish; wake waits are bounded."
-                : "Delivery is asynchronous. Busy recipients will only see this when their current run reaches the next prompt boundary.",
-              lead
-                ? "Continue useful decomposition, integration, review, or decision work. When no useful work remains, finish the current response normally. The runtime parks successful finalization while finite teammates remain active. Do not sleep, repeatedly read team state, ask for routine updates, or send filler. Teammates must send material progress, blockers, questions, and results without a lead status request. Relevant teammate or user events wake the lead."
-                : "Continue your assigned work unless this broadcast reports a blocker.",
-            ].join("\n"),
+            output: lead
+              ? [
+                  `Sent to ${recipients.length} recipient(s).`,
+                  "Lead session waited briefly for woken teammate run(s) to finish; wake waits are bounded.",
+                ].join("\n")
+              : [
+                  `Sent to ${recipients.length} recipient(s).`,
+                  "Delivery is asynchronous. Busy recipients will only see this when their current run reaches the next prompt boundary.",
+                  "Continue your assigned work unless this broadcast reports a blocker.",
+                ].join("\n"),
             metadata: { messageID: msg.id },
           }
         }).pipe(Effect.orDie),
