@@ -54,12 +54,8 @@ const it = testEffect(
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
-const seed = Effect.fn("TeamMessagesTest.seed")(function* (input?: {
-  planMode?: boolean
-  permission?: Permission.Ruleset
-}) {
+const seedLead = Effect.fn("TeamMessagesTest.seedLead")(function* () {
   const sessions = yield* Session.Service
-  const team = yield* Team.Service
   const lead = yield* sessions.create({ title: "Lead" })
   const user = yield* sessions.updateMessage({
     id: MessageID.ascending(),
@@ -84,6 +80,16 @@ const seed = Effect.fn("TeamMessagesTest.seed")(function* (input?: {
     time: { created: Date.now() },
   }
   yield* sessions.updateMessage(assistant)
+  return { lead, user, assistant }
+})
+
+const seed = Effect.fn("TeamMessagesTest.seed")(function* (input?: {
+  planMode?: boolean
+  permission?: Permission.Ruleset
+}) {
+  const sessions = yield* Session.Service
+  const team = yield* Team.Service
+  const { lead, user, assistant } = yield* seedLead()
   const info = yield* team.create({ name: "messages-team", goal: "Coordinate work", leadSessionID: lead.id })
   const worker = yield* sessions.create({ parentID: lead.id, title: "Worker", permission: input?.permission })
   const member = yield* team.addMember({
@@ -184,25 +190,37 @@ const expectedPermission = (
 ): { permission: string; pattern: string; action: Permission.Action }[] =>
   rules.map((rule) => ({ permission: rule.permission, pattern: rule.pattern, action: rule.action }))
 
-const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.Assistant }) =>
+const previousGetMessagesPart = (input: {
+  lead: Session.Info
+  assistant: MessageV2.Assistant
+  callID: string
+  state: SessionV1.ToolPart["state"]
+}) =>
   Session.Service.use((sessions) =>
     sessions.updatePart({
       id: PartID.ascending(),
       messageID: input.assistant.id,
       sessionID: input.lead.id,
       type: "tool",
-      callID: "previous-empty-check",
+      callID: input.callID,
       tool: "team_get_messages",
-      state: {
-        status: "completed",
-        input: {},
-        output: "No pending messages.",
-        title: "Team Messages",
-        metadata: { count: 0 },
-        time: { start: Date.now(), end: Date.now() },
-      },
+      state: input.state,
     }),
   )
+
+const previousEmptyCheck = (input: { lead: Session.Info; assistant: MessageV2.Assistant; teamID: string }) =>
+  previousGetMessagesPart({
+    ...input,
+    callID: "previous-empty-check",
+    state: {
+      status: "completed",
+      input: {},
+      output: "No pending messages.",
+      title: "Team Messages",
+      metadata: { count: 0, repeated: false, teamID: input.teamID },
+      time: { start: Date.now(), end: Date.now() },
+    },
+  })
 
 describe("tool.team_get_messages", () => {
   it.live("keeps team-state tool purpose and no-poll contracts without generic lead policy", () =>
@@ -244,31 +262,279 @@ describe("tool.team_get_messages", () => {
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
-          const { lead, assistant } = yield* seed()
+          const { lead, assistant, info, member } = yield* seed()
           const tool = yield* TeamGetMessagesTool
           const def = yield* tool.init()
 
           const result = yield* def.execute({}, context({ lead, assistant, callID: "current-check" }))
 
           expect(result.title).toBe("Team Messages")
-          expect(result.output).toContain("No pending messages.")
+          expect(result.output).toBe(
+            [
+              "No pending messages.",
+              "Check complete. Continue useful decomposition, integration, review, or decision work. When no useful work remains, finish the current response normally. The runtime parks successful finalization while finite teammates remain active.",
+              "Team messages are delivered asynchronously; busy teammates can only process broadcasts or direct messages at their next prompt boundary.",
+              "Do not sleep, repeatedly read team state, ask for routine updates, or send filler. Teammates must send material progress, blockers, questions, and results without a lead status request. Relevant teammate or user events wake the lead.",
+              "",
+              "Current team status:",
+              `- worker (general, active, session ${member.session_id})`,
+            ].join("\n"),
+          )
           expectLeadWaitContract(result.output)
           expectNoForbiddenLeadWaitGuidance(result.output)
           expect(result.output).toContain("worker (general, active, session")
-          expect(result.metadata.count).toBe(0)
-          expect(result.metadata.repeated).toBe(false)
+          expect(result.metadata).toMatchObject({ count: 0, repeated: false, teamID: info.id })
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("blocks repeated empty mailbox polling in the same user turn", () =>
+  it.live("keeps the first active-team empty response after a no-team result", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant } = yield* seedLead()
+          const def = yield* (yield* TeamGetMessagesTool).init()
+          const unavailable = yield* def.execute({}, context({ lead, assistant, callID: "no-team-check" }))
+          yield* previousGetMessagesPart({
+            lead,
+            assistant,
+            callID: "no-team-check",
+            state: {
+              status: "completed",
+              input: {},
+              output: unavailable.output,
+              title: unavailable.title,
+              metadata: unavailable.metadata,
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
+          const info = yield* team.create({
+            name: "created-after-no-team",
+            goal: "Verify the first active empty read",
+            leadSessionID: lead.id,
+          })
+
+          const result = yield* def.execute({}, context({ lead, assistant, callID: "first-active-check" }))
+
+          expect(unavailable.title).toBe("Team Messages")
+          expect(unavailable.output).toBe("No active team.")
+          expect(unavailable.metadata).toMatchObject({ count: 0, repeated: false })
+          expect("teamID" in unavailable.metadata).toBe(false)
+          expect(result.title).toBe("Team Messages")
+          expect(result.output).toStartWith("No pending messages.\nCheck complete.")
+          expectLeadWaitContract(result.output)
+          expect(result.metadata).toMatchObject({ count: 0, repeated: false, teamID: info.id })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("does not classify the disabled marker as an active-team empty response", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { lead, assistant, info } = yield* seed()
+          yield* previousGetMessagesPart({
+            lead,
+            assistant,
+            callID: "disabled-check",
+            state: {
+              status: "completed",
+              input: {},
+              output: "Agent teams disabled.",
+              title: "Team Messages",
+              metadata: { count: 0, repeated: false },
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
+          const def = yield* (yield* TeamGetMessagesTool).init()
+
+          const result = yield* def.execute({}, context({ lead, assistant, callID: "first-enabled-check" }))
+
+          expect(result.title).toBe("Team Messages")
+          expect(result.output).toStartWith("No pending messages.\nCheck complete.")
+          expectLeadWaitContract(result.output)
+          expect(result.metadata).toMatchObject({ count: 0, repeated: false, teamID: info.id })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("keeps the first empty response for a replacement team in the same turn", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const team = yield* Team.Service
+          const { lead, assistant, info } = yield* seed()
+          const def = yield* (yield* TeamGetMessagesTool).init()
+          const first = yield* def.execute({}, context({ lead, assistant, callID: "first-team-check" }))
+          yield* previousGetMessagesPart({
+            lead,
+            assistant,
+            callID: "first-team-check",
+            state: {
+              status: "completed",
+              input: {},
+              output: first.output,
+              title: first.title,
+              metadata: first.metadata,
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
+          yield* team.shutdown({
+            teamID: info.id,
+            sessionID: lead.id,
+            force: true,
+            reason: "replace team in repeat-classification regression",
+          })
+          const replacement = yield* team.create({
+            name: "replacement-team",
+            goal: "Verify team-scoped empty reads",
+            leadSessionID: lead.id,
+          })
+
+          const result = yield* def.execute({}, context({ lead, assistant, callID: "replacement-team-check" }))
+
+          expect(first.metadata).toMatchObject({ count: 0, repeated: false, teamID: info.id })
+          expect(result.title).toBe("Team Messages")
+          expect(result.output).toStartWith("No pending messages.\nCheck complete.")
+          expectLeadWaitContract(result.output)
+          expect(result.metadata).toMatchObject({ count: 0, repeated: false, teamID: replacement.id })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("blocks repeated empty polling from persisted history after tool reload", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const { lead, user, assistant, info } = yield* seed()
+          const tool = yield* TeamGetMessagesTool
+          const def = yield* tool.init()
+          const first = yield* def.execute({}, context({ lead, assistant, callID: "first-check" }))
+          yield* previousEmptyCheck({ lead, assistant, teamID: info.id })
+          const currentAssistant: MessageV2.Assistant = {
+            ...assistant,
+            id: MessageID.ascending(),
+            parentID: user.id,
+            time: { created: Date.now() },
+          }
+          yield* sessions.updateMessage(currentAssistant)
+          const reloadedDef = yield* (yield* TeamGetMessagesTool).init()
+          const result = yield* reloadedDef.execute(
+            {},
+            context({
+              lead,
+              assistant: currentAssistant,
+              callID: "current-check",
+              messages: yield* sessions.messages({ sessionID: lead.id }),
+            }),
+          )
+
+          expect(result.title).toBe("Team Messages (Polling Blocked)")
+          expect(result.output).toBe(
+            "No pending messages.\nRepeated empty mailbox check suppressed. Do not poll for mail. When no useful work remains, finish the current response normally.",
+          )
+          expect(result.output.length).toBeLessThan(first.output.length)
+          expect(result.output).not.toContain("Current team status:")
+          expect(result.output).not.toContain("worker (general")
+          expect(result.output).not.toContain("Team messages are delivered asynchronously")
+          expectNoForbiddenLeadWaitGuidance(result.output)
+          expectNoRepeatedTeamStateReadGuidance(result.output)
+          expect(result.metadata).toMatchObject({ count: 0, repeated: true, teamID: info.id })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("returns concise repeated-empty guidance to a team member", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const { assistant, worker, info } = yield* seed()
+          const workerUser = yield* sessions.updateMessage({
+            id: MessageID.ascending(),
+            role: "user",
+            sessionID: worker.id,
+            agent: "build",
+            model: ref,
+            time: { created: Date.now() },
+          })
+          const workerAssistant: MessageV2.Assistant = {
+            ...assistant,
+            id: MessageID.ascending(),
+            parentID: workerUser.id,
+            sessionID: worker.id,
+            time: { created: Date.now() },
+          }
+          yield* sessions.updateMessage(workerAssistant)
+          yield* previousEmptyCheck({ lead: worker, assistant: workerAssistant, teamID: info.id })
+          const def = yield* (yield* TeamGetMessagesTool).init()
+
+          const result = yield* def.execute(
+            {},
+            context({ lead: worker, assistant: workerAssistant, callID: "worker-current-check" }),
+          )
+
+          expect(result.title).toBe("Team Messages (Polling Blocked)")
+          expect(result.output).toBe(
+            "No pending messages.\nRepeated empty mailbox check suppressed. Continue your assigned work instead of polling.",
+          )
+          expect(result.output).not.toContain("Current team status:")
+          expect(result.metadata).toMatchObject({ count: 0, repeated: true, teamID: info.id })
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("does not suppress after failed, incomplete, or non-empty completed calls", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
           const sessions = yield* Session.Service
           const { lead, user, assistant } = yield* seed()
-          yield* previousEmptyCheck({ lead, assistant })
+          yield* previousGetMessagesPart({
+            lead,
+            assistant,
+            callID: "pending-check",
+            state: { status: "pending", input: {}, raw: "{}" },
+          })
+          yield* previousGetMessagesPart({
+            lead,
+            assistant,
+            callID: "running-check",
+            state: { status: "running", input: {}, time: { start: Date.now() } },
+          })
+          yield* previousGetMessagesPart({
+            lead,
+            assistant,
+            callID: "failed-check",
+            state: {
+              status: "error",
+              input: {},
+              error: "simulated read failure",
+              metadata: { count: 0 },
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
+          yield* previousGetMessagesPart({
+            lead,
+            assistant,
+            callID: "completed-mail-check",
+            state: {
+              status: "completed",
+              input: {},
+              output: "Delivered one message.",
+              title: "Team Messages",
+              metadata: { count: 1 },
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
           const currentAssistant: MessageV2.Assistant = {
             ...assistant,
             id: MessageID.ascending(),
@@ -284,44 +550,110 @@ describe("tool.team_get_messages", () => {
             context({
               lead,
               assistant: currentAssistant,
-              callID: "current-check",
+              callID: "retry-check",
               messages: yield* sessions.messages({ sessionID: lead.id }),
             }),
           )
 
-          expect(result.title).toBe("Team Messages (Polling Blocked)")
-          expect(result.output).toContain("Repeated empty mailbox check suppressed")
-          expect(result.output).toContain("finish the current response normally")
-          expectNoForbiddenLeadWaitGuidance(result.output)
-          expectNoRepeatedTeamStateReadGuidance(result.output)
-          expect(result.metadata.count).toBe(0)
-          expect(result.metadata.repeated).toBe(true)
+          expect(result.title).toBe("Team Messages")
+          expect(result.metadata).toMatchObject({ count: 0, repeated: false })
+          expectLeadWaitContract(result.output)
+          expect(result.output).toContain("Current team status:")
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
   )
 
-  it.live("still delivers new messages after a previous empty check", () =>
+  it.live("does not suppress a completed empty read from an earlier user turn", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const { lead, user, assistant, info } = yield* seed()
+          yield* previousEmptyCheck({ lead, assistant, teamID: info.id })
+          const nextUser = yield* sessions.updateMessage({
+            ...user,
+            id: MessageID.ascending(),
+            time: { created: Date.now() },
+          })
+          const currentAssistant: MessageV2.Assistant = {
+            ...assistant,
+            id: MessageID.ascending(),
+            parentID: nextUser.id,
+            time: { created: Date.now() },
+          }
+          yield* sessions.updateMessage(currentAssistant)
+          const tool = yield* TeamGetMessagesTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {},
+            context({
+              lead,
+              assistant: currentAssistant,
+              callID: "new-turn-check",
+              messages: yield* sessions.messages({ sessionID: lead.id }),
+            }),
+          )
+
+          expect(result.title).toBe("Team Messages")
+          expect(result.metadata).toMatchObject({ count: 0, repeated: false })
+          expectLeadWaitContract(result.output)
+        }),
+      { config: { experimental: { agent_teams: true } } },
+    ),
+  )
+
+  it.live("delivers ordered new messages once after a previous empty check", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
           const team = yield* Team.Service
           const { lead, assistant, info, member } = yield* seed()
-          yield* previousEmptyCheck({ lead, assistant })
-          yield* team.sendMessage({
+          const committed: string[] = []
+          const observedTeam = Team.Service.of({
+            ...team,
+            markMessageDelivered: (messageID, recipientSession) =>
+              Effect.sync(() => committed.push(messageID)).pipe(
+                Effect.andThen(team.markMessageDelivered(messageID, recipientSession)),
+              ),
+          })
+          yield* previousEmptyCheck({ lead, assistant, teamID: info.id })
+          const first = yield* team.sendMessage({
             teamID: info.id,
             sender: member.session_id,
             recipients: [lead.id],
-            body: "Implementation is complete.",
+            body: "First update after empty.",
           })
-          const tool = yield* TeamGetMessagesTool
+          const second = yield* team.sendMessage({
+            teamID: info.id,
+            sender: member.session_id,
+            recipients: [lead.id],
+            body: "Second update after empty.",
+          })
+          const tool = yield* TeamGetMessagesTool.pipe(Effect.provideService(Team.Service, observedTeam))
           const def = yield* tool.init()
 
           const result = yield* def.execute({}, context({ lead, assistant, callID: "current-check" }))
+          const repeated = yield* def.execute({}, context({ lead, assistant, callID: "after-delivery-check" }))
 
           expect(result.title).toBe("Team Messages")
-          expect(result.output).toContain("Implementation is complete.")
-          expect(result.metadata.count).toBe(1)
+          expect(result.output).toBe(
+            [
+              `From worker (${member.session_id}):`,
+              "First update after empty.",
+              "",
+              "---",
+              "",
+              `From worker (${member.session_id}):`,
+              "Second update after empty.",
+            ].join("\n"),
+          )
+          expect(result.metadata).toMatchObject({ count: 2, repeated: false, truncated: false })
+          expect(committed).toEqual([first.id, second.id])
+          expect(repeated.metadata).toMatchObject({ count: 0, repeated: true })
+          expect(committed).toEqual([first.id, second.id])
+          expect(yield* team.getPendingMessages(lead.id, info.id)).toHaveLength(0)
         }),
       { config: { experimental: { agent_teams: true } } },
     ),
@@ -492,7 +824,13 @@ describe("tool.team_get_messages", () => {
             teamID: info.id,
             sender: member.session_id,
             recipients: [lead.id],
-            body: "Concurrent delivery check.",
+            body: "Concurrent first.",
+          })
+          yield* team.sendMessage({
+            teamID: info.id,
+            sender: member.session_id,
+            recipients: [lead.id],
+            body: "Concurrent second.",
           })
           const tool = yield* TeamGetMessagesTool
           const def = yield* tool.init()
@@ -505,7 +843,22 @@ describe("tool.team_get_messages", () => {
             { concurrency: "unbounded" },
           )
 
-          expect(results.reduce((count, result) => count + result.metadata.count, 0)).toBe(1)
+          expect(results.map((result) => result.metadata.count).sort((a, b) => a - b)).toEqual([0, 2])
+          const delivered = results.find((result) => result.metadata.count === 2)
+          const empty = results.find((result) => result.metadata.count === 0)
+          expect(delivered?.output).toBe(
+            [
+              `From worker (${member.session_id}):`,
+              "Concurrent first.",
+              "",
+              "---",
+              "",
+              `From worker (${member.session_id}):`,
+              "Concurrent second.",
+            ].join("\n"),
+          )
+          expect(empty?.output).not.toContain("Concurrent first.")
+          expect(empty?.output).not.toContain("Concurrent second.")
           expect((yield* team.getPendingMessages(lead.id, info.id)).length).toBe(0)
         }),
       { config: { experimental: { agent_teams: true } } },
