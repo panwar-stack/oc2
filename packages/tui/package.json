@@ -21,7 +21,7 @@
     "./context/project": "./src/context/project.tsx",
     "./context/runtime": "./src/context/runtime.tsx",
     "./context/sdk": "./src/context/sdk.tsx",
-    "./context/sync": "./src/context/sync.tsx",
+    "./context/sync": "./src/context/sync.ts",
     "./context/theme": "./src/context/theme.tsx",
     "./context/editor": "./src/context/editor.ts",
     "./context/clipboard": "./src/context/clipboard.tsx",

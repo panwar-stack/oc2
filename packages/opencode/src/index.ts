@@ -2,8 +2,7 @@ import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import * as Log from "@oc2-ai/core/util/log"
 import { UI } from "./cli/ui"
-import { Installation } from "./installation"
-import { InstallationVersion } from "@oc2-ai/core/installation/version"
+import { InstallationLocal, InstallationVersion } from "@oc2-ai/core/installation/version"
 import { NamedError } from "@oc2-ai/core/util/error"
 import { FormatError } from "./cli/error"
 import { EOL } from "os"
@@ -148,10 +147,10 @@ const cli = yargs(args)
 
     await Log.init({
       print: process.argv.includes("--print-logs"),
-      dev: Installation.isLocal(),
+      dev: InstallationLocal,
       level: (() => {
         if (opts.logLevel) return opts.logLevel as Log.Level
-        if (Installation.isLocal()) return "DEBUG"
+        if (InstallationLocal) return "DEBUG"
         return "INFO"
       })(),
     })

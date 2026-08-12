@@ -895,12 +895,20 @@ export const {
 
       // blocking - include session.list when continuing a session
       const providersPromise = sdk.client.config.providers({ workspace }, { throwOnError: true })
-      const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
+      const providerListPromise = sdk.client.provider
+        .list({ workspace }, { throwOnError: true })
+        .then((x) => x.data!)
+        .catch((error) => {
+          console.error("Failed to load provider catalog", error)
+          return undefined
+        })
+      const applyProviderListPromise = providerListPromise.then((providerList) => {
+        if (providerList) setStore("provider_next", reconcile(providerList))
+      })
       const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
       const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
       const blockingRequests: { name: string; promise: Promise<unknown> }[] = [
         { name: "config.providers", promise: providersPromise },
-        { name: "provider.list", promise: providerListPromise },
         { name: "app.agents", promise: agentsPromise },
         { name: "config.get", promise: configPromise },
         { name: "project.sync", promise: projectPromise },
@@ -917,28 +925,24 @@ export const {
         })
         .then(async () => {
           const providersResponse = providersPromise.then((x) => x.data!)
-          const providerListResponse = providerListPromise.then((x) => x.data!)
           const agentsResponse = agentsPromise.then((x) => x.data ?? [])
           const configResponse = configPromise.then((x) => x.data!)
           const sessionListResponse = args.continue ? sessionListPromise : undefined
 
           return Promise.all([
             providersResponse,
-            providerListResponse,
             agentsResponse,
             configResponse,
             ...(sessionListResponse ? [sessionListResponse] : []),
           ]).then((responses) => {
             const providers = responses[0]
-            const providerList = responses[1]
-            const agents = responses[2]
-            const config = responses[3]
-            const sessions = responses[4]
+            const agents = responses[1]
+            const config = responses[2]
+            const sessions = responses[3]
 
             batch(() => {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
-              setStore("provider_next", reconcile(providerList))
               setStore("console_state", reconcile(emptyConsoleState))
               setStore("agent", reconcile(agents))
               setStore("config", reconcile(config))
@@ -949,7 +953,7 @@ export const {
         .then(() => {
           if (store.status !== "complete") setStore("status", "partial")
           // non-blocking
-          void Promise.all([
+          const backgroundPromise = Promise.all([
             ...(args.continue
               ? []
               : [
@@ -971,9 +975,11 @@ export const {
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
-          ]).then(() => {
+          ])
+          void Promise.all([backgroundPromise, applyProviderListPromise]).then(() => {
             setStore("status", "complete")
           })
+          return applyProviderListPromise
         })
         .catch(async (e) => {
           console.error("tui bootstrap failed", {

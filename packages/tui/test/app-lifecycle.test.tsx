@@ -19,10 +19,12 @@ async function waitFor(check: () => boolean, timeout = 2000) {
   }
 }
 
-test("SIGHUP clears title and disposes scoped resources once", async () => {
+test("startup does not wait for terminal theme mode and SIGHUP disposes scoped resources once", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const waitForThemeMode = mock(async () => null)
+  setup.renderer.waitForThemeMode = waitForThemeMode
   const titles: string[] = []
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
@@ -59,6 +61,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
       }).pipe(Effect.provide(Global.defaultLayer)),
     )
     await ready
+    expect(waitForThemeMode).not.toHaveBeenCalled()
     process.emit("SIGHUP")
     await task
 

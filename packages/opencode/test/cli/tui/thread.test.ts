@@ -10,7 +10,16 @@ describe("tui thread", () => {
 
     expect(source).toContain('await import("../tui/layer")')
     expect(source).toMatch(/await import\(["']@\/plugin\/tui\/runtime["']\)/)
+    expect(source).toContain('await import("../tui/validate-session")')
+    expect(source).not.toMatch(/import\s+\{\s*validateSession\s*\}\s+from\s+["']\.\.\/tui\/validate-session["']/)
     expect(source).not.toContain('import("./app")')
+  })
+
+  test("keeps the CLI installation check lightweight", async () => {
+    const source = await Bun.file(new URL("../../../src/index.ts", import.meta.url)).text()
+
+    expect(source).toContain("InstallationLocal")
+    expect(source).not.toMatch(/from\s+["']\.\/installation["']/)
   })
 
   async function check(project?: string) {

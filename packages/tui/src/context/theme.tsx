@@ -81,10 +81,9 @@ export {
 
 const THEME_REFRESH_DELAYS = [250, 1000] as const
 
-export const STARTUP_THEME_WAIT_MS = 250
-
-export async function waitForStartupThemeMode(renderer: Pick<CliRenderer, "waitForThemeMode">) {
-  return (await renderer.waitForThemeMode(STARTUP_THEME_WAIT_MS)) ?? "dark"
+export function getStartupThemeMode(renderer: Pick<CliRenderer, "themeMode">): "dark" | "light" {
+  const mode = renderer.themeMode
+  return mode === "dark" || mode === "light" ? mode : "dark"
 }
 
 type State = {

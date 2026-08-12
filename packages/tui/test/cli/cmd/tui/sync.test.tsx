@@ -83,6 +83,124 @@ function failedTerminal(id: string, sessionID: string): Event {
 }
 
 describe("tui sync", () => {
+  test("mounts children before the provider catalog resolves", async () => {
+    const provider = Promise.withResolvers<Response>()
+    let active: Parameters<NonNullable<Parameters<typeof mount>[0]>>[1]["sync"] | undefined
+    let mounted = false
+    const mounting = mount((url, context) => {
+      if (url.pathname !== "/provider") return
+      active = context.sync
+      return provider.promise
+    })
+    void mounting.then(() => {
+      mounted = true
+    })
+
+    await wait(() => active?.()?.status === "partial")
+    expect(active?.()?.data.provider_next.all).toEqual([])
+    expect(mounted).toBe(false)
+
+    provider.resolve(
+      json({
+        all: [{ id: "provider_test", name: "Provider Test", source: "env", env: [], models: {} }],
+        default: { provider_test: "model_test" },
+        connected: ["provider_test"],
+      }),
+    )
+    const { app, sync } = await mounting
+
+    try {
+      expect(mounted).toBe(true)
+      expect(sync.status).toBe("complete")
+      expect(sync.data.provider_next.all.map((item) => item.id)).toEqual(["provider_test"])
+      expect(sync.data.provider_next.default).toEqual({ provider_test: "model_test" })
+      expect(sync.data.provider_next.connected).toEqual(["provider_test"])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("completes bootstrap when the provider catalog fails", async () => {
+    const provider = Promise.withResolvers<Response>()
+    let active: Parameters<NonNullable<Parameters<typeof mount>[0]>>[1]["sync"] | undefined
+    let mounted = false
+    const mounting = mount((url, context) => {
+      if (url.pathname !== "/provider") return
+      active = context.sync
+      return provider.promise
+    })
+    void mounting.then(() => {
+      mounted = true
+    })
+
+    await wait(() => active?.()?.status === "partial")
+    expect(mounted).toBe(false)
+    provider.reject(new Error("provider catalog unavailable"))
+    const { app, sync } = await mounting
+
+    try {
+      expect(mounted).toBe(true)
+      expect(sync.status).toBe("complete")
+      expect(sync.data.provider_next).toEqual({ all: [], default: {}, connected: [] })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("awaits the provider catalog when bootstrap refreshes", async () => {
+    const providerB = Promise.withResolvers<Response>()
+    const providerFailure = Promise.withResolvers<Response>()
+    let providerRequests = 0
+    const catalog = (id: string) => ({
+      all: [{ id, name: id, source: "env", env: [], models: {} }],
+      default: { [id]: `model_${id}` },
+      connected: [id],
+    })
+    const { app, sync } = await mount((url) => {
+      if (url.pathname !== "/provider") return
+      providerRequests++
+      if (providerRequests === 1) return json(catalog("provider_a"))
+      if (providerRequests === 2) return providerB.promise
+      return providerFailure.promise
+    })
+
+    try {
+      expect(sync.data.provider_next.all.map((item) => item.id)).toEqual(["provider_a"])
+
+      let refreshed = false
+      const refreshing = sync.bootstrap().then(() => {
+        refreshed = true
+      })
+      await wait(() => providerRequests === 2)
+      expect(refreshed).toBe(false)
+      expect(sync.data.provider_next.all.map((item) => item.id)).toEqual(["provider_a"])
+
+      providerB.resolve(json(catalog("provider_b")))
+      await refreshing
+
+      expect(refreshed).toBe(true)
+      expect(sync.status).toBe("complete")
+      expect(sync.data.provider_next.all.map((item) => item.id)).toEqual(["provider_b"])
+
+      let failedRefreshSettled = false
+      const failedRefresh = sync.bootstrap().then(() => {
+        failedRefreshSettled = true
+      })
+      await wait(() => providerRequests === 3)
+      expect(failedRefreshSettled).toBe(false)
+      expect(sync.data.provider_next.all.map((item) => item.id)).toEqual(["provider_b"])
+
+      providerFailure.reject(new Error("provider refresh unavailable"))
+      await failedRefresh
+
+      expect(failedRefreshSettled).toBe(true)
+      expect(sync.status).toBe("complete")
+      expect(sync.data.provider_next.all.map((item) => item.id)).toEqual(["provider_b"])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("formats footer label from primary root and root count", () => {
     expect(
       rootDirectoryLabel({

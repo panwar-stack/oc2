@@ -18,7 +18,6 @@ import {
   ensureRunID,
   sanitizedProcessEnv,
 } from "@oc2-ai/core/util/opencode-process"
-import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@oc2-ai/tui/terminal-win32"
 
 declare global {
@@ -208,17 +207,20 @@ export const TuiThreadCommand = cmd({
               events: createEventSource(client),
             }
 
-        try {
-          await validateSession({
-            url: transport.url,
-            sessionID: args.session,
-            directory: cwd,
-            fetch: transport.fetch,
-          })
-        } catch (error) {
-          UI.error(errorMessage(error))
-          process.exitCode = 1
-          return
+        if (args.session) {
+          try {
+            const { validateSession } = await import("../tui/validate-session")
+            await validateSession({
+              url: transport.url,
+              sessionID: args.session,
+              directory: cwd,
+              fetch: transport.fetch,
+            })
+          } catch (error) {
+            UI.error(errorMessage(error))
+            process.exitCode = 1
+            return
+          }
         }
 
         setTimeout(() => {
