@@ -220,7 +220,7 @@ export const Info = Schema.Struct({
         description: "Enable agent teams for multi-agent orchestration (default: true)",
       }),
       drop_reasoning: Schema.optional(Schema.Boolean).annotate({
-        description: "Drop thinking/reasoning parts from conversation context sent on model requests",
+        description: "Drop thinking/reasoning parts from conversation context sent on model requests (default: true)",
       }),
     }),
   ),

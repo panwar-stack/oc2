@@ -116,7 +116,7 @@
     "mcp_timeout": 30000,
     "agent_teams": true,
     "openTelemetry": false,
-    "drop_reasoning": false
+    "drop_reasoning": true
   },
 
   "fugu": {

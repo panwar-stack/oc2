@@ -303,7 +303,9 @@ export const layer = Layer.effect(
       // The flag is read per turn attempt, not once at layer init: the Config service
       // snapshot is loaded when the location opens, and per-attempt reads keep the
       // runner testable and behave identically for a static config file.
-      const dropReasoning = Config.latest(yield* config.entries(), "experimental")?.drop_reasoning === true
+      // Reasoning is dropped unless the flag is explicitly disabled: an absent
+      // flag defaults to on (opt-out), so only `false` preserves reasoning.
+      const dropReasoning = Config.latest(yield* config.entries(), "experimental")?.drop_reasoning !== false
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },

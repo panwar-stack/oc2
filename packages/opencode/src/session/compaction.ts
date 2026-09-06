@@ -242,7 +242,8 @@ export const layer = Layer.effect(
       const all = turns(input.messages)
       if (!all.length) return { head: input.messages, tail_start_id: undefined }
       const recent = all.slice(-limit)
-      const dropReasoning = input.cfg.experimental?.drop_reasoning === true
+      // Reasoning is dropped by default; only an explicit `false` keeps it.
+      const dropReasoning = input.cfg.experimental?.drop_reasoning !== false
       const estimates = new Map<string, number>()
       const cachedEstimate = (input: EstimateInput) => {
         const key = estimateCacheKey(input)
@@ -390,7 +391,8 @@ export const layer = Layer.effect(
         ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
         : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
       const cfg = yield* config.get()
-      const dropReasoning = cfg.experimental?.drop_reasoning === true
+      // Reasoning is dropped by default; only an explicit `false` keeps it.
+      const dropReasoning = cfg.experimental?.drop_reasoning !== false
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))

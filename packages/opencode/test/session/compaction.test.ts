@@ -1695,7 +1695,7 @@ describe("session.compaction.process", () => {
   )
 
   itCompaction.instance(
-    "keeps assistant reasoning in compaction summary input when drop_reasoning is absent",
+    "drops assistant reasoning from compaction summary input by default when drop_reasoning is absent",
     () => {
       const stub = llm()
       let captured = ""
@@ -1733,11 +1733,72 @@ describe("session.compaction.process", () => {
           auto: false,
         })
 
-        // Flag-off retention guard: the summary-model input keeps the reasoning
-        // content, so dropping it flag-on is a real behavioral difference.
+        // New default: with no drop_reasoning key the flag reads as enabled, so
+        // reasoning must not re-enter the summary-model input as a reasoning
+        // part or as demoted text; the visible text part must survive.
+        expect(captured).toContain("the visible answer")
+        expect(captured).not.toContain("confidential chain-of-thought deliberation")
+        expect(captured).not.toContain('"type":"reasoning"')
+
+        // The stored transcript must keep the reasoning part unchanged.
+        const stored = (yield* ssn.messages({ sessionID: session.id })).find((msg) => msg.info.id === replyMsg.id)
+        expect(stored?.parts.some((part) => part.type === "reasoning")).toBe(true)
+        if (stored?.parts.some((part) => part.type === "reasoning")) {
+          const reasoning = stored.parts.find((part) => part.type === "reasoning")
+          expect(reasoning?.text).toBe("confidential chain-of-thought deliberation")
+        }
+        expect(stored?.parts.some((part) => part.type === "text" && part.text === "the visible answer")).toBe(true)
+      }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "keeps assistant reasoning in compaction summary input when drop_reasoning is disabled",
+    () => {
+      const stub = llm()
+      let captured = ""
+      stub.push(reply("summary", (input) => (captured = JSON.stringify(input.messages))))
+      return Effect.gen(function* () {
+        const test = yield* TestInstance
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const question = yield* createUserMessage(session.id, "what is the plan?")
+        const replyMsg = yield* createAssistantMessage(session.id, question.id, test.directory)
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: replyMsg.id,
+          sessionID: session.id,
+          type: "reasoning",
+          text: "confidential chain-of-thought deliberation",
+          time: { start: Date.now() },
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: replyMsg.id,
+          sessionID: session.id,
+          type: "text",
+          text: "the visible answer",
+        })
+        yield* createCompactionMarker(session.id)
+
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const parent = msgs.at(-1)?.info.id
+        expect(parent).toBeTruthy()
+        yield* SessionCompaction.use.process({
+          parentID: parent!,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        // Opt-out retention guard: the summary-model input keeps the reasoning
+        // content, so dropping it by default is a real behavioral difference.
         expect(captured).toContain("confidential chain-of-thought deliberation")
         expect(captured).toContain("the visible answer")
-      }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) }))
+      }).pipe(
+        withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }, { drop_reasoning: false }) }),
+      )
     },
     { git: true },
   )

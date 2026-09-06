@@ -383,7 +383,7 @@ export const layer = Layer.effect(
         ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
         : ((yield* provider.getSmallModel(input.providerID)) ??
           (yield* provider.getModel(input.providerID, input.modelID)))
-      const dropReasoning = (yield* config.get()).experimental?.drop_reasoning === true
+      const dropReasoning = (yield* config.get()).experimental?.drop_reasoning !== false
       const msgs = onlySubtasks
         ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
         : yield* MessageV2.toModelMessagesEffect(context, mdl, { dropReasoning })
@@ -1959,7 +1959,7 @@ Teammates report material progress, blockers, questions, and results without a l
             teamLeadSystemPrompt({ session, agent }),
             instruction.system().pipe(Effect.orDie),
             MessageV2.toModelMessagesEffect(msgs, model, {
-              dropReasoning: cfg.experimental?.drop_reasoning === true,
+              dropReasoning: cfg.experimental?.drop_reasoning !== false,
             }),
           ])
           const memoryRule = tools.memory_search_commit ? MEMORY_WORKFLOW_SYSTEM_PROMPT : undefined
