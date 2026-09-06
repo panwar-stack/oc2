@@ -59,6 +59,7 @@ type Tail = {
 type EstimateOptions = {
   stripMedia?: boolean
   toolOutputMaxChars?: number
+  dropReasoning?: boolean
 }
 
 type EstimateInput = {
@@ -142,6 +143,7 @@ function estimateCacheKey(input: EstimateInput) {
       ? {
           stripMedia: input.options.stripMedia === true,
           toolOutputMaxChars: input.options.toolOutputMaxChars ?? null,
+          dropReasoning: input.options.dropReasoning === true,
         }
       : "default",
   })
@@ -152,6 +154,7 @@ function splitTurn(input: {
   turn: Turn
   model: Provider.Model
   budget: number
+  options?: EstimateOptions
   estimate: (input: EstimateInput) => Effect.Effect<number>
 }) {
   return Effect.gen(function* () {
@@ -161,6 +164,7 @@ function splitTurn(input: {
       const size = yield* input.estimate({
         messages: input.messages.slice(start, input.turn.end),
         model: input.model,
+        options: input.options,
       })
       if (size > input.budget) continue
       return {
@@ -238,6 +242,7 @@ export const layer = Layer.effect(
       const all = turns(input.messages)
       if (!all.length) return { head: input.messages, tail_start_id: undefined }
       const recent = all.slice(-limit)
+      const dropReasoning = input.cfg.experimental?.drop_reasoning === true
       const estimates = new Map<string, number>()
       const cachedEstimate = (input: EstimateInput) => {
         const key = estimateCacheKey(input)
@@ -257,6 +262,7 @@ export const layer = Layer.effect(
           cachedEstimate({
             messages: input.messages.slice(turn.start, turn.end),
             model: input.model,
+            options: { dropReasoning },
           }),
         { concurrency: 1 },
       )
@@ -277,6 +283,7 @@ export const layer = Layer.effect(
           turn,
           model: input.model,
           budget: remaining,
+          options: { dropReasoning },
           estimate: cachedEstimate,
         })
         if (split) keep = split
@@ -383,6 +390,7 @@ export const layer = Layer.effect(
         ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
         : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
       const cfg = yield* config.get()
+      const dropReasoning = cfg.experimental?.drop_reasoning === true
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
@@ -404,6 +412,7 @@ export const layer = Layer.effect(
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+        dropReasoning,
       })
       const tailIndex = selected.tail_start_id
         ? history.findIndex((message) => message.info.id === selected.tail_start_id)
@@ -415,6 +424,7 @@ export const layer = Layer.effect(
               yield* MessageV2.toModelMessagesEffect(history.slice(tailIndex), model, {
                 stripMedia: true,
                 toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+                dropReasoning,
               }),
             )
       const ctx = yield* InstanceState.context

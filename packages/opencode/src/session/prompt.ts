@@ -383,9 +383,10 @@ export const layer = Layer.effect(
         ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
         : ((yield* provider.getSmallModel(input.providerID)) ??
           (yield* provider.getModel(input.providerID, input.modelID)))
+      const dropReasoning = (yield* config.get()).experimental?.drop_reasoning === true
       const msgs = onlySubtasks
         ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
-        : yield* MessageV2.toModelMessagesEffect(context, mdl)
+        : yield* MessageV2.toModelMessagesEffect(context, mdl, { dropReasoning })
       const text = yield* llm
         .stream({
           agent: ag,
@@ -1950,13 +1951,16 @@ Teammates report material progress, blockers, questions, and results without a l
 
           yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
+          const cfg = yield* config.get()
           const roots = yield* sessions.listRoots(sessionID).pipe(Effect.catch(() => Effect.succeed([])))
           const [skills, env, teamLead, instructions, modelMsgs] = yield* Effect.all([
             sys.skills(agent),
             sys.environment(model, roots),
             teamLeadSystemPrompt({ session, agent }),
             instruction.system().pipe(Effect.orDie),
-            MessageV2.toModelMessagesEffect(msgs, model),
+            MessageV2.toModelMessagesEffect(msgs, model, {
+              dropReasoning: cfg.experimental?.drop_reasoning === true,
+            }),
           ])
           const memoryRule = tools.memory_search_commit ? MEMORY_WORKFLOW_SYSTEM_PROMPT : undefined
           const system = [

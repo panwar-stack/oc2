@@ -1361,6 +1361,223 @@ describe("session.message-v2.toModelMessage", () => {
     const texts = (result[0].content as any[]).filter((p) => p.type === "text")
     expect(texts.map((t) => t.text)).toStrictEqual(["", "hello"])
   })
+
+  // --- dropReasoning option ---
+
+  test("drops assistant reasoning parts but keeps text when dropReasoning is enabled", async () => {
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1"),
+            type: "text",
+            text: "run tool",
+          },
+        ] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "reasoning",
+            text: "thinking",
+            time: { start: 0 },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "text",
+            text: "answer",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model, { dropReasoning: true })
+
+    // No reasoning content may survive anywhere in the converted messages.
+    expect(JSON.stringify(result)).not.toContain('"type":"reasoning"')
+    expect(result).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "run tool" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+      },
+    ])
+  })
+
+  test("drops reasoning instead of demoting to text when models differ and dropReasoning is enabled", async () => {
+    const assistantID = "m-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "m-parent", undefined, { providerID: "other", modelID: "other" }),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "reasoning",
+            text: "thinking",
+            time: { start: 0 },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "text",
+            text: "done",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model, { dropReasoning: true })
+
+    // Flag-off would demote the different-model reasoning to a text part; flag-on
+    // must drop it instead, so neither reasoning nor "thinking" text may remain.
+    expect(JSON.stringify(result)).not.toContain('"type":"reasoning"')
+    expect(JSON.stringify(result)).not.toContain("thinking")
+    expect(result).toStrictEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+      },
+    ])
+  })
+
+  test("excludes aborted reasoning-only messages when dropReasoning is enabled", async () => {
+    const assistantID1 = "m-assistant-1"
+    const assistantID2 = "m-assistant-2"
+
+    const aborted = new SessionV1.AbortedError({
+      message: "aborted",
+    }).toObject() as SessionV1.Assistant["error"]
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID1, "m-parent", aborted),
+        parts: [
+          {
+            ...basePart(assistantID1, "a1"),
+            type: "reasoning",
+            text: "thinking",
+            time: { start: 0 },
+          },
+          {
+            ...basePart(assistantID1, "a2"),
+            type: "text",
+            text: "partial answer",
+          },
+        ] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID2, "m-parent", aborted),
+        parts: [
+          {
+            ...basePart(assistantID2, "b1"),
+            type: "step-start",
+          },
+          {
+            ...basePart(assistantID2, "b2"),
+            type: "reasoning",
+            text: "thinking",
+            time: { start: 0 },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model, { dropReasoning: true })
+
+    // The aborted reasoning-only message is excluded as a whole; the aborted
+    // message that also carries text survives with its reasoning dropped.
+    expect(result).toStrictEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+      },
+    ])
+  })
+
+  test("leaves empty text separators untouched when dropReasoning drops signed reasoning", async () => {
+    // hasSignedReasoning scans the raw parts before any reasoning is dropped, so
+    // dropping signed reasoning must not disturb the surrounding text handling:
+    // the empty text separator is still substituted with a single space exactly
+    // as in the flag-off run of the same parts minus the reasoning blocks.
+    const assistantID = "m-assistant"
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "m-parent"),
+        parts: [
+          { ...basePart(assistantID, "p1"), type: "step-start" },
+          {
+            ...basePart(assistantID, "p2"),
+            type: "reasoning",
+            text: "thinking-one",
+            metadata: { anthropic: { signature: "sig1" } },
+          },
+          { ...basePart(assistantID, "p3"), type: "text", text: "" },
+          { ...basePart(assistantID, "p4"), type: "step-start" },
+          {
+            ...basePart(assistantID, "p5"),
+            type: "reasoning",
+            text: "thinking-two",
+            metadata: { anthropic: { signature: "sig2" } },
+          },
+          { ...basePart(assistantID, "p6"), type: "text", text: "the answer" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model, { dropReasoning: true })
+
+    expect(JSON.stringify(result)).not.toContain('"type":"reasoning"')
+    // step-start splits into two assistant messages; SDK's groupIntoBlocks merges them later
+    expect(result).toHaveLength(2)
+    expect((result[0].content as any[]).find((p) => p.type === "text").text).toBe(" ")
+    expect((result[1].content as any[]).find((p) => p.type === "text").text).toBe("the answer")
+  })
+
+  test("keeps assistant reasoning parts when dropReasoning is false or omitted", async () => {
+    // Guards against accidental default changes: flag-off behavior must stay
+    // byte-for-byte identical to the pre-PR2 path.
+    const assistantID = "m-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "m-parent"),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "reasoning",
+            text: "thinking",
+            time: { start: 0 },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "text",
+            text: "answer",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model)
+
+    expect(result).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "thinking", providerOptions: undefined },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ])
+  })
 })
 
 describe("session.message-v2.fromError", () => {
