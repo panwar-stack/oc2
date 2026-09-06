@@ -114,6 +114,86 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("decodes V1 experimental.drop_reasoning for true, false, and absent", () =>
+    Effect.sync(() => {
+      const decode = (input: object) => Schema.decodeUnknownSync(ConfigV1.Info)(input)
+      expect(decode({ experimental: { drop_reasoning: true } }).experimental?.drop_reasoning).toBe(true)
+      expect(decode({ experimental: { drop_reasoning: false } }).experimental?.drop_reasoning).toBe(false)
+      expect(decode({}).experimental?.drop_reasoning).toBeUndefined()
+      expect(decode({ experimental: { agent_teams: true } }).experimental?.drop_reasoning).toBeUndefined()
+    }),
+  )
+
+  it.effect("decodes V2 experimental.drop_reasoning for true, false, and absent", () =>
+    Effect.sync(() => {
+      const decode = (input: object) => Schema.decodeUnknownSync(Config.Info)(input)
+      expect(decode({ experimental: { drop_reasoning: true } }).experimental?.drop_reasoning).toBe(true)
+      expect(decode({ experimental: { drop_reasoning: false } }).experimental?.drop_reasoning).toBe(false)
+      expect(decode({}).experimental?.drop_reasoning).toBeUndefined()
+      expect(decode({ experimental: { agent_teams: true } }).experimental?.drop_reasoning).toBeUndefined()
+    }),
+  )
+
+  it.effect("migrates V1 experimental.drop_reasoning true without policies into V2 config", () =>
+    Effect.sync(() => {
+      const migrated = ConfigMigrateV1.migrate({
+        snapshot: false,
+        experimental: { drop_reasoning: true },
+      })
+
+      expect(migrated.snapshots).toBe(false)
+      expect(migrated.experimental).toEqual({
+        policies: undefined,
+        drop_reasoning: true,
+      })
+      expect(Schema.decodeUnknownSync(Config.Info)(migrated).experimental?.drop_reasoning).toBe(true)
+    }),
+  )
+
+  it.effect("migrates V1 experimental.drop_reasoning false without policies into V2 config", () =>
+    Effect.sync(() => {
+      const migrated = ConfigMigrateV1.migrate({
+        snapshot: false,
+        experimental: { drop_reasoning: false },
+      })
+
+      expect(migrated.experimental).toEqual({
+        policies: undefined,
+        drop_reasoning: false,
+      })
+      expect(Schema.decodeUnknownSync(Config.Info)(migrated).experimental?.drop_reasoning).toBe(false)
+    }),
+  )
+
+  it.effect("migrates V1 experimental policies while forwarding drop_reasoning", () =>
+    Effect.sync(() => {
+      const migrated = ConfigMigrateV1.migrate({
+        snapshot: false,
+        experimental: {
+          policies: [{ effect: "deny", action: "provider.use", resource: "openai" }],
+          drop_reasoning: true,
+        },
+      })
+
+      const decoded = Schema.decodeUnknownSync(Config.Info)(migrated)
+      expect(decoded.experimental?.policies?.[0]).toEqual({
+        effect: "deny",
+        action: "provider.use",
+        resource: "openai",
+      })
+      expect(decoded.experimental?.drop_reasoning).toBe(true)
+    }),
+  )
+
+  it.effect("omits V2 experimental when V1 config has no experimental keys", () =>
+    Effect.sync(() => {
+      const migrated = ConfigMigrateV1.migrate({ snapshot: false })
+
+      expect(migrated.experimental).toBeUndefined()
+      expect(Schema.decodeUnknownSync(Config.Info)(migrated).experimental).toBeUndefined()
+    }),
+  )
+
   it.effect("migrates v1 command configuration", () =>
     Effect.sync(() => {
       expect(

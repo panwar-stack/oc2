@@ -115,7 +115,8 @@
     "primary_tools": ["edit"],
     "mcp_timeout": 30000,
     "agent_teams": true,
-    "openTelemetry": false
+    "openTelemetry": false,
+    "drop_reasoning": false
   },
 
   "fugu": {
