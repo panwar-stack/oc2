@@ -221,10 +221,10 @@ function layer(result: "continue" | "compact") {
   )
 }
 
-function cfg(compaction?: ConfigV1.Info["compaction"]) {
+function cfg(compaction?: ConfigV1.Info["compaction"], experimental?: ConfigV1.Info["experimental"]) {
   const base = Schema.decodeUnknownSync(ConfigV1.Info)({}) as ConfigV1.Info
   return TestConfig.layer({
-    get: () => Effect.succeed({ ...base, compaction }),
+    get: () => Effect.succeed({ ...base, compaction, experimental }),
   })
 }
 
@@ -1632,6 +1632,155 @@ describe("session.compaction.process", () => {
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
     }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 500 }) })),
+  )
+
+  itCompaction.instance(
+    "drops assistant reasoning from compaction summary input when drop_reasoning is enabled",
+    () => {
+      const stub = llm()
+      let captured = ""
+      stub.push(reply("summary", (input) => (captured = JSON.stringify(input.messages))))
+      return Effect.gen(function* () {
+        const test = yield* TestInstance
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const question = yield* createUserMessage(session.id, "what is the plan?")
+        const replyMsg = yield* createAssistantMessage(session.id, question.id, test.directory)
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: replyMsg.id,
+          sessionID: session.id,
+          type: "reasoning",
+          text: "confidential chain-of-thought deliberation",
+          time: { start: Date.now() },
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: replyMsg.id,
+          sessionID: session.id,
+          type: "text",
+          text: "the visible answer",
+        })
+        yield* createCompactionMarker(session.id)
+
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const parent = msgs.at(-1)?.info.id
+        expect(parent).toBeTruthy()
+        yield* SessionCompaction.use.process({
+          parentID: parent!,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        // Reasoning must not re-enter the summary-model input as a reasoning
+        // part or as demoted text; the visible text part must survive.
+        expect(captured).toContain("the visible answer")
+        expect(captured).not.toContain("confidential chain-of-thought deliberation")
+        expect(captured).not.toContain('"type":"reasoning"')
+
+        // The stored transcript must keep the reasoning part unchanged.
+        const stored = (yield* ssn.messages({ sessionID: session.id })).find((msg) => msg.info.id === replyMsg.id)
+        expect(stored?.parts.some((part) => part.type === "reasoning")).toBe(true)
+        if (stored?.parts.some((part) => part.type === "reasoning")) {
+          const reasoning = stored.parts.find((part) => part.type === "reasoning")
+          expect(reasoning?.text).toBe("confidential chain-of-thought deliberation")
+        }
+        expect(stored?.parts.some((part) => part.type === "text" && part.text === "the visible answer")).toBe(true)
+      }).pipe(
+        withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }, { drop_reasoning: true }) }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "keeps assistant reasoning in compaction summary input when drop_reasoning is absent",
+    () => {
+      const stub = llm()
+      let captured = ""
+      stub.push(reply("summary", (input) => (captured = JSON.stringify(input.messages))))
+      return Effect.gen(function* () {
+        const test = yield* TestInstance
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const question = yield* createUserMessage(session.id, "what is the plan?")
+        const replyMsg = yield* createAssistantMessage(session.id, question.id, test.directory)
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: replyMsg.id,
+          sessionID: session.id,
+          type: "reasoning",
+          text: "confidential chain-of-thought deliberation",
+          time: { start: Date.now() },
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: replyMsg.id,
+          sessionID: session.id,
+          type: "text",
+          text: "the visible answer",
+        })
+        yield* createCompactionMarker(session.id)
+
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const parent = msgs.at(-1)?.info.id
+        expect(parent).toBeTruthy()
+        yield* SessionCompaction.use.process({
+          parentID: parent!,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        // Flag-off retention guard: the summary-model input keeps the reasoning
+        // content, so dropping it flag-on is a real behavioral difference.
+        expect(captured).toContain("confidential chain-of-thought deliberation")
+        expect(captured).toContain("the visible answer")
+      }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "sizes the retained tail without assistant reasoning when drop_reasoning is enabled",
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      yield* createUserMessage(session.id, "older context")
+      const recent = yield* createUserMessage(session.id, "recent turn")
+      const replyMsg = yield* createAssistantMessage(session.id, recent.id, test.directory)
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: replyMsg.id,
+        sessionID: session.id,
+        type: "reasoning",
+        text: "r".repeat(4_000),
+        time: { start: Date.now() },
+      })
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: replyMsg.id,
+        sessionID: session.id,
+        type: "text",
+        text: "short reply",
+      })
+      yield* createCompactionMarker(session.id)
+
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+      const parent = msgs.at(-1)?.info.id
+      expect(parent).toBeTruthy()
+      yield* SessionCompaction.use.process({ parentID: parent!, messages: msgs, sessionID: session.id, auto: false })
+
+      // The reasoning-heavy recent turn fits the preserve budget only because
+      // the token estimate drops reasoning like the real lowering does.
+      const part = yield* readCompactionPart(session.id)
+      expect(part?.type).toBe("compaction")
+      expect(part?.tail_start_id).toBe(recent.id)
+    }).pipe(
+      withCompaction({ config: cfg({ tail_turns: 1, preserve_recent_tokens: 500 }, { drop_reasoning: true }) }),
+    ),
   )
 })
 

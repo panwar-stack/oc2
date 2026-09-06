@@ -336,7 +336,7 @@ export const layer = Layer.effect(
         }),
       )
       yield* gate(sessionID, ticket)
-      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
+      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request, dropReasoning }))
         return yield* Effect.die(rebuildPreparedTurn())
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
@@ -530,7 +530,7 @@ export const layer = Layer.effect(
           )
           if (
             overflowRecovery &&
-            (yield* restore(overflowRecovery({ sessionID: session.id, entries, model, request })))
+            (yield* restore(overflowRecovery({ sessionID: session.id, entries, model, request, dropReasoning })))
           )
             return yield* Effect.die(continueAfterOverflowCompaction)
           if (stream._tag === "Failure" && Cause.hasInterrupts(stream.cause)) yield* FiberSet.clear(toolFibers)
