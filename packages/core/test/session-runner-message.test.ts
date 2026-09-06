@@ -396,4 +396,179 @@ Recent work
       },
     ])
   })
+
+  const finishedAssistant = (messageID: string, durableModelID: string, content: SessionMessage.AssistantContent[]) =>
+    new SessionMessage.Assistant({
+      id: id(messageID),
+      type: "assistant",
+      agent: "build",
+      model: { id: ModelV2.ID.make(durableModelID), providerID: ProviderV2.ID.make("provider") },
+      content,
+      time: { created, completed: created },
+      finish: "stop",
+    })
+
+  test("drops completed-turn reasoning on the same model when the option is set", () => {
+    const messages = toLLMMessages(
+      [
+        finishedAssistant("assistant-drop-same", "model", [
+          new SessionMessage.AssistantText({ type: "text", id: "text-1", text: "Answer" }),
+          new SessionMessage.AssistantReasoning({
+            type: "reasoning",
+            id: "reasoning-1",
+            text: "Hidden thought",
+            providerMetadata: { anthropic: { signature: "sig_1" } },
+          }),
+        ]),
+      ],
+      model,
+      { dropReasoning: true },
+    )
+
+    expect(messages.map((message) => message.role)).toEqual(["assistant"])
+    expect(messages[0]?.content).toEqual([{ type: "text", text: "Answer" }])
+  })
+
+  test("drop overrides demotion across a model switch", () => {
+    const messages = toLLMMessages(
+      [
+        finishedAssistant("assistant-drop-demote", "old-model", [
+          new SessionMessage.AssistantReasoning({
+            type: "reasoning",
+            id: "reasoning-old",
+            text: "Visible thought",
+            providerMetadata: { anthropic: { signature: "sig_old" } },
+          }),
+          new SessionMessage.AssistantText({ type: "text", id: "text-old", text: "Keep me" }),
+        ]),
+      ],
+      model,
+      { dropReasoning: true },
+    )
+
+    expect(messages.map((message) => message.role)).toEqual(["assistant"])
+    expect(messages[0]?.content).toEqual([{ type: "text", text: "Keep me" }])
+    expect(
+      messages[0]?.content.some(
+        (part) => part.type === "reasoning" || (part.type === "text" && part.text === "Visible thought"),
+      ),
+    ).toBe(false)
+  })
+
+  test("skips a finished reasoning-only assistant message after the drop", () => {
+    const messages = toLLMMessages(
+      [
+        finishedAssistant("assistant-drop-skip", "model", [
+          new SessionMessage.AssistantReasoning({
+            type: "reasoning",
+            id: "reasoning-only",
+            text: "Hidden thought",
+            providerMetadata: { anthropic: { signature: "sig_1" } },
+          }),
+        ]),
+      ],
+      model,
+      { dropReasoning: true },
+    )
+
+    expect(messages).toEqual([])
+  })
+
+  test("keeps reasoning when the drop option is explicitly off", () => {
+    const fixture = [
+      finishedAssistant("assistant-drop-off", "model", [
+        new SessionMessage.AssistantReasoning({
+          type: "reasoning",
+          id: "reasoning-off",
+          text: "Hidden thought",
+          providerMetadata: { anthropic: { signature: "sig_1" } },
+        }),
+      ]),
+    ]
+    expect(toLLMMessages(fixture, model, { dropReasoning: false })).toEqual(toLLMMessages(fixture, model))
+    expect(toLLMMessages(fixture, model, { dropReasoning: false })[0]?.content).toEqual([
+      { type: "reasoning", text: "Hidden thought", providerMetadata: { anthropic: { signature: "sig_1" } } },
+    ])
+  })
+
+  test("keeps only open-turn reasoning when keepActiveTurnReasoning is set", () => {
+    const olderUser = new SessionMessage.User({
+      id: id("user-older"),
+      type: "user",
+      text: "Older",
+      time: { created },
+    })
+    const newerUser = new SessionMessage.User({
+      id: id("user-newer"),
+      type: "user",
+      text: "Newer",
+      time: { created },
+    })
+    const olderAssistant = finishedAssistant("assistant-older", "model", [
+      new SessionMessage.AssistantReasoning({
+        type: "reasoning",
+        id: "reasoning-older",
+        text: "Older thought",
+      }),
+    ])
+    const newerAssistant = finishedAssistant("assistant-newer", "model", [
+      new SessionMessage.AssistantReasoning({
+        type: "reasoning",
+        id: "reasoning-newer",
+        text: "Newer thought",
+        providerMetadata: { anthropic: { signature: "sig_newer" } },
+      }),
+    ])
+    const messages = toLLMMessages(
+      [olderUser, olderAssistant, newerUser, newerAssistant],
+      model,
+      { dropReasoning: true, keepActiveTurnReasoning: true },
+    )
+
+    expect(messages.map((message) => message.role)).toEqual(["user", "user", "assistant"])
+    expect(messages[0]).toEqual(Message.make({ id: id("user-older"), role: "user", metadata: {}, content: [{ type: "text", text: "Older" }] }))
+    expect(messages[1]).toEqual(Message.make({ id: id("user-newer"), role: "user", metadata: {}, content: [{ type: "text", text: "Newer" }] }))
+    expect(messages[2]?.content).toEqual([
+      { type: "reasoning", text: "Newer thought", providerMetadata: { anthropic: { signature: "sig_newer" } } },
+    ])
+  })
+
+  test("drops reasoning on every assistant message when keepActiveTurnReasoning is absent", () => {
+    const olderUser = new SessionMessage.User({
+      id: id("user-older"),
+      type: "user",
+      text: "Older",
+      time: { created },
+    })
+    const newerUser = new SessionMessage.User({
+      id: id("user-newer"),
+      type: "user",
+      text: "Newer",
+      time: { created },
+    })
+    const olderAssistant = finishedAssistant("assistant-older", "model", [
+      new SessionMessage.AssistantReasoning({
+        type: "reasoning",
+        id: "reasoning-older",
+        text: "Older thought",
+      }),
+    ])
+    const newerAssistant = finishedAssistant("assistant-newer", "model", [
+      new SessionMessage.AssistantReasoning({
+        type: "reasoning",
+        id: "reasoning-newer",
+        text: "Newer thought",
+        providerMetadata: { anthropic: { signature: "sig_newer" } },
+      }),
+    ])
+    const messages = toLLMMessages(
+      [olderUser, olderAssistant, newerUser, newerAssistant],
+      model,
+      { dropReasoning: true },
+    )
+
+    expect(messages.map((message) => message.role)).toEqual(["user", "user"])
+    expect(messages[0]).toEqual(Message.make({ id: id("user-older"), role: "user", metadata: {}, content: [{ type: "text", text: "Older" }] }))
+    expect(messages[1]).toEqual(Message.make({ id: id("user-newer"), role: "user", metadata: {}, content: [{ type: "text", text: "Newer" }] }))
+  })
 })

@@ -142,7 +142,11 @@ export const layer = Layer.effect(
       const runnable = ticket ? yield* isTicketRunnable(db, ticket) : !(yield* isPaused(db, sessionID))
       if (!runnable) return yield* new SessionPausedError({ sessionID })
     })
-    const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries(), gate })
+    // Compaction settings are read once per layer init. The experimental flag is read
+    // per turn attempt instead (see runTurnAttempt) so config doubles and reloads can
+    // observe it after this layer is built.
+    const configEntries = yield* config.entries()
+    const compaction = SessionCompaction.make({ events, llm, config: configEntries, gate })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -217,6 +221,7 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       ticket: ResumeTicket | undefined,
       isSuspended: (() => boolean) | undefined,
+      keepActiveTurnReasoning: boolean,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
       yield* gate(sessionID, ticket)
@@ -295,6 +300,10 @@ export const layer = Layer.effect(
             ]
           : []),
       ]
+      // The flag is read per turn attempt, not once at layer init: the Config service
+      // snapshot is loaded when the location opens, and per-attempt reads keep the
+      // runner testable and behave identically for a static config file.
+      const dropReasoning = Config.latest(yield* config.entries(), "experimental")?.drop_reasoning === true
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
@@ -310,7 +319,7 @@ export const layer = Layer.effect(
                 },
               ]),
         ],
-        messages: toLLMMessages(context, model),
+        messages: toLLMMessages(context, model, { dropReasoning, keepActiveTurnReasoning }),
         tools: toolMaterialization.definitions,
         metadata: {
           toolDefinitionsDigest: toolDigest,
@@ -559,33 +568,59 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       ticket: ResumeTicket | undefined,
       isSuspended?: () => boolean,
+      keepActiveTurnReasoning?: boolean,
     ) => Effect.Effect<boolean, RunError>
 
     const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(
-      function* (sessionID, promotion, ticket, isSuspended) {
-        return yield* runTurnAttempt(sessionID, promotion, ticket, isSuspended).pipe(
+      function* (sessionID, promotion, ticket, isSuspended, keepActiveTurnReasoning) {
+        return yield* runTurnAttempt(
+          sessionID,
+          promotion,
+          ticket,
+          isSuspended,
+          keepActiveTurnReasoning ?? false,
+        ).pipe(
           Effect.catchDefect(
             Effect.fnUntraced(function* (defect) {
               if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
               if (defect.transition._tag === "ContinueAfterOverflowCompaction")
                 return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
               yield* Effect.yieldNow
-              return yield* runAfterOverflowCompaction(sessionID, defect.transition.promotion, ticket, isSuspended)
+              return yield* runAfterOverflowCompaction(
+                sessionID,
+                defect.transition.promotion,
+                ticket,
+                isSuspended,
+                keepActiveTurnReasoning,
+              )
             }),
           ),
         )
       },
     )
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, ticket, isSuspended) {
-      return yield* runTurnAttempt(sessionID, promotion, ticket, isSuspended, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = Effect.fnUntraced(function* (
+      sessionID,
+      promotion,
+      ticket,
+      isSuspended,
+      keepActiveTurnReasoning,
+    ) {
+      return yield* runTurnAttempt(
+        sessionID,
+        promotion,
+        ticket,
+        isSuspended,
+        keepActiveTurnReasoning ?? false,
+        compaction.compactAfterOverflow,
+      ).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined, ticket, isSuspended)
-            return yield* runTurn(sessionID, defect.transition.promotion, ticket, isSuspended)
+              return yield* runAfterOverflowCompaction(sessionID, undefined, ticket, isSuspended, keepActiveTurnReasoning)
+            return yield* runTurn(sessionID, defect.transition.promotion, ticket, isSuspended, keepActiveTurnReasoning)
           }),
         ),
       )
@@ -608,9 +643,25 @@ export const layer = Layer.effect(
       while (openActivity) {
         yield* gate(input.sessionID, input.ticket)
         let needsContinuation = true
+        // A step is an active tool-loop continuation iff the PREVIOUS step in this
+        // same outer-loop iteration returned needsContinuation = true (local tool
+        // results settled and the model must keep going). Reset at the start of every
+        // outer-loop iteration and of every run() invocation, so the flag only ever
+        // covers the next step of an open turn inside one bounded inner loop.
+        let keepActiveTurnReasoning = false
         for (let step = 0; step < MAX_STEPS; step++) {
           yield* gate(input.sessionID, input.ticket)
-          needsContinuation = yield* runTurn(input.sessionID, promotion, input.ticket, input.isSuspended)
+          needsContinuation = yield* runTurn(
+            input.sessionID,
+            promotion,
+            input.ticket,
+            input.isSuspended,
+            keepActiveTurnReasoning,
+          )
+          // Read before the hasPending-steer re-read: only a real tool-loop handoff
+          // opens the next step as a continuation of the current turn. A fresh steer
+          // starts a completed turn boundary instead.
+          keepActiveTurnReasoning = needsContinuation
           promotion = "steer"
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
           if (!needsContinuation) break

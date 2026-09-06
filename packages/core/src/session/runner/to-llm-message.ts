@@ -68,17 +68,31 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
   }
 }
 
-const assistant = (message: SessionMessage.Assistant, model: Model) => {
+const assistant = (
+  message: SessionMessage.Assistant,
+  model: Model,
+  state: { dropReasoning: boolean; openTurn: boolean },
+) => {
   const sameModel =
     String(message.model.providerID) === String(model.provider) && String(message.model.id) === String(model.id)
+  let droppedReasoning = false
   const content = message.content.flatMap((item): ContentPart[] => {
     if (item.type === "text") return [{ type: "text", text: item.text }]
-    if (item.type === "reasoning")
+    if (item.type === "reasoning") {
+      // With dropReasoning on, a completed-turn reasoning part is omitted entirely
+      // (drop overrides the model-switch demotion branch). Reasoning that belongs to
+      // the still-open tool-loop turn keeps the flag-off behavior so every round's
+      // signed provider continuation state is echoed back.
+      if (state.dropReasoning && !state.openTurn) {
+        droppedReasoning = true
+        return []
+      }
       return sameModel
         ? [{ type: "reasoning", text: item.text, providerMetadata: item.providerMetadata }]
         : item.text.length > 0
           ? [{ type: "text", text: item.text }]
           : []
+    }
     const call = toolCall(item, sameModel ? item.provider?.metadata : undefined)
     const result = toolResult(item, sameModel ? (item.provider?.resultMetadata ?? item.provider?.metadata) : undefined)
     return item.provider?.executed === true && result ? [call, result] : [call]
@@ -89,10 +103,25 @@ const assistant = (message: SessionMessage.Assistant, model: Model) => {
     .filter((message) => message !== undefined)
     .map(Message.tool)
   if (content.length === 0 && results.length === 0 && (message.error !== undefined || message.finish === undefined)) return []
+  // A finished assistant message whose content and tool results are both empty only
+  // because the drop removed its reasoning is skipped (mirror of the V1 guard). An
+  // empty finished assistant message that was empty without a drop still emits as
+  // before, so the flag-off path is byte-identical.
+  if (
+    content.length === 0 &&
+    results.length === 0 &&
+    droppedReasoning &&
+    message.finish !== undefined
+  )
+    return []
   return [Message.make({ id: message.id, role: "assistant", content, metadata: message.metadata }), ...results]
 }
 
-function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] {
+function toLLMMessage(
+  message: SessionMessage.Message,
+  model: Model,
+  state: { dropReasoning: boolean; openTurn: boolean },
+): Message[] {
   switch (message.type) {
     case "agent-switched":
     case "model-switched":
@@ -124,7 +153,7 @@ function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] 
         }),
       ]
     case "assistant":
-      return assistant(message, model)
+      return assistant(message, model, state)
     case "compaction":
       return [
         Message.make({
@@ -147,6 +176,30 @@ ${message.recent}
   }
 }
 
-/** Translate projected V2 Session history into canonical @oc2-ai/llm context. */
-export const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
-  messages.flatMap((message) => toLLMMessage(message, model))
+/**
+ * Translate projected V2 Session history into canonical @oc2-ai/llm context.
+ *
+ * With `dropReasoning`, reasoning parts of COMPLETED turns are omitted entirely (never
+ * demoted to text). With `keepActiveTurnReasoning`, an assistant message belongs to the
+ * current OPEN turn iff it appears after the last durable `user` message in the context;
+ * every assistant message of that open turn keeps its reasoning (each tool-loop round's
+ * signed provider continuation state must be echoed). Assistant messages before that
+ * boundary are completed turns and their reasoning is dropped. If no durable `user`
+ * message remains in the context (possible only after compaction rewriting), no
+ * completed-turn boundary exists, so every assistant message is treated as open-turn
+ * reasoning and kept (fallback).
+ */
+export const toLLMMessages = (
+  messages: readonly SessionMessage.Message[],
+  model: Model,
+  options?: { dropReasoning?: boolean; keepActiveTurnReasoning?: boolean },
+) => {
+  const dropReasoning = options?.dropReasoning === true
+  const lastUser = messages.findLastIndex((message) => message.type === "user")
+  return messages.flatMap((message, index) =>
+    toLLMMessage(message, model, {
+      dropReasoning,
+      openTurn: options?.keepActiveTurnReasoning === true && index > lastUser,
+    }),
+  )
+}

@@ -38,6 +38,7 @@ import { ApplicationTools } from "@oc2-ai/core/tool/application-tools"
 import { AgentV2 } from "@oc2-ai/core/agent"
 import { Config } from "@oc2-ai/core/config"
 import { ConfigCompaction } from "@oc2-ai/core/config/compaction"
+import { ConfigExperimental } from "@oc2-ai/core/config/experimental"
 import { Tool } from "@oc2-ai/core/tool/tool"
 import {
   SessionContextEpochTable,
@@ -175,6 +176,7 @@ const echo = Layer.effectDiscard(
 let modelResolveHook = Effect.void
 let currentModel = model
 let catalogOverride: ModelV2.Info | undefined
+let configExperimental: ConfigExperimental.Experimental | undefined
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(
     Effect.map(() => {
@@ -264,6 +266,7 @@ const config = Layer.succeed(
               buffer: 3_000,
               keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
             }),
+            ...(configExperimental === undefined ? {} : { experimental: configExperimental }),
           }),
         }),
       ]),
@@ -360,6 +363,7 @@ const setup = Effect.gen(function* () {
   modelResolveHook = Effect.void
   currentModel = model
   catalogOverride = undefined
+  configExperimental = undefined
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -2441,6 +2445,121 @@ describe("SessionRunnerLLM", () => {
           text: "Encrypted thought",
           providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
         },
+      ])
+    }),
+  )
+
+  it.effect("drops completed-turn reasoning from a second-turn request while the transcript keeps it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      // The runner reads the experimental flag per turn attempt, so the flag must be
+      // set before the first resume drives the runner.
+      configExperimental = new ConfigExperimental.Experimental({ drop_reasoning: true })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Think first" }), resume: false })
+
+      requests.length = 0
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "reasoning-anthropic" }),
+        LLMEvent.reasoningDelta({ id: "reasoning-anthropic", text: "Signed thought" }),
+        LLMEvent.reasoningEnd({ id: "reasoning-anthropic", providerMetadata: { anthropic: { signature: "sig_1" } } }),
+        LLMEvent.reasoningStart({
+          id: "reasoning-openai",
+          providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: null } },
+        }),
+        LLMEvent.reasoningDelta({ id: "reasoning-openai", text: "Encrypted thought" }),
+        LLMEvent.reasoningEnd({
+          id: "reasoning-openai",
+          providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+        }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      yield* session.resume(sessionID)
+      yield* replaySessionProjection(sessionID)
+
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Think first" },
+        {
+          type: "assistant",
+          content: [
+            { type: "reasoning", text: "Signed thought", providerMetadata: { anthropic: { signature: "sig_1" } } },
+            {
+              type: "reasoning",
+              text: "Encrypted thought",
+              providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+            },
+          ],
+        },
+      ])
+
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
+      response = successfulResponse
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      // The finished reasoning-only assistant message was dropped entirely, so the
+      // outbound history is just the two user prompts with no assistant message.
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user"])
+      expect(
+        requests[1]?.messages.flatMap((message) => message.content).some((part) => part.type === "reasoning"),
+      ).toBe(false)
+      const context = yield* session.context(sessionID)
+      expect(context[0]).toMatchObject({ type: "user", text: "Think first" })
+      expect(context[1]).toMatchObject({
+        type: "assistant",
+        content: [
+          { type: "reasoning", text: "Signed thought", providerMetadata: { anthropic: { signature: "sig_1" } } },
+          {
+            type: "reasoning",
+            text: "Encrypted thought",
+            providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+          },
+        ],
+      })
+      expect(context[2]).toMatchObject({ type: "user", text: "Continue" })
+    }),
+  )
+
+  it.effect("keeps open-turn reasoning on a tool-loop continuation step when the flag is on", () =>
+    Effect.gen(function* () {
+      yield* setup
+      // Set before the first resume so the runner's per-turn flag read is active.
+      configExperimental = new ConfigExperimental.Experimental({ drop_reasoning: true })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Think and echo" }), resume: false })
+
+      requests.length = 0
+      authorizations.length = 0
+      executions.length = 0
+      streamGate = undefined
+      streamStarted = undefined
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-loop" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-loop", text: "Loop thought" }),
+          LLMEvent.reasoningEnd({
+            id: "reasoning-loop",
+            providerMetadata: { anthropic: { signature: "sig_loop" } },
+          }),
+          LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "hello" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        successfulResponse,
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(executions).toEqual(["hello"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      // The continuation step of the active tool loop keeps the first round's reasoning.
+      expect(requests[1]?.messages[1]?.content).toMatchObject([
+        { type: "reasoning", text: "Loop thought", providerMetadata: { anthropic: { signature: "sig_loop" } } },
+        { type: "tool-call", id: "call-echo", name: "echo" },
       ])
     }),
   )
