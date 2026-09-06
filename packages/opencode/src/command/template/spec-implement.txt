@@ -2,14 +2,10 @@
 
 Read and resolve $1 first. MUST use agent teams.
 
-Record the current branch, status, and committed HEAD as base_sha. Treat the current branch as read-only.
-
-Create one new branch from base_sha. Perform all edits, tests, reviews, and commits there.
-
-Do not modify, merge into, fast-forward, rebase, cherry-pick, clean, reset, stash, switch, or commit in the original branch. Stop if implementation depends on uncommitted source changes there.
-
 When PR number - $2 - is provided, implement only that pull request. Otherwise, complete $1 one pull request at a time. For each pull request, implement, test, review, verify, and commit before continuing.
 
-Do not implement unrelated work. MUST Audit the full implementation when complete.
+Record the current branch, status, and committed HEAD as base_sha. 
+Create one new branch, if there is no matching branch already with changes per given spec, from base_sha. Perform all edits, tests, reviews, and commits there.
+If you created a new branch, then treat the current branch as read-only. Do not modify, merge into, fast-forward, rebase, cherry-pick, clean, reset, stash, switch, or commit in the original branch. 
 
-Before responding, verify the original branch is unchanged. Preserve both the original branch and the new implementation branch.
+Do not implement unrelated work. MUST Audit the full implementation when complete.
